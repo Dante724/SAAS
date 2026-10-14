@@ -53,8 +53,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
       } catch {
         /* ignore */
       }
-      if (typeof window !== "undefined" && window.location.pathname !== "/legacy.html") {
-        window.location.replace("/legacy.html");
+      if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+        window.location.replace("/login");
       }
     }
     const text = await res.text().catch(() => "");

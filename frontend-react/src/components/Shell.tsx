@@ -140,6 +140,11 @@ export default function Shell({ title, children }: { title: string; children: Re
   const [palette, setPalette] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [secOpen, setSecOpen] = useState(false);
+  // Org requires 2FA and this user hasn't enrolled: the API refuses everything except enrollment,
+  // so show a setup screen that can't be dismissed. Sticky until the page reloads, so the
+  // recovery codes stay on screen after `me` refreshes to enabled.
+  const [mfaGate, setMfaGate] = useState(false);
+  useEffect(() => { if (me?.mfa_required && !me?.mfa_enabled) setMfaGate(true); }, [me?.mfa_required, me?.mfa_enabled]);
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [unread, setUnread] = useState(0);
   const [dark, setDark] = useState(() => { try { return localStorage.getItem("ros_theme") === "dark"; } catch { return false; } });
@@ -289,7 +294,8 @@ export default function Shell({ title, children }: { title: string; children: Re
       </div>
       {palette && <CommandPalette onClose={() => setPalette(false)} />}
       {notifOpen && <NotificationsPanel onClose={() => setNotifOpen(false)} onChanged={setUnread} />}
-      {secOpen && <SecurityModal me={me} onClose={() => setSecOpen(false)} onChanged={refresh} />}
+      {(secOpen || mfaGate) && <SecurityModal me={me} forced={mfaGate} onChanged={refresh}
+        onClose={() => (mfaGate ? window.location.reload() : setSecOpen(false))} />}
     </div>
   );
 }
@@ -306,7 +312,7 @@ function QrSvg({ data }: { data: string }) {
 }
 
 // Two-factor enrollment / management. Reached from the top-bar avatar and the org-required banner.
-function SecurityModal({ me, onClose, onChanged }: { me: any; onClose: () => void; onChanged: () => void }) {
+function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; onClose: () => void; onChanged: () => void; forced?: boolean }) {
   const [enabled, setEnabled] = useState<boolean>(!!me?.mfa_enabled);
   const [step, setStep] = useState<"idle" | "enroll" | "done">("idle");
   const [enroll, setEnroll] = useState<{ secret: string; otpauth_uri: string } | null>(null);
@@ -332,13 +338,19 @@ function SecurityModal({ me, onClose, onChanged }: { me: any; onClose: () => voi
     catch (e: any) { setErr(e.message || "Could not disable"); } finally { setBusy(false); }
   }
   const inp = "glass-input w-full px-3 py-2 rounded-lg text-sm font-semibold text-ink-primary";
+  function signOut() {
+    try { localStorage.removeItem("ros_tok"); } catch { /* ignore */ }
+    window.location.replace("/login");
+  }
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={forced ? undefined : onClose} />
       <div className="relative w-full max-w-md bg-white rounded-2xl shadow-clay-drawer border border-slate-200/90 overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
           <h3 className="text-sm font-bold text-ink-primary flex items-center gap-2"><M n="lock" c="text-base" />Security · Two-factor authentication</h3>
-          <button aria-label="Close" onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
+          {forced
+            ? <button onClick={signOut} className="text-[11px] font-semibold text-ink-tertiary hover:text-ink-primary">Sign out</button>
+            : <button aria-label="Close" onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>}
         </div>
         <div className="p-5 space-y-4 text-sm">
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
@@ -358,6 +370,7 @@ function SecurityModal({ me, onClose, onChanged }: { me: any; onClose: () => voi
 
           {!enabled && step === "idle" && (
             <>
+              {forced && <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2">Your organization requires two-factor authentication. Set it up to continue.</div>}
               <p className="text-ink-secondary text-xs">Protect your account with an authenticator app (Google Authenticator, Authy, 1Password…). You'll enter a 6-digit code at sign-in.</p>
               <button onClick={startEnroll} disabled={busy} className="px-4 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm disabled:opacity-50">{busy ? "…" : "Enable two-factor"}</button>
             </>

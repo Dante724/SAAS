@@ -108,7 +108,7 @@ class Organisation(Base):
     currency_position: Mapped[str] = mapped_column(String(10), default="before")  # before|after
     # Build 144cd: org-wide security policy. When on, every member must set up an
     # authenticator (TOTP) before using the app, and can't turn their own 2FA off.
-    require_mfa: Mapped[bool] = mapped_column(Boolean, default=True)
+    require_mfa: Mapped[bool] = mapped_column(Boolean, default=False)   # opt-in: owners enable it
     # Build 144ce: subscription lifecycle, controlled from the separate /admin portal.
     # sub_status drives the portal's segments: trial | active | trial_lost | churned | suspended
     # ("new" is derived = trial started within 14 days; "paid" = active; "lost paid" = churned).
