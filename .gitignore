@@ -68,3 +68,6 @@ Thumbs.db
 coverage.xml
 htmlcov/
 frontend-react/coverage/
+
+# Vite temp config bundles
+*.timestamp-*.mjs
