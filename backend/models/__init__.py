@@ -22,7 +22,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from backend.db.database import Base
 
@@ -1279,6 +1279,12 @@ class Task(Base):
     completed_on_time: Mapped[Optional[bool]] = mapped_column(Boolean)  # Build 86: on-time analysis
     status: Mapped[str] = mapped_column(String(30), default="todo")
     priority: Mapped[str] = mapped_column(String(20), default="normal")
+
+    @validates("priority")
+    def _priority_text(self, _key, value):
+        # The tasks API sends numbers (0, 1, 2); the column is text. SQLite coerced silently,
+        # Postgres/asyncpg rejected the int — creating any task 500'd in production.
+        return None if value is None else str(value)
     due_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -1713,6 +1719,23 @@ class EmployeeBalanceLedger(Base):
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(120), unique=True, index=True)
     note: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+
+    KEY_MAX = 120
+
+    @staticmethod
+    def normalize_key(raw: Optional[str]) -> Optional[str]:
+        """Keys longer than the 120-char column (e.g. "<event>:<line>:<rule>:<employee>" is three
+        UUIDs ≈ 126 chars) are replaced by a stable digest form. Postgres rejected them outright
+        — every per-line commission accrual failed — while SQLite silently stored them. Keys
+        that fit are unchanged, so existing rows keep matching."""
+        if raw is None or len(raw) <= EmployeeBalanceLedger.KEY_MAX:
+            return raw
+        import hashlib
+        return f"{raw[:60]}#sha256:{hashlib.sha256(raw.encode()).hexdigest()}"[:EmployeeBalanceLedger.KEY_MAX]
+
+    @validates("idempotency_key")
+    def _fit_key(self, _key, value):
+        return EmployeeBalanceLedger.normalize_key(value)
 
 
 class PayrollRun(Base):
