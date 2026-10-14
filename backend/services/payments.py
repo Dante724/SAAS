@@ -242,6 +242,18 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
     """Idempotently reconcile a succeeded intent into the cash system."""
     if intent.status == "succeeded" and intent.payment_id:
         return intent  # already reconciled
+    # Claim the intent atomically before posting anything: the Stripe webhook, Square webhook and
+    # the public /refresh can all land concurrently, and a plain status check let two of them both
+    # post a Transaction + Payment (double amount_paid). The conditional UPDATE row-locks on
+    # Postgres, so the loser re-evaluates "payment_id IS NULL" after the winner commits.
+    from sqlalchemy import update as _upd
+    claimed = await db.execute(_upd(PaymentIntent)
+        .where(PaymentIntent.id == intent.id, PaymentIntent.payment_id.is_(None),
+               PaymentIntent.status != "processing")
+        .values(status="processing").execution_options(synchronize_session=False))
+    if claimed.rowcount == 0:
+        await db.refresh(intent)
+        return intent
 
     account = None
     if intent.account_id:
@@ -291,6 +303,20 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
     intent.payment_id = pay.id
     intent.status = "succeeded"
     intent.updated_at = datetime.utcnow()
+    # The client paid online: reflect it on their balance like every in-store payment path does
+    # (it was never posted, so the client kept showing the full amount owed).
+    _client_id = inv.client_id if inv else None
+    if _client_id:
+        from backend.services.ledger import post_contact_ledger
+        await post_contact_ledger(db, intent.org_id, _client_id, "income", -abs(intent.amount),
+                                  note=f"Online payment ({intent.provider})", ref_type="payment",
+                                  ref_id=pay.id)
+    if intent.order_id:
+        _ord = (await db.execute(select(Order).where(Order.id == intent.order_id))).scalar_one_or_none()
+        if _ord:
+            from backend.services.order_money import cancel_open_pay_links
+            await db.flush()
+            await cancel_open_pay_links(db, _ord)
 
     # Build 144w: workflow automations for payment_received (best-effort).
     if intent.order_id:

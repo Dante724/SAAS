@@ -73,3 +73,25 @@ def demo() -> None:
 
 if __name__ == "__main__":
     demo()
+
+
+async def add_to_column(db, obj, attr: str, delta) -> float:
+    """Atomically add `delta` to a running balance column and return the new value.
+
+    `obj.balance = obj.balance + x` is read-modify-write: two requests touching the same till,
+    client or supplier concurrently both read the old value and one update is lost. A single
+    `UPDATE … SET col = col + :delta` serialises on the row (Postgres row lock; SQLite writes are
+    serial), then the object is refreshed so callers see the committed-to value. Objects not yet
+    in the database are just updated in memory."""
+    from sqlalchemy import func, inspect, update
+    st = inspect(obj)
+    if st.pending or st.transient:
+        setattr(obj, attr, q2(float(getattr(obj, attr) or 0) + float(delta)))
+        return getattr(obj, attr)
+    model = type(obj)
+    col = getattr(model, attr)
+    await db.execute(update(model).where(model.id == obj.id)
+                     .values({attr: func.coalesce(col, 0) + q2(delta)})
+                     .execution_options(synchronize_session=False))
+    await db.refresh(obj, attribute_names=[attr])
+    return getattr(obj, attr)

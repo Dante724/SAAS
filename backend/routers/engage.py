@@ -313,7 +313,14 @@ async def apply_coupon(
         raise HTTPException(400, "Coupon already applied to this order")
     discount = q2((order.total or 0) * c.value / 100.0) if c.kind == "pct" else q2(c.value)
     discount = min(discount, q2(order.total or 0))
-    c.uses += 1
+    # Guarded atomic increment: `c.uses += 1` let concurrent redemptions both pass the
+    # max_uses check above and overshoot the limit.
+    res = await db.execute(sa_update(type(c)).where(
+        type(c).id == c.id,
+        (type(c).max_uses.is_(None)) | (type(c).max_uses == 0) | (type(c).uses < type(c).max_uses))
+        .values(uses=type(c).uses + 1).execution_options(synchronize_session=False))
+    if res.rowcount == 0:
+        raise HTTPException(409, "Coupon usage limit reached")
     await _add_discount_line(db, order, f"Coupon {c.code}", discount)
     await db.commit()
     return {"ok": True, "discount": discount, "new_total": order.total}
@@ -365,6 +372,10 @@ async def redeem_loyalty(
         raise HTTPException(400, "Loyalty redemption is not configured (loyalty_point_value)")
     if data.points <= 0:
         raise HTTPException(422, "points must be positive")
+    # Serialise redemptions per client (the POS path already does): two concurrent requests
+    # used to both read the same points balance and spend it twice.
+    from backend.models import Client as _Client
+    await db.execute(select(_Client.id).where(_Client.id == order.client_id).with_for_update())
     bal = await loyalty_balance(db, current.org_id, order.client_id)
     if data.points > bal:
         raise HTTPException(400, f"Client has only {bal:.0f} points")

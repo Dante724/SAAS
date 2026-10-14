@@ -66,8 +66,8 @@ async def post_transaction(db, org_id, account_id, txn_type, amount, *,
     acc = (await db.execute(select(Account).where(
         Account.id == account_id, Account.org_id == org_id))).scalar_one_or_none()
     if acc:
-        acc.balance = (acc.balance or 0) + amount
-        txn.balance_after = q2(acc.balance)  # A1: frozen running-balance snapshot
+        from backend.services.money import add_to_column
+        txn.balance_after = q2(await add_to_column(db, acc, "balance", amount))  # A1: running-balance snapshot
         # 144bh: manual cash income/expense on a till feeds the open drawer so the blind-count close
         # agrees with the cashbox balance (sales go via Payment.shift_id). Link only when it's
         # unambiguous: for a location-scoped till, that location's open shift; for a company-wide
