@@ -139,7 +139,7 @@ async def simulate_pay(intent_id: str, db: AsyncSession = Depends(get_db)):
     """Simulated-gateway success hook (no auth: mirrors a hosted-checkout return).
     Only works while the simulated gateway is active."""
     from backend.config import settings
-    if settings.is_production:
+    if settings.is_deployed:
         # the simulated gateway is a dev/test affordance; never let an unauthenticated
         # caller mark an intent paid in production even if one was somehow created there.
         raise HTTPException(403, "Simulated payments are disabled in production")

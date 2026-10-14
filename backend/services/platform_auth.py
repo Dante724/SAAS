@@ -67,7 +67,7 @@ async def ensure_seed_admin(db: AsyncSession) -> None:
     email = getattr(settings, "PLATFORM_ADMIN_EMAIL", "") or ""
     pw = getattr(settings, "PLATFORM_ADMIN_PASSWORD", "") or ""
     if not email or not pw:
-        if settings.is_production:
+        if settings.is_deployed:
             logging.getLogger("repairos").warning(
                 "No platform admin seeded: set PLATFORM_ADMIN_EMAIL and PLATFORM_ADMIN_PASSWORD.")
             return

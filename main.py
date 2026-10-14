@@ -116,7 +116,7 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa: BLE001 — never block startup on this
         log.exception("platform admin seed skipped")
     if settings.SEED_DEMO:
-        if settings.is_production:
+        if settings.is_deployed:
             log.warning("SEED_DEMO is enabled in production — refusing to seed demo data.")
         else:
             from scripts.seed import seed_demo_data
@@ -130,7 +130,7 @@ async def lifespan(app: FastAPI):
 
 
 # Build 144cq: hide the interactive API docs / schema in production.
-_docs_kwargs = {} if not settings.is_production else {
+_docs_kwargs = {} if not settings.is_deployed else {
     "docs_url": None, "redoc_url": None, "openapi_url": None,
 }
 app = FastAPI(

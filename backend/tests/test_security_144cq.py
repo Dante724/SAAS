@@ -43,6 +43,9 @@ def test_log_redaction_masks_secrets():
 
 
 def test_docs_hidden_in_production(monkeypatch):
+    from cryptography.fernet import Fernet
+
     from backend.config import Settings
-    s = Settings(ENVIRONMENT="production", SECRET_KEY="x" * 40, CORS_ORIGINS="https://app.example.com")
+    s = Settings(ENVIRONMENT="production", SECRET_KEY="x" * 40, CORS_ORIGINS="https://app.example.com",
+                 TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode())
     assert s.is_production is True

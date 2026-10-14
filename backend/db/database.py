@@ -113,7 +113,7 @@ async def init_db():
     from backend.models import all_models  # noqa: F401 – import triggers registration
     log = logging.getLogger("repairos.db")
 
-    if settings.is_production and not settings.RUN_MIGRATIONS_ON_STARTUP:
+    if settings.is_deployed and not settings.RUN_MIGRATIONS_ON_STARTUP:
         log.info("Production mode: skipping runtime DDL; schema is managed by Alembic.")
         return
 
