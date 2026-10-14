@@ -64,9 +64,6 @@ class ExpenseIn(BaseModel):
     location_id: Optional[str] = None
     expense_date: Optional[str] = None
 
-def _inv_number(seq: int) -> str:
-    return f"INV-{seq:05d}"
-
 def _ser_invoice(inv: Invoice) -> dict:
     return {
         "id": inv.id, "invoice_number": inv.invoice_number,
@@ -291,9 +288,7 @@ async def create_invoice(
     current: Employee = Depends(require_perm("can_create_invoices")),
 ):
     from backend.models import InvoiceOrder, InvoiceLine, Order
-    count = (await db.execute(
-        select(func.count()).select_from(Invoice).where(Invoice.org_id == current.org_id)
-    )).scalar() or 0
+    from backend.services.numbering import next_number
 
     # 144ed — the order list: explicit order_ids, with the legacy single order_id
     # folded in first and de-duped while preserving order.
@@ -329,7 +324,8 @@ async def create_invoice(
             return None
 
     inv = Invoice(
-        invoice_number=_inv_number(count + 1),
+        # One numbering path for every invoice (was count+1 here, a sequence elsewhere → duplicates)
+        invoice_number=await next_number(db, current.org_id, "invoice"),
         org_id=current.org_id,
         order_id=order_ids[0] if order_ids else None,
         client_id=data.client_id,
