@@ -1,5 +1,36 @@
 # Changelog
 
+## build 144en — Best-in-class test build (5 commits: 144en-1 … 144en-5 + docs)
+
+Planned with the testing-strategy skill; every change verified in an exact replica of CI's pinned
+stack (pytest 8.2.0 / pytest-asyncio 0.23.7 / xdist 3.6.1 / ruff 0.6.9), not the sandbox defaults.
+
+- **Lint suppression removed (the "both problems"):** 47 semicolon lines (E702) split and 13 ambiguous
+  `l` comprehension vars (E741) renamed — token-based, never touching strings. **Proof: the AST of all
+  31 changed files is identical to before** (the check itself caught and was corrected for a file that
+  legitimately used `ln`). E702/E741 now enforced in tests.
+- **Parallel CI + parity:** pinned `pytest-xdist`; CI runs `-n auto`. `make ci` runs every CI gate in CI
+  order; `make test-pg` runs the suite on Postgres. Found & closed a parity gap: local runs had used
+  pytest 9.1 / pytest-asyncio 1.4 vs CI's 8.2 / 0.23 — now verified on CI's versions.
+- **Postgres production parity:** new always-on test compiles all 154 tables + 272 indexes to Postgres DDL
+  and enforces partial-index `WHERE` parity across dialects (mutation-tested; 1.8s). Fixed app engine to
+  use NullPool only for `test`+Postgres (asyncpg is loop-bound) — prod/staging/dev/SQLite pool choice
+  proven unchanged. New `backend-postgres` CI job (Postgres 16: migrations from scratch + full suite),
+  advisory until first green run.
+- **Coverage ratchet:** backend branch coverage (pytest-cov 5.0.0, coverage 7.16.2 pinned) measured
+  50.2% → floor 49.5; frontend v8 (`all: true`) 2.8% lines / 25% funcs → floors 2.5 / 24. Both gates
+  proven to fail the run; reports uploaded as CI artifacts. Clean `npm ci` from lockfile verified.
+- **Pre-commit:** pinned `pre-commit` + `pre-commit-hooks`; hooks run from the venv (one place for every
+  version). Config delivered as a template (hook files are protected for the assistant). Each guard proven
+  to block: real `.env`, SQLite DB even via `git add -f`, private key, lint error, raw key as UI label,
+  broken YAML.
+- **TESTING.md:** layers, how to run each, coverage targets, and gaps ranked by risk from measured data —
+  P0: API keys + public v1 API (0% branch), public pages (9.6%), cash/finance/sales (7–13%) — with the
+  first test cases to write.
+- **Verified (final, committed state):** backend **1,144 passed / 0 failed**, coverage 50.2% ≥ floor;
+  ruff clean; migrations from scratch clean; workflows valid against GitHub's schema; frontend tsc +
+  ui-text lint + 85 tests + coverage floor + build all green.
+
 ## build 144em — Pre-launch full regression + make CI green (lint + 2 latent test bugs)
 
 Full regression of the committed state before launch. Found that **CI could never have passed**:
