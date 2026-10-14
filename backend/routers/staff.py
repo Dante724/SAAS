@@ -120,6 +120,40 @@ async def list_employees(
              "tax_id": e.tax_id, "public_name": e.public_name, "note": e.note,
              "location_id": e.location_id, "role_id": e.role_id, "active": e.active} for e in employees]
 
+# ── Privilege guards ──────────────────────────────────────────────
+# require_perm is default-allow, so a role's access is "everything except what it denies"
+# (permissions set to False). No role, and the owner's {"all": "write"} role, deny nothing.
+# An actor may only assign a role, or act on a teammate, whose denied set includes
+# everything the actor is denied — i.e. never hand out or take over more access than they have.
+
+async def _denied_for_role(db: AsyncSession, org_id: str, role_id: Optional[str]) -> set:
+    if not role_id:
+        return set()
+    role = (await db.execute(select(Role).where(Role.id == role_id, Role.org_id == org_id))).scalar_one_or_none()
+    if not role:
+        raise HTTPException(400, "Unknown role")
+    return {k for k, v in (role.permissions or {}).items() if v is False}
+
+
+async def _assert_can_assign_role(db: AsyncSession, current: Employee, role_id: Optional[str]) -> None:
+    mine = await _denied_for_role(db, current.org_id, current.role_id)
+    theirs = await _denied_for_role(db, current.org_id, role_id)
+    if not mine <= theirs:
+        raise HTTPException(403, "You can't assign a role with more access than your own")
+
+
+async def _assert_can_manage(db: AsyncSession, current: Employee, emp: Employee) -> None:
+    if emp.id == current.id:
+        return
+    mine = await _denied_for_role(db, current.org_id, current.role_id)
+    try:
+        theirs = await _denied_for_role(db, current.org_id, emp.role_id)
+    except HTTPException:
+        theirs = set()   # dangling role → treat as full access (the safe direction)
+    if not mine <= theirs:
+        raise HTTPException(403, "You can't change an account with more access than your own")
+
+
 @router.post("/employees", status_code=201)
 async def create_employee(
     data: EmployeeIn,
@@ -133,6 +167,7 @@ async def create_employee(
         raise HTTPException(400, "Email already in use")
     if data.password is not None and len(data.password) < MIN_PASSWORD_LEN:
         raise HTTPException(400, f"Password must be at least {MIN_PASSWORD_LEN} characters")
+    await _assert_can_assign_role(db, current, data.role_id)
     emp = Employee(
         org_id=current.org_id,
         name=data.name, email=data.email,
@@ -189,7 +224,10 @@ async def update_employee(
     emp = (await db.execute(select(Employee).where(Employee.id == emp_id, Employee.org_id == current.org_id))).scalar_one_or_none()
     if not emp:
         raise HTTPException(404, "Employee not found")
+    await _assert_can_manage(db, current, emp)
     payload = data.model_dump(exclude_unset=True)
+    if "role_id" in payload and payload["role_id"] != emp.role_id:
+        await _assert_can_assign_role(db, current, payload["role_id"])
     if "email" in payload and payload["email"] != emp.email:
         dupe = (await db.execute(select(Employee).where(Employee.email == payload["email"]))).scalar_one_or_none()
         if dupe:
@@ -213,9 +251,11 @@ async def reset_password(
     emp = (await db.execute(select(Employee).where(Employee.id == emp_id, Employee.org_id == current.org_id))).scalar_one_or_none()
     if not emp:
         raise HTTPException(404, "Employee not found")
-    if len(data.password) < 6:
-        raise HTTPException(400, "Password must be at least 6 characters")
+    await _assert_can_manage(db, current, emp)
+    if len(data.password) < MIN_PASSWORD_LEN:
+        raise HTTPException(400, f"Password must be at least {MIN_PASSWORD_LEN} characters")
     emp.password_hash = hash_password(data.password)
+    emp.token_version = (emp.token_version or 0) + 1   # sign out existing sessions
     await db.commit()
     return {"ok": True}
 
@@ -232,6 +272,7 @@ async def send_password_reset(
         Employee.id == emp_id, Employee.org_id == current.org_id))).scalar_one_or_none()
     if not emp:
         raise HTTPException(404, "Employee not found")
+    await _assert_can_manage(db, current, emp)
     from backend.routers.auth import _link
     from backend.services import tokens as _tok
     from backend.services.notifications import send_direct_email
@@ -256,6 +297,7 @@ async def reset_employee_mfa(emp_id: str, db: AsyncSession = Depends(get_db),
         Employee.id == emp_id, Employee.org_id == current.org_id))).scalar_one_or_none()
     if not emp:
         raise HTTPException(404, "Employee not found")
+    await _assert_can_manage(db, current, emp)
     emp.mfa_enabled = False
     emp.mfa_secret = None
     emp.mfa_recovery_codes = None
@@ -301,6 +343,7 @@ async def create_invite(data: InviteIn, db: AsyncSession = Depends(get_db),
     email = (data.email or "").strip().lower()
     if not email or "@" not in email:
         raise HTTPException(400, "A valid email is required")
+    await _assert_can_assign_role(db, current, data.role_id)
     dupe = (await db.execute(select(Employee).where(
         Employee.email == email, Employee.org_id == current.org_id))).scalar_one_or_none()
     if dupe:
@@ -427,6 +470,7 @@ async def deactivate_employee(
     emp = result.scalar_one_or_none()
     if not emp:
         raise HTTPException(404, "Employee not found")
+    await _assert_can_manage(db, current, emp)
     emp.active = False
     await db.commit()
     return {"ok": True}
