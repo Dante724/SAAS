@@ -1,6 +1,7 @@
 """Online payments (Phase 2A). Create a hosted-checkout PaymentIntent, list
 intents, confirm in simulated mode, and receive Stripe's webhook."""
 import json
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -9,12 +10,14 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
+from backend.core.webhook_security import provider_secrets, require_signature
 from backend.db.database import get_db
 from backend.models import Employee, PaymentIntent
 from backend.services import payments as pay
 from backend.services.auth import get_current_employee, require_perm
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
+log = logging.getLogger("repairos")
 
 
 # A2: map the raw intent status onto the client-facing pay-link lifecycle.
@@ -161,23 +164,20 @@ async def refresh_intent_status(intent_id: str, db: AsyncSession = Depends(get_d
     return _ser(intent)
 
 
+def _minor_units(amount) -> int:
+    # Must match how the gateways sent the amount at checkout (services/payments.py).
+    return int(round(float(amount) * 100))
+
+
 @router.post("/square/webhook")
 async def square_webhook(request: Request, db: AsyncSession = Depends(get_db)):
-    """Square payment webhook. Verified with the webhook signature key
-    (HMAC-SHA256 over notification_url + body); fail-closed when the key is set."""
+    """Square payment webhook. Verified with the shop's webhook signature key (or the
+    operator-wide one): HMAC-SHA256 over notification_url + body. Fails closed outside
+    development/test when no key is configured."""
+    import base64
+    import hashlib
+    import hmac
     raw = await request.body()
-    if settings.SQUARE_WEBHOOK_SIGNATURE_KEY:
-        import base64
-        import hashlib
-        import hmac
-        url = (settings.PUBLIC_BASE_URL or "").rstrip("/") + "/api/payments/square/webhook"
-        digest = hmac.new(settings.SQUARE_WEBHOOK_SIGNATURE_KEY.encode(),
-                          url.encode() + raw, hashlib.sha256).digest()
-        expected = base64.b64encode(digest).decode()
-        got = request.headers.get("x-square-hmacsha256-signature", "")
-        if not hmac.compare_digest(expected, got):
-            raise HTTPException(400, "Bad signature")
-    import json
     try:
         event = json.loads(raw.decode() or "{}")
     except Exception:
@@ -192,6 +192,22 @@ async def square_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         PaymentIntent.provider == "square", PaymentIntent.provider_ref == order_ref))).scalar_one_or_none()
     if not intent:
         return {"ok": True, "unmatched": True}
+    # Verify with the secret of the org that owns the matched intent — never trust the body first.
+    secrets = await provider_secrets(db, intent.org_id, "square", "webhook_signature_key",
+                                     settings.SQUARE_WEBHOOK_SIGNATURE_KEY)
+    url = (settings.PUBLIC_BASE_URL or "").rstrip("/") + "/api/payments/square/webhook"
+    got = request.headers.get("x-square-hmacsha256-signature", "")
+    verified = any(hmac.compare_digest(
+        base64.b64encode(hmac.new(s.encode(), url.encode() + raw, hashlib.sha256).digest()).decode(), got)
+        for s in secrets)
+    require_signature(secrets, verified, "Square")
+    money = payment.get("amount_money") or {}
+    if money.get("amount") is not None and int(money["amount"]) != _minor_units(intent.amount):
+        log.warning("Square webhook amount mismatch for intent %s", intent.id)
+        raise HTTPException(400, "Amount mismatch")
+    if money.get("currency") and money["currency"].lower() != (intent.currency or "").lower():
+        log.warning("Square webhook currency mismatch for intent %s", intent.id)
+        raise HTTPException(400, "Currency mismatch")
     from backend.services.payments import mark_succeeded
     await mark_succeeded(db, intent)
     return {"ok": True}
@@ -238,24 +254,41 @@ async def terminal_create_intent(
 
 @router.post("/stripe/webhook")
 async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
-    """Stripe checkout.session.completed -> reconcile. Signature verified when a
-    webhook secret is configured; otherwise the raw event is trusted (dev only)."""
+    """Stripe Checkout completion -> reconcile. Verified with the signing secret of the
+    shop that owns the intent (or the operator-wide one); fails closed outside
+    development/test when none is configured. The event must also match the intent's
+    provider, org, amount and currency, and Stripe must report it as paid."""
     payload = await request.body()
     sig = request.headers.get("stripe-signature", "")
-    if settings.STRIPE_WEBHOOK_SECRET:
-        if not _verify_stripe_sig(payload, sig, settings.STRIPE_WEBHOOK_SECRET):
-            raise HTTPException(400, "Invalid signature")
     try:
         event = json.loads(payload.decode() or "{}")
     except Exception:
         raise HTTPException(400, "Bad payload")
-    if event.get("type") != "checkout.session.completed":
+    if event.get("type") not in ("checkout.session.completed",
+                                 "checkout.session.async_payment_succeeded"):
         return {"ok": True, "ignored": event.get("type")}
     obj = (event.get("data") or {}).get("object") or {}
-    intent_id = (obj.get("metadata") or {}).get("intent_id") or obj.get("client_reference_id")
+    meta = obj.get("metadata") or {}
+    intent_id = meta.get("intent_id") or obj.get("client_reference_id")
     i = (await db.execute(select(PaymentIntent).where(PaymentIntent.id == intent_id))).scalar_one_or_none()
     if not i:
         raise HTTPException(404, "Unknown intent")
+    secrets = await provider_secrets(db, i.org_id, "stripe", "webhook_secret",
+                                     settings.STRIPE_WEBHOOK_SECRET)
+    require_signature(secrets, any(_verify_stripe_sig(payload, sig, s) for s in secrets), "Stripe")
+    if i.provider != "stripe" or (meta.get("org_id") and meta["org_id"] != i.org_id):
+        log.warning("Stripe webhook does not match intent %s (provider/org)", i.id)
+        raise HTTPException(400, "Event does not match payment")
+    if obj.get("amount_total") is not None and int(obj["amount_total"]) != _minor_units(i.amount):
+        log.warning("Stripe webhook amount mismatch for intent %s", i.id)
+        raise HTTPException(400, "Amount mismatch")
+    if obj.get("currency") and obj["currency"].lower() != (i.currency or "").lower():
+        log.warning("Stripe webhook currency mismatch for intent %s", i.id)
+        raise HTTPException(400, "Currency mismatch")
+    # Delayed methods (bank debits) complete the session before the money arrives;
+    # Stripe then sends checkout.session.async_payment_succeeded.
+    if obj.get("payment_status") not in (None, "paid", "no_payment_required"):
+        return {"ok": True, "pending": True}
     await pay.mark_succeeded(db, i)
     return {"ok": True}
 

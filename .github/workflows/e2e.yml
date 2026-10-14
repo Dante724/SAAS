@@ -23,7 +23,7 @@ jobs:
           pip install -r requirements.txt
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
       - name: Install Playwright + browsers
         working-directory: tests-e2e
         run: |
@@ -32,8 +32,9 @@ jobs:
       - name: Launch app for Lighthouse (fixed debug port)
         run: |
           SEED_DEMO=true python3 -m uvicorn main:app --port 8000 &
-          sleep 5
-          curl -sf http://localhost:8000/api/health
+          # Demo seeding takes longer than a fixed sleep; wait up to 60s for the app to answer.
+          for i in $(seq 1 60); do curl -sf http://localhost:8000/api/health && exit 0; sleep 1; done
+          echo "app did not become healthy in 60s"; exit 1
       - name: Run Playwright e2e (functional)
         working-directory: tests-e2e
         run: npx playwright test pwa.spec.js

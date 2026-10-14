@@ -197,7 +197,7 @@ class CommissionEngine:
         if amount == 0:
             return False
         existing = (await self.db.execute(select(EmployeeBalanceLedger.id).where(
-            EmployeeBalanceLedger.idempotency_key == idempotency_key))).scalar_one_or_none()
+            EmployeeBalanceLedger.idempotency_key == EmployeeBalanceLedger.normalize_key(idempotency_key)))).scalar_one_or_none()
         if existing:
             return False
         self.db.add(EmployeeBalanceLedger(

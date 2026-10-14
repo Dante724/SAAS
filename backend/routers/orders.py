@@ -1693,12 +1693,16 @@ async def order_incoming_po(
     await _guard_order_access(db, current, order)
     open_states = ("draft", "ordered", "partial")
     # POs raised for this WO, or with any line reserved for it — scoped to org via supplier
-    pos = (await db.execute(select(PurchaseOrder)
+    # De-duplicate on the id in a subquery: SELECT DISTINCT over whole PO rows fails on Postgres
+    # (purchase_orders has JSON columns, which have no equality operator).
+    po_ids = (select(PurchaseOrder.id)
         .join(Supplier, PurchaseOrder.supplier_id == Supplier.id)
         .outerjoin(POLine, POLine.po_id == PurchaseOrder.id)
         .where(Supplier.org_id == current.org_id, PurchaseOrder.status.in_(open_states),
                or_(PurchaseOrder.source_order_id == order_id, POLine.reserved_order_id == order_id))
-        .distinct())).scalars().all()
+        .distinct())
+    pos = (await db.execute(select(PurchaseOrder).where(PurchaseOrder.id.in_(po_ids))
+                            .order_by(PurchaseOrder.po_number))).scalars().all()
     part_names = {p.id: p.name for p in (await db.execute(
         select(Part).where(Part.org_id == current.org_id))).scalars().all()}
     out = []

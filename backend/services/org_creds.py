@@ -40,6 +40,7 @@ PROVIDER_FIELDS: dict[str, list[dict]] = {
         {"key": "access_token", "label": "Access token", "secret": True, "env": "SQUARE_ACCESS_TOKEN"},
         {"key": "location_id", "label": "Location ID", "env": "SQUARE_LOCATION_ID"},
         {"key": "env", "label": "Environment (sandbox/production)", "env": "SQUARE_ENV"},
+        {"key": "webhook_signature_key", "label": "Webhook signature key", "secret": True, "env": "SQUARE_WEBHOOK_SIGNATURE_KEY"},
     ],
     "sumup": [
         {"key": "api_key", "label": "API key", "secret": True, "env": "SUMUP_API_KEY"},

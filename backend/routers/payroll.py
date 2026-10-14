@@ -689,7 +689,7 @@ async def post_attendance_wages(
     wage = _money(q2(hours * rate))
     idem = f"attendance:{data.employee_id}:{data.date_from}:{data.date_to}"
     already = (await db.execute(select(EmployeeBalanceLedger).where(
-        EmployeeBalanceLedger.idempotency_key == idem))).scalar_one_or_none()
+        EmployeeBalanceLedger.idempotency_key == EmployeeBalanceLedger.normalize_key(idem)))).scalar_one_or_none()
     posted = False
     if wage > 0 and not already:
         # attribute the wage to the period worked (end of the window), not "now",
