@@ -27,5 +27,16 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     css: false,
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    coverage: {
+      provider: "v8",
+      // Measure ALL source files, including ones no test imports — an honest denominator.
+      all: true,
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: ["src/**/*.{test,spec}.{ts,tsx}", "src/test/**", "src/main.tsx", "src/**/*.d.ts"],
+      reporter: ["text-summary", "lcov"],
+      // RATCHET: set at the measured level; raise as tests are added, never lower.
+      // Measured 2.8% stmts/lines, 25% funcs, 63% branches; floors leave headroom for new untested files.
+      thresholds: { statements: 2.5, lines: 2.5, functions: 24, branches: 60 },
+    },
   },
 });

@@ -36,7 +36,16 @@ jobs:
         # migration lands. Kept visible so new drift is noticed.
         run: alembic -c backend/alembic.ini check || true
       - name: Run tests
-        run: pytest -q -n auto   # parallel; conftest isolates each worker on its own SQLite file
+        # parallel (conftest isolates each worker on its own SQLite file) + branch coverage; fails if
+        # coverage drops below the ratchet floor in pyproject [tool.coverage.report] fail_under.
+        run: pytest -q -n auto --cov --cov-report=term:skip-covered --cov-report=xml
+      - name: Upload backend coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-backend
+          path: coverage.xml
+          if-no-files-found: ignore
 
   backend-postgres:
     # Production runs Postgres 16; the main job runs on SQLite (fast but lenient about types,
@@ -104,7 +113,14 @@ jobs:
         run: npx tsc --noEmit
       - name: UI-text lint (no raw snake_case in labels)
         run: npm run lint:uitext
-      - name: Unit tests (Vitest)
-        run: npm test
+      - name: Unit tests + coverage floor (Vitest)
+        run: npm run test:coverage
+      - name: Upload frontend coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-frontend
+          path: frontend-react/coverage/lcov.info
+          if-no-files-found: ignore
       - name: Build
         run: npm run build

@@ -27,8 +27,8 @@ ci: ci-backend ci-frontend   ## run EVERY CI gate locally, in CI order. Green he
 ci-backend:     ## backend gates: lint → migrations from scratch → tests
 	ruff check main.py backend/config.py backend/core backend/db backend/tests
 	rm -f ci_test*.db && $(CI_ENV) alembic -c backend/alembic.ini upgrade head
-	rm -f ci_test*.db && $(CI_ENV) pytest -q -n auto
+	rm -f ci_test*.db && $(CI_ENV) pytest -q -n auto --cov --cov-report=term:skip-covered
 	rm -f ci_test*.db
 
 ci-frontend:    ## frontend gates: typecheck → ui-text lint → unit tests → build
-	cd frontend-react && npx tsc --noEmit && npm run lint:uitext && npm test && npm run build
+	cd frontend-react && npx tsc --noEmit && npm run lint:uitext && npm run test:coverage && npm run build
