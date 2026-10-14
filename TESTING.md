@@ -34,6 +34,12 @@ cd frontend-react && npm run test:coverage   # frontend unit tests + coverage fl
 **Local == CI.** Every tool version is pinned once in `requirements-dev.txt` / `package-lock.json`;
 `make ci` runs the same steps CI does. Verified in an exact replica of CI's pinned stack.
 
+**CI sharding.** On GitHub the backend suite runs as 4 parallel `test (shard N)` jobs. A hook at the end
+of `backend/tests/conftest.py` assigns whole files to shards (balanced by test count) when
+`PYTEST_SHARD`/`PYTEST_SHARD_TOTAL` are set. The `coverage` job then checks that the shards ran exactly
+the collected suite, combines their coverage data, and enforces the floor. To reproduce one shard locally:
+`PYTEST_SHARD=2 PYTEST_SHARD_TOTAL=4 pytest -n auto`. Unset, nothing changes.
+
 ## Coverage (ratchet)
 
 Measured on the full suite. Floors live in config; **raise them as coverage improves, never lower them.**
