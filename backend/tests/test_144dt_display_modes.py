@@ -44,7 +44,7 @@ async def test_detailed_mode_returns_every_line(client):
     body = (await client.get(f"/api/finance/invoices/{inv_id}", headers=H)).json()
     assert body["display_mode"] == "detailed"
     assert len(body["lines"]) == 2
-    assert {l["description"] for l in body["lines"]} == {"Diag", "Screen part"}
+    assert {ln["description"] for ln in body["lines"]} == {"Diag", "Screen part"}
 
 
 @pytest.mark.asyncio

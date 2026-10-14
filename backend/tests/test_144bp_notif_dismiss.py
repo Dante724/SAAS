@@ -64,8 +64,10 @@ async def test_dismiss_foreign_notification_404(client, tenant, db):
     db.add(Organisation(id=oid, name="Other Co"))
     await db.flush()
     other = Employee(org_id=oid, email=f"x-{uuid.uuid4().hex[:6]}@y.z", name="Other", password_hash="x")
-    db.add(other); await db.flush()
+    db.add(other)
+    await db.flush()
     sn = StaffNotification(org_id=oid, employee_id=other.id, kind="x", title="foreign")
-    db.add(sn); await db.commit()
+    db.add(sn)
+    await db.commit()
     r = await client.post(f"/api/tech/notifications/{sn.id}/dismiss", headers=tenant)
     assert r.status_code == 404

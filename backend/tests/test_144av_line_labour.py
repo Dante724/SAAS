@@ -26,17 +26,22 @@ async def _order(client, tenant, **extra):
 def test_line_splits_prefers_co_technicians():
     class L:  # duck-typed line
         co_technicians = [{"employee_id": "a", "share": 0.5}, {"employee_id": "b", "share": 0.5}]
-        technician_id = "a"; work_share = 1.0
+        technician_id = "a"
+        work_share = 1.0
     assert _line_splits(L()) == [("a", 0.5), ("b", 0.5)]
 
 
 def test_line_splits_falls_back_to_single_then_assignee():
     class L1:
-        co_technicians = []; technician_id = "solo"; work_share = 1.0
+        co_technicians = []
+        technician_id = "solo"
+        work_share = 1.0
     assert _line_splits(L1()) == [("solo", 1.0)]
 
     class L2:
-        co_technicians = []; technician_id = None; work_share = 1.0
+        co_technicians = []
+        technician_id = None
+        work_share = 1.0
     assert _line_splits(L2(), fallback="mgr") == [("mgr", 1.0)]
     assert _line_splits(L2()) == []   # nobody → no pay
 

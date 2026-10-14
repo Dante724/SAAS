@@ -39,10 +39,10 @@ async def test_create_with_free_lines_only(client):
     # subtotal auto-summed from the free lines (50 + 20)
     assert body["subtotal"] == 70
     assert body["comment"] == "thanks"
-    descs = [l["description"] for l in body["lines"]]
+    descs = [ln["description"] for ln in body["lines"]]
     assert "Diagnostics" in descs and "Rush fee" in descs
     # the rush-fee line carries qty 2 → total 20
-    rush = next(l for l in body["lines"] if l["description"] == "Rush fee")
+    rush = next(ln for ln in body["lines"] if ln["description"] == "Rush fee")
     assert rush["total"] == 20
 
 

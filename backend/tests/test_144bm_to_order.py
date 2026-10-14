@@ -23,7 +23,8 @@ async def test_to_order_lists_shortfall_from_open_job(client, tenant, db):
     loc = await _loc(client, tenant)
     # an OPEN work order that needs 3 of a part we have 0 of
     o = Order(org_id=org_id, order_number="WO-NEED-1", status="new", location_id=loc)
-    db.add(o); await db.flush()
+    db.add(o)
+    await db.flush()
     db.add(OrderLine(order_id=o.id, line_type="part", ref_id=needed["id"], description="Need Screen", qty=3))
     await db.commit()
 
@@ -46,7 +47,8 @@ async def test_in_stock_part_not_listed(client, tenant, db):
     org_id = (await db.execute(select(Part.org_id).where(Part.id == p["id"]))).scalar_one()
     await client.post("/api/inventory/postings", json={"location_id": loc, "lines": [{"part_id": p["id"], "qty": 10, "purchase_price": 5}]}, headers=tenant)
     o = Order(org_id=org_id, order_number="WO-HAVE-1", status="new", location_id=loc)
-    db.add(o); await db.flush()
+    db.add(o)
+    await db.flush()
     db.add(OrderLine(order_id=o.id, line_type="part", ref_id=p["id"], description="Have Battery", qty=2))
     await db.commit()
 
@@ -63,7 +65,8 @@ async def test_closed_order_excluded(client, tenant, db):
     org_id = (await db.execute(select(Part.org_id).where(Part.id == p["id"]))).scalar_one()
     loc = await _loc(client, tenant)
     o = Order(org_id=org_id, order_number="WO-CLOSED-1", status="closed", location_id=loc)
-    db.add(o); await db.flush()
+    db.add(o)
+    await db.flush()
     db.add(OrderLine(order_id=o.id, line_type="part", ref_id=p["id"], description="Closed Need", qty=4))
     await db.commit()
 

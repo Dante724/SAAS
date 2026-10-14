@@ -49,11 +49,13 @@ async def test_payment_due_only_when_issued_invoice_unpaid(client, tenant, db):
     org = (await db.execute(select(_O.org_id).where(_O.id == o["id"]))).scalar_one()
     # an issued, unpaid invoice → due
     inv = Invoice(org_id=org, order_id=o["id"], invoice_number="INV-DD-1", status="issued", total=100, amount_paid=0)
-    db.add(inv); await db.commit()
+    db.add(inv)
+    await db.commit()
     assert (await client.get(f"/api/orders/{o['id']}", headers=tenant)).json()["payment_due"] is True
 
     # fully paid → not due
-    inv.amount_paid = 100; await db.commit()
+    inv.amount_paid = 100
+    await db.commit()
     assert (await client.get(f"/api/orders/{o['id']}", headers=tenant)).json()["payment_due"] is False
 
 

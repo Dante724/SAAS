@@ -24,10 +24,12 @@ async def test_over_threshold_needs_manager(client, tenant, db):
     org.po_approval_threshold = 100
     # restricted role: explicitly denied settings management (a buyer, not a manager)
     role = Role(org_id=org.id, name="Buyer", permissions={"can_manage_settings": False})
-    db.add(role); await db.flush()
+    db.add(role)
+    await db.flush()
     buyer = Employee(org_id=org.id, location_id=admin.location_id, role_id=role.id,
                      name="Buyer", email="buyer@appr.test", password_hash=hash_password("pw-buyer-123"), active=True)
-    db.add(buyer); await db.commit()
+    db.add(buyer)
+    await db.commit()
     sid = (await client.post("/api/suppliers", json={"name": "Acme"}, headers=tenant)).json()["id"]
     loc = (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]
 

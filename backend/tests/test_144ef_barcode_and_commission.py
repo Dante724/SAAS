@@ -62,7 +62,10 @@ def test_service_rule_beats_generic_in_resolver():
     for that service's line over a generic rule."""
     class R:
         def __init__(self, level, sid=None, pid=None, cat=None):
-            self.rule_level = level; self.service_id = sid; self.product_id = pid; self.category = cat
+            self.rule_level = level
+            self.service_id = sid
+            self.product_id = pid
+            self.category = cat
     generic = R("generic")
     svc = R("service", sid="svc-1")
     other_svc = R("service", sid="svc-2")

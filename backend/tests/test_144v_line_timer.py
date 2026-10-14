@@ -14,7 +14,7 @@ async def _order_with_labour(client, tenant):
                   {"line_type": "labour", "description": "Alignment", "qty": 1, "unit_price": 90}]})
     assert r.status_code in (200, 201), r.text
     o = r.json()
-    labour_lines = [l for l in o["lines"] if l["line_type"] == "labour"]
+    labour_lines = [ln for ln in o["lines"] if ln["line_type"] == "labour"]
     return o["id"], labour_lines[0]["id"], labour_lines[1]["id"]
 
 

@@ -41,7 +41,7 @@ async def test_my_work_returns_order_cards_with_next_status(client, tenant):
     assert card["next_label"]
     assert card["checklist_total"] == 0 and card["checklist_done"] == 0
     assert card["client"]  # client name surfaced
-    assert any(l["description"] == "Brakes" for l in card["lines"])
+    assert any(ln["description"] == "Brakes" for ln in card["lines"])
 
 
 @pytest.mark.asyncio

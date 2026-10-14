@@ -34,7 +34,8 @@ async def test_non_finance_role_closes_blind(client, tenant, db):
     me = (await client.get("/api/auth/me", headers=tenant)).json()
     # make the current user a cashier who cannot view finance
     role = Role(org_id=me["org_id"], name="Cashier", permissions={"can_view_finance": False})
-    db.add(role); await db.flush()
+    db.add(role)
+    await db.flush()
     emp = (await db.execute(select(Employee).where(Employee.id == me["id"]))).scalar_one()
     emp.role_id = role.id
     await db.commit()

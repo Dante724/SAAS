@@ -68,7 +68,9 @@ async def test_supplier_cash_return_posts_to_cashbox(client, tenant, db):
                       json={"location_id": loc, "qty": 10, "movement_type": "receive"}, headers=tenant)
     w = (await client.get("/api/settings/warehouses?kind=product", headers=tenant)).json()["items"][0]
     sup = Supplier(org_id=me["org_id"], name="Acme", balance=0)
-    db.add(sup); await db.commit(); await db.refresh(sup)
+    db.add(sup)
+    await db.commit()
+    await db.refresh(sup)
 
     r = await client.post("/api/stock-docs/returns", json={
         "warehouse_id": w["id"], "supplier_id": sup.id, "settlement": "cash", "account_id": aid,

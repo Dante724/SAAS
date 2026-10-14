@@ -79,7 +79,8 @@ async def test_job_unblocked_notifies_on_receive(client, tenant, db):
     org_id = (await db.execute(select(P.org_id).where(P.id == p["id"]))).scalar_one()
     loc = (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]
     o = Order(org_id=org_id, order_number="WO-UB-1", status="new", location_id=loc)
-    db.add(o); await db.flush()
+    db.add(o)
+    await db.flush()
     db.add(OrderLine(order_id=o.id, line_type="part", ref_id=p["id"], description="Need", qty=3))
     await db.commit()
     part = (await db.execute(select(P).where(P.id == p["id"]))).scalar_one()
@@ -100,7 +101,8 @@ async def test_no_unblock_when_still_short(client, tenant, db):
     org_id = (await db.execute(select(P.org_id).where(P.id == p["id"]))).scalar_one()
     loc = (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]
     o = Order(org_id=org_id, order_number="WO-UB-2", status="new", location_id=loc)
-    db.add(o); await db.flush()
+    db.add(o)
+    await db.flush()
     db.add(OrderLine(order_id=o.id, line_type="part", ref_id=p["id"], description="Need", qty=10))
     await db.commit()
     part = (await db.execute(select(P).where(P.id == p["id"]))).scalar_one()

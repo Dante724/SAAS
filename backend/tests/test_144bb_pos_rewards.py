@@ -45,7 +45,8 @@ async def test_pos_loyalty_redeem(client, tenant, db):
     db.add(cl)
     await db.flush()
     db.add(LoyaltyLedger(org_id=me["org_id"], client_id=cl.id, points=400, ref_type="seed", note="t"))
-    await db.commit(); await db.refresh(cl)
+    await db.commit()
+    await db.refresh(cl)
 
     r = await client.post("/api/sales", json={
         "client_id": cl.id, "lines": [_svc_line(100)], "redeem_points": 200}, headers=tenant)

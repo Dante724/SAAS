@@ -53,7 +53,7 @@ async def test_variant_resolves_to_fitting_part_and_deducts_it(client, tenant, d
     assert r.status_code in (200, 201), r.text
 
     od = (await client.get(f"/api/orders/{oid}", headers=tenant)).json()
-    refs = [l.get("ref_id") for l in od["lines"]]
+    refs = [ln.get("ref_id") for ln in od["lines"]]
     assert ip13 in refs, f"should have resolved to the iPhone 13 screen, line refs={refs}"
     assert generic not in refs, "the generic fallback should NOT be on the order"
 
@@ -81,4 +81,4 @@ async def test_variant_falls_back_when_no_device(client, tenant, db):
         "kind": "bundle", "line_type": "part", "description": "Screen combo", "ref_id": bid, "qty": 1}, headers=tenant)
     assert r.status_code in (200, 201), r.text
     od = (await client.get(f"/api/orders/{oid}", headers=tenant)).json()
-    assert generic in [l.get("ref_id") for l in od["lines"]], "no device → configured part is used"
+    assert generic in [ln.get("ref_id") for ln in od["lines"]], "no device → configured part is used"

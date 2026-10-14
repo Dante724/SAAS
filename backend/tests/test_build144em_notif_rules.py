@@ -154,5 +154,5 @@ async def test_chat_first_routes_to_latest_chat_channel(client, tenant, db):
     logs = (await db.execute(select(NotificationLog).where(
         NotificationLog.order_id == o["id"]))).scalars().all()
     assert logs, "a notification should have been logged"
-    assert any(l.channel == "whatsapp" for l in logs), \
+    assert any(ln.channel == "whatsapp" for ln in logs), \
         "chat_first should have routed the send to the client's latest chat channel"

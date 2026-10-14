@@ -10,9 +10,11 @@ async def _setup(client, tenant, db):
     loc = (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]
     pid = (await client.post("/api/inventory/parts", json={"name": "Belt", "sku": "BELT-1"}, headers=tenant)).json()["id"]
     sup = Supplier(org_id=me["org_id"], name="S", balance=0)
-    db.add(sup); await db.flush()
+    db.add(sup)
+    await db.flush()
     po = PurchaseOrder(supplier_id=sup.id, location_id=loc, po_number="PO-M1", status="ordered", on_credit=True)
-    db.add(po); await db.flush()
+    db.add(po)
+    await db.flush()
     from backend.models import POLine
     db.add(POLine(po_id=po.id, part_id=pid, qty_ordered=10, unit_cost=5))
     await db.commit()

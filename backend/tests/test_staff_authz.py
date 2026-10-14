@@ -20,10 +20,12 @@ async def test_staff_writes_need_manage_employees(client, tenant, db):
 
     # a restricted employee: management of employees + roles explicitly denied
     role = Role(org_id=org.id, name="Tech", permissions={"can_manage_employees": False, "can_manage_roles": False})
-    db.add(role); await db.flush()
+    db.add(role)
+    await db.flush()
     tech = Employee(org_id=org.id, location_id=owner.location_id, role_id=role.id,
                     name="Tech", email="tech@authz.test", password_hash=hash_password("pw-tech-123"), active=True)
-    db.add(tech); await db.commit()
+    db.add(tech)
+    await db.commit()
     th = await _login(client, "tech@authz.test", "pw-tech-123")
 
     # owner (no role) can still manage — not 403

@@ -16,7 +16,8 @@ async def _loc(client, tenant):
 
 @pytest.mark.asyncio
 async def test_edit_lines_and_charges_then_totals(client, tenant, db):
-    sid = await _sup(client, tenant); loc = await _loc(client, tenant)
+    sid = await _sup(client, tenant)
+    loc = await _loc(client, tenant)
     pid = (await client.post("/api/inventory/parts", json={"name": "Pad", "sku": "PAD-1"}, headers=tenant)).json()["id"]
     po = (await client.post("/api/inventory/po", headers=tenant, json={
         "supplier_id": sid, "location_id": loc, "on_credit": True,
@@ -46,7 +47,8 @@ async def test_edit_lines_and_charges_then_totals(client, tenant, db):
 
 @pytest.mark.asyncio
 async def test_cannot_remove_received_line(client, tenant, db):
-    sid = await _sup(client, tenant); loc = await _loc(client, tenant)
+    sid = await _sup(client, tenant)
+    loc = await _loc(client, tenant)
     pid = (await client.post("/api/inventory/parts", json={"name": "Disc", "sku": "DISC-1"}, headers=tenant)).json()["id"]
     po_id = (await client.post("/api/inventory/po", headers=tenant, json={
         "supplier_id": sid, "location_id": loc, "lines": [{"part_id": pid, "qty_ordered": 3, "unit_cost": 5}]})).json()["po_id"]

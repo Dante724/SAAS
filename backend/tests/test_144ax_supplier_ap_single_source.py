@@ -16,9 +16,12 @@ async def _linked_supplier(client, h, db):
     from backend.models import Supplier
     me = await _me(client, h)
     c = _Client(org_id=me["org_id"], name="Acme Vendor", is_supplier=True)
-    db.add(c); await db.flush()
+    db.add(c)
+    await db.flush()
     sup = Supplier(org_id=me["org_id"], client_id=c.id, name="Acme Vendor", balance=0)
-    db.add(sup); await db.commit(); await db.refresh(sup)
+    db.add(sup)
+    await db.commit()
+    await db.refresh(sup)
     return sup, c.id
 
 

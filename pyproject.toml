@@ -13,7 +13,4 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Tests: unused/redefined imports (fixtures), compact one-line setups (E702) and short loop vars
-# like `l` (E741) are cosmetic in test code and can't hide a bug — allowed. Real-signal rules
-# (F841 unused vars, E711, B017, etc.) stay enforced.
-"backend/tests/*" = ["F401", "F811", "E702", "E741"]
+"backend/tests/*" = ["F401", "F811"]

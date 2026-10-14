@@ -32,11 +32,13 @@ async def test_create_po_blocked_for_scoped_tech_on_others_order(client, tenant,
     admin = (await db.execute(select(Employee).where(Employee.org_id == org.id))).scalars().first()
     role = Role(org_id=org.id, name="Bench", order_scope="own",
                 permissions={"can_manage_inventory": True})
-    db.add(role); await db.flush()
+    db.add(role)
+    await db.flush()
     tech = Employee(org_id=org.id, location_id=admin.location_id, role_id=role.id,
                     name="Bench", email="bench-po@scopetest.dev",
                     password_hash=hash_password("pw-bench-po-123"), active=True)
-    db.add(tech); await db.commit()
+    db.add(tech)
+    await db.commit()
 
     sid = (await client.post("/api/suppliers", json={"name": "Acme"}, headers=tenant)).json()["id"]
     cid = (await client.post("/api/clients", json={"name": "C", "phone": "+1555088"}, headers=tenant)).json()["id"]

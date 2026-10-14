@@ -25,7 +25,7 @@ async def test_full_count_seeds_real_onhand(client, tenant):
     st = (await client.post("/api/stocktake", json={"location_id": loc, "kind": "full"}, headers=tenant)).json()
     assert st["lines"] >= 1, "full count should seed lines from location stock"
     detail = (await client.get(f"/api/stocktake/{st['id']}", headers=tenant)).json()
-    line = next(l for l in detail["lines"] if l["system_qty"] == 10)
+    line = next(ln for ln in detail["lines"] if ln["system_qty"] == 10)
     assert line["system_qty"] == 10
 
 

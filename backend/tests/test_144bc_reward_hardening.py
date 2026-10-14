@@ -46,9 +46,12 @@ async def test_pos_loyalty_caps_at_bill(client, tenant, db):
     me = (await client.get("/api/auth/me", headers=tenant)).json()
     org = (await db.execute(select(Organisation).where(Organisation.id == me["org_id"]))).scalar_one()
     org.loyalty_point_value = 0.10          # 1 pt = 0.10
-    cl = ClientM(org_id=me["org_id"], name="Cap Carl"); db.add(cl); await db.flush()
+    cl = ClientM(org_id=me["org_id"], name="Cap Carl")
+    db.add(cl)
+    await db.flush()
     db.add(LoyaltyLedger(org_id=me["org_id"], client_id=cl.id, points=1000, ref_type="seed", note="t"))
-    await db.commit(); await db.refresh(cl)
+    await db.commit()
+    await db.refresh(cl)
 
     # bill 30; redeeming 1000 pts (=100 value) should cap at 30 value = 300 pts
     r = await client.post("/api/sales", json={
@@ -70,9 +73,12 @@ async def test_wo_loyalty_caps_at_order_balance(client, tenant, db):
     loc = (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]
     org = (await db.execute(select(Organisation).where(Organisation.id == me["org_id"]))).scalar_one()
     org.loyalty_point_value = 0.10
-    cl = ClientM(org_id=me["org_id"], name="WO Cap"); db.add(cl); await db.flush()
+    cl = ClientM(org_id=me["org_id"], name="WO Cap")
+    db.add(cl)
+    await db.flush()
     db.add(LoyaltyLedger(org_id=me["org_id"], client_id=cl.id, points=1000, ref_type="seed", note="t"))
-    await db.commit(); await db.refresh(cl)
+    await db.commit()
+    await db.refresh(cl)
     o = (await client.post("/api/orders", json={"client_id": cl.id, "location_id": loc, "complaint": "x"},
                            headers=tenant)).json()
     await client.post(f"/api/orders/{o['id']}/lines", json={
@@ -95,7 +101,8 @@ async def test_wo_gift_card_atomic_decrement(client, tenant, db):
     g = (await client.post("/api/giftcards", json={"value": 40, "client_id": cid}, headers=tenant)).json()
     code = g["code"]
     gid = (await db.execute(select(GiftCard.id).where(GiftCard.code == code))).scalar_one()
-    await db.execute(sa_update(GiftCard).where(GiftCard.id == gid).values(balance=5)); await db.commit()
+    await db.execute(sa_update(GiftCard).where(GiftCard.id == gid).values(balance=5))
+    await db.commit()
     o = (await client.post("/api/orders", json={"client_id": cid, "location_id": loc, "complaint": "x"},
                            headers=tenant)).json()
     await client.post(f"/api/orders/{o['id']}/lines", json={

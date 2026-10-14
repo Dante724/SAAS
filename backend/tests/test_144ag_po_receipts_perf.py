@@ -12,7 +12,8 @@ async def _loc(client, tenant):
 
 @pytest.mark.asyncio
 async def test_receipt_timeline_records_each_delivery(client, tenant):
-    sid = await _sup(client, tenant); loc = await _loc(client, tenant)
+    sid = await _sup(client, tenant)
+    loc = await _loc(client, tenant)
     pid = (await client.post("/api/inventory/parts", json={"name": "Hose", "sku": "H-1"}, headers=tenant)).json()["id"]
     po_id = (await client.post("/api/inventory/po", headers=tenant, json={
         "supplier_id": sid, "location_id": loc, "lines": [{"part_id": pid, "qty_ordered": 10, "unit_cost": 3}]})).json()["po_id"]
@@ -28,7 +29,8 @@ async def test_receipt_timeline_records_each_delivery(client, tenant):
 
 @pytest.mark.asyncio
 async def test_supplier_performance_scorecard(client, tenant):
-    sid = await _sup(client, tenant); loc = await _loc(client, tenant)
+    sid = await _sup(client, tenant)
+    loc = await _loc(client, tenant)
     pid = (await client.post("/api/inventory/parts", json={"name": "Filter", "sku": "F-1"}, headers=tenant)).json()["id"]
     # PO 1 @ cost 5, received
     po1 = (await client.post("/api/inventory/po", headers=tenant, json={

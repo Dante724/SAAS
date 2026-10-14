@@ -48,7 +48,8 @@ async def test_run_due_dispatches_scheduled(client, tenant, db):
     from backend.models import Client, NotificationLog
     oid = await _org_id(client, tenant)
     cust = Client(org_id=oid, name="Due Client", phone="9995556666", consent_phone=True)
-    db.add(cust); await db.flush()
+    db.add(cust)
+    await db.flush()
     db.add(NotificationLog(
         org_id=oid, scope="client", channel="sms", trigger_event="reminder",
         client_id=cust.id, recipient=cust.phone, subject=None, body="Reminder!",

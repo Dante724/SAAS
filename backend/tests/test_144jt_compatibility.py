@@ -30,7 +30,8 @@ async def test_search_flags_fit(client, tenant, db):
     await client.post("/api/catalog/products", headers=tenant, json={
         "name": "Generic cable", "sell_price": 5})
     dev = Device(id=uuid.uuid4().hex, org_id=org, brand="Apple", model="iPhone 13")
-    db.add(dev); await db.commit()
+    db.add(dev)
+    await db.commit()
 
     # /catalog/search flags the fit; without device_id there's no 'fits' key (unchanged behavior)
     def _items(resp):

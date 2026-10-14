@@ -27,7 +27,7 @@ async def test_transfer_then_reverse_returns_to_original_location(client, tenant
     assert (await client.get(f"/api/inventory/parts/{pid}", headers=tenant)).json()["qty_available"] == 7
 
     od = (await client.get(f"/api/orders/{oid}", headers=tenant)).json()
-    line_id = [l for l in od["lines"] if l.get("ref_id") == pid][0]["id"]
+    line_id = [ln for ln in od["lines"] if ln.get("ref_id") == pid][0]["id"]
 
     assert (await client.post(f"/api/orders/{oid}/transfer", headers=tenant,
                               json={"location_id": locB})).status_code == 200

@@ -86,7 +86,7 @@ async def test_alloc_basis_qty_splits_evenly(client, tenant):
     # set charges + qty basis, capitalise
     await client.post(f"/api/inventory/po/{po}/recost", headers=tenant,
                       json={"charges": [{"label": "Freight", "amount": 20}], "charges_to_cost": True, "alloc_basis": "qty"})
-    lines = {l["part"]: l["id"] for l in detail["lines"]}
+    lines = {ln["part"]: ln["id"] for ln in detail["lines"]}
     for lid in lines.values():
         await client.post(f"/api/inventory/po/{po}/receive", headers=tenant, json={"lines": [{"po_line_id": lid, "qty": 10}]})
     # qty basis → ₹20 over 20 units = ₹1/unit on BOTH parts
@@ -106,7 +106,7 @@ async def test_alloc_basis_weight(client, tenant):
     ])
     await client.post(f"/api/inventory/po/{po}/recost", headers=tenant,
                       json={"charges": [{"label": "Freight", "amount": 40}], "charges_to_cost": True, "alloc_basis": "weight"})
-    lines = {l["part"]: l["id"] for l in detail["lines"]}
+    lines = {ln["part"]: ln["id"] for ln in detail["lines"]}
     for lid in lines.values():
         await client.post(f"/api/inventory/po/{po}/receive", headers=tenant, json={"lines": [{"po_line_id": lid, "qty": 10}]})
     # total weight = 10*1 + 10*3 = 40kg. ₹40 / 40kg = ₹1/kg.

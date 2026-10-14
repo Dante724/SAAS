@@ -24,7 +24,8 @@ async def test_link_lifecycle_and_generate_once(client, tenant):
     # create link
     r = await client.post(f"/api/orders/{oid}/payment-link", headers=h)
     assert r.status_code == 201, r.text
-    j = r.json(); iid = j["intent_id"]
+    j = r.json()
+    iid = j["intent_id"]
     assert j["reused"] is False and j["status"] in ("created", "pending")
 
     # generate-once: asking again reuses the same link

@@ -59,7 +59,8 @@ async def test_overdue_count_is_accurate(client, tenant, db):
     rows = {r.id: r for r in (await db.execute(select(Order).where(Order.id.in_(ids)))).scalars().all()}
     rows[ids[0]].due_at = now - timedelta(days=1)   # overdue
     rows[ids[1]].due_at = now + timedelta(days=3)   # future — not overdue
-    rows[ids[2]].due_at = now - timedelta(days=1); rows[ids[2]].closed_at = now  # overdue date but closed
+    rows[ids[2]].due_at = now - timedelta(days=1)
+    rows[ids[2]].closed_at = now  # overdue date but closed
     await db.commit()
 
     body = (await client.get("/api/reports/home-feed", headers=tenant)).json()

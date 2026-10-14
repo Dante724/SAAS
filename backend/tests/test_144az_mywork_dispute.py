@@ -20,7 +20,7 @@ async def test_my_work_lists_my_assigned_lines(client, tenant):
         "qty": 1, "unit_price": 100, "technician_id": me["id"], "booked_hours": 1.0}, headers=tenant)
     mw = (await client.get("/api/timeclock/my-work", headers=tenant)).json()
     assert "today_seconds" in mw and "week_seconds" in mw
-    assert any(l["description"] == "Brakes" and l["booked_hours"] == 1.0 for l in mw["lines"])
+    assert any(ln["description"] == "Brakes" and ln["booked_hours"] == 1.0 for ln in mw["lines"])
 
 
 @pytest.mark.asyncio
