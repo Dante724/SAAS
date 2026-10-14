@@ -112,8 +112,11 @@ async def create_refund(
                     account_id=data.account_id, amount=data.amount, reason=data.reason)
     db.add(refund)
     await db.flush()
-    db.add(Payment(order_id=order_id, client_id=locked.client_id, method="refund", kind="refund",
-                   amount=data.amount, account_id=data.account_id, received_by_id=current.id,
+    from backend.routers.cash import open_drawer_shift
+    _shift = await open_drawer_shift(db, current.org_id, acct)
+    db.add(Payment(order_id=order_id, client_id=locked.client_id, method="cash" if _shift else "refund",
+                   kind="refund", amount=data.amount, account_id=data.account_id, received_by_id=current.id,
+                   shift_id=_shift,   # cash handed back from a drawer reduces that drawer's expected cash
                    reference=f"Refund: {data.reason or ''}"[:200]))
     # Money out of the cashbox (signed ledger)
     from backend.routers.cash import post_transaction

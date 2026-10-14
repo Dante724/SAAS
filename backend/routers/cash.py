@@ -72,16 +72,23 @@ async def post_transaction(db, org_id, account_id, txn_type, amount, *,
         # agrees with the cashbox balance (sales go via Payment.shift_id). Link only when it's
         # unambiguous: for a location-scoped till, that location's open shift; for a company-wide
         # till, the single org-wide open shift. 2+ candidate drawers → leave unlinked.
-        if txn_type in ("income", "expense") and acc.payment_option == "cash":
-            from backend.models import CashShift
-            q = (select(CashShift).join(Location, CashShift.location_id == Location.id)
-                 .where(Location.org_id == org_id, CashShift.closed_at.is_(None)))
-            if acc.location_id:
-                q = q.where(CashShift.location_id == acc.location_id)
-            shifts = (await db.execute(q)).scalars().all()
-            if len(shifts) == 1:
-                txn.shift_id = shifts[0].id
+        if txn_type in ("income", "expense"):
+            txn.shift_id = await open_drawer_shift(db, org_id, acc)
     return txn
+
+
+async def open_drawer_shift(db, org_id, acc) -> Optional[str]:
+    """The open cash shift a cash till belongs to, when unambiguous: for a location-scoped till,
+    that location's open shift; for a company-wide till, the single org-wide open shift."""
+    if not acc or acc.payment_option != "cash":
+        return None
+    from backend.models import CashShift
+    q = (select(CashShift).join(Location, CashShift.location_id == Location.id)
+         .where(Location.org_id == org_id, CashShift.closed_at.is_(None)))
+    if acc.location_id:
+        q = q.where(CashShift.location_id == acc.location_id)
+    shifts = (await db.execute(q)).scalars().all()
+    return shifts[0].id if len(shifts) == 1 else None
 
 
 def _ser_account(a: Account) -> dict:
@@ -291,6 +298,17 @@ async def _get_txn(db, org_id, txn_id) -> Transaction:
     return t
 
 
+# Cash legs posted by a payment document. Voiding/correcting only the cash row reversed the till
+# while the Payment, invoice.amount_paid, client ledger and sale.paid stayed as they were.
+_DOCUMENT_LEGS = {"order": "work order payment", "invoice": "invoice payment", "sale": "sale"}
+
+
+def _guard_document_leg(t) -> None:
+    if t.ref_type in _DOCUMENT_LEGS:
+        raise HTTPException(409, f"This transaction is the cash side of a {_DOCUMENT_LEGS[t.ref_type]}. "
+                                 "Refund or void it from that document so everything stays in sync.")
+
+
 @router.post("/transactions/{txn_id}/correct", status_code=201)
 async def correct_transaction(
     txn_id: str,
@@ -304,6 +322,7 @@ async def correct_transaction(
     orig = await _get_txn(db, current.org_id, txn_id)
     if orig.status == "deleted":
         raise HTTPException(400, "Cannot correct a deleted transaction")
+    _guard_document_leg(orig)
     if not (data.reason or "").strip():
         raise HTTPException(400, "A reason is required")
     if data.delta == 0:
@@ -339,6 +358,7 @@ async def delete_transaction(
     if t.ref_type in ("refund", "client_return", "purchase_return"):
         raise HTTPException(409, f"This transaction settles a {t.ref_type.replace('_', ' ')}. "
                                  "Delete the return/refund document instead.")
+    _guard_document_leg(t)
     legs = [t]
     if t.transfer_pair_id:
         legs = (await db.execute(select(Transaction).where(
@@ -531,7 +551,8 @@ async def pay_order(
         raise HTTPException(400, "Nothing to pay — this order is already settled" if remaining <= 0 else "Payment amount must be positive")
 
     # ensure an invoice exists for this order
-    inv = (await db.execute(select(Invoice).where(Invoice.order_id == order_id))).scalar_one_or_none()
+    from backend.services.order_money import primary_invoice
+    inv = await primary_invoice(db, order_id)
     if not inv:
         await _check_backdating(db, current.org_id)
         inv = Invoice(invoice_number=await next_number(db, current.org_id, "invoice"), org_id=current.org_id,
@@ -602,7 +623,10 @@ async def pay_order(
                                    ref_id=order_id, employee_id=current.id)
 
     pay = Payment(invoice_id=inv.id, order_id=order_id, client_id=o.client_id, method=data.method,
-                  kind="payment", account_id=acc.id, amount=amount, received_by_id=current.id)
+                  kind="payment", account_id=acc.id, amount=amount, received_by_id=current.id,
+                  # cash into a till counts toward that drawer's close (was never linked → a short
+                  # drawer looked balanced or "over")
+                  shift_id=await open_drawer_shift(db, current.org_id, acc) if data.method == "cash" else None)
     db.add(pay)
     if o.client_id:
         await db.flush()
@@ -658,7 +682,8 @@ async def prepay_order(
                            ref_id=order_id, employee_id=current.id)
     pay = Payment(invoice_id=None, order_id=order_id, client_id=o.client_id, method=data.method,
                   kind="prepayment", account_id=acc.id, amount=data.amount, received_by_id=current.id,
-                  reference="Prepayment")
+                  reference="Prepayment",
+                  shift_id=await open_drawer_shift(db, current.org_id, acc) if data.method == "cash" else None)
     db.add(pay)
     if o.client_id:
         await db.flush()

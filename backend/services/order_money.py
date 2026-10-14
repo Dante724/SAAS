@@ -13,7 +13,7 @@ Conventions every writer follows:
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.models import Order, Payment, PaymentIntent
+from backend.models import Invoice, Order, Payment, PaymentIntent
 from backend.services.money import q2
 
 
@@ -40,6 +40,16 @@ async def balance_due(db: AsyncSession, order: Order) -> float:
 async def overpaid(db: AsyncSession, order: Order) -> float:
     """Amount received beyond the order total (refundable as overpayment)."""
     return q2(max(0.0, await net_paid(db, order.id) - float(order.total or 0)))
+
+
+async def primary_invoice(db: AsyncSession, order_id: str):
+    """The invoice money for this order should land on: the newest one still open, else the
+    newest. Orders can carry several invoices (sub-invoices, invoices attached later), and the
+    old scalar_one_or_none() lookups 500'd with MultipleResultsFound once they did."""
+    invs = (await db.execute(select(Invoice).where(Invoice.order_id == order_id)
+                             .order_by(Invoice.created_at.desc()))).scalars().all()
+    open_ = [i for i in invs if (i.status or "") not in ("paid", "void", "voided", "cancelled", "canceled")]
+    return (open_ or invs or [None])[0]
 
 
 async def cancel_open_pay_links(db: AsyncSession, order: Order) -> int:

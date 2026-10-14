@@ -538,7 +538,7 @@ async def bulk_action(
             from backend.models import Invoice
             # skip if order already has an invoice
             existing = (await db.execute(
-                select(Invoice).where(Invoice.order_id == o.id)
+                select(Invoice.id).where(Invoice.order_id == o.id).limit(1)
             )).scalar_one_or_none()
             if existing:
                 continue
@@ -1265,7 +1265,7 @@ async def _apply_status_change(db, current, order, new_status, note=None):
 
     # Per-status trigger: auto-create invoice
     if target and target.triggers_invoice:
-        existing_inv = (await db.execute(select(Invoice).where(Invoice.order_id == order.id))).scalar_one_or_none()
+        existing_inv = (await db.execute(select(Invoice.id).where(Invoice.order_id == order.id).limit(1))).scalar_one_or_none()
         if not existing_inv:
             _inv = Invoice(invoice_number=await next_number(db, current.org_id, "invoice"), org_id=current.org_id,
                            order_id=order.id, client_id=order.client_id, status="draft",
@@ -2397,6 +2397,9 @@ async def _archive_order(db, current, order_id, reason, do_refund):
                 _ded = (_l.qty or 0) - (_l.pending_stock or 0)
                 if _ded > 0:
                     await _reverse_fulfillment(db, order, _l.ref_id, _ded)
+                    # The parts are back on the shelf: the line no longer holds stock. Without this,
+                    # restore -> archive (or delete the line) returned the same parts again.
+                    _l.pending_stock = _l.qty or 0
     if not order.is_estimate:
         from backend.services.payroll import CommissionEngine
         await CommissionEngine(db, current.org_id).reverse_for_deletion(order)

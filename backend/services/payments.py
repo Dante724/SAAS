@@ -219,7 +219,8 @@ async def create_intent(db: AsyncSession, *, org_id: str, order_id: Optional[str
             from fastapi import HTTPException
             raise HTTPException(404, "Order not found")
         description = f"Order {o.order_number}"
-        inv = (await db.execute(select(Invoice).where(Invoice.order_id == order_id))).scalar_one_or_none()
+        from backend.services.order_money import primary_invoice
+        inv = await primary_invoice(db, order_id)
         invoice_id = inv.id if inv else None
     gw = await resolve_gateway(db, org_id, await org_provider(db, org_id))
     intent = PaymentIntent(
@@ -255,7 +256,8 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
     if intent.invoice_id:
         inv = (await db.execute(select(Invoice).where(Invoice.id == intent.invoice_id))).scalar_one_or_none()
     if not inv and intent.order_id:
-        inv = (await db.execute(select(Invoice).where(Invoice.order_id == intent.order_id))).scalar_one_or_none()
+        from backend.services.order_money import primary_invoice
+        inv = await primary_invoice(db, intent.order_id)
         if not inv:
             o = (await db.execute(select(Order).where(Order.id == intent.order_id))).scalar_one_or_none()
             inv = Invoice(invoice_number=await next_number(db, intent.org_id, "invoice"), org_id=intent.org_id,
