@@ -26,7 +26,8 @@ def _parse_date(s: Optional[str]):
 class EmployeeIn(BaseModel):
     name: str
     email: str
-    password: str = "changeme123"
+    # No default: an omitted password means "email them a link to set their own".
+    password: Optional[str] = None
     phone: Optional[str] = None
     role_id: Optional[str] = None
     location_id: Optional[str] = None
@@ -125,13 +126,19 @@ async def create_employee(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_employees")),
 ):
+    import secrets
+
     existing = await db.execute(select(Employee).where(Employee.email == data.email))
     if existing.scalar_one_or_none():
         raise HTTPException(400, "Email already in use")
+    if data.password is not None and len(data.password) < MIN_PASSWORD_LEN:
+        raise HTTPException(400, f"Password must be at least {MIN_PASSWORD_LEN} characters")
     emp = Employee(
         org_id=current.org_id,
         name=data.name, email=data.email,
-        password_hash=hash_password(data.password),
+        # Without a password, store a random one nobody knows; the welcome email lets
+        # the teammate choose their own.
+        password_hash=hash_password(data.password or secrets.token_urlsafe(32)),
         phone=data.phone, role_id=data.role_id,
         location_id=data.location_id,
         wage_type=data.wage_type, wage_value=data.wage_value,
@@ -145,7 +152,32 @@ async def create_employee(
     db.add(emp)
     await db.commit()
     await db.refresh(emp)
-    return {"id": emp.id, "name": emp.name}
+    invite_sent = False
+    if not data.password:
+        await _send_set_password_email(db, emp, current.org_id)
+        invite_sent = True
+    return {"id": emp.id, "name": emp.name, "invite_sent": invite_sent}
+
+
+MIN_PASSWORD_LEN = 8
+SET_PASSWORD_TTL_MIN = 60 * 24 * 7   # same 7 days as teammate invites
+
+
+async def _send_set_password_email(db: AsyncSession, emp: Employee, org_id: str) -> None:
+    """Email a new teammate a single-use link to choose their password (reuses the
+    password-reset token + /reset-password page, with an invite-length expiry)."""
+    from backend.models import Organisation
+    from backend.routers.auth import _link
+    from backend.services import tokens as _tok
+    from backend.services.notifications import send_direct_email
+    raw = await _tok.issue(db, employee_id=emp.id, kind="reset", ttl_min=SET_PASSWORD_TTL_MIN)
+    await db.commit()
+    org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
+    url = _link(f"/reset-password?token={raw}")
+    await send_direct_email(
+        emp.email, f"You've been added to {org.name if org else 'your team'} on RepairOS",
+        f"Hi {emp.name},\n\nAn account has been created for you. Choose your password here:\n\n{url}\n\n"
+        f"The link expires in 7 days and can be used once.")
 
 
 @router.patch("/employees/{emp_id}")
