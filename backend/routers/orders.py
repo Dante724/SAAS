@@ -1844,7 +1844,7 @@ async def payment_link(
         existing.status = "canceled"   # revoke the stale link before issuing a new one
     try:
         intent = await pay.create_intent(db, org_id=current.org_id, order_id=order_id,
-                                         amount=balance, account_id=None, currency="usd")
+                                         amount=balance, account_id=None)   # org base currency
     except RuntimeError as e:
         raise HTTPException(502, f"Gateway error: {e}")
     base = (settings.PUBLIC_BASE_URL or "").rstrip("/")

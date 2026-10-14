@@ -31,6 +31,20 @@ def q2(x) -> float:
     return float(d2(x))
 
 
+# ISO-4217 currencies whose smallest unit isn't 1/100 (as payment processors count them).
+ZERO_DECIMAL = {"bif", "clp", "djf", "gnf", "jpy", "kmf", "krw", "mga", "pyg", "rwf", "ugx",
+                "vnd", "vuv", "xaf", "xof", "xpf"}
+THREE_DECIMAL = {"bhd", "jod", "kwd", "omr", "tnd"}
+
+
+def minor_units(amount, currency: str) -> int:
+    """Amount in the currency's smallest unit for gateway APIs (cents, yen, fils…). Multiplying
+    every currency by 100 overcharged JPY/KRW 100x and undercharged KWD/BHD 10x."""
+    c = (currency or "").lower()
+    exp = 0 if c in ZERO_DECIMAL else 3 if c in THREE_DECIMAL else 2
+    return int((Decimal(str(amount)) * (10 ** exp)).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+
+
 def q4(x) -> float:
     """Unit-cost precision (4dp, round-half-up) — mirrors avg_cost's Numeric(12,4)."""
     return float(Decimal(str(x)).quantize(_TT, rounding=ROUND_HALF_UP))

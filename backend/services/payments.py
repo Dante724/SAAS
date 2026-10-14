@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import settings
 from backend.models import Account, Invoice, Order, Payment, PaymentIntent
 from backend.services.numbering import next_number
-from backend.services.money import q2, q4
+from backend.services.money import minor_units, q2, q4
 
 
 # ── Gateways ─────────────────────────────────────────────────────────────────
@@ -52,7 +52,7 @@ class StripeGateway(PaymentGateway):
         # Stripe's SDK is sync; call its REST API directly via httpx to stay async
         # and avoid a hard dependency. Amounts are in the smallest currency unit.
         import httpx
-        amount_minor = int(round(intent.amount * 100))
+        amount_minor = minor_units(intent.amount, intent.currency)
         c = self.creds
         data = {
             "mode": "payment",
@@ -90,7 +90,7 @@ class SquareGateway(PaymentGateway):
     async def create_checkout(self, *, intent: PaymentIntent, description: str) -> dict:
         import httpx
         c = self.creds
-        amount_minor = int(round(intent.amount * 100))
+        amount_minor = minor_units(intent.amount, intent.currency)
         payload = {
             "idempotency_key": intent.id,
             "quick_pay": {
@@ -202,7 +202,14 @@ async def org_provider(db: AsyncSession, org_id: str) -> str:
 # ── Intent creation ──────────────────────────────────────────────────────────
 async def create_intent(db: AsyncSession, *, org_id: str, order_id: Optional[str],
                         amount: float, account_id: Optional[str],
-                        currency: str = "usd") -> PaymentIntent:
+                        currency: Optional[str] = None) -> PaymentIntent:
+    # Stored money is always in the org's base currency, so that's what a checkout must charge.
+    # Hard-coding "usd" turned an INR 5,000 balance into a $5,000 checkout.
+    if not currency:
+        from backend.models import Organisation
+        org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
+        currency = ((org.currency_code if org else None) or "usd")
+    currency = currency.lower()
     invoice_id = None
     description = "RepairOS payment"
     if order_id:
@@ -404,7 +411,7 @@ async def terminal_connection_token(db: AsyncSession, org_id: str) -> str:
 async def terminal_payment_intent(db: AsyncSession, org_id: str, *, amount: float, currency: str, intent_id: str) -> dict:
     key = await _stripe_key(db, org_id)
     import httpx
-    data = {"amount": str(int(round(amount * 100))), "currency": currency,
+    data = {"amount": str(minor_units(amount, currency)), "currency": currency,
             "payment_method_types[]": "card_present", "capture_method": "automatic",
             "metadata[intent_id]": intent_id}
     async with httpx.AsyncClient(timeout=15.0) as client:
