@@ -79,9 +79,31 @@ export async function openAuthedDoc(path: string): Promise<void> {
   const res = await fetch(BASE + path, { credentials: "include", headers: { ...authHeader() } });
   if (!res.ok) throw new ApiError(res.status, (await res.text().catch(() => "")) || res.statusText);
   const blob = await res.blob();
+  // A blob URL runs with this app's origin, so only open types that can't execute script;
+  // anything else (HTML, SVG, XML, unknown) is downloaded as an opaque file instead.
+  if (!isInlineSafeType(blob.type)) {
+    const url = URL.createObjectURL(new Blob([blob], { type: "application/octet-stream" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = downloadName(res.headers.get("content-disposition"));
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    return;
+  }
   const url = URL.createObjectURL(blob);
   window.open(url, "_blank");
   setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+const INLINE_SAFE = /^(application\/pdf|image\/(png|jpeg|gif|webp|heic|heif)|audio\/[\w.+-]+|video\/[\w.+-]+|text\/plain)(;|$)/i;
+
+export function isInlineSafeType(type: string): boolean {
+  return INLINE_SAFE.test((type || "").trim());
+}
+
+function downloadName(disposition: string | null): string {
+  const m = /filename\*=UTF-8''([^;]+)/i.exec(disposition || "");
+  try { return m ? decodeURIComponent(m[1]) : "download"; } catch { return "download"; }
 }
 
 // Multipart upload (no JSON Content-Type → browser sets the boundary). Reuses the session.
