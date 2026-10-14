@@ -18,8 +18,17 @@ _NAMING_CONVENTION = {
 _connect_args = {"check_same_thread": False} if settings.is_sqlite else {}
 _engine_kwargs = dict(echo=False, connect_args=_connect_args)
 if not settings.is_sqlite:
-    # Sensible pool defaults for a pooled server driver (asyncpg).
-    _engine_kwargs.update(pool_size=10, max_overflow=20, pool_pre_ping=True, pool_recycle=1800)
+    if settings.ENVIRONMENT.lower() == "test":
+        # Test suite on Postgres: pytest-asyncio gives every test a fresh event loop and asyncpg
+        # connections are bound to the loop that opened them, so a pool would hand a later test a
+        # connection from a dead loop ("attached to a different loop"). NullPool opens/closes per
+        # checkout. Test-only — dev/staging/production keep the pooled settings below.
+        from sqlalchemy.pool import NullPool
+
+        _engine_kwargs["poolclass"] = NullPool
+    else:
+        # Sensible pool defaults for a pooled server driver (asyncpg).
+        _engine_kwargs.update(pool_size=10, max_overflow=20, pool_pre_ping=True, pool_recycle=1800)
 
 engine = create_async_engine(settings.DATABASE_URL, **_engine_kwargs)
 

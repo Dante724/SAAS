@@ -38,6 +38,54 @@ jobs:
       - name: Run tests
         run: pytest -q -n auto   # parallel; conftest isolates each worker on its own SQLite file
 
+  backend-postgres:
+    # Production runs Postgres 16; the main job runs on SQLite (fast but lenient about types,
+    # constraints and SQL dialect). This job runs migrations from scratch AND the full suite on a
+    # real Postgres so prod-only failures surface in CI, not at deploy.
+    # ADVISORY until its first green run on GitHub — then delete `continue-on-error` to make it a
+    # required gate. (Postgres DDL compile + partial-index parity are already hard-gated in the
+    # main job via test_postgres_ddl_compat.py.)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: repairos
+          POSTGRES_PASSWORD: repairos
+          POSTGRES_DB: repairos_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U repairos"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      ENVIRONMENT: test
+      SEED_DEMO: "false"
+      PGPASSWORD: repairos
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Migrations from scratch on Postgres
+        # Separate database so the migration run never collides with the suite's create_all.
+        env:
+          DATABASE_URL: postgresql+asyncpg://repairos:repairos@localhost:5432/repairos_mig
+        run: |
+          psql -h localhost -U repairos -d repairos_test -c "CREATE DATABASE repairos_mig"
+          alembic -c backend/alembic.ini upgrade head
+      - name: Full test suite on Postgres
+        # Serial (-p no:xdist): every worker would share this one database.
+        env:
+          DATABASE_URL: postgresql+asyncpg://repairos:repairos@localhost:5432/repairos_test
+          TEST_DATABASE_URL: postgresql+asyncpg://repairos:repairos@localhost:5432/repairos_test
+        run: pytest -q -p no:xdist
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
