@@ -112,3 +112,37 @@ async def tenant(client):
     assert r.status_code == 201, r.text
     token = r.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+# --- CI sharding --------------------------------------------------------------------------------
+# CI splits the suite across parallel jobs with PYTEST_SHARD=<i> PYTEST_SHARD_TOTAL=<n> (1-based).
+# Whole files are assigned greedily (largest first) to the shard with the fewest tests so far —
+# per-test cost is dominated by the per-test schema rebuild above, so test count tracks runtime and
+# the split stays balanced with no durations file to maintain. It is a pure function of the
+# collected items, so every xdist worker (and every shard) computes the same partition, and the
+# union of all shards is exactly the full suite. PYTEST_SHARD_MANIFEST, if set, receives this
+# shard's node ids so CI can verify that union. Unset (the default): runs everything.
+def pytest_collection_modifyitems(config, items):
+    shard, total = os.environ.get("PYTEST_SHARD"), os.environ.get("PYTEST_SHARD_TOTAL")
+    if not (shard and total):
+        return
+    shard, total = int(shard), int(total)
+    assert 1 <= shard <= total, f"PYTEST_SHARD={shard} out of range 1..{total}"
+    by_file: dict[str, list] = {}
+    for item in items:
+        by_file.setdefault(item.nodeid.split("::", 1)[0], []).append(item)
+    loads = [0] * total
+    owner: dict[str, int] = {}
+    for path in sorted(by_file, key=lambda p: (-len(by_file[p]), p)):
+        i = min(range(total), key=lambda k: (loads[k], k))
+        owner[path] = i + 1
+        loads[i] += len(by_file[path])
+    keep = [it for it in items if owner[it.nodeid.split("::", 1)[0]] == shard]
+    drop = [it for it in items if owner[it.nodeid.split("::", 1)[0]] != shard]
+    if drop:
+        config.hook.pytest_deselected(items=drop)
+    items[:] = keep
+    manifest = os.environ.get("PYTEST_SHARD_MANIFEST")
+    if manifest and os.environ.get("PYTEST_XDIST_WORKER") in (None, "gw0"):
+        with open(manifest, "w") as f:
+            f.write("".join(it.nodeid + "\n" for it in keep))
