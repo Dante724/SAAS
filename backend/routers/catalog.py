@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from backend.db.database import get_db
 from backend.models import Employee, Part, Service
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, require_perm
 
 router = APIRouter(prefix="/api/catalog", tags=["catalog"])
 
@@ -111,7 +111,7 @@ async def list_services(
 async def create_service(
     data: ServiceIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_labors")),
 ):
     if not data.name.strip():
         raise HTTPException(400, "Name is required")
@@ -136,7 +136,7 @@ async def create_service(
 async def update_service(
     service_id: str, data: ServiceIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_labors")),
 ):
     s = (await db.execute(select(Service).where(Service.id == service_id, Service.org_id == current.org_id))).scalar_one_or_none()
     if not s:
@@ -164,7 +164,7 @@ async def update_service(
 async def delete_service(
     service_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_delete_labors")),
 ):
     s = (await db.execute(select(Service).where(Service.id == service_id, Service.org_id == current.org_id))).scalar_one_or_none()
     if not s:
@@ -214,7 +214,7 @@ async def list_service_commissions(
 async def add_service_commission(
     service_id: str, data: ServiceCommissionIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_config_exceptional_commissions")),
 ):
     from decimal import Decimal
     from backend.models import CommissionRule
@@ -238,7 +238,7 @@ async def add_service_commission(
 async def delete_service_commission(
     service_id: str, rule_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_config_exceptional_commissions")),
 ):
     from backend.models import CommissionRule
     r = (await db.execute(select(CommissionRule).where(
@@ -369,7 +369,7 @@ async def list_taxes(
 async def create_tax(
     data: TaxIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     if not data.name.strip():
         raise HTTPException(400, "Name is required")
@@ -393,7 +393,7 @@ async def create_tax(
 async def update_tax(
     tax_id: str, data: TaxIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     t = (await db.execute(select(Tax).where(Tax.id == tax_id, Tax.org_id == current.org_id))).scalar_one_or_none()
     if not t:
@@ -413,7 +413,7 @@ async def update_tax(
 async def delete_tax(
     tax_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     t = (await db.execute(select(Tax).where(Tax.id == tax_id, Tax.org_id == current.org_id))).scalar_one_or_none()
     if not t:

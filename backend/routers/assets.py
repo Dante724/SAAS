@@ -343,7 +343,7 @@ class WriteOffIn(BaseModel):
 async def write_off_asset(
     asset_id: str, data: WriteOffIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_inventory")),
 ):
     """Mark an asset written off (damaged/lost/scrapped), logging the event."""
     d = (await db.execute(select(Device).where(
@@ -371,7 +371,7 @@ async def convert_to_product(
     asset_id: str,
     data: ConvertIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_convert_asset_to_product")),
 ):
     """Orderry: turn a non-sellable company asset into a sellable product (stock)."""
     from backend.models import Location, Part, StockLevel, StockMovement

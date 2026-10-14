@@ -165,7 +165,7 @@ async def email_test_send(
 @router.post("/poll")
 async def email_poll(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     """Build 144ae: pull recent messages from the org's connected Gmail inbox(es)
     into the RepairOS inbox as threads. Idempotent (de-duped by Gmail message id).

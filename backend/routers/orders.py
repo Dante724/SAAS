@@ -558,7 +558,7 @@ async def bulk_action(
 async def create_order(
     data: OrderIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_tickets")),
 ):
     # Build 144df: location is optional from the client — default to the org's
     # first active location, creating a "Main" one if the org has none yet, so a
@@ -1904,7 +1904,7 @@ class NotifyIn(BaseModel):
 async def notify_order_customer(
     order_id: str, data: NotifyIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_send_sms")),
 ):
     """Message button: email/SMS the customer about this order. Delivery goes
     through the configured channel adapter (a real gateway is required to
@@ -2463,7 +2463,7 @@ async def transfer_order(
     order_id: str,
     data: TransferOrderIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_transfer_tickets")),
 ):
     """Build 75 — move a work order to another of the org's locations."""
     order = (await db.execute(select(Order).where(
@@ -2805,7 +2805,7 @@ async def assign_people(
     order_id: str,
     data: AssignIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_assign_staff")),
 ):
     """144cp — set the WO manager and/or assigned specialist. Only the fields
     present in the request are changed; empty string clears the field."""
@@ -2825,10 +2825,11 @@ async def assign_people(
     await db.commit()
     if notify_id and notify_id != current.id:
         try:
+            from backend.services.push import notify   # was never imported: assignees got no alert
             await notify(db, org_id=current.org_id, employee_id=notify_id,
-                         kind="order_assigned",
+                         kind="job.assigned", title=f"New job {order.order_number}",
                          body=f"You were assigned to {order.order_number}",
-                         link=f"/orders/{order.id}")
+                         deep_link=f"/tech#/order/{order.id}")
         except Exception:
             pass
     return {"ok": True}

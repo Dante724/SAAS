@@ -87,3 +87,24 @@ async def test_same_shop_references_still_work(client, tenant):
     r = await client.post("/api/orders", headers=tenant, json={
         "client_id": cid, "location_id": await _loc(client, tenant), "complaint": "x"})
     assert r.status_code in (200, 201), r.text
+
+
+@pytest.mark.asyncio
+async def test_reassigning_an_order_notifies_the_new_technician(client, tenant, db):
+    """Regression: the assign endpoint called an un-imported notify() with the wrong arguments,
+    and the bare except hid it, so reassigned technicians were never alerted."""
+    from backend.models import Employee, StaffNotification
+    from backend.services.auth import hash_password
+    me = (await client.get("/api/auth/me", headers=tenant)).json()
+    owner = (await db.execute(select(Employee).where(Employee.id == me["id"]))).scalar_one()
+    tech = Employee(org_id=owner.org_id, location_id=owner.location_id, name="Tech",
+                    email=f"t-{uuid.uuid4().hex[:6]}@xt.test", password_hash=hash_password("pw-t-123456"), active=True)
+    db.add(tech)
+    await db.commit()
+    cid = (await client.post("/api/clients", json={"name": "Mine"}, headers=tenant)).json()["id"]
+    oid = (await client.post("/api/orders", headers=tenant, json={
+        "client_id": cid, "location_id": await _loc(client, tenant), "complaint": "x"})).json()["id"]
+    assert (await client.patch(f"/api/orders/{oid}/assign", headers=tenant,
+                               json={"assigned_to_id": tech.id})).status_code == 200
+    notes = (await db.execute(select(StaffNotification).where(StaffNotification.employee_id == tech.id))).scalars().all()
+    assert any(n.kind == "job.assigned" for n in notes)
