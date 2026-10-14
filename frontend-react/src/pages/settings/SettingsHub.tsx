@@ -10,6 +10,7 @@ import { getLang, setLang, LANGS } from "../../i18n";
 import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
 import { NAV, CATS, SEC_CAT, searchSections, type SectionId } from "./settingsRegistry";
 import { SetupChecklist } from "./SetupChecklist";
+import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
 
 // Full section set = the registry sections + a few that have no nav entry of their own.
 type Section = SectionId | "overview" | "automation" | "payroll-rules";
@@ -1147,9 +1148,9 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
 // {Tokens} render as non-editable chips; serialize converts them back to {Tokens}.
 function notifPill(tok: string) {
   const label = tok.replace(/^\{|\}$/g, "");
-  return `<span class="tok-pill" contenteditable="false" data-tok="${tok}">${label}</span>`;
+  return `<span class="tok-pill" contenteditable="false" data-tok="${escapeHtml(tok)}">${escapeHtml(label)}</span>`;
 }
-function notifHydrate(html: string) { return (html || "").replace(/\{[A-Z][^{}]*\}/g, (m) => notifPill(m)); }
+function notifHydrate(html: string) { return sanitizeHtml(html || "").replace(/\{[A-Z][^{}]*\}/g, (m) => notifPill(m)); }
 function notifSerialize(root: HTMLElement) {
   const clone = root.cloneNode(true) as HTMLElement;
   clone.querySelectorAll(".tok-pill").forEach((el) => el.replaceWith(document.createTextNode((el as HTMLElement).dataset.tok || "")));

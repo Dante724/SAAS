@@ -8,6 +8,7 @@ Finance, Date, Other), per-row product variables that repeat inside a
 products table, pre-built table blocks ({Products Table} etc.), and
 Orderry-exact default Estimate + Price-tag templates seeded for new orgs.
 """
+import html as _html_mod
 import re
 import json
 from fastapi import APIRouter, Depends, HTTPException
@@ -23,9 +24,23 @@ from backend.models import (
     Employee, Organisation, Invoice, LegalEntity, Location, Part,
     CustomField, WorkOrderType, Device,
 )
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, require_perm
 from backend.services.codes import code128_svg, qr_svg
 from backend.config import settings
+
+
+class _Html(str):
+    """A variable value that is deliberate, already-safe markup (tables, logo, QR/barcode
+    SVG, buttons). Every other value is HTML-escaped when substituted into a document, so
+    client names, complaints, notes etc. can never inject script into a printed page."""
+
+
+def _esc(v) -> str:
+    return _html_mod.escape(str(v), quote=True)
+
+
+def _sub(v) -> str:
+    return v if isinstance(v, _Html) else _esc(v)
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -351,7 +366,7 @@ class TemplateIn(BaseModel):
 async def create_template(
     data: TemplateIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     t = DocumentTemplate(org_id=current.org_id, name=data.name, doc_type=data.doc_type,
                          body_html=data.body_html, auto_print_on=data.auto_print_on,
@@ -371,7 +386,7 @@ async def update_template(
     tid: str,
     data: TemplateIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     t = (await db.execute(select(DocumentTemplate).where(
         DocumentTemplate.id == tid, DocumentTemplate.org_id == current.org_id))).scalar_one_or_none()
@@ -394,7 +409,7 @@ async def update_template(
 async def delete_template(
     tid: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     t = (await db.execute(select(DocumentTemplate).where(
         DocumentTemplate.id == tid, DocumentTemplate.org_id == current.org_id))).scalar_one_or_none()
@@ -511,13 +526,13 @@ def _row_vars(i: int, line: OrderLine, part, tech) -> dict:
 
 
 def _table_block(headers, rows, title=None):
-    head = "".join(f"<th style='text-align:left;padding:6px;border-bottom:1px solid #ccc'>{h}</th>" for h in headers)
+    head = "".join(f"<th style='text-align:left;padding:6px;border-bottom:1px solid #ccc'>{_esc(h)}</th>" for h in headers)
     body = "".join(
-        "<tr>" + "".join(f"<td style='padding:6px;border-bottom:1px solid #eee'>{c}</td>" for c in r) + "</tr>"
+        "<tr>" + "".join(f"<td style='padding:6px;border-bottom:1px solid #eee'>{_esc(c)}</td>" for c in r) + "</tr>"
         for r in rows) or f"<tr><td colspan='{len(headers)}' style='padding:6px;color:#999'>No items</td></tr>"
-    cap = f"<caption style='text-align:left;font-weight:bold;padding:4px 0'>{title}</caption>" if title else ""
-    return (f"<table style='width:100%;border-collapse:collapse'>{cap}"
-            f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
+    cap = f"<caption style='text-align:left;font-weight:bold;padding:4px 0'>{_esc(title)}</caption>" if title else ""
+    return _Html(f"<table style='width:100%;border-collapse:collapse'>{cap}"
+                 f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
 
 
 def _track_url(order: Order, suffix: str = "") -> str:
@@ -611,8 +626,8 @@ async def _resolve(db, org_id, order: Order, current=None):
 
     # real, scannable vector codes from the order's barcode value
     code = order.barcode or order.order_number
-    barcode_svg = code128_svg(code)
-    qr_code_svg = qr_svg(code)
+    barcode_svg = _Html(code128_svg(code))
+    qr_code_svg = _Html(qr_svg(code))
 
     # Payer: client's designated payer, else the client.
     payer = client
@@ -639,18 +654,18 @@ async def _resolve(db, org_id, order: Order, current=None):
 
     # ── 144hk: branding, interactive CTAs, work summary ──────────────────────
     _logo = (getattr(org, "logo_data", None) if org else None) or ""
-    logo_html = (f'<img src="{_logo}" alt="{org.name if org else ""}" '
-                 f'style="max-height:64px;max-width:220px;object-fit:contain;" />') if _logo else ""
+    logo_html = _Html(f'<img src="{_esc(_logo)}" alt="{_esc(org.name if org else "")}" '
+                      f'style="max-height:64px;max-width:220px;object-fit:contain;" />') if _logo else ""
     accent = (getattr(org, "brand_primary_color", None) if org else None) or "#2563eb"
     track = _track_url(order)
-    track_qr = qr_svg(track)
+    track_qr = _Html(qr_svg(track))
 
     def _cta(title: str, sub: str) -> str:
-        return (f'<table style="border-collapse:collapse;margin:8px 0;"><tr>'
-                f'<td style="border:1.5px solid {accent};border-radius:8px;padding:10px 14px;">'
-                f'<div style="font-weight:700;color:{accent};font-size:13px;">{title}</div>'
+        return _Html(f'<table style="border-collapse:collapse;margin:8px 0;"><tr>'
+                f'<td style="border:1.5px solid {_esc(accent)};border-radius:8px;padding:10px 14px;">'
+                f'<div style="font-weight:700;color:{_esc(accent)};font-size:13px;">{title}</div>'
                 f'<div style="font-size:11px;color:#444;margin-top:2px;">{sub}</div>'
-                f'<div style="font-size:11px;margin-top:2px;">{track}</div></td>'
+                f'<div style="font-size:11px;margin-top:2px;">{_esc(track)}</div></td>'
                 f'<td style="width:76px;padding-left:10px;vertical-align:middle;">'
                 f'<div style="width:72px;height:72px;">{track_qr}</div></td></tr></table>')
 
@@ -688,10 +703,10 @@ async def _resolve(db, org_id, order: Order, current=None):
     def _fmt_dt(d):
         return d.strftime("%Y-%m-%d %H:%M") if d else "—"
 
-    sign_here = ('<div style="margin-top:24px;">'
+    sign_here = _Html('<div style="margin-top:24px;">'
                  '<div style="border-bottom:1px solid #333;width:260px;height:28px;"></div>'
                  '<div style="font-size:11px;color:#555;margin-top:3px;">Signature / Date</div></div>')
-    verify_badge = (f'<table style="border-collapse:collapse;"><tr>'
+    verify_badge = _Html(f'<table style="border-collapse:collapse;"><tr>'
                     f'<td style="width:64px;"><div style="width:60px;height:60px;">{track_qr}</div></td>'
                     f'<td style="font-size:10px;color:#555;padding-left:6px;vertical-align:middle;">'
                     f'Scan to verify this<br/>document is genuine</td></tr></table>')
@@ -894,7 +909,7 @@ async def _resolve(db, org_id, order: Order, current=None):
         "{Public Page URL}": track,
         "{Order URL}": track,
         "{Public Page QR Code}": track_qr,
-        "{Client Feedback QR Code}": qr_svg(_feedback),
+        "{Client Feedback QR Code}": _Html(qr_svg(_feedback)),
         "{Order Payment QR}": track_qr,
     })
 
@@ -923,7 +938,7 @@ def _render(body: str, doc: dict, rows: list) -> str:
         for r in rows:
             c = inner
             for k, v in r.items():
-                c = c.replace(k, str(v))
+                c = c.replace(k, _sub(v))
             chunks.append(c)
         if not rows:
             chunks.append(_ROW_VAR_RE.sub("", inner))
@@ -932,7 +947,7 @@ def _render(body: str, doc: dict, rows: list) -> str:
     body = _conditionals(body, doc)    # 144id — resolve {#if}/{#unless} before expansion
     body = _TBODY_RE.sub(repeat, body)
     for k, v in doc.items():
-        body = body.replace(k, str(v))
+        body = body.replace(k, _sub(v))
     body = _ROW_VAR_RE.sub("", body)   # strip any row vars used outside a table
     return body
 
@@ -1160,7 +1175,7 @@ async def _resolve_invoice(db, org_id, inv: Invoice):
     paid = inv.amount_paid or 0
     bal = max((inv.total or 0) - paid, 0)
     logo = (getattr(org, "logo_data", None) if org else None) or ""
-    logo_html = (f'<img src="{logo}" style="max-height:64px;max-width:220px;object-fit:contain;" />') if logo else ""
+    logo_html = _Html(f'<img src="{_esc(logo)}" style="max-height:64px;max-width:220px;object-fit:contain;" />') if logo else ""
     order = (await db.execute(select(Order).where(Order.id == inv.order_id))).scalar_one_or_none() if inv.order_id else None
     pay_url = _track_url(order) if order else ""
     doc = {
@@ -1249,8 +1264,8 @@ async def _resolve_part(org, part: Part, price) -> dict:
         "{Company Name}": org.name if org else "RepairOS",
         "{Today Date}": _fmt_date(datetime.utcnow()),
         "{Current Date}": _fmt_date(datetime.utcnow()),
-        "{Barcode}": code128_svg(code_val),
-        "{QR Code}": qr_svg(code_val),
+        "{Barcode}": _Html(code128_svg(code_val)),
+        "{QR Code}": _Html(qr_svg(code_val)),
     }
 
 
@@ -1329,7 +1344,7 @@ async def _resolve_asset(db, org, asset: Device) -> dict:
         "{Client Name}": g(client, "name"), "{Client Phone}": g(client, "phone"),
         "{Company Name}": org.name if org else "RepairOS",
         "{Today Date}": _fmt_date(datetime.utcnow()), "{Current Date}": _fmt_date(datetime.utcnow()),
-        "{Barcode}": code128_svg(code_val), "{QR Code}": qr_svg(code_val),
+        "{Barcode}": _Html(code128_svg(code_val)), "{QR Code}": _Html(qr_svg(code_val)),
     }
 
 
@@ -1381,7 +1396,7 @@ async def _resolve_client(db, org, client: Client) -> dict:
         "{Client Tax Identification Number}": g(client, "tax_id"),
         "{Company Name}": org.name if org else "RepairOS",
         "{Today Date}": _fmt_date(datetime.utcnow()), "{Current Date}": _fmt_date(datetime.utcnow()),
-        "{Barcode}": code128_svg(code_val), "{QR Code}": qr_svg(code_val),
+        "{Barcode}": _Html(code128_svg(code_val)), "{QR Code}": _Html(qr_svg(code_val)),
     }
 
 

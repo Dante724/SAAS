@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { M } from "./Shell";
 import { api } from "../api/client";
+import { printHtmlInFrame } from "../lib/safeHtml";
 
 /**
  * 144ie — one dialog for bulk exact-size printing of any record type. It loads the
@@ -51,11 +52,7 @@ export default function BulkPrintDialog({ open, onClose, ids, noun, endpoint, id
       const r = await api.post<any>(endpoint, body);
       const html = r?.html;
       if (html) {
-        const ifr = document.createElement("iframe");
-        ifr.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
-        ifr.srcdoc = html;
-        ifr.onload = () => { try { ifr.contentWindow?.focus(); ifr.contentWindow?.print(); } catch { /* noop */ } setTimeout(() => ifr.remove(), 2000); };
-        document.body.appendChild(ifr);
+        printHtmlInFrame(html);
       }
       onClose();
     } catch { /* noop */ } finally { setBusy(false); }

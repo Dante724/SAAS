@@ -1,6 +1,9 @@
 """QuickBooks Online endpoints (Phase 2C): OAuth connect/callback, connection
 status, push sync, and the mapping + sync-log audit trail."""
-from fastapi import APIRouter, Depends, Query
+import html
+import re
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,8 +37,13 @@ async def callback(code: str = Query(...), realmId: str = Query(...), state: str
     """OAuth redirect target. Unauthenticated by design — the browser follows
     Intuit's redirect without a Bearer token, so org/user context is recovered
     from the signed ``state`` (see qbo._parse_state)."""
+    # Intuit realm (company) ids are short alphanumeric tokens; anything else is a tampered
+    # redirect. Never reflect request values into this unauthenticated HTML page unescaped.
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", realmId or ""):
+        raise HTTPException(400, "Invalid QuickBooks company id")
     conn = await qbo.complete_connect(db, code, realmId, state)
-    return HTMLResponse(f"<h3>QuickBooks connected</h3><p>Realm {conn.realm_id}. You can close this window.</p>")
+    return HTMLResponse(f"<h3>QuickBooks connected</h3><p>Realm {html.escape(conn.realm_id or '')}. "
+                        "You can close this window.</p>")
 
 
 class _SyncResult(dict):

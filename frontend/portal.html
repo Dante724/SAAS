@@ -69,23 +69,26 @@ async function load() {
   }
 }
 
+// Escape every server value before it goes into innerHTML (incl. quotes: some land in attributes).
+function escH(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
 function card(o) {
-  const warn = o.is_estimate ? '<span class="pill warn">' + o.stage_label + '</span>' : '<span class="pill">' + o.stage_label + '</span>';
-  return '<div class="card-o" onclick="openOrder(\'' + o.id + '\')">' +
-    '<div class="top"><span class="num">' + o.order_number + '</span>' + warn + '</div>' +
-    '<div class="meta">' + (o.complaint ? o.complaint : 'Repair') + ' · ' + money(o.total) + '</div>' +
-    (o.warranty_until ? '<div class="warr">Under warranty until ' + o.warranty_until.slice(0,10) + '</div>' : '') +
+  const warn = o.is_estimate ? '<span class="pill warn">' + escH(o.stage_label) + '</span>' : '<span class="pill">' + escH(o.stage_label) + '</span>';
+  return '<div class="card-o" onclick="openOrder(\'' + escH(o.id) + '\')">' +
+    '<div class="top"><span class="num">' + escH(o.order_number) + '</span>' + warn + '</div>' +
+    '<div class="meta">' + escH(o.complaint ? o.complaint : 'Repair') + ' · ' + escH(money(o.total)) + '</div>' +
+    (o.warranty_until ? '<div class="warr">Under warranty until ' + escH(o.warranty_until.slice(0,10)) + '</div>' : '') +
     '</div>';
 }
 
 function renderHome() {
   const c = DATA.counts;
-  let html = '<div class="ph"><div class="ph-shop">' + DATA.shop_name + '</div>' +
-    '<div class="ph-hi">Hi ' + DATA.client_name + '</div>' +
+  let html = '<div class="ph"><div class="ph-shop">' + escH(DATA.shop_name) + '</div>' +
+    '<div class="ph-hi">Hi ' + escH(DATA.client_name) + '</div>' +
     '<div class="stat-row">' +
-      '<div class="stat"><b>' + c.work_orders + '</b><span>Repairs</span></div>' +
-      '<div class="stat"><b>' + c.estimates + '</b><span>Estimates</span></div>' +
-      '<div class="stat"><b>' + c.under_warranty + '</b><span>Warranty</span></div>' +
+      '<div class="stat"><b>' + escH(c.work_orders) + '</b><span>Repairs</span></div>' +
+      '<div class="stat"><b>' + escH(c.estimates) + '</b><span>Estimates</span></div>' +
+      '<div class="stat"><b>' + escH(c.under_warranty) + '</b><span>Warranty</span></div>' +
     '</div></div>';
   if (DATA.estimates.length) {
     html += '<div class="sec-title">Estimates</div>' + DATA.estimates.map(card).join('');
@@ -97,16 +100,16 @@ function renderHome() {
 
 async function openOrder(id) {
   root.innerHTML = '<div class="empty">Loading…</div>';
-  const o = await (await fetch('/api/public/portal/' + token + '/order/' + id)).json();
+  const o = await (await fetch('/api/public/portal/' + token + '/order/' + encodeURIComponent(id))).json();
   let html = '<div class="back" onclick="renderHome()">\u2190 Back</div>';
-  html += '<div class="ph"><div class="ph-hi" style="font-size:22px">' + o.order_number + '</div>' +
-          '<div style="margin-top:8px">' + (o.is_estimate ? '<span class="pill warn">' : '<span class="pill">') + o.stage_label + '</span></div></div>';
-  if (o.complaint) html += '<div class="card-o" style="cursor:default"><b>Reported issue</b><div class="meta">' + o.complaint + '</div>' +
-    (o.diagnosis ? '<div class="meta" style="margin-top:6px"><b>Diagnosis:</b> ' + o.diagnosis + '</div>' : '') + '</div>';
+  html += '<div class="ph"><div class="ph-hi" style="font-size:22px">' + escH(o.order_number) + '</div>' +
+          '<div style="margin-top:8px">' + (o.is_estimate ? '<span class="pill warn">' : '<span class="pill">') + escH(o.stage_label) + '</span></div></div>';
+  if (o.complaint) html += '<div class="card-o" style="cursor:default"><b>Reported issue</b><div class="meta">' + escH(o.complaint) + '</div>' +
+    (o.diagnosis ? '<div class="meta" style="margin-top:6px"><b>Diagnosis:</b> ' + escH(o.diagnosis) + '</div>' : '') + '</div>';
   if (o.lines && o.lines.length) {
     html += '<div class="card-o" style="cursor:default">' + o.lines.map(l =>
-      '<div class="ln"><span>' + l.description + (l.qty > 1 ? ' \u00d7' + l.qty : '') + '</span><span>' + money(l.unit_price * l.qty) + '</span></div>').join('') +
-      '<div class="total">' + money(o.total) + '</div></div>';
+      '<div class="ln"><span>' + escH(l.description) + (l.qty > 1 ? ' \u00d7' + escH(l.qty) : '') + '</span><span>' + escH(money(l.unit_price * l.qty)) + '</span></div>').join('') +
+      '<div class="total">' + escH(money(o.total)) + '</div></div>';
   }
   window._recs = o.recommendations || [];
   html += recsHtmlP(o);
@@ -114,20 +117,20 @@ async function openOrder(id) {
     html += '<div class="card-o" style="cursor:default"><b>Approve this estimate?</b>' +
       '<div class="meta" style="margin:6px 0 10px">Sign below (optional), then choose.</div>' +
       '<canvas id="sig"></canvas>' +
-      '<div class="btn-row"><button class="btn btn-ok" onclick="decide(\'' + o.id + '\',\'accept\')">Approve</button>' +
-      '<button class="btn btn-no" onclick="decide(\'' + o.id + '\',\'decline\')">Decline</button></div></div>';
+      '<div class="btn-row"><button class="btn btn-ok" onclick="decide(\'' + escH(o.id) + '\',\'accept\')">Approve</button>' +
+      '<button class="btn btn-no" onclick="decide(\'' + escH(o.id) + '\',\'decline\')">Decline</button></div></div>';
   }
   if (o.timeline && o.timeline.length) {
     html += '<div class="sec-title">Progress</div><div class="card-o" style="cursor:default">' +
-      o.timeline.map(t => '<div class="tl"><span class="dot"></span><span>' + t.label +
-        (t.at ? ' · ' + t.at.slice(0,10) : '') + '</span></div>').join('') + '</div>';
+      o.timeline.map(t => '<div class="tl"><span class="dot"></span><span>' + escH(t.label) +
+        (t.at ? ' · ' + escH(t.at.slice(0,10)) : '') + '</span></div>').join('') + '</div>';
   }
   if (o.allow_messages !== false) {
     html += '<div class="sec-title">Message the shop</div>' +
       '<div class="card-o" style="cursor:default">' +
       '<textarea id="msg-body" rows="2" placeholder="Ask a question or add a note…" ' +
       'style="width:100%;border:1px solid #dfe4ef;border-radius:10px;padding:9px 11px;font-size:13px;resize:vertical;box-sizing:border-box"></textarea>' +
-      '<div class="btn-row"><button class="btn btn-ok" onclick="sendMessage(\'' + o.id + '\')">Send message</button></div></div>';
+      '<div class="btn-row"><button class="btn btn-ok" onclick="sendMessage(\'' + escH(o.id) + '\')">Send message</button></div></div>';
   }
   window._recOrderId = o.id;
   root.innerHTML = html;
@@ -143,12 +146,12 @@ function recsHtmlP(o) {
   if (!open.length && !decided.length) return '';
   const esc = s => { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; };
   const row = (r, on) => '<label class="rrow' + (on ? '' : ' rrow-done') + '">' +
-    (on ? '<input type="checkbox" class="rchk" value="' + r.id + '" onchange="recTotalP()" checked>'
+    (on ? '<input type="checkbox" class="rchk" value="' + escH(r.id) + '" onchange="recTotalP()" checked>'
         : '<span class="rst rst-' + r.status + '">' + (r.status === 'approved' ? '✓' : '✕') + '</span>') +
-    (r.media_data ? '<img class="rimg" src="' + r.media_data + '" alt="">' : '') +
+    (r.media_data ? '<img class="rimg" src="' + escH(r.media_data) + '" alt="">' : '') +
     '<span class="rbody"><span class="rttl">' + esc(r.title) + '</span>' +
     (r.note ? '<span class="rnote">' + esc(r.note) + '</span>' : '') + '</span>' +
-    '<span class="rprice">' + money(r.line_total) + '</span></label>';
+    '<span class="rprice">' + escH(money(r.line_total)) + '</span></label>';
   let h = '<div class="sec-title">Recommended for you</div><div class="card-o" style="cursor:default">';
   if (open.length) {
     h += '<div class="meta" style="margin-bottom:10px">Pick what you\'d like us to do, then approve.</div>' +
