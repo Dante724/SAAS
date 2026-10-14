@@ -36,7 +36,7 @@ jobs:
         # migration lands. Kept visible so new drift is noticed.
         run: alembic -c backend/alembic.ini check || true
       - name: Run tests
-        run: pytest -q
+        run: pytest -q -n auto   # parallel; conftest isolates each worker on its own SQLite file
 
   frontend:
     runs-on: ubuntu-latest
