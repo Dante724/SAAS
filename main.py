@@ -303,6 +303,23 @@ async def serve_portal(token: str):
     return FileResponse(os.path.join(frontend_dir, "portal.html"))
 
 
+def _contained_file(base_dir: str, rel: str):
+    """Return the real path of `rel` under `base_dir` if it is an existing file *inside*
+    base_dir, else None. Guards the SPA fallback against path traversal: `..` segments,
+    percent-encoded slashes (decoded by the server before routing), absolute paths (which
+    os.path.join would otherwise let replace the base) and symlinks pointing outside."""
+    if not rel or "\x00" in rel or "\\" in rel:
+        return None
+    try:
+        base = os.path.realpath(base_dir)
+        cand = os.path.realpath(os.path.join(base, rel))
+        if os.path.commonpath([base, cand]) != base or not os.path.isfile(cand):
+            return None
+    except (ValueError, OSError):
+        return None
+    return cand
+
+
 @app.get("/{path:path}", include_in_schema=False)
 async def serve_spa(path: str):
     # Never let the SPA fallback answer for API/asset namespaces — return a real 404.
@@ -310,12 +327,13 @@ async def serve_spa(path: str):
         return JSONResponse({"detail": "Not Found"}, status_code=404)
     # Serve a real built React file (favicon, vite.svg, etc.) if present.
     if path and _have_react:
-        rcand = os.path.join(react_dir, path)
-        if os.path.isfile(rcand):
+        rcand = _contained_file(react_dir, path)
+        if rcand:
             return FileResponse(rcand)
     # Then any real legacy file (public assets), else the React SPA shell so
-    # client-side routes resolve on hard refresh.
-    candidate = os.path.join(frontend_dir, path)
-    if path and os.path.isfile(candidate):
+    # client-side routes resolve on hard refresh. Traversal attempts fall through to
+    # the shell, exactly like any other unknown path.
+    candidate = _contained_file(frontend_dir, path)
+    if candidate:
         return FileResponse(candidate)
     return _serve_react()
