@@ -22,6 +22,7 @@ cd frontend-react && npm run test:coverage   # frontend unit tests + coverage fl
 | Prod-dialect check | `test_postgres_ddl_compat.py` | tables/indexes that won't compile on Postgres; partial indexes whose `WHERE` differs by DB | CI every push (no server needed) | **hard** |
 | Postgres behavioural run | `backend-postgres` CI job | migrations from scratch + full suite on real Postgres 16 | CI every push | advisory → **make hard after first green** |
 | Migrations from scratch | `alembic upgrade head` | broken / non-replayable migrations | CI + `make ci` | **hard** |
+| Model ↔ migration drift | `test_144eo_migrated_schema.py` | migrations building a different schema than the models (missing index/FK/column, wrong length or `ondelete`) — invisible to every other test, because they build from the models | CI every push | **hard** (allowlist can only shrink) |
 | Lint | ruff 0.6.9 (pinned) | real bugs (unused vars, `== None`, broad `raises`) + import order | CI + pre-commit | **hard** |
 | Coverage ratchet | pytest-cov / vitest v8 | coverage silently dropping | CI | **hard** (floor) |
 | Frontend unit/component | Vitest + React Testing Library (85 tests) | logic + component behaviour | CI every push | **hard** |
@@ -73,6 +74,16 @@ router handlers — exactly where production bugs hide.
 - **Cash / finance / sales:** totals balance (debits == credits); refunds can't exceed the original;
   rounding uses the money helper (no float drift); concurrent payment on one invoice can't double-pay;
   every money mutation is org-scoped; financial history is never hard-deleted.
+
+### Schema debt (tracked by the drift gate)
+
+11 foreign keys the models declare were never created by a migration, so production does not enforce
+them (`KNOWN_MISSING_FKS` in `test_144eo_migrated_schema.py`). To add them safely:
+
+1. On production, run the read-only audit: `DATABASE_URL=… python scripts/check_fk_orphans.py`
+   (SELECT-only; Postgres runs it in a READ ONLY transaction). Exit 0 = no orphans.
+2. Fix any orphan rows it lists (re-point or NULL them).
+3. Add a migration creating the FKs, and delete those entries from `KNOWN_MISSING_FKS`.
 
 ### Plan
 

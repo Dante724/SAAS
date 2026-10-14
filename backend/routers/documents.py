@@ -11,7 +11,7 @@ Orderry-exact default Estimate + Price-tag templates seeded for new orgs.
 import re
 import json
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional
 from datetime import datetime
 from sqlalchemy import select, func
@@ -333,6 +333,18 @@ class TemplateIn(BaseModel):
     margin_mm: Optional[float] = None
     font_family: str = "Sans-Serif"
     print_statuses: list[str] = []
+
+    @field_validator("page_size")
+    @classmethod
+    def _known_page_size(cls, v: Optional[str]) -> str:
+        # 144eo: persisted page_size must be one we can render (and fit the column on Postgres).
+        # Empty keeps the historic "fall back to a4" behaviour; anything unknown is a 422.
+        v = (v or "").strip()
+        if not v:
+            return "a4"
+        if v not in VALID_PAGE_SIZES:
+            raise ValueError(f"page_size must be one of: {', '.join(sorted(VALID_PAGE_SIZES))}")
+        return v
 
 
 @router.post("/templates", status_code=201)
@@ -1049,6 +1061,8 @@ PAGE_PRESETS = {
     "a4": (210.0, 297.0), "letter": (215.9, 279.4),
     "receipt80": (80.0, None), "receipt58": (58.0, None),
 }
+# Every page_size a template may be saved with: the presets + "label" (custom width x height).
+VALID_PAGE_SIZES = frozenset(PAGE_PRESETS) | {"label"}
 
 
 def _page_dims(page_size: str, w, h):

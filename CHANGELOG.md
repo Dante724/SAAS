@@ -1,5 +1,41 @@
 # Changelog
 
+## build 144eo — Close the model ↔ migration gap (drift fixes + hard drift gate)
+
+The test suite builds its schema from the MODELS; production builds it from the MIGRATIONS, so any
+disagreement between them was invisible to tests. A drift audit found real gaps. Correction to an
+earlier claim: the notification-rule FK bug is NOT on Postgres production (fk144as01 fixed it there);
+it is real on SQLite databases built before that fix — including the dev database.
+
+- **Migration `sc144eo01`** (single head, chains off `c8e0g2i4k6m8`), idempotent + dialect-aware:
+  - `notification_logs.rule_id` FK → `ON DELETE SET NULL` on every dialect (fk144as01 skipped SQLite;
+    `create_all` never alters existing tables, so older DBs kept `NO ACTION` and deleting a rule that
+    had fired was rejected). Postgres: no-op when already correct. SQLite: batch rebuild.
+  - `document_templates.page_size` 12 → 16 chars (Postgres enforces length; model says 16).
+  - 7 single-column indexes the models declare but no migration created — built `CONCURRENTLY IF NOT
+    EXISTS` on Postgres (no write lock), as in ix144dh01.
+  - `ix_bookings_scheduled_for` → `ix_appointments_scheduled_for` (missed by the rename).
+  - Clears its own leftover `_alembic_tmp_*` table first, so an interrupted SQLite run can be retried
+    (Alembic doesn't run SQLite DDL in one transaction; found by testing a failed downgrade).
+- **Model:** `orders.barcode` now declares exactly what production has (lookup index + separate
+  `uq_orders_barcode` unique index) instead of migrating the largest table. Uniqueness unchanged.
+- **API:** `page_size` validated against the render presets (+`label`); unknown → 422, empty → `a4`.
+- **Hard drift gate** `test_144eo_migrated_schema.py` (replaces CI's advisory `alembic check || true`):
+  builds a DB purely via `alembic upgrade head` and fails on any model/migration mismatch outside a
+  reviewed allowlist that can only shrink (11 known missing FKs, 1 VARCHAR≡TEXT). Also asserts a fired
+  rule can be deleted on the migrated schema, and page_size validation. Mutation-tested: fails on the
+  pre-fix schema, reproduces the original FK error, catches a planted column, flags a stale allowlist.
+- **`scripts/check_fk_orphans.py`:** read-only audit of all 418 declared FKs (orphan counts + whether the
+  DB enforces each). SELECT-only, Postgres READ ONLY txn, always rolled back — DB file byte-identical
+  after a run. Prerequisite for adding the 11 missing FKs (procedure in TESTING.md).
+- **Verified:** migrations from scratch (single head); populated data at the previous head → upgrade →
+  downgrade → upgrade with every row preserved; a copy of the real dev DB (create_all-built, mixed
+  state) upgrades cleanly with identical row counts and a real fired rule deletes; failed-run recovery;
+  backend suite **1,147 passed / 0 failed** on CI's pinned stack; ruff clean; workflow schema valid.
+- **Dev-data notes (not production):** the dev DB still has a legacy `bookings` table holding 3
+  appointments invisible to the app (the rename migration never ran on a create_all DB), and 3
+  pre-existing orphan `checklist_sections.step_id` rows. Left untouched.
+
 ## build 144en — Best-in-class test build (5 commits: 144en-1 … 144en-5 + docs)
 
 Planned with the testing-strategy skill; every change verified in an exact replica of CI's pinned

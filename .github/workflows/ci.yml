@@ -28,14 +28,9 @@ jobs:
         # migration (e.g. a duplicate index, or SQLite-incompatible batch DDL) before it reaches a
         # production deploy, where the app runs migrations rather than create_all.
         run: alembic -c backend/alembic.ini upgrade head
-      - name: Model/migration drift check (advisory)
-        # Advisory only: dev builds the schema via create_all + column-sync, so the models have
-        # historically drifted ahead of the migration chain. `alembic check` surfaces that gap, but
-        # on SQLite it also reports reflection false-positives (nullable/FK/index metadata SQLite
-        # doesn't fully expose), so it can't be a hard gate until a Postgres-based reconciliation
-        # migration lands. Kept visible so new drift is noticed.
-        run: alembic -c backend/alembic.ini check || true
       - name: Run tests
+        # Includes the HARD model/migration drift gate (test_144eo_migrated_schema.py): migrations must
+        # build exactly the schema the models describe, minus a reviewed allowlist that can only shrink.
         # parallel (conftest isolates each worker on its own SQLite file) + branch coverage; fails if
         # coverage drops below the ratchet floor in pyproject [tool.coverage.report] fail_under.
         run: pytest -q -n auto --cov --cov-report=term:skip-covered --cov-report=xml

@@ -454,6 +454,10 @@ class Order(Base):
         Index("ix_orders_org_created", "org_id", "created_at"),
         # Status tabs: filter org_id + status.
         Index("ix_orders_org_status", "org_id", "status"),
+        # 144ei — barcode is globally unique across ALL tenants. Declared exactly as the migrations
+        # build it (a lookup index + a separate unique index, see y5a7c9e1g3i5) so models and the
+        # migrated production schema match. Uniqueness is unchanged.
+        Index("uq_orders_barcode", "barcode", unique=True),
     )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     order_number: Mapped[str] = mapped_column(String(50))
@@ -505,7 +509,7 @@ class Order(Base):
     public_token: Mapped[Optional[str]] = mapped_column(String(40), unique=True, index=True, default=lambda: secrets.token_urlsafe(16))  # 144cu — unique track link, never repeated
     client_msg_unread: Mapped[int] = mapped_column(Integer, default=0)  # 144ba: unread customer messages
     rec_unread: Mapped[int] = mapped_column(Integer, default=0)  # 144bd: unread recommendation decisions (approve/decline)
-    barcode: Mapped[Optional[str]] = mapped_column(String(40), unique=True, index=True, default=lambda: _uuid().replace("-", "")[:12].upper())  # Phase F scanner search; 144ei: globally unique across all tenants
+    barcode: Mapped[Optional[str]] = mapped_column(String(40), index=True, default=lambda: _uuid().replace("-", "")[:12].upper())  # Phase F scanner search; 144ei: globally unique via uq_orders_barcode (__table_args__)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
