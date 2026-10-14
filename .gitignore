@@ -1,0 +1,55 @@
+# ─────────────────────────────────────────────────────────────
+# RepairOS — production .gitignore. Keep secrets, local databases,
+# virtualenvs, dependencies and caches OUT of version control.
+# ─────────────────────────────────────────────────────────────
+
+# Secrets / environment (NEVER commit real env files; .env.example is the template)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+secrets.*
+*.secret
+
+# Local databases (dev/test SQLite — may contain real or demo data)
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite3-journal
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+pytest-cache-files-*/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Playwright (E2E) — baselines are committed; auth state + reports are not
+test-results/
+playwright-report/
+playwright/.cache/
+**/e2e/.auth/
+
+# Editor / OS / tooling
+.DS_Store
+Thumbs.db
+.vscode/settings.json
+.idea/
+.claude/
+
+# Logs
+*.log

@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RepairOS · Operator Portal</title>
+<style>
+  :root{
+    --bg:#0b0e14;--bg2:#0f131c;--panel:rgba(255,255,255,.045);--panel2:rgba(255,255,255,.08);
+    --line:rgba(255,255,255,.10);--tx:#eef2f8;--tx2:#aeb8c8;--tx3:#7b8698;--tx4:#5a6474;
+    --accent:#6ea8fe;--accent2:#8b7bff;--green:#3ecf8e;--amber:#f5c451;--red:#f2695f;--rad:16px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:
+    radial-gradient(1000px 600px at 10% -10%,rgba(110,168,254,.10),transparent 55%),
+    radial-gradient(1000px 600px at 110% 0%,rgba(139,123,255,.10),transparent 55%),var(--bg);
+    color:var(--tx);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;min-height:100vh}
+  .hide{display:none!important}
+  button{font:inherit;cursor:pointer}
+  input,select,textarea{font:inherit;background:var(--bg2);color:var(--tx);border:1px solid var(--line);
+    border-radius:10px;padding:9px 11px;width:100%}
+  textarea{resize:vertical;min-height:64px}
+  .btn{background:var(--panel2);border:1px solid var(--line);color:var(--tx);border-radius:10px;padding:8px 14px;font-weight:600}
+  .btn:hover{background:rgba(255,255,255,.13)}
+  .btn.primary{background:linear-gradient(180deg,#6ea8fe,#5a86e6);border-color:transparent;color:#fff}
+  .btn.sm{padding:5px 10px;font-size:12.5px;border-radius:8px}
+  .btn.danger{background:rgba(242,105,95,.15);border-color:rgba(242,105,95,.4);color:#ffb3ac}
+
+  /* login */
+  .login-wrap{min-height:100vh;display:grid;place-items:center;padding:24px}
+  .login-card{width:380px;max-width:100%;background:var(--panel);border:1px solid var(--line);
+    border-radius:22px;padding:30px;box-shadow:0 20px 60px rgba(0,0,0,.45)}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px;margin-bottom:4px}
+  .brand .dot{width:11px;height:11px;border-radius:50%;background:linear-gradient(180deg,#6ea8fe,#8b7bff)}
+  .muted{color:var(--tx3)}
+  .field{margin:14px 0}
+  .field label{display:block;font-size:12px;color:var(--tx3);margin-bottom:6px;font-weight:600}
+
+  /* shell */
+  .top{display:flex;align-items:center;justify-content:space-between;padding:16px 26px;border-bottom:1px solid var(--line);
+    position:sticky;top:0;background:rgba(11,14,20,.85);backdrop-filter:blur(10px);z-index:5}
+  .wrap{max-width:1200px;margin:0 auto;padding:22px 26px 80px}
+  .seg-row{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:22px}
+  @media(max-width:900px){.seg-row{grid-template-columns:repeat(3,1fr)}}
+  .seg{background:var(--panel);border:1px solid var(--line);border-radius:var(--rad);padding:14px 16px;text-align:left;transition:.15s}
+  .seg:hover{border-color:rgba(110,168,254,.4)}
+  .seg.active{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+  .seg .n{font-size:26px;font-weight:800}
+  .seg .l{font-size:11.5px;color:var(--tx3);letter-spacing:.03em;text-transform:uppercase;font-weight:600}
+  .seg .l.new{color:var(--green)}.seg .l.paid{color:var(--accent)}.seg .l.lost{color:var(--red)}.seg .l.susp{color:var(--amber)}
+
+  .toolbar{display:flex;gap:10px;margin-bottom:14px;align-items:center}
+  .toolbar input{max-width:280px}
+  table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:var(--rad);overflow:hidden}
+  th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--tx3);font-size:11px;letter-spacing:.05em;text-transform:uppercase;font-weight:700}
+  tr:last-child td{border-bottom:none}
+  tr.row:hover{background:rgba(255,255,255,.03);cursor:pointer}
+  .badge{display:inline-block;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;border:1px solid var(--line)}
+  .b-new{background:rgba(62,207,142,.15);color:#8ff0c4;border-color:rgba(62,207,142,.35)}
+  .b-trial{background:rgba(245,196,81,.13);color:#ffdf9a;border-color:rgba(245,196,81,.3)}
+  .b-paid{background:rgba(110,168,254,.15);color:#bcd4ff;border-color:rgba(110,168,254,.35)}
+  .b-lost{background:rgba(242,105,95,.14);color:#ffb3ac;border-color:rgba(242,105,95,.35)}
+  .b-susp{background:rgba(245,196,81,.13);color:#ffdf9a;border-color:rgba(245,196,81,.3)}
+
+  /* drawer */
+  .scrim{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:20}
+  .drawer{position:fixed;top:0;right:0;height:100vh;width:560px;max-width:100vw;background:var(--bg2);
+    border-left:1px solid var(--line);z-index:21;overflow-y:auto;box-shadow:-20px 0 60px rgba(0,0,0,.5)}
+  .drawer .dh{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg2)}
+  .drawer .db{padding:20px 22px}
+  .grp{margin-bottom:22px}
+  .grp h3{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--tx3);margin:0 0 10px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .emp{border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px;background:var(--panel)}
+  .emp .en{font-weight:700}
+  .emp .ee{font-size:12px;color:var(--tx3)}
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#0f1622;border:1px solid var(--line);
+    padding:11px 18px;border-radius:12px;z-index:40;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+  .x{background:none;border:none;color:var(--tx3);font-size:20px;line-height:1}
+  a.tablink{color:var(--accent);text-decoration:none;font-weight:600}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login" class="login-wrap">
+  <div class="login-card">
+    <div class="brand"><span class="dot"></span> RepairOS <span class="muted" style="font-weight:600">Operator</span></div>
+    <div class="muted" style="font-size:13px;margin-bottom:6px">Platform administration portal</div>
+    <div class="field"><label>Email</label><input id="l-email" type="email" placeholder="ops@yourco.com"></div>
+    <div class="field"><label>Password</label><input id="l-pass" type="password" placeholder="••••••••" onkeydown="if(event.key==='Enter')Admin.login()"></div>
+    <button class="btn primary" style="width:100%;margin-top:6px" onclick="Admin.login()">Sign in</button>
+    <div class="muted" style="font-size:11.5px;margin-top:14px">Separate from tenant logins. Set via PLATFORM_ADMIN_EMAIL / PLATFORM_ADMIN_PASSWORD.</div>
+  </div>
+</div>
+
+<!-- CONSOLE -->
+<div id="console" class="hide">
+  <div class="top">
+    <div class="brand"><span class="dot"></span> RepairOS <span class="muted" style="font-weight:600">Operator</span></div>
+    <div style="display:flex;gap:10px;align-items:center">
+      <button class="btn sm" onclick="Admin.openCoupons()">Coupons</button>
+      <span class="muted" id="who"></span>
+      <button class="btn sm" onclick="Admin.logout()">Sign out</button>
+    </div>
+  </div>
+  <div class="wrap">
+    <div class="seg-row" id="segs"></div>
+    <div class="toolbar">
+      <input id="search" placeholder="Search clients…" oninput="Admin.render()">
+      <span class="muted" id="filterLabel"></span>
+      <span style="flex:1"></span>
+      <button class="btn sm" onclick="Admin.setSegment(null)">Clear filter</button>
+    </div>
+    <table>
+      <thead><tr><th>Client</th><th>Plan</th><th>Status</th><th>Term</th><th>Discount</th><th>Users</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</div>
+
+<div id="drawerHost"></div>
+<div id="toast"></div>
+
+<script>
+const API = '';
+const TKEY = 'ros_admin_token';
+function tok(){ return localStorage.getItem(TKEY) || ''; }
+async function api(path, opts={}){
+  const h = Object.assign({'Content-Type':'application/json'}, opts.headers||{});
+  if(tok()) h['Authorization'] = 'Bearer '+tok();
+  const r = await fetch(API+path, Object.assign({}, opts, {headers:h}));
+  const txt = await r.text(); let j={}; try{ j = txt?JSON.parse(txt):{}; }catch(e){ j={detail:txt}; }
+  if(!r.ok) throw new Error(j.detail || ('Error '+r.status));
+  return j;
+}
+function toast(m){ const t=document.getElementById('toast'); t.innerHTML=`<div class="toast">${m}</div>`; setTimeout(()=>t.innerHTML='',2600); }
+function esc(s){ return String(s==null?'':s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
+
+const SEG_META = [
+  ['new','New','new'],['trial','Trial','trial'],['paid','Paid','paid'],
+  ['lost_trial','Lost trials','lost'],['lost_paid','Lost paid','lost'],['suspended','Suspended','susp'],
+];
+const STATUS_BADGE = {new:'b-new',trial:'b-trial',paid:'b-paid',lost_trial:'b-lost',lost_paid:'b-lost',suspended:'b-susp'};
+
+const Admin = {
+  tenants:[], stats:null, segment:null,
+
+  async boot(){
+    if(!tok()){ this.showLogin(); return; }
+    try{ const me = await api('/api/admin/me'); document.getElementById('who').textContent = me.name; this.showConsole(); await this.load(); }
+    catch(e){ this.showLogin(); }
+  },
+  showLogin(){ document.getElementById('login').classList.remove('hide'); document.getElementById('console').classList.add('hide'); },
+  showConsole(){ document.getElementById('login').classList.add('hide'); document.getElementById('console').classList.remove('hide'); },
+
+  async login(){
+    const email=document.getElementById('l-email').value.trim();
+    const password=document.getElementById('l-pass').value;
+    if(!email||!password) return toast('Enter email and password');
+    try{
+      const r = await api('/api/admin/login',{method:'POST',body:JSON.stringify({email,password})});
+      localStorage.setItem(TKEY, r.access_token);
+      document.getElementById('who').textContent = r.name || '';
+      this.showConsole(); await this.load();
+    }catch(e){ toast(e.message); }
+  },
+  logout(){ localStorage.removeItem(TKEY); this.showLogin(); },
+
+  async load(){
+    this.stats = await api('/api/admin/stats');
+    this.tenants = (await api('/api/admin/tenants')).items;
+    this.renderSegs(); this.render();
+  },
+  renderSegs(){
+    const s = this.stats.segments||{};
+    document.getElementById('segs').innerHTML = SEG_META.map(([k,label,cls])=>`
+      <button class="seg ${this.segment===k?'active':''}" onclick="Admin.setSegment('${k}')">
+        <div class="n">${s[k]||0}</div><div class="l ${cls}">${label}</div></button>`).join('');
+  },
+  setSegment(k){ this.segment = (this.segment===k)?null:k; this.renderSegs(); this.render();
+    document.getElementById('filterLabel').textContent = this.segment ? ('Showing: '+(SEG_META.find(m=>m[0]===this.segment)||['','',''])[1]) : ''; },
+
+  render(){
+    const q = (document.getElementById('search').value||'').toLowerCase();
+    const rows = this.tenants.filter(t =>
+      (!this.segment || t.segment===this.segment) && (!q || (t.name||'').toLowerCase().includes(q)));
+    document.getElementById('rows').innerHTML = rows.length ? rows.map(t=>{
+      const term = (t.sub_start||t.sub_end) ? `${t.sub_start||'—'} → ${t.sub_end||'—'}` : '—';
+      const expSoon = this._expiringSoon(t.sub_end);
+      return `<tr class="row" onclick="Admin.open('${t.id}')">
+        <td style="font-weight:700">${esc(t.name)}</td>
+        <td>${esc(t.plan||'—')}</td>
+        <td><span class="badge ${STATUS_BADGE[t.segment]||''}">${(SEG_META.find(m=>m[0]===t.segment)||['','—'])[1]}</span></td>
+        <td>${term} ${expSoon?'<span class="badge b-susp" style="margin-left:6px">expires soon</span>':''}</td>
+        <td>${t.discount_pct?`${t.discount_pct}%`:'—'}</td>
+        <td>${t.employees}</td>
+        <td><button class="btn sm" onclick="event.stopPropagation();Admin.open('${t.id}')">Open</button></td></tr>`;
+    }).join('') : `<tr><td colspan="7" class="muted" style="text-align:center;padding:30px">No clients in this view</td></tr>`;
+  },
+  _expiringSoon(end){ if(!end) return false; const d=(new Date(end)-new Date())/86400000; return d>=0 && d<=14; },
+
+  async open(id){
+    const t = await api('/api/admin/tenants/'+id);
+    const statusOpts = ['trial','active','trial_lost','churned','suspended']
+      .map(s=>`<option value="${s}" ${t.sub_status===s?'selected':''}>${s}</option>`).join('');
+    const emps = (t.employees_detail||[]).map(e=>`
+      <div class="emp">
+        <div class="en">${esc(e.name)} ${e.active?'':'<span class="badge b-lost" style="margin-left:6px">inactive</span>'}</div>
+        <div class="ee">${esc(e.email)}</div>
+        <div class="two" style="margin-top:8px">
+          <div><label class="muted" style="font-size:11px">Access from</label><input type="date" id="es-${e.id}" value="${e.access_start||''}"></div>
+          <div><label class="muted" style="font-size:11px">Access until</label><input type="date" id="ee-${e.id}" value="${e.access_end||''}"></div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+          <label class="muted" style="font-size:12px"><input type="checkbox" id="ea-${e.id}" ${e.active?'checked':''} style="width:auto;margin-right:6px">Active</label>
+          <span style="flex:1"></span>
+          <button class="btn sm" onclick="Admin.saveEmp('${t.id}','${e.id}')">Save user</button>
+        </div>
+      </div>`).join('');
+    document.getElementById('drawerHost').innerHTML = `
+      <div class="scrim" onclick="Admin.closeDrawer()"></div>
+      <div class="drawer">
+        <div class="dh"><div style="font-weight:800;font-size:16px">${esc(t.name)}</div>
+          <button class="x" onclick="Admin.closeDrawer()">×</button></div>
+        <div class="db">
+          <div class="grp"><h3>Subscription</h3>
+            <div class="two">
+              <div><label class="muted" style="font-size:11px">Plan</label><input id="d-plan" value="${esc(t.plan||'')}" placeholder="trial / starter / pro"></div>
+              <div><label class="muted" style="font-size:11px">Status</label><select id="d-status">${statusOpts}</select></div>
+            </div>
+            <div class="two" style="margin-top:12px">
+              <div><label class="muted" style="font-size:11px">Term start</label><input type="date" id="d-start" value="${t.sub_start||''}"></div>
+              <div><label class="muted" style="font-size:11px">Term end</label><input type="date" id="d-end" value="${t.sub_end||''}"></div>
+            </div>
+            <div style="margin-top:12px"><label class="muted" style="font-size:11px">Discount %</label><input type="number" id="d-disc" min="0" max="100" value="${t.discount_pct||0}"></div>
+            <div style="display:flex;gap:8px;margin-top:12px">
+              <input id="d-coupon" placeholder="Apply coupon code…">
+              <button class="btn sm" style="white-space:nowrap" onclick="Admin.applyCoupon('${t.id}')">Apply</button>
+            </div>
+          </div>
+          <div class="grp"><h3>Operator notes</h3>
+            <textarea id="d-notes" placeholder="Private notes about this account…">${esc(t.admin_notes||'')}</textarea>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:22px">
+            <button class="btn primary" onclick="Admin.saveTenant('${t.id}')">Save account</button>
+            <button class="btn danger" onclick="Admin.suspend('${t.id}')">Suspend</button>
+          </div>
+          <div class="grp"><h3>Team access windows (${(t.employees_detail||[]).length})</h3>${emps || '<div class="muted">No employees</div>'}</div>
+        </div>
+      </div>`;
+  },
+  closeDrawer(){ document.getElementById('drawerHost').innerHTML=''; },
+
+  async saveTenant(id){
+    const body = {
+      plan: document.getElementById('d-plan').value||null,
+      sub_status: document.getElementById('d-status').value,
+      sub_start: document.getElementById('d-start').value||null,
+      sub_end: document.getElementById('d-end').value||null,
+      discount_pct: parseFloat(document.getElementById('d-disc').value||'0'),
+      admin_notes: document.getElementById('d-notes').value||null,
+    };
+    try{ await api('/api/admin/tenants/'+id,{method:'PATCH',body:JSON.stringify(body)}); toast('Account saved'); this.closeDrawer(); await this.load(); }
+    catch(e){ toast(e.message); }
+  },
+  async suspend(id){
+    if(!confirm('Suspend this account? Its users will be blocked from signing in.')) return;
+    try{ await api('/api/admin/tenants/'+id,{method:'PATCH',body:JSON.stringify({sub_status:'suspended'})}); toast('Account suspended'); this.closeDrawer(); await this.load(); }
+    catch(e){ toast(e.message); }
+  },
+  async saveEmp(orgId, empId){
+    const body = {
+      access_start: document.getElementById('es-'+empId).value||null,
+      access_end: document.getElementById('ee-'+empId).value||null,
+      active: document.getElementById('ea-'+empId).checked,
+    };
+    try{ await api(`/api/admin/tenants/${orgId}/employees/${empId}`,{method:'PATCH',body:JSON.stringify(body)}); toast('User updated'); }
+    catch(e){ toast(e.message); }
+  },
+  async applyCoupon(id){
+    const code = (document.getElementById('d-coupon').value||'').trim();
+    if(!code) return toast('Enter a coupon code');
+    try{ const r = await api(`/api/admin/tenants/${id}/apply-coupon`,{method:'POST',body:JSON.stringify({code})});
+      document.getElementById('d-disc').value = r.discount_pct; toast('Coupon applied — '+r.discount_pct+'%'); }
+    catch(e){ toast(e.message); }
+  },
+
+  async openCoupons(){
+    const list = (await api('/api/admin/coupons')).items;
+    const rows = list.length ? list.map(c=>`<tr><td style="font-weight:700">${esc(c.code)}</td><td>${c.percent}%</td>
+      <td>${esc(c.plan||'any')}</td><td>${c.expires_at||'—'}</td></tr>`).join('')
+      : '<tr><td colspan="4" class="muted" style="text-align:center;padding:20px">No coupons yet</td></tr>';
+    document.getElementById('drawerHost').innerHTML = `
+      <div class="scrim" onclick="Admin.closeDrawer()"></div>
+      <div class="drawer">
+        <div class="dh"><div style="font-weight:800;font-size:16px">Coupon codes</div><button class="x" onclick="Admin.closeDrawer()">×</button></div>
+        <div class="db">
+          <div class="grp"><h3>Generate a code</h3>
+            <div class="two">
+              <div><label class="muted" style="font-size:11px">Code (blank = auto)</label><input id="c-code" placeholder="SAVE20"></div>
+              <div><label class="muted" style="font-size:11px">Percent</label><input id="c-pct" type="number" min="0" max="100" value="10"></div>
+            </div>
+            <div class="two" style="margin-top:12px">
+              <div><label class="muted" style="font-size:11px">Plan (blank = any)</label><input id="c-plan" placeholder="pro"></div>
+              <div><label class="muted" style="font-size:11px">Expires</label><input id="c-exp" type="date"></div>
+            </div>
+            <button class="btn primary" style="margin-top:12px" onclick="Admin.createCoupon()">Generate code</button>
+          </div>
+          <div class="grp"><h3>Existing</h3>
+            <table><thead><tr><th>Code</th><th>%</th><th>Plan</th><th>Expires</th></tr></thead><tbody>${rows}</tbody></table>
+          </div>
+        </div>
+      </div>`;
+  },
+  async createCoupon(){
+    const body = {
+      code: document.getElementById('c-code').value||null,
+      percent: parseFloat(document.getElementById('c-pct').value||'0'),
+      plan: document.getElementById('c-plan').value||null,
+      expires_at: document.getElementById('c-exp').value||null,
+    };
+    try{ const r = await api('/api/admin/coupons',{method:'POST',body:JSON.stringify(body)}); toast('Generated '+r.code); this.openCoupons(); }
+    catch(e){ toast(e.message); }
+  },
+};
+Admin.boot();
+</script>
+</body>
+</html>

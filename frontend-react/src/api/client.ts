@@ -1,0 +1,102 @@
+// RepairOS API client — reuses the EXISTING session (same-origin cookie/token).
+// No auth redesign, no CORS: the React bundle is served from the same origin as
+// the live app, so the browser sends the logged-in session automatically.
+// Endpoints are the existing FastAPI ones (see inventory/endpoints.txt).
+
+const BASE = "/api";
+
+// Global branch scope (legacy App.locationId). When set, every GET gets
+// ?location_id=… appended so lists show one branch — the switcher lives in the
+// Shell top bar. ponytail: GET-only + string-append; writes carry their own
+// location_id in the body where the backend needs it.
+export function getLocationScope(): string { try { return localStorage.getItem("ros_loc") || ""; } catch { return ""; } }
+export function setLocationScope(id: string) { try { localStorage.setItem("ros_loc", id || ""); } catch { /* ignore */ } }
+function scoped(method: string, path: string): string {
+  const loc = getLocationScope();
+  if (!loc || method !== "GET" || path.startsWith("/staff/locations") || path.startsWith("/auth/")) return path;
+  return path + (path.includes("?") ? "&" : "?") + "location_id=" + encodeURIComponent(loc);
+}
+
+// The vanilla app stores its bearer token in localStorage under this key in some
+// builds; if present we forward it. Cookie-based sessions work without it.
+function authHeader(): Record<string, string> {
+  try {
+    // The vanilla app stores its bearer token under "ros_tok" (see core.js).
+    // We keep the older keys as fallbacks for safety.
+    const t =
+      localStorage.getItem("ros_tok") ||
+      localStorage.getItem("ros_token") ||
+      localStorage.getItem("token") ||
+      "";
+    return t ? { Authorization: `Bearer ${t}` } : {};
+  } catch {
+    return {};
+  }
+}
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(BASE + scoped(method, path), {
+    method,
+    credentials: "include", // send the existing session cookie
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeader(),
+    },
+    body: body != null ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    // Guarded cutover: an expired/invalid session bounces back to the legacy
+    // login page (the redesign has no login screen of its own).
+    if (res.status === 401) {
+      try {
+        localStorage.removeItem("ros_tok");
+      } catch {
+        /* ignore */
+      }
+      if (typeof window !== "undefined" && window.location.pathname !== "/legacy.html") {
+        window.location.replace("/legacy.html");
+      }
+    }
+    const text = await res.text().catch(() => "");
+    throw new ApiError(res.status, text || res.statusText);
+  }
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+// Print/PDF: the /print/* endpoints return PDF bytes and require the bearer
+// token, so window.open(url) would 401. Fetch with auth, then open the blob in a
+// new tab. Reused by WO, PO, invoice and payroll print buttons.
+export async function openAuthedDoc(path: string): Promise<void> {
+  const res = await fetch(BASE + path, { credentials: "include", headers: { ...authHeader() } });
+  if (!res.ok) throw new ApiError(res.status, (await res.text().catch(() => "")) || res.statusText);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  window.open(url, "_blank");
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+// Multipart upload (no JSON Content-Type → browser sets the boundary). Reuses the session.
+async function postForm<T>(path: string, form: FormData): Promise<T> {
+  const res = await fetch(BASE + path, { method: "POST", credentials: "include", headers: { ...authHeader() }, body: form });
+  if (!res.ok) throw new ApiError(res.status, (await res.text().catch(() => "")) || res.statusText);
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
+export const api = {
+  get: <T>(p: string) => request<T>("GET", p),
+  post: <T>(p: string, b?: unknown) => request<T>("POST", p, b),
+  postForm,
+  patch: <T>(p: string, b?: unknown) => request<T>("PATCH", p, b),
+  put: <T>(p: string, b?: unknown) => request<T>("PUT", p, b),
+  del: <T>(p: string) => request<T>("DELETE", p),
+};

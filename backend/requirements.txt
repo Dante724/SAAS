@@ -1,0 +1,2 @@
+# Deprecated: dependencies are now defined at the repo root.
+-r ../requirements.txt

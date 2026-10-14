@@ -1,0 +1,14 @@
+const fs=require('fs');const p=f=>fs.readFileSync(__dirname+'/../'+f,'utf8');
+const css=p('static/css/design.css');const html=p('index.html');
+let r=[];const ck=(n,c)=>r.push({n,ok:c});
+ck('build bumped to 144co',/build 144(c[o-z]|[d-z][a-z])/.test(html));
+ck('defines --pop-origin token',/--pop-origin\s*:/.test(css));
+ck('popovers are origin-aware (transform-origin)',/transform-origin:\s*var\(--pop-origin/.test(css));
+ck('pop-in keyframe scales from .96 not 0',/@keyframes pop-in/.test(css)&&/scale\(\.96\)/.test(css)&&!/scale\(0\)/.test(css.split('@keyframes pop-in')[1].slice(0,160)));
+ck('popover enter uses ease-out (not ease-in)',/animation:\s*pop-in[^;]*var\(--ease-out\)/.test(css));
+ck('profile-menu + pickers animate in',/\.profile-menu,\s*\n?\s*\.cat-dropdown\.open,\s*\.cp-dropdown\.open\s*\{[\s\S]*pop-in/.test(css));
+ck('left-anchored menus grow from top-left',/--pop-origin:\s*top left/.test(css));
+ck('reduced-motion disables the pop-in',/prefers-reduced-motion[\s\S]*pop-in[\s\S]*none|animation:\s*none/.test(css));
+ck('UI motion stays sub-300ms (.18s)',/pop-in\s*\.18s/.test(css));
+const bad=r.filter(x=>!x.ok);r.forEach(x=>console.log((x.ok?'ok ':'FAIL ')+x.n));
+console.log(`\n${r.length-bad.length}/${r.length} passed`);process.exit(bad.length?1:0);

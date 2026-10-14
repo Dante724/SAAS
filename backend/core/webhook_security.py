@@ -1,0 +1,81 @@
+"""Build 110 — production hardening: webhook authentication and rate limiting.
+
+Two small, self-contained defenses:
+
+1.  Org webhook tokens. Inbound provider webhooks (unified inbox, VoIP calls) are keyed
+    by org id in the URL — which is guessable/leakable. Every org gets a random
+    ``webhook_secret`` at registration; inbound posts must present it in an
+    ``X-Webhook-Token`` header. Fail-closed: an org with a secret rejects unsigned posts.
+    Orgs created before this build (secret is NULL) are lazily issued one the first time
+    an admin views it, and until then continue to accept posts — a deliberate
+    compatibility window rather than silently breaking existing integrations.
+
+2.  A sliding-window rate limiter for public endpoints. ``/api/public/lookup`` pairs an
+    order number with a phone; without throttling it can be brute-forced. The limiter is
+    in-process (a deque of timestamps per key) — the right tool for a single-node deploy
+    and an honest placeholder for Redis when there are multiple nodes.
+"""
+import time
+from collections import defaultdict, deque
+
+from fastapi import HTTPException, Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.models import Organisation
+
+
+async def verify_org_webhook(db: AsyncSession, org_id: str, request: Request) -> None:
+    """Reject an inbound webhook that doesn't present the org's token.
+
+    404 (not 401) when the org doesn't exist, so the endpoint can't be used to probe
+    which org ids are real.
+    """
+    org = (await db.execute(select(Organisation).where(
+        Organisation.id == org_id))).scalar_one_or_none()
+    if not org:
+        raise HTTPException(404, "Unknown organisation")
+    if org.webhook_secret:  # fail-closed once a secret exists
+        presented = request.headers.get("X-Webhook-Token", "")
+        if not presented or presented != org.webhook_secret:
+            raise HTTPException(401, "Invalid or missing X-Webhook-Token")
+
+
+class SlidingWindowLimiter:
+    """Tiny in-process sliding-window limiter: at most ``limit`` events per ``window``
+    seconds per key. Keys are caller-chosen (client IP, org id, order number...)."""
+
+    def __init__(self, limit: int, window_s: float):
+        self.limit = limit
+        self.window = window_s
+        self._hits: dict[str, deque] = defaultdict(deque)
+
+    def check(self, key: str) -> bool:
+        """True if the event is allowed; records it if so."""
+        now = time.monotonic()
+        dq = self._hits[key]
+        while dq and now - dq[0] > self.window:
+            dq.popleft()
+        if len(dq) >= self.limit:
+            return False
+        dq.append(now)
+        return True
+
+    def reset(self) -> None:  # for tests
+        self._hits.clear()
+
+
+# Public lookup: generous for a human retyping a phone, hostile to a script.
+lookup_limiter = SlidingWindowLimiter(limit=10, window_s=60)
+
+
+def enforce_rate_limit(limiter: SlidingWindowLimiter, key: str) -> None:
+    if not limiter.check(key):
+        raise HTTPException(429, "Too many attempts — try again in a minute")
+
+
+def client_ip(request: Request) -> str:
+    fwd = request.headers.get("X-Forwarded-For")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"

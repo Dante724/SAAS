@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "inter",
+        "createdAt": "2026-09-16T06:20:21.357Z",
+        "reason": "Brand font — Stitch Liquid Clay design system (approved)"
+      }
+    ]
+  }
+}

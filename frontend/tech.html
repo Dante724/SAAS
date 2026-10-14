@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#6366f1">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="RepairOS Tech">
+<title>RepairOS Technician</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="/static/css/design.css">
+<style>
+  :root{ --safe-b: env(safe-area-inset-bottom,0px); --safe-t: env(safe-area-inset-top,0px); }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:#0f1020;color:#e9e9f2;
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;overscroll-behavior-y:contain}
+  button{font-family:inherit}
+  .hidden{display:none!important}
+  /* Top status strip */
+  #topbar{position:sticky;top:0;z-index:30;padding:calc(var(--safe-t) + 10px) 16px 10px;
+    display:flex;align-items:center;gap:10px;background:rgba(15,16,32,.92);backdrop-filter:blur(10px);
+    border-bottom:1px solid rgba(255,255,255,.06)}
+  #topbar .title{font-weight:700;font-size:17px;flex:1}
+  .pill{font-size:11px;font-weight:700;padding:5px 9px;border-radius:999px;display:inline-flex;align-items:center;gap:5px}
+  .pill.on{background:rgba(52,211,153,.16);color:#34d399}
+  .pill.off{background:rgba(251,146,60,.16);color:#fb923c}
+  .iconbtn{width:40px;height:40px;border-radius:12px;border:0;background:rgba(255,255,255,.07);color:#e9e9f2;
+    display:flex;align-items:center;justify-content:center;position:relative}
+  .badge-dot{position:absolute;top:6px;right:6px;min-width:16px;height:16px;border-radius:8px;background:#f43f5e;
+    color:#fff;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;padding:0 4px}
+  /* Banners */
+  .banner{margin:10px 16px;padding:12px 14px;border-radius:14px;font-size:13px;display:flex;gap:10px;align-items:center}
+  .banner.update{background:rgba(99,102,241,.16);color:#c7d2fe}
+  .banner.sync{background:rgba(255,255,255,.06);color:#a7a7c0}
+  .banner button{margin-left:auto;background:#6366f1;color:#fff;border:0;border-radius:10px;padding:9px 14px;font-weight:700;font-size:13px;min-height:40px}
+  /* Content scroll area */
+  #view{padding:6px 16px calc(96px + var(--safe-b));min-height:60vh}
+  /* Bottom nav */
+  #nav{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;
+    padding:8px 8px calc(8px + var(--safe-b));background:rgba(15,16,32,.96);backdrop-filter:blur(12px);
+    border-top:1px solid rgba(255,255,255,.07)}
+  #nav a{flex:1;text-decoration:none;color:#8b8ba7;display:flex;flex-direction:column;align-items:center;gap:3px;
+    padding:8px 4px;border-radius:12px;font-size:11px;font-weight:600;min-height:54px;justify-content:center}
+  #nav a.active{color:#fff;background:rgba(99,102,241,.18)}
+  /* Cards / stats */
+  .stat-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin:8px 0 18px}
+  .stat{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.06);border-radius:16px;padding:14px}
+  .stat .n{font-size:28px;font-weight:800;line-height:1}
+  .stat .l{font-size:12px;color:#9a9ab5;margin-top:6px;text-transform:uppercase;letter-spacing:.05em}
+  .stat.alert .n{color:#fb923c}
+  .sec-h{font-size:13px;font-weight:800;color:#9a9ab5;text-transform:uppercase;letter-spacing:.06em;margin:18px 0 10px}
+  .job{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.06);border-radius:16px;padding:14px;margin-bottom:10px;
+    display:block;text-decoration:none;color:inherit;-webkit-user-select:none}
+  .job:active{background:rgba(255,255,255,.09)}
+  .job .row{display:flex;align-items:center;gap:8px}
+  .job .num{font-weight:800;font-size:15px}
+  .job .st{margin-left:auto;font-size:11px;font-weight:700;padding:4px 9px;border-radius:999px;background:rgba(99,102,241,.18);color:#c7d2fe}
+  .job .meta{color:#9a9ab5;font-size:13px;margin-top:6px}
+  .job.ov{border-color:rgba(251,146,60,.4)}
+  .empty{color:#7a7a95;font-size:13px;text-align:center;padding:22px}
+  .big-btn{width:100%;border:0;border-radius:16px;padding:18px;font-size:16px;font-weight:800;color:#fff;
+    background:linear-gradient(160deg,#6366f1,#8b5cf6);min-height:60px}
+  .big-btn.stop{background:linear-gradient(160deg,#f43f5e,#fb7185)}
+  .ghost-btn{width:100%;border:1px solid rgba(255,255,255,.14);background:transparent;color:#e9e9f2;border-radius:14px;padding:14px;font-weight:700;min-height:52px;margin-top:10px}
+  /* Login */
+  #login{min-height:100%;display:flex;align-items:center;justify-content:center;padding:24px}
+  #login .card{width:100%;max-width:360px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);border-radius:22px;padding:26px}
+  #login .logo{width:60px;height:60px;border-radius:18px;margin:0 auto 14px;background:linear-gradient(160deg,#6366f1,#8b5cf6);display:flex;align-items:center;justify-content:center}
+  #login h1{text-align:center;font-size:20px;margin:0 0 4px}#login p{text-align:center;color:#9a9ab5;font-size:13px;margin:0 0 20px}
+  #login input{width:100%;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.12);border-radius:12px;
+    padding:14px;color:#fff;font-size:16px;margin-bottom:12px;min-height:52px}
+  #install-fab{position:fixed;right:16px;bottom:calc(86px + var(--safe-b));z-index:40;background:#6366f1;color:#fff;border:0;
+    border-radius:999px;padding:12px 16px;font-weight:700;font-size:13px;box-shadow:0 8px 24px rgba(99,102,241,.5)}
+</style>
+</head>
+<body>
+  <div id="login">
+    <div class="card">
+      <div class="logo" data-icon="wrench" data-size="26"></div>
+      <h1>RepairOS Technician</h1>
+      <p>Sign in to your field app</p>
+      <input id="t-email" type="email" inputmode="email" autocomplete="username" placeholder="you@shop.com" value="admin@repairos.dev">
+      <input id="t-pass" type="password" autocomplete="current-password" placeholder="Password" value="admin123">
+      <button class="big-btn" id="t-login">Sign in</button>
+    </div>
+  </div>
+
+  <div id="app" class="hidden">
+    <div id="topbar">
+      <div class="title" id="t-title">Today</div>
+      <span class="pill on" id="t-conn">● Online</span>
+      <button class="iconbtn" id="t-bell" aria-label="Notifications"><span data-icon="message" data-size="18"></span><span class="badge-dot hidden" id="t-unread">0</span></button>
+    </div>
+    <div id="banners"></div>
+    <div id="view"></div>
+    <button id="install-fab" class="hidden">Install app</button>
+    <nav id="nav">
+      <a href="#/dashboard" data-tab="dashboard"><span data-icon="dashboard" data-size="20"></span>Jobs</a>
+      <a href="#/clock" data-tab="clock"><span data-icon="clock" data-size="20"></span>Clock</a>
+      <a href="#/scan" data-tab="scan"><span data-icon="search" data-size="20"></span>Scan</a>
+      <a href="#/notifications" data-tab="notifications"><span data-icon="message" data-size="20"></span>Alerts</a>
+    </nav>
+  </div>
+
+  <script src="/static/js/core.js"></script>
+  <script src="/static/js/icons.js"></script>
+  <script src="/static/js/pwa.js"></script>
+  <script src="/static/js/tech/dashboard.js"></script>
+  <script src="/static/js/tech/app.js"></script>
+</body>
+</html>

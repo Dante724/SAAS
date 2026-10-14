@@ -1,0 +1,12 @@
+const fs=require('fs');const p=f=>fs.readFileSync(__dirname+'/../'+f,'utf8');
+const g=p('static/js/gdpr.js');const html=p('index.html');
+let r=[];const ck=(n,c)=>r.push({n,ok:c});
+ck('build bumped to 144cs',/build 144(c[s-z]|[d-z][a-z])/.test(html));
+ck('gdpr.js loaded',/gdpr\.js/.test(html));
+ck('org export downloads a bundle',/gdpr\/export-org/.test(g)&&/download/.test(g));
+ck('per-client export',/client\/\$\{clientId\}\/export/.test(g));
+ck('set consent posts channel+granted',/\/consent`,\s*\{ channel, granted/.test(g));
+ck('consent history view',/\/consent`\)/.test(g)&&/history/.test(g.toLowerCase()));
+ck('erase confirms + posts',/confirm\(/.test(g)&&/\/erase`/.test(g));
+const bad=r.filter(x=>!x.ok);r.forEach(x=>console.log((x.ok?'ok ':'FAIL ')+x.n));
+console.log(`\n${r.length-bad.length}/${r.length} passed`);process.exit(bad.length?1:0);

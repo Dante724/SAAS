@@ -1,0 +1,279 @@
+/* ══════════════════════════════════════════════════════════════════
+   RepairOS v2 — Stitch-fidelity restyle layer (light "liquid glass").
+   Scoped refinement over design.css. Structure/behavior untouched —
+   looks only. Loaded AFTER design.css so these win on specificity ties.
+   Build: v2-overhaul.
+════════════════════════════════════════════════════════════════════ */
+
+:root{
+  --v2-ink:#14213f; --v2-ink2:#435577; --v2-ink3:#6c7a99; --v2-ink4:#9aa7c4;
+  --v2-line:rgba(148,163,214,.16);
+  --v2-primary:#4f8ef7; --v2-violet:#9b7bf4; --v2-teal:#2cd4c0;
+  --v2-card:#ffffff; --v2-card-soft:#fbfcff;
+  --v2-radius:14px;
+  --v2-shadow-sm:0 2px 8px rgba(60,100,170,.08);
+  --v2-shadow-md:0 8px 26px rgba(60,100,170,.12);
+  --v2-specular:inset 0 1px 0 rgba(255,255,255,.92);
+}
+
+/* tabular numerics everywhere money/ids live */
+.tbl-num,.rc-stat b,.wo-bal-hero .amt,.o-kpi-val,.kpi-val,
+.rc-row span:last-child{ font-variant-numeric:tabular-nums; }
+
+/* ── SECTION EYEBROW LABELS (rc-k) — airier, Stitch style ── */
+.rc-k{
+  font-size:10px!important; font-weight:800!important; letter-spacing:.06em!important;
+  text-transform:uppercase!important; color:var(--v2-ink4)!important; margin-bottom:5px!important;
+}
+
+/* ══ WORK-ORDER DRAWER ══════════════════════════════════════════ */
+
+/* Tab bar — clean underline, no chrome */
+.wo-tabs{ gap:2px!important; border-bottom:1px solid var(--v2-line)!important; padding-bottom:0!important; }
+.wo-tab{
+  font-size:13px!important; font-weight:600!important; color:var(--v2-ink3)!important;
+  padding:11px 16px!important; border-radius:0!important; background:transparent!important;
+  border:none!important; border-bottom:2px solid transparent!important; margin-bottom:-1px!important;
+}
+.wo-tab:hover{ color:var(--v2-ink2)!important; background:transparent!important; }
+.wo-tab.active{ color:var(--v2-primary)!important; background:transparent!important;
+  border-bottom-color:var(--v2-primary)!important; box-shadow:none!important; }
+
+/* Identity cards (client + asset) — white, soft border, airy */
+.rc-cards2{ gap:14px!important; }
+.rc-sysc{
+  background:var(--v2-card)!important; border:1px solid var(--v2-line)!important;
+  border-radius:var(--v2-radius)!important; padding:15px 16px!important;
+  box-shadow:var(--v2-shadow-sm),var(--v2-specular)!important;
+}
+.rc-sysc.rc-click{ cursor:pointer; transition:border-color .14s, box-shadow .14s, transform .14s; }
+.rc-sysc.rc-click:hover{ border-color:rgba(79,142,247,.35)!important;
+  box-shadow:0 6px 18px rgba(79,142,247,.12),var(--v2-specular)!important; transform:translateY(-1px); }
+.rc-sysc-h{ gap:12px!important; align-items:center!important; margin-bottom:10px!important; }
+.rc-sysc-name{ font-size:14px!important; font-weight:800!important; color:var(--v2-ink)!important;
+  display:flex!important; align-items:center!important; gap:6px!important; flex-wrap:wrap!important; }
+.rc-sysc .sub{ font-size:11px!important; color:var(--v2-ink4)!important; }
+
+/* Avatar bubble — gradient, matches Stitch LV chip */
+.rc-ppl.rc-ppl-lg{
+  width:40px!important; height:40px!important; border-radius:50%!important;
+  background:linear-gradient(135deg,var(--v2-primary),var(--v2-violet))!important;
+  color:#fff!important; font-weight:800!important; font-size:14px!important;
+  display:flex!important; align-items:center!important; justify-content:center!important;
+  box-shadow:0 4px 12px rgba(79,142,247,.30)!important; flex-shrink:0;
+}
+
+/* rows inside identity cards */
+.rc-sysc-b{ display:flex; flex-direction:column; gap:6px; }
+.rc-row{ display:flex; justify-content:space-between; align-items:center;
+  font-size:12.5px!important; padding:3px 0!important; }
+.rc-row .sub{ color:var(--v2-ink4)!important; font-weight:600; }
+.rc-row span:last-child{ color:var(--v2-ink)!important; font-weight:600; }
+.rc-row-empty{ color:var(--v2-ink4)!important; font-style:normal; }
+
+/* Order-parameters chip strip → airier */
+.rc-strip{ gap:10px!important; padding:14px 0!important; flex-wrap:wrap; }
+.rc-strip-item{ min-width:0; }
+.rc-chip{
+  background:var(--v2-card)!important; border:1px solid var(--v2-line)!important;
+  border-radius:10px!important; padding:8px 12px!important; font-size:13px!important;
+  font-weight:600!important; color:var(--v2-ink)!important; box-shadow:var(--v2-shadow-sm)!important;
+}
+.rc-chip:hover{ border-color:rgba(79,142,247,.35)!important; }
+.rc-chip-static{ background:var(--v2-card-soft)!important; }
+.rc-ppl:not(.rc-ppl-lg){ background:linear-gradient(135deg,var(--v2-primary),var(--v2-violet));
+  color:#fff; font-weight:800; }
+
+/* Complaint + stats + notes cards */
+.rc-complaint,.rc-notes{
+  background:var(--v2-card)!important; border:1px solid var(--v2-line)!important;
+  border-radius:var(--v2-radius)!important; padding:14px 16px!important;
+  box-shadow:var(--v2-shadow-sm),var(--v2-specular)!important;
+}
+.rc-stats{ gap:12px!important; }
+.rc-stat{
+  background:var(--v2-card)!important; border:1px solid var(--v2-line)!important;
+  border-radius:12px!important; padding:11px 14px!important; box-shadow:var(--v2-shadow-sm)!important;
+}
+.rc-stat b{ font-size:15px!important; font-weight:800!important; color:var(--v2-ink)!important; }
+
+/* SLA banner (added in _woOverview) */
+.v2-sla{
+  display:flex; align-items:center; gap:12px; margin-bottom:14px;
+  background:linear-gradient(135deg,rgba(79,142,247,.08),rgba(155,123,244,.05));
+  border:1px solid rgba(79,142,247,.18); border-radius:var(--v2-radius);
+  padding:12px 16px; box-shadow:var(--v2-specular);
+}
+.v2-sla-ic{ width:32px;height:32px;border-radius:9px;flex-shrink:0;
+  background:linear-gradient(135deg,var(--v2-primary),var(--v2-violet));
+  color:#fff;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 12px rgba(79,142,247,.3); }
+.v2-sla-tt{ font-size:13px;font-weight:800;color:var(--v2-ink); }
+.v2-sla-sub{ font-size:11.5px;color:var(--v2-ink3);margin-top:1px; }
+.v2-sla-flag{ margin-left:auto;font-size:10px;font-weight:800;letter-spacing:.04em;
+  padding:5px 11px;border-radius:999px;border:1.5px solid rgba(79,142,247,.3);
+  color:var(--v2-primary);text-transform:uppercase; }
+
+/* header badge pills inside identity cards (prior visits / VIP / warranty) */
+.v2-pill{ display:inline-flex;align-items:center;gap:4px;font-size:9.5px;font-weight:800;
+  letter-spacing:.03em;text-transform:uppercase;padding:3px 8px;border-radius:999px;
+  vertical-align:middle;margin-left:6px; }
+.v2-pill-visits{ background:rgba(79,142,247,.12);color:var(--v2-primary); }
+.v2-pill-vip{ background:rgba(61,202,122,.14);color:#16a34a; }
+.v2-pill-warranty{ background:rgba(61,202,122,.14);color:#16a34a; }
+
+/* ══ HUB (Work orders list) ══════════════════════════════════════ */
+
+/* KPI cards — flat white, soft-tint glyph, airy */
+.o-kpi-row{ gap:12px!important; }
+
+/* Status filter chips */
+.chip{
+  background:var(--v2-card)!important; border:1px solid var(--v2-line)!important;
+  color:var(--v2-ink3)!important; font-weight:600!important; box-shadow:var(--v2-shadow-sm)!important;
+}
+.chip:hover{ border-color:rgba(79,142,247,.35)!important; color:var(--v2-primary)!important;
+  background:var(--v2-card)!important; }
+.chip.active{ background:var(--v2-primary)!important; color:#fff!important; border-color:transparent!important;
+  box-shadow:0 4px 12px rgba(79,142,247,.3)!important; }
+
+/* Table — sticky, airy, soft hover */
+.tbl thead th{ font-size:10px!important; font-weight:800!important; letter-spacing:.05em!important;
+  color:var(--v2-ink4)!important; text-transform:uppercase!important; }
+.tbl tbody td{ font-size:13px!important; color:var(--v2-ink)!important; }
+.tbl tbody tr:hover td{ background:rgba(79,142,247,.03)!important; }
+
+/* ══ FORM FIELDS — soft, rounded, focus ring ═════════════════════ */
+.field-input,.field-select{
+  border:1px solid var(--v2-line)!important; border-radius:11px!important;
+  background:var(--v2-card-soft)!important; color:var(--v2-ink)!important;
+  font-size:13px!important; padding:10px 12px!important;
+}
+.field-input:focus,.field-select:focus{
+  border-color:rgba(79,142,247,.5)!important;
+  box-shadow:0 0 0 3px rgba(79,142,247,.12)!important; background:#fff!important;
+}
+.field-label{ font-size:10px!important; font-weight:800!important; letter-spacing:.05em!important;
+  text-transform:uppercase!important; color:var(--v2-ink4)!important; }
+
+/* ══ DARK MODE — leave the app's own dark tokens; only soften v2 cards ══ */
+[data-theme="dark"] .rc-sysc,[data-theme="dark"] .rc-complaint,
+[data-theme="dark"] .rc-notes,[data-theme="dark"] .rc-stat,
+[data-theme="dark"] .rc-chip{
+  background:var(--g-fill,rgba(18,22,40,.62))!important;
+  border-color:var(--g-border-mid,rgba(255,255,255,.08))!important;
+}
+[data-theme="dark"] .rc-sysc-name,[data-theme="dark"] .rc-stat b,
+[data-theme="dark"] .tbl tbody td{ color:var(--tx-1,#eef1fb)!important; }
+[data-theme="dark"] .field-input,[data-theme="dark"] .field-select{
+  background:var(--elev-1,#12151f)!important; color:var(--tx-1,#eef1fb)!important; }
+[data-theme="dark"] .chip{ background:var(--elev-1,#12151f)!important; color:var(--tx-3,#8a93ae)!important; }
+[data-theme="dark"] .v2-sla{ background:rgba(124,147,255,.10)!important; border-color:rgba(124,147,255,.22)!important; }
+[data-theme="dark"] .v2-sla-tt{ color:var(--tx-1,#eef1fb)!important; }
+
+/* ══ TOP BAR (Stitch fidelity) ═══════════════════════════════════ */
+/* Search trigger → soft pill */
+.cmdk-trigger{
+  background:var(--v2-card)!important; border:1px solid var(--v2-line)!important;
+  border-radius:999px!important; padding:7px 14px!important; color:var(--v2-ink4)!important;
+  box-shadow:var(--v2-shadow-sm)!important; font-size:13px!important;
+}
+.cmdk-trigger:hover{ border-color:rgba(79,142,247,.35)!important; }
+.cmdk-trigger-kbd{ background:rgba(148,163,214,.15)!important; color:var(--v2-ink4)!important;
+  border-radius:5px!important; padding:1px 6px!important; font-size:10px!important; }
+
+/* View switcher (Table / Board / Scheduler) → segmented control */
+.view-toggle{ background:rgba(148,163,214,.12)!important; border-radius:11px!important;
+  padding:3px!important; gap:2px!important; border:1px solid var(--v2-line)!important; }
+.view-toggle .vt-btn{ border:none!important; background:transparent!important;
+  color:var(--v2-ink3)!important; font-weight:600!important; font-size:12.5px!important;
+  border-radius:8px!important; padding:6px 12px!important; box-shadow:none!important; }
+.view-toggle .vt-btn.active{ background:#fff!important; color:var(--v2-primary)!important;
+  box-shadow:0 2px 6px rgba(60,100,170,.12)!important; }
+
+/* Active job timer → green running pill (Stitch) */
+.tc-chip{ border-radius:999px!important; padding:6px 12px!important;
+  background:var(--v2-card)!important; border:1px solid var(--v2-line)!important;
+  box-shadow:var(--v2-shadow-sm)!important; font-variant-numeric:tabular-nums; }
+.tc-chip.running,.tc-chip.active,.tc-chip.on{
+  background:rgba(61,202,122,.12)!important; border-color:rgba(61,202,122,.3)!important;
+  color:#16a34a!important; }
+.tc-chip.running .tc-chip-time,.tc-chip.active .tc-chip-time{ color:#16a34a!important; font-weight:800; }
+
+/* Toolbar primary/secondary CTAs stay; just soften ghost toolbar buttons */
+.o-toolbar .btn-glass,.o-toolbar .btn-success-outline{ box-shadow:var(--v2-shadow-sm)!important; }
+
+[data-theme="dark"] .cmdk-trigger,[data-theme="dark"] .view-toggle{
+  background:var(--elev-1,#12151f)!important; border-color:var(--g-border-mid,rgba(255,255,255,.08))!important; }
+[data-theme="dark"] .view-toggle .vt-btn.active{ background:var(--elev-3,#232838)!important; color:var(--blue-dark,#9daeff)!important; }
+
+/* persistent top-bar cluster: bell + profile avatar (Stitch top-right) */
+.topbar-persist{ display:flex; align-items:center; gap:10px; margin-left:8px; }
+.topbar-bell{ width:34px;height:34px;border-radius:10px;flex-shrink:0;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--v2-card);border:1px solid var(--v2-line);color:var(--v2-ink3);
+  box-shadow:var(--v2-shadow-sm);transition:border-color .14s,color .14s; }
+.topbar-bell:hover{ border-color:rgba(79,142,247,.35);color:var(--v2-primary); }
+.topbar-avatar{ width:32px;height:32px;border-radius:50%;flex-shrink:0;overflow:hidden;
+  box-shadow:0 3px 10px rgba(79,142,247,.28);transition:transform .12s; }
+.topbar-avatar:hover{ transform:translateY(-1px); }
+.topbar-avatar .avatar,.topbar-avatar img,.topbar-avatar>*{ width:100%!important;height:100%!important; }
+[data-theme="dark"] .topbar-bell{ background:var(--elev-1,#12151f);border-color:var(--g-border-mid,rgba(255,255,255,.08)); }
+
+/* ════════════════════════════════════════════════════════════════
+   DRAWER / MODAL CHROME + CLIENT & ASSET FORMS — clean flat look
+   (match the Stitch screenshots: white surfaces, thin borders,
+   soft shadow — NOT heavy clay/glass).
+════════════════════════════════════════════════════════════════ */
+
+/* Drawer + modal surfaces → clean white, soft shadow */
+.modal-side,.modal-side-wide,.modal{
+  background:#ffffff!important;
+  box-shadow:-24px 0 64px rgba(60,100,170,.16)!important;
+  backdrop-filter:none!important; -webkit-backdrop-filter:none!important;
+}
+.modal-header{ border-bottom:1px solid var(--v2-line)!important; }
+.modal-footer{ border-top:1px solid var(--v2-line)!important; background:#fff!important; }
+.modal-title{ color:var(--v2-ink)!important; font-weight:800!important; }
+
+/* Drawer tab bar reuse (client/asset use .wo-tabs) already handled above */
+
+/* ── CLIENT DETAIL FORM ── */
+/* Hero strip blobs (Phone / Email / Balance / Manager) + section blobs */
+.detail-blob{
+  background:var(--v2-card)!important; border:1px solid var(--v2-line)!important;
+  border-radius:12px!important; padding:11px 14px!important;
+  box-shadow:var(--v2-shadow-sm)!important;
+}
+.d-label{
+  font-size:10px!important; font-weight:800!important; letter-spacing:.05em!important;
+  text-transform:uppercase!important; color:var(--v2-ink4)!important; margin-bottom:4px!important;
+}
+.d-value{ font-size:14px!important; font-weight:700!important; color:var(--v2-ink)!important;
+  font-variant-numeric:tabular-nums; }
+
+/* Device / asset rows in the client card */
+.card-sm{
+  background:var(--v2-card)!important; border:1px solid var(--v2-line)!important;
+  border-radius:12px!important; box-shadow:var(--v2-shadow-sm)!important;
+  transition:border-color .14s, box-shadow .14s, transform .14s;
+}
+.card-sm:hover{ border-color:rgba(79,142,247,.35)!important;
+  box-shadow:0 6px 16px rgba(79,142,247,.12)!important; transform:translateY(-1px); }
+
+/* Panel spacing */
+.c-panel{ padding-top:4px!important; }
+
+/* ── ASSET DETAIL FORM ── */
+.asset-form-fields{ gap:12px!important; }
+.field-row{ gap:12px!important; }
+/* .field-input / .field-select / .field-label already styled in v2 core */
+
+/* ── DARK MODE flatten for these ── */
+[data-theme="dark"] .modal-side,[data-theme="dark"] .modal-side-wide,[data-theme="dark"] .modal{
+  background:var(--elev-1,#12151f)!important; }
+[data-theme="dark"] .modal-footer{ background:var(--elev-1,#12151f)!important; }
+[data-theme="dark"] .detail-blob,[data-theme="dark"] .card-sm{
+  background:var(--g-fill,rgba(18,22,40,.62))!important;
+  border-color:var(--g-border-mid,rgba(255,255,255,.08))!important; }
+[data-theme="dark"] .d-value{ color:var(--tx-1,#eef1fb)!important; }

@@ -1,0 +1,530 @@
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.security import OAuth2PasswordRequestForm
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.config import settings
+from backend.db.database import get_db
+from backend.models import Employee, Location, Organisation, Role
+from backend.services import tokens as _tok
+from backend.services.auth import create_access_token, get_current_employee, hash_password, verify_password
+from backend.services.notifications import send_direct_email
+from backend.services.ratelimit import client_ip as _ip
+from backend.services.ratelimit import enforce as _rate
+
+router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
+def _link(path: str) -> str:
+    base = (settings.PUBLIC_BASE_URL or "").rstrip("/")
+    return f"{base}{path}" if base else path
+
+
+async def _send_verification(db: AsyncSession, employee: "Employee") -> str:
+    """Issue an email-verification token and email the link. Returns the raw
+    token so tests (and dev, when no SMTP is set) can complete the flow."""
+    raw = await _tok.issue(db, employee_id=employee.id, kind="verify")
+    await db.commit()
+    url = _link(f"/verify-email?token={raw}")
+    await send_direct_email(
+        employee.email, "Verify your RepairOS email",
+        f"Welcome to RepairOS. Confirm this address to secure your account:\n\n{url}\n\n"
+        f"This link expires in 48 hours. If you didn't sign up, ignore this email.")
+    return raw
+
+
+class RegisterRequest(BaseModel):
+    org_name: str
+    name: str
+    email: str
+    password: str
+    # Build 144cg — Orderry-style onboarding (all optional; sensible defaults applied).
+    industry_template: Optional[str] = None
+    region: Optional[str] = None          # us | ca | eu | mena | other
+    country: Optional[str] = None         # ISO alpha-2
+    currency: Optional[str] = None        # symbol
+    currency_code: Optional[str] = None   # ISO 4217
+    timezone: Optional[str] = None
+    document_language: Optional[str] = None
+    company_phone: Optional[str] = None
+    employee_count: Optional[str] = None
+
+
+# Common ISO-4217 code → display symbol, so the sign-up form can send a plain
+# code and we still store a proper symbol (falls back to the code itself).
+CURRENCY_SYMBOLS = {
+    "USD": "$", "CAD": "$", "AUD": "$", "NZD": "$", "SGD": "$", "HKD": "$", "MXN": "$",
+    "EUR": "€", "GBP": "£", "JPY": "¥", "CNY": "¥", "INR": "₹",
+    "AED": "AED", "SAR": "SAR", "QAR": "QAR", "KWD": "KWD", "BHD": "BHD", "OMR": "OMR",
+    "CHF": "CHF", "SEK": "kr", "NOK": "kr", "DKK": "kr", "ZAR": "R", "BRL": "R$", "TRY": "₺",
+}
+
+
+def _symbol_for(code: Optional[str], fallback: Optional[str] = None) -> Optional[str]:
+    if not code:
+        return fallback
+    return CURRENCY_SYMBOLS.get(code.upper(), code.upper())
+
+
+# Build 144cl — seed a sensible default tax so a new shop isn't starting blank.
+# EU/Gulf VAT is normally price-inclusive; US/Canada sales tax is added on top.
+# Keyed by region, with a country override table for the common exact rates.
+REGION_TAX = {
+    "us":   {"name": "Sales tax", "rate": 0.0,  "mode": "imposed"},   # varies by state — owner sets it
+    "ca":   {"name": "GST",       "rate": 5.0,  "mode": "imposed"},
+    "eu":   {"name": "VAT",       "rate": 21.0, "mode": "included"},
+    "mena": {"name": "VAT",       "rate": 5.0,  "mode": "included"},
+    "other": None,
+}
+COUNTRY_VAT = {  # ISO alpha-2 → (name, rate, mode)
+    "DE": ("VAT", 19.0, "included"), "FR": ("VAT", 20.0, "included"), "ES": ("IVA", 21.0, "included"),
+    "IT": ("IVA", 22.0, "included"), "NL": ("BTW", 21.0, "included"), "IE": ("VAT", 23.0, "included"),
+    "GB": ("VAT", 20.0, "included"), "AE": ("VAT", 5.0, "included"), "SA": ("VAT", 15.0, "included"),
+    "QA": ("VAT", 0.0, "included"), "US": ("Sales tax", 0.0, "imposed"), "CA": ("GST", 5.0, "imposed"),
+}
+
+
+def _default_tax_for(region, country):
+    if country and country.upper() in COUNTRY_VAT:
+        n, r, m = COUNTRY_VAT[country.upper()]
+        return {"name": n, "rate": r, "mode": m}
+    return REGION_TAX.get(region or "", None)
+
+
+# Region → sensible currency / timezone / language defaults for onboarding.
+REGION_DEFAULTS = {
+    "us":   {"currency": "$", "currency_code": "USD", "timezone": "America/New_York", "language": "en"},
+    "ca":   {"currency": "$", "currency_code": "CAD", "timezone": "America/Toronto", "language": "en"},
+    "eu":   {"currency": "€", "currency_code": "EUR", "timezone": "Europe/Berlin", "language": "en"},
+    "mena": {"currency": "AED", "currency_code": "AED", "timezone": "Asia/Dubai", "language": "en"},
+    "other": {"currency": "$", "currency_code": "USD", "timezone": "UTC", "language": "en"},
+}
+
+
+# ISO-3166 country → our region bucket, for pre-selecting the signup dropdown.
+# Only a *hint* — the user can change it, and we never store the IP or the country.
+_EU_ISO = {"AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR",
+           "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK",
+           "SI", "ES", "SE", "GB", "CH", "NO", "IS"}
+_MENA_ISO = {"AE", "SA", "QA", "KW", "BH", "OM", "JO", "LB", "EG", "IL", "TR",
+             "IQ", "MA", "DZ", "TN"}
+
+
+def _region_hint(country: str | None) -> str | None:
+    c = (country or "").strip().upper()
+    if not c:
+        return None
+    if c == "US":
+        return "us"
+    if c == "CA":
+        return "ca"
+    if c in _EU_ISO:
+        return "eu"
+    if c in _MENA_ISO:
+        return "mena"
+    return "other"
+
+
+@router.get("/signup-options")
+async def signup_options(request: Request):
+    """Public: choices the signup form needs — industry templates, region presets,
+    and team-size brackets. Unauthenticated so the sign-up screen can load them.
+
+    region_hint is a convenience default derived from the CDN's country header
+    (Cloudflare/Vercel set these; no raw IP is read or stored). The user can
+    override it; EU and Middle East still default to English per REGION_DEFAULTS."""
+    from backend.services import industry as _ind
+    templates = [{"key": k, "label": _ind.TEMPLATES[k].get("label", k)} for k in _ind.TEMPLATE_KEYS]
+    country = (request.headers.get("cf-ipcountry")
+               or request.headers.get("x-vercel-ip-country")
+               or request.headers.get("x-country"))
+    return {
+        "templates": templates,
+        "regions": [
+            {"key": "us", "label": "United States"},
+            {"key": "ca", "label": "Canada"},
+            {"key": "eu", "label": "Europe"},
+            {"key": "mena", "label": "Middle East"},
+            {"key": "other", "label": "Other"},
+        ],
+        "region_defaults": REGION_DEFAULTS,
+        "region_hint": _region_hint(country),
+        "employee_brackets": ["1", "2-5", "6-20", "21-50", "50+"],
+    }
+
+
+class ForgotRequest(BaseModel):
+    email: str
+
+
+class ResetRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+class TokenOnly(BaseModel):
+    token: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    employee_id: str
+    org_id: str
+    name: str
+    role: str
+    # Build 144cd: set when the org mandates 2FA but this user hasn't enrolled yet.
+    # The frontend uses it to force enrollment before the app becomes usable.
+    mfa_enrollment_required: bool = False
+
+@router.post("/register", status_code=201)
+async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
+    existing = await db.execute(select(Employee).where(Employee.email == data.email))
+    if existing.scalar_one_or_none():
+        raise HTTPException(400, "Email already registered")
+
+    import secrets as _sec
+    from datetime import date as _date
+    org = Organisation(name=data.org_name, webhook_secret=_sec.token_urlsafe(24),
+                       sub_status="trial", sub_start=_date.today())   # build 144ce
+    # Build 144cg — apply onboarding choices with region-based defaults.
+    if data.region:
+        org.region = data.region
+        defaults = REGION_DEFAULTS.get(data.region, {})
+        org.currency_code = data.currency_code or defaults.get("currency_code") or org.currency_code
+        # Prefer an explicit real symbol; otherwise derive it from the code (build 144ch)
+        # so the UI never shows a bare code like "GBP" where "£" belongs.
+        org.currency = _symbol_for(org.currency_code, data.currency or defaults.get("currency") or org.currency)
+        org.timezone = data.timezone or defaults.get("timezone") or org.timezone
+        org.document_language = data.document_language or defaults.get("language") or org.document_language
+    else:
+        if data.currency_code:
+            org.currency_code = data.currency_code
+            org.currency = _symbol_for(data.currency_code, data.currency or org.currency)
+        elif data.currency:
+            org.currency = data.currency
+        if data.timezone:
+            org.timezone = data.timezone
+        if data.document_language:
+            org.document_language = data.document_language
+    if data.country:
+        org.country = data.country
+    if data.company_phone:
+        org.company_phone = data.company_phone
+    if data.employee_count:
+        org.employee_count = data.employee_count
+    if data.industry_template:
+        from backend.services import industry as _ind
+        org.industry_template = _ind.normalize_template_key(data.industry_template)
+    db.add(org)
+    await db.flush()
+
+    location = Location(org_id=org.id, name="Main location")
+    db.add(location)
+    await db.flush()
+
+    # Build 84: every location owns one default product warehouse. It's what makes the
+    # location_id → warehouse compatibility shim resolve, so it must exist from day one.
+    from backend.models import Warehouse
+    from backend.services.warehouses import ACTIONS as _WH_ACTIONS
+    db.add(Warehouse(
+        org_id=org.id, name=f"{location.name} warehouse", kind="product",
+        scope="location", location_id=location.id, is_default=True,
+        allowed_actions=list(_WH_ACTIONS)))
+    await db.flush()
+
+    admin_role = Role(org_id=org.id, name="admin", permissions={"all": "write"})
+    db.add(admin_role)
+    await db.flush()
+
+    # Build 144cl: seed a region-appropriate default tax rate (owner can edit/disable it).
+    _tax = _default_tax_for(data.region, data.country)
+    if _tax is not None:
+        from backend.models import Tax
+        db.add(Tax(org_id=org.id, name=_tax["name"], rate=_tax["rate"], mode=_tax["mode"],
+                   is_default=True, active=True))
+        await db.flush()
+
+    employee = Employee(
+        org_id=org.id,
+        location_id=location.id,
+        role_id=admin_role.id,
+        name=data.name,
+        email=data.email,
+        password_hash=hash_password(data.password),
+    )
+    db.add(employee)
+
+    # Build 144ah: give the new org a starter set of client-facing order notifications
+    # (received / status changed / completed) so customers hear something out of the box.
+    from backend.services.notification_rules import seed_default_rules
+    await seed_default_rules(db, org.id)
+
+    await db.commit()
+
+    # Build 144cb: send an email-verification link (best-effort; never blocks signup).
+    await _send_verification(db, employee)
+
+    token = create_access_token({"sub": employee.id, "org_id": org.id, "tv": employee.token_version or 0})
+    return TokenResponse(
+        access_token=token,
+        employee_id=employee.id,
+        org_id=org.id,
+        name=employee.name,
+        role="admin",
+    )
+
+@router.post("/token", response_model=TokenResponse)
+async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
+    # Build 144bz: throttle brute-force — 10 attempts / 5 min per IP+username
+    _rate("login", f"{_ip(request)}:{(form.username or '').lower()}", limit=10, window_sec=300)
+    result = await db.execute(select(Employee).where(Employee.email == form.username))
+    employee = result.scalar_one_or_none()
+    if not employee or not verify_password(form.password, employee.password_hash):
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
+    if not employee.active:
+        raise HTTPException(status_code=403, detail="Account disabled")
+
+    # Build 144ce: account-level lifecycle gate. A suspended org or one past its
+    # term end date can't sign in — the platform admin controls these dates.
+    from datetime import date as _date
+    _org = (await db.execute(select(Organisation).where(
+        Organisation.id == employee.org_id))).scalar_one_or_none()
+    if _org:
+        if _org.sub_status == "suspended":
+            raise HTTPException(status_code=403, detail="This account is suspended. Please contact support.")
+        if _org.sub_end and _org.sub_end < _date.today():
+            raise HTTPException(status_code=403, detail="Your subscription has ended. Please contact support to renew.")
+    # Build 144ce: per-employee access window (set from the /admin portal).
+    _today = _date.today()
+    if (employee.access_start and employee.access_start > _today) or \
+       (employee.access_end and employee.access_end < _today):
+        raise HTTPException(status_code=403, detail="Your access is outside its allowed dates.")
+
+    # B1: MFA gate — when enabled, a valid TOTP or recovery code is required.
+    if employee.mfa_enabled and employee.mfa_secret:
+        from backend.services.mfa import consume_recovery_code
+        from backend.services.mfa import verify as _mfa_verify
+        code = (getattr(form, "client_secret", None) or "").strip()  # OAuth2 form carries it
+        ok = bool(code) and _mfa_verify(employee.mfa_secret, code)
+        if not ok and code:
+            used, remaining = consume_recovery_code(employee.mfa_recovery_codes, code)
+            if used:
+                employee.mfa_recovery_codes = remaining
+                await db.commit()
+                ok = True
+        if not ok:
+            raise HTTPException(status_code=401, detail="MFA code required or invalid",
+                                headers={"X-MFA-Required": "1"})
+
+    role_result = await db.execute(select(Role).where(Role.id == employee.role_id))
+    role = role_result.scalar_one_or_none()
+
+    # Build 144cd: if the org mandates 2FA and this user hasn't enrolled, flag it so
+    # the app forces enrollment. (Enrolled users already passed the code gate above.)
+    org = (await db.execute(select(Organisation).where(
+        Organisation.id == employee.org_id))).scalar_one_or_none()
+    enroll_needed = bool(org and org.require_mfa) and not employee.mfa_enabled
+
+    token = create_access_token({"sub": employee.id, "org_id": employee.org_id, "tv": employee.token_version or 0})
+    return TokenResponse(
+        access_token=token,
+        employee_id=employee.id,
+        org_id=employee.org_id,
+        name=employee.name,
+        role=role.name if role else "staff",
+        mfa_enrollment_required=enroll_needed,
+    )
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh(
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Exchange a still-valid token for a fresh one (sliding session for the
+    PWA, which keeps a long-lived session on-device and refreshes on launch)."""
+    role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
+    token = create_access_token({"sub": current.id, "org_id": current.org_id, "tv": current.token_version or 0})
+    return TokenResponse(
+        access_token=token, employee_id=current.id, org_id=current.org_id,
+        name=current.name, role=role.name if role else "staff",
+    )
+
+
+@router.post("/logout-all-devices")
+async def logout_all_devices(
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Lost-device / panic logout: invalidate every token issued to this
+    employee (including the caller's) by bumping their token version. The
+    employee must sign in again everywhere."""
+    current.token_version = (current.token_version or 0) + 1
+    await db.commit()
+    return {"ok": True, "token_version": current.token_version}
+
+
+# ── Build 144cb: password reset (self-service, logged out) ───────────────────
+@router.post("/password/forgot")
+async def password_forgot(data: ForgotRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    """Start a reset. Always returns 200 with the same message whether or not the
+    email exists — never leak which addresses are registered. Rate-limited."""
+    _rate("forgot", f"{_ip(request)}:{(data.email or '').lower()}", limit=5, window_sec=900)
+    emp = (await db.execute(select(Employee).where(Employee.email == data.email))).scalar_one_or_none()
+    if emp and emp.active:
+        await _tok.invalidate_all(db, employee_id=emp.id, kind="reset")
+        raw = await _tok.issue(db, employee_id=emp.id, kind="reset")
+        await db.commit()
+        url = _link(f"/reset-password?token={raw}")
+        await send_direct_email(
+            emp.email, "Reset your RepairOS password",
+            f"Someone asked to reset your password. If it was you, open this link:\n\n{url}\n\n"
+            f"It expires in 1 hour and can be used once. If it wasn't you, ignore this email.")
+    return {"ok": True, "message": "If that email is registered, a reset link is on its way."}
+
+
+@router.post("/password/reset")
+async def password_reset(data: ResetRequest, db: AsyncSession = Depends(get_db)):
+    """Complete a reset: consume the token, set the new password, and revoke all
+    existing sessions so a stolen token can't leave a live session behind."""
+    if not data.new_password or len(data.new_password) < 8:
+        raise HTTPException(400, "Password must be at least 8 characters")
+    emp = await _tok.redeem(db, raw=data.token, kind="reset")
+    if not emp:
+        raise HTTPException(400, "This reset link is invalid or has expired")
+    emp.password_hash = hash_password(data.new_password)
+    emp.token_version = (emp.token_version or 0) + 1   # log out everywhere
+    emp.email_verified = True                           # proving email access verifies it
+    await db.commit()
+    return {"ok": True}
+
+
+# ── Build 144cb: email verification ──────────────────────────────────────────
+@router.post("/email/verify")
+async def email_verify(data: TokenOnly, db: AsyncSession = Depends(get_db)):
+    emp = await _tok.redeem(db, raw=data.token, kind="verify")
+    if not emp:
+        raise HTTPException(400, "This verification link is invalid or has expired")
+    emp.email_verified = True
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/email/resend")
+async def email_resend(current: Employee = Depends(get_current_employee),
+                       db: AsyncSession = Depends(get_db)):
+    """Re-send the verification email to the logged-in user's address."""
+    if current.email_verified:
+        return {"ok": True, "already_verified": True}
+    await _tok.invalidate_all(db, employee_id=current.id, kind="verify")
+    await _send_verification(db, current)
+    return {"ok": True}
+
+
+# ── Build 144cc: teammate invitation accept (logged out) ─────────────────────
+class InvitePreview(BaseModel):
+    token: str
+
+
+class InviteAccept(BaseModel):
+    token: str
+    name: str
+    password: str
+
+
+def _invite_by_token(raw: str):
+    import hashlib
+    return hashlib.sha256((raw or "").encode()).hexdigest()
+
+
+@router.post("/invite/preview")
+async def invite_preview(data: InvitePreview, db: AsyncSession = Depends(get_db)):
+    """Show the invitee who invited them / which email, so the accept screen can
+    pre-fill. Returns valid=False for unknown, expired, or already-accepted links."""
+    from backend.models import Invite, Organisation
+    inv = (await db.execute(select(Invite).where(
+        Invite.token_hash == _invite_by_token(data.token)))).scalar_one_or_none()
+    from datetime import datetime as _dt
+    if not inv or inv.accepted_at is not None or inv.expires_at < _dt.utcnow():
+        return {"valid": False}
+    org = (await db.execute(select(Organisation).where(Organisation.id == inv.org_id))).scalar_one_or_none()
+    return {"valid": True, "email": inv.email, "name": inv.name,
+            "org_name": org.name if org else None}
+
+
+@router.post("/invite/accept", response_model=TokenResponse)
+async def invite_accept(data: InviteAccept, db: AsyncSession = Depends(get_db)):
+    """Redeem an invite: create the Employee with the chosen password and return a
+    session token so they land straight in the app (email already proven verified)."""
+    from datetime import datetime as _dt
+
+    from backend.models import Invite
+    if not data.password or len(data.password) < 8:
+        raise HTTPException(400, "Password must be at least 8 characters")
+    inv = (await db.execute(select(Invite).where(
+        Invite.token_hash == _invite_by_token(data.token)))).scalar_one_or_none()
+    if not inv or inv.accepted_at is not None or inv.expires_at < _dt.utcnow():
+        raise HTTPException(400, "This invitation is invalid or has expired")
+    # Guard against a race where the email got an account after the invite was sent.
+    if (await db.execute(select(Employee).where(
+            Employee.email == inv.email, Employee.org_id == inv.org_id))).scalar_one_or_none():
+        raise HTTPException(400, "An account with this email already exists")
+    emp = Employee(
+        org_id=inv.org_id, location_id=inv.location_id, role_id=inv.role_id,
+        name=(data.name or inv.name or inv.email.split("@")[0]),
+        email=inv.email, password_hash=hash_password(data.password),
+        email_verified=True)
+    db.add(emp)
+    inv.accepted_at = _dt.utcnow()
+    await db.commit()
+    role = (await db.execute(select(Role).where(Role.id == emp.role_id))).scalar_one_or_none()
+    token = create_access_token({"sub": emp.id, "org_id": emp.org_id, "tv": 0})
+    return TokenResponse(access_token=token, employee_id=emp.id, org_id=emp.org_id,
+                         name=emp.name, role=role.name if role else "staff")
+
+
+@router.get("/me")
+async def me(current: Employee = Depends(get_current_employee),
+             db: AsyncSession = Depends(get_db)):
+    # Build 125: surface the org's base currency so the whole UI can format money in it
+    # (fmt.currency) instead of a hard-coded ₹.
+    org = (await db.execute(select(Organisation).where(
+        Organisation.id == current.org_id))).scalar_one_or_none()
+    # Surface the employee's effective role permissions so the UI can hide the
+    # controls their role denies. Same deny-wins rule as require_perm: a code is
+    # allowed unless the role sets it explicitly to False. No role => allow all.
+    role_name, permissions, home_route = None, {}, None
+    if current.role_id:
+        role = (await db.execute(select(Role).where(
+            Role.id == current.role_id))).scalar_one_or_none()
+        if role:
+            role_name = role.name
+            permissions = role.permissions or {}
+            home_route = getattr(role, "home_route", None) or None
+    return {
+        "id": current.id,
+        "name": current.name,
+        "email": current.email,
+        "org_id": current.org_id,
+        "location_id": current.location_id,
+        "active": current.active,
+        "currency": (org.currency if org else None) or "₹",
+        "currency_code": (org.currency_code if org else None) or "INR",
+        "role": role_name,
+        "is_owner": current.role_id is None,
+        "home_route": home_route,
+        "permissions": permissions,
+        # build 144cb: account-security surface for the UI (verify banner, 2FA badge)
+        "email_verified": bool(current.email_verified),
+        "mfa_enabled": bool(current.mfa_enabled),
+        # build 144cd: org 2FA policy — the app forces enrollment when required and not yet set up
+        "mfa_required": bool(org.require_mfa) if org else False,
+        # build 144j: which time clocks this employee sees in the widget
+        "track_job_hours": current.track_job_hours,
+        "track_attendance": current.track_attendance,
+        # build 144x: org master switches — effective clock = org ON *and* employee tracks it
+        "clock_wo_enabled": (org.clock_wo_enabled if org and org.clock_wo_enabled is not None else True),
+        "clock_attendance_enabled": (org.clock_attendance_enabled if org and org.clock_attendance_enabled is not None else True),
+    }

@@ -1,0 +1,16 @@
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+extend-exclude = ["backend/migrations", "*.tsx", "*.ts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = [
+  "E501",  # line length handled by formatter, not enforced
+  "B008",  # FastAPI idiom: Depends()/File() in argument defaults
+  "B904",  # raise-from not required for HTTPException re-raises
+  "E402",  # conftest/env set os.environ before imports by design
+]
+
+[tool.ruff.lint.per-file-ignores]
+"backend/tests/*" = ["F401", "F811"]

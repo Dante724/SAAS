@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Your repairs</title>
+<link rel="stylesheet" href="/static/css/design.css">
+<style>
+  body { overflow-y:auto; }
+  .pw { max-width:620px; margin:0 auto; padding:26px 18px 60px; position:relative; z-index:1; }
+  .ph { text-align:center; margin-bottom:22px; }
+  .ph-shop { font-size:12.5px; font-weight:800; color:var(--tx-3); text-transform:uppercase; letter-spacing:.1em; }
+  .ph-hi { font-size:26px; font-weight:800; color:var(--tx-1); letter-spacing:-.4px; margin-top:4px; }
+  .stat-row { display:flex; gap:10px; justify-content:center; margin-top:14px; }
+  .stat { background:rgba(255,255,255,.6); border-radius:var(--r-lg); padding:10px 16px; text-align:center; box-shadow:var(--clay-sm); }
+  .stat b { display:block; font-size:20px; font-weight:800; color:var(--tx-1); }
+  .stat span { font-size:10.5px; font-weight:700; color:var(--tx-3); text-transform:uppercase; letter-spacing:.05em; }
+  .sec-title { font-size:12px; font-weight:800; color:var(--tx-3); text-transform:uppercase; letter-spacing:.08em; margin:22px 4px 10px; }
+  .card-o { background:rgba(255,255,255,.62); border-radius:var(--r-lg); padding:15px 16px; margin-bottom:11px; box-shadow:var(--clay-sm); cursor:pointer; transition:transform .12s; }
+  .card-o:hover { transform:translateY(-1px); }
+  .card-o .top { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+  .card-o .num { font-size:15px; font-weight:800; color:var(--tx-1); }
+  .pill { padding:4px 11px; border-radius:var(--r-pill); font-size:11.5px; font-weight:800; background:linear-gradient(135deg,var(--blue),var(--purple)); color:#fff; }
+  .pill.warn { background:linear-gradient(135deg,#f5a623,#f57b23); }
+  .card-o .meta { font-size:12.5px; color:var(--tx-2); margin-top:6px; }
+  .card-o .warr { font-size:11.5px; color:var(--green); font-weight:800; margin-top:5px; }
+  .btn-row { display:flex; gap:9px; margin-top:12px; }
+  .btn { flex:1; padding:11px; border-radius:var(--r-md); font-size:14px; font-weight:800; border:none; cursor:pointer; }
+  .btn-ok { background:linear-gradient(135deg,var(--green),#1e9e6a); color:#fff; }
+  .btn-no { background:rgba(0,0,0,.06); color:var(--tx-2); }
+  .empty { text-align:center; color:var(--tx-4); font-size:13px; padding:18px; }
+  .back { display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:700; color:var(--tx-3); cursor:pointer; margin-bottom:14px; }
+  .ln { display:flex; justify-content:space-between; font-size:13px; padding:7px 0; border-bottom:1px solid rgba(255,255,255,.5); }
+  .ln:last-child { border-bottom:none; }
+  .tl { display:flex; gap:10px; align-items:center; font-size:12.5px; color:var(--tx-2); padding:5px 0; }
+  .tl .dot { width:9px; height:9px; border-radius:50%; background:linear-gradient(135deg,var(--blue),var(--purple)); }
+  canvas#sig { width:100%; height:150px; background:#fff; border-radius:var(--r-md); border:1.5px dashed var(--g-border); touch-action:none; }
+  .total { font-size:18px; font-weight:800; color:var(--tx-1); text-align:right; margin-top:8px; }
+.rrow { display:flex; align-items:center; gap:10px; padding:9px 11px; border:1px solid #dfe4ef; border-radius:11px; margin-bottom:7px; cursor:pointer; }
+.rrow:hover { border-color:#4f8ef7; background:#f5f8ff; }
+.rrow-done { cursor:default; opacity:.85; }
+.rchk { width:18px; height:18px; flex-shrink:0; accent-color:#4f8ef7; }
+.rst { width:21px; height:21px; border-radius:50%; display:grid; place-items:center; color:#fff; font-size:12px; flex-shrink:0; }
+.rst-approved { background:#1f8f5f; } .rst-declined { background:#d24a3d; }
+.rimg { width:38px; height:38px; border-radius:8px; object-fit:cover; flex-shrink:0; }
+.rbody { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+.rttl { font-size:14px; font-weight:700; color:#1b2333; }
+.rnote { font-size:12px; color:#6b7280; line-height:1.4; }
+.rprice { font-size:14px; font-weight:800; color:#2f6fd0; white-space:nowrap; }
+.rfoot { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px; flex-wrap:wrap; }
+</style>
+</head>
+<body>
+<div class="pw" id="root"><div class="empty">Loading…</div></div>
+<script>
+const token = location.pathname.split('/portal/')[1] || '';
+const root = document.getElementById('root');
+const money = n => '\u20b9' + (Math.round((n||0))).toLocaleString('en-IN');
+let DATA = null;
+
+async function load() {
+  try {
+    const r = await fetch('/api/public/portal/' + token);
+    if (!r.ok) throw new Error('not found');
+    DATA = await r.json();
+    renderHome();
+  } catch (e) {
+    root.innerHTML = '<div class="empty">This portal link is invalid or has expired.</div>';
+  }
+}
+
+function card(o) {
+  const warn = o.is_estimate ? '<span class="pill warn">' + o.stage_label + '</span>' : '<span class="pill">' + o.stage_label + '</span>';
+  return '<div class="card-o" onclick="openOrder(\'' + o.id + '\')">' +
+    '<div class="top"><span class="num">' + o.order_number + '</span>' + warn + '</div>' +
+    '<div class="meta">' + (o.complaint ? o.complaint : 'Repair') + ' · ' + money(o.total) + '</div>' +
+    (o.warranty_until ? '<div class="warr">Under warranty until ' + o.warranty_until.slice(0,10) + '</div>' : '') +
+    '</div>';
+}
+
+function renderHome() {
+  const c = DATA.counts;
+  let html = '<div class="ph"><div class="ph-shop">' + DATA.shop_name + '</div>' +
+    '<div class="ph-hi">Hi ' + DATA.client_name + '</div>' +
+    '<div class="stat-row">' +
+      '<div class="stat"><b>' + c.work_orders + '</b><span>Repairs</span></div>' +
+      '<div class="stat"><b>' + c.estimates + '</b><span>Estimates</span></div>' +
+      '<div class="stat"><b>' + c.under_warranty + '</b><span>Warranty</span></div>' +
+    '</div></div>';
+  if (DATA.estimates.length) {
+    html += '<div class="sec-title">Estimates</div>' + DATA.estimates.map(card).join('');
+  }
+  html += '<div class="sec-title">Repairs</div>';
+  html += DATA.work_orders.length ? DATA.work_orders.map(card).join('') : '<div class="empty">No repairs yet.</div>';
+  root.innerHTML = html;
+}
+
+async function openOrder(id) {
+  root.innerHTML = '<div class="empty">Loading…</div>';
+  const o = await (await fetch('/api/public/portal/' + token + '/order/' + id)).json();
+  let html = '<div class="back" onclick="renderHome()">\u2190 Back</div>';
+  html += '<div class="ph"><div class="ph-hi" style="font-size:22px">' + o.order_number + '</div>' +
+          '<div style="margin-top:8px">' + (o.is_estimate ? '<span class="pill warn">' : '<span class="pill">') + o.stage_label + '</span></div></div>';
+  if (o.complaint) html += '<div class="card-o" style="cursor:default"><b>Reported issue</b><div class="meta">' + o.complaint + '</div>' +
+    (o.diagnosis ? '<div class="meta" style="margin-top:6px"><b>Diagnosis:</b> ' + o.diagnosis + '</div>' : '') + '</div>';
+  if (o.lines && o.lines.length) {
+    html += '<div class="card-o" style="cursor:default">' + o.lines.map(l =>
+      '<div class="ln"><span>' + l.description + (l.qty > 1 ? ' \u00d7' + l.qty : '') + '</span><span>' + money(l.unit_price * l.qty) + '</span></div>').join('') +
+      '<div class="total">' + money(o.total) + '</div></div>';
+  }
+  window._recs = o.recommendations || [];
+  html += recsHtmlP(o);
+  if (o.can_approve) {
+    html += '<div class="card-o" style="cursor:default"><b>Approve this estimate?</b>' +
+      '<div class="meta" style="margin:6px 0 10px">Sign below (optional), then choose.</div>' +
+      '<canvas id="sig"></canvas>' +
+      '<div class="btn-row"><button class="btn btn-ok" onclick="decide(\'' + o.id + '\',\'accept\')">Approve</button>' +
+      '<button class="btn btn-no" onclick="decide(\'' + o.id + '\',\'decline\')">Decline</button></div></div>';
+  }
+  if (o.timeline && o.timeline.length) {
+    html += '<div class="sec-title">Progress</div><div class="card-o" style="cursor:default">' +
+      o.timeline.map(t => '<div class="tl"><span class="dot"></span><span>' + t.label +
+        (t.at ? ' · ' + t.at.slice(0,10) : '') + '</span></div>').join('') + '</div>';
+  }
+  if (o.allow_messages !== false) {
+    html += '<div class="sec-title">Message the shop</div>' +
+      '<div class="card-o" style="cursor:default">' +
+      '<textarea id="msg-body" rows="2" placeholder="Ask a question or add a note…" ' +
+      'style="width:100%;border:1px solid #dfe4ef;border-radius:10px;padding:9px 11px;font-size:13px;resize:vertical;box-sizing:border-box"></textarea>' +
+      '<div class="btn-row"><button class="btn btn-ok" onclick="sendMessage(\'' + o.id + '\')">Send message</button></div></div>';
+  }
+  window._recOrderId = o.id;
+  root.innerHTML = html;
+  initSig();
+  recTotalP();
+}
+
+function recsHtmlP(o) {
+  if (o.allow_recommend === false) return '';
+  const all = o.recommendations || [];
+  const open = all.filter(r => r.status === 'sent');
+  const decided = all.filter(r => r.status === 'approved' || r.status === 'declined');
+  if (!open.length && !decided.length) return '';
+  const esc = s => { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; };
+  const row = (r, on) => '<label class="rrow' + (on ? '' : ' rrow-done') + '">' +
+    (on ? '<input type="checkbox" class="rchk" value="' + r.id + '" onchange="recTotalP()" checked>'
+        : '<span class="rst rst-' + r.status + '">' + (r.status === 'approved' ? '✓' : '✕') + '</span>') +
+    (r.media_data ? '<img class="rimg" src="' + r.media_data + '" alt="">' : '') +
+    '<span class="rbody"><span class="rttl">' + esc(r.title) + '</span>' +
+    (r.note ? '<span class="rnote">' + esc(r.note) + '</span>' : '') + '</span>' +
+    '<span class="rprice">' + money(r.line_total) + '</span></label>';
+  let h = '<div class="sec-title">Recommended for you</div><div class="card-o" style="cursor:default">';
+  if (open.length) {
+    h += '<div class="meta" style="margin-bottom:10px">Pick what you\'d like us to do, then approve.</div>' +
+      open.map(r => row(r, true)).join('') +
+      '<div class="rfoot"><span id="rsum" class="meta"></span>' +
+      '<div class="btn-row" style="margin:0"><button class="btn btn-no" onclick="submitRecsP(false)">Decline all</button>' +
+      '<button class="btn btn-ok" id="rbtn" onclick="submitRecsP(true)">Approve selected</button></div></div>';
+  }
+  if (decided.length) h += '<div style="margin-top:6px">' + decided.map(r => row(r, false)).join('') + '</div>';
+  return h + '</div>';
+}
+
+function recTotalP() {
+  const chks = [...document.querySelectorAll('.rchk')];
+  const rows = window._recs || [];
+  let sum = 0, n = 0;
+  chks.forEach(c => { if (c.checked) { const r = rows.find(x => x.id === c.value); if (r) { sum += r.line_total; n++; } } });
+  const s = document.getElementById('rsum'); if (s) s.textContent = n ? (n + ' selected · ' + money(sum)) : 'Nothing selected';
+  const b = document.getElementById('rbtn'); if (b) b.textContent = n ? ('Approve selected — ' + money(sum)) : 'Approve selected';
+}
+
+async function submitRecsP(approve) {
+  const chks = [...document.querySelectorAll('.rchk')];
+  const openIds = chks.map(c => c.value);
+  let approve_ids = [], decline_ids = [];
+  if (approve) {
+    approve_ids = chks.filter(c => c.checked).map(c => c.value);
+    decline_ids = chks.filter(c => !c.checked).map(c => c.value);
+    if (!approve_ids.length) { alert('Select at least one item, or use Decline all.'); return; }
+  } else { decline_ids = openIds; }
+  try {
+    const r = await fetch('/api/public/portal/' + token + '/order/' + window._recOrderId + '/recommendations/decide', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approve_ids, decline_ids })
+    });
+    if (!r.ok) throw new Error();
+    openOrder(window._recOrderId);
+  } catch (e) { alert('Could not submit your choice.'); }
+}
+
+async function sendMessage(id) {
+  const el = document.getElementById('msg-body');
+  const body = (el && el.value || '').trim();
+  if (!body) return;
+  try {
+    const r = await fetch('/api/public/portal/' + token + '/order/' + id + '/message', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body })
+    });
+    if (!r.ok) throw new Error();
+    el.value = '';
+    el.insertAdjacentHTML('afterend', '<div class="meta" style="color:#0f7050;margin-top:6px">Message sent — the shop will see it.</div>');
+  } catch (e) { alert('Could not send your message.'); }
+}
+
+/* lightweight signature pad */
+let SIG = null;
+function initSig() {
+  const c = document.getElementById('sig'); if (!c) return;
+  const ratio = window.devicePixelRatio || 1;
+  c.width = c.offsetWidth * ratio; c.height = c.offsetHeight * ratio;
+  const ctx = c.getContext('2d'); ctx.scale(ratio, ratio); ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.strokeStyle = '#222';
+  let drawing = false, dirty = false;
+  const pos = e => { const r = c.getBoundingClientRect(); const t = e.touches ? e.touches[0] : e; return [t.clientX - r.left, t.clientY - r.top]; };
+  const down = e => { drawing = true; const [x, y] = pos(e); ctx.beginPath(); ctx.moveTo(x, y); e.preventDefault(); };
+  const move = e => { if (!drawing) return; const [x, y] = pos(e); ctx.lineTo(x, y); ctx.stroke(); dirty = true; e.preventDefault(); };
+  const up = () => drawing = false;
+  c.onmousedown = down; c.onmousemove = move; c.onmouseup = up; c.onmouseleave = up;
+  c.ontouchstart = down; c.ontouchmove = move; c.ontouchend = up;
+  SIG = { canvas: c, isDirty: () => dirty };
+}
+
+async function decide(id, decision) {
+  const signature = (SIG && SIG.isDirty()) ? SIG.canvas.toDataURL('image/png') : null;
+  const r = await fetch('/api/public/portal/' + token + '/order/' + id + '/respond', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision, signature })
+  });
+  if (r.ok) {
+    root.innerHTML = '<div class="ph"><div class="ph-hi">Thank you!</div>' +
+      '<div class="empty">Your estimate has been ' + (decision === 'accept' ? 'approved' : 'declined') + '. We\u2019ll be in touch.</div></div>';
+    setTimeout(load, 1800);
+  } else {
+    alert('Something went wrong. Please try again.');
+  }
+}
+
+load();
+</script>
+</body>
+</html>
