@@ -24,10 +24,11 @@ from backend.models import (
     StockMovement,
 )
 from backend.services import industry as _ind
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import get_current_employee, require_perm, record_scope
 from backend.services.numbering import next_number
 
-router = APIRouter(prefix="/api/orders", tags=["orders"])
+router = APIRouter(prefix="/api/orders", tags=["orders"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 
 async def unique_order_code(db: AsyncSession) -> str:

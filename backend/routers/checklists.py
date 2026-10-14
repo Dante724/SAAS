@@ -29,9 +29,10 @@ from backend.models import (
     OrderChecklist,
     OrderChecklistItem,
 )
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import get_current_employee, require_perm, record_scope
 
-router = APIRouter(prefix="/api", tags=["checklists"])
+router = APIRouter(prefix="/api", tags=["checklists"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 FIELD_KINDS = {"check_result", "yes_no", "text", "textarea", "dropdown",
                "multiselect", "date", "file", "catalog_pick"}

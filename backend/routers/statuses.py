@@ -12,9 +12,10 @@ from pydantic import BaseModel
 from typing import Optional
 from backend.db.database import get_db
 from backend.models import OrderStatus, Employee
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import get_current_employee, require_perm, record_scope
 
-router = APIRouter(prefix="/api/statuses", tags=["statuses"])
+router = APIRouter(prefix="/api/statuses", tags=["statuses"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 GROUPS = ["new", "in_progress", "pending", "ready", "closed", "dropped"]
 TERMINAL_GROUPS = {"closed", "dropped"}

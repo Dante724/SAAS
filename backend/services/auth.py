@@ -153,3 +153,13 @@ async def check_location_access(db, current, location_id):
     if location_id not in allowed:
         raise HTTPException(status_code=403,
                             detail="Your role is not allowed to act on this location")
+
+
+async def record_scope(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+) -> None:
+    """Router dependency enforcing role record scope on {order_id}/{client_id} routes."""
+    from backend.services.scoping import guard_record_scope
+    await guard_record_scope(request, db, current)

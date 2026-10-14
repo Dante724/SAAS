@@ -7,10 +7,11 @@ from typing import Optional
 from datetime import datetime, date
 from backend.db.database import get_db
 from backend.models import Invoice, Payment, CashShift, CashDrawerMovement, Expense, Order, Employee, Location
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import get_current_employee, require_perm, record_scope
 from backend.services.money import q2, q4, msum  # noqa: F401 — money quantizers used module-wide
 
-router = APIRouter(prefix="/api/finance", tags=["finance"])
+router = APIRouter(prefix="/api/finance", tags=["finance"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 class InvoiceLineIn(BaseModel):
     kind: str = "custom"                            # service|product|labor|custom

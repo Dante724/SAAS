@@ -18,9 +18,10 @@ from backend.models import (
     Organisation,
 )
 from backend.services.audit import record as audit_record
-from backend.services.auth import require_perm
+from backend.services.auth import require_perm, record_scope
 
-router = APIRouter(prefix="/api/compliance", tags=["compliance"])
+router = APIRouter(prefix="/api/compliance", tags=["compliance"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 
 # ── Audit log ────────────────────────────────────────────────────────────────

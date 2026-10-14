@@ -27,7 +27,7 @@ from backend.models import (
     Payment,
     Transaction,
 )
-from backend.services.auth import require_perm
+from backend.services.auth import require_perm, record_scope
 from backend.services.numbering import next_number
 from backend.services.money import q2, q4
 
@@ -42,7 +42,8 @@ async def _check_backdating(db, org_id):
         if last and last.issued_at and datetime.utcnow() < last.issued_at:
             raise HTTPException(422, "Backdating invoices is not allowed")
 
-router = APIRouter(prefix="/api/cash", tags=["cash"])
+router = APIRouter(prefix="/api/cash", tags=["cash"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 
 # ── helpers ──────────────────────────────────────────

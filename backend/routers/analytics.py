@@ -19,10 +19,11 @@ from backend.models import (
     OrderLine,
     OrderStatus,
 )
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, record_scope
 from backend.services.money import q2, q4
 
-router = APIRouter(prefix="/api/analytics", tags=["analytics"])
+router = APIRouter(prefix="/api/analytics", tags=["analytics"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 
 def _window(days: int):

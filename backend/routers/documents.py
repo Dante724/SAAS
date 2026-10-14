@@ -24,7 +24,7 @@ from backend.models import (
     Employee, Organisation, Invoice, LegalEntity, Location, Part,
     CustomField, WorkOrderType, Device,
 )
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import get_current_employee, require_perm, record_scope
 from backend.services.codes import code128_svg, qr_svg
 from backend.config import settings
 
@@ -42,7 +42,8 @@ def _esc(v) -> str:
 def _sub(v) -> str:
     return v if isinstance(v, _Html) else _esc(v)
 
-router = APIRouter(prefix="/api/documents", tags=["documents"])
+router = APIRouter(prefix="/api/documents", tags=["documents"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 # ── Variable catalog (Orderry-style), grouped for the editor side-panel. ──────
 # Every code here is resolved in _resolve() (document-level) or _row_vars()

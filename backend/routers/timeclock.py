@@ -35,10 +35,11 @@ def _audit(db, e, action, actor_id, *, field=None, old=None, new=None):
     db.add(TimeEntryAudit(org_id=e.org_id, time_entry_id=e.id, action=action, field=field,
                           old_value=None if old is None else str(old),
                           new_value=None if new is None else str(new), actor_id=actor_id))
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import get_current_employee, require_perm, record_scope
 from backend.services.money import q2, q4
 
-router = APIRouter(prefix="/api/timeclock", tags=["timeclock"])
+router = APIRouter(prefix="/api/timeclock", tags=["timeclock"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 CATEGORIES = ("job", "task", "break", "admin", "other")
 
