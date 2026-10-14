@@ -275,7 +275,8 @@ class Employee(Base):
     token_version: Mapped[int] = mapped_column(Integer, default=0)
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     mfa_secret: Mapped[Optional[str]] = mapped_column(String(64))          # base32 TOTP secret
-    mfa_recovery_codes: Mapped[Optional[str]] = mapped_column(Text)        # JSON list of hashed single-use codes  # bump to revoke all issued tokens (lost-device logout)
+    mfa_recovery_codes: Mapped[Optional[str]] = mapped_column(Text)        # JSON list of hashed single-use codes
+    mfa_last_step: Mapped[Optional[int]] = mapped_column(Integer)          # last accepted TOTP time step (replay guard)  # bump to revoke all issued tokens (lost-device logout)
     # Build 144cb: email verification. Existing users default unverified; verification
     # is enforced only where the org opts in, so this never locks out current logins.
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False)

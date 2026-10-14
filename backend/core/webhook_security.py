@@ -109,7 +109,5 @@ def enforce_rate_limit(limiter: SlidingWindowLimiter, key: str) -> None:
 
 
 def client_ip(request: Request) -> str:
-    fwd = request.headers.get("X-Forwarded-For")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    from backend.services.ratelimit import client_ip as _client_ip
+    return _client_ip(request)

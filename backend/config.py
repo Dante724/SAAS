@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "*"                     # csv allowlist; "*" disallowed in production
     LOG_LEVEL: str = "INFO"
     REDIS_URL: str = ""                        # set -> shared rate-limit store across instances (else in-process)
+    # How many reverse proxies (load balancer, CDN…) sit in front of the app. 0 = clients connect
+    # directly, so X-Forwarded-For is ignored (a client could write anything there). N = trust the
+    # address appended by the N-th proxy from the right. Alternatively run uvicorn with
+    # --proxy-headers --forwarded-allow-ips=<proxy ip> and leave this at 0.
+    TRUSTED_PROXY_HOPS: int = 0
     LOG_JSON: bool = False                      # structured JSON logs (recommended in prod)
 
     # -- Notification providers (absent keys -> simulated/logged) --

@@ -63,6 +63,7 @@ class AdminLogin(BaseModel):
 @router.post("/login")
 async def admin_login(data: AdminLogin, request: Request, db: AsyncSession = Depends(get_db)):
     _rate("admin_login", f"{_ip(request)}:{(data.email or '').lower()}", limit=10, window_sec=300)
+    _rate("admin_login_acct", (data.email or "").strip().lower(), limit=20, window_sec=900)
     admin = (await db.execute(select(PlatformAdmin).where(
         PlatformAdmin.email == (data.email or "").lower()))).scalar_one_or_none()
     if not admin or not admin.active or not verify_password(data.password, admin.password_hash):
