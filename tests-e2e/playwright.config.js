@@ -28,7 +28,8 @@ module.exports = defineConfig({
       `python3 -m uvicorn main:app --port ${PORT}`,
     cwd: '..',
     url: `${BASE}/api/health`,
-    reuseExistingServer: !process.env.CI,
+    // The e2e workflow starts the app itself (Lighthouse needs it up first), so reuse it.
+    reuseExistingServer: true,
     timeout: 60000,
   },
 });
