@@ -18,6 +18,14 @@ secrets.*
 *.db-journal
 *.sqlite
 *.sqlite3
+# backups / dumps of any kind (144ep: a DB backup had been committed)
+*.db.*
+*.bak
+*.bak-*
+*.backup
+*.bundle
+*.dump
+*.sql.gz
 *.sqlite3-journal
 
 # Python
