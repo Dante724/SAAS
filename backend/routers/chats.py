@@ -183,22 +183,23 @@ async def twilio_inbound(request: Request, db: AsyncSession = Depends(get_db),
     fields (From, To, Body, ProfileName). We resolve/create the thread, link the
     CRM client by phone, and store the inbound message. Returns empty TwiML."""
     form = await request.form()
-    # Build 110: verify Twilio's X-Twilio-Signature when an auth token is configured
-    # (HMAC-SHA1 over the request URL + sorted form params, base64). Fail-closed —
-    # same pattern as the Square/Stripe payment webhooks.
+    # Verify Twilio's X-Twilio-Signature (HMAC-SHA1 over the request URL + sorted form
+    # params, base64) with this shop's auth token, else the operator-wide one. With no
+    # token at all, unsigned posts are accepted only in development/test.
+    import base64
+    import hashlib
+    import hmac as _hmac
+
     from backend.config import settings as _settings
-    if _settings.TWILIO_AUTH_TOKEN:
-        import base64
-        import hashlib
-        import hmac as _hmac
-        payload = str(request.url)
-        for k in sorted(form.keys()):
-            payload += k + str(form[k])
-        expected = base64.b64encode(_hmac.new(
-            _settings.TWILIO_AUTH_TOKEN.encode(), payload.encode(), hashlib.sha1).digest()).decode()
-        presented = request.headers.get("X-Twilio-Signature", "")
-        if not _hmac.compare_digest(expected, presented):
-            raise HTTPException(403, "Invalid Twilio signature")
+    from backend.core.webhook_security import provider_secrets, require_signature
+    secrets = await provider_secrets(db, org_id, "twilio", "auth_token", _settings.TWILIO_AUTH_TOKEN)
+    payload = str(request.url)
+    for k in sorted(form.keys()):
+        payload += k + str(form[k])
+    presented = request.headers.get("X-Twilio-Signature", "")
+    verified = any(_hmac.compare_digest(base64.b64encode(_hmac.new(
+        s.encode(), payload.encode(), hashlib.sha1).digest()).decode(), presented) for s in secrets)
+    require_signature(secrets, verified, "Twilio", status=403)
     raw_from = (form.get("From") or "").strip()
     body = (form.get("Body") or "").strip()
     profile = (form.get("ProfileName") or "").strip() or None

@@ -185,3 +185,67 @@ async def test_square_amount_mismatch_rejected(no_global_secrets, client, tenant
     raw = _square_event("sq_3", amount=1)
     assert (await _post_square(client, raw, _square_sig("sqkey", raw))).status_code == 400
     assert await _status(client, i.id) != "succeeded"
+
+
+# ── Inbound messaging: Meta (Messenger/Instagram/WhatsApp) and Twilio ────────
+
+META_PAYLOAD = {"object": "page", "entry": [
+    {"messaging": [{"sender": {"id": "fbuser9"}, "message": {"mid": "sec-mm1", "text": "hi"}}]}]}
+
+
+@pytest.fixture
+def no_messaging_secrets(monkeypatch):
+    monkeypatch.setattr(settings, "META_APP_SECRET", "", raising=False)
+    monkeypatch.setattr(settings, "TWILIO_AUTH_TOKEN", "", raising=False)
+
+
+@pytest.mark.asyncio
+async def test_meta_unsigned_rejected_in_production(monkeypatch, no_messaging_secrets, client, tenant):
+    org = (await client.get("/api/auth/me", headers=tenant)).json()["org_id"]
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    r = await client.post(f"/api/inbox/webhook/meta/{org}", json=META_PAYLOAD)
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_meta_per_shop_app_secret_is_enforced(no_messaging_secrets, client, tenant, db):
+    org = (await client.get("/api/auth/me", headers=tenant)).json()["org_id"]
+    await org_creds.set_creds(db, org, "meta", {"app_secret": "meta_shop", "page_token": "p"})
+    raw = json.dumps(META_PAYLOAD).encode()
+    url = f"/api/inbox/webhook/meta/{org}"
+    hdr = {"content-type": "application/json"}
+
+    assert (await client.post(url, content=raw, headers=hdr)).status_code == 403
+    bad = "sha256=" + hmac.new(b"other", raw, hashlib.sha256).hexdigest()
+    assert (await client.post(url, content=raw, headers={**hdr, "X-Hub-Signature-256": bad})).status_code == 403
+    good = "sha256=" + hmac.new(b"meta_shop", raw, hashlib.sha256).hexdigest()
+    r = await client.post(url, content=raw, headers={**hdr, "X-Hub-Signature-256": good})
+    assert r.status_code == 201 and r.json()["ingested"] == 1
+
+
+def _twilio_sig(token, url, form):
+    payload = url + "".join(k + form[k] for k in sorted(form))
+    return base64.b64encode(hmac.new(token.encode(), payload.encode(), hashlib.sha1).digest()).decode()
+
+
+@pytest.mark.asyncio
+async def test_twilio_unsigned_rejected_in_staging(monkeypatch, no_messaging_secrets, client, tenant):
+    org = (await client.get("/api/auth/me", headers=tenant)).json()["org_id"]
+    monkeypatch.setattr(settings, "ENVIRONMENT", "staging")
+    r = await client.post(f"/api/chats/webhook/twilio?org_id={org}", data={"From": "+15550001", "Body": "hi"})
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_twilio_per_shop_token_is_enforced(no_messaging_secrets, client, tenant, db):
+    org = (await client.get("/api/auth/me", headers=tenant)).json()["org_id"]
+    await org_creds.set_creds(db, org, "twilio", {"account_sid": "AC1", "auth_token": "tw_shop"})
+    path = f"/api/chats/webhook/twilio?org_id={org}"
+    form = {"From": "+15550002", "Body": "hello"}
+    url = "http://test" + path
+
+    assert (await client.post(path, data=form)).status_code == 403
+    assert (await client.post(path, data=form,
+                              headers={"X-Twilio-Signature": _twilio_sig("other", url, form)})).status_code == 403
+    ok = await client.post(path, data=form, headers={"X-Twilio-Signature": _twilio_sig("tw_shop", url, form)})
+    assert ok.status_code == 200

@@ -10,6 +10,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
+from backend.core.webhook_security import provider_secrets, require_signature
 from backend.db.database import get_db
 from backend.models import Employee, PaymentIntent
 from backend.services import payments as pay
@@ -163,30 +164,6 @@ async def refresh_intent_status(intent_id: str, db: AsyncSession = Depends(get_d
     return _ser(intent)
 
 
-def _unsigned_webhooks_allowed() -> bool:
-    """Only local development and the test suite may accept unsigned provider events.
-    Staging and production always fail closed."""
-    return (settings.ENVIRONMENT or "").lower() in ("development", "test")
-
-
-async def _webhook_secrets(db: AsyncSession, org_id: str, provider: str, field: str,
-                           global_secret: Optional[str]) -> list[str]:
-    """Signing secrets that may have signed an event for this org: the shop's own
-    (Settings → Integrations) first, then the operator-wide env value."""
-    from backend.services import org_creds
-    own = (await org_creds.effective(db, org_id, provider)).get(field)
-    return [s for s in dict.fromkeys([own, global_secret]) if s]
-
-
-def _require_signature(secrets: list[str], verified: bool, provider: str) -> None:
-    if secrets:
-        if not verified:
-            raise HTTPException(400, "Invalid signature")
-    elif not _unsigned_webhooks_allowed():
-        log.warning("%s webhook rejected: no signing secret configured for this shop", provider)
-        raise HTTPException(400, "Webhook signing secret not configured")
-
-
 def _minor_units(amount) -> int:
     # Must match how the gateways sent the amount at checkout (services/payments.py).
     return int(round(float(amount) * 100))
@@ -216,14 +193,14 @@ async def square_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     if not intent:
         return {"ok": True, "unmatched": True}
     # Verify with the secret of the org that owns the matched intent — never trust the body first.
-    secrets = await _webhook_secrets(db, intent.org_id, "square", "webhook_signature_key",
+    secrets = await provider_secrets(db, intent.org_id, "square", "webhook_signature_key",
                                      settings.SQUARE_WEBHOOK_SIGNATURE_KEY)
     url = (settings.PUBLIC_BASE_URL or "").rstrip("/") + "/api/payments/square/webhook"
     got = request.headers.get("x-square-hmacsha256-signature", "")
     verified = any(hmac.compare_digest(
         base64.b64encode(hmac.new(s.encode(), url.encode() + raw, hashlib.sha256).digest()).decode(), got)
         for s in secrets)
-    _require_signature(secrets, verified, "Square")
+    require_signature(secrets, verified, "Square")
     money = payment.get("amount_money") or {}
     if money.get("amount") is not None and int(money["amount"]) != _minor_units(intent.amount):
         log.warning("Square webhook amount mismatch for intent %s", intent.id)
@@ -296,9 +273,9 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     i = (await db.execute(select(PaymentIntent).where(PaymentIntent.id == intent_id))).scalar_one_or_none()
     if not i:
         raise HTTPException(404, "Unknown intent")
-    secrets = await _webhook_secrets(db, i.org_id, "stripe", "webhook_secret",
+    secrets = await provider_secrets(db, i.org_id, "stripe", "webhook_secret",
                                      settings.STRIPE_WEBHOOK_SECRET)
-    _require_signature(secrets, any(_verify_stripe_sig(payload, sig, s) for s in secrets), "Stripe")
+    require_signature(secrets, any(_verify_stripe_sig(payload, sig, s) for s in secrets), "Stripe")
     if i.provider != "stripe" or (meta.get("org_id") and meta["org_id"] != i.org_id):
         log.warning("Stripe webhook does not match intent %s (provider/org)", i.id)
         raise HTTPException(400, "Event does not match payment")

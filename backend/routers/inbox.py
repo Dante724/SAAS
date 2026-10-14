@@ -353,23 +353,23 @@ async def meta_verify(org_id: str, request: Request):
 @router.post("/webhook/meta/{org_id}", status_code=201)
 async def meta_inbound(org_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     """Inbound Messenger / Instagram / WhatsApp Cloud events → inbox threads.
-    De-duped by provider message id. When META_APP_SECRET is configured the request
-    is authenticated via the X-Hub-Signature-256 header (fail-closed); only when the
-    secret is unset (dev) are unsigned posts accepted."""
+    De-duped by provider message id. Authenticated via the X-Hub-Signature-256 header
+    using this shop's Meta app secret (or the operator-wide one); with no secret at all,
+    unsigned posts are accepted only in development/test."""
     import hashlib
     import hmac
 
     from backend.config import settings
+    from backend.core.webhook_security import provider_secrets, require_signature
     from backend.services.messaging import parse_meta_webhook
 
     # Read the raw body once: it's needed for both signature verification and parsing.
     raw = await request.body()
-    if settings.META_APP_SECRET:  # fail-closed once a secret exists
-        presented = request.headers.get("X-Hub-Signature-256", "")
-        expected = "sha256=" + hmac.new(
-            settings.META_APP_SECRET.encode(), raw, hashlib.sha256).hexdigest()
-        if not presented or not hmac.compare_digest(presented, expected):
-            raise HTTPException(403, "Invalid or missing X-Hub-Signature-256")
+    secrets = await provider_secrets(db, org_id, "meta", "app_secret", settings.META_APP_SECRET)
+    presented = request.headers.get("X-Hub-Signature-256", "")
+    verified = bool(presented) and any(hmac.compare_digest(
+        presented, "sha256=" + hmac.new(s.encode(), raw, hashlib.sha256).hexdigest()) for s in secrets)
+    require_signature(secrets, verified, "Meta", status=403)
     try:
         import json as _json
         payload = _json.loads(raw.decode() or "{}")
