@@ -67,5 +67,6 @@ test('offline navigation falls back to the app shell (not a network error)', asy
   await login(page);
   await context.setOffline(true);
   await page.goto('/tech');
-  await expect(page.locator('#login, #app')).toBeVisible();
+  // Both containers are always in the DOM (one hidden): the shell rendered if either is shown.
+  await expect(page.locator('#login:visible, #app:visible')).toBeVisible();
 });
