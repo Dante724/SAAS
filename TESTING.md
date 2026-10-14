@@ -40,7 +40,7 @@ Measured on the full suite. Floors live in config; **raise them as coverage impr
 
 | | Measured | Floor | Where |
 |---|---|---|---|
-| Backend (lines + branches combined) | 50.2% (58.7% lines, 20.3% branches) | 49.5 | `pyproject.toml` → `[tool.coverage.report] fail_under` |
+| Backend (lines + branches combined) | 50.2% (58.7% lines, 20.3% branches) | 50.0 (re-measured 144ep, 1154 tests) | `pyproject.toml` → `[tool.coverage.report] fail_under` |
 | Frontend lines / statements | 2.8% | 2.5 | `frontend-react/vite.config.ts` → `coverage.thresholds` |
 | Frontend functions | 25.2% | 24 | same |
 
@@ -77,13 +77,17 @@ router handlers — exactly where production bugs hide.
 
 ### Schema debt (tracked by the drift gate)
 
-11 foreign keys the models declare were never created by a migration, so production does not enforce
-them (`KNOWN_MISSING_FKS` in `test_144eo_migrated_schema.py`). To add them safely:
+None outstanding: `KNOWN_MISSING_FKS` is empty since `fk144ep01` created the last 11 FKs. Keep it
+empty — a new model FK needs a migration.
 
-1. On production, run the read-only audit: `DATABASE_URL=… python scripts/check_fk_orphans.py`
-   (SELECT-only; Postgres runs it in a READ ONLY transaction). Exit 0 = no orphans.
-2. Fix any orphan rows it lists (re-point or NULL them).
-3. Add a migration creating the FKs, and delete those entries from `KNOWN_MISSING_FKS`.
+**Before deploying `fk144ep01` (or any FK-adding migration):** run the read-only audit on production,
+`DATABASE_URL=… python scripts/check_fk_orphans.py` (SELECT-only, READ ONLY transaction). Exit 0 = safe.
+If orphans exist the migration aborts on purpose with the list and changes nothing — re-point or NULL
+them, then deploy again.
+
+**Local dev DB built by `create_all`** (never migrated) can hold leftovers migrations would have fixed:
+`python scripts/repair_dev_db.py repairos.db` (dry run) then `--apply` (backs up first, one
+transaction, idempotent, refuses `ENVIRONMENT=production`).
 
 ### Plan
 

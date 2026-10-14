@@ -144,12 +144,20 @@ async def _write_structure(db: AsyncSession, org_id: str, t: ChecklistTemplate, 
     t.type_id = data.type_id
     t.scope = data.scope if data.scope in ("all", "selected") else "all"
     t.type_ids = json.dumps(data.type_ids or [])
-    # wipe existing structure (cascade removes sections/items under steps)
-    for st in (await db.execute(select(ChecklistStep).where(ChecklistStep.template_id == t.id))).scalars().all():
-        await db.delete(st)
+    # Wipe the existing structure CHILD-FIRST (items -> sections -> steps). Don't rely on the DB's
+    # ON DELETE CASCADE: on any connection without FK enforcement it silently doesn't run and the
+    # old sections are orphaned (found in a real DB — 144ep). Order checklists are snapshots, so
+    # rewriting a template never touches a job's recorded answers.
+    old_steps = (await db.execute(select(ChecklistStep).where(ChecklistStep.template_id == t.id))).scalars().all()
     for it in (await db.execute(select(ChecklistTemplateItem).where(
             ChecklistTemplateItem.template_id == t.id))).scalars().all():
         await db.delete(it)
+    if old_steps:
+        for se in (await db.execute(select(ChecklistSection).where(
+                ChecklistSection.step_id.in_([s.id for s in old_steps])))).scalars().all():
+            await db.delete(se)
+    for st in old_steps:
+        await db.delete(st)
     await db.flush()
 
     order_i = 0

@@ -27,14 +27,9 @@ REPO = Path(__file__).resolve().parents[2]
 
 # ── Known, reviewed differences (tracked debt). The gate fails on anything NOT listed here, and
 # also fails if a listed item is no longer a difference — so this list can only shrink. ──
-# Foreign keys the models declare but no migration ever created (production does not enforce
-# them). Adding them needs a check for existing orphan rows first: scripts/check_fk_orphans.py.
-KNOWN_MISSING_FKS = {
-    ("bundles", "category_id"), ("commission_rules", "service_id"), ("coupons", "client_id"),
-    ("devices", "org_id"), ("directory_items", "location_id"), ("orders", "manager_id"),
-    ("parts", "default_supplier_id"), ("purchase_orders", "supplier_invoice_blob_id"),
-    ("services", "category_id"), ("time_entries", "task_id"), ("transactions", "voided_by_id"),
-}
+# Foreign keys the models declare but no migration creates. Empty since fk144ep01 added the last 11 —
+# keep it that way: a new model FK needs a migration (with an orphan pre-check, see fk144ep01).
+KNOWN_MISSING_FKS: set[tuple[str, str]] = set()
 # Equivalent types: unbounded VARCHAR vs TEXT store the same thing on SQLite and Postgres.
 KNOWN_TYPE_DIFFS = {("clients", "billing_address")}
 

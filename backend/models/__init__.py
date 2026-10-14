@@ -678,7 +678,7 @@ class Part(Base):
     name: Mapped[str] = mapped_column(String(300))
     brand: Mapped[Optional[str]] = mapped_column(String(100))
     description: Mapped[Optional[str]] = mapped_column(Text)  # 144av: product description (form)
-    default_supplier_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("suppliers.id"))  # 144av
+    default_supplier_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("suppliers.id", ondelete="SET NULL"))  # 144av; 144ep: supplier mirror can be removed -> clear the preference
     category: Mapped[Optional[str]] = mapped_column(String(100))
     cost_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     avg_cost: Mapped[float] = mapped_column(Numeric(12, 4, asdecimal=False), default=0.0)  # weighted moving-average cost
@@ -1840,7 +1840,7 @@ class TimeEntry(Base):
     # so several people on one WO each roll up to their own line for cost/commission.
     order_line_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("order_lines.id"), index=True)
     # build 144x: the work-order timer can also run against a standalone task
-    task_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("tasks.id"), index=True)
+    task_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("tasks.id", ondelete="SET NULL"), index=True)  # 144ep: tasks are hard-deleted; keep the time (payroll history)
     location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"))
     category: Mapped[str] = mapped_column(String(16), default="job")  # job|task|break|admin|other
     started_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)

@@ -1,5 +1,30 @@
 # Changelog
 
+## build 144ep — Enforce the last 11 foreign keys; fix checklist orphans; repair dev DB
+
+- **Root cause, checklist orphans:** `_write_structure` (template save) deleted steps and relied on the
+  DB's `ON DELETE CASCADE` to remove their sections; on a connection without FK enforcement that never
+  ran, leaving orphan sections. It now deletes child-first (items → sections → steps) explicitly.
+  Regression test runs the rewrite with FK enforcement OFF and asserts zero orphans (RED: 2 orphans).
+- **Hard-deleted parents → `ON DELETE SET NULL`** (FK audit of every parent's delete path):
+  `time_entries.task_id` (deleting a task keeps the labour/payroll time) and
+  `parts.default_supplier_id` (un-flagging a supplier contact removes its mirror; the part keeps, the
+  preference clears). Both returned 500 before (RED tests).
+- **Migration `fk144ep01`** adds the 11 FKs the models declared but production never enforced:
+  - Pre-flight orphan check: any orphan → aborts with the list, **changes nothing** (no silent rewrite).
+  - Postgres: `ADD CONSTRAINT … NOT VALID` then `VALIDATE` in autocommit (no long table lock).
+  - Idempotent: correct FKs are left alone; wrong `ON DELETE` (create_all DBs) is replaced.
+  - Verified: fresh DB; seeded up→down→up with all 11 tables content-identical; planted orphan aborts
+    with schema, data and revision unchanged; real dev DB copy upgrades NO ACTION → SET NULL.
+  - Drift gate `KNOWN_MISSING_FKS` is now empty.
+  - **Deploy step:** run `scripts/check_fk_orphans.py` on production first (see TESTING.md).
+- **`scripts/repair_dev_db.py`:** for create_all-built dev DBs. Moves legacy `bookings` rows into
+  `appointments` (verified identical before the old table is dropped) and deletes unreachable orphan
+  checklist sections. Dry run by default; `--apply` backs up first, one transaction, idempotent,
+  refuses on id clashes and in production. Applied to the local dev DB: 3 appointments recovered,
+  3 orphans removed, `foreign_key_check` clean.
+- **Gates:** full suite 1154 passed (304 files, CI-replica venv); backend coverage 50.2% → floor raised 49.5 → 50.0; ruff (pinned 0.6.9) clean.
+
 ## build 144eo — Close the model ↔ migration gap (drift fixes + hard drift gate)
 
 The test suite builds its schema from the MODELS; production builds it from the MIGRATIONS, so any

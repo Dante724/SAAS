@@ -22,7 +22,7 @@ branch = true
 
 [tool.coverage.report]
 # RATCHET: fail_under is set at the measured level. Raise it as coverage improves; never lower it.
-fail_under = 49.5
+fail_under = 50.0
 precision = 1
 show_missing = true
 skip_covered = true
