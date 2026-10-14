@@ -15,7 +15,7 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,6 +45,21 @@ class DocLine(BaseModel):
     part_id: str
     qty: float = 1
     unit_cost: Optional[float] = None
+
+    @field_validator("qty")
+    @classmethod
+    def _qty_positive(cls, v):
+        # a negative qty passed _take_stock's "have < qty" check and ADDED stock
+        if v <= 0:
+            raise ValueError("Quantity must be greater than zero")
+        return v
+
+    @field_validator("unit_cost")
+    @classmethod
+    def _cost_non_negative(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("Cost can't be negative")
+        return v
     serialized_item_id: Optional[str] = None
     bin_id: Optional[str] = None
     comment: Optional[str] = None
@@ -120,6 +135,8 @@ async def _give_stock(db: AsyncSession, part_id: str, warehouse, qty: float,
 
 
 async def _cost(db: AsyncSession, part_id: str, given: Optional[float]) -> Decimal:
+    # An explicit unit_cost is the credit agreed with the supplier (routes require
+    # can_manage_inventory); DocLine rejects negative values.
     if given is not None:
         return Decimal(str(given))
     p = (await db.execute(select(Part).where(Part.id == part_id))).scalar_one_or_none()
@@ -400,6 +417,13 @@ async def create_write_off(
 
 class WriteOffLinePatch(BaseModel):
     qty: Optional[float] = None
+
+    @field_validator("qty")
+    @classmethod
+    def _qty_positive(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError("Quantity must be greater than zero")
+        return v
     comment: Optional[str] = None
     comment_public: Optional[bool] = None
 
@@ -490,6 +514,20 @@ class PostLine(BaseModel):
     part_id: str
     qty: float
     unit_cost: float = 0.0
+
+    @field_validator("qty")
+    @classmethod
+    def _qty_positive(cls, v):
+        if v <= 0:
+            raise ValueError("Quantity must be greater than zero")
+        return v
+
+    @field_validator("unit_cost")
+    @classmethod
+    def _cost_non_negative(cls, v):
+        if v < 0:
+            raise ValueError("Cost can't be negative")
+        return v
     markup_pct: Optional[float] = None     # sets the sell price at posting time
     price_type_id: Optional[str] = None    # which price list the markup writes to
 
