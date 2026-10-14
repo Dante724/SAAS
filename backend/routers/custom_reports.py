@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import CustomReport, Employee
 from backend.services import custom_reports as cr
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, require_perm
 
 router = APIRouter(prefix="/api/custom-reports", tags=["reports"])
 
@@ -52,7 +52,7 @@ class RunIn(BaseModel):
 
 @router.post("/run")
 async def run_adhoc(data: RunIn, db: AsyncSession = Depends(get_db),
-                    current: Employee = Depends(get_current_employee)):
+                    current: Employee = Depends(require_perm("can_view_reports"))):
     try:
         return await cr.build_and_run(db, current.org_id, data.config, data.date_from, data.date_to, data.location_id)
     except ValueError as e:
@@ -103,7 +103,7 @@ async def delete_report(rid: str, db: AsyncSession = Depends(get_db),
 @router.get("/{rid}/run")
 async def run_saved(rid: str, date_from: Optional[str] = None, date_to: Optional[str] = None,
                     location_id: Optional[str] = None, db: AsyncSession = Depends(get_db),
-                    current: Employee = Depends(get_current_employee)):
+                    current: Employee = Depends(require_perm("can_view_reports"))):
     r = await _owned(db, current.org_id, rid)
     try:
         out = await cr.build_and_run(db, current.org_id, r.config, date_from, date_to, location_id)

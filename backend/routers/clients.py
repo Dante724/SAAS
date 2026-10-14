@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from backend.db.database import get_db
 from backend.models import Client, Device, Employee
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, require_perm
 from backend.services.money import q2, q4
 
 router = APIRouter(prefix="/api/clients", tags=["clients"])
@@ -812,7 +812,7 @@ async def undo_merge(
 @router.get("/export/csv")
 async def export_clients(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_export_clients")),
 ):
     """Export the contact book as CSV (respects the caller's contact scope)."""
     import csv
