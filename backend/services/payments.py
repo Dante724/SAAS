@@ -277,8 +277,8 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
     db.add(pay)
     await db.flush()
     if inv:
-        inv.amount_paid = (inv.amount_paid or 0) + intent.amount
-        inv.status = "paid" if inv.amount_paid >= (inv.total or 0) else "partial"
+        inv.amount_paid = q2((inv.amount_paid or 0) + intent.amount)   # quantize before comparing
+        inv.status = "paid" if inv.amount_paid >= q2(inv.total or 0) else "partial"
     intent.payment_id = pay.id
     intent.status = "succeeded"
     intent.updated_at = datetime.utcnow()

@@ -1790,7 +1790,8 @@ async def invoice_preview(
     lines = [{"description": l.description, "qty": l.qty, "unit_price": l.unit_price,
               "line_type": l.line_type, "total": q2((l.qty or 0) * (l.unit_price or 0))}
              for l in order.lines]
-    balance = q2((order.total or 0) - (order.prepayment_total or 0))
+    from backend.services.order_money import balance_due
+    balance = await balance_due(db, order)
     return {
         "order_id": order.id, "order_number": order.order_number,
         "client": order.client.name if order.client else "Walk-in",
@@ -1823,7 +1824,8 @@ async def payment_link(
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
-    balance = q2((order.total or 0) - (order.prepayment_total or 0))
+    from backend.services.order_money import balance_due
+    balance = await balance_due(db, order)   # net of every payment, not just prepayments
     if balance <= 0:
         raise HTTPException(400, "Nothing to collect: order balance is zero.")
     # reuse an existing live link unless regenerating
@@ -2326,6 +2328,13 @@ async def _archive_order(db, current, order_id, reason, do_refund):
             db.add(Payment(order_id=order_id, client_id=order.client_id, method="refund",
                            kind="refund", amount=net_paid, account_id=acct.id if acct else None,
                            received_by_id=current.id, reference=f"Archive refund: {reason}"[:200]))
+            if order.client_id:
+                # The cash goes back, so the client's ledger must show it — otherwise the reversed
+                # charge leaves them with phantom store credit equal to what they were refunded.
+                from backend.services.ledger import post_contact_ledger
+                await post_contact_ledger(db, current.org_id, order.client_id, "refund", abs(net_paid),
+                                          note=f"Refund on archived order {order.order_number}",
+                                          ref_type="refund", ref_id=refund.id, created_by_id=current.id)
             if acct:
                 from backend.routers.cash import post_transaction
                 await post_transaction(db, current.org_id, acct.id, "refund", -net_paid,

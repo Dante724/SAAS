@@ -521,12 +521,9 @@ async def pay_order(
         Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
-    # remaining = total minus everything already paid (incl. prepayments)
-    already = (await db.execute(
-        select(func.coalesce(func.sum(Payment.amount), 0)).select_from(Payment)
-        .where(Payment.order_id == order_id, Payment.kind != "refund")
-    )).scalar() or 0
-    remaining = q2((o.total or 0) - already)
+    # remaining = total minus everything already paid, net of refunds (shared definition)
+    from backend.services.order_money import balance_due, cancel_open_pay_links
+    remaining = await balance_due(db, o)
     amount = data.amount if data.amount is not None else max(remaining, 0)
     # Guard: positive amounts only, and don't let a "pay the balance" tap double-post once the
     # order is already settled (double-click / retry → remaining 0 → amount 0 → rejected here).
@@ -558,10 +555,12 @@ async def pay_order(
             await post_contact_ledger(db, current.org_id, o.client_id, "income", -abs(amount),
                                       note=f"Payment for {o.order_number}", ref_type="payment",
                                       ref_id=pay.id, created_by_id=current.id)
-        inv.amount_paid = (inv.amount_paid or 0) + amount
-        inv.status = "paid" if inv.amount_paid >= inv.total else "partial"
+        inv.amount_paid = q2((inv.amount_paid or 0) + amount)   # quantize: float sums left paid invoices "partial"
+        inv.status = "paid" if inv.amount_paid >= q2(inv.total) else "partial"
         await log_system_event(db, current.org_id, "order", order_id,
                                f"Closed on client balance: {amount}")
+        await db.flush()
+        await cancel_open_pay_links(db, o)
         await db.commit()
         return {"ok": True, "method": "balance", "amount": amount}
 
@@ -611,10 +610,12 @@ async def pay_order(
         await post_contact_ledger(db, current.org_id, o.client_id, "income", -abs(amount),
                                   note=f"Payment for {o.order_number}", ref_type="payment",
                                   ref_id=pay.id, created_by_id=current.id)
-    inv.amount_paid = (inv.amount_paid or 0) + amount
-    inv.status = "paid" if inv.amount_paid >= inv.total else "partial"
+    inv.amount_paid = q2((inv.amount_paid or 0) + amount)   # quantize: float sums left paid invoices "partial"
+    inv.status = "paid" if inv.amount_paid >= q2(inv.total) else "partial"
     await log_system_event(db, current.org_id, "order", order_id,
                            f"Payment {amount} via {data.method} to {acc.name}")
+    await db.flush()
+    await cancel_open_pay_links(db, o)   # a link sent earlier must not charge the customer again
     await db.commit()
     # 144jc: payment_received notifications (client receipt + staff), best-effort.
     try:
@@ -668,6 +669,9 @@ async def prepay_order(
     o.prepayment_total = (o.prepayment_total or 0) + data.amount
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order_id, f"Prepayment {data.amount} to {acc.name}")
+    from backend.services.order_money import cancel_open_pay_links
+    await db.flush()
+    await cancel_open_pay_links(db, o)
     await db.commit()
     return {"ok": True, "prepaid": o.prepayment_total}
 
@@ -686,6 +690,14 @@ async def refund_overpayment(
     acc = (await db.execute(select(Account).where(Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
     if not acc:
         raise HTTPException(404, "Account not found")
+    # Only money actually received beyond the total can go back out — this endpoint used to pay
+    # any amount (or a negative one) out of the till.
+    from backend.services.order_money import overpaid
+    excess = await overpaid(db, o)
+    if data.amount is None or data.amount <= 0:
+        raise HTTPException(400, "Refund amount must be positive")
+    if data.amount > excess + 0.005:
+        raise HTTPException(400, f"Only the overpayment can be refunded here ({excess:g})")
     await post_transaction(db, current.org_id, acc.id, "expense", -abs(data.amount),
                            comment=f"Refund overpayment {o.order_number}", ref_type="order",
                            ref_id=order_id, employee_id=current.id)

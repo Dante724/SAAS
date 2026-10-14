@@ -151,10 +151,15 @@ async def redeem_giftcard(
         raise HTTPException(404, "Gift card not found or inactive")
     if g.expires_at and g.expires_at < datetime.utcnow():
         raise HTTPException(400, "Gift card has expired")
-    order_balance = q2((order.total or 0) - (order.prepayment_total or 0))
+    from backend.services.order_money import balance_due
+    order_balance = await balance_due(db, order)
     amount = q2(data.amount if data.amount is not None else min(g.balance, max(order_balance, 0)))
     if amount <= 0:
         raise HTTPException(400, "Nothing to redeem")
+    if amount > order_balance + 0.005:
+        # an uncapped redemption drove the order total negative, which refund_overpayment then
+        # paid out in cash — turning gift-card balance into money
+        raise HTTPException(400, f"Amount exceeds the order balance ({order_balance:.2f})")
     if amount > g.balance:
         raise HTTPException(400, f"Amount exceeds card balance ({g.balance:.2f})")
     # 144bc — guarded atomic decrement: a concurrent redemption can't drive the balance negative.
@@ -364,7 +369,8 @@ async def redeem_loyalty(
     if data.points > bal:
         raise HTTPException(400, f"Client has only {bal:.0f} points")
     # 144bc — cap redeemed value at the order balance so points past what's owed aren't burned.
-    order_balance = q2((order.total or 0) - (order.prepayment_total or 0))
+    from backend.services.order_money import balance_due
+    order_balance = await balance_due(db, order)
     amount = q2(data.points * org.loyalty_point_value)
     used_points = data.points
     if amount > order_balance:

@@ -506,8 +506,16 @@ async def record_payment(
     inv = result.scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    # Negative amounts used to post +|amount| into the cashbox while reducing amount_paid; an
+    # amount above the balance silently over-collected.
+    if data.amount is None or data.amount <= 0:
+        raise HTTPException(400, "Payment amount must be positive")
+    remaining = q2(float(inv.total or 0) - float(inv.amount_paid or 0))
+    if data.amount > remaining + 0.005:
+        raise HTTPException(400, f"Payment exceeds the invoice balance ({remaining:g})")
     payment = Payment(
         invoice_id=invoice_id,
+        order_id=inv.order_id,          # so the order's own paid/balance math sees invoice payments
         client_id=inv.client_id,
         method=data.method,
         amount=data.amount,
@@ -537,6 +545,12 @@ async def record_payment(
         await post_contact_ledger(db, current.org_id, inv.client_id, "income", -abs(data.amount),
                                   note=f"Payment for invoice {inv.invoice_number or invoice_id}",
                                   ref_type="payment", ref_id=payment.id, created_by_id=current.id)
+    if inv.order_id:
+        from backend.services.order_money import cancel_open_pay_links
+        order = (await db.execute(select(Order).where(Order.id == inv.order_id))).scalar_one_or_none()
+        if order:
+            await db.flush()
+            await cancel_open_pay_links(db, order)
     await db.commit()
     return {"ok": True, "amount_paid": inv.amount_paid, "status": inv.status}
 
