@@ -15,8 +15,9 @@ async def test_thread_merges_and_orders(client, tenant, db):
     r = await client.post(f"/api/orders/{oid}/thread", json={"body": "We received your device."}, headers=tenant)
     assert r.status_code == 201, r.text
     # simulate a customer reply (as the public track page would store it) + mark unread
-    from backend.models import EventFeedItem, Order
     from sqlalchemy import select
+
+    from backend.models import EventFeedItem, Order
     db.add(EventFeedItem(org_id=(await db.execute(select(Order).where(Order.id == oid))).scalar_one().org_id,
                          entity_type="order", entity_id=oid, item_type="client_message",
                          body="Great, when will it be ready?", author_name="Chat Cust", visibility="client"))

@@ -56,7 +56,9 @@ async def test_dismiss_foreign_notification_404(client, tenant, db):
     # fixture is referentially valid under enforced FKs (a fabricated org_id would now fail the
     # organisations FK on insert, which is correct — orphan rows shouldn't be possible).
     import uuid
+
     from sqlalchemy import select as _sel
+
     from backend.models import Organisation
     oid = f"org-{uuid.uuid4().hex[:8]}"
     db.add(Organisation(id=oid, name="Other Co"))

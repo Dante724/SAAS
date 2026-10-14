@@ -9,6 +9,7 @@
 """
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 
 async def _enable_appointment(db):
@@ -76,6 +77,6 @@ async def test_appointment_url_is_tenant_unique_and_never_crosses(client, tenant
     assert a.json()["shop_name"] != b.json()["shop_name"]
 
     # Re-pointing a slug stays unique: cannot collide with the other tenant's.
-    with pytest.raises(Exception):
+    with pytest.raises(IntegrityError):
         orgB.subdomain = "shop-a"
         await db.commit()

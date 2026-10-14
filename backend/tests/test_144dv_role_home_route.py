@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 @pytest.mark.asyncio
 async def test_home_route_roundtrips_and_shows_on_me(client, tenant, db):
-    from backend.models import Role, Employee
+    from backend.models import Employee, Role
     me = (await client.get("/api/auth/me", headers=tenant)).json()
 
     # Create a role with a landing page, via the rbac API.

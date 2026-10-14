@@ -1,6 +1,7 @@
 """144co — product/service/bundle integrity: delete guards, org-scoped components, broken-component
 flag, and where-used. Protects the catalog so bundles never silently orphan or leak cross-tenant."""
 import uuid
+
 import pytest
 
 
@@ -53,8 +54,9 @@ async def test_bundle_rejects_foreign_component(client, tenant):
 async def test_missing_component_flagged(client, tenant, db):
     sid = await _svc(client, tenant, name="Vanish Svc")
     await _bundle(client, tenant, [{"ref_type": "service", "ref_id": sid, "qty": 1}], name="Kit M")
-    from backend.models import Service
     from sqlalchemy import delete as sa_delete
+
+    from backend.models import Service
     await db.execute(sa_delete(Service).where(Service.id == sid))
     await db.commit()
     bundles = (await client.get("/api/bundles", headers=tenant)).json()["items"]

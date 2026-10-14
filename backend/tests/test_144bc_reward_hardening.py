@@ -8,7 +8,8 @@ redeem paths:
      never burned for no benefit.
 """
 import pytest
-from sqlalchemy import select, update as sa_update, func
+from sqlalchemy import func, select
+from sqlalchemy import update as sa_update
 
 
 def _svc(price):
@@ -40,7 +41,8 @@ async def test_pos_gift_card_atomic_decrement_rejects_oversell(client, tenant, d
 async def test_pos_loyalty_caps_at_bill(client, tenant, db):
     """Redeeming more points than the bill is worth must only consume points up to the bill,
     not burn the surplus."""
-    from backend.models import Client as ClientM, Organisation, LoyaltyLedger
+    from backend.models import Client as ClientM
+    from backend.models import LoyaltyLedger, Organisation
     me = (await client.get("/api/auth/me", headers=tenant)).json()
     org = (await db.execute(select(Organisation).where(Organisation.id == me["org_id"]))).scalar_one()
     org.loyalty_point_value = 0.10          # 1 pt = 0.10
@@ -62,7 +64,8 @@ async def test_pos_loyalty_caps_at_bill(client, tenant, db):
 @pytest.mark.asyncio
 async def test_wo_loyalty_caps_at_order_balance(client, tenant, db):
     """Same cap on the work-order redeem path."""
-    from backend.models import Client as ClientM, Organisation, LoyaltyLedger
+    from backend.models import Client as ClientM
+    from backend.models import LoyaltyLedger, Organisation
     me = (await client.get("/api/auth/me", headers=tenant)).json()
     loc = (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]
     org = (await db.execute(select(Organisation).where(Organisation.id == me["org_id"]))).scalar_one()

@@ -1,8 +1,9 @@
 """144ds — the Home feed is role-shaped: owner picks which signals a role sees
 (home_feed_sources), and order_scope='own' limits order/task signals to what's
 assigned to that person."""
-import pytest
 from datetime import datetime, timedelta
+
+import pytest
 from sqlalchemy import select
 
 
@@ -15,7 +16,7 @@ async def _me(client, h):
 
 
 async def _attach_role(db, org_id, emp_id, **role_kw):
-    from backend.models import Role, Employee
+    from backend.models import Employee, Role
     r = Role(org_id=org_id, name="FeedRole", **role_kw)
     db.add(r)
     await db.flush()
@@ -28,7 +29,7 @@ async def _attach_role(db, org_id, emp_id, **role_kw):
 @pytest.mark.asyncio
 async def test_home_feed_sources_filters_items(client, tenant, db):
     me = await _me(client, tenant)
-    loc = await _loc(client, tenant)
+    _ = await _loc(client, tenant)
     # a low-stock part + an open task would normally both appear
     from backend.models import Task
     db.add(Task(org_id=me["org_id"], title="T", status="todo"))

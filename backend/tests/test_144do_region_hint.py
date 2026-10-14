@@ -1,6 +1,7 @@
 """144do — signup-options derives a region hint from the CDN country header
 (no IP stored); unknown/absent country yields no hint. A suggestion only."""
 import pytest
+
 from backend.routers.auth import _region_hint
 
 

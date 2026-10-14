@@ -4,7 +4,7 @@ Full count seeds from real on-hand, scan-to-count increments, and posting the va
 the SAME location StockLevel row (no warehouse-keyed duplicate / double-count).
 """
 import pytest
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 
 
 async def _loc(client, h):

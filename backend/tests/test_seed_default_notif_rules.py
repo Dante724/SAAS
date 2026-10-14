@@ -23,6 +23,7 @@ async def test_new_org_has_starter_client_rules(client, tenant):
 async def test_seeding_is_idempotent(db, tenant):
     """Re-running the seeder for an org that already has rules adds nothing."""
     from sqlalchemy import func, select
+
     from backend.models import Employee, NotificationRule
     from backend.services.notification_rules import seed_default_rules
 

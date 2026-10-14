@@ -1,7 +1,8 @@
 """144dr — Home 'needs you' feed: real, org-scoped signals with deep links.
 Empty shop => ok=True; a created signal shows up with the right count + link."""
-import pytest
 from datetime import datetime, timedelta
+
+import pytest
 from sqlalchemy import select
 
 

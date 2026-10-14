@@ -1,6 +1,7 @@
 """Build 144ek — service appointment rules: prices-by-type (reuses /api/pricing),
 allowed employees (enforced on public appointment), required resource types (stored)."""
 import uuid
+
 import pytest
 
 

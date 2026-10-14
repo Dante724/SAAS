@@ -1,5 +1,6 @@
 """144iz — notification hardening: consent gate, scheduler run_due, provider status."""
 from datetime import datetime, timedelta
+
 from sqlalchemy import select
 
 
@@ -18,7 +19,7 @@ async def test_provider_status_defaults_simulated(client, tenant):
 
 async def test_consent_blocks_send(client, tenant, db):
     """A client opted out on phone must not receive an SMS; it's logged skipped."""
-    from backend.models import Client, Order, NotificationRule, NotificationLog
+    from backend.models import Client, NotificationLog, NotificationRule, Order
     oid = await _org_id(client, tenant)
     # create client + order via API (avoids model NOT-NULL pitfalls), then opt out
     cid = (await client.post("/api/clients", json={"name": "No SMS", "phone": "9990001111"}, headers=tenant)).json()["id"]

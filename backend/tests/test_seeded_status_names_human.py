@@ -5,7 +5,9 @@ against the "Dropped off / waiting_parts-as-a-label" class of mistake."""
 import pytest
 
 from backend.routers.statuses import (
-    DEFAULT_STATUSES, ESTIMATE_STATUSES, RECORD_TYPE_DEFAULTS,
+    DEFAULT_STATUSES,
+    ESTIMATE_STATUSES,
+    RECORD_TYPE_DEFAULTS,
 )
 
 # (key, name) pairs across every seeded pipeline

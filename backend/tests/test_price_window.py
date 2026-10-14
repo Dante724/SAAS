@@ -1,7 +1,8 @@
 """144hb — promotional window on price types: an expired promo doesn't apply."""
-from backend.routers.pricing import _in_window
-from types import SimpleNamespace
 from datetime import datetime, timedelta
+from types import SimpleNamespace
+
+from backend.routers.pricing import _in_window
 
 
 def test_in_window_bounds():

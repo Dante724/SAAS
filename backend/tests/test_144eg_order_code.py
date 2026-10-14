@@ -1,6 +1,7 @@
 """Build 144eg — Order code (barcode/QR) set on the order, shared with the
 {Barcode}/{QR Code} print variables and the /by-barcode scanner lookup."""
 import uuid
+
 import pytest
 
 

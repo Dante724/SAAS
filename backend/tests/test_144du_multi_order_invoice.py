@@ -4,6 +4,7 @@ Verifies fan-out across linked orders for all three display modes, plus the
 attach/detach endpoints and their org scoping.
 """
 import uuid
+
 import pytest
 
 

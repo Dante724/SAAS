@@ -2,6 +2,7 @@
 description, type (labor/service), unit, duration, barcode, bookable.
 """
 import uuid
+
 import pytest
 
 

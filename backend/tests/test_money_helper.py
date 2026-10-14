@@ -1,7 +1,8 @@
 """H2 Phase 1 — the canonical money module quantizes with round-half-up (the money convention),
 not Python's banker's rounding, and sums exactly instead of accumulating float noise."""
-from backend.services.money import q2, q4, d2, msum
 from decimal import Decimal
+
+from backend.services.money import d2, msum, q2, q4
 
 
 def test_half_up_not_bankers():

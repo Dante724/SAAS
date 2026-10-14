@@ -12,7 +12,8 @@ async def _me(client, h):
 
 async def _linked_supplier(client, h, db):
     """A supplier mirrored by a real contact, so both balances exist and must agree."""
-    from backend.models import Client as _Client, Supplier
+    from backend.models import Client as _Client
+    from backend.models import Supplier
     me = await _me(client, h)
     c = _Client(org_id=me["org_id"], name="Acme Vendor", is_supplier=True)
     db.add(c); await db.flush()

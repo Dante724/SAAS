@@ -14,7 +14,7 @@ async def test_appointment_config_has_pickup_fields(client, tenant, db):
 
 
 async def test_appointment_request_creates_web_lead(client, tenant, db):
-    from backend.models import Organisation, Lead
+    from backend.models import Lead, Organisation
     org = (await db.execute(select(Organisation))).scalars().first()
     org.appointment_enabled = True
     await db.commit()

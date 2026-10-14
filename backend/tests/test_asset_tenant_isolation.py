@@ -5,6 +5,7 @@ Regression tests for the audit findings:
   MED-2   org suspension was enforced only at login, not per request.
 """
 import uuid
+
 import pytest
 from sqlalchemy import select
 

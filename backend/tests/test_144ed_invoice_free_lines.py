@@ -2,6 +2,7 @@
 multi-order at create and the comment/due fields (New Invoice drawer parity).
 """
 import uuid
+
 import pytest
 
 

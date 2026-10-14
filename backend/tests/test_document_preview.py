@@ -4,7 +4,7 @@
 async def test_preview_renders_with_sample_order(client, tenant):
     loc = (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]
     cid = (await client.post("/api/clients", json={"name": "Pat Lee"}, headers=tenant)).json()["id"]
-    oid = (await client.post("/api/orders", json={
+    _oid = (await client.post("/api/orders", json={
         "client_id": cid, "location_id": loc, "complaint": "Broken hinge"}, headers=tenant)).json()["id"]
     r = await client.post("/api/documents/preview", json={
         "body_html": "<h1>{Company Name}</h1><p>For {Client Name} · {Order Malfunction}</p>",

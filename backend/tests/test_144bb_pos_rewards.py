@@ -36,7 +36,8 @@ async def test_pos_gift_card_decrements_balance(client, tenant):
 
 @pytest.mark.asyncio
 async def test_pos_loyalty_redeem(client, tenant, db):
-    from backend.models import Client as ClientM, Organisation, LoyaltyLedger
+    from backend.models import Client as ClientM
+    from backend.models import LoyaltyLedger, Organisation
     me = (await client.get("/api/auth/me", headers=tenant)).json()
     org = (await db.execute(select(Organisation).where(Organisation.id == me["org_id"]))).scalar_one()
     org.loyalty_point_value = 0.05

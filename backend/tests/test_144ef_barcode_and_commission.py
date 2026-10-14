@@ -1,6 +1,7 @@
 """Build 144ef — app-wide barcode/QR generator endpoint + service exceptional
 commissions (Orderry parity)."""
 import uuid
+
 import pytest
 
 from backend.services.payroll import CommissionEngine

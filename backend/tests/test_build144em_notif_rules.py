@@ -101,11 +101,12 @@ async def test_variable_catalog_is_rich_and_grouped(client, tenant):
 @pytest.mark.asyncio
 async def test_tracking_url_variable_resolves(client, tenant, db, monkeypatch):
     """{Tracking URL} renders to the order's public track link."""
-    from backend.config import settings
-    from backend.routers.documents import _resolve, _render
-    from backend.models import Order
     from sqlalchemy import select as _select
     from sqlalchemy.orm import selectinload
+
+    from backend.config import settings
+    from backend.models import Order
+    from backend.routers.documents import _render, _resolve
 
     monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "https://shop.example")
     loc = (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]
@@ -124,9 +125,10 @@ async def test_tracking_url_variable_resolves(client, tenant, db, monkeypatch):
 @pytest.mark.asyncio
 async def test_chat_first_routes_to_latest_chat_channel(client, tenant, db):
     """A chat_first rule sends via the channel of the client's most recent thread."""
+    from datetime import datetime
+
     from backend.models import ChatThread, NotificationLog
     from backend.services import notification_rules as rules_svc
-    from datetime import datetime
 
     me = await _me(client, tenant)
     loc = (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]

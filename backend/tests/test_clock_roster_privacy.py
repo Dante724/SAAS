@@ -5,6 +5,7 @@ live roster of who is clocked in and where. A non-manager is denied the roster
 and cannot read another employee's timesheet.
 """
 import uuid
+
 import pytest
 
 

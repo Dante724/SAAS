@@ -1,5 +1,6 @@
 """144ja — notification parity: module-scoped variables, Contacts birthday module."""
 from datetime import date, datetime
+
 from sqlalchemy import select
 
 
@@ -31,7 +32,7 @@ async def test_contact_module_rule_accepted(client, tenant):
 
 async def test_birthday_sweep_sends_once(client, tenant, db):
     """A client whose birthday is today gets one greeting; a re-run sends none."""
-    from backend.models import Client, NotificationRule, NotificationLog
+    from backend.models import Client, NotificationLog, NotificationRule
     oid = await _org_id(client, tenant)
     today = date.today()
     bday = f"1990-{today.month:02d}-{today.day:02d}"

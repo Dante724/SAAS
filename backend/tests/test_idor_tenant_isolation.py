@@ -3,6 +3,7 @@ org B's records by id. Covers close_shift (finance) concretely; the same org-sco
 pattern (parent lookup filtered by org) was applied to sales.set_count and
 suppliers.reserve/unreserve_po_line."""
 import uuid
+
 import pytest
 
 

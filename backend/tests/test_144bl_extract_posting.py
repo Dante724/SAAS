@@ -5,6 +5,7 @@ contract (rows[] shape) is identical to what the live model returns, and those r
 the existing /postings/preview + /postings/commit path.
 """
 import io
+
 import pytest
 
 

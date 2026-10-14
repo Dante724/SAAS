@@ -1,6 +1,7 @@
 """Build 144ei — every work order's code is globally unique (across all tenants),
 auto-assigned, and never repeated. Orderry semantics."""
 import uuid
+
 import pytest
 
 

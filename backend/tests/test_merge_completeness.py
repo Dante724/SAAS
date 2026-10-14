@@ -14,6 +14,7 @@ async def _client(client, tenant, **f):
 def test_fk_target_set_is_complete():
     """Guard against drift: the discovered set must cover every clients.id FK in the schema."""
     from sqlalchemy import inspect
+
     import backend.models as m
     from backend.routers.clients import _client_fk_targets
 

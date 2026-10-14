@@ -5,7 +5,7 @@ a preview that classifies each row matched/unsure/new, a commit that creates the
 and posts in one transaction, and a bulk quantity adjust across selected parts.
 """
 import pytest
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 
 
 async def _loc(client, h):
@@ -56,7 +56,7 @@ async def test_commit_creates_new_part_and_posts_stock(client, tenant, db):
                               .where(StockLevel.part_id == existing["id"]))).scalar()
     assert float(exqty) == 4.0
     # new part exists with stock 6
-    newp = (await db.execute(select(Part).where(Part.org_id != None, Part.sku == "BAT-PX7"))).scalars().first()
+    newp = (await db.execute(select(Part).where(Part.org_id.isnot(None), Part.sku == "BAT-PX7"))).scalars().first()
     assert newp is not None and newp.sell_price == 20.0
     nqty = (await db.execute(select(func.coalesce(func.sum(StockLevel.qty_available), 0))
                              .where(StockLevel.part_id == newp.id))).scalar()

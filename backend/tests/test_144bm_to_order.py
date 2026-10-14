@@ -1,6 +1,7 @@
 """144bm — job-driven 'Parts to order': aggregate parts needed across OPEN work orders
 vs on-hand + on-order, grouped by supplier. Read-only (writes nothing)."""
 import pytest
+
 from backend.models import Order, OrderLine
 
 
@@ -15,6 +16,7 @@ async def _part(client, h, name, sku):
 @pytest.mark.asyncio
 async def test_to_order_lists_shortfall_from_open_job(client, tenant, db):
     from sqlalchemy import select
+
     from backend.models import Part
     needed = await _part(client, tenant, "Need Screen", "NEED-SCR")
     org_id = (await db.execute(select(Part.org_id).where(Part.id == needed["id"]))).scalar_one()
@@ -37,6 +39,7 @@ async def test_to_order_lists_shortfall_from_open_job(client, tenant, db):
 @pytest.mark.asyncio
 async def test_in_stock_part_not_listed(client, tenant, db):
     from sqlalchemy import select
+
     from backend.models import Part
     loc = await _loc(client, tenant)
     p = await _part(client, tenant, "Have Battery", "HAVE-BAT")
@@ -54,6 +57,7 @@ async def test_in_stock_part_not_listed(client, tenant, db):
 @pytest.mark.asyncio
 async def test_closed_order_excluded(client, tenant, db):
     from sqlalchemy import select
+
     from backend.models import Part
     p = await _part(client, tenant, "Closed Need", "CLOSED-NEED")
     org_id = (await db.execute(select(Part.org_id).where(Part.id == p["id"]))).scalar_one()

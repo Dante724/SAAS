@@ -1,9 +1,10 @@
 """144gq — auto-fill: a field with source asset.<attr> pre-fills from the device."""
 import uuid
+
 import pytest
 from sqlalchemy import select
 
-from backend.models import Order, Device
+from backend.models import Device, Order
 
 
 @pytest.mark.asyncio

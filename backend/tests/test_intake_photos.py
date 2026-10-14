@@ -1,6 +1,7 @@
 """Build 144ak — intake (condition) photos on a work order: uploaded via the media endpoint,
 attached at creation, surfaced as URLs in the order detail, and editable afterwards."""
 import base64
+
 import pytest
 
 _PX = "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 32).decode()

@@ -7,6 +7,7 @@ An invoice's display_mode was stored but never applied. Now GET
   one_line   -> a single line labelled with the order
 """
 import uuid
+
 import pytest
 
 

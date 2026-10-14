@@ -4,8 +4,8 @@ import uuid
 from datetime import datetime
 
 from backend.models import Invoice, InvoiceLine, OrderLine, Transaction
-from backend.services.finance_pnl import compute_pnl
 from backend.services import regions
+from backend.services.finance_pnl import compute_pnl
 
 
 async def _org(client, tenant):
@@ -39,7 +39,9 @@ async def test_pnl_math_and_isolation(client, tenant, db):
                    subtotal=500, discount=0, tax=0, total=500, issued_at=datetime(2026, 9, 12)))
     # product line → order line cost 150 × qty 2 = 300 COGS. The parent Order + the expense's
     # Account must really exist now that FKs are enforced (orphan rows used to slip through).
-    from backend.models import Order as _Order, Account as _Account, Location as _Location
+    from backend.models import Account as _Account
+    from backend.models import Location as _Location
+    from backend.models import Order as _Order
     db.add(_Location(id="loc1", org_id=a, name="Main"))
     await db.flush()
     db.add(_Order(id="o1", org_id=a, order_number="O1", location_id="loc1"))

@@ -136,7 +136,8 @@ async def init_db():
     # the matching Alembic migration.
     from sqlalchemy import select as _select
 
-    from backend.models import Client as _Client, Supplier as _Supplier
+    from backend.models import Client as _Client
+    from backend.models import Supplier as _Supplier
     async with AsyncSessionLocal() as session:
         orphans = (await session.execute(
             _select(_Supplier).where(_Supplier.client_id.is_(None)))).scalars().all()

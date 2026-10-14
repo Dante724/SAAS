@@ -1,6 +1,7 @@
 """Build 144dr — appointments-without-assignee, scheduled-date-on-track, and the
 invoice loop (display mode + auto-draft on close)."""
 import uuid
+
 import pytest
 from sqlalchemy import select
 
@@ -36,6 +37,7 @@ async def test_appointment_without_assignee_and_unassigned_filter(client):
 @pytest.mark.asyncio
 async def test_scheduled_date_hidden_until_opted_in(client, db):
     from datetime import datetime
+
     from backend.models import Order
     H = await _register(client)
     o = await _order(client, H)

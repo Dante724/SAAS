@@ -42,7 +42,9 @@ async def test_mfa_enroll_activate_and_login_gate(client, tenant, db):
 
 @pytest.mark.asyncio
 async def test_mfa_disable_requires_password(client, tenant, db):
-    from sqlalchemy import select, update as _update
+    from sqlalchemy import select
+    from sqlalchemy import update as _update
+
     from backend.models import Employee, Organisation
     from backend.services.mfa import totp
     # New orgs now mandate MFA (build 144cd), which blocks /disable with a 400 before the password

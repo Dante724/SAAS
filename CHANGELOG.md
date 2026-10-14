@@ -1,5 +1,32 @@
 # Changelog
 
+## build 144em — Pre-launch full regression + make CI green (lint + 2 latent test bugs)
+
+Full regression of the committed state before launch. Found that **CI could never have passed**:
+the backend lint step was red and two tests errored under CI's environment.
+
+- **Latent test bug (inventory integrity):** `test_convert_estimate_stock_movement` and
+  `test_transfer_reverse_location` read `os.environ["TEST_DATABASE_URL"]` directly, but the
+  conftest contract makes that var optional (falls back to `DATABASE_URL`) and CI only sets
+  `DATABASE_URL` → KeyError *before* their key assertion (estimate-conversion logs a NEGATIVE stock
+  movement), so that guarantee never ran in CI. Now honor the fallback; pass serially + under xdist.
+- **Lint (CI-exact, pinned `ruff==0.6.9`): 140 errors → 0.** 129/140 were pre-existing in untouched
+  test files. Fixed by risk class:
+  - 75× I001 import order — auto-fixed with *safe* fixes only (no `--unsafe-fixes`).
+  - 5 real-signal fixes by hand: **E711** `Part.org_id != None` → `.isnot(None)` (ruff's suggested
+    `is not None` would have silently made the SQLAlchemy filter a constant `True`); **B017**
+    `pytest.raises(Exception)` → `IntegrityError` (the old form passed on *any* error); **3× F841**
+    kept the side-effecting POST calls and renamed the names to intentional `_`/`_oid`/`_tid`.
+  - 60× E702/E741 (semicolons, a loop var named `l`) — cosmetic, test-only, can't hide a bug →
+    added to the existing `backend/tests/*` per-file-ignores (alongside F401/F811). Real-signal
+    rules stay enforced.
+- **Proof of no behavior change:** OpenAPI surface compared before/after — **802 operations,
+  identical**; app boots; `main.py` diff is only alphabetizing names inside one import statement
+  (route registration order lives in the separate `include_router` list).
+- **Verified (CI-equivalent):** backend **1,141 passed / 0 failed** (4 parallel chunks); ruff 0.6.9
+  "All checks passed"; `alembic upgrade head` clean from scratch, single head `c8e0g2i4k6m8`;
+  frontend `lint:uitext` clean, `tsc` clean, Vitest 85/85.
+
 ## build 144el — UI-quality test harness: content lint + status-name guard + Playwright E2E
 
 Added the test layers that catch *appearance* and *rendered text* — things Vitest/pytest (which

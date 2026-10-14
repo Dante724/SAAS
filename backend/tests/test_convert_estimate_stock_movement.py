@@ -6,9 +6,10 @@ full line qty), corrupting any report that sums StockMovement.qty.
 Uses a late one-shot session (not the `db` fixture) to read the movement, so the assertion
 session isn't held open across the client writes (SQLite lock contention)."""
 import os
+
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from backend.models import StockMovement
 
@@ -36,7 +37,7 @@ async def test_convert_logs_negative_deducted_movement(client, tenant):
     deducted = before - after
     assert deducted == 3, (before, after)
 
-    eng = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    eng = create_async_engine(os.environ.get("TEST_DATABASE_URL") or os.environ["DATABASE_URL"])
     try:
         async with async_sessionmaker(eng, expire_on_commit=False)() as s:
             mv = (await s.execute(select(StockMovement).where(

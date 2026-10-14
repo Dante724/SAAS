@@ -3,8 +3,9 @@
 Every manual create / edit / approve / reopen / void writes an immutable audit row with
 who-changed-what (old→new), readable via GET /timeclock/entries/{id}/audit.
 """
-import pytest
 from datetime import datetime, timedelta
+
+import pytest
 
 
 async def _manual_entry(client, h):

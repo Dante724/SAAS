@@ -10,7 +10,7 @@ async def _org(client, tenant):
 
 async def test_order_created_fires_rule(client, tenant, db):
     """A client 'Order created' rule now fires on order creation (was dead)."""
-    from backend.models import Client, NotificationRule, NotificationLog
+    from backend.models import Client, NotificationLog, NotificationRule
     oid = await _org(client, tenant)
     cid = (await client.post("/api/clients", json={"name": "New Client", "email": "n@e.com"}, headers=tenant)).json()["id"]
     cust = (await db.execute(select(Client).where(Client.id == cid))).scalar_one()
@@ -35,7 +35,7 @@ async def test_payment_and_comment_events_are_valid_rules(client, tenant):
 
 
 async def test_comment_added_evaluates(client, tenant, db):
-    from backend.models import Client, NotificationRule, NotificationLog
+    from backend.models import Client, NotificationLog, NotificationRule
     oid = await _org(client, tenant)
     cid = (await client.post("/api/clients", json={"name": "Cc", "email": "cc@e.com"}, headers=tenant)).json()["id"]
     cust = (await db.execute(select(Client).where(Client.id == cid))).scalar_one()
@@ -63,8 +63,9 @@ async def test_send_test_endpoint(client, tenant):
 
 
 def test_working_window_shift():
-    from backend.services.notification_rules import shift_into_working_hours
     from datetime import datetime
+
+    from backend.services.notification_rules import shift_into_working_hours
     late = datetime(2026, 9, 20, 20, 0)          # 20:00
     # default 9–18 → pushes to next day 09:00
     nxt = shift_into_working_hours(late)

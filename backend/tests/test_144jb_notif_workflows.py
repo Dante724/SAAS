@@ -17,7 +17,7 @@ async def test_rule_accepts_scope_and_record_type(client, tenant):
 
 async def test_staff_rule_notifies_assignee(client, tenant, db):
     """A staff-scoped order rule notifies the assigned tech (not the actor)."""
-    from backend.models import Order, NotificationRule, NotificationLog
+    from backend.models import NotificationLog, NotificationRule, Order
     me = await _me(client, tenant)
     oid = me.get("org_id") or me.get("orgId")
     emp_id = me.get("id") or me.get("employee_id")
@@ -44,7 +44,7 @@ async def test_staff_rule_notifies_assignee(client, tenant, db):
 
 async def test_staff_rule_skips_the_actor(client, tenant, db):
     """You are not notified about a change you made yourself."""
-    from backend.models import Order, NotificationRule, NotificationLog
+    from backend.models import NotificationLog, NotificationRule, Order
     me = await _me(client, tenant)
     oid = me.get("org_id") or me.get("orgId")
     emp_id = me.get("id") or me.get("employee_id")
@@ -65,7 +65,7 @@ async def test_staff_rule_skips_the_actor(client, tenant, db):
 
 async def test_record_type_scopes_client_rule(client, tenant, db):
     """An estimate-scoped client rule does not fire for a work_order."""
-    from backend.models import Order, NotificationRule, Client
+    from backend.models import Client, NotificationRule, Order
     me = await _me(client, tenant)
     oid = me.get("org_id") or me.get("orgId")
     cid = (await client.post("/api/clients", json={"name": "C3", "phone": "7", "email": "c3@e.com"}, headers=tenant)).json()["id"]

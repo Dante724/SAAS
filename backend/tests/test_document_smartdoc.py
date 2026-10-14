@@ -4,7 +4,7 @@
 async def test_conditional_shows_and_hides(client, tenant):
     body = ("Base always.{#if Invoice Comment} note: {Invoice Comment}{/if}"
             "{#unless Invoice Comment} (no note){/unless}")
-    tid = (await client.post("/api/documents/templates", json={
+    _tid = (await client.post("/api/documents/templates", json={
         "name": "Cond", "doc_type": "invoice", "body_html": body}, headers=tenant)).json()["id"]
     # No invoices yet → {Invoice Comment} resolves to its placeholder / empty, so the
     # if-branch drops and the unless-branch stays.

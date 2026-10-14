@@ -35,6 +35,7 @@ async def test_notifications_prefer_connected_gmail(monkeypatch, db, client, ten
     # legacy template path only when NO rule matched, and a seeded order_created rule would
     # otherwise intercept it — so the connected-Gmail template below would never fire.
     from sqlalchemy import delete as _delete
+
     from backend.models import NotificationRule
     await db.execute(_delete(NotificationRule).where(NotificationRule.org_id == org_id))
     await db.commit()

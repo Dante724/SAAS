@@ -2,6 +2,7 @@
 invoice and the client-facing pay page, not just the staff detail modal.
 """
 import uuid
+
 import pytest
 
 

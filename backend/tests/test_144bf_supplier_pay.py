@@ -13,7 +13,7 @@ async def _account(client, h):
 
 @pytest.mark.asyncio
 async def test_pay_supplier_reduces_balance_and_cash(client, tenant, db):
-    from backend.models import Supplier, Account
+    from backend.models import Account, Supplier
     acc_id = await _account(client, tenant)
     acc0 = (await db.execute(select(Account).where(Account.id == acc_id))).scalar_one()
     start_cash = float(acc0.balance or 0)

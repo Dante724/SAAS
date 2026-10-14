@@ -3,9 +3,10 @@ later stock reversal (here: deleting the product line) must return stock to the 
 was DEDUCTED from, not the order's new location. Otherwise per-location on-hand corrupts:
 the original location stays short and the new one gains phantom units."""
 import os
+
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from backend.models import StockLevel
 
@@ -33,7 +34,7 @@ async def test_transfer_then_reverse_returns_to_original_location(client, tenant
     # delete the line -> reverses the 3 units
     assert (await client.delete(f"/api/orders/{oid}/lines/{line_id}", headers=tenant)).status_code in (200, 204)
 
-    eng = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    eng = create_async_engine(os.environ.get("TEST_DATABASE_URL") or os.environ["DATABASE_URL"])
     try:
         async with async_sessionmaker(eng, expire_on_commit=False)() as s:
             slA = (await s.execute(select(StockLevel).where(

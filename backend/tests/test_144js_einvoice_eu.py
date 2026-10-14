@@ -5,7 +5,7 @@ non-EU orgs get the EN 16931 base; both are well-formed XML.
 """
 import xml.etree.ElementTree as ET
 
-from backend.services.einvoice import render_ubl, PEPPOL_PROFILE
+from backend.services.einvoice import PEPPOL_PROFILE, render_ubl
 
 _LINES = [{"description": "Screen repair", "qty": 1, "unit_price": 100.0, "total": 100.0},
           {"description": "Part", "qty": 2, "unit_price": 25.0, "total": 50.0}]
