@@ -92,6 +92,9 @@ from backend.routers import (
 )
 
 setup_logging()
+from backend.core.error_tracking import init_error_tracking  # noqa: E402
+
+init_error_tracking()
 log = logging.getLogger("repairos")
 
 ROUTERS = [

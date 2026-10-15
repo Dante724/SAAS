@@ -34,6 +34,7 @@ uv pip compile requirements-dev.txt --universal --python-version 3.11 --generate
 | `WEB_CONCURRENCY` | no | Worker processes (default 2). Background sweeps run once across all workers (Postgres advisory locks). |
 | `REDIS_URL` | multi-instance | Shared rate-limit store. |
 | `MEDIA_BACKEND` | recommended | `s3` in production (see §5). |
+| `SENTRY_DSN` | recommended | Sends unhandled errors to Sentry/GlitchTip (headers, cookies, bodies and query strings are scrubbed). Optional `SENTRY_TRACES_SAMPLE_RATE` (default 0) and `RELEASE` (git SHA). |
 | `METRICS_TOKEN` | to scrape `/metrics` | Prometheus bearer token. Without it a deployed instance returns 404 at `/metrics`. |
 | `MAX_REQUEST_BYTES` | no | Request body cap (default 16 MB). Raise it only together with `MEDIA_MAX_BYTES`. |
 | `REFRESH_TOKEN_EXPIRE_MINUTES` | no | Absolute session length (default 30 days). Refreshing a token never extends a sign-in past this. |

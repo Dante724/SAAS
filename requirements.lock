@@ -368,6 +368,7 @@ certifi==2026.7.22 \
     #   httpcore
     #   httpx
     #   requests
+    #   sentry-sdk
 cffi==2.1.1 ; platform_python_implementation != 'PyPy' \
     --hash=sha256:046bfc24911b37851ee1b51aab8bffe713d89c68c6a057b09484ce9fd5f69b4e \
     --hash=sha256:06c72bb76605a4b0cd0aad6930b69d4baf7dd5d806cfc409b824191099700e66 \
@@ -722,7 +723,9 @@ et-xmlfile==2.0.0 \
 fastapi==0.143.1 \
     --hash=sha256:4cafaab64df8534758bf0fce61947f5e27e6cd512798ccbbaad5425086c3b664 \
     --hash=sha256:687beb445804e4c4dbe2a76fd83c25e9b973ac48c267defb86f791e099baecc4
-    # via -r requirements.txt
+    # via
+    #   -r requirements.txt
+    #   sentry-sdk
 frozenlist==1.8.0 \
     --hash=sha256:0325024fe97f94c41c08872db482cf8ac4800d80e79222c6b0b7b162d5b13686 \
     --hash=sha256:032efa2674356903cd0261c4317a561a6850f3ac864a63fc1583147fb05a79b0 \
@@ -1936,6 +1939,10 @@ segno==1.6.6 \
     --hash=sha256:28c7d081ed0cf935e0411293a465efd4d500704072cdb039778a2ab8736190c7 \
     --hash=sha256:e60933afc4b52137d323a4434c8340e0ce1e58cec71439e46680d4db188f11b3
     # via -r requirements.txt
+sentry-sdk==2.72.0 \
+    --hash=sha256:0d2ffbc28ee2e63cbaf3d015e93b448cffcc3ef3be03a44704ad36ade72faa95 \
+    --hash=sha256:3e13ace4ffd0b3cc78288236edfc4e4bd90eb12a396cc5845fa10a58ff289f50
+    # via -r requirements.txt
 six==1.17.0 \
     --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \
     --hash=sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81
@@ -2049,6 +2056,7 @@ urllib3==2.8.0 \
     # via
     #   botocore
     #   requests
+    #   sentry-sdk
 uvicorn==0.54.0 \
     --hash=sha256:505bdb0f318731d45f1f712071fc781a8981f6847a31c902c9f5e652d4f67faf \
     --hash=sha256:a2e33cbfaa0306f8e6b0c13e0cb89d7d7a2da3e62b90c66e18c33d9807b28620

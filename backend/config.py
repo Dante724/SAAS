@@ -133,6 +133,11 @@ class Settings(BaseSettings):
     VIN_LOOKUP_LIVE: bool = True          # attempt NHTSA vPIC enrichment (keyless, best-effort)
     IMEI_LOOKUP_API_KEY: str = ""         # absent -> structural validation only
 
+    # -- Error tracking (Sentry protocol). Empty DSN = off. --
+    SENTRY_DSN: str = ""
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.0
+    RELEASE: str = ""                       # e.g. the git SHA, set by the deploy
+
     # -- Prometheus scrape token for /metrics (required to expose it when deployed) --
     METRICS_TOKEN: str = ""
 
