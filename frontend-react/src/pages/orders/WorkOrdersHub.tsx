@@ -39,7 +39,7 @@ function pill(status?: string) {
   const [cls, dot] = PILL[key] || ["bg-slate-100 text-slate-700 border-slate-200", "bg-slate-500"];
   const label = (status || "—").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
   return (
-    <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border inline-flex items-center gap-1 ${cls}`}>
+    <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border inline-flex items-center gap-1.5 ${cls}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />{label}
     </span>
   );
@@ -216,22 +216,22 @@ export default function WorkOrdersHub() {
         {/* KPIs */}
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
           {kpiCards.map((k) => (
-            <div key={k.l} className="bg-white rounded-xl p-3 border border-slate-200/80 shadow-clay-sm flex items-center justify-between">
-              <div><span className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">{k.l}</span><p className={`text-xl font-black ${k.vc}`}>{k.v}</p></div>
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${k.tint}`}><M n={k.icon} c="text-base" /></div>
+            <div key={k.l} className="bg-white rounded-2xl px-4 py-3.5 border border-slate-200/80 shadow-clay-card flex items-center justify-between hover:border-slate-300 transition-colors">
+              <div><span className="text-[10px] font-semibold uppercase tracking-wider text-ink-tertiary">{k.l}</span><p className={`mt-0.5 text-2xl font-bold tracking-tight tabular-nums ${k.vc}`}>{k.v}</p></div>
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ring-1 ring-inset ring-black/5 ${k.tint}`}><M n={k.icon} c="text-lg" /></div>
             </div>
           ))}
         </div>
 
         {/* Toolbar */}
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 space-y-3">
+        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 space-y-3.5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <Gate perm="can_create_tickets"><button onClick={() => setCreate("order")} className="px-4 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="add" c="text-sm font-bold" />Order</button></Gate>
-              <Gate perm="can_create_estimates"><button onClick={() => setCreate("estimate")} className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200/80 text-ink-secondary hover:text-ink-primary text-xs font-semibold border border-slate-200/70 transition-all flex items-center gap-1.5"><M n="request_quote" c="text-sm" />+ Estimate</button></Gate>
+              <Gate perm="can_create_tickets"><button onClick={() => setCreate("order")} className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-sm font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="add" c="text-sm font-bold" />Order</button></Gate>
+              <Gate perm="can_create_estimates"><button onClick={() => setCreate("estimate")} className="px-3.5 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-ink-secondary hover:text-ink-primary text-sm font-semibold border border-slate-200 transition-all flex items-center gap-1.5"><M n="request_quote" c="text-sm" />+ Estimate</button></Gate>
               <div className="h-5 w-[1px] bg-slate-200 mx-1" />
               <div className="relative">
-                <button onClick={() => { setFltOpen((o) => !o); setColsOpen(false); setViewsOpen(false); }} className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1 border ${activeFacets ? "bg-primary/10 text-primary border-primary/30" : "text-ink-secondary hover:bg-slate-100 border-slate-200"}`}><M n="filter_list" c="text-xs" />Filter{activeFacets ? <span className="ml-0.5 px-1.5 rounded-full bg-primary text-white text-[10px] font-bold">{activeFacets}</span> : null}</button>
+                <button onClick={() => { setFltOpen((o) => !o); setColsOpen(false); setViewsOpen(false); }} className={`px-3 py-2 rounded-xl text-xs font-medium flex items-center gap-1 border ${activeFacets ? "bg-primary/10 text-primary border-primary/30" : "text-ink-secondary hover:bg-slate-100 border-slate-200"}`}><M n="filter_list" c="text-xs" />Filter{activeFacets ? <span className="ml-0.5 px-1.5 rounded-full bg-primary text-white text-[10px] font-bold">{activeFacets}</span> : null}</button>
                 {fltOpen && (
                   <div className="absolute left-0 top-9 z-30 w-64 bg-white border border-slate-200 rounded-xl shadow-drawer p-3 space-y-3" onMouseLeave={() => setFltOpen(false)}>
                     <div className="flex items-center justify-between"><span className="text-[10px] font-bold text-ink-tertiary uppercase tracking-wider">Filter work orders</span>{activeFacets ? <button onClick={() => { setFAssignee(""); setFPriority(""); setFScheduled(""); }} className="text-[11px] font-semibold text-primary">Clear</button> : null}</div>
@@ -244,7 +244,7 @@ export default function WorkOrdersHub() {
                   </div>
                 )}
               </div>
-              <button onClick={openArchived} className="px-3 py-1.5 rounded-lg text-xs font-medium text-ink-secondary hover:bg-slate-100 flex items-center gap-1 border border-slate-200"><M n="inventory" c="text-xs" />Archived</button>
+              <button onClick={openArchived} className="px-3 py-2 rounded-xl text-xs font-medium text-ink-secondary hover:bg-slate-100 flex items-center gap-1 border border-slate-200"><M n="inventory" c="text-xs" />Archived</button>
             </div>
             <div className="flex items-center gap-2">
               <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200/70 text-xs">
@@ -254,7 +254,7 @@ export default function WorkOrdersHub() {
               </div>
               <div className="relative"><M n="filter_alt" c="absolute left-2.5 top-1.5 text-ink-tertiary text-xs" /><input value={q} onChange={(e) => setQ(e.target.value)} className="text-xs pl-7 pr-3 py-1 rounded-lg border border-slate-200 bg-slate-50 font-medium focus:bg-white focus:outline-none" placeholder="Filter rows..." /></div>
               <div className="relative">
-                <button onClick={() => { setColsOpen((o) => !o); setViewsOpen(false); }} className="px-3 py-1.5 rounded-lg text-xs font-medium text-ink-secondary hover:bg-slate-100 border border-slate-200 flex items-center gap-1"><M n="view_column" c="text-xs" />Columns</button>
+                <button onClick={() => { setColsOpen((o) => !o); setViewsOpen(false); }} className="px-3 py-2 rounded-xl text-xs font-medium text-ink-secondary hover:bg-slate-100 border border-slate-200 flex items-center gap-1"><M n="view_column" c="text-xs" />Columns</button>
                 {colsOpen && (
                   <div className="absolute right-0 top-9 z-30 w-52 bg-white border border-slate-200 rounded-xl shadow-drawer p-2" onMouseLeave={() => setColsOpen(false)}>
                     <div className="px-2 py-1 text-[10px] font-bold text-ink-tertiary uppercase tracking-wider">Visible columns</div>
@@ -267,7 +267,7 @@ export default function WorkOrdersHub() {
                 )}
               </div>
               <div className="relative">
-                <button onClick={() => { setViewsOpen((o) => !o); setColsOpen(false); }} className="px-3 py-1.5 rounded-lg text-xs font-medium text-ink-secondary hover:bg-slate-100 border border-slate-200 flex items-center gap-1"><M n="bookmark" c="text-xs" />Saved views</button>
+                <button onClick={() => { setViewsOpen((o) => !o); setColsOpen(false); }} className="px-3 py-2 rounded-xl text-xs font-medium text-ink-secondary hover:bg-slate-100 border border-slate-200 flex items-center gap-1"><M n="bookmark" c="text-xs" />Saved views</button>
                 {viewsOpen && (
                   <div className="absolute right-0 top-9 z-30 w-60 bg-white border border-slate-200 rounded-xl shadow-drawer p-2" onMouseLeave={() => setViewsOpen(false)}>
                     <button onClick={saveView} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-blue-50/60 text-primary text-xs font-semibold"><M n="add" c="text-sm" />Save current view</button>
@@ -284,10 +284,10 @@ export default function WorkOrdersHub() {
               </div>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-1.5 pt-1 text-xs border-t border-slate-100">
-            <button onClick={() => setFilter(null)} className={!filter ? "px-3 py-1 rounded-full font-semibold bg-primary text-white text-[11px] shadow-xs" : "px-2.5 py-1 rounded-full font-medium bg-slate-100 text-ink-secondary hover:bg-slate-200 text-[11px]"}>All ({all.length})</button>
+          <div className="flex flex-wrap items-center gap-2 pt-3.5 text-xs border-t border-slate-100">
+            <button onClick={() => setFilter(null)} className={!filter ? "px-3.5 py-1.5 rounded-full font-semibold bg-primary text-white text-xs shadow-clay-sm" : "px-3.5 py-1.5 rounded-full font-medium bg-slate-50 text-ink-secondary ring-1 ring-inset ring-slate-200 hover:bg-white hover:text-ink-primary hover:ring-slate-300 text-xs transition-colors"}>All ({all.length})</button>
             {statuses.map((s) => { const k = s.key || norm(s.name); const n = countFor(k); return (
-              <button key={s.id} onClick={() => setFilter(k)} className={filter === k ? "px-3 py-1 rounded-full font-semibold bg-primary text-white text-[11px] shadow-xs" : "px-2.5 py-1 rounded-full font-medium bg-slate-100 text-ink-secondary hover:bg-slate-200 text-[11px]"}>{s.name} ({n})</button>
+              <button key={s.id} onClick={() => setFilter(k)} className={filter === k ? "px-3.5 py-1.5 rounded-full font-semibold bg-primary text-white text-xs shadow-clay-sm" : "px-3.5 py-1.5 rounded-full font-medium bg-slate-50 text-ink-secondary ring-1 ring-inset ring-slate-200 hover:bg-white hover:text-ink-primary hover:ring-slate-300 text-xs transition-colors"}>{s.name} ({n})</button>
             ); })}
           </div>
         </div>
@@ -310,10 +310,10 @@ export default function WorkOrdersHub() {
 
         {/* Table */}
         {view === "table" && (
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
+        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[10px] font-bold uppercase tracking-wider">
+              <tr className="bg-slate-50/60 border-b border-slate-200/80 text-ink-tertiary text-[10px] font-semibold uppercase tracking-wider">
                 <th className="py-3 px-4 w-10"><input className="rounded text-primary border-slate-300" type="checkbox" checked={rows.length > 0 && sel.size === rows.length} onChange={toggleAll} /></th>
                 {showCol("order_id") && <th className="py-3 px-4">Order ID</th>}
                 {showCol("client") && <th className="py-3 px-4">Client</th>}
@@ -330,18 +330,18 @@ export default function WorkOrdersHub() {
               {!orders && !err && <tr><td colSpan={colSpan} className="py-6 px-4 text-ink-tertiary">Loading orders…</td></tr>}
               {orders && rows.length === 0 && <tr><td colSpan={colSpan} className="py-6 px-4 text-ink-tertiary">No work orders match.</td></tr>}
               {pageRows.map((o) => (
-                <tr key={o.id} onClick={() => setOpen(o)} className={`hover:bg-blue-50/40 cursor-pointer transition-colors group ${sel.has(o.id) ? "bg-blue-50/40" : ""}`}>
-                  <td className="py-3 px-4" onClick={(e) => e.stopPropagation()}><input className="rounded text-primary border-slate-300" type="checkbox" checked={sel.has(o.id)} onChange={() => toggle(o.id)} /></td>
-                  {showCol("order_id") && <td className="py-3 px-4 font-mono font-bold text-primary"><span className="inline-flex items-center gap-1.5">{o.order_number || o.id}{!!(o.client_msg_unread && o.client_msg_unread > 0) && <span title={`${o.client_msg_unread} unread customer message(s)`} className="inline-flex items-center gap-0.5 text-[9px] font-bold bg-primary text-white px-1.5 py-0.5 rounded-full"><M n="forum" c="text-[10px]" />{o.client_msg_unread}</span>}{(o as any).checklists_pending && <span role="img" aria-label="Checklist incomplete" title="Checklist incomplete" className="w-2 h-2 rounded-full bg-amber-500" />}</span></td>}
-                  {showCol("client") && <td className="py-3 px-4"><span className="font-bold text-ink-primary">{o.client?.name || "Walk-in"}</span><span className="text-[10px] text-ink-tertiary block">{o.client?.phone || ""}</span></td>}
-                  {showCol("device") && <td className="py-3 px-4 text-ink-primary font-semibold">{deviceName(o.device)}</td>}
-                  {showCol("status") && <td className="py-3 px-4"><div className="flex items-center gap-1.5">{pill(o.status)}{flags[o.id]?.stalled && (
+                <tr key={o.id} onClick={() => setOpen(o)} className={`hover:bg-slate-50/80 cursor-pointer transition-colors group ${sel.has(o.id) ? "bg-primary/5" : ""}`}>
+                  <td className="py-3.5 px-4" onClick={(e) => e.stopPropagation()}><input className="rounded text-primary border-slate-300" type="checkbox" checked={sel.has(o.id)} onChange={() => toggle(o.id)} /></td>
+                  {showCol("order_id") && <td className="py-3.5 px-4 font-mono font-bold text-primary"><span className="inline-flex items-center gap-1.5">{o.order_number || o.id}{!!(o.client_msg_unread && o.client_msg_unread > 0) && <span title={`${o.client_msg_unread} unread customer message(s)`} className="inline-flex items-center gap-0.5 text-[9px] font-bold bg-primary text-white px-1.5 py-0.5 rounded-full"><M n="forum" c="text-[10px]" />{o.client_msg_unread}</span>}{(o as any).checklists_pending && <span role="img" aria-label="Checklist incomplete" title="Checklist incomplete" className="w-2 h-2 rounded-full bg-amber-500" />}</span></td>}
+                  {showCol("client") && <td className="py-3.5 px-4"><span className="font-semibold text-[13px] text-ink-primary">{o.client?.name || "Walk-in"}</span><span className="text-[11px] font-normal text-ink-tertiary block">{o.client?.phone || ""}</span></td>}
+                  {showCol("device") && <td className="py-3.5 px-4 text-ink-primary font-semibold">{deviceName(o.device)}</td>}
+                  {showCol("status") && <td className="py-3.5 px-4"><div className="flex items-center gap-1.5">{pill(o.status)}{flags[o.id]?.stalled && (
                     <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-rose-100 text-rose-700 border border-rose-200" title={flags[o.id]?.over_by_min ? `~${Math.round(flags[o.id]!.over_by_min!)} min over typical` : "Running long"}><M n="schedule" c="text-[11px]" />Stalled</span>
                   )}</div></td>}
-                  {showCol("assignee") && <td className="py-3 px-4">{o.assigned_to?.name || "—"}</td>}
-                  {showCol("scheduled") && <td className="py-3 px-4">{o.scheduled_for ? new Date(o.scheduled_for).toLocaleDateString() : "—"}</td>}
-                  {showCol("estimate") && <td className="py-3 px-4 text-right font-mono font-bold text-ink-primary">{money(o.total)}</td>}
-                  <td className="py-3 px-4 text-center"><button aria-label="Next" className="p-1 rounded text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="chevron_right" c="text-sm" /></button></td>
+                  {showCol("assignee") && <td className="py-3.5 px-4">{o.assigned_to?.name || "—"}</td>}
+                  {showCol("scheduled") && <td className="py-3.5 px-4">{o.scheduled_for ? new Date(o.scheduled_for).toLocaleDateString() : "—"}</td>}
+                  {showCol("estimate") && <td className="py-3.5 px-4 text-right font-mono font-bold text-ink-primary">{money(o.total)}</td>}
+                  <td className="py-3.5 px-4 text-center"><button aria-label="Next" className="p-1.5 rounded-lg text-ink-tertiary group-hover:text-primary group-hover:bg-primary/10 transition-colors"><M n="chevron_right" c="text-sm" /></button></td>
                 </tr>
               ))}
             </tbody>
