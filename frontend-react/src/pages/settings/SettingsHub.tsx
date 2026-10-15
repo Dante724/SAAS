@@ -18,6 +18,7 @@ import PublicPagesSettings from "./PublicPagesSettings";
 import { PricingPage, InventoryPage } from "./PricingInventory";
 import FinanceNumbering from "./FinanceNumbering";
 import DocumentTemplatesPage from "./DocumentTemplatesPage";
+import LocationsPage from "./LocationsPage";
 import { TeamPage, RoleEditor, Avatar } from "./TeamSettings";
 import { ChecklistList, ChecklistEditor } from "./ChecklistSettings";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
@@ -364,7 +365,7 @@ export default function SettingsHub() {
               onChanged={reloadInvites} onFlash={flash} />
           )}
 
-          {sec === "locations" && <LocationsEditor />}
+          {sec === "locations" && <LocationsPage companyTz={co?.timezone || undefined} />}
 
           {sec === "feedback" && <FeedbackSettingsEditor />}
 
@@ -484,113 +485,6 @@ export default function SettingsHub() {
 }
 
 
-/* ── Locations (working hours + per-location resources) → /staff/locations, /resources ── */
-const DAYS: [string, string][] = [["mon", "Mon"], ["tue", "Tue"], ["wed", "Wed"], ["thu", "Thu"], ["fri", "Fri"], ["sat", "Sat"], ["sun", "Sun"]];
-const TZS = ["UTC", "Asia/Kolkata", "Asia/Dubai", "Europe/London", "America/New_York", "America/Los_Angeles", "Asia/Singapore", "Australia/Sydney", "Europe/Berlin", "America/Chicago", "Asia/Tokyo", "Pacific/Auckland"];
-function LocationsEditor() {
-  const [items, setItems] = useState<any[] | null>(null);
-  const [edit, setEdit] = useState<any | "new" | null>(null);
-  const load = () => api.get<any>("/staff/locations").then((r) => setItems(r.items || r || [])).catch(() => setItems([]));
-  useEffect(() => { load(); }, []);
-  const openDays = (wh: any) => wh ? DAYS.filter(([k]) => wh[k] && !wh[k].closed).length : 0;
-  return (
-    <div className="max-w-3xl">
-      <SectionCard title="Locations" count={items?.length ?? undefined} onAdd={() => setEdit("new")}>
-        <SecTable rows={items} onRowClick={(l) => setEdit(l)}
-          cols={[["Name", (l) => l?.name || "—"], ["Timezone", (l) => l?.timezone || "UTC"], ["Hours", (l) => { const n = openDays(l?.working_hours); return n ? `${n} day(s) open` : "closed"; }], ["Status", (l) => (l?.active === false ? "Archived" : "Active")]]} />
-      </SectionCard>
-      {edit && <LocationDrawer loc={edit === "new" ? null : edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); load(); }} />}
-    </div>
-  );
-}
-function LocationDrawer({ loc, onClose, onSaved }: { loc: any | null; onClose: () => void; onSaved: () => void }) {
-  const [f, setF] = useState<any>({ name: loc?.name || "", phone: loc?.phone || "", address: loc?.address || "", timezone: loc?.timezone || "UTC", receipt_header: loc?.receipt_header || "", legal_entity_id: loc?.legal_entity_id || "", price_type_id: loc?.price_type_id || "" });
-  const [wh, setWh] = useState<Record<string, any>>(loc?.working_hours || {});
-  const [legals, setLegals] = useState<any[]>([]);
-  const [priceTypes, setPriceTypes] = useState<any[]>([]);
-  useEffect(() => {
-    api.get<any>("/settings/legal-entities").then((r) => setLegals(r.items || r || [])).catch(() => {});
-    api.get<any>("/pricing/types").then((r) => setPriceTypes(r.items || r || [])).catch(() => {});
-  }, []);
-  const [res, setRes] = useState<any[] | null>(null);
-  const [nr, setNr] = useState({ name: "", kind: "bay" });
-  const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
-  const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
-  const dayVal = (k: string) => wh[k] || {};
-  const setDay = (k: string, patch: any) => setWh((s) => ({ ...s, [k]: { ...s[k], ...patch } }));
-  const loadRes = () => { if (loc?.id) api.get<any>("/resources").then((r) => setRes((r.items || []).filter((x: any) => x.location_id === loc.id))).catch(() => setRes([])); };
-  useEffect(() => { loadRes(); }, [loc?.id]);
-  async function save() {
-    if (!f.name.trim()) { setErr("Name is required"); return; }
-    setBusy(true); setErr(null);
-    const body = { ...f, legal_entity_id: f.legal_entity_id || null, price_type_id: f.price_type_id || null,
-      working_hours: Object.fromEntries(DAYS.map(([k]) => [k, wh[k]?.closed ? { closed: true } : { open: wh[k]?.open || "09:00", close: wh[k]?.close || "18:00" }])) };
-    try { if (loc?.id) await api.put(`/staff/locations/${loc.id}`, body); else await api.post("/staff/locations", body); onSaved(); }
-    catch (e: any) { setErr(e.message || "Save failed"); setBusy(false); }
-  }
-  async function addRes() { if (!nr.name.trim() || !loc?.id) return; try { await api.post("/resources", { name: nr.name.trim(), kind: nr.kind, color: "#2cd4c0", location_id: loc.id }); setNr({ name: "", kind: "bay" }); loadRes(); } catch (e: any) { setErr(e.message); } }
-  async function delRes(id: string) { if (!(await confirmDialog("Remove this resource?", { danger: true, confirmLabel: "Remove" }))) return; try { await api.del(`/resources/${id}`); loadRes(); } catch (e: any) { setErr(e.message); } }
-  async function archive() { if (!loc?.id || !(await confirmDialog("Archive this location?", { danger: true, confirmLabel: "Archive" }))) return; try { await api.del(`/staff/locations/${loc.id}`); onSaved(); } catch (e: any) { setErr(e.message); } }
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative w-[560px] max-w-full bg-white h-full shadow-drawer flex flex-col">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200"><h2 className="font-bold text-ink-primary">{loc ? "Edit location" : "New location"}</h2><button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
-          {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl}>Name *</label><input value={f.name} onChange={(e) => set("name", e.target.value)} className={field} /></div>
-            <div><label className={lbl}>Phone</label><input value={f.phone} onChange={(e) => set("phone", e.target.value)} className={field} /></div>
-          </div>
-          <div><label className={lbl}>Address</label><textarea value={f.address} onChange={(e) => set("address", e.target.value)} className={`${field} h-16 resize-none`} /></div>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl}>Timezone</label><select value={f.timezone} onChange={(e) => set("timezone", e.target.value)} className={field}>{TZS.map((t) => <option key={t}>{t}</option>)}</select></div>
-            <div><label className={lbl}>Receipt header</label><input value={f.receipt_header} onChange={(e) => set("receipt_header", e.target.value)} className={field} /></div>
-            <div><label className={lbl}>Legal entity (invoices)</label>
-              <select value={f.legal_entity_id || ""} onChange={(e) => set("legal_entity_id", e.target.value)} className={field}><option value="">Company default</option>{legals.map((le) => <option key={le.id} value={le.id}>{le.name}</option>)}</select></div>
-            <div><label className={lbl}>Price type</label>
-              <select value={f.price_type_id || ""} onChange={(e) => set("price_type_id", e.target.value)} className={field}><option value="">Default pricing</option>{priceTypes.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
-          </div>
-          <div className="text-[11px] font-bold text-ink-tertiary uppercase tracking-wide pt-1">Working hours</div>
-          <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-1.5">
-            {DAYS.map(([k, l]) => { const d = dayVal(k); return (
-              <div key={k} className="flex items-center gap-2 text-xs">
-                <span className="w-9 font-bold text-ink-primary">{l}</span>
-                <label className="flex items-center gap-1 text-ink-secondary"><input type="checkbox" checked={!!d.closed} onChange={(e) => setDay(k, { closed: e.target.checked })} className="accent-primary" />Closed</label>
-                <DateField mode="time" disabled={d.closed} value={d.open || "09:00"} onChange={(v) => setDay(k, { open: v })} className="w-24" />
-                <span className="text-ink-tertiary">–</span>
-                <DateField mode="time" disabled={d.closed} value={d.close || "18:00"} onChange={(v) => setDay(k, { close: v })} className="w-24" />
-              </div>); })}
-          </div>
-          <div className="text-[11px] font-bold text-ink-tertiary uppercase tracking-wide pt-1">Location resources</div>
-          {!loc ? <div className="text-xs text-ink-tertiary">Save this location first, then reopen to add resources.</div> : (
-            <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-2">
-              {res == null && <div className="text-xs text-ink-tertiary">Loading…</div>}
-              {res?.length === 0 && <div className="text-xs text-ink-tertiary">No resources yet.</div>}
-              {res?.map((r) => (
-                <div key={r.id} className="flex items-center gap-2 text-xs">
-                  <span className="w-3 h-3 rounded" style={{ background: r.color || "#2cd4c0" }} />
-                  <span className="font-semibold text-ink-primary flex-1">{r.name}</span>
-                  <span className="text-[10px] uppercase bg-slate-200 text-ink-secondary px-1.5 py-0.5 rounded">{r.kind}</span>
-                  <button onClick={() => delRes(r.id)} className="text-rose-600 font-semibold">Remove</button>
-                </div>
-              ))}
-              <div className="flex items-end gap-2 pt-1">
-                <div className="flex-1"><label className={lbl}>Name</label><input value={nr.name} onChange={(e) => setNr({ ...nr, name: e.target.value })} placeholder="Car lift 1, Room A" className={field} /></div>
-                <div><label className={lbl}>Kind</label><select value={nr.kind} onChange={(e) => setNr({ ...nr, kind: e.target.value })} className={field}>{[["bay", "Bay / post"], ["room", "Room"], ["equipment", "Equipment"], ["other", "Other"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
-                <button onClick={addRes} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-semibold">Add</button>
-              </div>
-            </div>
-          )}
-        </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-          {loc?.active !== false && loc && <button onClick={archive} className="text-xs font-semibold text-rose-600">Archive</button>}
-          <div className="ml-auto flex gap-2"><button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Saving…" : loc ? "Save" : "Create location"}</button></div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 /* ── Inventory settings card (bins/reservations/serial templates) → /staff/inventory-settings ── */
 /* ── Delivery status: which notification channels are live vs simulated (N-GAP-4) ── */

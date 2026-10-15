@@ -31,7 +31,9 @@ function money(n?: number) {
   return CUR + Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 function todayHours(l?: Loc | null) {
-  const h = l?.working_hours; if (!h) return null;
+  const h = l?.working_hours;
+  // No hours saved yet: the server books 09:00–18:00 every day, so say that rather than "Closed".
+  if (!h || !Object.keys(h).length) return "Open today 09:00–18:00";
   const d = h[WEEK[(new Date().getDay() + 6) % 7]];
   if (!d || d.closed) return "Closed today";
   return d.open && d.close ? `Open today ${d.open}–${d.close}` : null;
