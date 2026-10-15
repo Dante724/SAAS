@@ -4,8 +4,9 @@ import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog, confirmDialog, promptDialog, selectDialog } from "../../lib/dialog";
 
 // Settings → Directories: the pick-lists behind dropdowns (lead sources, cancellation reasons,
-// and any list a custom field is bound to). Split view: lists on the left, the selected list's
-// options on the right. Every list says where it's used, so editing it is never a mystery.
+// and any list a custom field is bound to). Lists as cards on the left; the open list shows how
+// its options are used (a share strip like the Statuses bar), with rename, merge and hide on
+// every row (buttons stay visible for tablets at the counter).
 type Dir = { id: string; key: string; name: string; is_system: boolean; item_count: number; used_in: string[] };
 type Item = { id: string; value: string; parent_id?: string | null; location_id?: string | null; active: boolean; child_count: number; uses: number };
 
@@ -44,37 +45,47 @@ export default function DirectoriesManager() {
   }
 
   return (
-    <div className="max-w-5xl grid grid-cols-1 md:grid-cols-[260px_1fr] gap-5 items-start">
-      {/* Lists */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
-          <span className="text-[11px] font-bold uppercase tracking-wider text-ink-tertiary">Lists</span>
-          <button onClick={newList} className="text-xs font-semibold text-primary flex items-center gap-1"><M n="add" c="text-sm" />New list</button>
+    <div className="max-w-5xl pb-10">
+      <div className="flex items-start gap-3 mb-5">
+        <div>
+          <h2 className="text-base font-semibold text-ink-primary">Lists</h2>
+          <p className="text-xs text-ink-tertiary">The choices your team picks from: where customers came from, why a job was cancelled, and any list a form field uses.</p>
         </div>
-        {dirs === null && <div className="px-4 py-3 text-xs text-ink-tertiary">Loading…</div>}
-        {(dirs || []).map((d) => (
-          <button key={d.id} onClick={() => setSelId(d.id)}
-            className={`w-full text-left px-4 py-2.5 flex items-center gap-2 border-l-2 ${d.id === selId ? "bg-blue-50/60 border-primary" : "border-transparent hover:bg-slate-50"}`}>
-            <span className={`flex-1 text-sm ${d.id === selId ? "font-bold text-ink-primary" : "font-semibold text-ink-secondary"}`}>{d.name}</span>
-            <span className="text-[11px] font-semibold text-ink-tertiary">{d.item_count}</span>
-          </button>
-        ))}
-        {elsewhere.length > 0 && (
-          <div className="px-4 py-3 border-t border-slate-100 space-y-1.5">
-            <div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">Managed elsewhere</div>
-            {elsewhere.map((e) => (
-              <div key={e.name} className="text-[11px] text-ink-tertiary leading-snug"><span className="font-semibold text-ink-secondary">{e.name}</span> — {e.where}</div>
-            ))}
-          </div>
-        )}
+        <button onClick={newList} className="ml-auto inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-primary hover:bg-slate-50 flex-shrink-0"><M n="add" c="text-sm" />New list</button>
       </div>
-
-      {/* Options of the selected list */}
-      {sel ? <ListEditor key={sel.id} dir={sel} onChanged={loadDirs} onDelete={() => delList(sel)} />
-        : <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-6 text-sm text-ink-tertiary">Create a list to get started.</div>}
+      <div className="grid grid-cols-1 md:grid-cols-[240px_minmax(0,1fr)] gap-4 items-start">
+        <nav aria-label="Lists" className="space-y-1.5">
+          {dirs === null && <div className="px-1 text-xs text-ink-tertiary">Loading…</div>}
+          {(dirs || []).map((d) => { const on = d.id === selId; return (
+            <button key={d.id} onClick={() => setSelId(d.id)} aria-current={on ? "true" : undefined}
+              className={`w-full text-left rounded-2xl border px-3.5 py-3 flex items-center gap-3 transition-colors ${on ? "bg-white border-primary/40 ring-2 ring-primary/10 shadow-clay-card" : "bg-white/70 border-slate-200/90 hover:bg-white hover:border-slate-300"}`}>
+              <span className={`w-9 h-9 rounded-xl grid place-items-center flex-shrink-0 ${on ? "bg-primary text-white" : "bg-primary/10 text-primary"}`}><M n={LIST_ICON[d.key] || "format_list_bulleted"} c="text-base" /></span>
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-ink-primary truncate">{d.name}</span>
+                <span className="block text-[11px] text-ink-tertiary truncate">{d.item_count} option{d.item_count === 1 ? "" : "s"}{d.used_in.length ? ` · ${d.used_in[0]}` : " · not used yet"}</span>
+              </span>
+            </button>
+          ); })}
+          {elsewhere.length > 0 && (
+            <div className="rounded-2xl bg-slate-50 px-3.5 py-3 mt-3">
+              <div className="text-[11px] font-semibold text-ink-tertiary mb-1.5">Set up somewhere else</div>
+              {elsewhere.map((e) => (
+                <div key={e.name} className="text-[11px] text-ink-tertiary leading-snug mb-1"><span className="font-medium text-ink-secondary">{e.name}</span> · {e.where}</div>
+              ))}
+            </div>
+          )}
+        </nav>
+        {sel ? <ListEditor key={sel.id} dir={sel} onChanged={loadDirs} onDelete={() => delList(sel)} />
+          : <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-8 text-center text-sm text-ink-tertiary">Create a list to get started.</div>}
+      </div>
     </div>
   );
 }
+
+const LIST_ICON: Record<string, string> = { lead_source: "campaign", cancel_reason: "block", problems: "build", problem: "build" };
+// Option colours: the same order every time, so an option keeps its colour in the usage strip.
+const HUES = ["#378ADD", "#1D9E75", "#7F77DD", "#EF9F27", "#D4537E", "#D85A30", "#639922", "#185FA5", "#888780"];
+const USED_FOR: Record<string, string> = { lead_source: "Your team picks one when adding a customer", cancel_reason: "Your team picks one when a job is cancelled" };
 
 function ListEditor({ dir, onChanged, onDelete }: { dir: Dir; onChanged: () => void; onDelete: () => void }) {
   const [items, setItems] = useState<Item[] | null>(null);
@@ -87,6 +98,8 @@ function ListEditor({ dir, onChanged, onDelete }: { dir: Dir; onChanged: () => v
   const [paste, setPaste] = useState<string | null>(null);
   const [editId, setEditId] = useState<string | null>(null); const [editVal, setEditVal] = useState("");
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
+  const [sortBy, setSortBy] = useState<"mine" | "used">("mine");
+  const [hover, setHover] = useState<string | null>(null);
   const flash = (text: string, bad = false) => { setMsg({ text, bad }); setTimeout(() => setMsg(null), 3500); };
 
   const load = () => api.get<{ items: Item[]; counts_usage?: boolean }>(`/directories/${dir.id}/items?include_archived=true`)
@@ -136,9 +149,9 @@ function ListEditor({ dir, onChanged, onDelete }: { dir: Dir; onChanged: () => v
     catch (e: any) { flash(e.message || "Could not merge", true); }
   }
   async function archive(i: Item) {
-    try { await api.del(`/directories/items/${i.id}`); flash(`Archived “${i.value}” — existing records keep it`); done(); }
+    try { await api.del(`/directories/items/${i.id}`); flash(`Hid “${i.value}”. Records that used it keep it`); done(); }
     catch (e: any) {
-      if (String(e?.status) === "409" && (await confirmDialog(`“${i.value}” has sub-options. Archive it and move them to the top level?`, { confirmLabel: "Archive" }))) {
+      if (String(e?.status) === "409" && (await confirmDialog(`“${i.value}” has sub-options. Hide it and move them to the top level?`, { confirmLabel: "Hide" }))) {
         await api.del(`/directories/items/${i.id}?force=true`); done();
       }
     }
@@ -148,98 +161,125 @@ function ListEditor({ dir, onChanged, onDelete }: { dir: Dir; onChanged: () => v
     catch (e: any) { flash(e.message || "Could not restore", true); }
   }
 
+  const total = active.reduce((n, i) => n + (i.uses || 0), 0);
+  const colorOf = (id: string) => HUES[Math.max(0, active.findIndex((x) => x.id === id)) % HUES.length];
+  const ordered = sortBy === "used" ? [...shown].sort((a, b) => (b.uses || 0) - (a.uses || 0)) : shown;
+  const usesText = (n: number) => (n ? `${n} ${noun?.[n === 1 ? 0 : 1] || (n === 1 ? "use" : "uses")}` : "Not used yet");
+
   return (
-    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm">
-      <div className="px-5 pt-4 pb-3 border-b border-slate-100 space-y-2">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h3 className="text-base font-bold text-ink-primary">{dir.name}</h3>
-            <p className="text-xs text-ink-tertiary mt-0.5">{active.length} option{active.length === 1 ? "" : "s"}{archived.length ? ` · ${archived.length} archived` : ""}</p>
+    <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card">
+      <div className="px-5 pt-5 pb-4 border-b border-slate-100">
+        <div className="flex items-start gap-3">
+          <div className="min-w-0">
+            <h3 className="text-lg font-semibold text-ink-primary">{dir.name}</h3>
+            <p className="text-xs text-ink-tertiary">{USED_FOR[dir.key] || (dir.used_in.length ? `Used in ${dir.used_in.join(", ")}` : "Not used yet. Bind it to a field in Forms & fields.")}</p>
           </div>
-          <div className="flex items-center gap-1.5">
-            <button onClick={() => openAuthedDoc(`/directories/${dir.id}/export`).catch(() => flash("Export not available", true))} title="Export CSV" className="p-1.5 rounded-lg text-ink-tertiary hover:text-primary hover:bg-slate-100"><M n="download" c="text-base" /></button>
-            {!dir.is_system && <button onClick={onDelete} title="Delete list" className="p-1.5 rounded-lg text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-base" /></button>}
+          <div className="ml-auto flex items-center gap-1 flex-shrink-0">
+            <button onClick={() => openAuthedDoc(`/directories/${dir.id}/export`).catch(() => flash("Export not available", true))} aria-label="Download as a spreadsheet" title="Download as a spreadsheet" className="w-9 h-9 rounded-xl grid place-items-center text-ink-tertiary hover:text-primary hover:bg-slate-100"><M n="download" c="text-base" /></button>
+            {!dir.is_system && <button onClick={onDelete} aria-label="Delete list" title="Delete list" className="w-9 h-9 rounded-xl grid place-items-center text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-base" /></button>}
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] font-semibold text-ink-tertiary">Used in:</span>
-          {dir.used_in.length ? dir.used_in.map((u) => <span key={u} className="px-2 py-0.5 rounded-full bg-slate-100 text-ink-secondary text-[11px] font-semibold">{u}</span>)
-            : <span className="text-[11px] text-amber-700">Nothing yet — bind it to a custom field in Forms & fields.</span>}
-        </div>
+        {counts && total > 0 && (
+          <div className="mt-4">
+            <div className="flex h-2.5 rounded-full overflow-hidden bg-slate-100">
+              {active.filter((i) => i.uses).map((i) => (
+                <div key={i.id} title={`${i.value}: ${usesText(i.uses)}`} className={`transition-opacity ${hover && hover !== i.id ? "opacity-30" : ""}`} style={{ width: `${(i.uses / total) * 100}%`, background: colorOf(i.id) }} />
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-[11px] text-ink-secondary">
+              {[...active].filter((i) => i.uses).sort((a, b) => b.uses - a.uses).slice(0, 4).map((i) => (
+                <span key={i.id} className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-full" style={{ background: colorOf(i.id) }} />{i.value} {Math.round((i.uses / total) * 100)}%</span>
+              ))}
+              <span className="text-ink-tertiary">of {total} {noun?.[total === 1 ? 0 : 1] || "uses"}</span>
+            </div>
+          </div>
+        )}
+        {dir.used_in.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 mt-3">
+            {dir.used_in.map((u) => <span key={u} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-ink-secondary text-[11px]"><M n="link" c="text-[11px]" />{u}</span>)}
+          </div>
+        )}
       </div>
 
       <div className="p-5 space-y-3">
+        <div className="flex gap-2">
+          <input value={nv} onChange={(e) => setNv(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} placeholder="Add an option and press Enter" aria-label="New option"
+            className="flex-1 bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/10" />
+          <button onClick={add} disabled={!nv.trim()} className="px-4 py-2.5 rounded-xl bg-ink-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">Add</button>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 text-[11px] font-semibold">
+          <button onClick={() => setPaste(paste === null ? "" : null)} className="text-primary hover:underline">Paste a list</button>
+          <button onClick={() => setMore((m) => !m)} className="text-ink-tertiary hover:text-ink-secondary">{more ? "Hide extra options" : "Sub-option or one location only"}</button>
+          {msg && <span className={msg.bad ? "text-rose-600" : "text-emerald-700"}>{msg.text}</span>}
+          {active.length > 1 && (
+            <span className="ml-auto inline-flex rounded-lg bg-slate-100 p-0.5">
+              {([["mine", "Your order"], ["used", "Most used"]] as ["mine" | "used", string][]).map(([v, l]) => (
+                <button key={v} onClick={() => setSortBy(v)} aria-pressed={sortBy === v} className={`px-2.5 py-1 rounded-md ${sortBy === v ? "bg-white text-ink-primary shadow-sm" : "text-ink-tertiary"}`}>{l}</button>
+              ))}
+            </span>
+          )}
+        </div>
+        {more && (
+          <div className="flex flex-wrap gap-2">
+            <select value={np} onChange={(e) => setNp(e.target.value)} aria-label="Put it under" className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs"><option value="">Top level</option>{active.map((i) => <option key={i.id} value={i.id}>Under {i.value}</option>)}</select>
+            <select value={nl} onChange={(e) => setNl(e.target.value)} aria-label="Location" className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs"><option value="">All locations</option>{locs.map((l) => <option key={l.id} value={l.id}>{l.name} only</option>)}</select>
+          </div>
+        )}
+        {paste !== null && (
+          <div className="space-y-1.5">
+            <textarea autoFocus value={paste} onChange={(e) => setPaste(e.target.value)} placeholder={"One option per line\nNextdoor\nRadio ad"} className="w-full h-28 bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-primary" />
+            <button onClick={addPasted} disabled={!paste.trim()} className="px-3.5 py-2 rounded-xl bg-ink-primary text-white text-xs font-semibold disabled:opacity-40">Add {paste.split(/\r?\n/).filter((l) => l.trim()).length || ""} options</button>
+          </div>
+        )}
         {active.length > 8 && (
           <div className="relative"><M n="search" c="absolute left-3 top-2.5 text-ink-tertiary text-base" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search options" className="glass-input w-full pl-9 pr-3 py-2 rounded-lg text-sm" /></div>
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find an option" aria-label="Find an option" className="w-full bg-slate-50 border border-transparent focus:border-slate-200 focus:bg-white rounded-xl pl-9 pr-3 py-2 text-sm outline-none" /></div>
         )}
 
-        <div className="border border-slate-200/80 rounded-xl divide-y divide-slate-100 overflow-hidden">
+        <div className="rounded-xl border border-slate-200/80 divide-y divide-slate-100 overflow-hidden">
           {items === null && <div className="px-4 py-3 text-sm text-ink-tertiary">Loading…</div>}
-          {items && shown.length === 0 && <div className="px-4 py-3 text-sm text-ink-tertiary">{q ? "No matching options." : "No options yet — add the first one below."}</div>}
-          {shown.map((i, idx) => (
-            <div key={i.id} className="group px-3 py-2 flex items-center gap-2 text-sm hover:bg-slate-50/70">
-              {!q && <div className="flex flex-col -my-1">
-                <button aria-label="Move up" disabled={idx === 0} onClick={() => move(i, -1)} className="text-ink-tertiary hover:text-primary disabled:opacity-20 leading-none"><M n="expand_less" c="text-sm" /></button>
-                <button aria-label="Move down" disabled={idx === shown.length - 1} onClick={() => move(i, 1)} className="text-ink-tertiary hover:text-primary disabled:opacity-20 leading-none"><M n="expand_more" c="text-sm" /></button>
+          {items && ordered.length === 0 && <div className="px-4 py-6 text-center text-sm text-ink-tertiary">{q ? "No matching options." : "No options yet. Add the first one above."}</div>}
+          {ordered.map((i, idx) => (
+            <div key={i.id} onMouseEnter={() => setHover(i.id)} onMouseLeave={() => setHover(null)} className="px-3 min-h-[48px] flex items-center gap-2.5 text-sm hover:bg-slate-50/70">
+              {!q && sortBy === "mine" && <div className="flex flex-col">
+                <button aria-label={`Move ${i.value} up`} disabled={idx === 0} onClick={() => move(i, -1)} className="text-ink-tertiary hover:text-primary disabled:opacity-20 leading-none p-0.5"><M n="expand_less" c="text-sm" /></button>
+                <button aria-label={`Move ${i.value} down`} disabled={idx === ordered.length - 1} onClick={() => move(i, 1)} className="text-ink-tertiary hover:text-primary disabled:opacity-20 leading-none p-0.5"><M n="expand_more" c="text-sm" /></button>
               </div>}
+              <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: colorOf(i.id) }} />
               {editId === i.id ? (
-                <input autoFocus value={editVal} onChange={(e) => setEditVal(e.target.value)} onBlur={() => saveRename(i)}
+                <input autoFocus value={editVal} onChange={(e) => setEditVal(e.target.value)} onBlur={() => saveRename(i)} aria-label="Rename option"
                   onKeyDown={(e) => { if (e.key === "Enter") saveRename(i); if (e.key === "Escape") setEditId(null); }}
-                  className="glass-input flex-1 px-2 py-1 rounded-lg text-sm font-semibold" />
+                  className="flex-1 bg-white border border-primary/40 rounded-lg px-2 py-1 text-sm outline-none" />
               ) : (
-                <button onClick={() => { setEditId(i.id); setEditVal(i.value); }} title="Click to rename" className="flex-1 text-left font-semibold text-ink-primary truncate">{i.value}</button>
+                <button onClick={() => { setEditId(i.id); setEditVal(i.value); }} title="Click to rename" className="flex-1 min-w-0 text-left text-ink-primary truncate">{i.value}</button>
               )}
               {i.parent_id && <span className="text-[11px] text-ink-tertiary">under {byId(i.parent_id)?.value || "—"}</span>}
-              {i.location_id && <span className="px-1.5 py-0.5 rounded bg-blue-50 text-primary text-[10px] font-semibold">{locs.find((l) => l.id === i.location_id)?.name || "1 location"}</span>}
-              {counts && <span className="text-[11px] text-ink-tertiary tabular-nums w-20 text-right">{i.uses ? `${i.uses} ${noun?.[i.uses === 1 ? 0 : 1] || "uses"}` : "unused"}</span>}
-              <div className="flex items-center gap-0.5 opacity-60 group-hover:opacity-100">
-                <button aria-label="Merge into another option" title="Merge into…" onClick={() => mergeInto(i)} className="p-1 rounded-lg text-ink-tertiary hover:text-primary hover:bg-slate-100"><M n="merge" c="text-base" /></button>
-                <button aria-label="Archive" title="Archive" onClick={() => archive(i)} className="p-1 rounded-lg text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="archive" c="text-base" /></button>
-              </div>
+              {i.location_id && <span className="px-1.5 py-0.5 rounded-md bg-primary/10 text-primary text-[10px] font-semibold">{locs.find((l) => l.id === i.location_id)?.name || "1 location"}</span>}
+              {counts && <span className={`text-[11px] tabular-nums whitespace-nowrap ${i.uses ? "text-ink-secondary" : "text-ink-tertiary"}`}>{usesText(i.uses)}</span>}
+              <button onClick={() => mergeInto(i)} className="px-2 py-1.5 rounded-lg text-[11px] font-semibold text-ink-tertiary hover:text-primary hover:bg-slate-100">Merge</button>
+              <button onClick={() => archive(i)} className="px-2 py-1.5 rounded-lg text-[11px] font-semibold text-ink-tertiary hover:text-rose-600 hover:bg-rose-50">Hide</button>
             </div>
           ))}
         </div>
 
-        {/* Add */}
-        <div className="space-y-2">
-          <div className="flex gap-2">
-            <input value={nv} onChange={(e) => setNv(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} placeholder="Add an option and press Enter"
-              className="glass-input flex-1 px-3 py-2 rounded-lg text-sm" />
-            <button onClick={add} disabled={!nv.trim()} className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:bg-primary-container disabled:opacity-50">Add</button>
-          </div>
-          <div className="flex items-center gap-3 text-[11px] font-semibold">
-            <button onClick={() => setPaste(paste === null ? "" : null)} className="text-primary hover:underline">Paste a list</button>
-            <button onClick={() => setMore((m) => !m)} className="text-ink-tertiary hover:text-ink-secondary">{more ? "Hide" : "Sub-option or location…"}</button>
-            {msg && <span className={msg.bad ? "text-rose-600" : "text-emerald-700"}>{msg.text}</span>}
-          </div>
-          {more && (
-            <div className="flex flex-wrap gap-2">
-              <select value={np} onChange={(e) => setNp(e.target.value)} className="glass-input px-2 py-2 rounded-lg text-xs"><option value="">Top level</option>{active.map((i) => <option key={i.id} value={i.id}>Under {i.value}</option>)}</select>
-              <select value={nl} onChange={(e) => setNl(e.target.value)} className="glass-input px-2 py-2 rounded-lg text-xs"><option value="">All locations</option>{locs.map((l) => <option key={l.id} value={l.id}>{l.name} only</option>)}</select>
-            </div>
-          )}
-          {paste !== null && (
-            <div className="space-y-1.5">
-              <textarea autoFocus value={paste} onChange={(e) => setPaste(e.target.value)} placeholder={"One option per line\nNextdoor\nRadio ad"} className="glass-input w-full h-28 px-3 py-2 rounded-lg text-sm" />
-              <button onClick={addPasted} disabled={!paste.trim()} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-50">Add {paste.split(/\r?\n/).filter((l) => l.trim()).length || ""} options</button>
-            </div>
-          )}
-        </div>
-
         {archived.length > 0 && (
-          <div className="pt-2 border-t border-slate-100">
+          <div className="pt-1">
             <button onClick={() => setShowArchived((s) => !s)} className="text-[11px] font-semibold text-ink-tertiary hover:text-ink-secondary flex items-center gap-1">
-              <M n={showArchived ? "expand_less" : "expand_more"} c="text-sm" />Archived ({archived.length})</button>
-            {showArchived && <div className="mt-2 space-y-1">{archived.map((i) => (
-              <div key={i.id} className="flex items-center gap-2 text-sm text-ink-tertiary px-1">
-                <span className="flex-1 line-through">{i.value}</span>
-                <button onClick={() => restore(i)} className="text-[11px] font-semibold text-primary hover:underline">Restore</button>
+              <M n={showArchived ? "expand_less" : "expand_more"} c="text-sm" />Hidden ({archived.length})</button>
+            {showArchived && (
+              <div className="mt-2 rounded-xl bg-slate-50 divide-y divide-slate-100">
+                <div className="px-3 py-2 text-[11px] text-ink-tertiary">Jobs and customers that used these keep them. New ones can't pick them.</div>
+                {archived.map((i) => (
+                  <div key={i.id} className="flex items-center gap-2 px-3 py-2 text-sm text-ink-tertiary">
+                    <span className="flex-1">{i.value}</span>
+                    <button onClick={() => restore(i)} className="text-[11px] font-semibold text-primary hover:underline">Show again</button>
+                  </div>
+                ))}
               </div>
-            ))}</div>}
+            )}
           </div>
         )}
       </div>
-    </div>
+    </section>
   );
 }

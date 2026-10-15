@@ -394,6 +394,7 @@ class TestSendIn(BaseModel):
     channel: str = "email"      # email|sms|whatsapp
     subject: Optional[str] = None
     body: str
+    sample: bool = False        # fill the placeholders from the shop's latest job
 
 
 @router.post("/test")
@@ -408,10 +409,99 @@ async def send_test(
     recipient = current.email if data.channel == "email" else getattr(current, "phone", None)
     if not recipient:
         raise HTTPException(400, f"Your profile has no {data.channel} to send a test to")
+    subject, body = data.subject, data.body
+    if data.sample:
+        # "Send me a sample": render against the newest job so the owner sees a real message.
+        from sqlalchemy.orm import selectinload
+
+        from backend.routers.documents import _apply, _resolve
+        order = (await db.execute(select(Order).where(Order.org_id == current.org_id)
+                                  .order_by(Order.created_at.desc())
+                                  .options(selectinload(Order.client), selectinload(Order.lines),
+                                           selectinload(Order.device), selectinload(Order.assigned_to)))).scalars().first()
+        if order:
+            variables = await _resolve(db, current.org_id, order)
+            if isinstance(variables, tuple):
+                variables = variables[0]
+            body = _apply(body or "", variables)
+            subject = _apply(subject, variables) if subject else subject
+        if data.channel in ("sms", "whatsapp"):
+            body = f"[Sample] {body}"
+        elif subject:
+            subject = f"[Sample] {subject}"
     _creds = await notif_creds(db, current.org_id, data.channel)
     res = await _adapter_for(data.channel, _creds).send(
-        recipient=recipient, subject=data.subject, body=data.body)
-    return {"status": res.get("status"), "recipient": recipient, "error": res.get("error")}
+        recipient=recipient, subject=subject, body=body)
+    return {"status": res.get("status"), "recipient": recipient, "error": res.get("error"), "body": body}
+
+
+@router.get("/rules/stats")
+async def rule_stats(
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Per customer rule: how many went out in the last 7 days, failures, and when the last
+    one was sent. Plus how many customers can be texted (have a phone and haven't opted out)."""
+    from datetime import datetime, timedelta
+
+    from sqlalchemy import func
+
+    from backend.models import Client, NotificationLog
+    since = datetime.utcnow() - timedelta(days=7)
+    rows = (await db.execute(select(
+        NotificationLog.rule_id, NotificationLog.status, func.count(), func.max(NotificationLog.created_at))
+        .where(NotificationLog.org_id == current.org_id, NotificationLog.rule_id.isnot(None),
+               NotificationLog.created_at >= since)
+        .group_by(NotificationLog.rule_id, NotificationLog.status))).all()
+    out: dict = {}
+    for rid, status, n, last in rows:
+        d = out.setdefault(rid, {"sent_7d": 0, "failed_7d": 0, "skipped_7d": 0, "last_sent_at": None})
+        if status == "sent":
+            d["sent_7d"] += n
+            d["last_sent_at"] = max(filter(None, [d["last_sent_at"], last.isoformat() if last else None]), default=None)
+        elif status == "failed":
+            d["failed_7d"] += n
+        elif status == "skipped":
+            d["skipped_7d"] += n
+    with_phone = (await db.execute(select(func.count()).select_from(Client).where(
+        Client.org_id == current.org_id, Client.phone.isnot(None), Client.phone != ""))).scalar() or 0
+    opted_out = (await db.execute(select(func.count()).select_from(Client).where(
+        Client.org_id == current.org_id, Client.phone.isnot(None), Client.phone != "",
+        Client.consent_phone == False))).scalar() or 0  # noqa: E712
+    return {"rules": out, "texting": {"with_phone": with_phone, "opted_out": opted_out}}
+
+
+class QuietHoursIn(BaseModel):
+    on: bool
+
+
+@router.get("/quiet-hours")
+async def get_quiet_hours(
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Shop-wide view of the per-rule 'only during opening hours' setting for customer messages."""
+    rows = (await db.execute(select(NotificationRule).where(
+        NotificationRule.org_id == current.org_id, NotificationRule.scope == "client"))).scalars().all()
+    on = sum(1 for r in rows if r.working_hours_only)
+    return {"on": bool(rows) and on == len(rows), "some": 0 < on < len(rows)}
+
+
+@router.put("/quiet-hours")
+async def set_quiet_hours(
+    data: QuietHoursIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_manage_settings")),
+):
+    """Hold every customer message that falls outside opening hours until the shop opens
+    (reminders keep their own timing)."""
+    rows = (await db.execute(select(NotificationRule).where(
+        NotificationRule.org_id == current.org_id, NotificationRule.scope == "client",
+        NotificationRule.event != "reminder"))).scalars().all()
+    for r in rows:
+        r.working_hours_only = data.on
+    await db.commit()
+    return {"ok": True, "changed": len(rows)}
 
 
 @router.get("/variables")

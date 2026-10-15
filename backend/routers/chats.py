@@ -39,6 +39,10 @@ async def _notify_inbound_chat(db: AsyncSession, org_id: str, thread: "ChatThrea
 router = APIRouter(prefix="/api/chats", tags=["chats"])
 
 
+OPT_OUT_WORDS = {"STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT", "OPTOUT", "OPT OUT"}
+OPT_IN_WORDS = {"START", "UNSTOP", "YES", "OPTIN", "OPT IN"}
+
+
 async def _link_client(db, org_id, phone):
     """Orderry rule: ambiguous numbers resolve to the most recent record."""
     if not phone:
@@ -219,6 +223,15 @@ async def twilio_inbound(request: Request, db: AsyncSession = Depends(get_db),
         await db.flush()
     db.add(ChatMessage(thread_id=thread.id, direction="in", body=body, status="received"))
     thread.last_message_at = datetime.utcnow()
+    # Carrier keywords: STOP turns automatic texts off for this customer, START turns them back on.
+    kw = body.strip().upper().rstrip(".!")
+    if kw in OPT_OUT_WORDS or kw in OPT_IN_WORDS:
+        c = await _link_client(db, org_id, phone)
+        if c:
+            c.consent_phone = kw in OPT_IN_WORDS
+            db.add(ChatMessage(thread_id=thread.id, direction="out", status="system",
+                               body="Texts turned off by the customer (STOP)." if kw in OPT_OUT_WORDS
+                               else "Texts turned back on by the customer (START)."))
     await db.commit()
     await _notify_inbound_chat(db, org_id, thread, body)
     return Response(content="<?xml version='1.0' encoding='UTF-8'?><Response></Response>",

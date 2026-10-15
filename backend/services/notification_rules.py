@@ -147,6 +147,21 @@ async def _render(db: AsyncSession, org_id: str, order: Order, rule: Notificatio
             f"Your order {order.order_number} is now: {status}", None)
 
 
+OPT_OUT_FOOTER = "Reply STOP to opt out."
+
+
+async def with_opt_out(db: AsyncSession, org_id: str, client_id: Optional[str], channel: str, body: str) -> str:
+    """US/Canada texting rules: the first text a customer gets from the shop says how to
+    stop them. Later texts stay short. Email is unaffected (it has its own unsubscribe)."""
+    if channel not in ("sms", "whatsapp") or not client_id or OPT_OUT_FOOTER in (body or ""):
+        return body
+    prior = (await db.execute(select(NotificationLog.id).where(
+        NotificationLog.org_id == org_id, NotificationLog.client_id == client_id,
+        NotificationLog.channel.in_(["sms", "whatsapp"]),
+        NotificationLog.status.in_(["sent", "scheduled"])).limit(1))).scalar_one_or_none()
+    return body if prior else f"{(body or '').rstrip()}\n{OPT_OUT_FOOTER}"
+
+
 async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
                    status_key: Optional[str] = None, now: Optional[datetime] = None) -> dict:
     """Run every matching rule for an order event. Immediate sends go out now;
@@ -174,6 +189,7 @@ async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
             if chat_ch:
                 channel = chat_ch
         recipient = (client.email if channel == "email" else client.phone) if client else None
+        body = await with_opt_out(db, org_id, order.client_id, channel, body)
 
         send_at = now + timedelta(minutes=rule.delay_min or 0)
         if rule.working_hours_only:
@@ -234,6 +250,7 @@ async def queue_reminders(db: AsyncSession, *, org_id: str,
             subject, body, tpl_id = await _render(db, org_id, order, rule)
             client = order.client
             recipient = (client.email if rule.channel == "email" else client.phone) if client else None
+            body = await with_opt_out(db, org_id, order.client_id, rule.channel, body)
             send_at = order.scheduled_for - lead
             if not recipient:
                 status, err = "skipped", f"Client has no {rule.channel} on file"
