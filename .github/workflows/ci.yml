@@ -151,9 +151,15 @@ jobs:
     # ADVISORY until its first green run on GitHub — then delete `continue-on-error` to make it a
     # required gate. (Postgres DDL compile + partial-index parity are already hard-gated in the
     # main job via test_postgres_ddl_compat.py.)
+    # Sharded like `test` (same conftest hook); every matrix job gets its own Postgres container.
+    name: backend-postgres (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     services:
       postgres:
         image: postgres:16-alpine
@@ -180,17 +186,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install --require-hashes -r requirements-dev.lock
       - name: Migrations from scratch on Postgres
-        # Separate database so the migration run never collides with the suite's create_all.
+        # Once, not per shard. Separate database so the migration run never collides with the
+        # suite's create_all.
+        if: ${{ matrix.shard == 1 }}
         env:
           DATABASE_URL: postgresql+asyncpg://repairos:repairos@localhost:5432/repairos_mig
         run: |
           psql -h localhost -U repairos -d repairos_test -c "CREATE DATABASE repairos_mig"
           alembic -c backend/alembic.ini upgrade head
-      - name: Full test suite on Postgres
+      - name: Test suite on Postgres (this shard)
         # Serial (-p no:xdist): every worker would share this one database.
         env:
           DATABASE_URL: postgresql+asyncpg://repairos:repairos@localhost:5432/repairos_test
           TEST_DATABASE_URL: postgresql+asyncpg://repairos:repairos@localhost:5432/repairos_test
+          PYTEST_SHARD: ${{ matrix.shard }}
+          PYTEST_SHARD_TOTAL: ${{ strategy.job-total }}
         run: pytest -q -p no:xdist
 
   frontend:

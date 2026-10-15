@@ -65,11 +65,52 @@ app.dependency_overrides[get_db] = _override_get_db
 
 
 @pytest_asyncio.fixture(autouse=True)
+async def _reset_rate_limits():
+    # The in-process rate limiters count every test's requests as one client IP within a 60s window,
+    # so a fast run (e.g. Postgres without the per-test rebuild) trips the app-wide 600/min limit
+    # partway through and unrelated tests get 429s. Start each test with empty counters.
+    from backend.core.observability import RateLimitMiddleware
+    from backend.core.webhook_security import lookup_limiter
+    from backend.services import ratelimit
+
+    ratelimit._HITS.clear()
+    lookup_limiter.reset()
+    node = app.middleware_stack   # built on the first request; None before that
+    while node is not None:
+        if isinstance(node, RateLimitMiddleware):
+            node._hits.clear()
+        node = getattr(node, "app", None)
+    yield
+
+
+_pg_schema_built = False
+
+
+@pytest_asyncio.fixture(autouse=True)
 async def _schema():
     # Dispose first so a connection leaked by a prior test (e.g. an endpoint that errored mid-
     # transaction) can't hold a write lock that makes this drop/create only partially apply —
     # which previously left a table present but stripped of its indexes for the next test.
     await test_engine.dispose()
+    if test_engine.dialect.name == "postgresql":
+        # On Postgres, drop_all + create_all of ~150 tables (twice per test, with the teardown drop)
+        # is what made the serial suite take over an hour. Build the schema once per process, then
+        # empty every table before each test — equivalent here: no test alters the schema, and no
+        # table has a sequence, trigger or create-time seed data that a rebuild would have reset.
+        # DELETE children-first in one round trip (~10ms) rather than TRUNCATE, which costs ~0.2s
+        # for this many tables even when they are empty. The FK graph is acyclic apart from
+        # self-references, which a single DELETE per table handles.
+        global _pg_schema_built
+        async with test_engine.begin() as conn:
+            if not _pg_schema_built:
+                await conn.run_sync(Base.metadata.drop_all)
+                await conn.run_sync(Base.metadata.create_all)
+                _pg_schema_built = True
+            else:
+                deletes = "".join(f'DELETE FROM "{t.name}";' for t in reversed(Base.metadata.sorted_tables))
+                await conn.exec_driver_sql(f"DO $$BEGIN {deletes} END$$")
+        yield
+        return
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
