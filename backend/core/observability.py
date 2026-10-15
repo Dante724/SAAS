@@ -80,6 +80,11 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         for k, v in _SECURITY_HEADERS.items():
             response.headers.setdefault(k, v)
+        # Deployed behind TLS: pin HTTPS so a first plain-http visit can't be downgraded.
+        # (Browsers ignore HSTS on http responses, so local dev over http is unaffected.)
+        from backend.config import settings
+        if settings.is_deployed:
+            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         return response
 
 
