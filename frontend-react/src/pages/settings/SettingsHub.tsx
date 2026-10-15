@@ -15,6 +15,7 @@ import { StatusList, StatusEditor } from "./StatusesSettings";
 import GeneralSettings from "./GeneralSettings";
 import CustomerMessages from "./NotificationsPage";
 import PublicPagesSettings from "./PublicPagesSettings";
+import { PricingPage, InventoryPage } from "./PricingInventory";
 import { TeamPage, RoleEditor, Avatar } from "./TeamSettings";
 import { ChecklistList, ChecklistEditor } from "./ChecklistSettings";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
@@ -367,12 +368,8 @@ export default function SettingsHub() {
           {sec === "feedback" && <FeedbackSettingsEditor />}
 
           {sec === "warehouses" && (
-            <div className="max-w-3xl space-y-5">
-              <InventorySettingsCard />
-              <SectionCard title="Warehouses" count={lists.warehouses?.length} onAdd={() => setEditing({ sec: "warehouses", row: null })}>
-                <SecTable rows={lists.warehouses} onRowClick={(r) => setEditing({ sec: "warehouses", row: r })} onDelete={(r) => delRow("warehouses", r)} cols={[["Name", (w) => val(w, ["name"])], ["Kind", (w) => val(w, ["kind"])], ["Scope", (w) => val(w, ["scope"])], ["Active", (w) => (w?.active ? "Yes" : "No")]]} />
-              </SectionCard>
-            </div>
+            <InventoryPage warehouses={lists.warehouses} currency={co?.currency || "$"} onAdd={() => setEditing({ sec: "warehouses", row: null })}
+              onEdit={(r) => setEditing({ sec: "warehouses", row: r })} onDelete={(r) => delRow("warehouses", r)} />
           )}
 
 
@@ -411,13 +408,8 @@ export default function SettingsHub() {
           )}
 
           {sec === "pricing" && (
-            <div className="max-w-3xl space-y-5">
-              <SectionCard title="Pricing types" count={lists.pricing?.length} onAdd={() => setEditing({ sec: "pricing", row: null })}>
-                <SecTable rows={lists.pricing} onRowClick={(r) => setEditing({ sec: "pricing", row: r })} onDelete={(r) => delRow("pricing", r)} cols={[["Name", (p) => val(p, ["name", "title"])], ["Markup %", (p) => val(p, ["markup_pct", "percent", "value"])], ["Default", (p) => (p?.is_default ? "Yes" : "—")], ["Scope", (p) => val(p, ["location_scope", "scope"])]]} />
-              </SectionCard>
-              <PricingDefaults types={lists.pricing || []} />
-              <TierManager types={lists.pricing || []} />
-            </div>
+            <PricingPage types={lists.pricing} currency={co?.currency || "$"} onAdd={() => setEditing({ sec: "pricing", row: null })}
+              onEdit={(r) => setEditing({ sec: "pricing", row: r })} onDelete={(r) => delRow("pricing", r)} tiers={<TierManager types={lists.pricing || []} />} />
           )}
 
           {sec === "industry" && (
@@ -601,38 +593,6 @@ function LocationDrawer({ loc, onClose, onSaved }: { loc: any | null; onClose: (
 }
 
 /* ── Inventory settings card (bins/reservations/serial templates) → /staff/inventory-settings ── */
-function InventorySettingsCard() {
-  const [c, setC] = useState<any>(null); const [saved, setSaved] = useState(false);
-  useEffect(() => { api.get<any>("/staff/inventory-settings").then(setC).catch(() => setC({})); }, []);
-  const set = (k: string, v: any) => setC((s: any) => ({ ...s, [k]: v }));
-  async function save() {
-    const body = { enable_bins: !!c.enable_bins, enable_reservations: !!c.enable_reservations, reservation_max_days: Number(c.reservation_max_days) || 0,
-      unique_identifier: c.unique_identifier || "sku", default_product_type: c.default_product_type || "default",
-      product_serial_template: c.product_serial_template || null, default_vehicle_type: c.default_vehicle_type || "Car", asset_serial_template: c.asset_serial_template || null,
-      po_approval_threshold: Number(c.po_approval_threshold) || 0 };
-    try { await api.put("/staff/inventory-settings", body); setSaved(true); setTimeout(() => setSaved(false), 1500); } catch (e: any) { alertDialog(e.message); }
-  }
-  if (!c) return <SectionCard title="Inventory settings"><div className="p-5 text-xs text-ink-tertiary">Loading…</div></SectionCard>;
-  return (
-    <SectionCard title="Inventory settings">
-      <div className="p-5 space-y-4">
-        <label className="flex items-center gap-2 text-xs font-medium text-ink-secondary"><input type="checkbox" checked={!!c.enable_bins} onChange={(e) => set("enable_bins", e.target.checked)} className="accent-primary" />Enable bin locations (shelf/bin per warehouse)</label>
-        <label className="flex items-center gap-2 text-xs font-medium text-ink-secondary"><input type="checkbox" checked={!!c.enable_reservations} onChange={(e) => set("enable_reservations", e.target.checked)} className="accent-primary" />Enable product reservations</label>
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className={lbl}>Max reservation period (days)</label><input type="number" min={0} value={c.reservation_max_days ?? 14} onChange={(e) => set("reservation_max_days", Number(e.target.value))} className={field} /></div>
-          <div><label className={lbl}>Unique product identifier</label><select value={c.unique_identifier || "sku"} onChange={(e) => set("unique_identifier", e.target.value)} className={field}>{[["name", "Name"], ["sku", "SKU"], ["barcode", "Barcode"], ["code", "Code"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
-          <div><label className={lbl}>Default product type</label><input value={c.default_product_type || "default"} onChange={(e) => set("default_product_type", e.target.value)} className={field} /></div>
-          <div><label className={lbl}>Product serial template</label><input value={c.product_serial_template || ""} onChange={(e) => set("product_serial_template", e.target.value)} placeholder="0-{C:19}" className={field} /></div>
-          <div><label className={lbl}>Default vehicle type</label><input value={c.default_vehicle_type || "Car"} onChange={(e) => set("default_vehicle_type", e.target.value)} className={field} /></div>
-          <div><label className={lbl}>Asset serial template</label><input value={c.asset_serial_template || ""} onChange={(e) => set("asset_serial_template", e.target.value)} placeholder="9-{C:4}" className={field} /></div>
-          <div><label className={lbl}>PO approval limit (₹)</label><input type="number" min={0} value={c.po_approval_threshold ?? 0} onChange={(e) => set("po_approval_threshold", Number(e.target.value))} placeholder="0 = no approval needed" className={field} /><span className="text-[10px] text-ink-tertiary">POs above this need a manager to send. 0 disables.</span></div>
-        </div>
-        <div className="flex justify-end items-center gap-2">{saved && <span className="text-[11px] font-semibold text-emerald-600">Saved</span>}<button onClick={save} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold">Save inventory settings</button></div>
-      </div>
-    </SectionCard>
-  );
-}
-
 /* ── Delivery status: which notification channels are live vs simulated (N-GAP-4) ── */
 function DeliveryStatusBanner() {
   const [ch, setCh] = useState<Record<string, string> | null>(null);
@@ -2483,74 +2443,7 @@ function IndustryNote({ onChange }: { onChange: () => void }) {
   );
 }
 
-// Default price per document (Settings ▸ Pricing). Which price type auto-applies
-// when you add a line to a Work Order / Sale / Invoice — Orderry's "Default price"
-// block. Backed by GET/PUT /pricing/defaults.
-function PricingDefaults({ types }: { types: any[] }) {
-  const [d, setD] = useState<any>(null);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
-  useEffect(() => { api.get<any>("/pricing/defaults").then(setD).catch(() => setD({})); }, []);
-  const set = (k: string, v: any) => setD((s: any) => ({ ...s, [k]: v }));
-  async function save() {
-    setBusy(true); setMsg("");
-    try {
-      await api.put("/pricing/defaults", {
-        price_type_tickets_id: d.price_type_tickets_id || null,
-        price_type_sales_id: d.price_type_sales_id || null,
-        price_type_invoices_id: d.price_type_invoices_id || null,
-        price_decimals: d.price_decimals == null ? null : Number(d.price_decimals),
-        min_margin_pct: d.min_margin_pct == null ? 0 : Number(d.min_margin_pct),
-        margin_guard: d.margin_guard || "off",
-        discount_approval_pct: d.discount_approval_pct == null ? 0 : Number(d.discount_approval_pct),
-      });
-      setMsg("Saved.");
-    } catch (e: any) { setMsg(e.message || "Could not save"); }
-    finally { setBusy(false); }
-  }
-  if (!d) return null;
-  const opts = [<option key="" value="">Default pricing</option>, ...types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)];
-  const Row = ({ lbl, k }: { lbl: string; k: string }) => (
-    <div className="space-y-1"><label className="block text-[11px] font-semibold text-ink-secondary">{lbl}</label>
-      <select value={d[k] || ""} onChange={(e) => set(k, e.target.value)} className="glass-input w-full px-3 py-2 rounded-lg text-xs">{opts}</select></div>
-  );
-  return (
-    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-5 space-y-3">
-      <div><h4 className="text-sm font-bold text-ink-primary">Default price per document</h4>
-        <p className="text-xs text-ink-tertiary mt-0.5">Which price type is auto-selected when you add a product to each document type.</p></div>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <Row lbl="Work Orders" k="price_type_tickets_id" />
-        <Row lbl="Sales" k="price_type_sales_id" />
-        <Row lbl="Invoices" k="price_type_invoices_id" />
-      </div>
-      <div className="pt-3 mt-1 border-t border-slate-100">
-        <h5 className="text-xs font-bold text-ink-primary">Margin floor guardrail</h5>
-        <p className="text-[11px] text-ink-tertiary mt-0.5">Warn or block a line when its margin falls below your minimum. Orderry lets staff discount into a loss — this doesn't.</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
-          <div className="space-y-1"><label className="block text-[11px] font-semibold text-ink-secondary">When a line is below floor</label>
-            <select value={d.margin_guard || "off"} onChange={(e) => set("margin_guard", e.target.value)} className="glass-input w-full px-3 py-2 rounded-lg text-xs">
-              <option value="off">Off</option><option value="warn">Warn only</option><option value="block">Block the line</option>
-            </select></div>
-          <div className="space-y-1"><label className="block text-[11px] font-semibold text-ink-secondary">Minimum margin %</label>
-            <input type="number" min={0} max={100} value={d.min_margin_pct ?? 0} onChange={(e) => set("min_margin_pct", e.target.value)} className="glass-input w-full px-3 py-2 rounded-lg text-xs" /></div>
-        </div>
-        <div className="mt-3 space-y-1 max-w-[240px]"><label className="block text-[11px] font-semibold text-ink-secondary">Discount needing manager approval (over %)</label>
-          <input type="number" min={0} max={100} value={d.discount_approval_pct ?? 0} onChange={(e) => set("discount_approval_pct", e.target.value)} className="glass-input w-full px-3 py-2 rounded-lg text-xs" />
-          <p className="text-[10px] text-ink-tertiary">0 = off. A line discount above this is blocked for any role whose "approve discount" permission is turned off (owners always allowed).</p></div>
-      </div>
-      <div className="flex items-end gap-3">
-        <div className="space-y-1 w-40"><label className="block text-[11px] font-semibold text-ink-secondary">Price decimals</label>
-          <input type="number" min={0} max={4} value={d.price_decimals ?? 2} onChange={(e) => set("price_decimals", e.target.value)} className="glass-input w-full px-3 py-2 rounded-lg text-xs" /></div>
-        <button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">Save</button>
-        {msg && <span className="text-[11px] text-ink-secondary pb-2">{msg}</span>}
-      </div>
-    </div>
-  );
-}
-
-// Quantity break tiers (144he). Pick a price type, add "at qty N use markup %"
-// rows. The highest tier whose min_qty a line's quantity reaches wins, so bulk
-// lines auto-price cheaper — Orderry has no per-type volume breaks.
+// Quantity breaks per price level (Settings ▸ Pricing › Quantity breaks) → /pricing/types/{id}/tiers.
 function TierManager({ types }: { types: any[] }) {
   const [ptId, setPtId] = useState("");
   const [tiers, setTiers] = useState<any[]>([]);
