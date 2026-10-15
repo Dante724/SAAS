@@ -2,11 +2,21 @@ name: CI
 on:
   push:
     branches: [ main, master ]
+  # CI minutes cost money on a private repo, so pull requests are checked only when they are
+  # ready: draft PRs skip every job; marking a PR "Ready for review" runs it once, and each
+  # later push cancels the run it replaces. "Run workflow" on the Actions tab starts one by hand.
   pull_request:
+    types: [ opened, reopened, synchronize, ready_for_review ]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     env:
       ENVIRONMENT: test
       SEED_DEMO: "false"
@@ -50,6 +60,7 @@ jobs:
     # required gate. (Postgres DDL compile + partial-index parity are already hard-gated in the
     # main job via test_postgres_ddl_compat.py.)
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     continue-on-error: true
     services:
       postgres:
@@ -92,6 +103,7 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     defaults:
       run:
         working-directory: frontend-react
