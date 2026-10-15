@@ -2329,7 +2329,7 @@ function FinanceSettings() {
           {!num && <div className="px-5 py-4 text-xs text-ink-tertiary">Loading…</div>}
           {(num || []).map((r, i) => (
             <div key={`${r.doc_type}-${r.scope_key}`} className="px-5 py-3 flex items-end gap-3 flex-wrap">
-              <div className="w-24"><label className={lbl}>Document</label><div className="text-xs font-bold text-ink-primary capitalize py-2">{r.doc_type}</div></div>
+              <div className="w-24"><label className={lbl}>Document</label><div className="text-xs font-bold text-ink-primary capitalize py-2">{String(r.doc_type).replace(/_/g, " ")}</div></div>
               <div className="flex-1 min-w-[140px]"><label className={lbl}>Template</label><input value={r.template} onChange={(e) => setNumRow(i, "template", e.target.value)} className={`${field} font-mono`} /></div>
               <div className="w-24"><label className={lbl}>Next #</label><input type="number" value={r.next_value} onChange={(e) => setNumRow(i, "next_value", e.target.value)} className={`${field} font-mono`} /></div>
               <div className="w-28"><label className={lbl}>Example</label><div className="text-xs font-mono font-bold text-primary py-2">{r.example}</div></div>
