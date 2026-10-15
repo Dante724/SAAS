@@ -22,7 +22,7 @@ import { escapeHtml } from "../../lib/safeHtml";
 import JobCardFields from "../../components/JobCardFields";
 
 type Emp = { id: string; name: string };
-type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean };
+type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean; order_item_id?: string | null };
 type Rec = { id: string; title?: string; name?: string; description?: string; price?: number; amount?: number; unit_price?: number; status?: string; published?: boolean; source?: string; note?: string };
 type Detail = Order & {
   complaint?: string; tech_notes?: string; diagnosis?: string; conclusion?: string;
@@ -489,6 +489,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><ChecklistRings orderId={order.id} onOpen={() => setTab("checklists")} /></div>
 
+              <JobItems orderId={order.id} onFlash={flash} onChanged={reload} />
+
               <IntakePhotos orderId={order.id} photos={d.intake_photos} onChanged={reload} onFlash={flash} />
 
               {/* Barcode */}
@@ -538,6 +540,108 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
       {sub === "asset" && dev.id && <AssetDrawer woNum={woNum} assetId={String(dev.id)} onClose={() => setSub(null)} />}
     </div>
   );
+}
+
+/* ---- several items per job ---- */
+type JobItem = { id: string; asset_id?: string | null; asset?: { id: string; brand?: string; model?: string; serial?: string; imei?: string } | null;
+  label?: string | null; complaint?: string | null; outcome: string; collected_at?: string | null; is_primary?: boolean; line_count: number; total: number };
+const itemName = (it: JobItem) => (it.asset ? [it.asset.brand, it.asset.model].filter(Boolean).join(" ") || it.asset.serial || "Item" : it.label || "Item");
+const OUTCOMES: [string, string][] = [["open", "Open"], ["fixed", "Fixed"], ["cant_fix", "Can't fix"], ["declined", "Declined"]];
+const OUT_TONE: Record<string, string> = { fixed: "bg-emerald-50 text-emerald-700 ring-emerald-200", cant_fix: "bg-amber-50 text-amber-700 ring-amber-200", declined: "bg-slate-100 text-ink-secondary ring-slate-200", open: "bg-white text-ink-primary ring-slate-300" };
+
+// Settings › Industry & assets › "Several items per job". Hidden unless the shop has it on, except a
+// job that already holds several items still lists them (read-only) after it's switched off.
+function JobItems({ orderId, onFlash, onChanged }: { orderId: string; onFlash: (m: string) => void; onChanged?: () => void }) {
+  const [st, setSt] = useState<{ enabled: boolean; items: JobItem[] } | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [cands, setCands] = useState<any[]>([]);
+  const [pickAsset, setPickAsset] = useState(""); const [label, setLabel] = useState(""); const [complaint, setComplaint] = useState("");
+  const load = () => api.get<any>(`/orders/${orderId}/items`).then((r) => setSt({ enabled: !!r.enabled, items: r.items || [] })).catch(() => setSt(null));
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [orderId]);
+  if (!st || (!st.enabled && st.items.length < 2)) return null;
+  const ro = !st.enabled;
+  async function call(fn: () => Promise<any>, ok?: string) {
+    try { const r = await fn(); if (r?.items) setSt((s) => (s ? { ...s, items: r.items } : s)); if (ok) onFlash(ok); onChanged?.(); }
+    catch (e: any) { onFlash(e?.message || "Couldn't save that"); }
+  }
+  function openAdd() { setAdding(true); setPickAsset(""); setLabel(""); setComplaint(""); api.get<any>(`/orders/${orderId}/items/candidates`).then((r) => setCands(r.items || [])).catch(() => setCands([])); }
+  async function add() {
+    if (!pickAsset && !label.trim()) return;
+    await call(() => api.post(`/orders/${orderId}/items`, { asset_id: pickAsset || undefined, label: pickAsset ? undefined : label, complaint }), "Item added");
+    setAdding(false);
+  }
+  const done = st.items.filter((i) => i.outcome !== "open").length;
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-100">
+        <span className="w-8 h-8 rounded-xl bg-primary/10 text-primary grid place-items-center"><M n="inventory" c="text-base" /></span>
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-ink-primary">Items on this job <span className="text-ink-tertiary font-normal">· {st.items.length}</span></div>
+          <div className="text-[11px] text-ink-tertiary">{done} of {st.items.length} have a result{ro ? " · read-only, several items per job is off" : ""}</div>
+        </div>
+        {!ro && !adding && <button onClick={openAdd} className="ml-auto px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-primary hover:bg-slate-50 flex items-center gap-1"><M n="add" c="text-sm" />Add item</button>}
+      </div>
+      {adding && (
+        <div className="px-4 py-3 bg-slate-50/70 border-b border-slate-100 space-y-2">
+          <div className="flex flex-wrap gap-2">
+            {cands.length > 0 && (
+              <select value={pickAsset} onChange={(e) => { setPickAsset(e.target.value); if (e.target.value) setLabel(""); }} aria-label="Customer's item" className="glass-input rounded-lg px-2 py-2 text-xs font-medium min-w-[200px]">
+                <option value="">Pick one of the customer's items…</option>
+                {cands.map((a) => <option key={a.id} value={a.id}>{[a.brand, a.model].filter(Boolean).join(" ") || "Item"}{a.serial ? ` · ${a.serial}` : ""}</option>)}
+              </select>
+            )}
+            <input value={label} onChange={(e) => { setLabel(e.target.value); if (e.target.value) setPickAsset(""); }} placeholder={cands.length ? "or type what it is" : "What is it? e.g. Makita grinder"} aria-label="Item name" className="glass-input flex-1 min-w-[180px] rounded-lg px-3 py-2 text-xs" />
+          </div>
+          <textarea value={complaint} onChange={(e) => setComplaint(e.target.value)} rows={2} placeholder="What's wrong with it?" aria-label="Problem" className="glass-input w-full rounded-lg px-3 py-2 text-xs" />
+          <div className="flex gap-2">
+            <button onClick={add} disabled={!pickAsset && !label.trim()} className="px-3.5 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-40">Add item</button>
+            <button onClick={() => setAdding(false)} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
+          </div>
+        </div>
+      )}
+      <div className="divide-y divide-slate-100">
+        {st.items.map((it, n) => (
+          <div key={it.id} className="px-4 py-3">
+            <div className="flex items-start gap-3">
+              <span className="w-7 h-7 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center text-[11px] font-semibold flex-shrink-0">{n + 1}</span>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-medium text-ink-primary">{itemName(it)}</span>
+                  {it.asset?.serial && <span className="text-[11px] text-ink-tertiary">Serial <span className="font-mono">{it.asset.serial}</span></span>}
+                  {it.is_primary && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-primary/10 text-primary">Main item</span>}
+                  {it.collected_at && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700">Collected</span>}
+                </div>
+                <ItemComplaint value={it.complaint || ""} readOnly={ro} onSave={(v) => call(() => api.patch(`/orders/${orderId}/items/${it.id}`, { complaint: v }))} />
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  {OUTCOMES.map(([k, l]) => (
+                    <button key={k} type="button" disabled={ro} aria-pressed={it.outcome === k} onClick={() => call(() => api.patch(`/orders/${orderId}/items/${it.id}`, { outcome: k }))}
+                      className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ring-1 ring-inset transition-colors disabled:cursor-default ${it.outcome === k ? OUT_TONE[k] : "text-ink-tertiary ring-transparent hover:bg-slate-100"}`}>{l}</button>
+                  ))}
+                  <label className={`ml-2 flex items-center gap-1.5 text-[11px] text-ink-secondary ${ro ? "" : "cursor-pointer"}`}>
+                    <input type="checkbox" disabled={ro} checked={!!it.collected_at} onChange={(e) => call(() => api.patch(`/orders/${orderId}/items/${it.id}`, { collected: e.target.checked }))} className="accent-primary" />Collected
+                  </label>
+                  <span className="ml-auto text-[11px] text-ink-tertiary tabular-nums">{it.line_count ? `${it.line_count} line${it.line_count === 1 ? "" : "s"} · ${money(it.total)}` : "No lines yet"}</span>
+                  {!ro && !it.is_primary && (
+                    <button type="button" aria-label={`Remove ${itemName(it)}`} title="Remove from this job"
+                      onClick={async () => { if (await confirmDialog(`Remove ${itemName(it)} from this job? Its services and parts stay on the job, marked "whole job".`, { title: "Remove item", confirmLabel: "Remove", danger: true })) call(() => api.del(`/orders/${orderId}/items/${it.id}`), "Item removed"); }}
+                      className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-sm" /></button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ItemComplaint({ value, readOnly, onSave }: { value: string; readOnly: boolean; onSave: (v: string) => void }) {
+  const [v, setV] = useState(value);
+  useEffect(() => { setV(value); }, [value]);
+  if (readOnly) return value ? <p className="mt-1 text-xs text-ink-secondary">{value}</p> : null;
+  return <input value={v} onChange={(e) => setV(e.target.value)} onBlur={() => { if (v !== value) onSave(v); }} placeholder="What's wrong with it?" aria-label="Problem"
+    className="mt-1 w-full text-xs text-ink-secondary bg-transparent border-b border-transparent hover:border-slate-200 focus:border-primary/50 focus:outline-none py-0.5" />;
 }
 
 /* ---- field helpers ---- */
@@ -756,6 +860,12 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
     catch (e: any) { onFlash(e.message || "Could not update line"); }
   }
   const [recs, setRecs] = useState<Rec[]>([]);
+  // Several items per job: which item a line is for ("" = whole job). Shown only when the shop has it on.
+  const [jobItems, setJobItems] = useState<JobItem[]>([]);
+  const [itemsOn, setItemsOn] = useState(false);
+  const [forItem, setForItem] = useState("");
+  useEffect(() => { api.get<any>(`/orders/${orderId}/items`).then((r) => { setItemsOn(!!r.enabled); setJobItems(r.items || []); }).catch(() => {}); }, [orderId, lines]);
+  const tagging = itemsOn && jobItems.length > 1;
   const [filter, setFilter] = useState("All");
   const [pick, setPick] = useState<CatalogItem | null>(null);
   const [qty, setQty] = useState(1);
@@ -778,6 +888,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
         line_type: pick.kind === "service" ? "labour" : "part",
         ref_id: pick.ref_id, qty, unit_price: pick.price || 0,
         discount: disc, discount_type: "pct",
+        ...(tagging && forItem ? { order_item_id: forItem } : {}),
       });
       onFlash(r?.margin_warning ? `Added — ${r.margin_warning}` : "Line added");
       setPick(null); setQty(1); setDisc(0);
@@ -818,6 +929,12 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
             <div className="min-w-0">
               <div className="flex items-center gap-2"><h5 className="text-xs font-bold text-ink-primary truncate">{l.description || "Item"}</h5><span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${tagCls(k)}`}>{l.kind || l.line_type || "item"}</span></div>
               <p className="text-[11px] text-ink-tertiary font-mono">Qty: {l.qty ?? 1} · Unit: {money(l.unit_price)}{l.discount ? ` · Disc ${l.discount}${l.discount_type === "pct" ? "%" : ""}` : ""}</p>
+              {tagging && (
+                <select value={l.order_item_id || ""} onChange={(e) => patchLine(l.id, { order_item_id: e.target.value })} aria-label={`Which item ${l.description || "this line"} is for`}
+                  className="mt-1 max-w-[220px] text-[11px] font-medium text-ink-secondary bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5">
+                  <option value="">For: whole job</option>{jobItems.map((it) => <option key={it.id} value={it.id}>For: {itemName(it)}</option>)}
+                </select>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2 flex-none">
@@ -919,6 +1036,12 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
               <div className="glass-input px-3 py-2 rounded-lg text-xs font-semibold flex items-center justify-between"><span className="truncate">{pick.name}</span><button aria-label="Close" onClick={() => setPick(null)} className="text-ink-tertiary hover:text-rose-600 ml-2"><M n="close" c="text-sm" /></button></div></div>
             <div className="w-16"><label className="block text-[10px] font-semibold text-ink-tertiary mb-1">Qty</label><input type="number" min={1} value={qty} onChange={(e) => setQty(Math.max(1, Number(e.target.value)))} className="glass-input w-full px-2 py-2 rounded-lg text-xs" /></div>
             <div className="w-20"><label className="block text-[10px] font-semibold text-ink-tertiary mb-1">Disc %</label><input type="number" min={0} max={100} value={disc} onChange={(e) => setDisc(Number(e.target.value))} className="glass-input w-full px-2 py-2 rounded-lg text-xs" /></div>
+            {tagging && (
+              <div className="min-w-[150px]"><label className="block text-[10px] font-semibold text-ink-tertiary mb-1">For</label>
+                <select value={forItem} onChange={(e) => setForItem(e.target.value)} aria-label="Which item this is for" className="glass-input w-full px-2 py-2 rounded-lg text-xs font-semibold text-ink-primary">
+                  <option value="">Whole job</option>{jobItems.map((it) => <option key={it.id} value={it.id}>{itemName(it)}</option>)}
+                </select></div>
+            )}
             <button onClick={addLine} disabled={adding} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50">{adding ? "Adding…" : "Add"}</button>
             {stock && (
               <div className="w-full text-[11px] pt-0.5">

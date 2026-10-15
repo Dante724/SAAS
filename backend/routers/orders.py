@@ -64,6 +64,7 @@ async def unique_public_token(db: AsyncSession) -> str:
 
 class LineIn(BaseModel):
     line_type: str  # labour|part|fee
+    order_item_id: Optional[str] = None             # several items per job: which item (null = whole job)
     description: str
     qty: float = 1.0
     unit_price: float = 0.0
@@ -320,7 +321,8 @@ def _serialize_order(o: Order) -> dict:
                    "tax_rate": l.tax_rate, "tax_mode": l.tax_mode, "technician_id": l.technician_id,
                    "work_share": getattr(l, "work_share", 1.0), "booked_hours": getattr(l, "booked_hours", 0) or 0,
                    "co_technicians": getattr(l, "co_technicians", None) or [],
-                   "pending_stock": l.pending_stock or 0, "ref_id": l.ref_id, "total": l.total} for l in o.lines],
+                   "pending_stock": l.pending_stock or 0, "ref_id": l.ref_id, "total": l.total,
+                   "order_item_id": getattr(l, "order_item_id", None)} for l in o.lines],
         "comments": [{"id": c.id, "body": c.body, "visible_to_client": c.visible_to_client,
                       "created_at": c.created_at.isoformat()} for c in o.comments],
         "status_logs": [{"from": s.from_status, "to": s.to_status, "at": s.changed_at.isoformat(),
@@ -3075,6 +3077,10 @@ async def add_line(
         raise HTTPException(404, "Order not found")
     await _guard_editable(db, order, current)
     await _validate_line_assignment(db, current.org_id, technician_id=data.technician_id, co_technicians=data.co_technicians)
+    if data.order_item_id:
+        from backend.services import multi_asset as _ma
+        await _ma.require_enabled(db, current.org_id)
+        await _ma.item_for_order(db, current.org_id, order.id, data.order_item_id)
     # 144ax G1 — snapshot the catalog service's standard duration as the line's booked hours
     # (minutes → hours), so booked-vs-actual has a baseline without the tech hand-typing it.
     # Snapshot, not a live link: editing the catalog service later won't rewrite this line.
@@ -3162,7 +3168,7 @@ async def add_line(
             t = _calc_line(li)
             nl = OrderLine(order_id=order_id, line_type=li.line_type, kind=li.kind, ref_id=li.ref_id,
                            description=li.description, qty=li.qty, unit_price=li.unit_price,
-                           technician_id=data.technician_id, total=t)
+                           technician_id=data.technician_id, order_item_id=data.order_item_id, total=t)
             db.add(nl)
             await db.flush()
             if kind == "product" and not order.is_estimate:
@@ -3212,6 +3218,7 @@ async def add_line(
         tax_id=data.tax_id, tax_rate=data.tax_rate, tax_mode=data.tax_mode,
         technician_id=data.technician_id, work_share=data.work_share, warranty_days=data.warranty_days,
         booked_hours=data.booked_hours or 0, co_technicians=data.co_technicians or [], total=total,
+        order_item_id=data.order_item_id,
     )
     db.add(line)
     await db.flush()
@@ -3367,6 +3374,7 @@ async def _maybe_deduct(db, order, line, qty, perms, current):
 
 
 class LineUpdate(BaseModel):
+    order_item_id: Optional[str] = None              # several items per job ("" / null = whole job)
     qty: Optional[float] = None
     unit_price: Optional[float] = None
     cost_price: Optional[float] = None
@@ -3425,6 +3433,12 @@ async def update_line(
     if not line:
         raise HTTPException(404, "Line not found")
     payload = data.model_dump(exclude_unset=True)
+    if "order_item_id" in payload:
+        payload["order_item_id"] = payload["order_item_id"] or None
+        if payload["order_item_id"]:
+            from backend.services import multi_asset as _ma
+            await _ma.require_enabled(db, current.org_id)
+            await _ma.item_for_order(db, current.org_id, order.id, payload["order_item_id"])
     # 144aw — validate labour attribution against the org + 100% split before persisting.
     if "co_technicians" in payload or "technician_id" in payload:
         await _validate_line_assignment(

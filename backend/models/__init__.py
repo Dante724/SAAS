@@ -103,6 +103,8 @@ class Organisation(Base):
     default_file_visibility: Mapped[str] = mapped_column(String(10), default="private")
     warranty_count_from: Mapped[str] = mapped_column(String(10), default="closure")  # closure|created
     asset_one_open_ticket: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Several items per job (tools / equipment / device shops only — see services/multi_asset.py).
+    multi_asset_jobs: Mapped[bool] = mapped_column(Boolean, default=False)
     rounding_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     currency_display_style: Mapped[str] = mapped_column(String(10), default="symbol")  # symbol|code|iso
     currency_position: Mapped[str] = mapped_column(String(10), default="before")  # before|after
@@ -572,6 +574,31 @@ class OrderLine(Base):
     tax_mode: Mapped[str] = mapped_column(String(10), default="imposed")  # included|imposed
     total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     order: Mapped["Order"] = relationship(back_populates="lines")
+    # Several items per job: which of the job's items this line is for (null = the whole job).
+    order_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("order_items.id"), index=True)
+
+
+class OrderItem(Base):
+    """Several items per job (multi-asset). One row per item the customer left on this job.
+
+    Tenant-scoped twice over: org_id on every row, and every read/write also matches order_id,
+    so an item can never be read or attached across shops or jobs. The job's own device stays
+    on orders.device_id (item #1 is created for it) so everything that knows one item still works.
+
+    outcome: open | fixed | cant_fix | declined
+    """
+    __tablename__ = "order_items"
+    __table_args__ = (UniqueConstraint("order_id", "asset_id", name="uq_order_items_order_asset"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"), index=True)
+    asset_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("devices.id"), index=True)
+    label: Mapped[Optional[str]] = mapped_column(String(200))     # for items with no asset record
+    complaint: Mapped[Optional[str]] = mapped_column(Text)
+    outcome: Mapped[str] = mapped_column(String(20), default="open")
+    collected_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 # 144df — the legacy JSON JobKit model was retired; the Bundle engine (relabelled "Job Kit" in the UI)
 # is now the single job-kit concept. Its table is dropped by migration jk144df01.
@@ -2877,7 +2904,7 @@ class AutomationRule(Base):
 
 all_models = [
     Organisation, Location, Role, Employee, Shift, WageRecord,
-    Client, Device, OrderStatus, Order, OrderLine, OrderStatusLog, OrderComment,
+    Client, Device, OrderStatus, Order, OrderLine, OrderItem, OrderStatusLog, OrderComment,
     LegalEntity, NumberSequence,
     Part, StockLevel, StockMovement, Supplier, PurchaseOrder, POLine, Service, SavedFilter, Tax,
     Invoice, InvoiceLine, Payment, CashShift, Expense, Account, CashFlowItem, Transaction,

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import Employee, Role, Task
+from backend.services import multi_asset as _ma
 from backend.services.auth import get_current_employee, hash_password, require_perm
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
@@ -676,6 +677,8 @@ async def get_company(
         "default_file_visibility": org.default_file_visibility,
         "warranty_count_from": org.warranty_count_from,
         "asset_one_open_ticket": org.asset_one_open_ticket,
+        "multi_asset_jobs": _ma.enabled(org),
+        "multi_asset_available": _ma.available(org),
         "rounding_enabled": org.rounding_enabled,
         "currency_display_style": org.currency_display_style,
         "currency_position": org.currency_position,
@@ -714,6 +717,7 @@ class CompanyIn(BaseModel):
     default_file_visibility: Optional[str] = None
     warranty_count_from: Optional[str] = None
     asset_one_open_ticket: Optional[bool] = None
+    multi_asset_jobs: Optional[bool] = None            # several items per job (eligible industries only)
     rounding_enabled: Optional[bool] = None
     currency_display_style: Optional[str] = None
     currency_position: Optional[str] = None
@@ -747,6 +751,11 @@ async def update_company(
         valid = ("auto", "stripe", "square", "sumup", "simulated")
         if payload["payment_provider"] not in valid:
             raise HTTPException(422, f"Unknown payment_provider. Valid: {list(valid)}")
+    if payload.get("multi_asset_jobs"):
+        from backend.services import industry as _ind
+        tmpl = payload.get("industry_template", org.industry_template)
+        if _ind.normalize_template_key(tmpl) not in _ma.ELIGIBLE:
+            raise HTTPException(422, "Several items per job is only for tools, equipment, phone and computer shops")
     # Build 121: the API field is 'currencies' but the column is 'currencies_json'
     if "currencies" in payload:
         org.currencies_json = payload.pop("currencies")

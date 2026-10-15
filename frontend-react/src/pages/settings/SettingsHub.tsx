@@ -416,6 +416,7 @@ export default function SettingsHub() {
           {sec === "industry" && (
             <div className="max-w-4xl space-y-5">
               <IndustryNote onChange={() => setSec("general")} />
+              <MultiAssetSwitch />
               <AssetCatalog />
             </div>
           )}
@@ -2189,6 +2190,37 @@ function IndustryNote({ onChange }: { onChange: () => void }) {
         <div className="text-[11px] text-ink-tertiary">The brands, models and groups below follow this. Change it in General.</div>
       </div>
       <button onClick={onChange} className="ml-auto px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex-shrink-0">Change</button>
+    </div>
+  );
+}
+
+// Several items per job — only offered to tools, small engine / equipment, phone and computer
+// shops (the server enforces the same list: services/multi_asset.ELIGIBLE). Other industries never see it.
+function MultiAssetSwitch() {
+  const [st, setSt] = useState<{ available: boolean; on: boolean } | null>(null);
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { api.get<any>("/staff/company").then((c) => setSt({ available: !!c.multi_asset_available, on: !!c.multi_asset_jobs })).catch(() => setSt(null)); }, []);
+  if (!st?.available) return null;
+  async function flip() {
+    if (!st) return;
+    setBusy(true); setErr(null);
+    try { await api.put("/staff/company", { multi_asset_jobs: !st.on }); setSt({ ...st, on: !st.on }); }
+    catch (e: any) { setErr(e?.message || "Couldn't change this"); } finally { setBusy(false); }
+  }
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card px-5 py-4">
+      <div className="flex items-start gap-3">
+        <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n="inventory" c="text-lg" /></span>
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-ink-primary">Several items per job</div>
+          <div className="text-xs text-ink-tertiary leading-relaxed">For customers who drop off a batch, like six tools at once. One job holds every item, each with its own problem and result, and each service or part can be marked for one item.</div>
+          {err && <div className="mt-1 text-xs text-rose-600">{err}</div>}
+        </div>
+        <button type="button" role="switch" aria-checked={st.on} aria-label="Several items per job" disabled={busy} onClick={flip}
+          className={`ml-auto w-10 h-6 rounded-full relative transition-colors flex-shrink-0 disabled:opacity-60 ${st.on ? "bg-primary" : "bg-slate-300"}`}>
+          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${st.on ? "left-[18px]" : "left-0.5"}`} />
+        </button>
+      </div>
     </div>
   );
 }
