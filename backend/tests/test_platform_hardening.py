@@ -47,3 +47,7 @@ def test_path_tokens_are_redacted_in_logs_but_uuids_stay():
     msg = rec.getMessage()
     assert "Zq3xV9pL0aBc7dEf1gHiJk" not in msg
     assert "1b4e28ba-2fa1-11d2-883f-0016d3cca427" in msg
+    rec2 = logging.LogRecord("repairos.access", logging.INFO, __file__, 1, "%s", (
+        "GET /api/settings/asset-identifier-rules -> 200",), None)
+    RedactionFilter().filter(rec2)
+    assert "asset-identifier-rules" in rec2.getMessage()

@@ -27,7 +27,9 @@ class RedactionFilter(logging.Filter):
     # reset links), and the access log writes every path. Mask long random segments; UUIDs
     # are record ids, not secrets, and stay readable for debugging.
     _PATH_TOKEN = re.compile(r'(?<=/)[A-Za-z0-9_\-]{20,}(?=[/?#\s]|$)')
-    _UUID = re.compile(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
+    # Kept readable: UUIDs (record ids) and route names like "asset-identifier-rules" (lowercase
+    # words) — random tokens always mix in digits or capitals.
+    _KEEP = re.compile(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[a-z_-]+')
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
@@ -36,7 +38,7 @@ class RedactionFilter(logging.Filter):
             return True
         red = self._KV.sub(r'\1\2***REDACTED***', msg)
         red = self._BEARER.sub(r'\1***REDACTED***', red)
-        red = self._PATH_TOKEN.sub(lambda m: m.group(0) if self._UUID.fullmatch(m.group(0)) else "***", red)
+        red = self._PATH_TOKEN.sub(lambda m: m.group(0) if self._KEEP.fullmatch(m.group(0)) else "***", red)
         if red != msg:
             record.msg = red
             record.args = ()
