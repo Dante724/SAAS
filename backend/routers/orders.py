@@ -698,6 +698,11 @@ async def create_order(
             custom_data=data.asset_custom_data or {},
             image_data=data.asset_image,
         )
+        from backend.services import asset_catalog as _cat
+        from backend.services import identifiers as _ids
+        _ids.tidy_device(new_asset)
+        new_asset.brand, new_asset.model = await _cat.canonical(
+            db, current.org_id, order_template_key, new_asset.brand, new_asset.model)
         db.add(new_asset)
         await db.flush()
         device_id = new_asset.id

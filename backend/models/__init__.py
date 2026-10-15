@@ -368,6 +368,14 @@ class Client(Base):
 
 class Device(Base):
     __tablename__ = "devices"
+    # Intake / scan look a device up by identifier within the shop (values stored normalized,
+    # see services/identifiers.py).
+    __table_args__ = (
+        Index("ix_devices_org_serial", "org_id", "serial"),
+        Index("ix_devices_org_imei", "org_id", "imei"),
+        Index("ix_devices_org_vin", "org_id", "vin"),
+        Index("ix_devices_org_hin", "org_id", "hin"),
+    )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     # Build 144do (security): devices are now tenant-anchored directly. Previously
     # tenancy was inferred via client_id -> Client.org_id, which left company-owned

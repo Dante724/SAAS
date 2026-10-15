@@ -497,8 +497,10 @@ async def _match_existing(db, org_id, kind, value) -> Optional[Device]:
     client_ids = select(Client.id).where(Client.org_id == org_id)
     base = or_(Device.org_id == org_id,
                and_(Device.org_id.is_(None), Device.client_id.in_(client_ids)))
+    from backend.services import identifiers as _ids
     col = {"vin": Device.vin, "hin": Device.hin, "imei": Device.imei}.get(kind, Device.serial)
-    return (await db.execute(select(Device).where(base, col == value))).scalars().first()
+    k = kind if kind in _ids.KINDS else "serial"
+    return (await db.execute(select(Device).where(base, col == _ids.normalize(k, value)))).scalars().first()
 
 
 class ScanIn(BaseModel):

@@ -15,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import Client, Device, Employee, Order
+from backend.services import asset_catalog as _cat
+from backend.services import identifiers as _ids
 from backend.services import industry as _ind
 from backend.services.auth import get_current_employee, require_perm
 
@@ -164,6 +166,8 @@ async def create_asset(
         asset_status=data.asset_status or ("in_use" if data.owner_type == "client" else "in_stock"),
         purchase_price=data.purchase_price or 0.0, sale_price=data.sale_price or 0.0,
     )
+    _ids.tidy_device(d)
+    d.brand, d.model = await _cat.canonical(db, current.org_id, template_key, d.brand, d.model)
     db.add(d)
     await db.flush()
     await _log_asset(db, current.org_id, d.id, "create",
@@ -172,6 +176,73 @@ async def create_asset(
     await db.commit()
     await db.refresh(d)
     return _ser(d, 0)
+
+
+@router.get("/suggest")
+async def suggest_names(
+    field: str = "brand", q: str = "", brand: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Brand / model picker options: the shop's own usage first, then its catalog, then the
+    built-in US/CA list (phones, tablets, computers, consoles)."""
+    if field not in ("brand", "model"):
+        raise HTTPException(422, "field must be brand or model")
+    return {"items": await _cat.suggest(db, current.org_id, field, q, brand)}
+
+
+class IdentifyIn(BaseModel):
+    value: str
+    kind: Optional[str] = None          # imei|vin|hin|serial — guessed when omitted
+    client_id: Optional[str] = None     # the customer at the counter, to tell "theirs" from "someone else's"
+
+
+@router.post("/identify")
+async def identify(
+    data: IdentifyIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Intake helper for a typed or scanned IMEI / VIN / HIN / serial: tidy it, say if it looks
+    mistyped, and find it if this shop has seen it before (owner, last job, warranty) so staff
+    reuse the device instead of creating a duplicate. Never blocks anything."""
+    kind = data.kind if data.kind in _ids.KINDS else _ids.guess_kind(data.value)
+    norm = _ids.normalize(kind, data.value)
+    if not norm:
+        return {"kind": kind, "normalized": None, "problem": None, "matches": []}
+    candidates = {k: _ids.normalize(k, data.value) for k in _ids.KINDS}
+    cols = {"imei": Device.imei, "vin": Device.vin, "hin": Device.hin, "serial": Device.serial}
+    conds = [cols[k] == v for k, v in candidates.items() if v]
+    rows = (await db.execute(select(Device).where(
+        Device.org_id == current.org_id, or_(*conds)).limit(5))).scalars().all()
+    from datetime import date as _date
+    today = _date.today()
+    matches = []
+    for d in rows:
+        owner = None
+        if d.client_id:
+            c = (await db.execute(select(Client).where(
+                Client.id == d.client_id, Client.org_id == current.org_id))).scalar_one_or_none()
+            owner = {"id": c.id, "name": c.name, "phone": c.phone} if c else None
+        last = (await db.execute(select(Order).where(
+            Order.org_id == current.org_id, Order.device_id == d.id)
+            .order_by(desc(Order.created_at)).limit(1))).scalars().first()
+        jobs = (await db.execute(select(func.count()).select_from(Order).where(
+            Order.org_id == current.org_id, Order.device_id == d.id))).scalar() or 0
+        last_out = None
+        if last:
+            wu = last.warranty_until
+            last_out = {"id": last.id, "order_number": last.order_number, "status": last.status,
+                        "created_at": last.created_at.isoformat() if last.created_at else None,
+                        "warranty_until": wu.isoformat() if wu else None,
+                        "under_warranty": bool(wu and wu >= today)}
+        matches.append({
+            "id": d.id, "brand": d.brand, "model": d.model, "serial": d.serial, "imei": d.imei,
+            "vin": d.vin, "hin": d.hin, "color": d.color, "watch_out": d.watch_out,
+            "client": owner, "owner_type": d.owner_type,
+            "same_client": bool(data.client_id and d.client_id == data.client_id),
+            "jobs": jobs, "last_order": last_out})
+    return {"kind": kind, "normalized": norm, "problem": _ids.problem(kind, norm), "matches": matches}
 
 
 @router.get("/{asset_id}")
@@ -254,6 +325,9 @@ async def update_asset(
         payload["client_id"] = None
     for k, v in payload.items():
         setattr(d, k, v)
+    _ids.tidy_device(d)
+    if "brand" in payload or "model" in payload:
+        d.brand, d.model = await _cat.canonical(db, current.org_id, d.template_key, d.brand, d.model)
     await db.commit()
     await db.refresh(d)
     order_count = (await db.execute(select(func.count()).select_from(Order)

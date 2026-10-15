@@ -230,31 +230,82 @@ LEGACY_ALIASES = {
     "small_engine": "small_engine",
 }
 
-# Starter brand data (system rows). Deliberately small — the real catalog comes
-# from CSV import / owner curation. Chosen to prove isolation: the same brand
-# name recurs across templates as SEPARATE rows.
+# Starter brand/model data (system rows), focused on what US/CA shops see every day so the
+# brand/model pickers are useful on day one. Shops add anything else just by typing it at intake
+# (services/asset_catalog.py remembers it). The same brand recurs across templates as separate rows.
+_PHONE_BRANDS = ["Apple", "Samsung", "Google", "Motorola", "OnePlus", "LG", "TCL", "Nokia", "Xiaomi"]
+_COMPUTER_BRANDS = ["Apple", "Dell", "HP", "Lenovo", "Asus", "Acer", "Microsoft", "MSI", "Razer", "Samsung"]
+_CONSOLE_BRANDS = ["Sony", "Microsoft", "Nintendo", "Valve"]
 STARTER_BRANDS: dict[str, list[str]] = {
-    "mobile_phone": ["Apple", "Samsung", "Google", "OnePlus", "Xiaomi"],
-    "computer":     ["Apple", "Dell", "HP", "Lenovo", "Asus"],
-    "tools":        ["DeWalt", "Makita", "Bosch", "Milwaukee"],
-    "small_engine": ["Honda", "Briggs & Stratton", "Yamaha", "Kohler"],
-    "powersports":  ["Yamaha", "Honda", "Polaris", "Kawasaki", "Can-Am"],
-    "auto":         ["Toyota", "Honda", "Ford", "Chevrolet", "BMW"],
-    "bike":         ["Trek", "Giant", "Yamaha", "Honda", "Specialized"],
-    "marine":       ["Yamaha", "Mercury", "Boston Whaler", "Sea Ray"],
-    "fleet_truck":  ["Freightliner", "Volvo", "Peterbilt", "Kenworth", "International"],
-    "general":      [],
+    "mobile_phone": _PHONE_BRANDS,
+    "computer":     _COMPUTER_BRANDS,
+    "tools":        ["DeWalt", "Makita", "Milwaukee", "Bosch", "Ryobi", "Ridgid", "Craftsman", "Black+Decker", "Metabo HPT", "Hilti"],
+    "small_engine": ["Honda", "Briggs & Stratton", "Kohler", "Kawasaki", "Yamaha", "Toro", "Husqvarna", "Stihl", "Echo", "John Deere", "Cub Cadet", "Troy-Bilt", "Generac"],
+    "powersports":  ["Polaris", "Can-Am", "Honda", "Yamaha", "Kawasaki", "Suzuki", "Arctic Cat", "Ski-Doo", "Sea-Doo", "Harley-Davidson"],
+    "auto":         ["Ford", "Chevrolet", "Toyota", "Honda", "Nissan", "Jeep", "Ram", "GMC", "Hyundai", "Kia", "Subaru", "Volkswagen", "BMW", "Mercedes-Benz", "Tesla"],
+    "bike":         ["Trek", "Specialized", "Giant", "Yamaha", "Cannondale", "Santa Cruz", "Rad Power Bikes", "Aventon", "Brompton"],
+    "marine":       ["Mercury", "Yamaha", "Suzuki", "Evinrude", "Honda Marine", "Boston Whaler", "Sea Ray", "Bayliner"],
+    "fleet_truck":  ["Freightliner", "Peterbilt", "Kenworth", "International", "Volvo", "Mack", "Isuzu", "Hino"],
+    "general":      sorted(set(_PHONE_BRANDS + _COMPUTER_BRANDS + _CONSOLE_BRANDS), key=str.lower),
 }
 
-# A few starter models to prove the brand->model chain (template + brand scoped).
+_PHONE_MODELS = {
+    "Apple": ["iPhone 16 Pro Max", "iPhone 16 Pro", "iPhone 16 Plus", "iPhone 16", "iPhone 16e",
+              "iPhone 15 Pro Max", "iPhone 15 Pro", "iPhone 15 Plus", "iPhone 15",
+              "iPhone 14 Pro Max", "iPhone 14 Pro", "iPhone 14 Plus", "iPhone 14",
+              "iPhone 13 Pro Max", "iPhone 13 Pro", "iPhone 13", "iPhone 13 mini",
+              "iPhone 12 Pro Max", "iPhone 12 Pro", "iPhone 12", "iPhone 12 mini",
+              "iPhone 11 Pro Max", "iPhone 11 Pro", "iPhone 11", "iPhone SE (3rd gen)", "iPhone SE (2nd gen)",
+              "iPhone XR", "iPhone XS Max", "iPhone XS", "iPhone X",
+              "iPad Pro 13-inch (M4)", "iPad Pro 11-inch (M4)", "iPad Air (M2)", "iPad (10th gen)", "iPad mini (6th gen)",
+              "Apple Watch Series 10", "Apple Watch Series 9", "Apple Watch Ultra 2", "Apple Watch SE"],
+    "Samsung": ["Galaxy S25 Ultra", "Galaxy S25+", "Galaxy S25", "Galaxy S24 Ultra", "Galaxy S24+", "Galaxy S24", "Galaxy S24 FE",
+                "Galaxy S23 Ultra", "Galaxy S23+", "Galaxy S23", "Galaxy S23 FE", "Galaxy S22 Ultra", "Galaxy S22", "Galaxy S21",
+                "Galaxy Z Fold6", "Galaxy Z Flip6", "Galaxy Z Fold5", "Galaxy Z Flip5",
+                "Galaxy A55", "Galaxy A54", "Galaxy A35", "Galaxy A25", "Galaxy A15", "Galaxy Tab S9", "Galaxy Tab A9"],
+    "Google": ["Pixel 9 Pro XL", "Pixel 9 Pro", "Pixel 9", "Pixel 9 Pro Fold", "Pixel 8 Pro", "Pixel 8", "Pixel 8a",
+               "Pixel 7 Pro", "Pixel 7", "Pixel 7a", "Pixel 6 Pro", "Pixel 6", "Pixel 6a"],
+    "Motorola": ["moto g Power", "moto g Stylus", "moto g play", "razr+", "razr", "edge"],
+    "OnePlus": ["OnePlus 13", "OnePlus 12", "OnePlus 11", "OnePlus Nord N30"],
+}
+_COMPUTER_MODELS = {
+    "Apple": ["MacBook Air 13-inch (M3)", "MacBook Air 15-inch (M3)", "MacBook Air 13-inch (M2)", "MacBook Air (M1)",
+              "MacBook Pro 14-inch (M4)", "MacBook Pro 16-inch (M4)", "MacBook Pro 14-inch (M3)", "MacBook Pro 13-inch (M2)",
+              "iMac 24-inch (M4)", "iMac 24-inch (M3)", "Mac mini (M4)", "Mac Studio"],
+    "Dell": ["XPS 13", "XPS 15", "XPS 16", "Inspiron 14", "Inspiron 15", "Inspiron 16", "Latitude 5440", "Latitude 7440",
+             "Vostro 15", "Alienware m16", "OptiPlex 7010"],
+    "HP": ["Pavilion 15", "Pavilion x360", "Envy x360", "Spectre x360", "EliteBook 840", "ProBook 450", "Victus 15", "OMEN 16", "HP 15 Laptop"],
+    "Lenovo": ["ThinkPad X1 Carbon", "ThinkPad T14", "ThinkPad E14", "IdeaPad 3", "IdeaPad 5", "IdeaPad Flex 5", "Yoga 7", "Legion 5", "ThinkCentre M70"],
+    "Asus": ["Zenbook 14", "Vivobook 15", "ROG Zephyrus G14", "ROG Strix G16", "TUF Gaming A15"],
+    "Acer": ["Aspire 5", "Swift 3", "Nitro 5", "Predator Helios 16", "Chromebook 314"],
+    "Microsoft": ["Surface Laptop 7", "Surface Laptop 5", "Surface Pro 11", "Surface Pro 9", "Surface Go 4"],
+}
+_CONSOLE_MODELS = {
+    "Sony": ["PlayStation 5 Pro", "PlayStation 5", "PlayStation 5 Digital", "PlayStation 4 Pro", "PlayStation 4", "DualSense Controller"],
+    "Microsoft": ["Xbox Series X", "Xbox Series S", "Xbox One X", "Xbox One S", "Xbox Wireless Controller"],
+    "Nintendo": ["Switch OLED", "Switch", "Switch Lite", "Joy-Con"],
+    "Valve": ["Steam Deck OLED", "Steam Deck"],
+}
+
+
+def _merge_models(*parts: dict) -> dict:
+    out: dict[str, list[str]] = {}
+    for p in parts:
+        for b, ms in p.items():
+            out.setdefault(b, [])
+            out[b] += [m for m in ms if m not in out[b]]
+    return out
+
+
 STARTER_MODELS: dict[str, dict[str, list[str]]] = {
-    "mobile_phone": {
-        "Apple": ["iPhone 14 Pro", "iPhone 15", "iPhone SE"],
-        "Samsung": ["Galaxy S23", "Galaxy A54"],
-    },
+    "mobile_phone": _PHONE_MODELS,
+    "computer": _merge_models(_COMPUTER_MODELS, {"Samsung": ["Galaxy Book4", "Galaxy Book3"]}),
+    "general": _merge_models(_PHONE_MODELS, _COMPUTER_MODELS, _CONSOLE_MODELS),
     "auto": {
-        "Toyota": ["Corolla", "Camry", "RAV4"],
-        "Honda": ["Civic", "Accord", "CR-V"],
+        "Toyota": ["Corolla", "Camry", "RAV4", "Tacoma", "Highlander", "Tundra"],
+        "Honda": ["Civic", "Accord", "CR-V", "Pilot", "HR-V"],
+        "Ford": ["F-150", "Escape", "Explorer", "Mustang", "Bronco", "Ranger"],
+        "Chevrolet": ["Silverado 1500", "Equinox", "Malibu", "Tahoe", "Traverse"],
     },
 }
 

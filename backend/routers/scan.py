@@ -41,9 +41,12 @@ async def resolve(data: ScanIn, db: AsyncSession = Depends(get_db),
         return {"matched": True, "type": "product", "id": p.id, "route": "/inventory", "label": p.name}
 
     # 3) asset — serial / imei / vin(upper) / hin(upper)
-    d = (await db.execute(select(Device).where(
-        Device.org_id == org, or_(Device.serial == code, Device.imei == code,
-                                  Device.vin == up, Device.hin == up)))).scalars().first()
+    from backend.services import identifiers as _ids
+    conds = [col == v for col, v in ((Device.serial, _ids.normalize("serial", code)),
+                                      (Device.imei, _ids.normalize("imei", code)),
+                                      (Device.vin, _ids.normalize("vin", code)),
+                                      (Device.hin, _ids.normalize("hin", code))) if v]
+    d = (await db.execute(select(Device).where(Device.org_id == org, or_(*conds)))).scalars().first()
     if d:
         label = " ".join(x for x in [d.brand, d.model] if x) or (d.serial or d.imei or "Asset")
         return {"matched": True, "type": "asset", "id": d.id, "route": "/assets", "label": label}

@@ -117,7 +117,7 @@ async def test_brand_duplicate_rejected(client, tenant):
 async def test_model_chain_and_filter(client, tenant):
     await client.put("/api/settings/industry-template", json={"template_key": "auto"}, headers=tenant)
     b = (await client.post("/api/settings/asset-brands",
-                           json={"template_key": "auto", "name": "Nissan"}, headers=tenant)).json()
+                           json={"template_key": "auto", "name": "Rivian"}, headers=tenant)).json()
     m = await client.post("/api/settings/asset-models",
                           json={"template_key": "auto", "brand_id": b["id"], "name": "Leaf"}, headers=tenant)
     assert m.status_code == 201, m.text

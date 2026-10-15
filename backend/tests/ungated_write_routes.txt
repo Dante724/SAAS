@@ -222,3 +222,7 @@ POST /api/timeclock/switch [staff]
 ## Adds one value to an existing list only (no rename/merge/delete); the front desk can't stop
 ## for an admin. Managing lists stays behind can_manage_settings.
 POST /api/directories/by-key/{key}/items [staff]
+
+## Staff — intake lookup: POST only to carry the typed/scanned value in a body; it reads and
+## writes nothing (tidy + checksum + "seen before" within the shop).
+POST /api/assets/identify [staff]
