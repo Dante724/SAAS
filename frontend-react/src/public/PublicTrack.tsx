@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
   FileSignature, Check, X, Camera, MessageSquare, Paperclip, RefreshCw,
   Wrench, Box, Receipt, ClipboardList, Download, MapPin, Clock, Phone, Star,
@@ -9,8 +9,20 @@ import {
 // A real part of the React app (Liquid Clay tokens, flat styling) — NOT the
 // legacy vanilla-JS track.html. Served at /track/:token, no auth, no shell.
 
-type Line = { label: string; qty?: number; kind?: string; line_type?: string; amount: number };
-type Rec = { id: string; title: string; note?: string; line_total: number; status: string; media_data?: string };
+type Line = { label: string; qty?: number; kind?: string; line_type?: string; amount: number; item?: string | null };
+
+// Several items per job: recommendations grouped item by item (job's item order), whole job last.
+function byItem(recs: Rec[]): { item: string | null; recs: Rec[] }[] {
+  const out: { item: string | null; recs: Rec[] }[] = [];
+  const sorted = [...recs].sort((a, b) => (a.item ? (a.item_order ?? 0) : 1e9) - (b.item ? (b.item_order ?? 0) : 1e9));
+  for (const r of sorted) {
+    const k = r.item || null;
+    const g = out.find((x) => x.item === k);
+    if (g) g.recs.push(r); else out.push({ item: k, recs: [r] });
+  }
+  return out;
+}
+type Rec = { id: string; title: string; note?: string; line_total: number; status: string; media_data?: string; item?: string | null; item_order?: number | null };
 type Update = { type: string; body?: string; media_data?: string; media_name?: string; at?: string };
 type TL = { label: string; at?: string };
 type Feedback = {
@@ -352,7 +364,9 @@ export default function PublicTrack() {
                 <>
                   <div className="mt-1 mb-3 text-[12.5px] text-ink-tertiary">Pick what you'd like us to do, then approve.</div>
                   <div className="flex flex-col gap-2">
-                    {openRecs.map((r) => (
+                    {byItem(openRecs).map((g) => (<div key={g.item || "_job"} className="flex flex-col gap-2">
+                    {openRecs.some((x) => x.item) && <div className="mt-1 text-[11.5px] font-extrabold uppercase tracking-wide text-ink-tertiary">{g.item ? `For your ${g.item}` : "For the whole job"}</div>}
+                    {g.recs.map((r) => (
                       <label key={r.id} className="flex cursor-pointer items-center gap-3 rounded-lg border border-slate-200 px-3 py-2.5 hover:bg-slate-50">
                         <input type="checkbox" className="h-[19px] w-[19px] accent-primary" checked={!!recSel[r.id]}
                           onChange={(e) => setRecSel((s) => ({ ...s, [r.id]: e.target.checked }))} />
@@ -364,6 +378,7 @@ export default function PublicTrack() {
                         <span className="whitespace-nowrap text-sm font-extrabold text-primary">{money(r.line_total, sym)}</span>
                       </label>
                     ))}
+                    </div>))}
                   </div>
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-2.5">
                     <span className="text-[13px] font-bold text-ink-secondary">{recCount ? `${recCount} selected · ${money(recSum, sym)}` : "Nothing selected"}</span>
@@ -383,7 +398,7 @@ export default function PublicTrack() {
                       </span>
                       <span className="flex min-w-0 flex-1 flex-col">
                         <span className="text-sm font-bold text-ink-primary">{r.title}</span>
-                        {r.note && <span className="text-xs leading-snug text-ink-tertiary">{r.note}</span>}
+                        {(r.note || r.item) && <span className="text-xs leading-snug text-ink-tertiary">{[r.item ? `For your ${r.item}` : "", r.note || ""].filter(Boolean).join(" · ")}</span>}
                       </span>
                       <span className="whitespace-nowrap text-sm font-extrabold text-primary">{money(r.line_total, sym)}</span>
                     </div>
@@ -406,8 +421,11 @@ export default function PublicTrack() {
                   </tr>
                 </thead>
                 <tbody>
-                  {d.lines.map((l, i) => (
-                    <tr key={i}>
+                  {d.lines.map((l, i) => (<Fragment key={i}>
+                    {d.lines!.some((x) => x.item) && (i === 0 || (d.lines![i - 1].item || null) !== (l.item || null)) && (
+                      <tr><td colSpan={3} className="px-1.5 pb-1 pt-3 text-[11.5px] font-extrabold uppercase tracking-wide text-ink-tertiary">{l.item || "Whole job"}</td></tr>
+                    )}
+                    <tr>
                       <td className="border-b border-slate-200 px-1.5 py-2.5 align-top">
                         <span className="flex items-center gap-2 font-semibold text-ink-primary">
                           <span className="grid h-[22px] w-[22px] place-items-center rounded-md bg-blue-50 text-primary">{lineIcon(l)}</span>{l.label}
@@ -416,7 +434,7 @@ export default function PublicTrack() {
                       <td className="border-b border-slate-200 px-1.5 py-2.5 text-right align-top text-ink-secondary">{l.qty != null ? l.qty : 1}</td>
                       <td className="border-b border-slate-200 px-1.5 py-2.5 text-right align-top font-bold text-ink-primary">{sym}{Number(l.amount).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
                     </tr>
-                  ))}
+                  </Fragment>))}
                 </tbody>
               </table>
               <div className="mt-1.5 flex justify-end">

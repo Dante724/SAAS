@@ -34,6 +34,7 @@ class RecIn(BaseModel):
     qty: float = 1.0
     unit_price: float = 0.0
     media_data: Optional[str] = None
+    order_item_id: Optional[str] = None     # several items per job: which item (null = whole job)
 
 
 class RecPatch(BaseModel):
@@ -44,6 +45,17 @@ class RecPatch(BaseModel):
     qty: Optional[float] = None
     unit_price: Optional[float] = None
     media_data: Optional[str] = None
+    order_item_id: Optional[str] = None     # "" / null = whole job
+
+
+async def _check_item(db: AsyncSession, org_id: str, order_id: str, item_id: Optional[str]) -> Optional[str]:
+    """Several items per job: the item must be on THIS job of THIS shop (else 422)."""
+    if not item_id:
+        return None
+    from backend.services import multi_asset as ma
+    await ma.require_enabled(db, org_id)
+    await ma.item_for_order(db, org_id, order_id, item_id)
+    return item_id
 
 
 def serialize_rec(r: Recommendation) -> dict:
@@ -61,6 +73,7 @@ def serialize_rec(r: Recommendation) -> dict:
         "status": r.status,
         "source": r.source,
         "source_ref_id": r.source_ref_id,
+        "order_item_id": r.order_item_id,
         "author_name": r.author_name,
         "created_at": r.created_at.isoformat() if r.created_at else None,
         "published_at": r.published_at.isoformat() if r.published_at else None,
@@ -117,6 +130,7 @@ async def add_recommendation(
         note=data.note, kind=data.kind, ref_id=data.ref_id,
         qty=data.qty or 1.0, unit_price=data.unit_price or 0.0,
         media_data=data.media_data, status="draft",
+        order_item_id=await _check_item(db, current.org_id, order_id, data.order_item_id),
         author_id=current.id, author_name=current.name)
     db.add(r)
     await db.commit()
@@ -140,6 +154,8 @@ async def update_recommendation(
         raise HTTPException(422, "kind must be service|product|custom")
     if fields.get("media_data") and len(fields["media_data"]) > MAX_MEDIA_CHARS:
         raise HTTPException(413, "Photo too large")
+    if "order_item_id" in fields:
+        fields["order_item_id"] = await _check_item(db, current.org_id, order_id, fields["order_item_id"])
     for k, v in fields.items():
         setattr(r, k, v)
     await db.commit()
@@ -258,6 +274,16 @@ async def clear_rec_unread(
     return {"ok": True}
 
 
+async def _live_item(db: AsyncSession, rec: Recommendation) -> Optional[str]:
+    """The rec's item, only if it is still on the rec's job in the rec's shop."""
+    if not rec.order_item_id:
+        return None
+    from backend.models import OrderItem
+    return (await db.execute(select(OrderItem.id).where(
+        OrderItem.id == rec.order_item_id, OrderItem.org_id == rec.org_id,
+        OrderItem.order_id == rec.order_id))).scalar_one_or_none()
+
+
 async def approve_recommendation(db: AsyncSession, rec: Recommendation) -> OrderLine:
     """Shared by the public approve endpoints: mark approved + create the OrderLine.
 
@@ -288,6 +314,7 @@ async def approve_recommendation(db: AsyncSession, rec: Recommendation) -> Order
         # 144bl: attribute the upsell to whoever recommended it, so the existing
         # per-line commission engine pays them when the order closes.
         technician_id=rec.author_id,
+        order_item_id=await _live_item(db, rec),
         total=total)
     db.add(ol)
     await db.flush()

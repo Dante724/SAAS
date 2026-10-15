@@ -539,10 +539,21 @@ def _row_vars(i: int, line: OrderLine, part, tech) -> dict:
 
 
 def _table_block(headers, rows, title=None):
+    """Rows are lists of cells; several items per job adds two kinds of dict row:
+    {"group": name} (an item heading) and {"subtotal": name, "amount": "1.00"}."""
+    n = len(headers)
     head = "".join(f"<th style='text-align:left;padding:6px;border-bottom:1px solid #ccc'>{_esc(h)}</th>" for h in headers)
-    body = "".join(
-        "<tr>" + "".join(f"<td style='padding:6px;border-bottom:1px solid #eee'>{_esc(c)}</td>" for c in r) + "</tr>"
-        for r in rows) or f"<tr><td colspan='{len(headers)}' style='padding:6px;color:#999'>No items</td></tr>"
+
+    def _tr(r):
+        if isinstance(r, dict) and "group" in r:
+            return (f"<tr><td colspan='{n}' style='padding:10px 6px 4px;font-weight:700;"
+                    f"border-bottom:1px solid #ccc'>{_esc(r['group'])}</td></tr>")
+        if isinstance(r, dict) and "subtotal" in r:
+            return (f"<tr><td colspan='{n - 1}' style='padding:4px 6px 8px;text-align:right;color:#555'>"
+                    f"{_esc(r['subtotal'])} subtotal</td><td style='padding:4px 6px 8px;font-weight:700'>"
+                    f"{_esc(r['amount'])}</td></tr>")
+        return "<tr>" + "".join(f"<td style='padding:6px;border-bottom:1px solid #eee'>{_esc(c)}</td>" for c in r) + "</tr>"
+    body = "".join(_tr(r) for r in rows) or f"<tr><td colspan='{n}' style='padding:6px;color:#999'>No items</td></tr>"
     cap = f"<caption style='text-align:left;font-weight:bold;padding:4px 0'>{_esc(title)}</caption>" if title else ""
     return _Html(f"<table style='width:100%;border-collapse:collapse'>{cap}"
                  f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
@@ -574,6 +585,11 @@ async def _resolve(db, org_id, order: Order, current=None):
     dev = order.device
     tech = order.assigned_to
     lines = list(order.lines or [])
+    # Several items per job: print item by item (job's item order), whole-job lines last.
+    from backend.services import multi_asset as _ma
+    _inames = await _ma.item_names(db, org_id, [getattr(l, "order_item_id", None) for l in lines])
+    if _inames:
+        lines = _ma.sort_by_item(lines, _inames, key=lambda l: getattr(l, "order_item_id", None))
 
     # Multi-currency: resolve the document's display currency (order snapshot → client → base).
     # Shadow `_money` locally so every amount in this document renders in the display currency.
@@ -632,6 +648,19 @@ async def _resolve(db, org_id, order: Order, current=None):
     products_table = _table_block(hdr, prod_rows)
     services_table = _table_block(hdr, serv_rows)
     all_items_table = _table_block(hdr, prod_rows + serv_rows)
+    if _inames:
+        _grouped, _rowno = [], {id(l): n for n, l in enumerate(lines, start=1)}
+        for g in _ma.group_rows([{"item": (_inames.get(getattr(l, "order_item_id", None)) or (None,))[0],
+                                  "total": _line_numbers(l)["amount"], "_l": l} for l in lines]):
+            if g["row"] == "group":
+                _grouped.append({"group": g["item"]})
+            elif g["row"] == "subtotal":
+                _grouped.append({"subtotal": g["item"], "amount": _money(g["total"])})
+            else:
+                l, n = g["_l"], _line_numbers(g["_l"])
+                _grouped.append([_rowno[id(l)], l.description or "", f"{n['qty']:g}", _money(n["unit_ex"]),
+                                 _money(n["tax"]), _money(n["amount"])])
+        all_items_table = _table_block(hdr, _grouped)
 
     # dominant tax (name/rate) for the document-level total line
     tax_name = tax_rate = ""
@@ -1187,10 +1216,19 @@ async def _resolve_invoice(db, org_id, inv: Invoice):
     def g(o, a):
         return (getattr(o, a, None) if o else "") or "—"
 
+    from backend.services.multi_asset import group_rows
     dl = await _inv_display(db, inv)
     hdr = ["#", "Description", "Qty", "Unit Price", "Amount"]
     rows, table_rows = [], []
-    for i, l in enumerate(dl, start=1):
+    i = 0
+    for l in group_rows(dl):      # several items per job: item headings + subtotals, whole job last
+        if l["row"] == "group":
+            table_rows.append({"group": l["item"]})
+            continue
+        if l["row"] == "subtotal":
+            table_rows.append({"subtotal": l["item"], "amount": m(l["total"])})
+            continue
+        i += 1
         rows.append({"{Row Number}": i, "{Product Name}": l["description"] or "—",
                      "{Product Qty}": f"{float(l.get('qty') or 0):g}",
                      "{Product Price}": m(l["unit_price"]), "{Product Amount}": m(l["total"])})

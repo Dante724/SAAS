@@ -278,9 +278,15 @@ async def track(token: str, db: AsyncSession = Depends(get_db)):
         base = (l.unit_price or 0) * (l.qty or 1)
         disc = base * (l.discount or 0) / 100 if (l.discount_type or "pct") == "pct" else (l.discount or 0)
         return q2((base - disc) * (_fx or 1))
+    # Several items per job: each line says which item it's for; item by item, whole job last.
+    from backend.services import multi_asset as _ma
+    _inames = await _ma.item_names(db, order.org_id, [l.order_item_id for l in _lines])
+    if _inames:
+        _lines = _ma.sort_by_item(_lines, _inames, key=lambda l: l.order_item_id)
     lines_pub = [{"label": l.description or (l.kind or l.line_type or "Item").title(),
                   "qty": l.qty or 1, "kind": l.kind or l.line_type,
-                  "amount": _line_amt(l)} for l in _lines]
+                  "amount": _line_amt(l),
+                  **({"item": (_inames.get(l.order_item_id) or (None,))[0]} if _inames else {})} for l in _lines]
 
     # 144ix — customer review capture: expose active feedback settings + whether this
     # order already has a submitted rating. Actual submit is token-gated below.
@@ -607,11 +613,16 @@ async def _public_recommendations(db: AsyncSession, order: "Order") -> list[dict
     rows = (await db.execute(select(_R).where(
         _R.order_id == order.id, _R.status.in_(("sent", "approved", "declined")))
         .order_by(_R.created_at))).scalars().all()
+    # Several items per job: say which item each one is for, so the customer decides per item.
+    from backend.services.multi_asset import item_names
+    names = await item_names(db, order.org_id, [r.order_item_id for r in rows])
     return [{
         "id": r.id, "title": r.title, "note": r.note,
         "qty": r.qty, "unit_price": r.unit_price,
         "line_total": q2((r.qty or 0) * (r.unit_price or 0)),
         "media_data": r.media_data, "status": r.status,
+        "item": (names[r.order_item_id][0] if r.order_item_id in names else None),
+        "item_order": (names[r.order_item_id][1] if r.order_item_id in names else None),
     } for r in rows]
 
 

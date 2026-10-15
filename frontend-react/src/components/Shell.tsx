@@ -25,6 +25,7 @@ import {
   History, Hourglass, LineChart, Lightbulb, Unlink, Truck, Lock, LockOpen, Merge,
   CircleDollarSign, Percent, ShieldAlert, Globe, Gift, RotateCcw, SearchCheck, VideoOff,
   ShieldCheck, Target, EyeOff, Car, Sailboat, Bike, Laptop, Cog, Upload,
+  ShoppingBag, Split,
 } from "lucide-react";
 
 // Map the old Material-Symbols ligature names to bundled Lucide icons (no web font,
@@ -34,7 +35,7 @@ const ICONS: Record<string, any> = {
   task_alt: CheckCircle2, mail: Mail, chat: MessageSquare, chat_bubble: MessageCircle,
   calendar_month: Calendar, calendar_view_week: CalendarRange, schedule: Clock, timer: Timer,
   contacts: Contact, group: Users, person: User, person_add: UserPlus, contact_support: LifeBuoy,
-  point_of_sale: ShoppingCart, shopping_cart: ShoppingCart,
+  point_of_sale: ShoppingCart, shopping_cart: ShoppingCart, shopping_bag: ShoppingBag, call_split: Split,
   inventory_2: Package, inventory: Boxes, warehouse: Warehouse,
   account_balance: Landmark, payments: Wallet, account_balance_wallet: Wallet, savings: PiggyBank,
   credit_card: CreditCard, request_quote: ReceiptText, receipt_long: Receipt, description: FileText,

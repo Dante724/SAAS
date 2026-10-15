@@ -1,6 +1,7 @@
 import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import ConversationPanel from "./ConversationPanel";
 import PhotoAnnotator from "./PhotoAnnotator";
 import TagChips from "../../components/TagChips";
@@ -23,7 +24,7 @@ import JobCardFields from "../../components/JobCardFields";
 
 type Emp = { id: string; name: string };
 type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean; order_item_id?: string | null };
-type Rec = { id: string; title?: string; name?: string; description?: string; price?: number; amount?: number; unit_price?: number; status?: string; published?: boolean; source?: string; note?: string };
+type Rec = { id: string; title?: string; name?: string; description?: string; price?: number; amount?: number; unit_price?: number; status?: string; published?: boolean; source?: string; note?: string; order_item_id?: string | null };
 type Detail = Order & {
   complaint?: string; tech_notes?: string; diagnosis?: string; conclusion?: string;
   warranty_until?: string | null; due_at?: string | null;
@@ -184,16 +185,27 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   async function stopAllTimers() {
     for (const b of byEmp.filter((x: any) => x.running)) await stopEntry(b.employee_id);
   }
-  function printWO() {
+  async function printWO() {
     const w = window.open("", "_blank", "width=420,height=640"); if (!w) return;
-    w.document.write(`<html><head><title>${escapeHtml(woNum)}</title><style>body{font-family:Inter,system-ui,sans-serif;padding:22px;color:#14213f}h1{font-size:16px;margin:0 0 4px}.k{font-size:10px;font-weight:800;text-transform:uppercase;color:#9aa7c4;letter-spacing:.05em;margin-top:12px}.v{font-size:14px;font-weight:600}hr{border:none;border-top:1px dashed #c9d3ea;margin:12px 0}</style></head><body>
-      <h1>RepairOS · Workshop Central</h1><div class="v" style="font-family:monospace">${escapeHtml(woNum)}</div><hr/>
-      <div class="k">Client</div><div class="v">${escapeHtml(c.name || "Walk-in")} ${c.phone ? "· " + escapeHtml(c.phone) : ""}</div>
+    const css = `body{font-family:Inter,system-ui,sans-serif;margin:0;color:#14213f}.s{padding:22px;page-break-after:always}.s:last-child{page-break-after:auto}h1{font-size:16px;margin:0 0 4px}.k{font-size:10px;font-weight:800;text-transform:uppercase;color:#9aa7c4;letter-spacing:.05em;margin-top:12px}.v{font-size:14px;font-weight:600}.n{font-size:22px;font-weight:800;font-family:monospace}hr{border:none;border-top:1px dashed #c9d3ea;margin:12px 0}`;
+    const head = `<h1>RepairOS · Workshop Central</h1>`;
+    const client = `<div class="k">Client</div><div class="v">${escapeHtml(c.name || "Walk-in")} ${c.phone ? "· " + escapeHtml(c.phone) : ""}</div>`;
+    // Several items per job: one bench sticker per item, so each tool on the shelf carries its own.
+    let items: JobItem[] = [];
+    try { const r = await api.get<any>(`/orders/${order.id}/items`); if (r.enabled) items = r.items || []; } catch { /* print the job sticker */ }
+    const stickers = items.length > 1
+      ? items.map((it, i) => `<div class="s">${head}<div class="n">${escapeHtml(woNum)}-${i + 1}</div><div class="v">Item ${i + 1} of ${items.length}</div><hr/>
+          ${client}
+          <div class="k">Item</div><div class="v">${escapeHtml(itemName(it))}${it.asset?.serial ? " · SN " + escapeHtml(it.asset.serial) : ""}</div>
+          <div class="k">Problem</div><div class="v">${escapeHtml(it.complaint || (it.is_primary ? d.complaint : "") || "—")}</div>
+          ${it.collected_at ? `<div class="k">Collected</div><div class="v">Yes</div>` : ""}</div>`).join("")
+      : `<div class="s">${head}<div class="v" style="font-family:monospace">${escapeHtml(woNum)}</div><hr/>
+      ${client}
       <div class="k">${escapeHtml(dev.asset_label || "Device")}</div><div class="v">${escapeHtml(hasDevice ? devTitle : "No device")}${dev.serial ? " · SN " + escapeHtml(dev.serial) : ""}</div>
       <div class="k">Status</div><div class="v">${escapeHtml((d.status || "").replace(/_/g, " "))}</div>
       <div class="k">Complaint</div><div class="v">${escapeHtml(d.complaint || "—")}</div>
-      <div class="k">Total</div><div class="v">${escapeHtml(money(d.total))}</div>
-    </body></html>`);
+      <div class="k">Total</div><div class="v">${escapeHtml(money(d.total))}</div></div>`;
+    w.document.write(`<html><head><title>${escapeHtml(woNum)}</title><style>${css}</style></head><body>${stickers}</body></html>`);
     w.document.close(); w.focus(); w.print();
   }
 
@@ -544,7 +556,9 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
 /* ---- several items per job ---- */
 type JobItem = { id: string; asset_id?: string | null; asset?: { id: string; brand?: string; model?: string; serial?: string; imei?: string } | null;
-  label?: string | null; complaint?: string | null; outcome: string; collected_at?: string | null; is_primary?: boolean; line_count: number; total: number };
+  label?: string | null; complaint?: string | null; outcome: string; collected_at?: string | null; is_primary?: boolean; line_count: number; total: number;
+  unbilled_lines?: number; unbilled_total?: number };
+type JobLink = { id: string; order_number: string };
 const itemName = (it: JobItem) => (it.asset ? [it.asset.brand, it.asset.model].filter(Boolean).join(" ") || it.asset.serial || "Item" : it.label || "Item");
 const OUTCOMES: [string, string][] = [["open", "Open"], ["fixed", "Fixed"], ["cant_fix", "Can't fix"], ["declined", "Declined"]];
 const OUT_TONE: Record<string, string> = { fixed: "bg-emerald-50 text-emerald-700 ring-emerald-200", cant_fix: "bg-amber-50 text-amber-700 ring-amber-200", declined: "bg-slate-100 text-ink-secondary ring-slate-200", open: "bg-white text-ink-primary ring-slate-300" };
@@ -552,12 +566,18 @@ const OUT_TONE: Record<string, string> = { fixed: "bg-emerald-50 text-emerald-70
 // Settings › Industry & assets › "Several items per job". Hidden unless the shop has it on, except a
 // job that already holds several items still lists them (read-only) after it's switched off.
 function JobItems({ orderId, onFlash, onChanged }: { orderId: string; onFlash: (m: string) => void; onChanged?: () => void }) {
-  const [st, setSt] = useState<{ enabled: boolean; items: JobItem[] } | null>(null);
+  const { can } = useMe();
+  const nav = useNavigate();
+  const [st, setSt] = useState<{ enabled: boolean; items: JobItem[]; split_from?: JobLink | null; split_off?: JobLink[]; job_unbilled?: number } | null>(null);
+  // "Collect & invoice": pick what the customer is taking now (null = not picking).
+  const [pick, setPick] = useState<Set<string> | null>(null);
+  const [jobLines, setJobLines] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
   const [cands, setCands] = useState<any[]>([]);
   const [pickAsset, setPickAsset] = useState(""); const [label, setLabel] = useState(""); const [complaint, setComplaint] = useState("");
-  const load = () => api.get<any>(`/orders/${orderId}/items`).then((r) => setSt({ enabled: !!r.enabled, items: r.items || [] })).catch(() => setSt(null));
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [orderId]);
+  const load = () => api.get<any>(`/orders/${orderId}/items`).then((r) => setSt({ enabled: !!r.enabled, items: r.items || [], split_from: r.split_from, split_off: r.split_off || [], job_unbilled: r.job_unbilled || 0 })).catch(() => setSt(null));
+  useEffect(() => { load(); setPick(null); /* eslint-disable-next-line */ }, [orderId]);
   if (!st || (!st.enabled && st.items.length < 2)) return null;
   const ro = !st.enabled;
   async function call(fn: () => Promise<any>, ok?: string) {
@@ -571,6 +591,35 @@ function JobItems({ orderId, onFlash, onChanged }: { orderId: string; onFlash: (
     setAdding(false);
   }
   const done = st.items.filter((i) => i.outcome !== "open").length;
+  const waiting = st.items.filter((i) => !i.collected_at);
+  const canBill = !ro && can("can_create_invoices") && waiting.length > 0;
+  const canSplit = !ro && can("can_create_tickets");
+  const picked = pick ? waiting.filter((i) => pick.has(i.id)) : [];
+  const lastOut = picked.length > 0 && picked.length === waiting.length;
+  const withJob = jobLines ?? lastOut;
+  const pickTotal = picked.reduce((n, i) => n + (i.unbilled_total || 0), 0) + (withJob ? st.job_unbilled || 0 : 0);
+  function startPick() { setPick(new Set()); setJobLines(null); setAdding(false); }
+  function toggle(id: string) { setPick((p) => { const n = new Set(p || []); if (n.has(id)) n.delete(id); else n.add(id); return n; }); }
+  async function collect() {
+    if (!picked.length) return;
+    setBusy(true);
+    try {
+      const r = await api.post<any>(`/orders/${orderId}/items/collect`, { item_ids: picked.map((i) => i.id), include_job_lines: withJob });
+      onFlash(r.invoice ? `Invoice ${r.invoice.invoice_number} created for ${money(r.invoice.total)} — the job stays open` : `Marked collected — nothing left to bill for ${picked.length === 1 ? "it" : "them"}`);
+      setPick(null); load(); onChanged?.();
+    } catch (e: any) { onFlash(e?.message || "Couldn't collect those items"); }
+    finally { setBusy(false); }
+  }
+  async function split(it: JobItem) {
+    const msg = `Move ${itemName(it)}${it.line_count ? ` and its ${it.line_count} line${it.line_count === 1 ? "" : "s"} (${money(it.total)})` : ""} to a new job for the same customer? The two jobs stay linked.`;
+    if (!(await confirmDialog(msg, { title: "Split into its own job", confirmLabel: "Split" }))) return;
+    try {
+      const r = await api.post<any>(`/orders/${orderId}/items/${it.id}/split`, {});
+      onFlash(`${itemName(it)} is now job ${r.order_number}`);
+      load(); onChanged?.();
+    } catch (e: any) { onFlash(e?.message || "Couldn't split that item"); }
+  }
+  const links = [...(st.split_from ? [{ ...st.split_from, rel: "Split from" }] : []), ...(st.split_off || []).map((l) => ({ ...l, rel: "Split off" }))];
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
       <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-100">
@@ -579,8 +628,26 @@ function JobItems({ orderId, onFlash, onChanged }: { orderId: string; onFlash: (
           <div className="text-sm font-semibold text-ink-primary">Items on this job <span className="text-ink-tertiary font-normal">· {st.items.length}</span></div>
           <div className="text-[11px] text-ink-tertiary">{done} of {st.items.length} have a result{ro ? " · read-only, several items per job is off" : ""}</div>
         </div>
-        {!ro && !adding && <button onClick={openAdd} className="ml-auto px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-primary hover:bg-slate-50 flex items-center gap-1"><M n="add" c="text-sm" />Add item</button>}
+        {!ro && !adding && !pick && (
+          <div className="ml-auto flex items-center gap-1.5">
+            {canBill && <button onClick={startPick} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-primary hover:bg-slate-50 flex items-center gap-1"><M n="shopping_bag" c="text-sm" />Collect &amp; invoice</button>}
+            <button onClick={openAdd} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-primary hover:bg-slate-50 flex items-center gap-1"><M n="add" c="text-sm" />Add item</button>
+          </div>
+        )}
       </div>
+      {links.length > 0 && (
+        <div className="px-4 py-2 border-b border-slate-100 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-tertiary">
+          <M n="link" c="text-sm" />
+          {links.map((l) => (
+            <span key={l.id}>{l.rel} <button type="button" onClick={() => nav(`/orders?open=${l.id}`)} className="font-mono font-semibold text-primary hover:underline">{l.order_number}</button></span>
+          ))}
+        </div>
+      )}
+      {pick && (
+        <div className="px-4 py-2.5 bg-primary/5 border-b border-primary/10 text-xs text-ink-primary">
+          <span className="font-semibold">What is the customer taking now?</span> <span className="text-ink-secondary">Tick the items. They get one invoice for just their work, and the job stays open for the rest.</span>
+        </div>
+      )}
       {adding && (
         <div className="px-4 py-3 bg-slate-50/70 border-b border-slate-100 space-y-2">
           <div className="flex flex-wrap gap-2">
@@ -603,7 +670,9 @@ function JobItems({ orderId, onFlash, onChanged }: { orderId: string; onFlash: (
         {st.items.map((it, n) => (
           <div key={it.id} className="px-4 py-3">
             <div className="flex items-start gap-3">
-              <span className="w-7 h-7 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center text-[11px] font-semibold flex-shrink-0">{n + 1}</span>
+              {pick && !it.collected_at
+                ? <input type="checkbox" checked={pick.has(it.id)} onChange={() => toggle(it.id)} aria-label={`Customer is taking ${itemName(it)}`} className="w-5 h-5 mt-1 accent-primary flex-shrink-0 cursor-pointer" />
+                : <span className={`w-7 h-7 rounded-lg grid place-items-center text-[11px] font-semibold flex-shrink-0 ${pick ? "bg-slate-50 text-ink-tertiary" : "bg-slate-100 text-ink-secondary"}`}>{n + 1}</span>}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm font-medium text-ink-primary">{itemName(it)}</span>
@@ -617,11 +686,15 @@ function JobItems({ orderId, onFlash, onChanged }: { orderId: string; onFlash: (
                     <button key={k} type="button" disabled={ro} aria-pressed={it.outcome === k} onClick={() => call(() => api.patch(`/orders/${orderId}/items/${it.id}`, { outcome: k }))}
                       className={`px-2.5 py-1 rounded-full text-[11px] font-semibold ring-1 ring-inset transition-colors disabled:cursor-default ${it.outcome === k ? OUT_TONE[k] : "text-ink-tertiary ring-transparent hover:bg-slate-100"}`}>{l}</button>
                   ))}
-                  <label className={`ml-2 flex items-center gap-1.5 text-[11px] text-ink-secondary ${ro ? "" : "cursor-pointer"}`}>
+                  {!pick && <label className={`ml-2 flex items-center gap-1.5 text-[11px] text-ink-secondary ${ro ? "" : "cursor-pointer"}`}>
                     <input type="checkbox" disabled={ro} checked={!!it.collected_at} onChange={(e) => call(() => api.patch(`/orders/${orderId}/items/${it.id}`, { collected: e.target.checked }))} className="accent-primary" />Collected
-                  </label>
-                  <span className="ml-auto text-[11px] text-ink-tertiary tabular-nums">{it.line_count ? `${it.line_count} line${it.line_count === 1 ? "" : "s"} · ${money(it.total)}` : "No lines yet"}</span>
-                  {!ro && !it.is_primary && (
+                  </label>}
+                  <span className="ml-auto text-[11px] text-ink-tertiary tabular-nums">{it.line_count ? `${it.line_count} line${it.line_count === 1 ? "" : "s"} · ${money(it.total)}${it.collected_at && !it.unbilled_lines ? " · invoiced" : ""}` : "No lines yet"}</span>
+                  {canSplit && !pick && !it.is_primary && !it.collected_at && st.items.length > 1 && (
+                    <button type="button" aria-label={`Split ${itemName(it)} into its own job`} title="Split into its own job" onClick={() => split(it)}
+                      className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:text-primary hover:bg-primary/5"><M n="call_split" c="text-sm" /></button>
+                  )}
+                  {!ro && !pick && !it.is_primary && (
                     <button type="button" aria-label={`Remove ${itemName(it)}`} title="Remove from this job"
                       onClick={async () => { if (await confirmDialog(`Remove ${itemName(it)} from this job? Its services and parts stay on the job, marked "whole job".`, { title: "Remove item", confirmLabel: "Remove", danger: true })) call(() => api.del(`/orders/${orderId}/items/${it.id}`), "Item removed"); }}
                       className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-sm" /></button>
@@ -632,6 +705,22 @@ function JobItems({ orderId, onFlash, onChanged }: { orderId: string; onFlash: (
           </div>
         ))}
       </div>
+      {pick && (
+        <div className="px-4 py-3 border-t border-slate-100 bg-slate-50/70 flex flex-wrap items-center gap-3">
+          {(st.job_unbilled || 0) > 0 && (
+            <label className="flex items-center gap-1.5 text-[11px] text-ink-secondary cursor-pointer">
+              <input type="checkbox" checked={withJob} onChange={(e) => setJobLines(e.target.checked)} className="accent-primary" />
+              Add whole-job charges ({money(st.job_unbilled)}){lastOut ? "" : " now"}
+            </label>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={() => setPick(null)} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
+            <button onClick={collect} disabled={!picked.length || busy} className="px-3.5 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-40">
+              {busy ? "Working…" : picked.length ? `Collect ${picked.length} & invoice ${money(pickTotal)}` : "Tick what they're taking"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -901,6 +990,11 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
     try { await api.post(`/orders/${orderId}/recommendations/${rec.id}/${approve ? "publish" : "unpublish"}`); setRecs((rs) => rs.filter((x) => x.id !== rec.id)); onFlash(approve ? "Recommendation approved" : "Recommendation rejected"); }
     catch (e: any) { onFlash(`Failed: ${e.message}`); }
   };
+  // Several items per job: the customer approves recommendations item by item on the tracking page.
+  async function tagRec(rec: Rec, itemId: string) {
+    try { const r = await api.patch<Rec>(`/orders/${orderId}/recommendations/${rec.id}`, { order_item_id: itemId || null }); setRecs((rs) => rs.map((x) => (x.id === rec.id ? { ...x, order_item_id: r.order_item_id } : x))); }
+    catch (e: any) { onFlash(e.message || "Couldn't change the item"); }
+  }
   const kindOf = (l: Line) => (l.kind || l.line_type || "item").toLowerCase();
   const shown = (lines || []).filter((l) => filter === "All" || (filter === "Services" && kindOf(l).includes("serv")) || (filter === "Products" && (kindOf(l).includes("part") || kindOf(l).includes("prod"))) || (filter === "Job Kits" && kindOf(l).includes("bundle")));
   // 144av #4 — flat by default; "By technician" groups into swimlanes (council: a lens, opt-in).
@@ -1088,6 +1182,12 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                     {r.source === "checklist" && <span className="inline-flex items-center gap-0.5 text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-200 px-1.5 py-0.5 rounded-full" title={r.note || "Auto-drafted from a checklist finding"}><M n="fact_check" c="text-[11px]" />From checklist</span>}
                   </div>
                   <p className="text-[11px] font-mono text-purple-700 font-bold">{money(r.price ?? r.unit_price ?? r.amount)}</p>
+                  {tagging && (
+                    <select value={r.order_item_id || ""} onChange={(e) => tagRec(r, e.target.value)} aria-label={`Which item ${r.title || "this recommendation"} is for`}
+                      className="mt-1 max-w-[200px] text-[11px] font-medium text-ink-secondary bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5">
+                      <option value="">For: whole job</option>{jobItems.map((it) => <option key={it.id} value={it.id}>For: {itemName(it)}</option>)}
+                    </select>
+                  )}
                 </div>
                 <Gate perm="can_publish_recommend"><div className="flex items-center gap-1.5"><button onClick={() => act(r, true)} className="px-2 py-1 rounded bg-purple-600 text-white text-[10px] font-bold hover:bg-purple-700">Approve</button><button onClick={() => act(r, false)} className="px-2 py-1 rounded bg-slate-100 text-ink-secondary text-[10px] font-semibold hover:bg-slate-200">Reject</button></div></Gate>
               </div>

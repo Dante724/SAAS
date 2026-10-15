@@ -51,7 +51,7 @@ async def test_off_by_default_and_writes_refused(client):
     h = await _shop(client)
     oid, _, _ = await _job(client, h)
     r = (await client.get(f"/api/orders/{oid}/items", headers=h)).json()
-    assert r == {"available": True, "enabled": False, "items": []}
+    assert r == {"available": True, "enabled": False, "items": [], "split_from": None, "split_off": [], "job_unbilled": 0.0}
     assert (await client.post(f"/api/orders/{oid}/items", json={"label": "Saw"}, headers=h)).status_code == 409
 
 

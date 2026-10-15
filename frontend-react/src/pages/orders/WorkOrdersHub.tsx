@@ -138,9 +138,12 @@ export default function WorkOrdersHub() {
   useEffect(() => { refetch(); api.get<any>("/statuses").then((r) => setStatuses(r.items || r || [])).catch(() => {}); }, []);
   // Deep-open from a scan (?open=<id>): open the WO drawer straight away, then clear the param.
   const [sp, setSp] = useSearchParams();
+  const openParam = sp.get("open");
   useEffect(() => {
-    const id = sp.get("open");
-    if (id) { setOpen({ id } as any); setSp((p) => { p.delete("open"); return p; }, { replace: true }); }
+    if (openParam) { setOpen({ id: openParam } as any); setSp((p) => { p.delete("open"); return p; }, { replace: true }); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openParam]);
+  useEffect(() => {
     // Deep-link filters from Home KPI cards (?status=new, ?priority=urgent). Applied once,
     // then cleared so the URL stays clean and the user can change filters freely.
     const st = sp.get("status"), pr = sp.get("priority");

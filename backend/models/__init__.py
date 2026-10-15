@@ -535,6 +535,8 @@ class Order(Base):
     archive_reason: Mapped[Optional[str]] = mapped_column(Text)
     archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     archived_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    # Several items per job: the job an item was split off from ("Split into its own job").
+    split_from_order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     client: Mapped[Optional["Client"]] = relationship(back_populates="orders")
     device: Mapped[Optional["Device"]] = relationship(back_populates="orders")
     location: Mapped["Location"] = relationship(back_populates="orders")
@@ -1541,6 +1543,8 @@ class Recommendation(Base):
     media_data: Mapped[Optional[str]] = mapped_column(Text)    # inline photo proof (data URL)
     status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
     order_line_id: Mapped[Optional[str]] = mapped_column(String)  # set once approved
+    # Several items per job: which of the job's items this is for (null = the whole job).
+    order_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("order_items.id"), index=True)
     source: Mapped[str] = mapped_column(String(20), default="manual")  # manual | checklist
     source_ref_id: Mapped[Optional[str]] = mapped_column(String)  # e.g. order_checklist_item id (idempotency + attribution)
     author_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
