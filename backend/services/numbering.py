@@ -26,6 +26,11 @@ DEFAULT_TEMPLATES = {
     "po": "PO-{C:5}",
     "transfer": "T-{C:5}",
     "credit_note": "CN-{C:5}",
+    # Stock documents (routers/stock_docs.py). Orgs that already issued one keep the template on
+    # their sequence row (the old fallback, e.g. PURCHASE_RETURN-00001); new orgs get these.
+    "purchase_return": "RET-{C:5}",
+    "write_off": "WOF-{C:5}",
+    "posting": "POST-{C:5}",
 }
 
 _TOKEN = re.compile(r"\{(D|M|Y|C(?::(\d+))?|CAT|T)\}")
@@ -76,7 +81,9 @@ async def _find_sequence(db, org_id, doc_type, location_id, entity_id):
 
 _DOC_MODEL = {"order": ("Order", "org_id"), "invoice": ("Invoice", "org_id"),
               "inquiry": ("Order", "org_id"), "sale": ("Sale", "org_id"),
-              "po": ("PurchaseOrder", None), "transfer": ("StockTransfer", "org_id")}
+              "po": ("PurchaseOrder", None), "transfer": ("StockTransfer", "org_id"),
+              "purchase_return": ("PurchaseReturn", "org_id"), "write_off": ("WriteOff", "org_id"),
+              "posting": ("Posting", "org_id")}
 
 
 async def _existing_count(db, org_id, doc_type) -> int:
@@ -87,7 +94,8 @@ async def _existing_count(db, org_id, doc_type) -> int:
     import backend.models as M
     name = {"order": "Order", "invoice": "Invoice", "sale": "Sale",
             "po": "PurchaseOrder", "transfer": "StockTransfer", "inquiry": "Order",
-            "credit_note": "CreditNote"}.get(doc_type)
+            "credit_note": "CreditNote",
+            "purchase_return": "PurchaseReturn", "write_off": "WriteOff", "posting": "Posting"}.get(doc_type)
     model = getattr(M, name, None) if name else None
     if model is None or not hasattr(model, "org_id"):
         return 0
@@ -152,7 +160,9 @@ async def _number_taken(db: AsyncSession, org_id: str, doc_type: str, number: st
 # so it's scoped through its location.
 _NUMBER_COLUMN = {"order": ("Order", "order_number"), "inquiry": ("Order", "order_number"),
                   "invoice": ("Invoice", "invoice_number"), "sale": ("Sale", "sale_number"),
-                  "po": ("PurchaseOrder", "po_number"), "transfer": ("StockTransfer", "transfer_number")}
+                  "po": ("PurchaseOrder", "po_number"), "transfer": ("StockTransfer", "transfer_number"),
+                  "purchase_return": ("PurchaseReturn", "number"), "write_off": ("WriteOff", "number"),
+                  "posting": ("Posting", "number"), "credit_note": ("CreditNote", "number")}
 
 
 def _counter_pattern(template: str) -> re.Pattern:
@@ -165,6 +175,8 @@ def _counter_pattern(template: str) -> re.Pattern:
             out.append(r"\d{2}")
         elif tok == "Y":
             out.append(r"\d{4}")
+        elif tok in ("CAT", "T"):
+            out.append(r".*?")
         else:
             digits = rf"\d{{{m.group(2)},}}" if m.group(2) else r"\d+"
             out.append(f"({digits})" if not captured else f"(?:{digits})")
