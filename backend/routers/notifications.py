@@ -408,7 +408,8 @@ async def send_test(
     from backend.services.notifications import _adapter_for, notif_creds
     recipient = current.email if data.channel == "email" else getattr(current, "phone", None)
     if not recipient:
-        raise HTTPException(400, f"Your profile has no {data.channel} to send a test to")
+        what = "email address" if data.channel == "email" else "mobile number"
+        raise HTTPException(400, f"Add a {what} to your profile to get a sample")
     subject, body = data.subject, data.body
     if data.sample:
         # "Send me a sample": render against the newest job so the owner sees a real message.
@@ -480,9 +481,11 @@ async def get_quiet_hours(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
-    """Shop-wide view of the per-rule 'only during opening hours' setting for customer messages."""
+    """Shop-wide view of the per-rule 'only during opening hours' setting for customer messages
+    (reminders keep their own timing, as in PUT)."""
     rows = (await db.execute(select(NotificationRule).where(
-        NotificationRule.org_id == current.org_id, NotificationRule.scope == "client"))).scalars().all()
+        NotificationRule.org_id == current.org_id, NotificationRule.scope == "client",
+        NotificationRule.event != "reminder"))).scalars().all()
     on = sum(1 for r in rows if r.working_hours_only)
     return {"on": bool(rows) and on == len(rows), "some": 0 < on < len(rows)}
 

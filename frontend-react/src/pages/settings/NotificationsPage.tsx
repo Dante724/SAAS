@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
+import { selectDialog } from "../../lib/dialog";
 import { cellRules, inView, isCustomerRule, toggleCell } from "../../lib/notifRules";
 
-/* Settings › Notifications › Customers — one table: each moment in a job (received, every
-   status, payment, update) × each channel (text, email). A switch turns a message on; clicking
-   the row opens the message with a live phone / inbox preview. It reads and writes the same
+/* Settings › Notifications › Customers — "what your customer gets": a journey strip (comes in,
+   in the shop, ready and done, updates and payment), then one card per moment. Each message
+   shows its wording, Text / Email pills (filled = on), and how many went out this week. A
+   status is listed only once it has its own message. Clicking a row opens the message with a
+   live phone / inbox preview and "Send me a sample". It reads and writes the same
    notification rules and templates the engine already uses (/notifications/rules, /templates). */
 
 type Row = { id: string; label: string; sub?: string; color?: string; event: string; status: string | null; allStatuses?: boolean };
@@ -41,6 +44,23 @@ function suggestedBody(row: Row) {
   return "Hi {Client First Name}, your {Asset Model} is now: {Order Status}. Track it here: {Public Order URL}";
 }
 
+type Stat = { sent_7d: number; failed_7d: number; skipped_7d: number; last_sent_at: string | null };
+type Moment = "in" | "shop" | "done" | "after";
+const MOMENTS: { key: Moment; label: string; icon: string; hint: string }[] = [
+  { key: "in", label: "Comes in", icon: "login", hint: "When you check it in" },
+  { key: "shop", label: "In the shop", icon: "build", hint: "While you work on it" },
+  { key: "done", label: "Ready and done", icon: "task_alt", hint: "When it finishes" },
+  { key: "after", label: "Updates and payment", icon: "payments", hint: "Anything else along the way" },
+];
+
+function ago(iso: string | null) {
+  if (!iso) return "";
+  const min = Math.max(0, Math.round((Date.now() - new Date(iso.endsWith("Z") ? iso : iso + "Z").getTime()) / 60000));
+  if (min < 60) return min <= 1 ? "just now" : `${min} min ago`;
+  if (min < 1440) return `${Math.round(min / 60)} h ago`;
+  return `${Math.round(min / 1440)} d ago`;
+}
+
 export default function CustomerMessages({ rules, templates, statusesFor, shopName, reload, flash, renderOther }: {
   rules: Rule[]; templates: any[]; statusesFor: (rt: string) => Promise<any[]>; shopName: string;
   reload: () => void; flash: (m: string) => void; renderOther: (view: "internal" | "automations") => ReactNode;
@@ -50,45 +70,76 @@ export default function CustomerMessages({ rules, templates, statusesFor, shopNa
   const [statuses, setStatuses] = useState<any[] | null>(null);
   const [providers, setProviders] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<Row | null>(null);
+  const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [stats, setStats] = useState<{ rules: Record<string, Stat>; texting: { with_phone: number; opted_out: number } } | null>(null);
+  const [quiet, setQuiet] = useState<{ on: boolean; some: boolean } | null>(null);
+  const [peek, setPeek] = useState<Moment | null>(null);
   useEffect(() => { api.get<any>("/notifications/providers").then((r) => setProviders(r.channels || {})).catch(() => setProviders({})); }, []);
   useEffect(() => { setStatuses(null); statusesFor(rt).then(setStatuses).catch(() => setStatuses([])); }, [rt]);  // eslint-disable-line
+  useEffect(() => {
+    api.get<any>("/notifications/rules/stats").then(setStats).catch(() => setStats(null));
+    api.get<any>("/notifications/quiet-hours").then(setQuiet).catch(() => setQuiet(null));
+  }, [rules]);
 
   const channels: [string, string, string][] = [["sms", "Text", "smartphone"], ["email", "Email", "mail"],
     ...(providers.whatsapp === "live" ? [["whatsapp", "WhatsApp", "chat"] as [string, string, string]] : [])];
   const noun = rt === "estimate" ? "estimate" : "job";
+  const Noun = rt === "estimate" ? "Estimate" : "Job";
 
-  const rows: Row[] = useMemo(() => {
-    const out: Row[] = [{ id: "created", label: rt === "estimate" ? "Estimate created" : "Job received", sub: "Right after it's checked in", event: "created", status: null }];
-    out.push({ id: "any", label: "Every status change", sub: "One message for any status. Turn off to choose per status.", event: "status_changed", status: null, allStatuses: true });
+  const isOn = (row: Row, ch: string) => cellRules(rules, rt, row.event, row.status, ch).some((r) => r.active);
+  const anyOn = (row: Row) => channels.some(([c]) => isOn(row, c));
+
+  // Every possible row; per-status rows are listed only when they have a message of their own.
+  const all: (Row & { moment: Moment })[] = useMemo(() => {
+    const out: (Row & { moment: Moment })[] = [
+      { id: "created", moment: "in", label: rt === "estimate" ? "Estimate created" : "Job received", sub: "Right after it's checked in", event: "created", status: null },
+      { id: "any", moment: "shop", label: "Every status change", event: "status_changed", status: null, allStatuses: true },
+    ];
     for (const s of statuses || []) {
       const term = !!s.is_terminal;
-      out.push({ id: `s:${s.key}`, label: s.name, color: s.color, event: term ? "closed" : "status_changed", status: s.key, sub: term ? "Finishes the " + noun : undefined });
+      out.push({ id: `s:${s.key}`, moment: term ? "done" : "shop", label: s.name, color: s.color, event: term ? "closed" : "status_changed", status: s.key, sub: term ? `Finishes the ${noun}` : undefined });
     }
-    out.push({ id: "closed-any", label: `${rt === "estimate" ? "Estimate" : "Job"} finished`, sub: "Any closing status", event: "closed", status: null, allStatuses: true });
-    out.push({ id: "comment", label: "You post an update", sub: "A comment the customer can see", event: "comment_added", status: null });
-    out.push({ id: "paid", label: "Payment received", event: "payment_received", status: null });
+    out.push({ id: "closed-any", moment: "done", label: `${Noun} finished`, sub: "Any closing status", event: "closed", status: null, allStatuses: true });
+    out.push({ id: "comment", moment: "after", label: "You post an update", sub: "A comment the customer can see", event: "comment_added", status: null });
+    out.push({ id: "paid", moment: "after", label: "Payment received", event: "payment_received", status: null });
     return out;
-  }, [statuses, rt, noun]);
-
-  const mine = (r: Rule) => isCustomerRule(r) && inView(r, rt);
-  const isOn = (row: Row, ch: string) => cellRules(rules, rt, row.event, row.status, ch).some((r) => r.active);
-  const covered = (row: Row, ch: string) => {
-    if (!row.status) return false;
-    const catchAll = rows.find((x) => x.allStatuses && x.event === row.event);
-    return !!catchAll && isOn(catchAll, ch);
-  };
+  }, [statuses, rt, noun, Noun]);  // eslint-disable-line
+  const listed = all.filter((r) => !r.status || anyOn(r));
+  const unlisted = all.filter((r) => r.status && !anyOn(r));
+  const catchAllFor = (row: Row) => (row.status ? all.find((x) => x.allStatuses && x.event === row.event) : undefined);
 
   async function toggle(row: Row, ch: string) {
     const key = `${row.id}:${ch}`; if (busy) return; setBusy(key);
-    try {
-      await toggleCell(api, rules, rt, row.event, row.status, ch);
-      reload();
-    } catch (e: any) { flash(e?.message || "Couldn't change that message"); } finally { setBusy(null); }
+    try { await toggleCell(api, rules, rt, row.event, row.status, ch); reload(); }
+    catch (e: any) { flash(e?.message || "Couldn't change that message"); } finally { setBusy(null); }
+  }
+  async function addForStatus(m: Moment) {
+    const choices = unlisted.filter((r) => r.moment === m);
+    const pick = await selectDialog("Which status should send its own message?", choices.map((r) => r.label), { title: "Message for a status", confirmLabel: "Write it" });
+    const row = choices.find((r) => r.label === pick);
+    if (row) { setAdding(true); setEditing(row); }
+  }
+  async function setQuietHours(on: boolean) {
+    try { await api.put("/notifications/quiet-hours", { on }); setQuiet({ on, some: false }); reload(); flash(on ? "Messages now wait until you open" : "Messages send any time"); }
+    catch (e: any) { flash(e?.message || "Couldn't change quiet hours"); }
   }
 
+  const rowRules = (row: Row) => channels.flatMap(([c]) => cellRules(rules, rt, row.event, row.status, c));
+  const rowStat = (row: Row) => rowRules(row).reduce((acc, r) => {
+    const st = stats?.rules?.[r.id]; if (!st) return acc;
+    return { sent: acc.sent + st.sent_7d, failed: acc.failed + st.failed_7d, last: [acc.last, st.last_sent_at].filter(Boolean).sort().pop() || null };
+  }, { sent: 0, failed: 0, last: null as string | null });
+  const previewOf = (row: Row) => {
+    const r = channels.map(([c]) => cellRules(rules, rt, row.event, row.status, c).find((x) => x.active)).find(Boolean)
+      || rowRules(row)[0];
+    const t = r?.template_id ? templates.find((x) => x.id === r.template_id) : null;
+    return fill(t?.body_template || defaultBody(row), { "{Order Status}": row.status ? row.label : "Ready for pickup", "{Company Name}": shopName || "Your shop" });
+  };
+
   const reminderRules = rules.filter((r) => (r.module || "order") === "order" && (r.scope || "client") === "client" && r.event === "reminder");
-  const liveNote = providers.sms && providers.sms !== "live" ? "Texts are in test mode until a phone number is connected" : null;
+  const testMode = (["sms", "email"] as const).filter((k) => providers[k] && providers[k] !== "live").map((k) => (k === "sms" ? "Texts" : "Emails"));
+  const ownStatusCount = (event: string) => listed.filter((r) => r.status && r.event === event).length;
 
   const Seg = ({ value, set, opts }: { value: string; set: (v: any) => void; opts: [string, string][] }) => (
     <div className="inline-flex rounded-xl bg-slate-100 p-1">
@@ -99,71 +150,128 @@ export default function CustomerMessages({ rules, templates, statusesFor, shopNa
     </div>
   );
 
+  const RowView = ({ row }: { row: Row }) => {
+    const st = rowStat(row); const ca = catchAllFor(row);
+    const doubled = ca ? channels.filter(([c]) => isOn(row, c) && isOn(ca, c)).map(([, l]) => l.toLowerCase()) : [];
+    const note = row.allStatuses && ownStatusCount(row.event)
+      ? `Also goes out on the ${ownStatusCount(row.event)} ${ownStatusCount(row.event) === 1 ? "status below that has its" : "statuses below that have their"} own message`
+      : row.id === "any" ? `One message whenever the ${noun} moves to a new status` : row.sub;
+    return (
+      <div className="group flex items-start gap-3 px-4 py-3.5 hover:bg-slate-50/70 cursor-pointer" onClick={() => { setAdding(false); setEditing(row); }}>
+        {row.color ? <span className="mt-1.5 w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: row.color, boxShadow: `0 0 0 3px ${row.color}22` }} />
+          : <span className="mt-0.5 w-6 h-6 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n={row.allStatuses ? "all_inclusive" : row.event === "payment_received" ? "payments" : row.event === "comment_added" ? "chat_bubble" : "login"} c="text-[13px]" /></span>}
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-medium text-ink-primary truncate">{row.label}</div>
+          {note && <div className="text-[11px] text-ink-tertiary truncate">{note}</div>}
+          {anyOn(row) && <div className="mt-1 text-xs text-ink-secondary truncate italic">“{previewOf(row)}”</div>}
+          <div className="mt-1 flex flex-wrap gap-x-2 text-[11px]">
+            {st.sent > 0 && <span className="text-ink-tertiary">Sent {st.sent} this week{st.last ? ` · last ${ago(st.last)}` : ""}</span>}
+            {st.failed > 0 && <span className="text-rose-600">{st.failed} didn't go through</span>}
+            {doubled.length > 0 && <span className="text-amber-700">Customers also get the “{ca!.label}” {doubled.join(" and ")}, so 2 arrive</span>}
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+          {channels.map(([ch, l, icon]) => {
+            const on = isOn(row, ch);
+            return (
+              <button key={ch} type="button" role="switch" aria-checked={on} disabled={busy === `${row.id}:${ch}`} aria-label={`${l} when ${row.label}`} onClick={() => toggle(row, ch)}
+                className={`inline-flex items-center gap-1 h-8 px-2.5 rounded-full text-[11px] font-semibold border transition-colors disabled:opacity-50 ${on ? "bg-primary/10 border-primary/30 text-primary" : "border-dashed border-slate-300 text-ink-tertiary hover:text-ink-secondary hover:border-slate-400"}`}>
+                <M n={on ? "check" : icon} c="text-[13px]" />{l}
+              </button>
+            );
+          })}
+          <M n="chevron_right" c="text-base text-ink-tertiary ml-1" />
+        </div>
+      </div>
+    );
+  };
+
   return (
-    <div className="max-w-3xl space-y-4">
+    <div className="max-w-4xl space-y-4 pb-10">
       <div className="flex items-start gap-3">
         <div>
           <h2 className="text-base font-semibold text-ink-primary">Notifications</h2>
           <p className="text-xs text-ink-tertiary">The texts and emails your customers and team get automatically.</p>
         </div>
-        <div className="ml-auto flex flex-wrap justify-end gap-1.5">
-          {([["sms", "Text"], ["email", "Email"], ["whatsapp", "WhatsApp"]] as [string, string][]).filter(([k]) => providers[k]).map(([k, l]) => (
-            <span key={k} title={providers[k] === "live" ? `${l} messages are sent` : `${l} is in test mode: messages are logged, not sent`}
-              className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] font-semibold ${providers[k] === "live" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${providers[k] === "live" ? "bg-emerald-500" : "bg-amber-500"}`} />{l} {providers[k] === "live" ? "on" : "test mode"}
-            </span>
-          ))}
-        </div>
+        <div className="ml-auto"><Seg value={view} set={setView} opts={[["customers", "Customers"], ["internal", "Your team"], ["automations", "Automations"]]} /></div>
       </div>
 
-      <Seg value={view} set={setView} opts={[["customers", "Customers"], ["internal", "Your team"], ["automations", "Automations"]]} />
-
       {view !== "customers" ? renderOther(view) : (<>
+        {testMode.length > 0 && (
+          <div className="flex items-center gap-3 rounded-2xl bg-amber-50 border border-amber-200/80 px-4 py-3">
+            <span className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 grid place-items-center flex-shrink-0"><M n="science" c="text-base" /></span>
+            <div className="text-xs text-amber-900"><span className="font-semibold">{testMode.join(" and ")} are in test mode.</span> They're saved in the log but nobody receives them until you connect {testMode.length === 2 ? "a phone number and a mail account" : testMode[0] === "Texts" ? "a phone number" : "a mail account"}.</div>
+          </div>
+        )}
+
         <div className="flex items-center gap-2">
           <Seg value={rt} set={setRt} opts={[["work_order", "Jobs"], ["estimate", "Estimates"]]} />
-          {liveNote && <span className="text-[11px] text-amber-700 ml-auto">{liveNote}</span>}
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-          <div className="grid items-center px-4 py-2.5 border-b border-slate-100 text-[11px] font-semibold text-ink-tertiary" style={{ gridTemplateColumns: `minmax(0,1fr) repeat(${channels.length}, 72px) 28px` }}>
-            <span>When</span>
-            {channels.map(([k, l, icon]) => <span key={k} className="flex items-center justify-center gap-1"><M n={icon} c="text-[13px]" />{l}</span>)}
-            <span />
-          </div>
-          {statuses === null && <div className="p-4 text-xs text-ink-tertiary">Loading…</div>}
-          {rows.map((row, i) => {
-            const firstStatus = row.status && !rows[i - 1]?.status;
-            return (
-              <div key={row.id}>
-                {firstStatus && <div className="px-4 pt-3 pb-1 text-[11px] font-semibold text-ink-tertiary">Or pick statuses</div>}
-                <div className="group grid items-center px-4 py-2.5 hover:bg-slate-50 cursor-pointer" style={{ gridTemplateColumns: `minmax(0,1fr) repeat(${channels.length}, 72px) 28px` }}
-                  onClick={() => setEditing(row)}>
-                  <span className="flex items-center gap-2.5 min-w-0">
-                    {row.color ? <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: row.color }} />
-                      : <span className="w-2.5 h-2.5 flex-shrink-0" />}
-                    <span className="min-w-0">
-                      <span className={`block text-sm truncate ${row.allStatuses ? "font-medium text-ink-primary" : "text-ink-primary"}`}>{row.label}</span>
-                      {row.sub && <span className="block text-[11px] text-ink-tertiary truncate">{row.sub}</span>}
+        {/* What your customer gets: the job's journey, one stop per moment. */}
+        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-5">
+          <div className="text-[11px] font-semibold text-ink-tertiary mb-3">What your customer gets</div>
+          <div className="relative grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="hidden md:block absolute top-5 left-[12%] right-[12%] h-0.5 bg-gradient-to-r from-primary/30 via-primary/20 to-primary/30" />
+            {MOMENTS.map((m) => {
+              const on = listed.filter((r) => r.moment === m.key && anyOn(r));
+              const first = on[0];
+              return (
+                <button key={m.key} type="button" onMouseEnter={() => setPeek(m.key)} onMouseLeave={() => setPeek(null)} onFocus={() => setPeek(m.key)} onBlur={() => setPeek(null)}
+                  onClick={() => document.getElementById(`moment-${m.key}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                  className="relative flex flex-col items-center text-center gap-1.5 rounded-xl px-2 py-1 hover:bg-slate-50">
+                  <span className={`relative z-10 w-10 h-10 rounded-2xl grid place-items-center ring-4 ring-white ${on.length ? "bg-primary text-white shadow-[0_6px_16px_-6px] shadow-primary/60" : "bg-slate-100 text-ink-tertiary"}`}><M n={m.icon} c="text-lg" /></span>
+                  <span className="text-xs font-semibold text-ink-primary">{m.label}</span>
+                  <span className={`text-[11px] ${on.length ? "text-primary" : "text-ink-tertiary"}`}>{on.length ? `${on.length} message${on.length === 1 ? "" : "s"}` : "Nothing sent"}</span>
+                  {peek === m.key && first && (
+                    <span className="absolute top-full mt-2 z-20 w-56 text-left rounded-2xl rounded-tl-md bg-white border border-slate-200 shadow-clay-drawer px-3 py-2 text-[11.5px] leading-snug text-ink-primary">
+                      <span className="block text-[10px] font-semibold text-ink-tertiary mb-0.5">{first.label}</span>{previewOf(first)}
                     </span>
-                  </span>
-                  {channels.map(([ch, l]) => {
-                    const on = isOn(row, ch); const cov = !on && covered(row, ch);
-                    return (
-                      <span key={ch} className="flex justify-center" onClick={(e) => e.stopPropagation()}>
-                        <button type="button" role="switch" aria-checked={on || cov} disabled={cov || busy === `${row.id}:${ch}`}
-                          aria-label={`${l} when ${row.label}`} onClick={() => toggle(row, ch)}
-                          title={cov ? `Already sent by "${rows.find((x) => x.allStatuses && x.event === row.event)?.label}"` : undefined}
-                          className={`w-9 h-5 rounded-full relative transition-colors ${on ? "bg-primary" : cov ? "bg-primary/30 cursor-default" : "bg-slate-300"}`}>
-                          <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${on || cov ? "left-[18px]" : "left-0.5"}`} />
-                        </button>
-                      </span>
-                    );
-                  })}
-                  <M n="chevron_right" c="text-base text-ink-tertiary justify-self-end" />
-                </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {statuses === null && <div className="text-xs text-ink-tertiary px-1">Loading…</div>}
+        {statuses !== null && MOMENTS.map((m) => {
+          const rows = listed.filter((r) => r.moment === m.key);
+          const canAdd = (m.key === "shop" || m.key === "done") && unlisted.some((r) => r.moment === m.key);
+          return (
+            <section key={m.key} id={`moment-${m.key}`} className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden scroll-mt-4">
+              <div className="flex items-center gap-2.5 px-4 pt-4 pb-2">
+                <span className="w-7 h-7 rounded-lg bg-primary/10 text-primary grid place-items-center"><M n={m.icon} c="text-[15px]" /></span>
+                <span className="text-sm font-semibold text-ink-primary">{m.label}</span>
+                <span className="text-[11px] text-ink-tertiary">{m.hint}</span>
               </div>
-            );
-          })}
+              <div className="divide-y divide-slate-100">{rows.map((r) => <RowView key={r.id} row={r} />)}</div>
+              {canAdd && (
+                <button onClick={() => addForStatus(m.key)} className="w-full flex items-center gap-2 px-4 py-3 border-t border-slate-100 text-xs font-semibold text-primary hover:bg-slate-50">
+                  <M n="add" c="text-sm" />Message for another status
+                </button>
+              )}
+            </section>
+          );
+        })}
+
+        <div className="grid md:grid-cols-2 gap-3">
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 flex items-start gap-3">
+            <span className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 grid place-items-center flex-shrink-0"><M n="bedtime" c="text-lg" /></span>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium text-ink-primary">Quiet hours</div>
+              <div className="text-[11px] text-ink-tertiary">{quiet?.some ? "On for some messages. Switch to set it for all." : "Messages that would go out after hours wait until you open."}</div>
+            </div>
+            <button type="button" role="switch" aria-checked={!!quiet?.on} aria-label="Quiet hours" disabled={!quiet} onClick={() => setQuietHours(!quiet?.on)}
+              className={`w-10 h-6 rounded-full relative transition-colors flex-shrink-0 ${quiet?.on ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${quiet?.on ? "left-[18px]" : "left-0.5"}`} /></button>
+          </div>
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 flex items-start gap-3">
+            <span className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 grid place-items-center flex-shrink-0"><M n="smartphone" c="text-lg" /></span>
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-ink-primary">{stats ? `Texts reach ${stats.texting.with_phone - stats.texting.opted_out} of ${stats.texting.with_phone} customers` : "Who can get texts"}</div>
+              <div className="text-[11px] text-ink-tertiary">{stats?.texting.opted_out ? `${stats.texting.opted_out} replied STOP. They can reply START to get texts again.` : "Customers can reply STOP to any text to turn them off."}</div>
+            </div>
+          </div>
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4">
@@ -181,8 +289,8 @@ export default function CustomerMessages({ rules, templates, statusesFor, shopNa
       </>)}
 
       {editing && (
-        <MessageEditor row={editing} rt={rt} channels={channels} rules={rules.filter(mine)} templates={templates} shopName={shopName}
-          onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload(); flash("Message saved"); }} />
+        <MessageEditor row={editing} rt={rt} channels={channels} rules={rules.filter((r: Rule) => isCustomerRule(r) && inView(r, rt))} templates={templates} shopName={shopName}
+          flash={flash} startOn={adding} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload(); flash("Message saved"); }} />
       )}
     </div>
   );
@@ -219,8 +327,8 @@ function ReminderQuickAdd({ rules, onChanged, flash }: { rules: Rule[]; onChange
   );
 }
 
-function MessageEditor({ row, rt, channels, rules, templates, shopName, onClose, onSaved }: {
-  row: Row; rt: string; channels: [string, string, string][]; rules: Rule[]; templates: any[]; shopName: string; onClose: () => void; onSaved: () => void;
+function MessageEditor({ row, rt, channels, rules, templates, shopName, flash, startOn, onClose, onSaved }: {
+  row: Row; rt: string; startOn?: boolean; channels: [string, string, string][]; rules: Rule[]; templates: any[]; shopName: string; flash: (m: string) => void; onClose: () => void; onSaved: () => void;
 }) {
   const ruleFor = (ch: string) => rules.find((r) => r.event === row.event && r.channel === ch && (row.status ? r.trigger_status_key === row.status : !r.trigger_status_key) && r.active)
     || rules.find((r) => r.event === row.event && r.channel === ch && (row.status ? r.trigger_status_key === row.status : !r.trigger_status_key));
@@ -230,7 +338,7 @@ function MessageEditor({ row, rt, channels, rules, templates, shopName, onClose,
   const tpl = rule?.template_id ? templates.find((t) => t.id === rule.template_id) : null;
   const [body, setBody] = useState<string>(tpl?.body_template || "");
   const [subject, setSubject] = useState<string>(tpl?.subject || "");
-  const [on, setOn] = useState<boolean>(!!rule?.active);
+  const [on, setOn] = useState<boolean>(!!rule?.active || !!startOn);
   const [delay, setDelay] = useState<number>(rule?.delay_min || 0);
   const [hours, setHours] = useState<boolean>(!!rule?.working_hours_only);
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
@@ -238,7 +346,7 @@ function MessageEditor({ row, rt, channels, rules, templates, shopName, onClose,
 
   useEffect(() => {   // switching channel loads that channel's message
     const r = ruleFor(ch); const t = r?.template_id ? templates.find((x) => x.id === r.template_id) : null;
-    setBody(t?.body_template || ""); setSubject(t?.subject || ""); setOn(!!r?.active); setDelay(r?.delay_min || 0); setHours(!!r?.working_hours_only);
+    setBody(t?.body_template || ""); setSubject(t?.subject || ""); setOn(!!r?.active || (!!startOn && ch === firstOn)); setDelay(r?.delay_min || 0); setHours(!!r?.working_hours_only);
   }, [ch]);  // eslint-disable-line
   useEffect(() => {
     const k = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -256,6 +364,17 @@ function MessageEditor({ row, rt, channels, rules, templates, shopName, onClose,
     const next = body.slice(0, s) + token + body.slice(e);
     setBody(next);
     requestAnimationFrame(() => { ref.focus(); ref.setSelectionRange(s + token.length, s + token.length); });
+  }
+
+  async function sendSample() {
+    try {
+      const r = await api.post<any>("/notifications/test", { channel: ch, subject: ch === "email" ? (subject.trim() || null) : null, body: shown, sample: true });
+      flash(r?.status === "sent" ? `Sample sent to ${r.recipient}` : r?.error ? `Not sent: ${r.error}` : `Sample logged for ${r?.recipient} (test mode)`);
+    } catch (e: any) {
+      let m = e?.message || "Couldn't send a sample";
+      try { m = JSON.parse(m).detail || m; } catch { /* plain text */ }
+      flash(m);
+    }
   }
 
   async function save() {
@@ -377,6 +496,7 @@ function MessageEditor({ row, rt, channels, rules, templates, shopName, onClose,
         </div>
 
         <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-2">
+          <button onClick={sendSample} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50"><M n="send" c="text-sm" />Send me a sample</button>
           {body.trim() && <button onClick={() => setBody("")} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Use standard wording</button>}
           <button onClick={onClose} className="ml-auto px-4 py-2 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-50 font-semibold text-xs">Cancel</button>
           <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-ink-primary text-white font-semibold text-xs hover:opacity-90 disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>

@@ -125,7 +125,8 @@ async def test_flag_only_shop_keeps_its_text_after_conversion(client, tenant, db
     assert not await _logs(db, oid, "status_changed")
     await _move(client, tenant, oid, "ready")
     logs = await _logs(db, oid, "status_changed")
-    assert [(lg.channel, lg.body) for lg in logs] == [("sms", "Your job is ready")]
+    # First text to this customer also carries the opt-out line.
+    assert [(lg.channel, lg.body) for lg in logs] == [("sms", "Your job is ready\nReply STOP to opt out.")]
     await _move(client, tenant, oid, "done")
     assert [lg.channel for lg in await _logs(db, oid, "closed")] == ["sms"]
 
