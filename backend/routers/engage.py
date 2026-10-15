@@ -27,10 +27,11 @@ from backend.models import (
     OrderLine,
     Organisation,
 )
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import get_current_employee, require_perm, record_scope
 from backend.services.money import q2, q4
 
-router = APIRouter(prefix="/api", tags=["engage"])
+router = APIRouter(prefix="/api", tags=["engage"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 TIERS = [(2000, "gold"), (500, "silver"), (0, "standard")]
 
@@ -141,7 +142,7 @@ async def redeem_giftcard(
     order_id: str,
     data: RedeemGiftIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_set_discount")),
 ):
     order = await _order_or_404(db, current.org_id, order_id)
     g = (await db.execute(select(GiftCard).where(
@@ -284,7 +285,7 @@ async def apply_coupon(
     order_id: str,
     data: ApplyCouponIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_set_discount")),
 ):
     order = await _order_or_404(db, current.org_id, order_id)
     c = (await db.execute(select(Coupon).where(
@@ -349,7 +350,7 @@ async def redeem_loyalty(
     order_id: str,
     data: RedeemPointsIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_set_discount")),
 ):
     order = await _order_or_404(db, current.org_id, order_id)
     if not order.client_id:

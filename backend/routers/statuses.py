@@ -12,9 +12,10 @@ from pydantic import BaseModel
 from typing import Optional
 from backend.db.database import get_db
 from backend.models import OrderStatus, Employee
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import get_current_employee, require_perm, record_scope
 
-router = APIRouter(prefix="/api/statuses", tags=["statuses"])
+router = APIRouter(prefix="/api/statuses", tags=["statuses"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 GROUPS = ["new", "in_progress", "pending", "ready", "closed", "dropped"]
 TERMINAL_GROUPS = {"closed", "dropped"}
@@ -296,7 +297,7 @@ class ReorderIn(BaseModel):
 async def reorder_statuses(
     data: ReorderIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     for i, sid in enumerate(data.ordered_ids):
         s = (await db.execute(select(OrderStatus).where(OrderStatus.id == sid, OrderStatus.org_id == current.org_id))).scalar_one_or_none()
@@ -346,7 +347,7 @@ class TransitionIn(BaseModel):
 async def create_transition(
     data: TransitionIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     t = StatusTransition(org_id=current.org_id, from_status_id=data.from_status_id,
                          to_status_id=data.to_status_id, role_id=data.role_id)
@@ -360,7 +361,7 @@ async def create_transition(
 async def delete_transition(
     tid: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     t = (await db.execute(select(StatusTransition).where(StatusTransition.id == tid, StatusTransition.org_id == current.org_id))).scalar_one_or_none()
     if t:

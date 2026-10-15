@@ -26,9 +26,10 @@ from backend.models import (
     StaffNotification,
     TimeEntry,
 )
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, record_scope
 
-router = APIRouter(prefix="/api/tech", tags=["technician"])
+router = APIRouter(prefix="/api/tech", tags=["technician"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 
 def _card(o: Order) -> dict:

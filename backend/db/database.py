@@ -45,6 +45,9 @@ if settings.is_sqlite:
 
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
+from backend.db import tenancy  # noqa: E402,F401 — registers the cross-tenant reference guard
+
+
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=_NAMING_CONVENTION)
 

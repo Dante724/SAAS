@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from backend.db.database import get_db
 from backend.models import WorkOrderType, CustomField, Employee, FormLayout
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, require_perm
 
 router = APIRouter(prefix="/api/forms", tags=["forms-editor"])
 
@@ -46,7 +46,7 @@ async def get_system_layout(
 async def put_system_layout(
     data: LayoutIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     if data.entity not in VALID_ENTITIES:
         raise HTTPException(400, "Unknown entity")
@@ -345,7 +345,7 @@ async def list_types(
 async def create_type(
     data: TypeIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     count = (await db.execute(
         select(func.count()).select_from(WorkOrderType).where(WorkOrderType.org_id == current.org_id)
@@ -373,7 +373,7 @@ async def create_type(
 async def update_type(
     type_id: str, data: TypeIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     result = await db.execute(select(WorkOrderType).where(WorkOrderType.id == type_id, WorkOrderType.org_id == current.org_id))
     t = result.scalar_one_or_none()
@@ -400,7 +400,7 @@ async def update_type(
 async def delete_type(
     type_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     result = await db.execute(select(WorkOrderType).where(WorkOrderType.id == type_id, WorkOrderType.org_id == current.org_id))
     t = result.scalar_one_or_none()
@@ -433,7 +433,7 @@ async def list_fields(
 async def add_field(
     type_id: str, data: FieldIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     if data.field_type not in VALID_FIELD_TYPES:
         raise HTTPException(400, "Invalid field type")
@@ -469,7 +469,7 @@ async def add_field(
 async def update_field(
     field_id: str, data: FieldIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     f = (await db.execute(select(CustomField).where(CustomField.id == field_id, CustomField.org_id == current.org_id))).scalar_one_or_none()
     if not f:
@@ -496,7 +496,7 @@ async def update_field(
 async def delete_field(
     field_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     f = (await db.execute(select(CustomField).where(CustomField.id == field_id, CustomField.org_id == current.org_id))).scalar_one_or_none()
     if not f:
@@ -548,7 +548,7 @@ async def list_entity_fields(
 async def add_entity_field(
     data: EntityFieldIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     if data.entity_type not in ENTITY_TYPES:
         raise HTTPException(400, "entity_type must be client, device or product")

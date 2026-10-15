@@ -65,7 +65,8 @@ async def post_contact_ledger(
         note=note, ref_type=ref_type, ref_id=ref_id, created_by_id=created_by_id,
     )
     db.add(entry)
-    c = (await db.execute(select(Client).where(Client.id == client_id))).scalar_one_or_none()
+    c = (await db.execute(select(Client).where(
+        Client.id == client_id, Client.org_id == org_id))).scalar_one_or_none()
     if c is not None:
         c.balance = q2(float(c.balance or 0) + amt)
     return entry

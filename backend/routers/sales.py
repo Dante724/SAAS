@@ -160,7 +160,7 @@ async def list_sales(
 async def create_sale(
     data: SaleIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_sales")),
 ):
     """One warehouse per sale (the seller's location). Products deduct stock via
     the guarded UPDATE + FIFO cost layers, so COGS — and therefore the estimated

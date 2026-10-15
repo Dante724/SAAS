@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.services.dates import parse_date
 from backend.models import Feedback, FeedbackSettings, Order, Client, OrderStatus
-from backend.services.auth import get_current_employee, Employee
+from backend.services.auth import get_current_employee, Employee, require_perm
 from backend.services.money import q2, q4
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
@@ -54,7 +54,7 @@ class SettingsIn(BaseModel):
 async def save_settings(
     data: SettingsIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     s = (await db.execute(select(FeedbackSettings).where(FeedbackSettings.org_id == current.org_id))).scalar_one_or_none()
     if not s:

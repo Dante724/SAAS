@@ -63,7 +63,7 @@ async def list_templates(
 async def create_template(
     data: TemplateIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     if data.channel not in VALID_CHANNELS:
         raise HTTPException(400, "Invalid channel")
@@ -84,7 +84,7 @@ async def create_template(
 async def update_template(
     template_id: str, data: TemplateIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     t = (await db.execute(
         select(NotificationTemplate).where(
@@ -108,7 +108,7 @@ async def update_template(
 async def delete_template(
     template_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     t = (await db.execute(
         select(NotificationTemplate).where(
@@ -332,7 +332,7 @@ async def delete_rule(
 @router.post("/rules/queue-reminders")
 async def queue_reminders(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     """Scan upcoming work orders AND appointments, queueing reminders now within lead time."""
     n = await _rules.queue_reminders(db, org_id=current.org_id)
@@ -343,7 +343,7 @@ async def queue_reminders(
 @router.post("/rules/run-due")
 async def run_due(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     """Worker tick: dispatch scheduled notifications whose send time has passed."""
     return await _rules.run_due(db, org_id=current.org_id)

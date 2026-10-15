@@ -9,10 +9,11 @@ from sqlalchemy.orm import selectinload
 
 from backend.db.database import get_db
 from backend.models import Client, Device, Employee
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, require_perm, record_scope
 from backend.services.money import q2, q4
 
-router = APIRouter(prefix="/api/clients", tags=["clients"])
+router = APIRouter(prefix="/api/clients", tags=["clients"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 class ClientIn(BaseModel):
     name: str
@@ -344,7 +345,7 @@ async def _sync_supplier(db: AsyncSession, org_id: str, client: Client) -> None:
 async def delete_client(
     client_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_delete_clients")),
 ):
     result = await db.execute(select(Client).where(Client.id == client_id, Client.org_id == current.org_id))
     client = result.scalar_one_or_none()
@@ -692,7 +693,7 @@ async def merge_clients_preview(
 async def merge_clients(
     data: MergeClientsIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_delete_clients")),
 ):
     """Merge duplicate contacts into one — now reversible.
 
@@ -753,7 +754,7 @@ async def merge_clients(
 async def undo_merge(
     log_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_delete_clients")),
 ):
     """Reverse a merge: recreate the deleted source contacts and move their records back."""
     from backend.models import MergeLog
@@ -812,7 +813,7 @@ async def undo_merge(
 @router.get("/export/csv")
 async def export_clients(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_export_clients")),
 ):
     """Export the contact book as CSV (respects the caller's contact scope)."""
     import csv
@@ -913,7 +914,7 @@ class BalanceMoveIn(BaseModel):
 async def move_balance(
     client_id: str, data: BalanceMoveIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_make_client_payments")),
 ):
     """Post an advance, payout or manual adjustment against a contact's balance.
 
@@ -1110,7 +1111,7 @@ async def list_message_templates(
 async def create_message_template(
     data: MessageTemplateIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     from backend.models import MessageTemplate
     if not data.name.strip() or not data.body.strip():
@@ -1127,7 +1128,7 @@ async def create_message_template(
 async def delete_message_template(
     template_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     from backend.models import MessageTemplate
     t = (await db.execute(select(MessageTemplate).where(

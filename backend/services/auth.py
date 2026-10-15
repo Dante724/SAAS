@@ -103,6 +103,23 @@ async def get_current_employee(
     return employee
 
 
+async def has_perm(db: AsyncSession, employee: Employee, perm_key: str) -> bool:
+    """Default-allow: False only when the employee's role explicitly sets the permission to
+    False. Employees with no role (org owners) have every permission."""
+    if not employee.role_id:
+        return True
+    from backend.models import Role
+    role = (await db.execute(select(Role).where(Role.id == employee.role_id))).scalar_one_or_none()
+    return ((role.permissions or {}) if role else {}).get(perm_key) is not False
+
+
+async def assert_perm(db: AsyncSession, employee: Employee, perm_key: str) -> None:
+    """In-handler variant of require_perm, for permissions that depend on the request
+    (e.g. which report is being run)."""
+    if not await has_perm(db, employee, perm_key):
+        raise HTTPException(status_code=403, detail=f"Your role does not allow this action ({perm_key})")
+
+
 def require_perm(perm_key: str):
     """Dependency factory for role-based gating. Default-allow (matching the
     existing can_add_without_stock semantics): the action is blocked only when
@@ -112,13 +129,7 @@ def require_perm(perm_key: str):
         db: AsyncSession = Depends(get_db),
         current: Employee = Depends(get_current_employee),
     ) -> Employee:
-        if current.role_id:
-            from backend.models import Role
-            role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-            perms = (role.permissions or {}) if role else {}
-            if perms.get(perm_key) is False:
-                raise HTTPException(status_code=403,
-                                    detail=f"Your role does not allow this action ({perm_key})")
+        await assert_perm(db, current, perm_key)
         return current
     return _checker
 
@@ -142,3 +153,13 @@ async def check_location_access(db, current, location_id):
     if location_id not in allowed:
         raise HTTPException(status_code=403,
                             detail="Your role is not allowed to act on this location")
+
+
+async def record_scope(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+) -> None:
+    """Router dependency enforcing role record scope on {order_id}/{client_id} routes."""
+    from backend.services.scoping import guard_record_scope
+    await guard_record_scope(request, db, current)

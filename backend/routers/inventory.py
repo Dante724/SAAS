@@ -162,7 +162,7 @@ async def scan_resolve(
 async def create_part(
     data: PartIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_products")),
 ):
     part = Part(org_id=current.org_id, **data.model_dump())
     db.add(part)
@@ -188,7 +188,7 @@ async def get_part(
 async def update_part(
     part_id: str, data: PartIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_products")),
 ):
     result = await db.execute(select(Part).where(Part.id == part_id, Part.org_id == current.org_id))
     part = result.scalar_one_or_none()

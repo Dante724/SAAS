@@ -193,7 +193,7 @@ async def delete_item(
 async def add_item_by_key(
     key: str, data: ItemIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     """Inline add from a form dialog. Any staff member can extend a directory this way
     (Orderry's design: adding a value here bypasses the directory-edit permission)."""

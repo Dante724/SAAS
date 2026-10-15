@@ -9,10 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import Employee, Order, EventFeedItem, ChatThread, ChatMessage
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, record_scope
 from backend.services import ai
 
-router = APIRouter(prefix="/api/ai", tags=["ai"])
+router = APIRouter(prefix="/api/ai", tags=["ai"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 
 @router.get("/status")

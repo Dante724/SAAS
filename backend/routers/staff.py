@@ -111,14 +111,23 @@ async def list_employees(
         select(Employee).where(Employee.org_id == current.org_id, Employee.active == True)  # noqa: E712
     )
     employees = result.scalars().all()
+    from backend.services.auth import has_perm
+    # Pay and tax ids are payroll data: only roles allowed to view payroll see colleagues' values.
+    see_pay = await has_perm(db, current, "can_view_payroll")
+
+    def pay(e, v):
+        return v if (see_pay or e.id == current.id) else None
     return [{"id": e.id, "name": e.name, "email": e.email,
-             "phone": e.phone, "wage_type": e.wage_type, "wage_value": e.wage_value,
-             "commission_labour": e.commission_labour, "commission_parts": e.commission_parts,
+             "phone": e.phone, "wage_type": pay(e, e.wage_type), "wage_value": pay(e, e.wage_value),
+             "commission_labour": pay(e, e.commission_labour), "commission_parts": pay(e, e.commission_parts),
              "weekly_hours": e.weekly_hours, "hourly_basis": e.hourly_basis or "labour",
              "track_job_hours": e.track_job_hours, "track_attendance": e.track_attendance,
              "position": e.position, "hired_at": e.hired_at.isoformat() if e.hired_at else None,
-             "tax_id": e.tax_id, "public_name": e.public_name, "note": e.note,
+             "tax_id": pay(e, e.tax_id), "public_name": e.public_name, "note": e.note,
              "location_id": e.location_id, "role_id": e.role_id, "active": e.active} for e in employees]
+
+PAY_FIELDS = ("wage_type", "wage_value", "commission_labour", "commission_parts", "tax_id")
+
 
 # ── Privilege guards ──────────────────────────────────────────────
 # require_perm is default-allow, so a role's access is "everything except what it denies"
@@ -168,6 +177,12 @@ async def create_employee(
     if data.password is not None and len(data.password) < MIN_PASSWORD_LEN:
         raise HTTPException(400, f"Password must be at least {MIN_PASSWORD_LEN} characters")
     await _assert_can_assign_role(db, current, data.role_id)
+    from backend.services.auth import has_perm
+    if not await has_perm(db, current, "can_view_payroll"):
+        defaults = EmployeeIn.model_fields
+        for k in PAY_FIELDS:
+            if k in defaults:
+                setattr(data, k, defaults[k].default)
     emp = Employee(
         org_id=current.org_id,
         name=data.name, email=data.email,
@@ -226,6 +241,12 @@ async def update_employee(
         raise HTTPException(404, "Employee not found")
     await _assert_can_manage(db, current, emp)
     payload = data.model_dump(exclude_unset=True)
+    from backend.services.auth import has_perm
+    if not await has_perm(db, current, "can_view_payroll"):
+        # Pay is hidden from this role in list_employees, so a full-form save would send blanks:
+        # never let it change (or wipe) compensation it can't see.
+        for k in PAY_FIELDS:
+            payload.pop(k, None)
     if "role_id" in payload and payload["role_id"] != emp.role_id:
         await _assert_can_assign_role(db, current, payload["role_id"])
     if "email" in payload and payload["email"] != emp.email:

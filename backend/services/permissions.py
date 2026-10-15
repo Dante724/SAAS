@@ -108,6 +108,22 @@ CATALOG = {
         ("can_edit_checklist", "Fill in / edit checklists"),
         ("can_delete_checklist", "Delete checklists from work orders"),
     ],
+    # Security phase 2: codes the API already enforced but the role editor couldn't set
+    # (rbac._validate rejected them), plus reports/client-data codes.
+    "Reports & data": [
+        ("can_view_reports", "Run and export reports (incl. custom reports)"),
+        ("can_export_clients", "Export the client list"),
+        ("can_delete_clients", "Delete and merge clients"),
+    ],
+    "Administration": [
+        ("can_view_finance", "Use finance: invoices, payments, cash shifts"),
+        ("can_manage_payroll", "Manage payroll runs and schedules"),
+        ("can_manage_staff", "Manage staff schedules and resources"),
+        ("can_delete_orders", "Delete and archive work orders"),
+        ("can_recommend", "Create recommendations on work orders"),
+        ("can_publish_recommend", "Send recommendations to clients"),
+        ("can_reply_customer", "Reply to customers from the inbox"),
+    ],
 }
 
 # All valid codes (flat), for validation.

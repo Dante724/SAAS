@@ -729,6 +729,22 @@ async def _rep_reorder_forecast(db, org, df, dt, **kw):
     return cols, data
 
 
+# Reports exposing sensitive figures need the matching permission on top of can_view_reports.
+REPORT_PERMS = {
+    "payroll": "can_view_payroll", "labor_cost": "can_view_payroll",
+    "wo_profit": "can_see_profit",
+    "cash_flow": "can_view_cashflow", "total_money": "can_view_balance",
+    "stock_valuation": "can_view_purchase_price",
+}
+
+
+async def _assert_report_access(db, current, report_key: str) -> None:
+    from backend.services.auth import assert_perm
+    await assert_perm(db, current, "can_view_reports")
+    if report_key in REPORT_PERMS:
+        await assert_perm(db, current, REPORT_PERMS[report_key])
+
+
 REPORTS = {
     "payroll":          ("Finance", "Payroll summary", _rep_payroll),
     "wo_created":       ("Work Orders", "Work orders created", _rep_work_orders_created),
@@ -774,6 +790,7 @@ async def run_report(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    await _assert_report_access(db, current, report_key)
     if report_key not in REPORTS:
         from fastapi import HTTPException
         raise HTTPException(404, "Unknown report")
@@ -795,6 +812,7 @@ async def export_report(
     current: Employee = Depends(get_current_employee),
 ):
     """Stream the report as a styled .xlsx (Orderry: export carries the full data)."""
+    await _assert_report_access(db, current, report_key)
     if report_key not in REPORTS:
         from fastapi import HTTPException
         raise HTTPException(404, "Unknown report")
@@ -842,6 +860,7 @@ async def export_report_csv(
     current: Employee = Depends(get_current_employee),
 ):
     """Stream any registered report as CSV (BI-friendly, opens anywhere)."""
+    await _assert_report_access(db, current, report_key)
     if report_key not in REPORTS:
         from fastapi import HTTPException
         raise HTTPException(404, "Unknown report")

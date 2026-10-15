@@ -7,10 +7,11 @@ from typing import Optional
 from datetime import datetime, date
 from backend.db.database import get_db
 from backend.models import Invoice, Payment, CashShift, CashDrawerMovement, Expense, Order, Employee, Location
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import get_current_employee, require_perm, record_scope
 from backend.services.money import q2, q4, msum  # noqa: F401 — money quantizers used module-wide
 
-router = APIRouter(prefix="/api/finance", tags=["finance"])
+router = APIRouter(prefix="/api/finance", tags=["finance"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 class InvoiceLineIn(BaseModel):
     kind: str = "custom"                            # service|product|labor|custom
@@ -196,7 +197,7 @@ async def _next_einvoice_number(db, org_id: str) -> str:
 async def issue_einvoice(
     invoice_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_invoices")),
 ):
     """Generate the UBL 2.1 e-invoice, assign a fiscal number, store the XML, mark issued.
     Idempotent-ish: re-issuing regenerates the XML but keeps the existing fiscal number."""
@@ -256,7 +257,7 @@ async def download_einvoice(
 async def update_invoice(
     invoice_id: str, data: dict,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_invoices")),
 ):
     """Build 144dt/144dw — change an invoice's Order-display mode and/or its payer
     (bill-to). Lines re-resolve on the next GET; stored line data is never rewritten."""
@@ -287,7 +288,7 @@ async def update_invoice(
 async def create_invoice(
     data: InvoiceIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_invoices")),
 ):
     from backend.models import InvoiceOrder, InvoiceLine, Order
     count = (await db.execute(
@@ -366,7 +367,7 @@ async def create_invoice(
 async def attach_order(
     invoice_id: str, data: dict,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_invoices")),
 ):
     """Build 144du — bill another work order on this invoice (Orderry parity)."""
     from backend.models import InvoiceOrder, Order
@@ -397,7 +398,7 @@ async def attach_order(
 async def detach_order(
     invoice_id: str, order_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_invoices")),
 ):
     """Build 144du — stop billing a work order on this invoice."""
     from backend.models import InvoiceOrder
@@ -426,7 +427,7 @@ class SendInvoiceIn(BaseModel):
 async def send_invoice_email(
     invoice_id: str, data: SendInvoiceIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_finance")),
 ):
     """Build 144dw — email the invoice PDF to the client (Orderry's envelope button).
     Uses the org's connected email account; if none is connected the send is
@@ -494,7 +495,7 @@ async def send_invoice_email(
 async def record_payment(
     invoice_id: str, data: PaymentIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_finance")),
 ):
     # Lock the invoice row so concurrent payments serialize (Postgres) — prevents a double-click /
     # retry from double-posting. No-op on SQLite, which serializes writes anyway.
@@ -721,7 +722,7 @@ async def list_payouts(
 async def open_shift(
     data: ShiftOpen,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_cashbox")),
 ):
     loc = (await db.execute(select(Location).where(
         Location.id == data.location_id, Location.org_id == current.org_id))).scalar_one_or_none()
@@ -785,7 +786,7 @@ async def list_shifts(
 async def drawer_movement(
     shift_id: str, data: DrawerMoveIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_cashbox")),
 ):
     """Record a manual cash pay-in / pay-out on the open drawer (note required)."""
     shift = await _shift_or_404(db, current.org_id, shift_id)
@@ -811,7 +812,7 @@ async def close_shift(
     closing_float: Optional[float] = Query(None),   # back-compat; or send a body with denoms
     data: Optional[ShiftCloseIn] = Body(None),
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_cashbox")),
 ):
     shift = await _shift_or_404(db, current.org_id, shift_id)
     if shift.closed_at is not None:
@@ -863,7 +864,7 @@ async def close_shift(
 async def add_expense(
     data: ExpenseIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_expenses")),
 ):
     expense = Expense(
         org_id=current.org_id,

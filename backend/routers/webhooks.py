@@ -20,7 +20,7 @@ def _ser(e: WebhookEndpoint) -> dict:
 @router.get("")
 async def list_endpoints(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),   # returns signing secrets
 ):
     rows = (await db.execute(select(WebhookEndpoint).where(
         WebhookEndpoint.org_id == current.org_id).order_by(WebhookEndpoint.created_at))).scalars().all()
