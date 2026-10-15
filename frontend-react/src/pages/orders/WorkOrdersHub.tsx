@@ -1,3 +1,4 @@
+import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
@@ -121,8 +122,10 @@ export default function WorkOrdersHub() {
   const colSpan = 2 + [...cols].length;
   async function moveTo(id: string, key: string) {
     const o = (orders || []).find((x) => x.id === id); if (!o || norm(o.status) === key) return;
+    let reason: string | null = null;
+    { const ds = droppedStatus(statuses, key); if (ds) { reason = await askCancelReason(ds.name); if (reason === null) return; } }
     setOrders((cur) => (cur || []).map((x) => x.id === id ? { ...x, status: key } : x)); // optimistic
-    try { await api.patch(`/orders/${id}/status`, { status: key }); } catch { refetch(); }
+    try { await api.patch(`/orders/${id}/status`, { status: key, reason: reason || undefined }); } catch { refetch(); }
   }
 
   function refetch() {
@@ -176,10 +179,13 @@ export default function WorkOrdersHub() {
   function toggle(id: string) { setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); }
   function toggleAll() { setSel((s) => s.size === rows.length && rows.length > 0 ? new Set() : new Set(rows.map((o) => o.id))); }
   async function bulkStatus(key: string) {
-    if (!key || sel.size === 0) return; setBusy(true);
+    if (!key || sel.size === 0) return;
+    let reason: string | null = null;
+    { const ds = droppedStatus(statuses, key); if (ds) { reason = await askCancelReason(ds.name, sel.size); if (reason === null) return; } }
+    setBusy(true);
     // Single atomic call (was N per-row PATCHes). action=set_status.
-    try { await api.post("/orders/bulk", { order_ids: [...sel], action: "set_status", value: key }); setSel(new Set()); refetch(); }
-    catch { for (const id of sel) { await api.patch(`/orders/${id}/status`, { status: key }).catch(() => {}); } setSel(new Set()); refetch(); }
+    try { await api.post("/orders/bulk", { order_ids: [...sel], action: "set_status", value: key, reason: reason || undefined }); setSel(new Set()); refetch(); }
+    catch { for (const id of sel) { await api.patch(`/orders/${id}/status`, { status: key, reason: reason || undefined }).catch(() => {}); } setSel(new Set()); refetch(); }
     finally { setBusy(false); }
   }
   // 144-G: bulk archive (soft-delete, reversible). Orders carrying unrefunded payments are

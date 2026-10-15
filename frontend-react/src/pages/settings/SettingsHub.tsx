@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
-import { api, openAuthedDoc } from "../../api/client";
+import { api } from "../../api/client";
 import CurrencyManager from "../../components/CurrencyManager";
 import TemplateEditorDrawer from "./TemplateEditorDrawer";
+import DirectoriesManager from "./DirectoriesManager";
 import { resetTerminology } from "../../lib/useTerminology";
 import { getLang, setLang, LANGS } from "../../i18n";
 import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
@@ -98,7 +99,8 @@ const INDUSTRIES: [string, string][] = [["general", "Generic — Assets"], ["aut
   ["bike", "Bike / cycle — Bikes (Serial)"]];
 
 export default function SettingsHub() {
-  const [sec, setSec] = useState<Section>("overview");
+  // ?section=… deep-links a section (e.g. "Manage options" in a directory dropdown).
+  const [sec, setSec] = useState<Section>(() => (new URLSearchParams(window.location.search).get("section") as Section) || "overview");
   const [q, setQ] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [co, setCo] = useState<any>(null);
@@ -216,7 +218,6 @@ export default function SettingsHub() {
       { k: "key", label: "Key", type: "text", req: true }, { k: "name", label: "Name", type: "text", req: true } ] },
   };
   const [editing, setEditing] = useState<{ sec: string; row: any | null; module?: string } | null>(null);
-  const [dirSel, setDirSel] = useState<any | null>(null);
   async function reloadSec(s: string) {
     if (s === "statuses") { const r = await api.get<any>(`/statuses?record_type=${statusRT}`).catch(() => null); if (r) setStatuses(r.items || r || []); return; }
     const url = SEC_URL[s]; if (!url) return;
@@ -555,14 +556,7 @@ export default function SettingsHub() {
             </SectionCard></div>
           )}
 
-          {sec === "directories" && (
-            <div className="max-w-4xl space-y-5">
-              <SectionCard title="Directories" count={lists.directories?.length} onAdd={() => setEditing({ sec: "directories", row: null })}>
-                <SecTable rows={lists.directories} onRowClick={(r) => setDirSel(r)} onDelete={(r) => delRow("directories", r)} cols={[["Directory", (d) => val(d, ["name", "title"])], ["Key", (d) => val(d, ["key", "slug"])]]} />
-              </SectionCard>
-              <DirectoryItemsPanel dir={dirSel} />
-            </div>
-          )}
+          {sec === "directories" && <DirectoriesManager />}
 
           {sec === "public" && <PublicAppointmentEditor />}
 
@@ -3575,70 +3569,3 @@ function TierManager({ types }: { types: any[] }) {
 
 // Directory item editor (144hi): add/delete items with an optional parent + per-location
 // scope, merge duplicates, and CSV import/export. Appears when a directory row is clicked.
-function DirectoryItemsPanel({ dir }: { dir: any | null }) {
-  const [items, setItems] = useState<any[]>([]);
-  const [locs, setLocs] = useState<any[]>([]);
-  const [nv, setNv] = useState(""); const [np, setNp] = useState(""); const [nl, setNl] = useState("");
-  const [mergeFrom, setMergeFrom] = useState(""); const [mergeTo, setMergeTo] = useState("");
-  const [csv, setCsv] = useState(""); const [showCsv, setShowCsv] = useState(false);
-  const [msg, setMsg] = useState("");
-  const load = () => { if (dir) api.get<any>(`/directories/${dir.id}/items`).then((r) => setItems(r.items || [])).catch(() => setItems([])); };
-  useEffect(() => { setItems([]); setMsg(""); load(); /* eslint-disable-next-line */ }, [dir?.id]);
-  useEffect(() => { api.get<any>("/staff/locations").then((r) => setLocs(r.items || r || [])).catch(() => {}); }, []);
-  if (!dir) return <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-5 text-xs text-ink-tertiary">Pick a directory above to edit its items.</div>;
-  const locName = (id: string) => locs.find((l) => l.id === id)?.name || id;
-  const add = async () => { if (!nv.trim()) return; await api.post(`/directories/${dir.id}/items`, { value: nv.trim(), parent_id: np || null, location_id: nl || null }); setNv(""); setNp(""); setNl(""); load(); };
-  const del = async (id: string) => {
-    try { await api.del(`/directories/items/${id}`); load(); }
-    catch (e: any) {
-      if (String(e?.status) === "409" && (await confirmDialog("This element has child elements. Delete anyway and unparent them?", { danger: true, confirmLabel: "Delete" }))) {
-        await api.del(`/directories/items/${id}?force=true`); load();
-      }
-    }
-  };
-  const merge = async () => { if (!mergeFrom || !mergeTo || mergeFrom === mergeTo) { setMsg("Pick two different elements."); return; } await api.post(`/directories/items/${mergeFrom}/merge`, { target_id: mergeTo }); setMergeFrom(""); setMergeTo(""); setMsg("Merged."); load(); };
-  const doImport = async () => { const r = await api.post<any>(`/directories/${dir.id}/import`, { csv }); setMsg(`Imported ${r.added}.`); setCsv(""); setShowCsv(false); load(); };
-  const doExport = () => { openAuthedDoc(`/directories/${dir.id}/export`).catch(() => setMsg("Export not available")); };
-  return (
-    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-5 space-y-3">
-      <div className="flex items-center justify-between">
-        <div><h4 className="text-sm font-bold text-ink-primary">{dir.name} — elements</h4>
-          <p className="text-xs text-ink-tertiary mt-0.5">Feed dropdowns app-wide. Set a parent for hierarchy; leave location blank for all locations.</p></div>
-        <div className="flex gap-2">
-          <button onClick={() => setShowCsv((s) => !s)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Import CSV</button>
-          <a href="#" onClick={(e) => { e.preventDefault(); doExport(); }} className="px-3 py-1.5 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Export CSV</a>
-        </div>
-      </div>
-      {showCsv && <div className="space-y-1.5">
-        <textarea value={csv} onChange={(e) => setCsv(e.target.value)} placeholder={"value,parent\nSamsung,\nGalaxy S24,Samsung"} className="glass-input w-full h-24 px-3 py-2 rounded-lg text-xs font-mono" />
-        <button onClick={doImport} disabled={!csv.trim()} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-50">Import rows</button>
-      </div>}
-      <div className="divide-y divide-slate-100 border border-slate-200/80 rounded-xl overflow-hidden max-h-72 overflow-y-auto">
-        {items.length === 0 && <div className="px-4 py-3 text-xs text-ink-tertiary">No elements yet.</div>}
-        {items.map((i) => (
-          <div key={i.id} className="px-4 py-2 flex items-center gap-2 text-xs">
-            <span className="font-semibold text-ink-primary">{i.value}</span>
-            {i.parent_id && <span className="text-[10px] text-ink-tertiary">↳ {items.find((x) => x.id === i.parent_id)?.value || "parent"}</span>}
-            {i.location_id && <span className="px-1.5 py-0.5 rounded bg-blue-50 text-primary text-[10px] font-semibold">{locName(i.location_id)}</span>}
-            {i.child_count > 0 && <span className="px-1.5 py-0.5 rounded bg-slate-100 text-ink-secondary text-[10px] font-semibold">{i.child_count} child{i.child_count === 1 ? "" : "ren"}</span>}
-            <button aria-label="Delete" onClick={() => del(i.id)} className="ml-auto text-ink-tertiary hover:text-rose-600"><M n="delete" c="text-sm" /></button>
-          </div>
-        ))}
-      </div>
-      <div className="flex flex-wrap items-end gap-2">
-        <input value={nv} onChange={(e) => setNv(e.target.value)} placeholder="New element" className="glass-input px-3 py-2 rounded-lg text-xs flex-1 min-w-[120px]" />
-        <select value={np} onChange={(e) => setNp(e.target.value)} className="glass-input px-2 py-2 rounded-lg text-xs"><option value="">No parent</option>{items.map((i) => <option key={i.id} value={i.id}>{i.value}</option>)}</select>
-        <select value={nl} onChange={(e) => setNl(e.target.value)} className="glass-input px-2 py-2 rounded-lg text-xs"><option value="">All locations</option>{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select>
-        <button onClick={add} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container">Add</button>
-      </div>
-      <div className="flex flex-wrap items-end gap-2 pt-2 border-t border-slate-100">
-        <span className="text-[11px] font-semibold text-ink-secondary self-center">Merge</span>
-        <select value={mergeFrom} onChange={(e) => setMergeFrom(e.target.value)} className="glass-input px-2 py-2 rounded-lg text-xs"><option value="">duplicate…</option>{items.map((i) => <option key={i.id} value={i.id}>{i.value}</option>)}</select>
-        <span className="text-[11px] text-ink-tertiary self-center">into</span>
-        <select value={mergeTo} onChange={(e) => setMergeTo(e.target.value)} className="glass-input px-2 py-2 rounded-lg text-xs"><option value="">keep…</option>{items.map((i) => <option key={i.id} value={i.id}>{i.value}</option>)}</select>
-        <button onClick={merge} className="px-3 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Merge</button>
-        {msg && <span className="text-[11px] text-ink-secondary self-center">{msg}</span>}
-      </div>
-    </div>
-  );
-}

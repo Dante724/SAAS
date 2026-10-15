@@ -1,3 +1,4 @@
+import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import ConversationPanel from "./ConversationPanel";
@@ -117,8 +118,10 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   useEffect(() => { api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(() => {}); }, []);
 
   async function changeStatus(key: string) {
+    let reason: string | null = null;
+    { const ds = droppedStatus(statuses as any[], key); if (ds) { reason = await askCancelReason(ds.name); if (reason === null) return; } }
     const prev = d.status; setD({ ...d, status: key });
-    try { await api.patch(`/orders/${order.id}/status`, { status: key }); flash("Status updated"); onChanged?.(); }
+    try { await api.patch(`/orders/${order.id}/status`, { status: key, reason: reason || undefined }); flash("Status updated"); onChanged?.(); }
     catch (e: any) { setD({ ...d, status: prev }); flash(`Failed: ${e.message}`); }
   }
   async function saveNotes(tech_notes: string, conclusion: string) {

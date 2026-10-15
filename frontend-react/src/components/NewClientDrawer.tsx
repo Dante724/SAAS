@@ -1,3 +1,4 @@
+import DirectorySelect from "./DirectorySelect";
 import { useState } from "react";
 import { M } from "./Shell";
 import { api } from "../api/client";
@@ -53,7 +54,7 @@ export default function NewClientDrawer({ prefillName, onClose, onCreated }: { p
           </div>
           <div><label className={lbl}>Address</label><input value={f.address || ""} onChange={(e) => set("address", e.target.value)} className={field} placeholder="Billing / home address" /></div>
           <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl}>Lead source</label><input value={f.source || ""} onChange={(e) => set("source", e.target.value)} className={field} placeholder="Walk-in, Referral…" /></div>
+            <div><label className={lbl}>Lead source</label><DirectorySelect dirKey="lead_source" value={f.source || ""} onChange={(v) => set("source", v)} className={field} /></div>
             <div><label className={lbl}>Loyalty tier</label>
               <select value={f.loyalty_tier} onChange={(e) => set("loyalty_tier", e.target.value)} className={`${field} appearance-none`}><option value="standard">Standard</option><option value="silver">Silver</option><option value="gold">Gold</option><option value="vip">VIP</option></select></div>
           </div>

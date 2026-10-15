@@ -1,3 +1,4 @@
+import DirectorySelect from "../../components/DirectorySelect";
 import { useEffect, useState } from "react";
 import TagChips from "../../components/TagChips";
 import { M } from "../../components/Shell";
@@ -38,13 +39,14 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
   const openAsset = (id?: string) => { if (id) setAssetOpen(id); else onOpenAsset?.(); };
   const [c, setC] = useState<Client>({});
   const [cd, setCd] = useState<Record<string, any>>({});
+  const [source, setSource] = useState("");
   const [disc, setDisc] = useState<any>({});
   const [biz, setBiz] = useState<any>({ tax_id: "", reg_no: "", billing_address: "" });
   const [busy, setBusy] = useState(false); const [toast, setToast] = useState<string | null>(null);
   const [isSupplier, setIsSupplier] = useState(false);   // Build 144am — Supplier role toggle
   const reload = () => api.get<Client>(`/clients/${clientId}`).then((r) => { setC(r); setIsSupplier(!!r.is_supplier); }).catch(() => {});
   useEffect(() => { api.get<Client>(`/clients/${clientId}`).then((r) => {
-    setC(r); setCd(r.custom_data || {}); setIsSupplier(!!r.is_supplier);
+    setC(r); setCd(r.custom_data || {}); setSource((r as any).source || ""); setIsSupplier(!!r.is_supplier);
     setBiz({ tax_id: (r as any).tax_id || "", reg_no: (r as any).reg_no || "", billing_address: (r as any).billing_address || "", birthday: (r as any).birthday || "" });
     setDisc({
       disc_services_mode: r.disc_services_mode || "none", disc_services_value: r.disc_services_value || 0, disc_services_price_type_id: r.disc_services_price_type_id || "",
@@ -70,6 +72,7 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
     try {
       await api.patch(`/clients/${clientId}`, {
         custom_data: cd,
+        source: source || null,
         is_supplier: isSupplier,
         tax_id: biz.tax_id || null, reg_no: biz.reg_no || null, billing_address: biz.billing_address || null,
         birthday: biz.birthday || null,
@@ -143,7 +146,8 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <F l="Phone number" v={c.phone || ""} /><F l="Email address" v={c.email || ""} />
-                <F l="Lead source" v={c.source || ""} /><F l="Loyalty tier" v={c.loyalty_tier || ""} />
+                <div><label className="text-[11px] font-semibold text-ink-tertiary">Lead source</label>
+                  <DirectorySelect dirKey="lead_source" value={source} onChange={setSource} className="glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full mt-1" /></div><F l="Loyalty tier" v={c.loyalty_tier || ""} />
                 <F l="Discount card / Member ID" v={c.discount_card || ""} /><F l="Orders" v={String(c.order_count ?? 0)} />
                 {c.currency_code && <F l="Billing currency" v={c.currency_code} />}
               </div>

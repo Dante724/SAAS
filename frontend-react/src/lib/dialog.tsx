@@ -89,3 +89,46 @@ export function promptDialog(message: string, opts: PromptOpts = {}): Promise<st
     });
   });
 }
+
+type SelectOpts = { title?: string; confirmLabel?: string; allowOther?: boolean; danger?: boolean };
+
+// Pick one of `options` (plus free text when allowOther). Resolves to the chosen string,
+// "" when the user confirms without choosing, or null when they back out.
+export function selectDialog(message: string, options: string[], opts: SelectOpts = {}): Promise<string | null> {
+  return new Promise((resolve) => {
+    mount((close) => {
+      const done = (v: string | null) => { close(); resolve(v); };
+      let val = "";
+      let other = "";
+      return (
+        <div className={overlay}>
+          <div className={scrim} onClick={() => done(null)} />
+          <div className={card}>
+            {opts.title && <h3 className="text-sm font-black text-ink-primary">{opts.title}</h3>}
+            <p className="text-xs text-ink-secondary whitespace-pre-line">{message}</p>
+            <div className="max-h-64 overflow-y-auto space-y-1">
+              {options.map((o) => (
+                <label key={o} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer text-sm text-ink-primary">
+                  <input type="radio" name="sel-dialog" className="accent-primary" onChange={() => { val = o; }} />{o}
+                </label>
+              ))}
+              {opts.allowOther && (
+                <label className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 text-sm text-ink-primary">
+                  <input type="radio" name="sel-dialog" className="accent-primary" onChange={() => { val = "__other__"; }} />
+                  <input placeholder="Other…" onFocus={(e) => { val = "__other__"; (e.currentTarget.previousSibling as HTMLInputElement).checked = true; }}
+                    onChange={(e) => { other = e.target.value; }} className="glass-input flex-1 rounded-lg px-2 py-1 text-sm" />
+                </label>
+              )}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button className={btnGhost} onClick={() => done(null)}>Back</button>
+              <button onClick={() => done(val === "__other__" ? other.trim() : val)}
+                className={`px-4 py-2 rounded-xl text-xs font-bold text-white shadow-clay-sm hover:brightness-110 ${opts.danger ? "bg-rose-600 hover:bg-rose-700" : "bg-gradient-to-r from-primary to-primary-container"}`}>
+                {opts.confirmLabel || "OK"}</button>
+            </div>
+          </div>
+        </div>
+      );
+    });
+  });
+}
