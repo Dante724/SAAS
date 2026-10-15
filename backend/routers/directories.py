@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Directory, DirectoryItem, Employee
 from backend.services.auth import get_current_employee, require_perm
+from backend.core.spreadsheet import safe_row, unguard_cell
 
 router = APIRouter(prefix="/api/directories", tags=["settings"])
 
@@ -265,7 +266,7 @@ async def export_items(
     w = csv.writer(buf)
     w.writerow(["value", "parent"])
     for r in rows:
-        w.writerow([r.value, by_id.get(r.parent_id, "")])
+        w.writerow(safe_row([r.value, by_id.get(r.parent_id, "")]))
     return Response(content=buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": "attachment; filename=directory.csv"})
 
@@ -294,7 +295,7 @@ async def import_items(
         DirectoryItem.active == True))).scalars().all()}  # noqa: E712
     reader = csv.reader(io.StringIO(data.csv))
     added = 0
-    rows = list(reader)
+    rows = [[unguard_cell(c) for c in r] for r in reader]
     # skip a header row that literally says "value"
     if rows and rows[0] and rows[0][0].strip().lower() == "value":
         rows = rows[1:]

@@ -9,6 +9,7 @@ from backend.db.database import get_db
 from backend.models import Invoice, Payment, CashShift, CashDrawerMovement, Expense, Order, Employee, Location
 from backend.services.auth import get_current_employee, require_perm, record_scope
 from backend.services.money import q2, q4, msum  # noqa: F401 — money quantizers used module-wide
+from backend.core.spreadsheet import safe_row
 
 router = APIRouter(prefix="/api/finance", tags=["finance"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -976,7 +977,7 @@ async def accountant_export(
     w = csv.writer(buf)
     w.writerow(["Date", "Account", "Type", "Category", "Comment", "Income", "Expense", "Balance after"])
     for _d, cells in lines:
-        w.writerow(cells)
+        w.writerow(safe_row(cells))
     buf.seek(0)
     from fastapi.responses import StreamingResponse
     fname = f"accountant_{df.strftime('%Y%m%d')}_{dt.strftime('%Y%m%d')}.csv"

@@ -24,6 +24,7 @@ from backend.models import (
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.numbering import next_number
 from backend.services.money import q2, q4
+from backend.core.spreadsheet import safe_row
 
 router = APIRouter(prefix="/api/sales", tags=["sales"])
 st_router = APIRouter(prefix="/api/stocktake", tags=["stocktake"])
@@ -704,8 +705,8 @@ async def export_count_sheet(
     w = csv.writer(buf)
     w.writerow(["code", "name", "system_qty", "counted_qty"])
     for ln, name, sku in rows:
-        w.writerow([sku or "", name, ln.system_qty or 0,
-                    "" if ln.counted_qty is None else ln.counted_qty])
+        w.writerow(safe_row([sku or "", name, ln.system_qty or 0,
+                             "" if ln.counted_qty is None else ln.counted_qty]))
     buf.seek(0)
     return StreamingResponse(
         iter([buf.getvalue()]), media_type="text/csv",

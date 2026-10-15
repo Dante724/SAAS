@@ -11,6 +11,7 @@ from backend.db.database import get_db
 from backend.models import Client, Device, Employee
 from backend.services.auth import get_current_employee, require_perm, record_scope
 from backend.services.money import q2
+from backend.core.spreadsheet import safe_row
 
 router = APIRouter(prefix="/api/clients", tags=["clients"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -831,8 +832,8 @@ async def export_clients(
     w = csv.writer(buf)
     w.writerow(["name", "phone", "email", "address", "source", "balance", "notes"])
     for c in rows:
-        w.writerow([c.name, c.phone or "", c.email or "", c.address or "",
-                    c.source or "", c.balance or 0, c.notes or ""])
+        w.writerow(safe_row([c.name, c.phone or "", c.email or "", c.address or "",
+                             c.source or "", c.balance or 0, c.notes or ""]))
     buf.seek(0)
     return StreamingResponse(
         iter([buf.getvalue()]), media_type="text/csv",

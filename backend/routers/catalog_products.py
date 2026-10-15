@@ -23,6 +23,7 @@ from backend.models import (
 from backend.services.auth import get_current_employee, require_perm
 from backend.routers.forms import resolve_custom_data
 from backend.services.money import q2
+from backend.core.spreadsheet import safe_row, unguard_cell
 
 router = APIRouter(prefix="/api/catalog", tags=["catalog-products"])
 
@@ -360,8 +361,8 @@ async def export_products(db: AsyncSession = Depends(get_db), current: Employee 
         return " > ".join(reversed(names))
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Products"; ws.append(_COLS)
     for p in rows:
-        ws.append([p.code, p.sku, p.barcode, p.name, path(p.category_id), p.uom, p.cost_price,
-                   p.sell_price, p.min_stock, p.warranty_days, "yes" if p.serialized else "no"])
+        ws.append(safe_row([p.code, p.sku, p.barcode, p.name, path(p.category_id), p.uom, p.cost_price,
+                            p.sell_price, p.min_stock, p.warranty_days, "yes" if p.serialized else "no"]))
     buf = io.BytesIO(); wb.save(buf); buf.seek(0)
     return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              headers={"Content-Disposition": 'attachment; filename="products.xlsx"'})
@@ -379,7 +380,7 @@ async def import_products(file: UploadFile = File(...), db: AsyncSession = Depen
         raise HTTPException(400, "Import file must have a 'Name' column")
     created = updated = 0
     for row in ws.iter_rows(min_row=2):
-        cells = [c.value for c in row]
+        cells = [unguard_cell(c.value) for c in row]
         def g(col, cells=cells):
             i = idx.get(col)
             return cells[i] if i is not None and i < len(cells) else None

@@ -143,6 +143,7 @@ from backend.models import (
     StockMovement, Supplier, Payment, EventFeedItem,
 )
 from backend.services.money import q2
+from backend.core.spreadsheet import safe_row
 
 
 def _parse_range(date_from, date_to):
@@ -837,7 +838,7 @@ async def export_report(
         cell.font = head_font
         cell.alignment = Alignment(horizontal="center")
     for r in rows:
-        ws.append(r)
+        ws.append(safe_row(r))
     for i, col in enumerate(cols, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = max(14, len(str(col)) + 4)
     buf = io.BytesIO()
@@ -871,7 +872,7 @@ async def export_report_csv(
     w = csv.writer(buf)
     w.writerow(cols)
     for r in rows:
-        w.writerow(r)
+        w.writerow(safe_row(r))
     buf.seek(0)
     fname = f"{report_key}_{df.strftime('%Y%m%d')}_{dt.strftime('%Y%m%d')}.csv"
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
