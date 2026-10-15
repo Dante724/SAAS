@@ -3,16 +3,15 @@ import { createPortal } from "react-dom";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
-import CurrencyManager from "../../components/CurrencyManager";
 import TemplateEditorDrawer from "./TemplateEditorDrawer";
 import DirectoriesManager from "./DirectoriesManager";
 import FormCustomizer, { type FormKey } from "../../components/FormCustomizer";
 import { resetTerminology } from "../../lib/useTerminology";
-import { getLang, setLang, LANGS } from "../../i18n";
 import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
 import { NAV, CATS, SEC_CAT, searchSections, type SectionId } from "./settingsRegistry";
 import { SetupChecklist } from "./SetupChecklist";
 import { StatusList, StatusEditor } from "./StatusesSettings";
+import GeneralSettings from "./GeneralSettings";
 import { ChecklistList, ChecklistEditor } from "./ChecklistSettings";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
 
@@ -122,7 +121,8 @@ export default function SettingsHub() {
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
 
-  useEffect(() => { api.get<any>("/staff/company").then(setCo).catch(() => setCo({})); }, []);
+  const coSaved = useRef<any>(null);   // last saved company settings (General shows a save bar when they differ)
+  useEffect(() => { api.get<any>("/staff/company").then((c) => { coSaved.current = c; setCo(c); }).catch(() => setCo({})); }, []);
   useEffect(() => {
     if (sec === "statuses" || sec === "team") {
       const rt = sec === "statuses" ? statusRT : "work_order";
@@ -245,7 +245,6 @@ export default function SettingsHub() {
     flash("Saved"); setEditing(null); cfg.reload();
   }
 
-  const set = (k: string, v: any) => setCo((s: any) => ({ ...s, [k]: v }));
   async function saveCompany() {
     try {
       await api.put("/staff/company", {
@@ -259,21 +258,9 @@ export default function SettingsHub() {
         clock_labour_billing: co.clock_labour_billing, rounding_enabled: co.rounding_enabled,
       });
       flash("Settings saved");
-    } catch (e: any) { flash(`Failed: ${e.message}`); }
+      return true;
+    } catch (e: any) { flash(`Failed: ${e.message}`); return false; }
   }
-  function onLogoPick(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0]; if (!f) return;
-    const r = new FileReader(); r.onload = () => set("logo_data", r.result as string); r.readAsDataURL(f);
-  }
-  // Country picker auto-fills timezone + currency (both stay editable after).
-  const pickCountry = (iso: string) => {
-    const m = COUNTRY_META.find((c) => c[0] === iso);
-    setCo((s: any) => ({ ...s, country: iso, ...(m ? { timezone: m[2], currency_code: m[3], currency: m[4] } : {}) }));
-  };
-  const pickCurrency = (code: string) => {
-    const c = CURRENCIES.find((x) => x[0] === code);
-    setCo((s: any) => ({ ...s, currency_code: code, ...(c ? { currency: c[1] } : {}) }));
-  };
   const [rebuilding, setRebuilding] = useState(false);
   async function rebuildBalances() {
     setRebuilding(true);
@@ -281,12 +268,7 @@ export default function SettingsHub() {
     catch (e: any) { flash(`Failed: ${e.message}`); } finally { setRebuilding(false); }
   }
 
-  const Toggle = ({ k, label, hint }: { k: string; label: string; hint?: string }) => (
-    <label className="flex items-center justify-between py-2.5 cursor-pointer">
-      <div><div className="text-xs font-semibold text-ink-primary">{label}</div>{hint && <div className="text-[11px] text-ink-tertiary">{hint}</div>}</div>
-      <button type="button" onClick={() => set(k, !co?.[k])} className={`w-10 h-6 rounded-full transition-colors flex-shrink-0 ${co?.[k] ? "bg-primary" : "bg-slate-300"} relative`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${co?.[k] ? "left-[18px]" : "left-0.5"}`} /></button>
-    </label>
-  );
+
 
   return (
     <Shell title="Settings">
@@ -348,89 +330,8 @@ export default function SettingsHub() {
             </div>
           )}
           {sec === "general" && co && (
-            <div className="max-w-2xl space-y-4">
-              {/* Company info */}
-              <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-5 space-y-4">
-                <h3 className="text-sm font-bold text-ink-primary">Company info</h3>
-                <p className="text-[11px] text-ink-tertiary -mt-2">These details appear on documents, invoices, and customer notifications.</p>
-                <div className="flex items-center gap-4">
-                  <div className="w-16 h-16 rounded-xl border border-slate-200 bg-slate-50 grid place-items-center overflow-hidden flex-shrink-0">
-                    {co.logo_data ? <img src={co.logo_data} alt="logo" className="w-full h-full object-contain" /> : <M n="image" c="text-2xl text-ink-placeholder" />}
-                  </div>
-                  <label className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50 cursor-pointer">
-                    Choose logo<input type="file" accept="image/*" onChange={onLogoPick} className="hidden" />
-                  </label>
-                  {co.logo_data && <button onClick={() => set("logo_data", "")} className="text-xs font-semibold text-rose-600">Remove</button>}
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div><label className={lbl}>Company name</label><input value={co.name || ""} onChange={(e) => set("name", e.target.value)} className={field} /></div>
-                  <div><label className={lbl}>Website</label><input value={co.website || ""} onChange={(e) => set("website", e.target.value)} className={field} /></div>
-                  <div><label className={lbl}>Email</label><input value={co.company_email || ""} onChange={(e) => set("company_email", e.target.value)} className={field} /></div>
-                  <div><label className={lbl}>Phone</label><input value={co.company_phone || ""} onChange={(e) => set("company_phone", e.target.value)} className={`${field} font-mono`} /></div>
-                  <div className="col-span-2"><label className={lbl}>Address</label><input value={co.company_address || ""} onChange={(e) => set("company_address", e.target.value)} className={field} /></div>
-                  <div><label className={lbl}>Country</label>
-                    <select value={co.country || ""} onChange={(e) => pickCountry(e.target.value)} className={field}>
-                      <option value="">— Select country —</option>{COUNTRY_META.map((c) => <option key={c[0]} value={c[0]}>{c[1]}</option>)}
-                    </select></div>
-                  <div><label className={lbl}>Timezone</label>
-                    <select value={co.timezone || ""} onChange={(e) => set("timezone", e.target.value)} className={field}>
-                      <option value="">— Select timezone —</option>{TIMEZONES.map((t) => <option key={t} value={t}>{t}</option>)}
-                    </select></div>
-                  <div><label className={lbl}>Currency</label>
-                    <select value={co.currency_code || ""} onChange={(e) => pickCurrency(e.target.value)} className={field}>
-                      <option value="">— Select currency —</option>{CURRENCIES.map(([c, s]) => <option key={c} value={c}>{c} — {s}</option>)}
-                    </select></div>
-                  <div><label className={lbl}>Currency symbol</label><input value={co.currency || ""} onChange={(e) => set("currency", e.target.value)} className={field} /></div>
-                  <div><label className={lbl}>My display language</label>
-                    <select value={getLang()} onChange={(e) => setLang(e.target.value as any)} className={field}>
-                      {LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
-                    </select>
-                    <p className="text-[11px] text-ink-tertiary mt-1">Applies to you on this device. Arabic switches the layout to right-to-left.</p></div>
-                  <div><label className={lbl}>Document language — printed docs</label>
-                    <select value={co.document_language || "en"} onChange={(e) => set("document_language", e.target.value)} className={field}>
-                      {DOC_LANGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                    </select></div>
-                  <div><label className={lbl}>Company details (registration / tax ID)</label><input value={co.company_details || ""} onChange={(e) => set("company_details", e.target.value)} className={field} /></div>
-                  <div className="col-span-2"><label className={lbl}>Company note (printed on documents)</label><textarea value={co.company_note || ""} onChange={(e) => set("company_note", e.target.value)} rows={2} className={field} /></div>
-                </div>
-              </div>
-
-              {/* Additional currencies — real Currency table + rate history (/api/finance/currencies) */}
-              <CurrencyManager />
-
-              {/* Industry template */}
-              <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-5 space-y-2">
-                <h3 className="text-sm font-bold text-ink-primary">Industry template</h3>
-                <p className="text-[11px] text-ink-tertiary">Renames the asset entity app-wide (Vehicles / Vessels / Devices…).</p>
-                <select value={co.industry_template || "general"} onChange={(e) => set("industry_template", e.target.value)} className={field}>
-                  {INDUSTRIES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                </select>
-              </div>
-
-              {/* Time clocks + policies + security */}
-              <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-5 divide-y divide-slate-100">
-                <h3 className="text-sm font-bold text-ink-primary pb-1">Time clocks</h3>
-                <Toggle k="clock_wo_enabled" label="Work-order / job & task timer" hint="Time spent on orders and tasks" />
-                <Toggle k="clock_attendance_enabled" label="Shop attendance clock" hint="Clock in / out of the workplace" />
-                <Toggle k="clock_labour_billing" label="Bill labour from the job timer" hint="Tracked time × the employee's rate adds a labour line" />
-              </div>
-              <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-5 divide-y divide-slate-100">
-                <h3 className="text-sm font-bold text-ink-primary pb-1">Policies & security</h3>
-                <Toggle k="prohibit_dup_phone" label="Prohibit duplicate phone numbers" hint="Block creating two clients with the same phone" />
-                <Toggle k="prohibit_dup_email" label="Prohibit duplicate emails" />
-                <Toggle k="rounding_enabled" label="Round invoice totals" />
-                <Toggle k="require_mfa" label="Require two-factor authentication" hint="Org-wide mandatory TOTP; members can't turn their own off" />
-              </div>
-
-              {/* Contact balances */}
-              <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-5 space-y-2">
-                <h3 className="text-sm font-bold text-ink-primary">Contact balances</h3>
-                <p className="text-[11px] text-ink-tertiary">Rebuild every client and supplier balance from orders, payments, postings and returns. Safe to run repeatedly.</p>
-                <button onClick={rebuildBalances} disabled={rebuilding} className="px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50 disabled:opacity-60 flex items-center gap-1.5"><M n="refresh" c="text-sm" />{rebuilding ? "Rebuilding…" : "Rebuild balances from history"}</button>
-              </div>
-
-              <div className="flex justify-end"><button onClick={saveCompany} className="px-5 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="save" c="text-sm" />Save company info</button></div>
-            </div>
+            <GeneralSettings co={co} setCo={setCo} saved={coSaved} onSave={saveCompany} rebuilding={rebuilding} onRebuild={rebuildBalances}
+              opts={{ countries: COUNTRY_META, timezones: TIMEZONES, currencies: CURRENCIES, docLangs: DOC_LANGS, industries: INDUSTRIES }} />
           )}
 
           {sec === "statuses" && (
