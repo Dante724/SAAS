@@ -162,7 +162,7 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
                 </div>
               </div>
               <DiscountMatrix disc={disc} onChange={setDisc} />
-              <CustomFields entity="client" value={cd} onChange={setCd} creating={false} />
+              <CustomFields entity="client" value={cd} onChange={setCd} creating={false} inputSize="sm" />
               <GdprCard clientId={clientId} onErased={onClose} />
               <div className="text-[11px] font-bold uppercase tracking-wider text-ink-tertiary mt-2">Registered {term.assets.toLowerCase()} on file</div>
               {(c.devices || []).length === 0 && <div className="text-xs text-ink-tertiary">No {term.assets.toLowerCase()} on file.</div>}

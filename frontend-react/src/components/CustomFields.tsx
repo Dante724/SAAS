@@ -25,9 +25,11 @@ function isVisible(f: Field, values: Record<string, any>): boolean {
   return op === "gt" ? n > w : op === "lt" ? n < w : false;
 }
 
-export default function CustomFields({ entity, typeId, value, onChange, creating, autofillCtx }: {
+export default function CustomFields({ entity, typeId, value, onChange, creating, autofillCtx, inputSize = "xs" }: {
   entity?: "product" | "client" | "device"; typeId?: string; value: Record<string, any>; onChange: (v: Record<string, any>) => void; creating: boolean;
   autofillCtx?: { device_id?: string; client_id?: string };
+  /** Match the host drawer's inputs: compact drawers use 12px ("xs"), the work-order drawer 14px ("sm"). */
+  inputSize?: "xs" | "sm";
 }) {
   const [fields, setFields] = useState<Field[]>([]);
   type DItem = { id: string; value: string; parent_id?: string | null };
@@ -86,24 +88,28 @@ export default function CustomFields({ entity, typeId, value, onChange, creating
   if (!fields.length) return null;
 
   const set = (k: string, v: any) => onChange({ ...(value || {}), [k]: v });
-  const lbl = "block font-semibold text-ink-secondary mb-1";
-  const field = "glass-input w-full px-3 py-2 rounded-lg text-ink-primary text-xs";
+  // Sizes are set here, not inherited: the block is dropped into drawers with different base
+  // text sizes, and without them labels rendered at the page default (much larger than the form).
+  const lbl = "block text-xs font-semibold text-ink-secondary mb-1";
+  const field = inputSize === "sm"
+    ? "glass-input w-full px-3 py-2.5 rounded-lg text-ink-primary text-sm font-semibold"
+    : "glass-input w-full px-3 py-2 rounded-lg text-ink-primary text-xs";
 
   return (
-    <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-3">
+    <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-3 text-xs">
       <div className="text-[11px] font-bold text-ink-primary uppercase tracking-wider">Custom fields</div>
       {fields.filter((f) => isVisible(f, value)).map((f) => {
         const v = (value || {})[f.field_key] ?? "";
         const locked = f.lock_after_create && !creating;
         const label = <label className={lbl}>{f.field_label}{f.required && <span className="text-rose-500"> *</span>}{locked && <span className="ml-1 text-[10px] text-ink-tertiary">(locked)</span>}</label>;
         if (f.field_type === "header") return <div key={f.id} className="text-[11px] font-bold text-ink-primary uppercase tracking-wider pt-1">{f.field_label}</div>;
-        if (f.field_type === "bool") return <label key={f.id} className="flex items-center justify-between cursor-pointer"><span className="text-ink-secondary font-medium">{f.field_label}</span><input type="checkbox" disabled={locked} checked={!!v} onChange={(e) => set(f.field_key, e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>;
+        if (f.field_type === "bool") return <label key={f.id} className="flex items-center justify-between cursor-pointer"><span className="text-xs text-ink-secondary font-semibold">{f.field_label}</span><input type="checkbox" disabled={locked} checked={!!v} onChange={(e) => set(f.field_key, e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>;
         return (
           <div key={f.id}>
             {label}
             {f.field_type === "textarea" ? <textarea disabled={locked} value={v} onChange={(e) => set(f.field_key, e.target.value)} placeholder={f.placeholder || ""} className={`${field} h-16 resize-none disabled:opacity-60`} />
               : f.field_type === "select" ? <select disabled={locked} value={v} onChange={(e) => set(f.field_key, e.target.value)} className={`${field} appearance-none disabled:opacity-60`}><option value="">—</option>{optsFor(f).map((o) => <option key={o} value={o}>{o}</option>)}</select>
-              : f.field_type === "multiselect" ? <div className="flex flex-wrap gap-1.5">{optsFor(f).map((o) => { const arr: string[] = Array.isArray(v) ? v : []; const on = arr.includes(o); return <button type="button" key={o} disabled={locked} onClick={() => set(f.field_key, on ? arr.filter((x) => x !== o) : [...arr, o])} className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${on ? "bg-primary text-white border-primary" : "bg-white text-ink-secondary border-slate-200"} disabled:opacity-60`}>{o}</button>; })}</div>
+              : f.field_type === "multiselect" ? <div className="flex flex-wrap gap-1.5">{!optsFor(f).length && <span className="text-[11px] text-ink-tertiary">No options yet</span>}{optsFor(f).map((o) => { const arr: string[] = Array.isArray(v) ? v : []; const on = arr.includes(o); return <button type="button" key={o} disabled={locked} onClick={() => set(f.field_key, on ? arr.filter((x) => x !== o) : [...arr, o])} className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${on ? "bg-primary text-white border-primary" : "bg-white text-ink-secondary border-slate-200"} disabled:opacity-60`}>{o}</button>; })}</div>
               : f.field_type === "link" ? <input disabled={locked} type="url" value={v} onChange={(e) => set(f.field_key, e.target.value)} placeholder={f.placeholder || "https://"} className={`${field} disabled:opacity-60`} />
               : <input disabled={locked} type={f.field_type === "number" ? "number" : f.field_type === "date" ? "date" : f.field_type === "datetime" ? "datetime-local" : "text"} value={v} onChange={(e) => set(f.field_key, e.target.value)} placeholder={f.placeholder || ""} className={`${field} disabled:opacity-60`} />}
             {f.directory_key && !locked && (f.field_type === "select" || f.field_type === "multiselect") &&

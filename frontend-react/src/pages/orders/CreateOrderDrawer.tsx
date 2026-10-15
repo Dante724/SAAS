@@ -199,7 +199,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                 </div>
               </div>
 
-              {typeId && <CustomFields typeId={typeId} value={woCustom} onChange={setWoCustom} creating />}
+              {typeId && <CustomFields typeId={typeId} value={woCustom} onChange={setWoCustom} creating inputSize="sm" />}
 
               <div className="space-y-1.5">
                 <label className={lbl}>Client</label>
@@ -312,7 +312,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                   </div>
                 )}
               </div>
-              <CustomFields entity="device" value={assetCustom} onChange={setAssetCustom} creating />
+              <CustomFields entity="device" value={assetCustom} onChange={setAssetCustom} creating inputSize="sm" />
               {err && <div className="text-status-overdue-ink text-xs font-semibold">{err}</div>}
             </section>
           )}

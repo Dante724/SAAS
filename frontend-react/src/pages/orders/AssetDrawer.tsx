@@ -144,7 +144,7 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
                 {identifierFields(term.identifier?.allowed, term.identifier?.primary).map((f) => <E key={f.kind} l={f.label} k={f.kind as keyof Asset} mono scan />)}
                 <E l="Color" k="color" />
               </div>
-              <CustomFields entity="device" value={a.custom_data || {}} onChange={(cd) => set("custom_data", cd)} creating={creating} />
+              <CustomFields entity="device" value={a.custom_data || {}} onChange={(cd) => set("custom_data", cd)} creating={creating} inputSize="sm" />
               {woNum && (<>
                 <div className="text-[11px] font-bold uppercase tracking-wider text-ink-tertiary">Active work order</div>
                 <div className="bg-white rounded-xl border border-slate-200/90 p-3.5 shadow-sm flex items-center gap-3"><span className="w-9 h-9 rounded-lg bg-blue-50 text-primary grid place-items-center text-[11px] font-extrabold">WO</span><div className="flex-1"><div className="text-xs font-bold text-ink-primary">{woNum}</div><div className="text-[11px] text-ink-tertiary">Linked to this asset</div></div><M n="chevron_right" c="text-ink-tertiary text-base" /></div>
