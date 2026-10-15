@@ -48,3 +48,16 @@ jobs:
       # every module — ci.yml's lint covers only core/db/tests. An un-imported notify() in
       # routers/orders.py silently disabled assignment alerts until this gate existed.
       - run: ruff check backend main.py scripts --select F,E9
+
+  npm-deps:
+    name: npm audit (production dependencies)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # What ships to browsers must be clean. Dev-only tooling (vite/vitest/tailwind) is
+      # tracked separately: those fixes need major-version migrations.
+      - run: npm audit --omit=dev --audit-level=moderate
+        working-directory: frontend-react
