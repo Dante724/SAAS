@@ -87,7 +87,7 @@ async def _records(db, org_id, subject, start, location_id):
         for s in (await db.execute(q)).scalars().all():
             if s.created_at < start:
                 continue
-            out.append({"ts": s.created_at, "amount": s.total or 0, "profit": (s.total or 0) - (s.total_cost or 0), "groups": {
+            out.append({"ts": s.created_at, "amount": s.total or 0, "profit": (s.total or 0) - (s.tax_total or 0) - (s.total_cost or 0), "groups": {
                 "seller": sellers.get(s.seller_id, "—"), "location": locs.get(s.location_id, "—"),
                 "month": s.created_at.strftime("%Y-%m"), "quarter": f"{s.created_at.year} Q{(s.created_at.month - 1) // 3 + 1}"}})
     elif subject == "payments":

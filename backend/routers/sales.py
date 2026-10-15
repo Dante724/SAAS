@@ -1,4 +1,5 @@
 """Sales (over-the-counter POS) + Stocktake (count → variance → adjust)."""
+import json
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional
@@ -22,8 +23,9 @@ from backend.models import (
     StocktakeLine,
 )
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.numbering import next_number
 from backend.services.money import q2, q4
+from backend.services.numbering import next_number
+from backend.services.tax import resolve_taxes
 from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
 
 router = APIRouter(prefix="/api/sales", tags=["sales"])
@@ -83,16 +85,17 @@ class SaleIn(BaseModel):
     redeem_points: float = 0
 
 
-async def _pos_redemptions(db, org_id, sale, client_id, gross, data):
+async def _pos_redemptions(db, org_id, sale, client_id, gross, data, tax=0.0):
     """144bb — resolve coupon / gift card / loyalty at POS into a single extra discount, and
     decrement the gift-card and loyalty ledgers (ref_type='sale'). Returns (amount, detail).
     Mirrors the order-based engage.py rules; no-op when no reward fields are passed so plain
-    sales are byte-identical to before."""
+    sales are byte-identical to before. `gross` is the pre-tax subtotal (coupon % and minimum
+    apply to it); `tax` is the imposed tax on top, which a gift card or points can still pay."""
     from backend.models import Client, GiftCard, GiftCardLedger, Coupon, LoyaltyLedger, Organisation
     from sqlalchemy import func as _f
     extra = 0.0
     detail: dict = {}
-    remaining = max(gross - (data.discount or 0), 0)
+    remaining = max(gross + (tax or 0) - (data.discount or 0), 0)
     if data.coupon_code:
         c = (await db.execute(select(Coupon).where(
             Coupon.org_id == org_id, Coupon.code == data.coupon_code.strip().upper()))).scalar_one_or_none()
@@ -175,7 +178,8 @@ async def list_sales(
     rows = (await db.execute(_q.order_by(Sale.created_at.desc()).limit(200))).scalars().all()
     return {"items": [{
         "id": s.id, "sale_number": s.sale_number, "client_id": s.client_id,
-        "total": s.total, "total_cost": s.total_cost, "profit": q2(s.total - s.total_cost),
+        "total": s.total, "tax_total": s.tax_total or 0, "total_cost": s.total_cost,
+        "profit": q2(s.total - (s.tax_total or 0) - s.total_cost),
         "paid": s.paid, "created_at": s.created_at.isoformat() if s.created_at else None,
     } for s in rows]}
 
@@ -206,16 +210,24 @@ async def create_sale(
     db.add(sale)
     await db.flush()
 
+    # Tax is resolved per line on its share of the whole-sale discount (the discount lowers the
+    # taxable amount), location-aware and honouring product/category/service exceptions.
+    line_totals = [q2(li.unit_price * li.qty * (1 - (li.discount or 0) / 100)) for li in data.lines]
+    subtotal = q2(sum(line_totals))
+    taxable_share = max(subtotal - (data.discount or 0), 0) / subtotal if subtotal else 0.0
     total = 0.0
     total_cost = 0.0
-    for li in data.lines:
-        line_total = q2(li.unit_price * li.qty * (1 - (li.discount or 0) / 100))
+    tax_total = 0.0
+    tax_imposed = 0.0
+    for li, line_total in zip(data.lines, line_totals):
         cost = 0.0
+        category_id = None
         if li.kind == "product" and li.ref_id:
             part = (await db.execute(select(Part).where(
                 Part.id == li.ref_id, Part.org_id == current.org_id))).scalar_one_or_none()
             if not part:
                 raise HTTPException(404, f"Product not found: {li.description}")
+            category_id = part.category_id
             sl = (await db.execute(select(StockLevel).where(
                 StockLevel.part_id == li.ref_id,
                 StockLevel.location_id == loc_id))).scalar_one_or_none()
@@ -256,18 +268,34 @@ async def create_sale(
                                  ref_type="sale", ref_id=sale.id))
             from backend.services import inventory_alerts as _alerts  # 144bo: low-stock alert
             await _alerts.maybe_low_stock_by_id(db, current.org_id, li.ref_id)
+        if li.kind == "service" and li.ref_id and category_id is None:
+            from backend.models import Service
+            category_id = (await db.execute(select(Service.category_id).where(
+                Service.id == li.ref_id, Service.org_id == current.org_id))).scalar_one_or_none()
+        tx = await resolve_taxes(db, current.org_id, doc_family="tickets_sales",
+                                 net_amount=q2(line_total * taxable_share),
+                                 item_type=("product" if li.kind == "product" else "service"),
+                                 item_id=li.ref_id, category_id=category_id, location_id=loc_id)
+        line_tax = tx["tax_total"]
+        tax_imposed += sum(t["amount"] for t in tx["taxes"] if t["mode"] != "included")
         db.add(SaleLine(sale_id=sale.id, kind=li.kind, ref_id=li.ref_id,
                         description=li.description, qty=li.qty, unit_price=li.unit_price,
                         cost_price=cost / li.qty if li.qty else 0, discount=li.discount,
-                        total=line_total))
+                        total=line_total, tax_amount=line_tax,
+                        tax_detail=json.dumps(tx["taxes"]) if tx["taxes"] else None))
         total += line_total
         total_cost += cost
+        tax_total += line_tax
 
     # 144bb — POS rewards: coupon / gift card / loyalty fold into the sale discount and
     # decrement their ledgers. No-op (and byte-identical) when no reward fields are passed.
-    reward_amt, reward_detail = await _pos_redemptions(db, current.org_id, sale, data.client_id, total, data)
+    tax_imposed = q2(tax_imposed)
+    reward_amt, reward_detail = await _pos_redemptions(db, current.org_id, sale, data.client_id, total, data,
+                                                       tax=tax_imposed)
     sale.discount = q2((data.discount or 0) + reward_amt)
-    sale.total = q2(max(total - sale.discount, 0))
+    # Imposed tax is added on top; included tax is already inside the line prices.
+    sale.total = q2(max(total + tax_imposed - sale.discount, 0))
+    sale.tax_total = q2(tax_total)
     sale.total_cost = q2(total_cost)
 
     # Payment straight into a cashbox (signed ledger entry linked to the sale)
@@ -282,8 +310,9 @@ async def create_sale(
     await log_system_event(db, current.org_id, "sale", sale.id,
                            f"Sale {sale.sale_number}: {len(data.lines)} line(s), total {sale.total:g}")
     await db.commit()
-    return {"id": sale.id, "sale_number": sale.sale_number, "total": sale.total,
-            "total_cost": sale.total_cost, "profit": q2(sale.total - sale.total_cost),
+    return {"id": sale.id, "sale_number": sale.sale_number, "subtotal": q2(total), "total": sale.total,
+            "tax_total": sale.tax_total, "total_cost": sale.total_cost,
+            "profit": q2(sale.total - sale.tax_total - sale.total_cost),
             "paid": sale.paid, "redeemed": reward_detail}
 
 

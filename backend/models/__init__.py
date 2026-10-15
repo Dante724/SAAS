@@ -2010,6 +2010,8 @@ class Sale(Base):
     total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     total_cost: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     discount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # whole-sale discount amount
+    # All tax on the sale (included + imposed); total already contains it, so net revenue = total − tax_total.
+    tax_total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0, server_default="0")
     paid: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
@@ -2025,7 +2027,12 @@ class SaleLine(Base):
     unit_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     cost_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # exact FIFO COGS for products
     discount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)    # pct
-    total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)      # net of line discount, pre imposed tax
+    # Tax resolved for this line (location-aware, honouring TaxException), on its share of the
+    # whole-sale discount. tax_detail is the JSON breakdown [{tax_id,name,rate,mode,amount}] so a
+    # receipt can show GST and PST separately.
+    tax_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0, server_default="0")
+    tax_detail: Mapped[Optional[str]] = mapped_column(Text)
 
 
 class Stocktake(Base):
