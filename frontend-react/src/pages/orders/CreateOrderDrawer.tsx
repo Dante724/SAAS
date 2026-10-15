@@ -14,6 +14,8 @@ import CatalogPicker from "../../components/CatalogPicker";
 import { useCurrencies, type CurItem } from "../../hooks/useCurrencies";
 import { useTerminology } from "../../lib/useTerminology";
 import { identifierFields } from "../../lib/assetIdentifiers";
+import IdentifyHint, { type IdMatch } from "../../components/IdentifyHint";
+import NameSuggestInput from "../../components/NameSuggestInput";
 
 type ClientLite = { id: string; name?: string; phone?: string; email?: string };
 type Emp = { id: string; name: string };
@@ -49,6 +51,16 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
   const [imei, setImei] = useState(""); const [vin, setVin] = useState(""); const [hin, setHin] = useState("");
   const [color, setColor] = useState(""); const [condition, setCondition] = useState("");
   const [moreOpen, setMoreOpen] = useState(false);
+  // An existing device picked from the "Seen before" card — the order attaches to it instead of
+  // creating a duplicate asset.
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  function pickExisting(m: IdMatch) {
+    setDeviceId(m.id);
+    if (m.brand) setBrand(m.brand);
+    if (m.model) setModel(m.model);
+    if (m.color) setColor(m.color);
+    if (!client && m.client) setClient({ id: m.client.id, name: m.client.name, phone: m.client.phone });
+  }
   const [assetCustom, setAssetCustom] = useState<Record<string, any>>({});
   const [lines, setLines] = useState<LineDraft[]>([]);
   const [emps, setEmps] = useState<Emp[]>([]);
@@ -123,6 +135,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
         assigned_to_id: assigneeId || null,
         manager_id: managerId || null,
         scheduled_for: scheduled || null,
+        device_id: deviceId,
         asset_brand: brand || null, asset_model: model || null, asset_serial: serial || null,
         asset_imei: imei || null, asset_vin: vin || null, asset_hin: hin || null,
         asset_color: color || null, asset_condition: condition || null,
@@ -134,7 +147,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
       });
       onCreated();
       if (!reopen) onClose();
-      else { setClient(null); setQ(""); setComplaint(""); setBrand(""); setModel(""); setSerial(""); setImei(""); setVin(""); setHin(""); setColor(""); setCondition(""); setMoreOpen(false); setLines([]); setWoCustom({}); setAssetCustom({}); setStep(1); }
+      else { setClient(null); setQ(""); setComplaint(""); setBrand(""); setModel(""); setSerial(""); setImei(""); setVin(""); setHin(""); setColor(""); setCondition(""); setMoreOpen(false); setDeviceId(null); setLines([]); setWoCustom({}); setAssetCustom({}); setStep(1); }
       return created;
     } catch (e: any) { setErr(e.message || "Failed to create"); } finally { setBusy(false); }
   }
@@ -277,13 +290,15 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1"><label className="block text-[10px] font-bold uppercase text-ink-tertiary">Group</label>
                         <div className="relative"><select value={group} onChange={(e) => setGroup(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg appearance-none">{(term.groups.length ? term.groups.map((g) => g.label) : ["Device", "Vehicle", "Equipment"]).map((g) => <option key={g}>{g}</option>)}</select><M n="expand_more" c="absolute right-2 top-2 text-ink-tertiary pointer-events-none text-xs" /></div></div>
-                      <div className="space-y-1"><label className="block text-[10px] font-bold uppercase text-ink-tertiary">Brand</label><input value={brand} onChange={(e) => setBrand(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="Samsung" /></div>
+                      <div className="space-y-1"><label className="block text-[10px] font-bold uppercase text-ink-tertiary">Brand</label><NameSuggestInput field="brand" value={brand} onChange={setBrand} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="Samsung" /></div>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1"><label className="block text-[10px] font-bold uppercase text-ink-tertiary">Model</label><input value={model} onChange={(e) => setModel(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="Galaxy S24 Ultra" /></div>
+                      <div className="space-y-1"><label className="block text-[10px] font-bold uppercase text-ink-tertiary">Model</label><NameSuggestInput field="model" brand={brand} value={model} onChange={setModel} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="Galaxy S24 Ultra" /></div>
                       <div className="space-y-1"><label className="block text-[10px] font-bold uppercase text-ink-tertiary">{primaryId.label}</label>
-                        <div className="flex items-center space-x-1.5"><input value={idState[primaryId.kind][0]} onChange={(e) => idState[primaryId.kind][1](e.target.value)} className="glass-input font-mono block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder={primaryId.placeholder} /><ScanButton title={`Scan ${primaryId.label}`} onScan={(code) => idState[primaryId.kind][1](code)} /></div></div>
+                        <div className="flex items-center space-x-1.5"><input value={idState[primaryId.kind][0]} onChange={(e) => { idState[primaryId.kind][1](e.target.value); setDeviceId(null); }} className="glass-input font-mono block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder={primaryId.placeholder} /><ScanButton title={`Scan ${primaryId.label}`} onScan={(code) => { idState[primaryId.kind][1](code); setDeviceId(null); }} /></div></div>
                     </div>
+                    <IdentifyHint value={idState[primaryId.kind][0]} kind={primaryId.kind} clientId={client?.id} usingId={deviceId}
+                      onUse={pickExisting} onUndo={() => setDeviceId(null)} />
                   </div>
                 </div>
 
