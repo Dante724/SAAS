@@ -12,6 +12,7 @@ import { NAV, CATS, SEC_CAT, searchSections, type SectionId } from "./settingsRe
 import { SetupChecklist } from "./SetupChecklist";
 import { StatusList, StatusEditor } from "./StatusesSettings";
 import GeneralSettings from "./GeneralSettings";
+import { TeamPage, RoleEditor, Avatar } from "./TeamSettings";
 import { ChecklistList, ChecklistEditor } from "./ChecklistSettings";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
 
@@ -82,18 +83,6 @@ const PAYROLL_TERMS: [string, string][] = [["any", "Any"], ["on_time", "Closed o
 const PAYROLL_LEVELS: [string, string][] = [["generic", "All items (generic)"], ["product", "Specific product"], ["category", "A category"], ["service", "Specific service"], ["profile", "Employee profile default"]];
 
 // Landing pages a role can start on (route → label). "" = default Home.
-const LANDING_PAGES: [string, string][] = [
-  ["", "Home (default)"], ["/my-work", "My work"], ["/orders", "Work orders"],
-  ["/inquiries", "Inquiries"], ["/appointments", "Appointments"], ["/invoices", "Invoices"],
-  ["/inventory", "Inventory"], ["/reports", "Reports"],
-];
-// Home-feed signal keys (must match backend reports.home_feed item keys).
-const FEED_SIGNALS: [string, string][] = [
-  ["overdue", "Overdue work orders"], ["messages", "Customer messages waiting"],
-  ["ready", "Ready for pickup"], ["urgent", "Urgent orders"],
-  ["unpaid", "Unpaid invoices"], ["lowstock", "Low / out of stock"],
-  ["tasks", "Open tasks"], ["inquiries", "Inquiries awaiting reply"],
-];
 const INDUSTRIES: [string, string][] = [["general", "Generic — Assets"], ["auto", "Auto repair — Vehicles (VIN)"],
   ["powersports", "Powersports — Vehicles (VIN)"], ["marine", "Marine — Vessels (HIN)"],
   ["mobile_phone", "Phone repair — Devices (IMEI/Serial)"], ["computer", "Computer repair — Devices (Serial)"],
@@ -347,31 +336,11 @@ export default function SettingsHub() {
           )}
 
           {sec === "team" && (
-            <div className="space-y-5 max-w-3xl">
-              <SectionCard title="Employees" count={lists.team?.length} onAdd={() => setEmpEdit("new")}>
-                <SecTable rows={lists.team} onRowClick={(e) => setEmpEdit(e)} cols={[
-                  ["Name", (e) => val(e, ["name"])],
-                  ["Position", (e) => val(e, ["position", "role_name"])],
-                  ["Email", (e) => val(e, ["email"])],
-                  ["Phone", (e) => val(e, ["phone"])],
-                  ["Status", (e) => (e?.active === false ? "Blocked" : "Active")],
-                ]} />
-              </SectionCard>
-              <SectionCard title="Roles" count={rbacRoles?.length ?? undefined} onAdd={() => setRoleEdit("new")}>
-                <SecTable rows={rbacRoles} onRowClick={(r) => setRoleEdit(r)} cols={[["Role", (r) => val(r, ["name"])], ["Overrides", (r) => String(Object.keys(r?.permissions || {}).length)]]} />
-              </SectionCard>
-              <SectionCard title="Pending invites" count={invites?.length ?? undefined} onAdd={() => setEditing({ sec: "invites", row: null })}>
-                <SecTable rows={invites} onDelete={(r) => delRow("invites", r)} cols={[["Email", (i) => val(i, ["email"])], ["Name", (i) => val(i, ["name"])], ["Status", (i) => val(i, ["status"], "pending")]]} />
-              </SectionCard>
-              <SectionCard title="Payroll rules — commission events" count={lists["payroll-rules"]?.length} onAdd={() => setPayrollEdit("new")}>
-                <SecTable rows={lists["payroll-rules"]} onRowClick={(r) => setPayrollEdit(r)} cols={[
-                  ["Rule", (r) => val(r, ["name"])],
-                  ["Event", (r) => PAYROLL_EVENT_LABELS[r?.event] || val(r, ["event"])],
-                  ["Employee", (r) => (lists.team || []).find((e: any) => e.id === r?.employee_id)?.name || "All / by role"],
-                  ["Amount", (r) => r?.calc_type === "flat" ? `${r?.amount}` : `${r?.amount}%${r?.percent_basis === "margin" ? " of margin" : ""}`],
-                ]} />
-              </SectionCard>
-            </div>
+            <TeamPage team={lists.team} roles={rbacRoles} invites={invites} rules={lists["payroll-rules"]} catalog={rbacCatalog}
+              payLabel={(r) => ({ event: PAYROLL_EVENT_LABELS[r?.event] || r?.event || "", amount: r?.calc_type === "flat" ? `${r?.amount}` : `${r?.amount}%${r?.percent_basis === "margin" ? " of margin" : ""}` })}
+              onEditPerson={(e) => setEmpEdit(e)} onNewPerson={() => setEmpEdit("new")} onInvite={() => setEditing({ sec: "invites", row: null })}
+              onEditRole={(r) => setRoleEdit(r)} onNewRole={() => setRoleEdit("new")} onEditRule={(r) => setPayrollEdit(r)} onNewRule={() => setPayrollEdit("new")}
+              onChanged={reloadInvites} onFlash={flash} />
           )}
 
           {sec === "locations" && <LocationsEditor />}
@@ -471,7 +440,8 @@ export default function SettingsHub() {
         />
       )}
       {roleEdit && rbacCatalog && (
-        <RoleEditorDrawer role={roleEdit === "new" ? null : roleEdit} catalog={rbacCatalog} statuses={statuses}
+        <RoleEditor role={roleEdit === "new" ? null : roleEdit} catalog={rbacCatalog} statuses={statuses}
+          members={roleEdit === "new" ? 0 : (lists.team || []).filter((e: any) => e.role_id === roleEdit.id).length + (invites || []).filter((i: any) => i.role_id === roleEdit.id).length}
           onClose={() => setRoleEdit(null)} onSaved={() => { flash("Role saved"); setRoleEdit(null); reloadRbac(); }} />
       )}
       {empEdit && (
@@ -1423,175 +1393,6 @@ function SectionCard({ title, count, onAdd, children }: { title: string; count?:
 }
 
 // ── RBAC role editor (permission matrix) ───────────────────────────────
-function RoleEditorDrawer({ role, catalog, statuses, onClose, onSaved }: { role: any | null; catalog: Record<string, { code: string; label: string }[]>; statuses: any[]; onClose: () => void; onSaved: () => void }) {
-  const [name, setName] = useState<string>(role?.name || "");
-  const [perms, setPerms] = useState<Record<string, boolean>>(role?.permissions || {});
-  const [contactScope, setContactScope] = useState<string>(role?.contact_scope || "all");
-  const [orderScope, setOrderScope] = useState<string>(role?.order_scope || "all");
-  const [payrollDays, setPayrollDays] = useState<string>(role?.payroll_visibility_days != null ? String(role.payroll_visibility_days) : "");
-  const [hiddenStatuses, setHiddenStatuses] = useState<string[]>(role?.hidden_status_keys || []);
-  const [feedSources, setFeedSources] = useState<string[]>(role?.home_feed_sources || []);
-  const [homeRoute, setHomeRoute] = useState<string>(role?.home_route || "");
-  const [open, setOpen] = useState<Record<string, boolean>>({});
-  const [tab, setTab] = useState<"permissions" | "access" | "statuses">("permissions");
-  const [q, setQ] = useState("");
-  const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
-  const allowed = (code: string) => perms[code] !== false;                    // deny-wins: absent = allowed
-  const toggle = (code: string) => setPerms((p) => ({ ...p, [code]: !(p[code] !== false) }));
-  const grantAll = (codes: { code: string }[], on: boolean) => setPerms((p) => { const n = { ...p }; codes.forEach((c) => { n[c.code] = on; }); return n; });
-  const setAllPerms = (on: boolean) => setPerms(() => { const n: Record<string, boolean> = {}; Object.values(catalog).flat().forEach((c) => { n[c.code] = on; }); return n; });
-  const toggleStatus = (key: string) => setHiddenStatuses((h) => h.includes(key) ? h.filter((k) => k !== key) : [...h, key]);
-  // Search filters the catalog to matching blocks/rows; matching blocks auto-expand.
-  const ql = q.trim().toLowerCase();
-  const filtered = Object.entries(catalog)
-    .map(([g, codes]) => [g, ql ? codes.filter((c) => c.label.toLowerCase().includes(ql) || g.toLowerCase().includes(ql)) : codes] as [string, { code: string; label: string }[]])
-    .filter(([, codes]) => codes.length > 0);
-  const totalOn = Object.values(catalog).flat().filter((c) => allowed(c.code)).length;
-  const totalAll = Object.values(catalog).flat().length;
-
-  async function save() {
-    if (!name.trim()) { setErr("Role name is required"); return; }
-    setBusy(true); setErr(null);
-    const body = {
-      name: name.trim(), permissions: perms,
-      contact_scope: contactScope, order_scope: orderScope,
-      warehouse_scope: role?.warehouse_scope || "all", warehouse_ids: role?.warehouse_ids || [],
-      payroll_visibility_days: payrollDays === "" ? null : Number(payrollDays),
-      hidden_status_keys: hiddenStatuses,
-      home_feed_sources: feedSources,
-      home_route: homeRoute,
-    };
-    try {
-      if (role?.id) await api.put(`/settings/rbac/roles/${role.id}`, body);
-      else await api.post("/settings/rbac/roles", body);
-      onSaved();
-    } catch (e: any) { setErr(e?.message || "Could not save"); setBusy(false); }
-  }
-
-  const sel = "glass-input w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg appearance-none";
-  const lblc = "block text-[11px] font-bold text-ink-tertiary uppercase mb-1";
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative w-[560px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
-        <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
-        <div className="px-5 py-4 border-b border-slate-100">
-          <div className="flex items-center justify-between mb-3">
-            <div><span className="text-[10px] font-bold uppercase tracking-wider text-primary block">Team › Roles</span><h2 className="font-bold text-ink-primary">{role ? "Edit role" : "New role"}</h2></div>
-            <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
-          </div>
-          <label className={lblc}>Role name *</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Front-desk, Technician, Manager" className="glass-input w-full text-sm px-3 py-2 rounded-lg font-semibold text-ink-primary" />
-        </div>
-        <nav className="px-5 border-b border-slate-100 flex gap-5 text-xs font-semibold">
-          {([["permissions", `Permissions · ${totalOn}/${totalAll}`], ["access", "Data access"], ["statuses", "Statuses"]] as [string, string][]).map(([id, label]) => (
-            <button key={id} onClick={() => setTab(id as any)} className={`py-3 border-b-2 transition-colors ${tab === id ? "text-primary border-primary font-bold" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{label}</button>
-          ))}
-        </nav>
-
-        <div className="flex-1 overflow-y-auto p-5 space-y-3">
-          {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
-
-          {tab === "permissions" && (<>
-            <div className="flex items-center gap-2">
-              <div className="relative flex-1">
-                <M n="search" c="absolute left-2.5 top-2 text-base text-ink-tertiary" />
-                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search permissions…" className="glass-input w-full pl-9 pr-3 py-2 text-xs font-semibold text-ink-primary rounded-lg" />
-              </div>
-              <button type="button" onClick={() => setAllPerms(true)} className="px-2.5 py-2 rounded-lg bg-emerald-50 text-emerald-700 text-[11px] font-bold hover:bg-emerald-100 whitespace-nowrap">Full access</button>
-              <button type="button" onClick={() => setAllPerms(false)} className="px-2.5 py-2 rounded-lg bg-rose-50 text-rose-600 text-[11px] font-bold hover:bg-rose-100 whitespace-nowrap">No access</button>
-            </div>
-            {filtered.length === 0 && <div className="text-xs text-ink-tertiary py-4 text-center">No permissions match “{q}”.</div>}
-            {filtered.map(([group, codes]) => {
-              const isOpen = (open[group] ?? false) || !!ql;               // auto-expand while searching
-              const onCount = codes.filter((c) => allowed(c.code)).length;
-              const allOn = onCount === codes.length;
-              return (
-                <div key={group} className="border border-slate-200/90 rounded-xl overflow-hidden">
-                  <div className="w-full px-3.5 py-2.5 bg-slate-50 flex items-center justify-between">
-                    <button type="button" onClick={() => setOpen((o) => ({ ...o, [group]: !isOpen }))} className="flex items-center gap-1.5 text-left">
-                      <M n={isOpen ? "expand_more" : "chevron_right"} c="text-sm text-ink-tertiary" />
-                      <span className="text-[11px] font-bold uppercase tracking-wide text-ink-secondary capitalize">{group.replace(/_/g, " ")}</span>
-                      <span className="text-[10px] font-bold text-ink-tertiary ml-1">{onCount}/{codes.length}</span>
-                    </button>
-                    <button type="button" onClick={() => grantAll(codes, !allOn)} className={`w-9 h-5 rounded-full flex-shrink-0 relative transition-colors ${allOn ? "bg-primary" : "bg-slate-300"}`} title={allOn ? "Turn all off" : "Turn all on"}><span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${allOn ? "left-[18px]" : "left-0.5"}`} /></button>
-                  </div>
-                  {isOpen && (
-                    <div className="divide-y divide-slate-100">
-                      {codes.map((c) => (
-                        <label key={c.code} className="flex items-center justify-between px-3.5 py-2 text-xs cursor-pointer hover:bg-blue-50/30">
-                          <span className="text-ink-primary pr-3">{c.label}</span>
-                          <input type="checkbox" checked={allowed(c.code)} onChange={() => toggle(c.code)} className="w-4 h-4 rounded border-slate-300 text-primary flex-shrink-0" />
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </>)}
-
-          {tab === "access" && (
-            <div className="bg-white rounded-xl border border-slate-200/90 shadow-clay-card p-4 space-y-3">
-              <p className="text-[11px] text-ink-tertiary">Limit which records this role can see, regardless of the permissions above.</p>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className={lblc}>Contacts</label>
-                  <select value={contactScope} onChange={(e) => setContactScope(e.target.value)} className={sel}><option value="all">All contacts</option><option value="own">Only their own</option></select></div>
-                <div><label className={lblc}>Work orders</label>
-                  <select value={orderScope} onChange={(e) => setOrderScope(e.target.value)} className={sel}><option value="all">All orders</option><option value="own">Only assigned to them</option></select></div>
-              </div>
-              <div><label className={lblc}>Payroll visibility (days back, blank = all)</label>
-                <input type="number" min={0} value={payrollDays} onChange={(e) => setPayrollDays(e.target.value)} placeholder="All history" className="glass-input w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" /></div>
-
-              <div className="pt-2 border-t border-slate-100">
-                <label className={lblc}>Landing page — where this role starts</label>
-                <select value={homeRoute} onChange={(e) => setHomeRoute(e.target.value)} className={sel}>
-                  {LANDING_PAGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                </select>
-                <p className="text-[11px] text-ink-tertiary mt-1">When someone with this role opens the app, they land here instead of Home.</p>
-              </div>
-
-              <div className="pt-2 border-t border-slate-100">
-                <label className={lblc}>Home feed — what this role sees</label>
-                <p className="text-[11px] text-ink-tertiary mb-2">Tick the alerts this role gets on Home. Leave all unticked to show everything. With "Work orders → Only assigned", order alerts are limited to their own jobs.</p>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {FEED_SIGNALS.map(([key, label]) => (
-                    <label key={key} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer text-xs">
-                      <input type="checkbox" checked={feedSources.includes(key)}
-                        onChange={() => setFeedSources((s) => s.includes(key) ? s.filter((k) => k !== key) : [...s, key])}
-                        className="w-4 h-4 rounded border-slate-300 text-primary" />
-                      <span className="text-ink-primary">{label}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {tab === "statuses" && (
-            <div className="bg-white rounded-xl border border-slate-200/90 shadow-clay-card p-4 space-y-2">
-              <p className="text-[11px] text-ink-tertiary">Ticked statuses are hidden from this role in every order view.</p>
-              {statuses.length === 0 && <div className="text-xs text-ink-tertiary py-2">No statuses configured.</div>}
-              <div className="grid grid-cols-2 gap-1.5 pt-1">
-                {statuses.map((s) => (
-                  <label key={s.key} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer text-xs">
-                    <input type="checkbox" checked={hiddenStatuses.includes(s.key)} onChange={() => toggleStatus(s.key)} className="w-4 h-4 rounded border-slate-300 text-primary" />
-                    <span className="text-ink-primary">{s.name}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-        <div className="px-5 py-4 border-t border-slate-100 flex justify-end gap-2 bg-slate-50/60">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : "Save role"}</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ── Employee editor (Orderry-style) ────────────────────────────────────
 function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | null; roles: any[]; onClose: () => void; onSaved: (m?: string) => void }) {
   const isNew = !emp?.id;
@@ -1630,35 +1431,42 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
   async function sendReset() { try { await api.post(`/staff/employees/${emp.id}/send-reset`, {}); onSaved("Reset link emailed"); } catch (e: any) { setErr(e?.message || "Failed"); } }
   async function resetMfa() { try { await api.post(`/staff/employees/${emp.id}/reset-mfa`, {}); onSaved("2FA reset"); } catch (e: any) { setErr(e?.message || "Failed"); } }
 
-  const lblc = "block text-[11px] font-bold text-ink-tertiary uppercase mb-1";
-  const fld = "glass-input w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg";
+  const lblc = "block text-xs font-medium text-ink-secondary mb-1.5";
+  const fld = "w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
       <div className="relative w-[540px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
-          <div><span className="text-[10px] font-bold uppercase tracking-wider text-primary block">Team › Employees</span><h2 className="font-bold text-ink-primary">{isNew ? "New employee" : f.name}</h2></div>
-          <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
+        <div className="px-5 pt-5 pb-3">
+          <div className="flex items-center gap-3">
+            {isNew ? <span className="w-11 h-11 rounded-full bg-slate-100 text-ink-tertiary grid place-items-center flex-shrink-0"><M n="person_add" c="text-lg" /></span> : <Avatar name={f.name || "?"} size={44} />}
+            <div className="flex-1 min-w-0">
+              <div className="text-lg font-semibold text-ink-primary truncate">{isNew ? "Add a teammate" : (f.name || "Teammate")}</div>
+              <div className="text-[11px] text-ink-tertiary truncate">{isNew ? "They get an account to sign in with" : [f.position, f.email].filter(Boolean).join(" · ")}</div>
+            </div>
+            {!isNew && f.active === false && <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-rose-50 text-rose-600">Blocked</span>}
+            <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary flex-shrink-0"><M n="close" c="text-base" /></button>
+          </div>
+          <div className="mt-4 inline-flex rounded-xl bg-slate-100 p-1">
+            {([["general", "Profile"], ["access", "Access"], ["payroll", "Pay"], ...(isNew ? [] : [["security", "Sign-in"]] as [string, string][])] as [string, string][]).map(([id, label]) => (
+              <button key={id} onClick={() => setTab(id as any)} aria-pressed={tab === id}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${tab === id ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>{label}</button>
+            ))}
+          </div>
         </div>
-        <nav className="px-5 border-b border-slate-100 flex gap-5 text-xs font-semibold">
-          {([["general", "General"], ["access", "Access"], ["payroll", "Payroll"], ...(isNew ? [] : [["security", "Security"]] as [string, string][])] as [string, string][]).map(([id, label]) => (
-            <button key={id} onClick={() => setTab(id as any)} className={`py-3 border-b-2 transition-colors ${tab === id ? "text-primary border-primary font-bold" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{label}</button>
-          ))}
-        </nav>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
 
           {tab === "general" && (
-          <div className="bg-white rounded-xl border border-slate-200/90 shadow-clay-card p-4 space-y-3">
-            <h3 className="text-xs font-bold text-ink-primary">Profile</h3>
+          <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
-              <div><label className={lblc}>Full name *</label><input value={f.name || ""} onChange={(e) => set("name", e.target.value)} className={fld} /></div>
+              <div><label className={lblc}>Full name</label><input value={f.name || ""} onChange={(e) => set("name", e.target.value)} className={fld} /></div>
               <div><label className={lblc}>Position</label><input value={f.position || ""} onChange={(e) => set("position", e.target.value)} className={fld} placeholder="Technician" /></div>
-              <div><label className={lblc}>Email *</label><input value={f.email || ""} onChange={(e) => set("email", e.target.value)} className={fld} /></div>
+              <div><label className={lblc}>Email</label><input value={f.email || ""} onChange={(e) => set("email", e.target.value)} className={fld} /></div>
               <div><label className={lblc}>Phone</label><input value={f.phone || ""} onChange={(e) => set("phone", e.target.value)} className={`${fld} font-mono`} /></div>
-              <div><label className={lblc}>Public name (on documents)</label><input value={f.public_name || ""} onChange={(e) => set("public_name", e.target.value)} className={fld} /></div>
-              <div><label className={lblc}>Tax ID / ITN</label><input value={f.tax_id || ""} onChange={(e) => set("tax_id", e.target.value)} className={`${fld} font-mono`} /></div>
+              <div><label className={lblc}>Name on documents</label><input value={f.public_name || ""} onChange={(e) => set("public_name", e.target.value)} className={fld} /></div>
+              <div><label className={lblc}>Tax ID</label><input value={f.tax_id || ""} onChange={(e) => set("tax_id", e.target.value)} className={`${fld} font-mono`} /></div>
               <div><label className={lblc}>Hired date</label><DateField mode="date" value={(f.hired_at || "").slice(0, 10)} onChange={(v) => set("hired_at", v)} /></div>
             </div>
             <div><label className={lblc}>Note</label><textarea value={f.note || ""} onChange={(e) => set("note", e.target.value)} rows={2} className={fld} /></div>
@@ -1666,8 +1474,7 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
           )}
 
           {tab === "access" && (
-          <div className="bg-white rounded-xl border border-slate-200/90 shadow-clay-card p-4 space-y-3">
-            <h3 className="text-xs font-bold text-ink-primary">Access</h3>
+          <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div><label className={lblc}>Role</label>
                 <select value={f.role_id || ""} onChange={(e) => set("role_id", e.target.value)} className={`${fld} appearance-none`}><option value="">— No role —</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
@@ -1684,8 +1491,7 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
           )}
 
           {tab === "payroll" && (
-          <div className="bg-white rounded-xl border border-slate-200/90 shadow-clay-card p-4 space-y-3">
-            <h3 className="text-xs font-bold text-ink-primary">Payroll</h3>
+          <div className="space-y-4">
             <div className="grid grid-cols-3 gap-3">
               <div><label className={lblc}>Wage type</label>
                 <select value={f.wage_type || "fixed"} onChange={(e) => set("wage_type", e.target.value)} className={`${fld} appearance-none`}><option value="fixed">Fixed salary</option><option value="hourly">Hourly</option></select></div>
@@ -1703,9 +1509,8 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
           )}
 
           {tab === "security" && !isNew && (
-            <div className="bg-white rounded-xl border border-slate-200/90 shadow-clay-card p-4 space-y-3">
-              <h3 className="text-xs font-bold text-ink-primary">Security</h3>
-              <div className="flex items-end gap-2">
+            <div className="space-y-4">
+                <div className="flex items-end gap-2">
                 <div className="flex-1"><label className={lblc}>Set new password</label><input value={pw} onChange={(e) => setPw(e.target.value)} type="text" placeholder="Min 8 chars" className={fld} /></div>
                 <button onClick={resetPassword} disabled={!pw.trim()} className="px-3 py-2 rounded-lg border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50 disabled:opacity-50">Set</button>
               </div>
@@ -1716,9 +1521,9 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
             </div>
           )}
         </div>
-        <div className="px-5 py-4 border-t border-slate-100 flex justify-end gap-2 bg-slate-50/60">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Add employee" : "Save"}</button>
+        <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-2">
+          <button onClick={onClose} className="ml-auto px-4 py-2 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-50 font-semibold text-xs">Cancel</button>
+          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-ink-primary text-white font-semibold text-xs hover:opacity-90 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Add teammate" : "Save"}</button>
         </div>
       </div>
     </div>

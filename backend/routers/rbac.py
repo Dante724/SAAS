@@ -8,7 +8,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -67,6 +67,11 @@ class RoleIn(BaseModel):
     home_route: Optional[str] = None      # landing page for this role ("" / None = Home)
 
 
+_SCOPE_FIELDS = ("location_scope", "location_ids", "contact_scope", "order_scope", "warehouse_scope",
+                 "warehouse_ids", "account_ids", "payroll_visibility_days", "hidden_status_keys",
+                 "home_feed_sources", "home_route")
+
+
 def _apply_scope(r: Role, data: "RoleIn") -> None:
     for field, value in (("contact_scope", data.contact_scope),
                          ("order_scope", data.order_scope),
@@ -112,6 +117,14 @@ async def update_role(role_id: str, data: RoleIn, db: AsyncSession = Depends(get
     if not r:
         raise HTTPException(404, "Role not found")
     _validate(data.permissions)
+    # A field the client didn't send keeps its current value. Defaulting it to "all" would quietly
+    # widen a restricted role (the old role editor never sent location or account limits).
+    current_vals = _ser_role(r)
+    missing = {k: current_vals[k] for k in _SCOPE_FIELDS if k not in data.model_fields_set}
+    if missing:
+        data = RoleIn(**{**data.model_dump(), **missing})
+    if data.location_scope not in ("all", "selected"):
+        raise HTTPException(422, "location_scope must be all|selected")
     r.name = data.name
     r.permissions = data.permissions
     r.location_scope = data.location_scope
@@ -128,6 +141,13 @@ async def delete_role(role_id: str, db: AsyncSession = Depends(get_db),
         Role.id == role_id, Role.org_id == current.org_id))).scalar_one_or_none()
     if not r:
         raise HTTPException(404, "Role not found")
+    # People without a role have full access, so never orphan anyone: move them first.
+    from backend.models import Employee as _E
+    from backend.models import Invite as _I
+    used = (await db.execute(select(func.count()).select_from(_E).where(_E.role_id == r.id))).scalar() or 0
+    invited = (await db.execute(select(func.count()).select_from(_I).where(_I.role_id == r.id, _I.accepted_at.is_(None)))).scalar() or 0
+    if used or invited:
+        raise HTTPException(409, f"{used + invited} {'person uses' if used + invited == 1 else 'people use'} this role. Give them another role first.")
     await db.delete(r)
     await db.commit()
     return {"ok": True}
