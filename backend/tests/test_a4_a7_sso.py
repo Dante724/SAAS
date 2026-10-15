@@ -63,7 +63,9 @@ async def test_campaign_create_and_send_segment(client, tenant):
 
 # ── SSO groundwork — config, discovery, gated authorize ──────────────────────
 @pytest.mark.asyncio
-async def test_sso_config_discovery_and_authorize(client, tenant):
+async def test_sso_config_discovery_and_authorize(client, tenant, monkeypatch):
+    from backend.config import settings
+    monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "https://app.example")
     created = await client.post("/api/sso/config", json={
         "protocol": "oidc", "display_name": "Acme SSO",
         "issuer": "https://idp.acme.test", "client_id": "abc123",
@@ -79,7 +81,56 @@ async def test_sso_config_discovery_and_authorize(client, tenant):
     assert miss["sso"] is False
 
     # gated authorize returns the IdP URL a real flow would use
-    auth = (await client.get(f"/api/sso/authorize/{cid}?redirect_uri=https://app/cb")).json()
+    auth = (await client.get(f"/api/sso/authorize/{cid}?redirect_uri=https://app.example/sso/cb")).json()
     assert auth["ready"] is True and auth["authorization_url"].startswith("https://idp.acme.test/authorize?")
 
     assert (await client.delete(f"/api/sso/config/{cid}", headers=tenant)).status_code == 200
+
+
+# ── SSO hardening (security phase 4) ─────────────────────────────────────────
+async def _register(client, email):
+    r = await client.post("/api/auth/register", json={
+        "org_name": "Other shop", "name": "Other", "email": email, "password": "S3cure-pass-123!"})
+    assert r.status_code == 201, r.text
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+@pytest.mark.asyncio
+async def test_sso_rejects_public_and_already_claimed_domains(client, tenant):
+    r = await client.post("/api/sso/config", json={"email_domain": "gmail.com", "enabled": True}, headers=tenant)
+    assert r.status_code == 422
+    r = await client.post("/api/sso/config", json={"email_domain": "claimed.test", "enabled": True,
+                                                   "issuer": "https://idp.claimed.test"}, headers=tenant)
+    assert r.status_code == 201, r.text
+    other = await _register(client, "owner@elsewhere.test")
+    r = await client.post("/api/sso/config", json={"email_domain": "Claimed.TEST", "enabled": True}, headers=other)
+    assert r.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_sso_refuses_plain_http_idp_and_foreign_redirects(client, tenant, monkeypatch):
+    from backend.config import settings
+    monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "https://app.example")
+    r = await client.post("/api/sso/config", json={"issuer": "http://idp.insecure.test"}, headers=tenant)
+    assert r.status_code == 422
+    cid = (await client.post("/api/sso/config", json={
+        "issuer": "https://idp.redir.test", "client_id": "c", "enabled": True}, headers=tenant)).json()["id"]
+    r = await client.get(f"/api/sso/authorize/{cid}?redirect_uri=https://evil.example/steal")
+    assert r.status_code == 422
+    ok = (await client.get(f"/api/sso/authorize/{cid}?redirect_uri=https://app.example/sso/cb")).json()
+    assert "state=" in ok["authorization_url"]
+
+
+@pytest.mark.asyncio
+async def test_sso_client_secret_is_encrypted_at_rest(client, tenant, db, monkeypatch):
+    from cryptography.fernet import Fernet
+    from sqlalchemy import select
+    from backend.config import settings
+    from backend.models import SsoConnection
+    from backend.services import crypto
+    monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    cid = (await client.post("/api/sso/config", json={"client_secret": "top-secret-value"},
+                             headers=tenant)).json()["id"]
+    row = (await db.execute(select(SsoConnection).where(SsoConnection.id == cid))).scalar_one()
+    assert row.client_secret != "top-secret-value"
+    assert crypto.decrypt(row.client_secret) == "top-secret-value"
