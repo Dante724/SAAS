@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import backend.core.scheduled  # noqa: F401 — registers periodic jobs
@@ -106,6 +106,9 @@ ROUTERS = [
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("starting RepairOS (env=%s)", settings.ENVIRONMENT)
+    if settings.is_deployed and not _have_react:
+        raise RuntimeError(f"React build missing ({_react_index}). Build frontend-react before starting "
+                           "in production/staging (the Dockerfile does this).")
     await init_db()
     # Build 144ce: ensure a bootstrap platform admin exists for the /admin portal.
     try:
@@ -201,12 +204,18 @@ if os.path.isdir(os.path.join(react_dir, "assets")):
     app.mount("/assets", StaticFiles(directory=os.path.join(react_dir, "assets")), name="react-assets")
 
 
+_NOT_BUILT = ("<!doctype html><meta charset=utf-8><title>RepairOS</title>"
+              "<body style='font-family:system-ui;padding:40px'><h2>The web app isn't built</h2>"
+              "<p>Run <code>cd frontend-react &amp;&amp; npm ci &amp;&amp; npm run build</code>, then restart. "
+              "Sign-in is still available at <a href='/login'>/login</a>.</p></body>")
+
+
 def _serve_react():
-    # If the redesign hasn't been built yet, fall back to the legacy shell so the
-    # app is never left unreachable.
+    # The old fallback served the legacy shell, whose hashed bundle no longer exists — a blank
+    # page. Say what's wrong instead (deployed environments refuse to boot without the build).
     if _have_react:
         return FileResponse(_react_index)
-    return FileResponse(os.path.join(frontend_dir, "index.html"))
+    return HTMLResponse(_NOT_BUILT, status_code=503)
 
 
 def _serve_legacy():

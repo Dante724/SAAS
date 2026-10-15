@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install --require-hashes -r requirements-dev.lock
       - name: Lint (core + tests)
         run: ruff check main.py backend/config.py backend/core backend/db backend/tests
       - name: Verify migrations build the schema from scratch
@@ -75,7 +75,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install --require-hashes -r requirements-dev.lock
       - name: Migrations from scratch on Postgres
         # Separate database so the migration run never collides with the suite's create_all.
         env:

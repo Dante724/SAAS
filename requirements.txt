@@ -23,3 +23,4 @@ segno>=1.6.6                    # Barcode/QR rendering for print templates (pure
 pywebpush>=2.0.0
 reportlab>=4.2                  # 3.13 wheels
 redis>=5.0                      # optional: shared rate-limit store (REDIS_URL); in-process fallback if unset
+boto3>=1.34                     # MEDIA_BACKEND=s3 (services/media.py imported it, but it was never installed)
