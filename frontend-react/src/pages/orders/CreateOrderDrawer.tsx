@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactElement } from "react";
 import { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import ScanButton from "../../components/ScanButton";
@@ -14,6 +14,7 @@ import CatalogPicker from "../../components/CatalogPicker";
 import { useCurrencies, type CurItem } from "../../hooks/useCurrencies";
 import { useTerminology } from "../../lib/useTerminology";
 import { identifierFields } from "../../lib/assetIdentifiers";
+import { useMe } from "../../context/Me";
 import IdentifyHint, { type IdMatch } from "../../components/IdentifyHint";
 import NameSuggestInput from "../../components/NameSuggestInput";
 
@@ -32,6 +33,7 @@ const TYPES: { t: string; dot: string }[] = [
 
 export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillClient, onClose, onCreated }: { isEstimate?: boolean; prefillClient?: ClientLite | null; onClose: () => void; onCreated: () => void }) {
   const term = useTerminology();
+  const canCustomize = useMe().can("can_manage_settings");
   const [estimate, setEstimate] = useState(!!initEstimate);
   const [step, setStep] = useState<1 | 2>(1);
   const [type, setType] = useState("Repair");
@@ -39,6 +41,10 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
   const [woCustom, setWoCustom] = useState<Record<string, any>>({});
   // Real configured types drive the chips when present; else fall back to static labels.
   const typeId = woTypes.find((t) => t.name === type)?.id || null;
+  useEffect(() => {
+    if (!typeId) { setLayout(null); return; }
+    api.get<{ items: any[] }>(`/forms/layout?form=order&type_id=${typeId}`).then((r) => setLayout(r.items || null)).catch(() => setLayout(null));
+  }, [typeId]);
   const [q, setQ] = useState("");
   const [results, setResults] = useState<ClientLite[]>([]);
   const [client, setClient] = useState<ClientLite | null>(prefillClient || null);
@@ -54,6 +60,9 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
   // An existing device picked from the "Seen before" card — the order attaches to it instead of
   // creating a duplicate asset.
   const [deviceId, setDeviceId] = useState<string | null>(null);
+  // Field order / visibility / required for this work-order type (Settings → Forms → Customize).
+  type LayoutItem = { ref: string; kind: string; key: string; label: string; visible: boolean; required: boolean };
+  const [layout, setLayout] = useState<LayoutItem[] | null>(null);
   function pickExisting(m: IdMatch) {
     setDeviceId(m.id);
     if (m.brand) setBrand(m.brand);
@@ -124,6 +133,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
   }
 
   async function submit(reopen: boolean) {
+    const m = missingRequired(); if (m) { setErr(m); setStep(1); return; }
     setBusy(true); setErr(null);
     try {
       const created = await api.post<any>("/orders", {
@@ -164,58 +174,24 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
   const primaryId = idFields[0];
   const moreIds = idFields.slice(1);
 
-  return (
-    <div className="fixed inset-0 flex justify-end" style={{ zIndex: 45 }}>
-      <div className="absolute inset-0 bg-ink-primary/30 backdrop-blur-[2.5px]" onClick={onClose} />
-      <div className="relative h-full w-full max-w-[780px] bg-white/95 backdrop-blur-2xl shadow-clay-drawer flex flex-col border-l border-white/80 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
-        <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
+  const reqKeys = new Set((layout || []).filter((i) => i.kind === "system" && i.visible && i.required).map((i) => i.key));
+  const star = (k: string) => (reqKeys.has(k) ? <span className="text-rose-500"> *</span> : null);
+  function missingRequired(): string | null {
+    const filled: Record<string, boolean> = {
+      client: !!client, complaint: !!complaint.trim(), manager: !!managerId, assignee: !!assigneeId,
+      scheduled_for: !!scheduled, priority: true,
+      asset: !!(deviceId || brand || model || serial || imei || vin || hin),
+    };
+    const miss = (layout || []).find((i) => i.kind === "system" && i.visible && i.required && !filled[i.key]);
+    return miss ? `${miss.label} is required` : null;
+  }
+  function next() { const m = missingRequired(); if (m) { setErr(m); return; } setErr(null); setStep(2); }
 
-        {/* Header */}
-        <header className="px-7 pt-5 pb-4 flex items-center justify-between border-b border-slate-100/90 bg-white/70">
-          <div className="flex items-center gap-3">
-            <h2 className="text-xl font-bold tracking-tight text-ink-primary">New {estimate ? "estimate" : "work order"}</h2>
-            <button type="button" onClick={() => setEstimate((v) => !v)} className="text-xs px-2.5 py-1 rounded-full font-medium bg-slate-100 hover:bg-slate-200/90 text-ink-secondary transition-colors border border-slate-200/70 flex items-center gap-1.5 shadow-2xs">
-              <span className="w-1.5 h-1.5 rounded-full bg-primary" /><span>Switch to {estimate ? "Work Order" : "Estimate"}</span>
-            </button>
-          </div>
-          <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100 transition-all"><M n="close" c="text-lg" /></button>
-        </header>
-
-        {/* Stepper */}
-        <nav className="px-7 py-3 border-b border-slate-100/80 bg-slate-50/60 flex items-center justify-between text-xs">
-          <div className="flex items-center space-x-3 w-full">
-            <button type="button" onClick={() => setStep(1)} className="flex items-center space-x-2 cursor-pointer">
-              <span className={`w-5 h-5 rounded-full font-bold flex items-center justify-center text-[11px] transition-all ${step === 1 ? "bg-primary text-white shadow-sm shadow-primary/30" : "bg-slate-200 text-ink-secondary"}`}>1</span>
-              <span className={`font-bold transition-colors ${step === 1 ? "text-primary" : "text-ink-tertiary"}`}>General info</span>
-            </button>
-            <div className={`flex-1 h-[2px] mx-2 transition-colors ${step === 2 ? "bg-primary" : "bg-slate-200"}`} />
-            <button type="button" onClick={() => setStep(2)} className="flex items-center space-x-2 cursor-pointer">
-              <span className={`w-5 h-5 rounded-full font-bold flex items-center justify-center text-[11px] transition-all ${step === 2 ? "bg-primary text-white shadow-sm shadow-primary/30" : "bg-slate-200 text-ink-secondary"}`}>2</span>
-              <span className={`transition-colors ${step === 2 ? "font-bold text-primary" : "font-medium text-ink-tertiary hover:text-ink-primary"}`}>Services &amp; products</span>
-            </button>
-          </div>
-        </nav>
-
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto overflow-x-hidden p-7 space-y-6">
-          {step === 1 && (
-            <section className="space-y-5">
-              <div className="space-y-1.5">
-                <label className={lbl}>Work order type</label>
-                <div className="flex flex-wrap items-center gap-2">
-                  {(woTypes.length ? woTypes.map((t) => ({ t: t.name, dot: "", color: t.color })) : TYPES.map((x) => ({ ...x, color: null }))).map((tp) => (
-                    <button key={tp.t} type="button" onClick={() => setType(tp.t)}
-                      className={`px-3.5 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all ${type === tp.t ? "bg-primary text-white shadow-clay-sm ring-2 ring-primary ring-offset-1" : "bg-white border border-slate-200/90 text-ink-secondary hover:bg-slate-50"}`}>
-                      <span className={`w-2 h-2 rounded-full ${type === tp.t ? "bg-white" : tp.dot}`} style={!("dot" in tp && tp.dot) && tp.color ? { background: tp.color } : undefined} /><span>{tp.t}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {typeId && <CustomFields typeId={typeId} value={woCustom} onChange={setWoCustom} creating inputSize="sm" />}
-
-              <div className="space-y-1.5">
-                <label className={lbl}>Client</label>
+  // Built-in parts of the form, placed by the shop's layout (Settings → Forms → Customize).
+  const sysBlocks: Record<string, ReactElement> = {
+    client: (
+<div className="space-y-1.5">
+                <label className={lbl}>Client{star("client")}</label>
                 {client ? (
                   <div className="glass-input flex items-center gap-2 pl-10 pr-3 py-2.5 rounded-xl relative">
                     <M n="person" c="absolute left-3.5 text-base text-ink-tertiary" />
@@ -238,33 +214,38 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                   </div>
                 )}
               </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5"><label className={lbl}>Priority</label>
+    ),
+    priority: (
+<div className="space-y-1.5"><label className={lbl}>Priority{star("priority")}</label>
                   <div className="relative"><select value={priority} onChange={(e) => setPriority(Number(e.target.value))} className={`${inp} pr-8 appearance-none`}><option value={0}>Normal</option><option value={1}>High</option><option value={2}>Urgent</option></select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div>
                 </div>
-                <div className="space-y-1.5"><label className={lbl}>Manager</label>
+    ),
+    manager: (
+<div className="space-y-1.5"><label className={lbl}>Manager{star("manager")}</label>
                   <div className="relative"><select value={managerId} onChange={(e) => setManagerId(e.target.value)} className={`${inp} pr-8 appearance-none`}><option value="">— Select —</option>{emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div>
                 </div>
-              </div>
-
-              <div className="space-y-1.5"><label className={lbl}>Specialist (assignee)</label>
+    ),
+    assignee: (
+<div className="space-y-1.5"><label className={lbl}>Specialist (assignee){star("assignee")}</label>
                 <div className="relative"><select value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)} className={`${inp} pr-8 appearance-none`}><option value="">— Unassigned —</option>{emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div>
               </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5"><label className={lbl}>Scheduled for</label>
+    ),
+    scheduled_for: (
+<div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5"><label className={lbl}>Scheduled for{star("scheduled_for")}</label>
                   <DateField mode="datetime" value={scheduled} onChange={setScheduled} />
                 </div>
                 <div className="space-y-1.5"><label className={lbl}>Duration (minutes)</label>
                   <input type="number" min={15} step={15} value={duration} onChange={(e) => setDuration(Number(e.target.value))} className={inp} /></div>
               </div>
-
-              <div className="space-y-1.5"><label className={lbl}>Complaint / description</label>
-                <textarea value={complaint} onChange={(e) => setComplaint(e.target.value)} rows={3} className={`${inp} resize-none`} placeholder="What's the issue?" /></div>
-
-              <div className="pt-3 border-t border-slate-200/80 space-y-3.5">
-                <div className="flex items-center gap-2"><span className="text-xs font-bold uppercase tracking-wider text-ink-primary">{term.asset}</span><span className="text-xs text-ink-tertiary font-normal">— auto-added to the client's warehouse</span></div>
+    ),
+    complaint: (
+<><div className="space-y-1.5"><label className={lbl}>Complaint / description{star("complaint")}</label>
+                <textarea value={complaint} onChange={(e) => setComplaint(e.target.value)} rows={3} className={`${inp} resize-none`} placeholder="What's the issue?" /></div></>
+    ),
+    asset: (
+<><div className="pt-3 border-t border-slate-200/80 space-y-3.5">
+                <div className="flex items-center gap-2"><span className="text-xs font-bold uppercase tracking-wider text-ink-primary">{term.asset}{star("asset")}</span><span className="text-xs text-ink-tertiary font-normal">— auto-added to the client's warehouse</span></div>
                 <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-start">
                   <div className="sm:col-span-4 space-y-2">
                     <label className="bg-slate-50/80 border-2 border-dashed border-slate-200/90 rounded-2xl p-4 flex flex-col items-center justify-center text-center group hover:border-primary/60 transition-colors cursor-pointer min-h-[140px]">
@@ -327,7 +308,86 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                   </div>
                 )}
               </div>
-              <CustomFields entity="device" value={assetCustom} onChange={setAssetCustom} creating inputSize="sm" />
+              <CustomFields entity="device" value={assetCustom} onChange={setAssetCustom} creating inputSize="sm" /></>
+    ),
+  };
+
+  // Fields in the order set in Customize: built-in blocks and the type's custom fields interleaved.
+  function renderLayout() {
+    if (!layout) return (<>
+      {typeId && <CustomFields typeId={typeId} value={woCustom} onChange={setWoCustom} creating inputSize="sm" />}
+      {["client", "priority", "manager", "assignee", "scheduled_for", "complaint", "asset"].map((k) => <div key={k}>{sysBlocks[k]}</div>)}
+    </>);
+    const out: ReactElement[] = [];
+    let run: string[] = [];
+    const flush = () => {
+      if (run.length && typeId) out.push(<CustomFields key={`cf-${run[0]}`} typeId={typeId} only={run} bare value={woCustom} onChange={setWoCustom} creating inputSize="sm" />);
+      run = [];
+    };
+    for (const it of layout) {
+      if (!it.visible) continue;
+      if (it.kind === "system") { flush(); if (sysBlocks[it.key]) out.push(<div key={it.ref}>{sysBlocks[it.key]}</div>); }
+      else run.push(it.ref.slice(3));
+    }
+    flush();
+    return <>{out}</>;
+  }
+
+  return (
+    <div className="fixed inset-0 flex justify-end" style={{ zIndex: 45 }}>
+      <div className="absolute inset-0 bg-ink-primary/30 backdrop-blur-[2.5px]" onClick={onClose} />
+      <div className="relative h-full w-full max-w-[780px] bg-white/95 backdrop-blur-2xl shadow-clay-drawer flex flex-col border-l border-white/80 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
+        <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
+
+        {/* Header */}
+        <header className="px-7 pt-5 pb-4 flex items-center justify-between border-b border-slate-100/90 bg-white/70">
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-bold tracking-tight text-ink-primary">New {estimate ? "estimate" : "work order"}</h2>
+            <button type="button" onClick={() => setEstimate((v) => !v)} className="text-xs px-2.5 py-1 rounded-full font-medium bg-slate-100 hover:bg-slate-200/90 text-ink-secondary transition-colors border border-slate-200/70 flex items-center gap-1.5 shadow-2xs">
+              <span className="w-1.5 h-1.5 rounded-full bg-primary" /><span>Switch to {estimate ? "Work Order" : "Estimate"}</span>
+            </button>
+          </div>
+          <div className="flex items-center gap-1">
+            {canCustomize && typeId && (
+              <a href={`/settings?section=forms&form=type:${typeId}`} target="_blank" rel="noopener" title="Reorder, add or hide fields on this form"
+                className="text-xs font-semibold text-ink-tertiary hover:text-primary flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-slate-100"><M n="tune" c="text-sm" />Customize form</a>
+            )}
+            <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100 transition-all"><M n="close" c="text-lg" /></button>
+          </div>
+        </header>
+
+        {/* Stepper */}
+        <nav className="px-7 py-3 border-b border-slate-100/80 bg-slate-50/60 flex items-center justify-between text-xs">
+          <div className="flex items-center space-x-3 w-full">
+            <button type="button" onClick={() => setStep(1)} className="flex items-center space-x-2 cursor-pointer">
+              <span className={`w-5 h-5 rounded-full font-bold flex items-center justify-center text-[11px] transition-all ${step === 1 ? "bg-primary text-white shadow-sm shadow-primary/30" : "bg-slate-200 text-ink-secondary"}`}>1</span>
+              <span className={`font-bold transition-colors ${step === 1 ? "text-primary" : "text-ink-tertiary"}`}>General info</span>
+            </button>
+            <div className={`flex-1 h-[2px] mx-2 transition-colors ${step === 2 ? "bg-primary" : "bg-slate-200"}`} />
+            <button type="button" onClick={next} className="flex items-center space-x-2 cursor-pointer">
+              <span className={`w-5 h-5 rounded-full font-bold flex items-center justify-center text-[11px] transition-all ${step === 2 ? "bg-primary text-white shadow-sm shadow-primary/30" : "bg-slate-200 text-ink-secondary"}`}>2</span>
+              <span className={`transition-colors ${step === 2 ? "font-bold text-primary" : "font-medium text-ink-tertiary hover:text-ink-primary"}`}>Services &amp; products</span>
+            </button>
+          </div>
+        </nav>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto overflow-x-hidden p-7 space-y-6">
+          {step === 1 && (
+            <section className="space-y-5">
+              <div className="space-y-1.5">
+                <label className={lbl}>Work order type</label>
+                <div className="flex flex-wrap items-center gap-2">
+                  {(woTypes.length ? woTypes.map((t) => ({ t: t.name, dot: "", color: t.color })) : TYPES.map((x) => ({ ...x, color: null }))).map((tp) => (
+                    <button key={tp.t} type="button" onClick={() => setType(tp.t)}
+                      className={`px-3.5 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-all ${type === tp.t ? "bg-primary text-white shadow-clay-sm ring-2 ring-primary ring-offset-1" : "bg-white border border-slate-200/90 text-ink-secondary hover:bg-slate-50"}`}>
+                      <span className={`w-2 h-2 rounded-full ${type === tp.t ? "bg-white" : tp.dot}`} style={!("dot" in tp && tp.dot) && tp.color ? { background: tp.color } : undefined} /><span>{tp.t}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {renderLayout()}
               {err && <div className="text-status-overdue-ink text-xs font-semibold">{err}</div>}
             </section>
           )}
@@ -402,7 +462,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
           {step === 1 ? (
             <div className="w-full flex items-center justify-between">
               <button type="button" onClick={onClose} className="px-4 py-2 text-xs font-bold text-ink-secondary hover:text-ink-primary transition-colors">Cancel</button>
-              <button type="button" onClick={() => setStep(2)} className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><span>Next: Services &amp; products</span><M n="arrow_forward" c="text-xs" /></button>
+              <button type="button" onClick={next} className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><span>Next: Services &amp; products</span><M n="arrow_forward" c="text-xs" /></button>
             </div>
           ) : (
             <div className="w-full flex items-center justify-between">

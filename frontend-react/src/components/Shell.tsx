@@ -24,7 +24,7 @@ import {
   Ban, CircleX, ListChecks, Pipette, ScanText, CheckCheck, Download, FilePen, CalendarCheck,
   History, Hourglass, LineChart, Lightbulb, Unlink, Truck, Lock, LockOpen, Merge,
   CircleDollarSign, Percent, ShieldAlert, Globe, Gift, RotateCcw, SearchCheck, VideoOff,
-  ShieldCheck, Target,
+  ShieldCheck, Target, EyeOff,
 } from "lucide-react";
 
 // Map the old Material-Symbols ligature names to bundled Lucide icons (no web font,
@@ -70,7 +70,7 @@ const ICONS: Record<string, any> = {
   barcode: Barcode, qr_code_scanner: QrCode, scan: ScanLine,
   dashboard: LayoutDashboard, light_mode: Sun, dark_mode: Moon, language: Languages,
   // 144hx — document editor icons (were falling back to Circle)
-  edit: Pencil, visibility: Eye, data_object: Braces, expand_less: ChevronUp,
+  edit: Pencil, visibility: Eye, visibility_off: EyeOff, data_object: Braces, expand_less: ChevronUp,
   format_bold: Bold, format_italic: Italic, format_underlined: Underline,
   title: Heading1, text_fields: Heading2, format_list_bulleted: List,
   format_align_left: AlignLeft, format_align_center: AlignCenter, format_align_right: AlignRight,

@@ -6,6 +6,7 @@ import { api } from "../../api/client";
 import CurrencyManager from "../../components/CurrencyManager";
 import TemplateEditorDrawer from "./TemplateEditorDrawer";
 import DirectoriesManager from "./DirectoriesManager";
+import FormCustomizer, { type FormKey } from "../../components/FormCustomizer";
 import { resetTerminology } from "../../lib/useTerminology";
 import { getLang, setLang, LANGS } from "../../i18n";
 import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
@@ -523,13 +524,8 @@ export default function SettingsHub() {
           {sec === "approvals" && <ApprovalsSettings />}
 
           {sec === "forms" && (
-            <div className="max-w-3xl space-y-5">
-              <SectionCard title="Form types & custom fields" count={lists.forms?.length} onAdd={() => setEditing({ sec: "forms", row: null })}>
-                <SecTable rows={lists.forms} onRowClick={(r) => setFormFieldsFor(r)} onDelete={(r) => delRow("forms", r)} cols={[["Form", (t) => val(t, ["name", "label", "title"])], ["Initial status", (t) => val(t, ["initial_status"])], ["Default", (t) => (t?.is_default ? "Yes" : "—")], ["Fields", (t) => val(t, ["field_count"], String((t?.fields || []).length || 0))]]} />
-              </SectionCard>
-              <SystemFieldsEditor />
-              <EntityFieldsEditor />
-            </div>
+            <FormsDesigner types={lists.forms || []} onAddType={() => setEditing({ sec: "forms", row: null })}
+              onDeleteType={(r) => delRow("forms", r)} onAdvanced={(t) => setFormFieldsFor(t)} />
           )}
 
           {sec === "pricing" && (
@@ -2321,7 +2317,8 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
             <input value={nf.field_label} onChange={(e) => setNf({ ...nf, field_label: e.target.value })} placeholder="Field label" className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary" />
             <div className="flex items-center gap-3">
               <select value={nf.field_type} onChange={(e) => setNf({ ...nf, field_type: e.target.value })} className="bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 capitalize">
-                {["text", "number", "select", "date", "checkbox", "textarea"].map((t) => <option key={t} value={t}>{t}</option>)}
+                {/* "bool" is the server's yes/no type — the old "checkbox" option was rejected with a 400 */}
+                {[["text", "Short text"], ["textarea", "Long text"], ["number", "Number"], ["select", "Pick one"], ["multiselect", "Pick several"], ["bool", "Yes / no"], ["date", "Date"], ["link", "Link"]].map(([t, l]) => <option key={t} value={t}>{l}</option>)}
               </select>
               <label className="flex items-center gap-1.5 text-xs text-ink-secondary"><input type="checkbox" checked={nf.required} onChange={(e) => setNf({ ...nf, required: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" />Required</label>
               <button onClick={add} disabled={busy} className="ml-auto px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-60">Add</button>
@@ -2892,142 +2889,6 @@ function PublicAppointmentEditor() {
 }
 
 /* ── System fields per entity: toggle built-in fields' Show/Required, persisted to /forms/system-layout ── */
-const SYS_CATALOG: Record<string, [string, string][]> = {
-  order: [["client", "Client"], ["vehicle", "Vehicle / asset"], ["manager", "Manager"], ["assignee", "Specialist (assignee)"], ["type", "Type"], ["scheduled_for", "Scheduled for"], ["due_at", "Due date"], ["priority", "Priority (urgent)"], ["complaint", "Malfunction / complaint"], ["tech_notes", "Manager notes"], ["payer", "Payer"], ["estimated_price", "Estimated price"], ["comment", "Comment"]],
-  invoice: [["client", "Client"], ["payer", "Payer"], ["issued_at", "Issue date"], ["due_at", "Due date"], ["discount", "Discount"], ["tax", "Tax"], ["comment", "Comment"]],
-  contact: [["name", "Name"], ["phone", "Phone"], ["email", "Email"], ["address", "Address"], ["company", "Company"], ["manager", "Manager"], ["contact_type", "Type (person / company)"], ["discount", "Discount"], ["comment", "Comment"]],
-  product: [["name", "Name"], ["sku", "SKU"], ["barcode", "Barcode"], ["category", "Category"], ["brand", "Brand"], ["cost", "Cost"], ["price", "Price"], ["unit", "Unit"], ["warranty", "Warranty"], ["description", "Description"]],
-  vehicle: [["owner", "Owner (we / client)"], ["client", "Client"], ["type", "Type"], ["vin", "VIN"], ["number_plate", "Number plate"], ["group", "Group"], ["brand", "Brand"], ["model", "Model"], ["year", "Year"], ["engine", "Engine"], ["tyre_size", "Tyre size"], ["color", "Colour"], ["condition", "Condition"], ["serial", "Serial / IMEI"], ["description", "Description"]],
-};
-function SystemFieldsEditor() {
-  const ENTITIES = [["order", "Work orders & estimates"], ["invoice", "Invoices"], ["contact", "Contacts"], ["product", "Products"], ["vehicle", "Vehicles / assets"]] as const;
-  const [entity, setEntity] = useState<string>("order");
-  const [rows, setRows] = useState<{ key: string; label: string; visible: boolean; required: boolean }[] | null>(null);
-  const [saved, setSaved] = useState(false);
-  useEffect(() => {
-    setRows(null); setSaved(false);
-    api.get<{ fields: { key: string; visible?: boolean; required?: boolean }[] }>(`/forms/system-layout?entity=${entity}`)
-      .then((r) => {
-        const byKey: Record<string, any> = {}; (r.fields || []).forEach((s) => (byKey[s.key] = s));
-        setRows((SYS_CATALOG[entity] || []).map(([key, label]) => ({ key, label, visible: byKey[key]?.visible !== false, required: !!byKey[key]?.required })));
-      })
-      .catch(() => setRows((SYS_CATALOG[entity] || []).map(([key, label]) => ({ key, label, visible: true, required: false }))));
-  }, [entity]);
-  async function persist(next: typeof rows) {
-    if (!next) return;
-    try { await api.put("/forms/system-layout", { entity, type_id: null, fields: next.map((f, i) => ({ key: f.key, visible: f.visible, required: f.required, sort: i })) }); setSaved(true); setTimeout(() => setSaved(false), 1500); }
-    catch (e: any) { alertDialog(e.message || "Could not save layout"); }
-  }
-  const toggle = (i: number, k: "visible" | "required") => { if (!rows) return; const next = rows.map((f, j) => j === i ? { ...f, [k]: !f[k] } : f); setRows(next); persist(next); };
-  return (
-    <SectionCard title="System fields" count={rows?.length}>
-      <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
-        <span className="text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide">Form</span>
-        <select value={entity} onChange={(e) => setEntity(e.target.value)} className="bg-white border border-slate-200 rounded-lg text-sm px-3 py-1.5">{ENTITIES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
-        <span className="text-xs text-ink-tertiary">Toggle what shows on this form and what's required.</span>
-        {saved && <span className="ml-auto text-[11px] font-semibold text-emerald-600">Saved</span>}
-      </div>
-      <div className="divide-y divide-slate-50">
-        {rows == null && <div className="px-4 py-6 text-xs text-ink-tertiary">Loading…</div>}
-        {rows?.map((f, i) => (
-          <div key={f.key} className="flex items-center gap-4 px-4 py-2.5">
-            <span className="flex-1 text-sm font-semibold text-ink-primary">{f.label}</span>
-            <label className="flex items-center gap-1.5 text-xs font-medium text-ink-secondary cursor-pointer"><input type="checkbox" checked={f.visible} onChange={() => toggle(i, "visible")} className="accent-primary" />Show</label>
-            <label className="flex items-center gap-1.5 text-xs font-medium text-ink-secondary cursor-pointer"><input type="checkbox" checked={f.required} onChange={() => toggle(i, "required")} className="accent-primary" />Required</label>
-          </div>
-        ))}
-      </div>
-    </SectionCard>
-  );
-}
-
-/* ── Custom fields per entity (product / client / device) → render on their forms ── */
-function EntityFieldsEditor() {
-  const ENTITIES = [["product", "Products"], ["client", "Clients"], ["device", "Devices & assets"]] as const;
-  const TYPES = ["text", "textarea", "number", "select", "multiselect", "link", "date", "datetime", "bool", "header"];
-  const [entity, setEntity] = useState<"product" | "client" | "device">("product");
-  const [fields, setFields] = useState<any[] | null>(null);
-  const [dirs, setDirs] = useState<any[]>([]);
-  const [nf, setNf] = useState<any>({ field_label: "", field_type: "text", required: false, lock_after_create: false, show_on_print: false, autofill_source: "", options: "", directory_key: "", parent_field_key: "", show_when_field_key: "", show_when_op: "is", show_when_value: "" });
-  const ASSET_ATTRS = ["brand", "model", "serial", "imei", "vin", "hin", "asset_type", "color"];
-  const load = () => api.get<{ items: any[] }>(`/forms/entity-fields?entity=${entity}`).then((r) => setFields(r.items || [])).catch(() => setFields([]));
-  useEffect(() => { setFields(null); load(); }, [entity]);
-  useEffect(() => { api.get<{ items: any[] }>("/directories").then((r) => setDirs(r.items || [])).catch(() => {}); }, []);
-  async function add() {
-    if (!nf.field_label.trim()) return;
-    try {
-      const cond = nf.show_when_field_key ? { show_when_field_key: nf.show_when_field_key, show_when_op: nf.show_when_op, show_when_value: nf.show_when_op === "filled" ? null : nf.show_when_value } : {};
-      await api.post("/forms/entity-fields", { entity_type: entity, field_label: nf.field_label.trim(), field_type: nf.field_type,
-        required: nf.required, lock_after_create: nf.lock_after_create, show_on_print: nf.show_on_print, autofill_source: nf.autofill_source || null, directory_key: nf.directory_key || null, parent_field_key: nf.directory_key ? (nf.parent_field_key || null) : null, options: (!nf.directory_key && (nf.field_type === "select" || nf.field_type === "multiselect")) ? nf.options.split(",").map((s: string) => s.trim()).filter(Boolean) : [], ...cond });
-      setNf({ field_label: "", field_type: "text", required: false, lock_after_create: false, show_on_print: false, autofill_source: "", options: "", directory_key: "", parent_field_key: "", show_when_field_key: "", show_when_op: "is", show_when_value: "" }); load();
-    } catch (e: any) { alertDialog(e.message || "Could not add field"); }
-  }
-  async function del(id: string) { try { await api.del(`/forms/fields/${id}`); load(); } catch { /* ignore */ } }
-
-  return (
-    <SectionCard title="Custom fields (per entity)">
-      <div className="p-5 space-y-4">
-        <div className="flex items-center gap-1 text-xs">
-          {ENTITIES.map(([id, label]) => (
-            <button key={id} onClick={() => setEntity(id)} className={`px-3 py-1.5 rounded-lg font-semibold ${entity === id ? "bg-primary text-white" : "bg-slate-100 text-ink-secondary hover:bg-slate-200"}`}>{label}</button>
-          ))}
-        </div>
-        <div className="divide-y divide-slate-100 border border-slate-200/80 rounded-xl overflow-hidden">
-          {!fields && <div className="px-4 py-3 text-xs text-ink-tertiary">Loading…</div>}
-          {fields?.length === 0 && <div className="px-4 py-3 text-xs text-ink-tertiary">No custom fields yet — they appear on the {entity} form once added.</div>}
-          {fields?.map((f) => (
-            <div key={f.id} className="px-4 py-2.5 flex items-center gap-2 text-xs">
-              <span className="font-semibold text-ink-primary flex-1">{f.field_label}</span>
-              <span className="text-ink-tertiary">{f.field_type}</span>
-              {f.required && <span className="px-1.5 py-0.5 rounded bg-rose-50 text-rose-600 font-bold text-[10px]">required</span>}
-              {f.lock_after_create && <span className="px-1.5 py-0.5 rounded bg-slate-100 text-ink-secondary font-bold text-[10px]">locked</span>}
-              {f.show_on_print && <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-bold text-[10px]">on print</span>}
-              {f.show_when_field_key && <span className="px-1.5 py-0.5 rounded bg-blue-50 text-primary font-bold text-[10px]" title={`Shows when ${f.show_when_field_key} ${f.show_when_op} ${f.show_when_value ?? ""}`}><M n="visibility" c="text-[11px]" /> conditional</span>}
-              <button aria-label="Delete" onClick={() => del(f.id)} className="text-ink-tertiary hover:text-rose-600"><M n="delete" c="text-sm" /></button>
-            </div>
-          ))}
-        </div>
-        <div className="flex flex-wrap items-end gap-2 pt-1">
-          <input value={nf.field_label} onChange={(e) => setNf({ ...nf, field_label: e.target.value })} placeholder="Field label" className="glass-input px-3 py-2 rounded-lg text-xs flex-1 min-w-[140px]" />
-          <select value={nf.field_type} onChange={(e) => setNf({ ...nf, field_type: e.target.value })} className="glass-input px-2 py-2 rounded-lg text-xs">{TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select>
-          {(nf.field_type === "select" || nf.field_type === "multiselect") && <>
-            <select value={nf.directory_key} onChange={(e) => setNf({ ...nf, directory_key: e.target.value })} className="glass-input px-2 py-2 rounded-lg text-xs" title="Pull options from a directory">
-              <option value="">Static options</option>
-              {dirs.map((d) => <option key={d.id} value={d.key}>{d.name}</option>)}
-            </select>
-            {!nf.directory_key && <input value={nf.options} onChange={(e) => setNf({ ...nf, options: e.target.value })} placeholder="opt1, opt2" className="glass-input px-3 py-2 rounded-lg text-xs w-32" />}
-            {nf.directory_key && (fields || []).length > 0 && <select value={nf.parent_field_key} onChange={(e) => setNf({ ...nf, parent_field_key: e.target.value })} className="glass-input px-2 py-2 rounded-lg text-xs" title="Cascade: filter to children of another field">
-              <option value="">No cascade</option>
-              {(fields || []).filter((x: any) => x.directory_key).map((x: any) => <option key={x.id} value={x.field_key}>under {x.field_label}</option>)}
-            </select>}
-          </>}
-          <label className="flex items-center gap-1 text-xs font-medium text-ink-secondary"><input type="checkbox" checked={nf.required} onChange={(e) => setNf({ ...nf, required: e.target.checked })} className="accent-primary" />Required</label>
-          <label className="flex items-center gap-1 text-xs font-medium text-ink-secondary"><input type="checkbox" checked={nf.lock_after_create} onChange={(e) => setNf({ ...nf, lock_after_create: e.target.checked })} className="accent-primary" />Lock after create</label>
-          <label className="flex items-center gap-1 text-xs font-medium text-ink-secondary"><input type="checkbox" checked={nf.show_on_print} onChange={(e) => setNf({ ...nf, show_on_print: e.target.checked })} className="accent-primary" />Show on printout</label>
-          <label className="flex items-center gap-1 text-xs font-medium text-ink-secondary"><M n="auto_awesome" c="text-[13px]" />Auto-fill<select value={nf.autofill_source} onChange={(e) => setNf({ ...nf, autofill_source: e.target.value })} className="glass-input px-2 py-1.5 rounded-lg text-xs"><option value="">off</option>{ASSET_ATTRS.map((a) => <option key={a} value={`asset.${a}`}>device {a}</option>)}</select></label>
-          <button onClick={add} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container">Add field</button>
-        </div>
-        {/* 144gp — conditional visibility: show this field only when another matches */}
-        <div className="flex flex-wrap items-center gap-2 pt-1 text-xs text-ink-secondary">
-          <span className="font-semibold"><M n="visibility" c="text-[13px] align-middle" /> Show only when</span>
-          <select value={nf.show_when_field_key} onChange={(e) => setNf({ ...nf, show_when_field_key: e.target.value })} className="glass-input px-2 py-1.5 rounded-lg text-xs">
-            <option value="">always</option>
-            {(fields || []).map((f) => <option key={f.id} value={f.field_key}>{f.field_label}</option>)}
-          </select>
-          {nf.show_when_field_key && <>
-            <select value={nf.show_when_op} onChange={(e) => setNf({ ...nf, show_when_op: e.target.value })} className="glass-input px-2 py-1.5 rounded-lg text-xs">
-              <option value="is">is</option><option value="is_not">is not</option>
-              <option value="gt">greater than</option><option value="lt">less than</option>
-              <option value="filled">is filled</option>
-            </select>
-            {nf.show_when_op !== "filled" && <input value={nf.show_when_value} onChange={(e) => setNf({ ...nf, show_when_value: e.target.value })} placeholder="value" className="glass-input px-3 py-1.5 rounded-lg text-xs w-28" />}
-          </>}
-        </div>
-      </div>
-    </SectionCard>
-  );
-}
-
 // ── Finance & numbering: full editors (numbering + legal entities + taxes + tax stack + exceptions) ──
 function FinanceSettings() {
   const [num, setNum] = useState<any[] | null>(null);
@@ -3569,3 +3430,37 @@ function TierManager({ types }: { types: any[] }) {
 
 // Directory item editor (144hi): add/delete items with an optional parent + per-location
 // scope, merge duplicates, and CSV import/export. Appears when a directory row is clicked.
+
+
+// ── Forms & fields: pick a form, customize it in place ─────────────────────
+// One pill per work-order type plus the Client / Device / Product forms; the selected form opens
+// in FormCustomizer (drag to reorder, click to edit, add a field where it belongs).
+function FormsDesigner({ types, onAddType, onDeleteType, onAdvanced }: {
+  types: any[]; onAddType: () => void; onDeleteType: (t: any) => void; onAdvanced: (t: any) => void;
+}) {
+  const want = new URLSearchParams(window.location.search).get("form");
+  const [pick, setPick] = useState<string>(() => want || "");
+  const choices: { id: string; label: string; form: FormKey; typeId?: string; type?: any }[] = [
+    ...types.map((t) => ({ id: `type:${t.id}`, label: `Work order · ${t.name}`, form: "order" as FormKey, typeId: t.id, type: t })),
+    { id: "client", label: "Client", form: "client" }, { id: "device", label: "Device / asset", form: "device" },
+    { id: "product", label: "Product", form: "product" },
+  ];
+  const cur = choices.find((c) => c.id === pick) || choices[0];
+  const pill = (on: boolean) => `px-3.5 py-1.5 rounded-full text-xs font-semibold border transition-colors ${on ? "bg-primary text-white border-primary" : "bg-white text-ink-secondary border-slate-200 hover:border-slate-300"}`;
+  return (
+    <div className="max-w-6xl space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        {choices.map((c) => <button key={c.id} onClick={() => setPick(c.id)} className={pill(c.id === cur?.id)}>{c.label}</button>)}
+        <button onClick={onAddType} className="px-3 py-1.5 rounded-full text-xs font-semibold text-primary hover:bg-blue-50 flex items-center gap-1"><M n="add" c="text-sm" />Work order type</button>
+      </div>
+      {cur?.type && (
+        <div className="flex flex-wrap items-center gap-3 text-xs text-ink-tertiary">
+          <span>New orders start as <span className="font-semibold text-ink-secondary">{cur.type.initial_status || "new"}</span>{cur.type.is_default ? " · default type" : ""}</span>
+          <button onClick={() => onAdvanced(cur.type)} className="font-semibold text-primary hover:underline">Advanced rules (show only when, upsell, block status)</button>
+          {!cur.type.is_default && <button onClick={() => onDeleteType(cur.type)} className="font-semibold text-rose-600 hover:underline">Delete this type</button>}
+        </div>
+      )}
+      {cur && <FormCustomizer key={cur.id} form={cur.form} typeId={cur.typeId} title={cur.label} />}
+    </div>
+  );
+}

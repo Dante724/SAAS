@@ -25,11 +25,15 @@ function isVisible(f: Field, values: Record<string, any>): boolean {
   return op === "gt" ? n > w : op === "lt" ? n < w : false;
 }
 
-export default function CustomFields({ entity, typeId, value, onChange, creating, autofillCtx, inputSize = "xs" }: {
+export default function CustomFields({ entity, typeId, value, onChange, creating, autofillCtx, inputSize = "xs", only, bare }: {
   entity?: "product" | "client" | "device"; typeId?: string; value: Record<string, any>; onChange: (v: Record<string, any>) => void; creating: boolean;
   autofillCtx?: { device_id?: string; client_id?: string };
   /** Match the host drawer's inputs: compact drawers use 12px ("xs"), the work-order drawer 14px ("sm"). */
   inputSize?: "xs" | "sm";
+  /** Render just these field ids (the form places them between its built-in fields). */
+  only?: string[];
+  /** No "Custom fields" box or title — the fields sit directly in the form. */
+  bare?: boolean;
 }) {
   const [fields, setFields] = useState<Field[]>([]);
   type DItem = { id: string; value: string; parent_id?: string | null };
@@ -85,7 +89,8 @@ export default function CustomFields({ entity, typeId, value, onChange, creating
     }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entity, typeId, creating, autofillCtx?.device_id, autofillCtx?.client_id]);
-  if (!fields.length) return null;
+  const shown = only ? fields.filter((f) => only.includes(f.id)) : fields;
+  if (!shown.length) return null;
 
   const set = (k: string, v: any) => onChange({ ...(value || {}), [k]: v });
   // Sizes are set here, not inherited: the block is dropped into drawers with different base
@@ -96,9 +101,9 @@ export default function CustomFields({ entity, typeId, value, onChange, creating
     : "glass-input w-full px-3 py-2 rounded-lg text-ink-primary text-xs";
 
   return (
-    <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-3 text-xs">
-      <div className="text-[11px] font-bold text-ink-primary uppercase tracking-wider">Custom fields</div>
-      {fields.filter((f) => isVisible(f, value)).map((f) => {
+    <div className={bare ? "space-y-3.5 text-xs" : "p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-3 text-xs"}>
+      {!bare && <div className="text-[11px] font-bold text-ink-primary uppercase tracking-wider">Custom fields</div>}
+      {shown.filter((f) => isVisible(f, value)).map((f) => {
         const v = (value || {})[f.field_key] ?? "";
         const locked = f.lock_after_create && !creating;
         const label = <label className={lbl}>{f.field_label}{f.required && <span className="text-rose-500"> *</span>}{locked && <span className="ml-1 text-[10px] text-ink-tertiary">(locked)</span>}</label>;
