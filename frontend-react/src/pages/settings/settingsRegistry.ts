@@ -72,13 +72,17 @@ export const SEC_KW: Record<SectionId, string> = {
   ecommerce: "ecommerce shop product sync online store shopify",
 };
 
-export const SETUP: { id: SectionId; t: string; d: string }[] = [
-  { id: "general", t: "Name your shop & set currency", d: "General" },
-  { id: "team", t: "Invite your team", d: "Team & roles" },
-  { id: "statuses", t: "Set up your repair statuses", d: "Statuses" },
-  { id: "finance", t: "Set invoice numbering & payments", d: "Finance & numbering" },
-  { id: "public", t: "Brand your online appointment page", d: "Public pages" },
-  { id: "integrations", t: "Connect payments & accounting", d: "Integrations" },
+// Setup guide: each step is checked against real data (SetupChecklist loadSetupState), with a
+// rough time to finish. `go` is the settings section to open, or an app route for actions.
+export type SetupStep = { id: string; t: string; d: string; min: number; go: SectionId | `/${string}`; skippable?: boolean };
+export const SETUP: SetupStep[] = [
+  { id: "shop", t: "Add your shop details", d: "Name, phone and address for receipts and texts", min: 2, go: "general" },
+  { id: "tax", t: "Set up sales tax", d: "So invoices charge the right tax", min: 2, go: "finance", skippable: true },
+  { id: "team", t: "Invite your team", d: "Give each tech their own sign-in", min: 2, go: "team", skippable: true },
+  { id: "payments", t: "Get paid online", d: "Card payments on invoices and the tracking page", min: 5, go: "integrations", skippable: true },
+  { id: "texts", t: "Turn on text messages", d: "Customers get updates by text, not just email", min: 5, go: "integrations", skippable: true },
+  { id: "booking", t: "Take bookings online", d: "Share a link customers can book from", min: 3, go: "public", skippable: true },
+  { id: "first", t: "Check in your first repair", d: "Try the whole flow with a real job", min: 3, go: "/orders" },
 ];
 
 /** Search the settings index by label + keywords. Empty query → no results. */

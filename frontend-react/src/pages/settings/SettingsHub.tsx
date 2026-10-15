@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useNavigate } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
@@ -92,6 +93,7 @@ const INDUSTRIES: [string, string][] = [["general", "Generic — Assets"], ["aut
   ["bike", "Bike / cycle — Bikes (Serial)"]];
 
 export default function SettingsHub() {
+  const navigate = useNavigate();
   // ?section=… deep-links a section (e.g. "Manage options" in a directory dropdown).
   const [sec, setSec] = useState<Section>(() => (new URLSearchParams(window.location.search).get("section") as Section) || "overview");
   const [q, setQ] = useState("");
@@ -307,20 +309,35 @@ export default function SettingsHub() {
           {sec === "overview" && (
             <div className="max-w-3xl space-y-5">
               <div>
-                <h2 className="text-[22px] font-extrabold text-ink-primary tracking-tight">Settings</h2>
-                <p className="text-[13px] text-ink-tertiary mt-0.5">Everything about your shop, grouped and searchable.</p>
+                <h2 className="text-xl font-semibold text-ink-primary">Settings</h2>
+                <p className="text-xs text-ink-tertiary mt-0.5">Set up your shop once, change anything later.</p>
               </div>
-              <SetupChecklist goSection={setSec} />
-              <div className="grid grid-cols-2 gap-3">
+              <SetupChecklist goSection={setSec} navigate={(to) => navigate(to)} />
+              <div className="relative">
+                <M n="search" c="absolute left-4 top-3.5 text-lg text-ink-tertiary pointer-events-none" />
+                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a setting: tax, invoice number, reminder, technician…" aria-label="Find a setting"
+                  className="w-full bg-white border border-slate-200 rounded-2xl pl-11 pr-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 shadow-clay-card" />
+              </div>
+              <div className="grid sm:grid-cols-2 gap-3">
                 {CATS.map((cat) => {
                   const items = NAV.filter((n) => SEC_CAT[n.id] === cat.id);
                   if (!items.length) return null;
                   return (
-                    <button key={cat.id} onClick={() => setSec(items[0].id)} className="text-left bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 hover:shadow-clay-drawer transition-shadow">
-                      <div className="w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center mb-2"><M n={cat.icon} c="text-primary text-lg" /></div>
-                      <div className="text-sm font-bold text-ink-primary">{cat.label}</div>
-                      <div className="text-[11px] text-ink-tertiary mt-0.5 leading-snug">{items.map((i) => i.label).join(" · ")}</div>
-                    </button>
+                    <div key={cat.id} className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4">
+                      <div className="flex items-center gap-2.5 mb-2">
+                        <span className="w-8 h-8 rounded-lg bg-primary/10 text-primary grid place-items-center"><M n={cat.icon} c="text-base" /></span>
+                        <span className="text-sm font-semibold text-ink-primary">{cat.label}</span>
+                      </div>
+                      <div className="flex flex-col">
+                        {items.map((n) => (
+                          <button key={n.id} onClick={() => setSec(n.id)} className="group flex items-center gap-2.5 px-2 py-1.5 -mx-1 rounded-lg text-left hover:bg-slate-50">
+                            <M n={n.icon} c="text-[15px] text-ink-tertiary group-hover:text-primary" />
+                            <span className="text-xs text-ink-secondary group-hover:text-ink-primary">{n.label}</span>
+                            <M n="chevron_right" c="ml-auto text-sm text-ink-tertiary opacity-0 group-hover:opacity-100" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   );
                 })}
               </div>
