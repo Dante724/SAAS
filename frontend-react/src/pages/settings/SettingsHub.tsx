@@ -16,6 +16,7 @@ import GeneralSettings from "./GeneralSettings";
 import CustomerMessages from "./NotificationsPage";
 import PublicPagesSettings from "./PublicPagesSettings";
 import { PricingPage, InventoryPage } from "./PricingInventory";
+import FinanceNumbering from "./FinanceNumbering";
 import { TeamPage, RoleEditor, Avatar } from "./TeamSettings";
 import { ChecklistList, ChecklistEditor } from "./ChecklistSettings";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
@@ -397,7 +398,7 @@ export default function SettingsHub() {
             </SectionCard></div>
           )}
 
-          {sec === "finance" && <FinanceSettings />}
+          {sec === "finance" && <FinanceNumbering currency={co?.currency || "$"} />}
           {sec === "ecommerce" && <EcommerceSettings />}
           {sec === "sso" && <SsoSettings />}
           {sec === "approvals" && <ApprovalsSettings />}
@@ -2042,151 +2043,6 @@ function StatusMultiSelect({ value, list, onChange, single, placeholder }: {
 
 /* ── Public appointment page editor (link + branding + appointment rules) ─────────── */
 /* ── System fields per entity: toggle built-in fields' Show/Required, persisted to /forms/system-layout ── */
-// ── Finance & numbering: full editors (numbering + legal entities + taxes + tax stack + exceptions) ──
-function FinanceSettings() {
-  const [num, setNum] = useState<any[] | null>(null);
-  const [taxes, setTaxes] = useState<any[] | null>(null);
-  const [ents, setEnts] = useState<any[] | null>(null);
-  const [stacks, setStacks] = useState<Record<string, string[]>>({});
-  const [exc, setExc] = useState<any[] | null>(null);
-  const [msg, setMsg] = useState("");
-  const [ent, setEnt] = useState<any>({ name: "", address: "", tax_id: "", details: "", is_default: false });
-  const [tax, setTax] = useState<any>({ name: "", rate: 0, mode: "imposed" });
-  const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(""), 2200); };
-  function reload() {
-    api.get<any>("/settings/numbering").then((r) => setNum(r.items || [])).catch(() => setNum([]));
-    api.get<any>("/catalog/taxes").then((r) => setTaxes(r.items || [])).catch(() => setTaxes([]));
-    api.get<any>("/settings/legal-entities").then((r) => setEnts(r.items || [])).catch(() => setEnts([]));
-    api.get<any>("/settings/tax-rules").then((r) => setStacks(r.stacks || {})).catch(() => setStacks({}));
-    api.get<any>("/settings/tax-exceptions").then((r) => setExc(r.items || [])).catch(() => setExc([]));
-  }
-  useEffect(reload, []);
-  const setNumRow = (i: number, k: string, v: any) => setNum((cur) => (cur || []).map((r, idx) => idx === i ? { ...r, [k]: v } : r));
-  async function saveNum(r: any) {
-    try { const res = await api.put<any>("/settings/numbering", { doc_type: r.doc_type, template: r.template, begins_from: Number(r.next_value) || 1, scope_key: r.scope_key || "org" }); flash(`Saved ${r.doc_type}`); setNum((cur) => (cur || []).map((x) => x.doc_type === r.doc_type && x.scope_key === r.scope_key ? { ...x, example: res.example, is_default: false } : x)); }
-    catch (e: any) { alertDialog(e.message || "Save failed"); }
-  }
-  async function previewNum(i: number, r: any) {
-    try { const res = await api.post<any>("/settings/numbering/preview", { doc_type: r.doc_type, template: r.template, begins_from: Number(r.next_value) || 1 }); setNumRow(i, "example", res.example); } catch { /* ignore */ }
-  }
-  async function addEntity() {
-    if (!ent.name.trim()) return;
-    try { await api.post("/settings/legal-entities", ent); setEnt({ name: "", address: "", tax_id: "", details: "", is_default: false }); reload(); flash("Legal entity added"); }
-    catch (e: any) { alertDialog(e.message || "Failed"); }
-  }
-  async function delEntity(id: string) { try { await api.del(`/settings/legal-entities/${id}`); reload(); } catch (e: any) { alertDialog(e.message); } }
-  async function makeDefaultEntity(e: any) { try { await api.put(`/settings/legal-entities/${e.id}`, { ...e, is_default: true }); reload(); } catch (er: any) { alertDialog(er.message); } }
-  async function addTax() {
-    if (!tax.name.trim()) return;
-    try { await api.post("/catalog/taxes", { name: tax.name, rate: Number(tax.rate) || 0, mode: tax.mode }); setTax({ name: "", rate: 0, mode: "imposed" }); reload(); flash("Tax added"); }
-    catch (e: any) { alertDialog(e.message || "Failed"); }
-  }
-  const taxName = (id: string) => (taxes || []).find((t) => t.id === id)?.name || id;
-  function toggleStack(fam: string, id: string) {
-    setStacks((s) => { const cur = s[fam] || []; return { ...s, [fam]: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] }; });
-  }
-  async function saveStack(fam: string) {
-    try { await api.put("/settings/tax-rules", { doc_family: fam, tax_ids: stacks[fam] || [] }); flash(`Saved ${fam} tax stack`); } catch (e: any) { alertDialog(e.message); }
-  }
-  async function delExc(id: string) { try { await api.del(`/settings/tax-exceptions/${id}`); reload(); } catch (e: any) { alertDialog(e.message); } }
-
-  const FAMILIES: [string, string][] = [["tickets_sales", "Tickets & sales"], ["posting", "Postings"]];
-  return (
-    <div className="max-w-3xl space-y-5">
-      <SectionCard title="Document numbering">
-        <div className="divide-y divide-slate-100">
-          {!num && <div className="px-5 py-4 text-xs text-ink-tertiary">Loading…</div>}
-          {(num || []).map((r, i) => (
-            <div key={`${r.doc_type}-${r.scope_key}`} className="px-5 py-3 flex items-end gap-3 flex-wrap">
-              <div className="w-24"><label className={lbl}>Document</label><div className="text-xs font-bold text-ink-primary capitalize py-2">{r.doc_type}</div></div>
-              <div className="flex-1 min-w-[140px]"><label className={lbl}>Template</label><input value={r.template} onChange={(e) => setNumRow(i, "template", e.target.value)} className={`${field} font-mono`} /></div>
-              <div className="w-24"><label className={lbl}>Next #</label><input type="number" value={r.next_value} onChange={(e) => setNumRow(i, "next_value", e.target.value)} className={`${field} font-mono`} /></div>
-              <div className="w-28"><label className={lbl}>Example</label><div className="text-xs font-mono font-bold text-primary py-2">{r.example}</div></div>
-              <button onClick={() => previewNum(i, r)} className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-[11px] font-bold text-ink-secondary hover:bg-slate-50">Preview</button>
-              <button onClick={() => saveNum(r)} className="px-3 py-1.5 rounded-lg bg-primary text-white text-[11px] font-bold shadow-clay-sm">Save</button>
-            </div>
-          ))}
-          <div className="px-5 py-2 text-[11px] text-ink-tertiary">Tokens: <span className="font-mono">{"{C:5}"}</span> counter, <span className="font-mono">{"{D}{M}{Y}"}</span> date. Template must contain a counter.</div>
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Legal entities" count={ents?.length}>
-        <div className="divide-y divide-slate-100">
-          {(ents || []).map((e) => (
-            <div key={e.id} className="px-5 py-3 flex items-center gap-2 text-xs">
-              <div className="flex-1"><span className="font-bold text-ink-primary">{e.name}</span>{e.tax_id ? <span className="text-ink-tertiary"> · {e.tax_id}</span> : null}{e.address ? <div className="text-[11px] text-ink-tertiary">{e.address}</div> : null}</div>
-              {e.is_default ? <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">Default</span> : <button onClick={() => makeDefaultEntity(e)} className="text-[11px] font-bold text-primary">Make default</button>}
-              <button aria-label="Delete" onClick={() => delEntity(e.id)} className="text-rose-600"><M n="delete" c="text-sm" /></button>
-            </div>
-          ))}
-          {ents && ents.length === 0 && <div className="px-5 py-3 text-xs text-ink-tertiary">No legal entities yet.</div>}
-          <div className="px-5 py-3 grid grid-cols-2 gap-2">
-            <input value={ent.name} onChange={(e) => setEnt({ ...ent, name: e.target.value })} placeholder="Entity name" className={field} />
-            <input value={ent.tax_id} onChange={(e) => setEnt({ ...ent, tax_id: e.target.value })} placeholder="Tax ID" className={field} />
-            <input value={ent.address} onChange={(e) => setEnt({ ...ent, address: e.target.value })} placeholder="Address" className={`${field} col-span-2`} />
-            <input value={ent.vat_no || ""} onChange={(e) => setEnt({ ...ent, vat_no: e.target.value })} placeholder="VAT no." className={field} />
-            <input value={ent.registration_no || ""} onChange={(e) => setEnt({ ...ent, registration_no: e.target.value })} placeholder="Registration no." className={field} />
-            <input value={ent.bank_name || ""} onChange={(e) => setEnt({ ...ent, bank_name: e.target.value })} placeholder="Bank name" className={field} />
-            <input value={ent.bank_account || ""} onChange={(e) => setEnt({ ...ent, bank_account: e.target.value })} placeholder="Bank account" className={field} />
-            <input value={ent.phone || ""} onChange={(e) => setEnt({ ...ent, phone: e.target.value })} placeholder="Phone" className={field} />
-            <input value={ent.email || ""} onChange={(e) => setEnt({ ...ent, email: e.target.value })} placeholder="Email" className={field} />
-            <input value={ent.director || ""} onChange={(e) => setEnt({ ...ent, director: e.target.value })} placeholder="Director" className={`${field} col-span-2`} />
-            <label className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-secondary"><input type="checkbox" checked={ent.is_default} onChange={(e) => setEnt({ ...ent, is_default: e.target.checked })} className="accent-primary" />Default</label>
-            <div className="text-right"><button onClick={addEntity} className="px-3 py-1.5 rounded-lg bg-primary text-white text-[11px] font-bold shadow-clay-sm">+ Add entity</button></div>
-          </div>
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Taxes" count={taxes?.length}>
-        <div className="divide-y divide-slate-100">
-          {(taxes || []).map((t) => (
-            <div key={t.id} className="px-5 py-2.5 flex items-center gap-2 text-xs"><span className="font-bold text-ink-primary flex-1">{t.name}</span><span className="font-mono text-ink-secondary">{t.rate}%</span><span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-ink-secondary">{t.mode}</span></div>
-          ))}
-          {taxes && taxes.length === 0 && <div className="px-5 py-3 text-xs text-ink-tertiary">No taxes yet.</div>}
-          <div className="px-5 py-3 flex items-end gap-2">
-            <div className="flex-1"><label className={lbl}>Name</label><input value={tax.name} onChange={(e) => setTax({ ...tax, name: e.target.value })} placeholder="e.g. VAT" className={field} /></div>
-            <div className="w-24"><label className={lbl}>Rate %</label><input type="number" value={tax.rate} onChange={(e) => setTax({ ...tax, rate: e.target.value })} className={`${field} font-mono`} /></div>
-            <div className="w-28"><label className={lbl}>Mode</label><select value={tax.mode} onChange={(e) => setTax({ ...tax, mode: e.target.value })} className={field}><option value="imposed">imposed</option><option value="included">included</option></select></div>
-            <button onClick={addTax} className="px-3 py-1.5 rounded-lg bg-primary text-white text-[11px] font-bold shadow-clay-sm">+ Add</button>
-          </div>
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Tax stack (applied in order)">
-        <div className="divide-y divide-slate-100">
-          {FAMILIES.map(([fam, label]) => (
-            <div key={fam} className="px-5 py-3">
-              <div className="flex items-center justify-between mb-2"><span className="text-xs font-bold text-ink-primary">{label}</span><button onClick={() => saveStack(fam)} className="px-2.5 py-1 rounded-lg bg-primary text-white text-[11px] font-bold shadow-clay-sm">Save stack</button></div>
-              <div className="flex flex-wrap gap-1.5">
-                {(taxes || []).map((t) => { const on = (stacks[fam] || []).includes(t.id); const pos = (stacks[fam] || []).indexOf(t.id); return (
-                  <button key={t.id} onClick={() => toggleStack(fam, t.id)} className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold ${on ? "bg-primary text-white border-primary" : "bg-slate-50 text-ink-secondary border-slate-200/60 hover:bg-slate-100"}`}>{on ? `${pos + 1}. ` : ""}{t.name}</button>
-                ); })}
-                {(taxes || []).length === 0 && <span className="text-[11px] text-ink-tertiary">Add taxes above first.</span>}
-              </div>
-            </div>
-          ))}
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Tax exceptions" count={exc?.length}>
-        <div className="divide-y divide-slate-100">
-          {(exc || []).map((e) => (
-            <div key={e.id} className="px-5 py-2.5 flex items-center gap-2 text-xs">
-              <span className="px-2 py-0.5 rounded bg-slate-100 text-[10px] font-bold">{e.doc_family}</span>
-              <span className="text-ink-secondary">{e.target_type}: {e.target_id}</span>
-              <div className="flex-1" />
-              <span className="font-semibold text-ink-primary">{e.exempt ? "Exempt" : taxName(e.tax_id)}</span>
-              <button aria-label="Delete" onClick={() => delExc(e.id)} className="text-rose-600"><M n="delete" c="text-sm" /></button>
-            </div>
-          ))}
-          {exc && exc.length === 0 && <div className="px-5 py-3 text-xs text-ink-tertiary">No tax exceptions. Lines follow the tax stack above.</div>}
-        </div>
-      </SectionCard>
-      {msg && <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-drawer z-[70]">{msg}</div>}
-    </div>
-  );
-}
-
 // ── E-commerce integrations (Shopify/WooCommerce) — legacy gap, backend /api/ecommerce/integrations ──
 function EcommerceSettings() {
   const [items, setItems] = useState<any[] | null>(null);
