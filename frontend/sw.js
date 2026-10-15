@@ -9,7 +9,7 @@
    - Push + notificationclick: technician notifications with deep links.
    - Background Sync: on 'sync', tell open pages to flush their offline queue.
 */
-const VERSION = 'ros-tech-v2-react';
+const VERSION = 'ros-tech-v3';   // v3: core.js 401 handling + refresh POST
 const SHELL_CACHE = `shell-${VERSION}`;
 const STATIC_CACHE = `static-${VERSION}`;
 const API_CACHE = `api-${VERSION}`;

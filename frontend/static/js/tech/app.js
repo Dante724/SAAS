@@ -26,7 +26,8 @@
     document.getElementById('login').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
     // Sliding-session refresh (keeps the on-device session alive across launches).
-    try { const r = await get('/api/auth/refresh'); if (r && r.access_token) Auth.token = r.access_token; } catch (e) {}
+    // POST — the endpoint never accepted GET, so this refresh silently 405'd on every launch.
+    try { const r = await post('/api/auth/refresh'); if (r && r.access_token) Auth.token = r.access_token; } catch (e) {}
     // Best-effort push enrolment (no-op unless VAPID configured + permission granted).
     if (window.RosPWA) RosPWA.enablePush().catch(() => {});
     if (!location.hash) location.hash = '#/dashboard';

@@ -24,11 +24,20 @@ const Auth = {
   clear() { localStorage.removeItem('ros_tok'); },
 };
 
+/* Session ended (expired, revoked, or the account was suspended). The legacy admin shell defined
+   App.logout; the technician PWA — the only page still on this file — never did, so a 401 there
+   threw "App is not defined" and stranded the user on an error instead of the sign-in screen. */
+function signedOut() {
+  Auth.clear();
+  if (typeof App !== 'undefined' && App.logout) { App.logout(); return; }
+  location.reload();   // with no token the page boots to its sign-in form
+}
+
 /* ── HTTP CLIENT ── */
 async function req(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${Auth.token}`, ...(opts.headers || {}) };
   const r = await fetch(API + path, { ...opts, headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
-  if (r.status === 401) { App.logout(); return null; }
+  if (r.status === 401) { signedOut(); return null; }
   const json = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(errMessage(json, r.status));
   return json;
