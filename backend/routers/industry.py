@@ -120,6 +120,9 @@ async def set_industry_template(
         raise HTTPException(422, f"Unknown template. Valid: {I.TEMPLATE_KEYS}")
     o = await _org(db, current.org_id)
     o.industry_template = data.template_key
+    from backend.services import multi_asset as _ma
+    if not _ma.available(o):       # several items per job: tools / equipment / phone / computer only
+        o.multi_asset_jobs = False
     await db.commit()
     created = await I.ensure_industry_seed(db, current.org_id, only_template=data.template_key)
     return {"ok": True, "current": data.template_key, "seeded": created,

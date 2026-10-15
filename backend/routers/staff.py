@@ -761,6 +761,10 @@ async def update_company(
         org.currencies_json = payload.pop("currencies")
     for k, v in payload.items():
         setattr(org, k, v)
+    # Several items per job is strictly for tools / equipment / phone / computer shops:
+    # moving to any other industry switches it off (moving back needs a fresh opt-in).
+    if "industry_template" in payload and not _ma.available(org):
+        org.multi_asset_jobs = False
     await db.commit()
     return {"ok": True}
 

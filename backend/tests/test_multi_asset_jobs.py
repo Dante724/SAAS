@@ -124,8 +124,11 @@ async def test_switching_industry_hides_items_and_keeps_the_data(client):
     assert "Grinder service" in html and "Whole job" not in html and "Grinder subtotal" not in html
     assert (await client.post(f"/api/orders/{oid}/items", json={"label": "Drill"}, headers=h)).status_code == 409
     assert (await client.put("/api/staff/company", json={"multi_asset_jobs": True}, headers=h)).status_code == 422
-    # Back to an eligible industry: the items are still there.
+    # Back to an eligible industry: still off until the shop turns it on again; items kept.
     await client.put("/api/staff/company", json={"industry_template": "tools"}, headers=h)
+    r = (await client.get(f"/api/orders/{oid}/items", headers=h)).json()
+    assert r["available"] is True and r["enabled"] is False
+    await _on(client, h)
     assert len((await client.get(f"/api/orders/{oid}/items", headers=h)).json()["items"]) == 2
 
 
@@ -172,3 +175,15 @@ async def test_asset_must_belong_to_the_jobs_customer(client):
     other = (await client.post("/api/clients", json={"name": "Someone Else"}, headers=h)).json()["id"]
     theirs = (await client.post("/api/assets", json={"owner_type": "client", "client_id": other, "brand": "Bosch"}, headers=h)).json()["id"]
     assert (await client.post(f"/api/orders/{oid}/items", json={"asset_id": theirs}, headers=h)).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_industry_settings_route_also_switches_it_off(client):
+    h = await _shop(client)
+    await _on(client, h)
+    r = await client.put("/api/settings/industry-template", json={"template_key": "marine"}, headers=h)
+    assert r.status_code == 200, r.text
+    co = (await client.get("/api/staff/company", headers=h)).json()
+    assert co["multi_asset_available"] is False and co["multi_asset_jobs"] is False
+    await client.put("/api/settings/industry-template", json={"template_key": "tools"}, headers=h)
+    assert (await client.get("/api/staff/company", headers=h)).json()["multi_asset_jobs"] is False
