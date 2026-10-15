@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Employee, Role
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.permissions import ALL_CODES, CATALOG, TEMPLATES
+from backend.services.permissions import CATALOG, TEMPLATES, permission_errors
 
 router = APIRouter(prefix="/api/settings/rbac", tags=["settings"])
 
@@ -88,9 +88,9 @@ def _apply_scope(r: Role, data: "RoleIn") -> None:
 
 
 def _validate(perms: dict):
-    unknown = set(perms) - ALL_CODES
-    if unknown:
-        raise HTTPException(422, f"Unknown permission codes: {sorted(unknown)}")
+    errors = permission_errors(perms)
+    if errors:
+        raise HTTPException(422, "; ".join(errors))
 
 
 @router.post("/roles", status_code=201)

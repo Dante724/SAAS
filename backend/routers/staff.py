@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Employee, Role, Task
 from backend.services.auth import get_current_employee, hash_password, require_perm
+from backend.services.permissions import permission_errors
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
 
@@ -72,6 +73,8 @@ class PasswordReset(BaseModel):
     password: str
 
 class RoleIn(BaseModel):
+    """Legacy role endpoint (the React app uses /api/settings/rbac/roles). Permissions are
+    validated the same way: known codes with true/false values only."""
     name: str
     permissions: dict = {}
     # Build 83 — record-level access conditions
@@ -80,6 +83,14 @@ class RoleIn(BaseModel):
     warehouse_scope: str = "all"     # all|selected
     warehouse_ids: list[str] = []
     payroll_visibility_days: Optional[int] = None
+
+
+def _validate_permissions(perms: dict) -> None:
+    # Same rule as rbac._validate. Enforcement only honours an explicit False on a real code, so
+    # an old-style {"finance": "none"} would be stored, look restricted, and grant full access.
+    errors = permission_errors(perms)
+    if errors:
+        raise HTTPException(422, "; ".join(errors))
 
 
 def _apply_role_scope(r: "Role", data: "RoleIn") -> None:
@@ -442,6 +453,7 @@ async def create_role(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_roles")),
 ):
+    _validate_permissions(data.permissions)
     r = Role(org_id=current.org_id, name=data.name, permissions=data.permissions)
     _apply_role_scope(r, data)
     db.add(r)
@@ -459,6 +471,7 @@ async def update_role(
     r = (await db.execute(select(Role).where(Role.id == role_id, Role.org_id == current.org_id))).scalar_one_or_none()
     if not r:
         raise HTTPException(404, "Role not found")
+    _validate_permissions(data.permissions)
     r.name = data.name
     r.permissions = data.permissions
     _apply_role_scope(r, data)

@@ -40,6 +40,9 @@ CATALOG = {
         ("can_add_custom_product", "Add custom products outside Catalog"),
         ("can_add_without_stock", "Add products without deduction"),
         ("can_create_payment_links", "Create payment links"),
+        ("can_add_services", "Add services to work orders"),
+        ("can_add_products", "Add products to work orders"),
+        ("can_approve_discount", "Approve discounts above the shop's limit"),
     ],
     "Inventory": [
         ("can_manage_inventory", "Manage inventory (stock, POs, receiving)"),
@@ -128,6 +131,24 @@ CATALOG = {
 
 # All valid codes (flat), for validation.
 ALL_CODES = {code for group in CATALOG.values() for code, _ in group}
+
+
+
+def permission_errors(perms) -> list:
+    """Problems with a role's permissions dict, empty when valid. Valid = known codes only,
+    each set to a real boolean. Anything else would be stored but silently ignored by
+    enforcement (which only honours an explicit False), so it must be rejected."""
+    if not isinstance(perms, dict):
+        return ["permissions must be an object of {code: true|false}"]
+    errors = []
+    unknown = sorted(set(perms) - ALL_CODES)
+    if unknown:
+        errors.append(f"Unknown permission codes: {unknown}")
+    not_bool = sorted(k for k, v in perms.items() if k in ALL_CODES and not isinstance(v, bool))
+    if not_bool:
+        errors.append(f"Permission values must be true or false: {not_bool}")
+    return errors
+
 
 # Seed templates (deny-lists per template; anything not listed = allowed).
 TEMPLATES = {
