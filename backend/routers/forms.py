@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete as sa_delete
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Union
 from backend.db.database import get_db
 from backend.models import WorkOrderType, CustomField, Employee, FormLayout
 from backend.services.auth import get_current_employee, require_perm
@@ -711,6 +711,16 @@ async def hidden_field_ids(db, org_id: str, form: str, type_id: Optional[str]) -
             and i.get("visible") is False} if row else set()
 
 
+# How strictly a field is required: "" optional · "intake" when the record is created ·
+# "close" before a work order can move to a closed/done status (work orders only).
+def _level(v, form: str) -> str:
+    if v is True or v == "intake":
+        return "intake"
+    if v == "close" and form == "order":
+        return "close"
+    return ""
+
+
 async def build_layout(db, org_id: str, form: str, type_id: Optional[str]) -> list[dict]:
     customs = (await db.execute(_layout_custom_q(org_id, form, type_id).order_by(CustomField.sort_order))).scalars().all()
     system = SYSTEM_FIELDS.get(form, [])
@@ -730,15 +740,19 @@ async def build_layout(db, org_id: str, form: str, type_id: Optional[str]) -> li
         if ref in seen:
             return
         cfg = cfg or {}
+        visible = cfg.get("visible", True) is not False
         if ref.startswith("sys:") and ref[4:] in sys_by:
             k = ref[4:]
-            out.append({"ref": ref, "kind": "system", "key": k, "label": sys_by[k],
-                        "visible": cfg.get("visible", True) is not False, "required": bool(cfg.get("required", False))})
+            lvl = _level(cfg.get("required"), form) if visible else ""
+            out.append({"ref": ref, "kind": "system", "key": k, "label": sys_by[k], "visible": visible,
+                        "required": lvl == "intake", "require": lvl})
         elif ref.startswith("cf:") and ref[3:] in cf_by:
             fld = cf_by[ref[3:]]
+            lvl = "" if fld.field_type == "header" or not visible else (
+                "intake" if fld.required else _level(cfg.get("required"), form))
             out.append({"ref": ref, "kind": "header" if fld.field_type == "header" else "custom", "key": fld.field_key,
-                        "label": fld.field_label, "visible": cfg.get("visible", True) is not False,
-                        "required": bool(fld.required), "field": _ser_field(fld)})
+                        "label": fld.field_label, "visible": visible,
+                        "required": lvl == "intake", "require": lvl, "field": _ser_field(fld), "_row": fld})
         else:
             return
         seen.add(ref)
@@ -756,11 +770,78 @@ async def build_layout(db, org_id: str, form: str, type_id: Optional[str]) -> li
     return out
 
 
+# Built-in work-order fields → "is it filled?" on a saved order (Before-closing check).
+_ORDER_SYS_FILLED = {
+    "client": lambda o: bool(o.client_id), "asset": lambda o: bool(o.device_id),
+    "complaint": lambda o: not _is_empty(o.complaint), "priority": lambda o: True,
+    "manager": lambda o: bool(o.manager_id), "assignee": lambda o: bool(o.assigned_to_id),
+    "scheduled_for": lambda o: bool(o.scheduled_for),
+}
+
+
+def _cf_filled(fld: CustomField, v) -> bool:
+    if fld.field_type == "bool":
+        return v is True          # a yes/no needed to close means "ticked", e.g. "Data backed up"
+    if isinstance(v, list):
+        return len(v) > 0
+    return not _is_empty(v)
+
+
+async def missing_before_close(db, org_id: str, order) -> list[str]:
+    """Labels of the fields this order's form marks "Before closing" that are still empty.
+    Fields hidden in Customize, or hidden by their own show-rule, never block."""
+    if not order.type_id or getattr(order, "is_estimate", False):
+        return []
+    values = order.custom_data or {}
+    out = []
+    for it in await build_layout(db, org_id, "order", order.type_id):
+        if not it["visible"] or it.get("require") != "close":
+            continue
+        if it["kind"] == "system":
+            if not _ORDER_SYS_FILLED.get(it["key"], lambda o: True)(order):
+                out.append(it["label"])
+        elif it["kind"] == "custom":
+            fld = it["_row"]
+            if _field_visible(fld, values) and not _cf_filled(fld, values.get(fld.field_key)):
+                out.append(it["label"])
+    return out
+
+
+async def missing_at_intake(db, org_id: str, type_id: Optional[str], data) -> list[str]:
+    """Labels of fields the work-order form requires at intake that a create payload leaves
+    empty. The form checks this too; this keeps API callers and stale forms honest."""
+    if not type_id:
+        return []
+    values = data.custom_data or {}
+    filled = {
+        "client": bool(data.client_id), "complaint": not _is_empty(data.complaint), "priority": True,
+        "manager": bool(data.manager_id), "assignee": bool(data.assigned_to_id), "scheduled_for": bool(data.scheduled_for),
+        "asset": bool(data.device_id or data.asset_brand or data.asset_model or data.asset_serial
+                      or data.asset_imei or data.asset_vin or data.asset_hin),
+    }
+    out = []
+    for it in await build_layout(db, org_id, "order", type_id):
+        if not it["visible"] or it.get("require") != "intake":
+            continue
+        if it["kind"] == "system":
+            if not filled.get(it["key"], True):
+                out.append(it["label"])
+        elif it["kind"] == "custom":
+            fld = it["_row"]
+            if fld.field_type != "bool" and _field_visible(fld, values) and not _cf_filled(fld, values.get(fld.field_key)):
+                out.append(it["label"])
+    return out
+
+
 async def _template_key(db, org_id: str) -> str:
     from backend.models import Organisation
     from backend.services import industry as _ind
     org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
     return _ind.normalize_template_key(getattr(org, "industry_template", None))
+
+
+def _public(items: list[dict]) -> list[dict]:
+    return [{k: v for k, v in i.items() if k != "_row"} for i in items]
 
 
 @router.get("/layout")
@@ -774,7 +855,7 @@ async def get_layout(
         raise HTTPException(400, "form must be order, client, device or product")
     if form == "order" and not type_id:
         raise HTTPException(422, "type_id is required for the work order form")
-    items = await build_layout(db, current.org_id, form, type_id)
+    items = _public(await build_layout(db, current.org_id, form, type_id))
     have = {i["label"].strip().lower() for i in items}
     tk = await _template_key(db, current.org_id)
     lib = SUGGESTIONS.get(form, {})
@@ -785,7 +866,7 @@ async def get_layout(
 class LayoutItemIn(BaseModel):
     ref: str
     visible: bool = True
-    required: bool = False
+    required: Union[bool, str] = False   # False/"" · True/"intake" · "close" (work orders only)
 
 
 class LayoutSaveIn(BaseModel):
@@ -806,19 +887,23 @@ async def save_layout(
     sys_keys = {k for k, _ in SYSTEM_FIELDS.get(data.form, [])}
     clean, order = [], 0
     for it in data.items:
+        # A hidden field can't be required — it would block saving a form that doesn't show it.
+        lvl = _level(it.required, data.form) if it.visible else ""
         if it.ref.startswith("sys:") and it.ref[4:] in sys_keys:
-            clean.append({"ref": it.ref, "visible": it.visible, "required": it.required and it.visible})
+            clean.append({"ref": it.ref, "visible": it.visible, "required": lvl})
         elif it.ref.startswith("cf:") and it.ref[3:] in customs:
             f = customs[it.ref[3:]]
             f.sort_order = order
             order += 1
-            # A hidden field can't be required — it would block saving a form that doesn't show it.
-            f.required = bool(it.required and it.visible) if f.field_type != "header" else False
-            clean.append({"ref": it.ref, "visible": it.visible})
+            if f.field_type == "header":
+                lvl = ""
+            # "At intake" stays on the field row (older readers enforce it); "Before closing" lives here.
+            f.required = lvl == "intake"
+            clean.append({"ref": it.ref, "visible": it.visible, **({"required": "close"} if lvl == "close" else {})})
     row = await _layout_row(db, current.org_id, data.form, data.type_id, fallback=False)
     if not row:
         row = FormLayout(org_id=current.org_id, entity=data.form, type_id=data.type_id or None)
         db.add(row)
     row.data = clean
     await db.commit()
-    return {"ok": True, "items": await build_layout(db, current.org_id, data.form, data.type_id)}
+    return {"ok": True, "items": _public(await build_layout(db, current.org_id, data.form, data.type_id))}

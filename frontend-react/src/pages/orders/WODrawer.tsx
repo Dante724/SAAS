@@ -18,6 +18,7 @@ import { useCurrencies } from "../../hooks/useCurrencies";
 import CatalogPicker, { type CatalogItem } from "../../components/CatalogPicker";
 import StatusControl, { type FullStatus } from "../../components/StatusControl";
 import { escapeHtml } from "../../lib/safeHtml";
+import JobCardFields from "../../components/JobCardFields";
 
 type Emp = { id: string; name: string };
 type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean };
@@ -476,6 +477,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                   <label className="block text-[11px] font-bold text-ink-tertiary uppercase">Complaint / Reported Malfunction</label>
                   <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200 text-xs font-medium text-ink-primary">{or(d.complaint, "No complaint recorded yet.")}</div>
                 </div>
+                <JobCardFields orderId={order.id} typeId={(d as any).type_id} value={(d as any).custom_data} onFlash={flash}
+                  onSaved={(cd) => setD({ ...d, custom_data: cd } as Detail)} />
                 <NotesEditor initTech={d.tech_notes || ""} initConcl={d.conclusion || ""} diagnosis={d.diagnosis || ""} onSave={saveNotes} />
               </div>
 

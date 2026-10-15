@@ -611,6 +611,12 @@ async def create_order(
     from backend.services.auth import check_location_access
     await check_location_access(db, current, data.location_id)
 
+    # Fields the work-order form requires at intake (Settings → Forms → Customize).
+    from backend.routers.forms import missing_at_intake
+    _missing = await missing_at_intake(db, current.org_id, data.type_id, data)
+    if _missing:
+        raise HTTPException(422, f"Fill in {', '.join(_missing)} first.")
+
     # Industry template this order (and any asset auto-created with it) is stamped
     # with. Defaults to the org's active template; historical orders keep theirs.
     from backend.models import Organisation as _OrgRow
@@ -1209,6 +1215,12 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
             raise HTTPException(409, f"Cannot complete: {len(undone)} required checklist item(s) not done.")
         if wtype and wtype.requires_signature and not order.signature:
             raise HTTPException(409, "Cannot complete: customer signature required.")
+        # Fields the form marks "Before closing" (Settings → Forms → Customize).
+        if order.status != data.status:
+            from backend.routers.forms import missing_before_close
+            _missing = await missing_before_close(db, current.org_id, order)
+            if _missing:
+                raise HTTPException(409, f"Fill in before closing: {', '.join(_missing)}.")
 
     # Orderry rule: cannot close an order with products not yet written off from stock
     if is_closing:
@@ -2795,6 +2807,43 @@ async def set_order_code(
         order.barcode = want
     await db.commit()
     return {"ok": True, "barcode": order.barcode, "order_number": order.order_number}
+
+
+class CustomDataIn(BaseModel):
+    custom_data: dict = {}
+
+
+@router.patch("/{order_id}/custom-data")
+async def save_custom_data(
+    order_id: str,
+    data: CustomDataIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Edit the work order's own form fields (Passcode, Accessories…) after intake — the job
+    card is where "Before closing" fields get filled. Only this type's fields are kept; fields
+    locked after create keep their first value."""
+    order = (await db.execute(select(Order).where(
+        Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
+    from backend.models import CustomField
+    fields = (await db.execute(select(CustomField).where(
+        CustomField.org_id == current.org_id, CustomField.type_id == order.type_id,
+        CustomField.entity_type == "order"))).scalars().all() if order.type_id else []
+    cur = dict(order.custom_data or {})
+    for f in fields:
+        if f.field_type == "header" or f.field_key not in data.custom_data:
+            continue
+        if f.lock_after_create and cur.get(f.field_key) not in (None, "", []):
+            continue
+        cur[f.field_key] = data.custom_data[f.field_key]
+    order.custom_data = cur
+    from backend.routers.forms import sync_order_field_upsells
+    await sync_order_field_upsells(db, current.org_id, order, actor=current)
+    await db.commit()
+    return {"ok": True, "custom_data": cur}
 
 
 class NotesIn(BaseModel):

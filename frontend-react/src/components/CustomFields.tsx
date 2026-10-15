@@ -10,7 +10,7 @@ type Field = { id: string; field_key: string; field_label: string; field_type: s
 
 // 144gp — conditional visibility: a field with a show-rule renders only when the
 // controlling field's current value matches. Mirrors the server's _field_visible.
-function isVisible(f: Field, values: Record<string, any>): boolean {
+export function isVisible(f: Pick<Field, "show_when_field_key" | "show_when_op" | "show_when_value">, values: Record<string, any>): boolean {
   const key = f.show_when_field_key, op = f.show_when_op;
   if (!key || !op) return true;
   const cur = (values || {})[key];
@@ -25,7 +25,7 @@ function isVisible(f: Field, values: Record<string, any>): boolean {
   return op === "gt" ? n > w : op === "lt" ? n < w : false;
 }
 
-export default function CustomFields({ entity, typeId, value, onChange, creating, autofillCtx, inputSize = "xs", only, bare }: {
+export default function CustomFields({ entity, typeId, value, onChange, creating, autofillCtx, inputSize = "xs", only, bare, closeIds }: {
   entity?: "product" | "client" | "device"; typeId?: string; value: Record<string, any>; onChange: (v: Record<string, any>) => void; creating: boolean;
   autofillCtx?: { device_id?: string; client_id?: string };
   /** Match the host drawer's inputs: compact drawers use 12px ("xs"), the work-order drawer 14px ("sm"). */
@@ -34,6 +34,8 @@ export default function CustomFields({ entity, typeId, value, onChange, creating
   only?: string[];
   /** No "Custom fields" box or title — the fields sit directly in the form. */
   bare?: boolean;
+  /** Fields the form marks "Before closing" — tagged so staff know they're needed to close. */
+  closeIds?: string[];
 }) {
   const [fields, setFields] = useState<Field[]>([]);
   type DItem = { id: string; value: string; parent_id?: string | null };
@@ -106,9 +108,10 @@ export default function CustomFields({ entity, typeId, value, onChange, creating
       {shown.filter((f) => isVisible(f, value)).map((f) => {
         const v = (value || {})[f.field_key] ?? "";
         const locked = f.lock_after_create && !creating;
-        const label = <label className={lbl}>{f.field_label}{f.required && <span className="text-rose-500"> *</span>}{locked && <span className="ml-1 text-[10px] text-ink-tertiary">(locked)</span>}</label>;
+        const closeTag = closeIds?.includes(f.id) && <span className="ml-1.5 px-1.5 py-px rounded bg-amber-50 text-[10px] font-semibold text-amber-700">Needed to close</span>;
+        const label = <label className={lbl}>{f.field_label}{f.required && <span className="text-rose-500"> *</span>}{closeTag}{locked && <span className="ml-1 text-[10px] text-ink-tertiary">(locked)</span>}</label>;
         if (f.field_type === "header") return <div key={f.id} className="text-[11px] font-bold text-ink-primary uppercase tracking-wider pt-1">{f.field_label}</div>;
-        if (f.field_type === "bool") return <label key={f.id} className="flex items-center justify-between cursor-pointer"><span className="text-xs text-ink-secondary font-semibold">{f.field_label}</span><input type="checkbox" disabled={locked} checked={!!v} onChange={(e) => set(f.field_key, e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>;
+        if (f.field_type === "bool") return <label key={f.id} className="flex items-center justify-between cursor-pointer"><span className="text-xs text-ink-secondary font-semibold">{f.field_label}{closeTag}</span><input type="checkbox" disabled={locked} checked={!!v} onChange={(e) => set(f.field_key, e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>;
         return (
           <div key={f.id}>
             {label}

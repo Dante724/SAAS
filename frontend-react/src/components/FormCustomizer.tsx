@@ -10,7 +10,9 @@ import { confirmDialog, promptDialog } from "../lib/dialog";
 export type FormKey = "order" | "client" | "device" | "product";
 type Field = { id: string; field_label: string; field_type: string; required: boolean; placeholder?: string | null;
   options?: string[]; directory_key?: string | null; [k: string]: any };
-type Item = { ref: string; kind: "system" | "custom" | "header"; key: string; label: string; visible: boolean; required: boolean; field?: Field };
+// required: "" optional · "intake" when the record is created · "close" before a work order closes.
+type Require = "" | "intake" | "close";
+type Item = { ref: string; kind: "system" | "custom" | "header"; key: string; label: string; visible: boolean; required: boolean; require: Require; field?: Field };
 type Sugg = { label: string; field_type: string; options: string[] };
 
 const TYPES: [string, string][] = [["text", "Short text"], ["textarea", "Long text"], ["number", "Number"], ["select", "Pick one"],
@@ -40,7 +42,7 @@ export default function FormCustomizer({ form, typeId, title }: { form: FormKey;
   async function persist(next: Item[]) {
     setItems(next); setState("saving");
     try {
-      await api.put("/forms/layout", { form, type_id: typeId || null, items: next.map((i) => ({ ref: i.ref, visible: i.visible, required: i.required })) });
+      await api.put("/forms/layout", { form, type_id: typeId || null, items: next.map((i) => ({ ref: i.ref, visible: i.visible, required: i.require })) });
       setState("saved"); setTimeout(() => setState((s) => (s === "saved" ? "" : s)), 1800);
     } catch { setState("error"); }
   }
@@ -66,7 +68,7 @@ export default function FormCustomizer({ form, typeId, title }: { form: FormKey;
     const body: any = { field_label: label, field_type, options, required: false };
     if (form !== "order") body.entity_type = form;
     const f = await api.post<Field>(url, body);
-    const it: Item = { ref: `cf:${f.id}`, kind: field_type === "header" ? "header" : "custom", key: f.field_key || "", label: f.field_label, visible: true, required: false, field: f };
+    const it: Item = { ref: `cf:${f.id}`, kind: field_type === "header" ? "header" : "custom", key: f.field_key || "", label: f.field_label, visible: true, required: false, require: "", field: f };
     const next = [...(items || [])]; next.splice(at, 0, it);
     await persist(next); setSel(it.ref); setAddAt(null);
     setSugg((s) => s.filter((x) => x.label.toLowerCase() !== label.toLowerCase()));
@@ -153,7 +155,8 @@ export default function FormCustomizer({ form, typeId, title }: { form: FormKey;
                     <M n="drag_indicator" c="text-ink-tertiary cursor-grab text-base" />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5 text-xs font-semibold text-ink-secondary mb-1">
-                        {it.label}{it.required && <span className="text-rose-500">*</span>}
+                        {it.label}{it.require === "intake" && <span className="text-rose-500">*</span>}
+                        {it.require === "close" && <span className="px-1.5 py-px rounded bg-amber-50 text-[10px] font-semibold text-amber-700">Before closing</span>}
                         {it.kind === "system" && <span className="px-1.5 py-px rounded bg-slate-100 text-[10px] font-semibold text-ink-tertiary">Built-in</span>}
                         {it.field?.directory_key && <span className="px-1.5 py-px rounded bg-violet-50 text-[10px] font-semibold text-violet-700">List: {dirs.find((d) => d.key === it.field?.directory_key)?.name || it.field.directory_key}</span>}
                       </div>
@@ -178,11 +181,11 @@ export default function FormCustomizer({ form, typeId, title }: { form: FormKey;
             <p>Use <span className="font-semibold text-primary">Add a field</span> between fields to add one exactly where it belongs.</p>
           </div>
         ) : (
-          <FieldPanel key={selected.ref} it={selected} dirs={dirs}
+          <FieldPanel key={selected.ref} it={selected} dirs={dirs} form={form}
             onLabel={(v) => selected.field && saveField(selected, { field_label: v })}
             onField={(p) => saveField(selected, p)}
-            onRequired={(v) => patch(selected.ref, { required: v })}
-            onHide={() => { patch(selected.ref, { visible: false, required: false }); setSel(null); }}
+            onRequired={(v) => patch(selected.ref, { require: v, required: v === "intake" })}
+            onHide={() => { patch(selected.ref, { visible: false, required: false, require: "" }); setSel(null); }}
             onDelete={() => remove(selected)} />
         )}
       </div>
@@ -199,9 +202,9 @@ function Arrows({ idx, n, move }: { idx: number; n: number; move: (a: number, b:
   );
 }
 
-function FieldPanel({ it, dirs, onLabel, onField, onRequired, onHide, onDelete }: {
-  it: Item; dirs: { key: string; name: string }[];
-  onLabel: (v: string) => void; onField: (p: Partial<Field>) => void; onRequired: (v: boolean) => void; onHide: () => void; onDelete: () => void;
+function FieldPanel({ it, dirs, form, onLabel, onField, onRequired, onHide, onDelete }: {
+  it: Item; dirs: { key: string; name: string }[]; form: FormKey;
+  onLabel: (v: string) => void; onField: (p: Partial<Field>) => void; onRequired: (v: Require) => void; onHide: () => void; onDelete: () => void;
 }) {
   const [label, setLabel] = useState(it.label);
   const [opts, setOpts] = useState((it.field?.options || []).join(", "));
@@ -210,6 +213,8 @@ function FieldPanel({ it, dirs, onLabel, onField, onRequired, onHide, onDelete }
   const lbl = "block text-[11px] font-bold uppercase tracking-wider text-ink-tertiary mb-1.5";
   const chip = (on: boolean) => `px-3 py-1.5 rounded-lg text-xs font-semibold border ${on ? "bg-primary text-white border-primary" : "bg-white text-ink-secondary border-slate-200 hover:border-slate-300"}`;
   const isChoice = f && (f.field_type === "select" || f.field_type === "multiselect");
+  // A yes/no always has an answer at intake, so "required" for it only means "ticked before closing".
+  const isBool = f?.field_type === "bool";
   return (
     <>
       <div className="flex items-center gap-2">
@@ -221,10 +226,14 @@ function FieldPanel({ it, dirs, onLabel, onField, onRequired, onHide, onDelete }
           <input value={label} onChange={(e) => setLabel(e.target.value)} onBlur={() => label.trim() && label !== it.label && onLabel(label.trim())}
             onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} className="glass-input w-full rounded-lg px-3 py-2 text-sm font-semibold" /></div>
       )}
-      {it.kind !== "header" && (
+      {it.kind !== "header" && !(isBool && form !== "order") && (
         <div><label className={lbl}>Required</label>
-          <div className="flex gap-1.5"><button onClick={() => onRequired(false)} className={chip(!it.required)}>Optional</button>
-            <button onClick={() => onRequired(true)} className={chip(it.required)}>Required</button></div></div>
+          <div className="flex flex-wrap gap-1.5"><button onClick={() => onRequired("")} className={chip(!it.require)}>Optional</button>
+            {!isBool && <button onClick={() => onRequired("intake")} className={chip(it.require === "intake")}>At intake</button>}
+            {form === "order" && <button onClick={() => onRequired("close")} className={chip(it.require === "close")}>Before closing</button>}</div>
+          <p className="text-[11px] text-ink-tertiary mt-1.5">{it.require === "intake" ? "Can't save the form without it."
+            : it.require === "close" ? `Can be empty at check-in, but the work order can't be closed until it's ${isBool ? "ticked" : "filled"}.`
+            : "Staff can leave it empty."}</p></div>
       )}
       {it.kind === "custom" && f && (<>
         <div><label className={lbl}>Answer type</label>

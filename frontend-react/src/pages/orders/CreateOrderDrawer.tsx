@@ -9,7 +9,7 @@ import AuthedImage from "../../components/AuthedImage";
 import PhotoAnnotator from "./PhotoAnnotator";
 import { money } from "./types";
 import NewClientDrawer from "../../components/NewClientDrawer";
-import CustomFields from "../../components/CustomFields";
+import CustomFields, { isVisible } from "../../components/CustomFields";
 import CatalogPicker from "../../components/CatalogPicker";
 import { useCurrencies, type CurItem } from "../../hooks/useCurrencies";
 import { useTerminology } from "../../lib/useTerminology";
@@ -61,7 +61,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
   // creating a duplicate asset.
   const [deviceId, setDeviceId] = useState<string | null>(null);
   // Field order / visibility / required for this work-order type (Settings → Forms → Customize).
-  type LayoutItem = { ref: string; kind: string; key: string; label: string; visible: boolean; required: boolean };
+  type LayoutItem = { ref: string; kind: string; key: string; label: string; visible: boolean; required: boolean; require?: "" | "intake" | "close"; field?: any };
   const [layout, setLayout] = useState<LayoutItem[] | null>(null);
   function pickExisting(m: IdMatch) {
     setDeviceId(m.id);
@@ -175,15 +175,19 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
   const moreIds = idFields.slice(1);
 
   const reqKeys = new Set((layout || []).filter((i) => i.kind === "system" && i.visible && i.required).map((i) => i.key));
-  const star = (k: string) => (reqKeys.has(k) ? <span className="text-rose-500"> *</span> : null);
+  const closeKeys = new Set((layout || []).filter((i) => i.kind === "system" && i.visible && i.require === "close").map((i) => i.key));
+  const star = (k: string) => (reqKeys.has(k) ? <span className="text-rose-500"> *</span>
+    : closeKeys.has(k) ? <span className="ml-1.5 px-1.5 py-px rounded bg-amber-50 text-[10px] font-semibold normal-case tracking-normal text-amber-700">Needed to close</span> : null);
   function missingRequired(): string | null {
     const filled: Record<string, boolean> = {
       client: !!client, complaint: !!complaint.trim(), manager: !!managerId, assignee: !!assigneeId,
       scheduled_for: !!scheduled, priority: true,
       asset: !!(deviceId || brand || model || serial || imei || vin || hin),
     };
-    const miss = (layout || []).find((i) => i.kind === "system" && i.visible && i.required && !filled[i.key]);
-    return miss ? `${miss.label} is required` : null;
+    const empty = (v: any) => v === undefined || v === null || (Array.isArray(v) ? !v.length : String(v).trim() === "");
+    const miss = (layout || []).filter((i) => i.visible && i.required && (i.kind === "system" ? !filled[i.key]
+      : i.kind === "custom" && i.field && i.field.field_type !== "bool" && isVisible(i.field, woCustom) && empty(woCustom[i.key])));
+    return miss.length ? `Fill in ${miss.map((i) => i.label).join(", ")}` : null;
   }
   function next() { const m = missingRequired(); if (m) { setErr(m); return; } setErr(null); setStep(2); }
 
@@ -313,6 +317,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
   };
 
   // Fields in the order set in Customize: built-in blocks and the type's custom fields interleaved.
+  const closeIds = (layout || []).filter((i) => i.require === "close" && i.kind === "custom").map((i) => i.ref.slice(3));
   function renderLayout() {
     if (!layout) return (<>
       {typeId && <CustomFields typeId={typeId} value={woCustom} onChange={setWoCustom} creating inputSize="sm" />}
@@ -321,7 +326,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
     const out: ReactElement[] = [];
     let run: string[] = [];
     const flush = () => {
-      if (run.length && typeId) out.push(<CustomFields key={`cf-${run[0]}`} typeId={typeId} only={run} bare value={woCustom} onChange={setWoCustom} creating inputSize="sm" />);
+      if (run.length && typeId) out.push(<CustomFields key={`cf-${run[0]}`} typeId={typeId} only={run} bare closeIds={closeIds} value={woCustom} onChange={setWoCustom} creating inputSize="sm" />);
       run = [];
     };
     for (const it of layout) {
