@@ -8,7 +8,7 @@ from typing import Optional
 from sqlalchemy import select, func, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
-from backend.models import StorageBin, StockLevel, StockMovement, Location, Part
+from backend.models import StorageBin, StockLevel, StockMovement, Location
 from backend.services.auth import get_current_employee, require_perm, Employee
 
 router = APIRouter(prefix="/api/bins", tags=["bins"])

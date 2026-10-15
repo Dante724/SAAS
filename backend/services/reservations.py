@@ -16,7 +16,7 @@ from datetime import datetime
 from sqlalchemy import select
 
 from backend.models import StockLevel, StockReservation
-from backend.services.money import q2, q4
+from backend.services.money import q4
 
 
 async def _active_holds(db, part_id, location_id):

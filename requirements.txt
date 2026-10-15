@@ -7,7 +7,7 @@ uvicorn[standard]>=0.29.0
 sqlalchemy[asyncio]>=2.0.36     # 3.13 wheels
 pydantic>=2.9.2                 # pulls pydantic-core>=2.23 (3.13 wheels)
 pydantic-settings>=2.4.0
-python-jose[cryptography]>=3.3.0
+PyJWT>=2.9                      # JWT (replaced python-jose: unmaintained, CVE-2026-85394 + ecdsa PYSEC-2026-1325)
 cryptography>=42                # token encryption at rest (Fernet); also a transitive dep
 bcrypt>=4.1                     # used directly by backend/services/auth.py (no passlib);
                                # any 4.x/5.x works and all ship 3.13 wheels

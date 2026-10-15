@@ -16,7 +16,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -36,7 +36,7 @@ from backend.models import (
 )
 from backend.services import warehouses as wh
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 router = APIRouter(prefix="/api/stock-docs", tags=["inventory"])
 

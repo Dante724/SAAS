@@ -554,7 +554,7 @@ async def parts_to_order(
     supplier group into a PO via the existing /inventory/po endpoint."""
     from collections import defaultdict
     from datetime import datetime as _dt
-    from backend.models import Order, OrderLine, OrderStatus, POLine, PurchaseOrder, Supplier
+    from backend.models import Order, OrderLine, OrderStatus, POLine, Supplier
 
     closed = {"closed", "done", "delivered", "dropped", "cancelled", "completed", "picked_up"}
     for (k,) in (await db.execute(select(OrderStatus.key).where(

@@ -11,7 +11,7 @@ CRUD, plus the two things a shop actually does with a supplier:
     that's waiting on the part, so when the goods land they're already spoken for
     rather than being sold to whoever walks in first.
 """
-from datetime import date, datetime
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -27,11 +27,10 @@ from backend.models import (
     Part,
     POLine,
     PurchaseOrder,
-    StockReservation,
     Supplier,
 )
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 router = APIRouter(prefix="/api/suppliers", tags=["inventory"])
 
@@ -120,7 +119,7 @@ async def pay_supplier(
     owe (single source in services/ledger). A payment therefore subtracts from
     Supplier.balance and posts a positive contact row that moves the contact toward zero.
     """
-    from backend.models import Account, Client
+    from backend.models import Account
     s = await _load(db, current, supplier_id)
     amount = q2(float(data.amount or 0))
     if amount <= 0:

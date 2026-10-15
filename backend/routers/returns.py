@@ -4,7 +4,7 @@ commissions via the payroll engine (idempotent negative mirrors)."""
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from backend.db.database import get_db
@@ -13,7 +13,6 @@ from backend.models import (
     Account, Employee, Payment,
 )
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.money import q2, q4
 
 router = APIRouter(prefix="/api/returns", tags=["returns"])
 

@@ -1,6 +1,5 @@
 """API key management (Phase 2B). Lives under the normal employee session;
 the keys it mints authenticate the public /api/v1 surface."""
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel

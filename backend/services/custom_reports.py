@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import Order, Invoice, Payment, Client, Part
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 
 # ── Whitelist ────────────────────────────────────────────────────────────────

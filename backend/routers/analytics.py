@@ -20,7 +20,7 @@ from backend.models import (
     OrderStatus,
 )
 from backend.services.auth import get_current_employee, record_scope
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}

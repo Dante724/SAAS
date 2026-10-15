@@ -2345,7 +2345,6 @@ async def _archive_order(db, current, order_id, reason, do_refund):
     refunded = 0.0
     if do_refund:
         pays = _pays
-        already = _refunded_already
         net_paid = _net
         if net_paid > 0:
             acct = None

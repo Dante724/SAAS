@@ -774,7 +774,7 @@ async def portal_decide_recs(token: str, order_id: str, data: RecDecideIn,
 # ════════════════════════════════════════════════════════════
 from datetime import datetime, timedelta, time as dt_time
 from backend.models import Organisation as _Org, Service, Employee, Appointment, Client, Order
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 
 async def _org_by_slug(db: AsyncSession, slug: str) -> _Org:

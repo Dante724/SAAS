@@ -17,7 +17,7 @@ from backend.models import (
     Employee, Order, OrderStatus, Sale, Payment, WorkOrderType, Location, Account, InsightCard,
 )
 from backend.services.auth import get_current_employee
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 router = APIRouter(prefix="/api/reports/insights", tags=["insights"])
 

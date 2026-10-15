@@ -7,7 +7,7 @@ scopes (read/write) come from the key. Responses use a consistent envelope:
 Covered resources: contacts, orders, estimates, products, appointments, invoices,
 time-entries. Writes are gated by the 'write' scope.
 """
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query

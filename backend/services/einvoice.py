@@ -24,7 +24,7 @@ from sqlalchemy import select
 from backend.models import Client, Invoice, LegalEntity, Organisation
 from backend.services import regions
 from backend.services.invoicing import display_lines
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 
 def _d(dt) -> str:

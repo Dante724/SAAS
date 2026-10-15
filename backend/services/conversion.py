@@ -15,7 +15,6 @@ Rules (Orderry):
   * Conversion documents are never deleted. Reversal = the opposite conversion,
     which writes a second document and links the two.
 """
-from datetime import datetime
 from typing import Optional
 
 from fastapi import HTTPException
@@ -26,7 +25,6 @@ from backend.models import (
     AssetProductConversion,
     Device,
     Order,
-    OrderLine,
     OrderStatus,
     Part,
     SerializedItem,

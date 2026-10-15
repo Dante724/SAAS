@@ -13,7 +13,7 @@ from sqlalchemy import select
 from pydantic import BaseModel
 from typing import Optional
 from backend.db.database import get_db
-from backend.models import NotificationTemplate, Employee, Order, Client
+from backend.models import NotificationTemplate, Employee, Order
 from backend.services.auth import get_current_employee, require_perm
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
@@ -196,7 +196,6 @@ async def notification_log(
 
 
 # ── Build 80: notification rules engine ──────────────────────────────────────
-from datetime import datetime as _dt  # noqa: E402
 
 from backend.models import NotificationRule  # noqa: E402
 from backend.services import notification_rules as _rules  # noqa: E402

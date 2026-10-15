@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Employee, EventFeedItem, Order, OrderLine, Organisation, Recommendation
 from backend.services.auth import get_current_employee, require_perm, record_scope
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 router = APIRouter(prefix="/api/orders", tags=["recommendations"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}

@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import (
-    Client,
     Employee,
     EmployeeBalanceLedger,
     Invoice,
@@ -37,7 +36,7 @@ from backend.models import (
 )
 from backend.services import printing
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 router = APIRouter(prefix="/api/print", tags=["print"])
 

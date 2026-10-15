@@ -31,7 +31,7 @@ from backend.models import (
 )
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.numbering import next_number
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 router = APIRouter(prefix="/api/transfers", tags=["transfers"])
 

@@ -214,7 +214,7 @@ async def dismiss_all_notifications(
 
 # ── Notification preferences (Part 9) ─────────────────────────────────────────
 from backend.services.push import VALID_KINDS  # noqa: E402
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 
 @router.get("/preferences")

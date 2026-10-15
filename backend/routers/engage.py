@@ -28,7 +28,7 @@ from backend.models import (
     Organisation,
 )
 from backend.services.auth import get_current_employee, require_perm, record_scope
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 router = APIRouter(prefix="/api", tags=["engage"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}

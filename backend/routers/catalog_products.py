@@ -7,13 +7,12 @@ tracking is on), barcode generation, and Excel import/export. Stock *balances*
 and movements continue to live under /api/inventory.
 """
 import io
-from datetime import datetime, date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -23,7 +22,7 @@ from backend.models import (
 )
 from backend.services.auth import get_current_employee, require_perm
 from backend.routers.forms import resolve_custom_data
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 router = APIRouter(prefix="/api/catalog", tags=["catalog-products"])
 

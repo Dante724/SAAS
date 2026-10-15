@@ -22,7 +22,7 @@ from backend.models import (
 )
 from backend.services.crypto import decrypt as _dec
 from backend.services.crypto import encrypt as _enc
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 AUTH_BASE = "https://appcenter.intuit.com/connect/oauth2"
 TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
@@ -220,7 +220,7 @@ async def _remote_id(db, org_id, entity_type, local_id) -> Optional[str]:
 
 
 async def _build_payload(db, org_id, entity_type, local_id) -> Optional[dict]:
-    from backend.models import Order, OrderLine, Part
+    from backend.models import OrderLine, Part
 
     if entity_type == "contact":
         c = (await db.execute(select(Client).where(Client.id == local_id, Client.org_id == org_id))).scalar_one_or_none()

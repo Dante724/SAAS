@@ -29,7 +29,7 @@ from backend.models import (
 )
 from backend.services.auth import require_perm, record_scope
 from backend.services.numbering import next_number
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 
 async def _check_backdating(db, org_id):

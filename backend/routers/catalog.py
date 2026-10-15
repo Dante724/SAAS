@@ -333,7 +333,7 @@ async def catalog_search(
 
 # ── Taxes (named, reusable rates) ────────────────────
 from backend.models import Tax
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 
 class TaxIn(BaseModel):

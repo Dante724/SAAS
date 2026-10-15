@@ -1,6 +1,6 @@
 """Part 10: lost-device logout via Employee.token_version + backward compat."""
 import pytest
-from jose import jwt
+import jwt
 
 from backend.config import settings
 

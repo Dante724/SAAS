@@ -6,12 +6,12 @@ from sqlalchemy import select
 from backend.db.database import AsyncSessionLocal
 from backend.models import (
     Organisation, Location, Role, Employee, Client, Device,
-    Order, OrderLine, OrderStatusLog, Part, StockLevel, Task, Invoice,
+    Order, OrderStatusLog, Part, StockLevel, Task, Invoice,
     WorkOrderType, CustomField, NotificationTemplate, Service, Tax, Account, CashFlowItem
 )
 from backend.services.auth import hash_password
 import uuid
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 
 def uid(): return str(uuid.uuid4())
 def now(): return datetime.utcnow()

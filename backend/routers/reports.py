@@ -138,12 +138,11 @@ from datetime import datetime, timedelta
 from fastapi import Query
 from fastapi.responses import StreamingResponse
 import io
-from sqlalchemy import and_, or_, desc
 from backend.models import (
     OrderLine, OrderStatus, Transaction, Account, CashFlowItem,
-    StockMovement, Supplier, Payment, Device, EventFeedItem, WorkOrderType,
+    StockMovement, Supplier, Payment, EventFeedItem,
 )
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 
 def _parse_range(date_from, date_to):
@@ -506,7 +505,7 @@ async def _rep_purchase_list(db, org, df, dt, **kw):
     promised to a customer, falls below its minimum — reserved stock isn't really yours
     to sell. Anything already on order is netted off, so the same part isn't ordered
     twice while the first delivery is still in transit."""
-    from backend.models import POLine, PurchaseOrder, Supplier
+    from backend.models import POLine, PurchaseOrder
 
     parts = (await db.execute(select(Part).where(
         Part.org_id == org, Part.active == True)  # noqa: E712
@@ -682,7 +681,7 @@ async def _rep_reorder_forecast(db, org, df, dt, **kw):
     days-of-cover and stockout date, then suggests an order quantity that covers the
     supplier's lead time plus a 14-day buffer — netting off what's already on order.
     Unlike the min-stock purchase list, this reacts to how fast things actually move."""
-    from backend.models import POLine, PurchaseOrder, Supplier
+    from backend.models import POLine, PurchaseOrder
     WINDOW, COVER = 28, 14
     since = datetime.utcnow() - timedelta(days=WINDOW)
     vel = {pid: float(q or 0) for pid, q in (await db.execute(
@@ -888,8 +887,8 @@ async def company_dashboard(
     """Rich 'My company' dashboard matching Orderry: today metrics, status mix,
     orders-by-assignee, account balances, and monthly KPIs. Optionally scoped to a
     single location via ?location_id=."""
-    from datetime import datetime, timedelta
-    from backend.models import Account, Payment, OrderStatus
+    from datetime import datetime
+    from backend.models import Account, OrderStatus
     oid = current.org_id
     now = datetime.utcnow()
     today0 = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -991,7 +990,6 @@ async def company_dashboard(
 #  stamped on the line) − labour cost (Σ TimeEntry duration × snapshot rate,
 #  timer AND manual). Rolled up per location. No schema, no WO-page changes.
 # ══════════════════════════════════════════════════════════════════════════
-from datetime import datetime, timedelta
 
 
 def _allowed_location_ids(role):

@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import settings
 from backend.models import Account, Invoice, Order, Payment, PaymentIntent
 from backend.services.numbering import next_number
-from backend.services.money import minor_units, q2, q4
+from backend.services.money import minor_units, q2
 
 
 # ── Gateways ─────────────────────────────────────────────────────────────────

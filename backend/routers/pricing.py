@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Employee, Location, Organisation, Part, PriceType, PriceTypeItem, Service
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 router = APIRouter(prefix="/api/pricing", tags=["pricing"])
 
