@@ -103,7 +103,7 @@ function Dashboard() {
     { l: "Refunds today", v: money(t.refunds), icon: "undo", tint: "bg-rose-50 text-rose-600", mono: true, to: "/finance" },
     { l: "Money in accounts", v: money(k.total_money), icon: "account_balance", tint: "bg-violet-50 text-violet-600", mono: true, sub: `Cash ${money(k.cash)} · Cashless ${money(k.cashless)}`, to: "/finance" },
     { l: "New", v: String(k.new ?? 0), icon: "bolt", tint: "bg-blue-50 text-primary", to: "/orders?status=new" },
-    { l: "Urgent", v: String(k.urgent ?? 0), icon: "priority_high", tint: "bg-amber-50 text-amber-600", to: "/orders?priority=2" },
+    { l: "Urgent", v: String(k.urgent ?? 0), icon: "priority_high", tint: "bg-amber-50 text-amber-600", to: "/orders?priority=urgent" },
     { l: "Overdue", v: String(k.overdue ?? 0), icon: "warning", tint: "bg-rose-50 text-rose-600", to: "/orders" },
     { l: "Receivables", v: money(k.receivables), icon: "attach_money", tint: "bg-slate-100 text-ink-secondary", mono: true, to: "/invoices" },
   ];

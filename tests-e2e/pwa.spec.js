@@ -2,8 +2,10 @@
 // login, and the offline → queue → sync loop. Runs in CI (needs a browser).
 const { test, expect } = require('@playwright/test');
 
-const EMAIL = process.env.E2E_EMAIL || 'admin@repairos.dev';
-const PASS = process.env.E2E_PASS || 'admin123';
+// A seeded technician: the offline test needs jobs assigned to whoever signs in, and the
+// demo admin has none (so that test always skipped).
+const EMAIL = process.env.E2E_EMAIL || 'priya@repairos.dev';
+const PASS = process.env.E2E_PASS || 'tech123';
 
 async function login(page) {
   await page.goto('/tech');

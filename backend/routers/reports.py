@@ -1188,7 +1188,7 @@ async def home_feed(
     add("overdue", "danger", "warning", overdue, f"{overdue} work order{'s' if overdue != 1 else ''} overdue", "/orders")
     add("messages", "danger", "chat", unread, f"{unread} customer message{'s' if unread != 1 else ''} waiting", "/orders")
     add("ready", "success", "local_shipping", ready, f"{ready} order{'s' if ready != 1 else ''} ready for pickup", "/orders")
-    add("urgent", "warning", "priority_high", urgent, f"{urgent} urgent order{'s' if urgent != 1 else ''} open", "/orders?priority=2")
+    add("urgent", "warning", "priority_high", urgent, f"{urgent} urgent order{'s' if urgent != 1 else ''} open", "/orders?priority=urgent")
     add("unpaid", "info", "request_quote", unpaid_n, f"{unpaid_n} unpaid invoice{'s' if unpaid_n != 1 else ''}", "/invoices")
     add("lowstock", "warning", "inventory_2", low, f"{low} item{'s' if low != 1 else ''} low or out of stock", "/inventory")
     add("tasks", "info", "task_alt", open_tasks, f"{open_tasks} open task{'s' if open_tasks != 1 else ''}", "/tasks")

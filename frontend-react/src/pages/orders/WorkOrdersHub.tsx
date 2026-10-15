@@ -9,13 +9,7 @@ import CreateOrderDrawer from "./CreateOrderDrawer";
 import Pager from "../../components/Pager";
 import { Gate } from "../../context/Me";
 
-const KPIS = [
-  { l: "Incomplete", v: "9", icon: "pending_actions", tint: "bg-blue-50 text-primary", vc: "text-ink-primary" },
-  { l: "My Work Orders", v: "2", icon: "person", tint: "bg-indigo-50 text-indigo-600", vc: "text-primary" },
-  { l: "Urgent Priority", v: "1", icon: "priority_high", tint: "bg-amber-50 text-amber-600", vc: "text-ink-primary" },
-  { l: "Overdue", v: "0", icon: "warning", tint: "bg-rose-50 text-rose-600", vc: "text-status-overdue-ink" },
-  { l: "Receivables", v: "₹14,200", icon: "attach_money", tint: "bg-emerald-50 text-emerald-600", vc: "text-ink-primary font-mono" },
-];
+type Kpis = { new?: number; urgent?: number; overdue?: number; receivables?: number };
 type Status = { id: string; name?: string; key?: string; status_group?: string };
 type SavedView = { id: string; name: string; params: any; is_shared?: boolean; mine?: boolean };
 
@@ -61,7 +55,8 @@ export default function WorkOrdersHub() {
   // Multi-facet filter panel (client-side over the loaded set, same as status + text).
   const [fltOpen, setFltOpen] = useState(false);
   const [fAssignee, setFAssignee] = useState("");              // "" any · "__none" unassigned · else name
-  const [fPriority, setFPriority] = useState("");              // "" any · "0"|"1"|"2"
+  const [fPriority, setFPriority] = useState("");              // "" any · "0"|"1"|"2" · "urgent" = 1 or 2
+  const [kpis, setKpis] = useState<Kpis | null>(null);
   const [fScheduled, setFScheduled] = useState<"" | "yes" | "no">("");
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [q, setQ] = useState("");
@@ -134,6 +129,8 @@ export default function WorkOrdersHub() {
     api.get<{ items: Order[] }>("/orders?limit=1000").then((r) => setOrders(r.items || [])).catch((e) => setErr(String(e.message || e)));
     api.get<{ items: Record<string, { stalled: boolean; predicted_ready_at: string | null; over_by_min: number | null }> }>("/orders/timing/flags")
       .then((r) => setFlags(r.items || {})).catch(() => setFlags({}));
+    // Same numbers as the Home dashboard (one server-side definition of urgent/overdue).
+    api.get<{ kpis?: Kpis }>("/reports/company-dashboard").then((r) => setKpis(r.kpis || {})).catch(() => setKpis(null));
   }
   useEffect(() => { refetch(); api.get<any>("/statuses").then((r) => setStatuses(r.items || r || [])).catch(() => {}); }, []);
   // Deep-open from a scan (?open=<id>): open the WO drawer straight away, then clear the param.
@@ -141,7 +138,7 @@ export default function WorkOrdersHub() {
   useEffect(() => {
     const id = sp.get("open");
     if (id) { setOpen({ id } as any); setSp((p) => { p.delete("open"); return p; }, { replace: true }); }
-    // Deep-link filters from Home KPI cards (?status=new, ?priority=2). Applied once,
+    // Deep-link filters from Home KPI cards (?status=new, ?priority=urgent). Applied once,
     // then cleared so the URL stays clean and the user can change filters freely.
     const st = sp.get("status"), pr = sp.get("priority");
     if (st) setFilter(st.toLowerCase().replace(/\s+/g, "_"));
@@ -155,8 +152,18 @@ export default function WorkOrdersHub() {
   const rows = all.filter((o) => (!filter || norm(o.status) === filter) &&
     (!q || [o.order_number, o.client?.name, deviceName(o.device)].some((v) => (v || "").toLowerCase().includes(q.toLowerCase()))) &&
     (!fAssignee || (fAssignee === "__none" ? !o.assigned_to?.name : o.assigned_to?.name === fAssignee)) &&
-    (!fPriority || String(o.priority ?? 0) === fPriority) &&
+    (!fPriority || (fPriority === "urgent" ? (o.priority ?? 0) >= 1 : String(o.priority ?? 0) === fPriority)) &&
     (!fScheduled || (fScheduled === "yes" ? !!o.scheduled_for : !o.scheduled_for)));
+  const closedKeys = new Set(statuses.filter((st) => ["closed", "dropped"].includes(st.status_group || "")).map((st) => norm(st.key || st.name)));
+  const incomplete = all.filter((o) => !o.is_estimate && !closedKeys.has(norm(o.status))).length;
+  const dash = (n?: number) => (kpis && n != null ? String(n) : "—");
+  const kpiCards = [
+    { l: "Incomplete", v: orders ? String(incomplete) : "—", icon: "pending_actions", tint: "bg-blue-50 text-primary", vc: "text-ink-primary" },
+    { l: "New", v: dash(kpis?.new), icon: "fiber_new", tint: "bg-indigo-50 text-indigo-600", vc: "text-primary" },
+    { l: "Urgent Priority", v: dash(kpis?.urgent), icon: "priority_high", tint: "bg-amber-50 text-amber-600", vc: "text-ink-primary" },
+    { l: "Overdue", v: dash(kpis?.overdue), icon: "warning", tint: "bg-rose-50 text-rose-600", vc: "text-status-overdue-ink" },
+    { l: "Receivables", v: kpis?.receivables != null ? money(kpis.receivables) : "—", icon: "attach_money", tint: "bg-emerald-50 text-emerald-600", vc: "text-ink-primary" },
+  ];
   const assignees = [...new Set(all.map((o) => o.assigned_to?.name).filter(Boolean) as string[])].sort();
   const activeFacets = (fAssignee ? 1 : 0) + (fPriority ? 1 : 0) + (fScheduled ? 1 : 0);
   const countFor = (key: string) => all.filter((o) => norm(o.status) === key).length;
@@ -202,7 +209,7 @@ export default function WorkOrdersHub() {
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
         {/* KPIs */}
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-          {KPIS.map((k) => (
+          {kpiCards.map((k) => (
             <div key={k.l} className="bg-white rounded-xl p-3 border border-slate-200/80 shadow-clay-sm flex items-center justify-between">
               <div><span className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">{k.l}</span><p className={`text-xl font-black ${k.vc}`}>{k.v}</p></div>
               <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${k.tint}`}><M n={k.icon} c="text-base" /></div>
@@ -225,7 +232,7 @@ export default function WorkOrdersHub() {
                     <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Assignee</span>
                       <select value={fAssignee} onChange={(e) => setFAssignee(e.target.value)} className="w-full text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-medium"><option value="">Any</option><option value="__none">Unassigned</option>{assignees.map((a) => <option key={a} value={a}>{a}</option>)}</select></label>
                     <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Priority</span>
-                      <select value={fPriority} onChange={(e) => setFPriority(e.target.value)} className="w-full text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-medium"><option value="">Any</option><option value="0">Normal</option><option value="1">High</option><option value="2">Urgent</option></select></label>
+                      <select value={fPriority} onChange={(e) => setFPriority(e.target.value)} className="w-full text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-medium"><option value="">Any</option><option value="0">Normal</option><option value="1">High</option><option value="2">Urgent</option><option value="urgent">High or urgent</option></select></label>
                     <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Scheduling</span>
                       <select value={fScheduled} onChange={(e) => setFScheduled(e.target.value as "" | "yes" | "no")} className="w-full text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-medium"><option value="">Any</option><option value="yes">Scheduled</option><option value="no">Unscheduled</option></select></label>
                   </div>

@@ -675,7 +675,17 @@ function TimeClockChip({ me }: { me: any }) {
 function LocationSwitcher() {
   const [locs, setLocs] = useState<{ id: string; name: string }[]>([]);
   const [sel, setSel] = useState<string>(getLocationScope());
-  useEffect(() => { api.get<any>("/staff/locations").then((r) => setLocs((r.items || r || []).filter((l: any) => l.active !== false))).catch(() => {}); }, []);
+  useEffect(() => {
+    api.get<any>("/staff/locations").then((r) => {
+      const active = (r.items || r || []).filter((l: any) => l.active !== false);
+      setLocs(active);
+      // A remembered branch that no longer exists for this account (deleted, deactivated, or a
+      // different login on this browser) silently filtered every list to nothing while the
+      // switcher read "All locations" — and single-branch shops have no switcher to undo it.
+      const cur = getLocationScope();
+      if (cur && !active.some((l: any) => l.id === cur)) { setLocationScope(""); window.location.reload(); }
+    }).catch(() => {});
+  }, []);
   if (locs.length < 2) return null; // single branch: no switcher needed
   return (
     <select value={sel} onChange={(e) => { setSel(e.target.value); setLocationScope(e.target.value); window.location.reload(); }}
