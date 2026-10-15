@@ -857,6 +857,7 @@ class Tax(Base):
 
 class StockLevel(Base):
     __tablename__ = "stock_levels"
+    __table_args__ = (Index("ix_stock_levels_part_location", "part_id", "location_id"),)   # phase 4 perf: hot lookup path
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
@@ -869,6 +870,7 @@ class StockLevel(Base):
 
 class StockMovement(Base):
     __tablename__ = "stock_movements"
+    __table_args__ = (Index("ix_stock_movements_part_created", "part_id", "created_at"),)   # phase 4 perf: hot lookup path
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
@@ -1072,6 +1074,7 @@ class InvoiceOrder(Base):
 
 class Payment(Base):
     __tablename__ = "payments"
+    __table_args__ = (Index("ix_payments_paid_at", "paid_at"),)   # phase 4 perf: hot lookup path
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     invoice_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("invoices.id"), index=True)
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
@@ -1434,6 +1437,7 @@ class FormLayout(Base):
 
 class AuditLog(Base):
     __tablename__ = "audit_log"
+    __table_args__ = (Index("ix_audit_log_org_created", "org_id", "created_at"),)   # phase 4 perf: hot lookup path
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     actor_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
@@ -1832,6 +1836,7 @@ class NotificationLog(Base):
     """Every notification the system rendered + attempted to deliver. This is the
     communication history shown on the order and the client profile."""
     __tablename__ = "notification_logs"
+    __table_args__ = (Index("ix_notification_logs_org_created", "org_id", "created_at"),)   # phase 4 perf: hot lookup path
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     scope: Mapped[str] = mapped_column(String(12), default="client")  # client|employee
