@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
+import { cellRules, inView, isCustomerRule, toggleCell } from "../../lib/notifRules";
 
 /* Settings › Notifications › Customers — one table: each moment in a job (received, every
    status, payment, update) × each channel (text, email). A switch turns a message on; clicking
@@ -70,11 +71,8 @@ export default function CustomerMessages({ rules, templates, statusesFor, shopNa
     return out;
   }, [statuses, rt, noun]);
 
-  const mine = (r: Rule) => (r.module || "order") === "order" && (r.scope || "client") === "client" && r.event !== "reminder"
-    && (rt === "estimate" ? r.record_type === "estimate" : r.record_type !== "estimate");
-  const cellRules = (row: Row, ch: string) => rules.filter((r) => mine(r) && r.event === row.event && r.channel === ch
-    && (row.status ? r.trigger_status_key === row.status : !r.trigger_status_key));
-  const isOn = (row: Row, ch: string) => cellRules(row, ch).some((r) => r.active);
+  const mine = (r: Rule) => isCustomerRule(r) && inView(r, rt);
+  const isOn = (row: Row, ch: string) => cellRules(rules, rt, row.event, row.status, ch).some((r) => r.active);
   const covered = (row: Row, ch: string) => {
     if (!row.status) return false;
     const catchAll = rows.find((x) => x.allStatuses && x.event === row.event);
@@ -84,14 +82,7 @@ export default function CustomerMessages({ rules, templates, statusesFor, shopNa
   async function toggle(row: Row, ch: string) {
     const key = `${row.id}:${ch}`; if (busy) return; setBusy(key);
     try {
-      const existing = cellRules(row, ch);
-      if (isOn(row, ch)) {
-        for (const r of existing.filter((x) => x.active)) await api.patch(`/notifications/rules/${r.id}`, { active: false });
-      } else if (existing.length) {
-        await api.patch(`/notifications/rules/${existing[0].id}`, { active: true });
-      } else {
-        await api.post("/notifications/rules", { module: "order", scope: "client", record_type: rt, event: row.event, trigger_status_key: row.status, channel: ch, active: true });
-      }
+      await toggleCell(api, rules, rt, row.event, row.status, ch);
       reload();
     } catch (e: any) { flash(e?.message || "Couldn't change that message"); } finally { setBusy(null); }
   }

@@ -2,10 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog, selectDialog } from "../../lib/dialog";
+import { CHANNEL_LABEL, cellRules, channelPhrase, firesOnStatus, firingLabel, statusEvent, toggleCell, type NotifRule } from "../../lib/notifRules";
 
 /* Settings › Statuses — the list (grouped by stage, live job counts, icon badges) and the edit panel
    (plain-English summary, example text, everyday switches up front, the rest under Advanced).
-   Same data and endpoints as before: /statuses, /statuses/reorder, /statuses/{id}?move_to=. */
+   Same data and endpoints as before: /statuses, /statuses/reorder, /statuses/{id}?move_to=.
+   Customer messages are notification rules (/notifications/rules), not a status flag: the editor
+   reads out what fires and flips this status's own rule, like Settings › Notifications does. */
 
 const RECORD_TYPES: [string, string][] = [["work_order", "Work orders"], ["estimate", "Estimates"], ["inquiry", "Inquiries"],
   ["invoice", "Invoices"], ["transfer", "Transfers"], ["purchase_order", "Purchase orders"]];
@@ -34,9 +37,9 @@ const limitLabel = (m?: number | null) => {
 
 const hasCounts = (rt: string) => rt === "work_order" || rt === "estimate";
 
-function badges(s: any): { icon: string; title: string }[] {
+function badges(s: any, ownMessages: string[]): { icon: string; title: string }[] {
   const out: { icon: string; title: string }[] = [];
-  if (s.triggers_notification) out.push({ icon: "chat", title: "Texts the customer" });
+  if (ownMessages.length) out.push({ icon: "chat", title: `Messages the customer (${channelPhrase(ownMessages)})` });
   if (s.triggers_invoice) out.push({ icon: "receipt_long", title: "Creates an invoice" });
   if (s.triggers_payment) out.push({ icon: "payments", title: "Asks for payment" });
   if (s.time_limit_min) out.push({ icon: "timer", title: `Alerts if a job is here longer than ${limitLabel(s.time_limit_min)}` });
@@ -53,6 +56,10 @@ export function StatusList({ statuses, recordType, onRecordType, onOpen, onAdd, 
   const drag = useRef<number | null>(null);
   const [over, setOver] = useState<number | null>(null);
   const [menu, setMenu] = useState<string | null>(null);
+  const [rules, setRules] = useState<NotifRule[]>([]);
+  useEffect(() => { api.get<any>("/notifications/rules").then((r) => setRules(r.items || [])).catch(() => setRules([])); }, [statuses]);
+  // Only a status's own rules get a badge: the every-status rules apply to all of them alike.
+  const ownMessages = (s: any) => firesOnStatus(rules, s.record_type || recordType, statusEvent(s), s.key).filter((f) => f.own).map((f) => f.channel);
   const plainStages = recordType === "work_order";
   const counts = hasCounts(recordType) && statuses.some((s) => s.job_count !== undefined);
 
@@ -151,7 +158,7 @@ export function StatusList({ statuses, recordType, onRecordType, onOpen, onAdd, 
                 {s.is_default && <span className="text-[10px] text-ink-tertiary">starts every job</span>}
                 <span className="ml-auto flex items-center gap-1.5">
                   {counts && <span className="text-[11px] text-ink-tertiary mr-1 whitespace-nowrap">{terminal ? `${s.job_count || 0} in 30 days` : `${s.job_count || 0} ${s.job_count === 1 ? "job" : "jobs"}`}</span>}
-                  {badges(s).map((b) => (
+                  {badges(s, ownMessages(s)).map((b) => (
                     <span key={b.icon} title={b.title} aria-label={b.title} className="w-6 h-6 rounded-md bg-slate-100 text-ink-secondary grid place-items-center"><M n={b.icon} c="text-[14px]" /></span>
                   ))}
                   <button aria-label={`More actions for ${s.name}`} onClick={(e) => { e.stopPropagation(); setMenu(menu === s.id ? null : s.id); }}
@@ -267,14 +274,15 @@ function MovesPanel({ statuses, onFlash }: { statuses: any[]; onFlash: (m: strin
   );
 }
 
-export function StatusEditor({ status, recordType = "work_order", statuses, onClose, onSaved }: {
+export function StatusEditor({ status, recordType = "work_order", statuses, onClose, onSaved, onOpenNotifications }: {
   status: any | null; recordType?: string; statuses: any[]; onClose: () => void; onSaved: (m?: string) => void;
+  onOpenNotifications?: () => void;
 }) {
   const isNew = !status?.id;
   const rt = status?.record_type || recordType;
   const [f, setF] = useState<any>(status || {
     name: "", color: SWATCHES[0], status_group: "in_progress", is_default: false,
-    triggers_invoice: false, triggers_notification: false, triggers_payment: false, locks_edits: false,
+    triggers_invoice: false, triggers_payment: false, locks_edits: false,
     moves_asset_to: "", time_limit_min: null, require_comment: false, require_payment: false, require_checklist: false,
     shows_accept: false, converts_to_order: false, allow_messages: null,
   });
@@ -284,6 +292,11 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
   const [adv, setAdv] = useState(false);
   const [customLimit, setCustomLimit] = useState(() => !!f.time_limit_min && !LIMITS.some(([v]) => v === Number(f.time_limit_min)));
   useEffect(() => { api.get<any>("/settings/warehouses").then((r) => setWarehouses(r.items || r || [])).catch(() => setWarehouses([])); }, []);
+  const [rules, setRules] = useState<NotifRule[] | null>(null);
+  const [providers, setProviders] = useState<Record<string, string>>({});
+  const [msgBusy, setMsgBusy] = useState<string | null>(null);
+  const loadRules = () => api.get<any>("/notifications/rules").then((r) => setRules(r.items || [])).catch(() => setRules([]));
+  useEffect(() => { loadRules(); api.get<any>("/notifications/providers").then((r) => setProviders(r.channels || {})).catch(() => setProviders({})); }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
@@ -297,7 +310,7 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
     setBusy(true); setErr(null);
     const body = {
       name: f.name.trim(), color: f.color, status_group: f.status_group, is_default: !!f.is_default,
-      triggers_invoice: !!f.triggers_invoice, triggers_notification: !!f.triggers_notification,
+      triggers_invoice: !!f.triggers_invoice,
       triggers_payment: !!f.triggers_payment, locks_edits: !!f.locks_edits,
       moves_asset_to: f.moves_asset_to || null, time_limit_min: f.time_limit_min ? Number(f.time_limit_min) : null,
       require_comment: !!f.require_comment, require_payment: !!f.require_payment, require_checklist: !!f.require_checklist,
@@ -310,9 +323,24 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
     } catch (e: any) { setErr(e?.message || "Couldn't save"); setBusy(false); }
   }
 
+  // Customer messages, from the notification rules. Every-status rules follow the stage picked
+  // here; this status's own rules sit on its saved stage (the server moves them when it changes).
+  const key: string | undefined = status?.key;
+  const formEvent = statusEvent({ status_group: f.status_group });
+  const ownEvent = status?.id ? statusEvent(status) : formEvent;
+  const fires = rules ? [...firesOnStatus(rules, rt, formEvent, key).filter((x) => !x.own),
+    ...(key ? firesOnStatus(rules, rt, ownEvent, key).filter((x) => x.own) : [])] : [];
+  const msgChannels = ["sms", "email", ...(providers.whatsapp === "live" || (rules || []).some((r) => r.channel === "whatsapp") ? ["whatsapp"] : [])];
+  async function flipMessage(ch: string) {
+    if (!rules || !key || msgBusy) return; setMsgBusy(ch);
+    try { await toggleCell(api, rules, rt, ownEvent, key, ch); await loadRules(); }
+    catch (e: any) { setErr(e?.message || "Couldn't change that message"); } finally { setMsgBusy(null); }
+  }
+  const openNotifications = () => { if (onOpenNotifications) onOpenNotifications(); else window.location.assign("/settings?section=notifications"); };
+
   // Plain-English summary of everything this status does.
   const acts: string[] = [];
-  if (f.triggers_notification) acts.push("texts the customer");
+  if (jobs && fires.length) acts.push(`messages the customer (${channelPhrase(fires.map((x) => x.channel))})`);
   if (f.triggers_invoice) acts.push("creates an invoice");
   if (f.triggers_payment) acts.push("asks for payment");
   if (f.locks_edits) acts.push("locks the job");
@@ -388,19 +416,51 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
             <p className="text-sm text-ink-primary leading-relaxed">{summary}</p>
           </div>
 
-          {jobs && f.triggers_notification && (
+          {jobs && fires.length > 0 && (
             <div className="flex items-start gap-2.5">
               <span className="w-8 h-8 rounded-full bg-slate-100 grid place-items-center flex-shrink-0 text-ink-secondary"><M n="smartphone" c="text-sm" /></span>
               <div>
                 <div className="bg-primary/10 text-ink-primary rounded-2xl rounded-bl-md px-3.5 py-2.5 text-[13px] leading-snug">Hi Sam, your iPhone 14 is now: <span className="font-semibold">{f.name?.trim() || "…"}</span>. Track it here: shop.link/t/8F2K</div>
-                <div className="text-[10px] text-ink-tertiary mt-1">Example. The exact wording comes from your notification templates.</div>
+                <div className="text-[10px] text-ink-tertiary mt-1">Example. The exact wording is set in Notifications.</div>
               </div>
             </div>
           )}
 
           <div>
             <div className="text-[11px] font-semibold text-ink-tertiary mb-1">When a job moves here</div>
-            <Switch k="triggers_notification" icon="chat" label="Text the customer" />
+            {jobs && (
+              <div className="py-2.5" data-testid="status-messages">
+                <div className="flex items-start gap-3">
+                  <span className="w-8 h-8 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n="chat" c="text-base" /></span>
+                  <span className="min-w-0">
+                    <span className="block text-sm text-ink-primary">Message the customer</span>
+                    <span className="block text-[11px] text-ink-tertiary">
+                      {rules === null ? "Checking…" : fires.length ? fires.map((x) => firingLabel(x, rt)).join(", ") : "Nothing is sent"}
+                    </span>
+                  </span>
+                  <button type="button" onClick={openNotifications} className="ml-auto text-xs font-semibold text-primary whitespace-nowrap">Edit message</button>
+                </div>
+                <div className="flex items-center gap-4 mt-2 pl-11 flex-wrap">
+                  {msgChannels.map((ch) => {
+                    const on = !!rules && !!key && cellRules(rules, rt, ownEvent, key, ch).some((r) => r.active);
+                    const cov = !on && fires.some((x) => !x.own && x.channel === ch);
+                    const label = CHANNEL_LABEL[ch] || ch;
+                    return (
+                      <span key={ch} className="flex items-center gap-1.5">
+                        <button type="button" role="switch" aria-checked={on || cov} aria-label={`${label} when a job moves here`}
+                          disabled={!key || !rules || cov || msgBusy === ch} onClick={() => flipMessage(ch)}
+                          title={cov ? "Already sent to every status. Change it in Notifications." : undefined}
+                          className={`w-9 h-5 rounded-full relative transition-colors disabled:cursor-default ${on ? "bg-primary" : cov ? "bg-primary/30" : "bg-slate-300"}`}>
+                          <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${on || cov ? "left-[18px]" : "left-0.5"}`} />
+                        </button>
+                        <span className="text-xs text-ink-secondary">{label}</span>
+                      </span>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-ink-tertiary mt-1.5 pl-11">{key ? "Switches save right away." : "Save the status first to give it its own message."}</p>
+              </div>
+            )}
             <Switch k="triggers_invoice" icon="receipt_long" label="Create an invoice" />
             <Switch k="triggers_payment" icon="payments" label="Ask for payment" />
             <div className="flex items-center gap-3 py-2.5 border-t border-slate-100">
