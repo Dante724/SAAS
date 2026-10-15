@@ -589,9 +589,14 @@ async def write_off(pid: str, data: WriteOffIn, db: AsyncSession = Depends(get_d
         take = min(float(b.qty_remaining), remaining)
         b.qty_remaining = float(b.qty_remaining) - take
         remaining -= take
-    sl.qty_available -= qty
+    await _atomic_add(db, sl, "qty_available", -(qty), round_to=None)   # atomic
     db.add(StockMovement(part_id=pid, location_id=data.location_id, movement_type="writeoff",
                          qty=qty, ref_type="writeoff", created_by_id=current.id))
     await db.commit()
     return {"ok": True, "qty": qty, "method": "FEFO" if p.expiry_tracking else "FIFO",
             "qty_available": sl.qty_available}
+
+
+async def _atomic_add(db, obj, attr, delta, *, round_to=None):
+    from backend.services.money import add_to_column
+    return await add_to_column(db, obj, attr, delta, round_to=round_to)

@@ -428,7 +428,7 @@ async def post_stocktake(
                             warehouse_id=st.warehouse_id, bin_id=l.bin_id or st.bin_id,
                             qty_available=0, qty_reserved=0)
             db.add(sl)
-        sl.qty_available = (sl.qty_available or 0) + l.variance
+        await _atomic_add(db, sl, "qty_available", l.variance, round_to=None)   # atomic
         part = (await db.execute(select(Part).where(Part.id == l.part_id))).scalar_one_or_none()
         db.add(StockMovement(part_id=l.part_id, location_id=st.location_id,
                              warehouse_id=st.warehouse_id, bin_id=l.bin_id or st.bin_id,
@@ -767,3 +767,8 @@ async def _load_open_stocktake(db: AsyncSession, current: Employee, st_id: str) 
     if st.status == "posted":
         raise HTTPException(409, "This stocktake is posted — counts can't change now")
     return st
+
+
+async def _atomic_add(db, obj, attr, delta, *, round_to=None):
+    from backend.services.money import add_to_column
+    return await add_to_column(db, obj, attr, delta, round_to=round_to)

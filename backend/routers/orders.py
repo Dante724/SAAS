@@ -807,7 +807,7 @@ async def create_order(
                 "without deduction. Reduce the quantity or receive more stock."
             )
         if sl:
-            sl.qty_available -= deducted
+            await _atomic_add(db, sl, "qty_available", -(deducted), round_to=None)   # atomic
         line_obj.pending_stock = shortfall
         if deducted > 0:
             db.add(StockMovement(
@@ -1432,7 +1432,7 @@ async def _convert_estimate(db, current, estimate):
                 StockLevel.part_id == l.ref_id, StockLevel.location_id == estimate.location_id).with_for_update())).scalar_one_or_none()
             if sl:
                 deduct = min(l.qty, max(sl.qty_available, 0))
-                sl.qty_available -= deduct
+                await _atomic_add(db, sl, "qty_available", -(deduct), round_to=None)   # atomic
                 l.pending_stock = l.qty - deduct
                 # log the ACTUAL deducted quantity, negative — matches every other
                 # consumption movement; was qty=+l.qty which corrupted movement-sum reports.
@@ -2911,7 +2911,7 @@ async def receive_pending_stock(
     deduct = min(line.pending_stock, max(available, 0))
     if deduct <= 0:
         raise HTTPException(409, "No stock available to write off yet")
-    sl.qty_available -= deduct
+    await _atomic_add(db, sl, "qty_available", -(deduct), round_to=None)   # atomic
     line.pending_stock -= deduct
     db.add(StockMovement(
         part_id=line.ref_id, location_id=order.location_id,
@@ -3197,7 +3197,7 @@ async def _reverse_fulfillment(db, order, part_id, qty):
     sl = (await db.execute(select(StockLevel).where(
         StockLevel.part_id == part_id, StockLevel.location_id == loc_id))).scalar_one_or_none()
     if sl:
-        sl.qty_available = (sl.qty_available or 0) + qty
+        await _atomic_add(db, sl, "qty_available", qty, round_to=None)   # atomic
     else:
         db.add(StockLevel(part_id=part_id, location_id=loc_id,
                           qty_available=qty, qty_reserved=0))
@@ -3280,7 +3280,7 @@ async def _maybe_deduct(db, order, line, qty, perms, current):
     if shortfall > 0 and perms.get("can_add_without_stock") is False:
         raise HTTPException(403, "Not enough free stock and you can't add without deduction.")
     if sl and deducted > 0:
-        sl.qty_available = (sl.qty_available or 0) - deducted
+        await _atomic_add(db, sl, "qty_available", -(deducted), round_to=None)   # atomic
         if True:
             db.add(StockMovement(part_id=line.ref_id, location_id=order.location_id,
                                  movement_type="use", qty=-deducted, ref_type="order", ref_id=order.id))
@@ -3651,3 +3651,8 @@ async def order_thread_post(
     db.add(c)
     await db.commit()
     return {"id": c.id, "from": "staff", "who": current.name, "body": c.body, "at": c.created_at.isoformat()}
+
+
+async def _atomic_add(db, obj, attr, delta, *, round_to=None):
+    from backend.services.money import add_to_column
+    return await add_to_column(db, obj, attr, delta, round_to=round_to)

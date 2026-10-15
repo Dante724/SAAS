@@ -46,7 +46,7 @@ async def apply_receipt_line(
         if set_last_cost:
             part.cost_price = unit_cost
 
-    sl.qty_available = (sl.qty_available or 0) + qty
+    await _atomic_add(db, sl, "qty_available", qty, round_to=None)   # atomic
     if bin_id and not sl.bin_id:
         sl.bin_id = bin_id
 
@@ -108,3 +108,8 @@ async def apply_cost_adjustment(
                          unit_cost=q4(add_per_unit), created_by_id=created_by_id,
                          ref_type="po" if po_id else "recost", ref_id=po_id))
     return {"applied": q2(add_cost_total), "on_hand": on_hand}
+
+
+async def _atomic_add(db, obj, attr, delta, *, round_to=None):
+    from backend.services.money import add_to_column
+    return await add_to_column(db, obj, attr, delta, round_to=round_to)

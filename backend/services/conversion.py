@@ -134,7 +134,7 @@ async def product_to_asset(db: AsyncSession, org_id: str, employee_id: str, *,
             StockLevel.part_id == part.id,
             StockLevel.location_id == unit.location_id))).scalar_one_or_none()
         if sl and sl.qty_available > 0:
-            sl.qty_available -= 1
+            await _atomic_add(db, sl, "qty_available", -(1), round_to=None)   # atomic
     unit.status = "converted_to_asset"
     unit.converted_asset_id = device.id
 
@@ -290,7 +290,7 @@ async def asset_to_product(db: AsyncSession, org_id: str, employee_id: str, *,
             sl = (await db.execute(select(StockLevel).where(
                 StockLevel.part_id == part.id, StockLevel.location_id == loc))).scalar_one_or_none()
             if sl:
-                sl.qty_available += 1
+                await _atomic_add(db, sl, "qty_available", 1, round_to=None)   # atomic
             else:
                 db.add(StockLevel(part_id=part.id, location_id=loc, qty_available=1, qty_reserved=0))
 
@@ -352,3 +352,8 @@ def serialize(c: AssetProductConversion) -> dict:
         "created_at": c.created_at.isoformat() if c.created_at else None,
         "metadata": c.metadata_json or {},
     }
+
+
+async def _atomic_add(db, obj, attr, delta, *, round_to=None):
+    from backend.services.money import add_to_column
+    return await add_to_column(db, obj, attr, delta, round_to=round_to)

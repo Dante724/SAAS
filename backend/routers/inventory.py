@@ -228,7 +228,7 @@ async def adjust_stock(
         db.add(sl)
 
     if data.movement_type in ("receive", "adjust"):
-        sl.qty_available += data.qty
+        await _atomic_add(db, sl, "qty_available", data.qty, round_to=None)   # atomic
     elif data.movement_type == "writeoff":
         sl.qty_available = max(0, sl.qty_available - data.qty)
 
@@ -2122,7 +2122,7 @@ async def merge_parts(
                 StockLevel.part_id == target.id,
                 StockLevel.location_id == sl.location_id))).scalar_one_or_none()
             if tgt_sl:
-                tgt_sl.qty_available += sl.qty_available
+                await _atomic_add(db, tgt_sl, "qty_available", sl.qty_available, round_to=None)   # atomic
                 tgt_sl.qty_reserved += sl.qty_reserved
                 sl.qty_available = 0
                 sl.qty_reserved = 0
@@ -2254,3 +2254,8 @@ async def bulk_update_parts(
 
     await db.commit()
     return {"ok": True, "changed": changed, "action": data.action}
+
+
+async def _atomic_add(db, obj, attr, delta, *, round_to=None):
+    from backend.services.money import add_to_column
+    return await add_to_column(db, obj, attr, delta, round_to=round_to)

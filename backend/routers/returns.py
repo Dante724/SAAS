@@ -52,7 +52,7 @@ async def create_return(
                 StockLevel.part_id == li.part_id,
                 StockLevel.location_id == current.location_id))).scalars().first()
             if sl:
-                sl.qty_available = (sl.qty_available or 0) + li.qty
+                await _atomic_add(db, sl, "qty_available", li.qty, round_to=None)   # atomic
             else:
                 db.add(StockLevel(part_id=li.part_id, location_id=current.location_id,
                                   qty_available=li.qty, qty_reserved=0))
@@ -190,3 +190,8 @@ async def list_refunds(
                     "return_id": r.return_id,
                     "created_at": r.created_at.isoformat() if r.created_at else None})
     return {"items": out}
+
+
+async def _atomic_add(db, obj, attr, delta, *, round_to=None):
+    from backend.services.money import add_to_column
+    return await add_to_column(db, obj, attr, delta, round_to=round_to)

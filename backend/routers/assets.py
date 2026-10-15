@@ -403,7 +403,7 @@ async def convert_to_product(
         sl = (await db.execute(select(StockLevel).where(
             StockLevel.part_id == part.id, StockLevel.location_id == loc_id))).scalar_one_or_none()
         if sl:
-            sl.qty_available += 1
+            await _atomic_add(db, sl, "qty_available", 1, round_to=None)   # atomic
         else:
             db.add(StockLevel(part_id=part.id, location_id=loc_id, qty_available=1, qty_reserved=0))
         # record the stock movement so the product's History shows where the unit came from
@@ -428,3 +428,8 @@ async def convert_to_product(
     await log_system_event(db, current.org_id, "asset", d.id, f"Converted asset to product: {part.name}")
     await db.commit()
     return {"ok": True, "part_id": part.id, "name": part.name}
+
+
+async def _atomic_add(db, obj, attr, delta, *, round_to=None):
+    from backend.services.money import add_to_column
+    return await add_to_column(db, obj, attr, delta, round_to=round_to)
