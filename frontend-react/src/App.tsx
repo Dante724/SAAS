@@ -11,6 +11,7 @@ const AssetsHub = lazy(() => import("./pages/assets/AssetsHub"));
 const InventoryHub = lazy(() => import("./pages/inventory/InventoryHub"));
 const SalesPOS = lazy(() => import("./pages/sales/SalesPOS"));
 const FinanceHub = lazy(() => import("./pages/finance/FinanceHub"));
+const InvoicesHub = lazy(() => import("./pages/invoices/InvoicesHub"));
 const CashHub = lazy(() => import("./pages/cash/CashHub"));
 const ReportsHub = lazy(() => import("./pages/reports/ReportsHub"));
 const SettingsHub = lazy(() => import("./pages/settings/SettingsHub"));
@@ -48,7 +49,7 @@ export default function App() {
         <Route path="/" element={<CompanyHub />} />
         <Route path="/catalog" element={<CatalogHub />} />
         <Route path="/orders" element={<WorkOrdersHub />} />
-        <Route path="/invoices" element={<FinanceHub initialTab="invoices" />} />
+        <Route path="/invoices" element={<InvoicesHub />} />
         <Route path="/clients" element={<ClientsHub />} />
         <Route path="/assets" element={<AssetsHub />} />
         <Route path="/inventory" element={<InventoryHub />} />

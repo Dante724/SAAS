@@ -75,6 +75,7 @@ export function MeProvider({ children }: { children: ReactNode }) {
 export const NAV_PERM: Record<string, string> = {
   "/clients": "can_view_client_info",
   "/finance": "can_view_cashflow",
+  "/invoices": "can_view_invoices",
   "/cash": "can_view_cashflow",
   "/settings": "can_manage_settings",
 };
