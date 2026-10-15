@@ -144,13 +144,13 @@ export default function WorkOrdersHub() {
   useEffect(() => { loadViews(); }, []);
   async function saveView() {
     const name = await promptDialog("Name this view:"); if (!name) return;
-    try { await api.post("/orders/filters/saved", { name, params: { q, filter, view, cols: [...cols], fAssignee, fPriority, fScheduled }, is_shared: false }); loadViews(); }
+    try { await api.post("/orders/filters/saved", { name, params: { q, filter, view, cols: [...cols], fAssignee, fPriority, fScheduled, fOverdue }, is_shared: false }); loadViews(); }
     catch (e: any) { await alertDialog(e.message || "Could not save view"); }
   }
   function applyView(v: SavedView) {
     const p = v.params || {};
     if (p.q != null) setQ(p.q); setFilter(p.filter ?? null);
-    setFAssignee(p.fAssignee ?? ""); setFPriority(p.fPriority ?? ""); setFScheduled(p.fScheduled ?? "");
+    setFAssignee(p.fAssignee ?? ""); setFPriority(p.fPriority ?? ""); setFScheduled(p.fScheduled ?? ""); setFOverdue(!!p.fOverdue);
     if (p.view) setView(p.view);
     if (Array.isArray(p.cols)) { const n = new Set<string>(p.cols); setCols(n); try { localStorage.setItem(COLS_KEY, JSON.stringify([...n])); } catch { /* ignore */ } }
     setViewsOpen(false);
