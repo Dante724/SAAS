@@ -4,7 +4,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -69,9 +69,36 @@ async def gdpr_export(
         Client.id == client_id, Client.org_id == current.org_id))).scalar_one_or_none()
     if not cl:
         raise HTTPException(404, "Client not found")
+    from backend.models import (Appointment, ChatMessage, ChatThread, Feedback, InboxMessage,
+                                InboxThread, Invoice, LoyaltyLedger, NotificationLog, Payment)
     devices = (await db.execute(select(Device).where(Device.client_id == client_id))).scalars().all()
     orders = (await db.execute(select(Order).where(
         Order.org_id == current.org_id, Order.client_id == client_id))).scalars().all()
+
+    async def rows(model, *conds, order=None):
+        q = select(model).where(*conds)
+        return (await db.execute(q.order_by(order) if order is not None else q)).scalars().all()
+
+    def iso(v):
+        return v.isoformat() if v else None
+
+    invoices = await rows(Invoice, Invoice.org_id == current.org_id, Invoice.client_id == client_id)
+    payments = await rows(Payment, Payment.client_id == client_id,
+                          Payment.invoice_id.in_([i.id for i in invoices] or ["_"]) |
+                          Payment.order_id.in_([o.id for o in orders] or ["_"]))
+    messages = await rows(NotificationLog, NotificationLog.org_id == current.org_id,
+                          NotificationLog.client_id == client_id, order=NotificationLog.created_at)
+    consents = await rows(ConsentLog, ConsentLog.org_id == current.org_id,
+                          ConsentLog.client_id == client_id, order=ConsentLog.created_at)
+    appts = await rows(Appointment, Appointment.org_id == current.org_id, Appointment.client_id == client_id)
+    feedback = await rows(Feedback, Feedback.org_id == current.org_id, Feedback.client_id == client_id)
+    loyalty = await rows(LoyaltyLedger, LoyaltyLedger.org_id == current.org_id, LoyaltyLedger.client_id == client_id)
+    chat_ids = [t.id for t in await rows(ChatThread, ChatThread.org_id == current.org_id,
+                                          ChatThread.client_id == client_id)]
+    inbox_ids = [t.id for t in await rows(InboxThread, InboxThread.org_id == current.org_id,
+                                           InboxThread.client_id == client_id)]
+    chats = await rows(ChatMessage, ChatMessage.thread_id.in_(chat_ids or ["_"]), order=ChatMessage.created_at)
+    inbox = await rows(InboxMessage, InboxMessage.thread_id.in_(inbox_ids or ["_"]), order=InboxMessage.created_at)
 
     await audit_record(db, org_id=current.org_id, actor_id=current.id,
                        action="gdpr.export", entity_type="client", entity_id=client_id)
@@ -86,6 +113,26 @@ async def gdpr_export(
         "orders": [{"id": o.id, "order_number": o.order_number, "status": o.status,
                     "total": o.total, "created_at": o.created_at.isoformat() if o.created_at else None}
                    for o in orders],
+        # Art. 15 covers everything held about the subject, not just the profile.
+        "profile_extra": {"billing_address": cl.billing_address, "birthday": iso(cl.birthday),
+                          "tax_id": cl.tax_id, "discount_card": cl.discount_card,
+                          "custom_data": cl.custom_data or {}, "consent_email": cl.consent_email,
+                          "consent_phone": cl.consent_phone},
+        "invoices": [{"number": i.invoice_number, "status": i.status, "total": i.total,
+                      "amount_paid": i.amount_paid, "issued_at": iso(i.issued_at)} for i in invoices],
+        "payments": [{"amount": p.amount, "method": p.method, "kind": p.kind, "paid_at": iso(p.paid_at)}
+                     for p in payments],
+        "messages_sent": [{"channel": m.channel, "recipient": m.recipient, "subject": m.subject,
+                           "body": m.body, "status": m.status, "created_at": iso(m.created_at)} for m in messages],
+        "conversations": [{"direction": m.direction, "body": m.body, "created_at": iso(m.created_at)}
+                          for m in [*chats, *inbox]],
+        "consent_history": [{"channel": c.channel, "granted": c.granted, "source": c.source,
+                             "created_at": iso(c.created_at)} for c in consents],
+        "appointments": [{"scheduled_for": iso(a.scheduled_for), "status": a.status, "note": a.note}
+                         for a in appts],
+        "feedback": [{"rating": f.rating, "comment": f.comment, "submitted_at": iso(f.submitted_at)}
+                     for f in feedback],
+        "loyalty": [{"points": x.points, "note": x.note, "created_at": iso(x.created_at)} for x in loyalty],
     }
 
 
@@ -106,9 +153,13 @@ async def gdpr_erase(
         raise HTTPException(404, "Client not found")
 
     cl.name = f"[erased {client_id[:8]}]"
-    for f in ("phone", "email", "address", "notes"):
+    for f in ("phone", "email", "address", "notes", "billing_address", "birthday", "tax_id",
+              "reg_no", "discount_card", "watch_out"):
         if hasattr(cl, f):
             setattr(cl, f, None)
+    cl.custom_data = {}
+    cl.portal_token = None      # the old portal link must stop showing their history
+    await _erase_related(db, current.org_id, client_id)
     scrubbed = 0
     for d in (await db.execute(select(Device).where(Device.client_id == client_id))).scalars().all():
         for f in ("serial", "vin", "hin", "imei", "passcode_enc", "color"):
@@ -129,6 +180,38 @@ async def gdpr_erase(
     await db.commit()
     return {"ok": True, "client_id": client_id, "asset_fields_scrubbed": scrubbed,
             "note": "PII anonymized; financial records retained for accounting."}
+
+
+async def _erase_related(db, org_id: str, client_id: str) -> None:
+    """Personal data about the subject outside the client row: message history, call
+    recordings/transcripts, chat and inbox conversations, booking contact details, survey
+    comments and the order signature image. Amounts, dates and statuses stay for accounting."""
+    from backend.models import (Appointment, Call, ChatMessage, ChatThread, Feedback, InboxMessage,
+                                InboxThread, Lead, NotificationLog)
+    gone = "[erased]"
+    await db.execute(update(NotificationLog).where(
+        NotificationLog.org_id == org_id, NotificationLog.client_id == client_id)
+        .values(recipient=None, subject=None, body=gone))
+    await db.execute(update(Call).where(Call.org_id == org_id, Call.client_id == client_id)
+                     .values(from_number=None, to_number=None, recording_url=None,
+                             transcript=None, summary=None))
+    chat_ids = select(ChatThread.id).where(ChatThread.org_id == org_id, ChatThread.client_id == client_id)
+    await db.execute(update(ChatMessage).where(ChatMessage.thread_id.in_(chat_ids)).values(body=gone))
+    await db.execute(update(ChatThread).where(ChatThread.org_id == org_id, ChatThread.client_id == client_id)
+                     .values(contact_phone=None, contact_name=None))
+    inbox_ids = select(InboxThread.id).where(InboxThread.org_id == org_id, InboxThread.client_id == client_id)
+    await db.execute(update(InboxMessage).where(InboxMessage.thread_id.in_(inbox_ids))
+                     .values(body=gone, media_url=None))
+    await db.execute(update(InboxThread).where(InboxThread.org_id == org_id, InboxThread.client_id == client_id)
+                     .values(handle=None, subject=None))
+    await db.execute(update(Appointment).where(Appointment.org_id == org_id, Appointment.client_id == client_id)
+                     .values(client_name=None, client_phone=None, note=None))
+    await db.execute(update(Lead).where(Lead.org_id == org_id, Lead.client_id == client_id)
+                     .values(name=gone, phone=None, email=None, inquiry=None))
+    await db.execute(update(Feedback).where(Feedback.org_id == org_id, Feedback.client_id == client_id)
+                     .values(comment=None))
+    await db.execute(update(Order).where(Order.org_id == org_id, Order.client_id == client_id)
+                     .values(signature=None))
 
 
 # ── GDPR: consent record (proof-of-consent, Art. 7) ──────────────────────────
