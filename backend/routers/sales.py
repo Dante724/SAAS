@@ -166,6 +166,81 @@ async def _pos_redemptions(db, org_id, sale, client_id, gross, data, tax=0.0):
     return q2(extra), detail
 
 
+async def _sale_location(db, current) -> str:
+    """The sale's warehouse: the seller's location. A seller without a home location (e.g. the
+    org owner) still needs one — sales.location_id is NOT NULL — so fall back to the org's first."""
+    if current.location_id:
+        return current.location_id
+    from backend.models import Location
+    loc_id = (await db.execute(select(Location.id).where(
+        Location.org_id == current.org_id).order_by(Location.created_at).limit(1))).scalar_one_or_none()
+    if not loc_id:
+        raise HTTPException(400, "No location is set up for this sale")
+    return loc_id
+
+
+async def _price_sale(db, org_id, loc_id, lines: list[SaleLineIn], discount: float) -> dict:
+    """Price a cart without side effects — shared by create_sale and the /quote preview so the
+    cashier sees exactly what will be charged. Tax is resolved per line on its share of the
+    whole-sale discount (the discount lowers the taxable amount), location-aware and honouring
+    product/category/service exceptions. Rewards (coupon/gift card/points) are not included.
+
+    Returns {lines: [{total, part, tax}], subtotal, taxes (merged per tax), tax_total,
+    tax_imposed, total} where total = subtotal + imposed tax − discount."""
+    line_totals = [q2(li.unit_price * li.qty * (1 - (li.discount or 0) / 100)) for li in lines]
+    subtotal = q2(sum(line_totals))
+    taxable_share = max(subtotal - (discount or 0), 0) / subtotal if subtotal else 0.0
+    out, merged = [], {}
+    tax_total = tax_imposed = 0.0
+    for li, line_total in zip(lines, line_totals):
+        part = None
+        category_id = None
+        if li.kind == "product" and li.ref_id:
+            part = (await db.execute(select(Part).where(
+                Part.id == li.ref_id, Part.org_id == org_id))).scalar_one_or_none()
+            if not part:
+                raise HTTPException(404, f"Product not found: {li.description}")
+            category_id = part.category_id
+        elif li.kind == "service" and li.ref_id:
+            from backend.models import Service
+            category_id = (await db.execute(select(Service.category_id).where(
+                Service.id == li.ref_id, Service.org_id == org_id))).scalar_one_or_none()
+        tx = await resolve_taxes(db, org_id, doc_family="tickets_sales",
+                                 net_amount=q2(line_total * taxable_share),
+                                 item_type=("product" if li.kind == "product" else "service"),
+                                 item_id=li.ref_id, category_id=category_id, location_id=loc_id)
+        for t in tx["taxes"]:
+            m = merged.setdefault(t["tax_id"], {**t, "amount": 0.0})
+            m["amount"] = q2(m["amount"] + t["amount"])
+            if t["mode"] != "included":
+                tax_imposed += t["amount"]
+        tax_total += tx["tax_total"]
+        out.append({"total": line_total, "part": part, "tax": tx})
+    tax_imposed = q2(tax_imposed)
+    return {"lines": out, "subtotal": subtotal, "taxes": list(merged.values()),
+            "tax_total": q2(tax_total), "tax_imposed": tax_imposed,
+            "total": q2(max(subtotal + tax_imposed - (discount or 0), 0))}
+
+
+class QuoteIn(BaseModel):
+    discount: float = 0
+    lines: list[SaleLineIn] = []
+
+
+@router.post("/quote")
+async def quote_sale(
+    data: QuoteIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_create_sales")),
+):
+    """Side-effect-free preview of what POST /api/sales will charge for this cart (before
+    rewards): subtotal, per-tax breakdown, tax_total and total. Nothing is written."""
+    loc_id = await _sale_location(db, current)
+    p = await _price_sale(db, current.org_id, loc_id, data.lines, data.discount)
+    return {"subtotal": p["subtotal"], "discount": q2(data.discount or 0), "taxes": p["taxes"],
+            "tax_total": p["tax_total"], "tax_imposed": p["tax_imposed"], "total": p["total"]}
+
+
 @router.get("")
 async def list_sales(
     location_id: Optional[str] = None,        # build 138: scope sales to a branch
@@ -195,39 +270,20 @@ async def create_sale(
     profit (total − cost) — is exact."""
     if not data.lines:
         raise HTTPException(400, "A sale needs at least one line")
-    # A seller without a home location (e.g. the org owner) still needs a location on the sale —
-    # sales.location_id is NOT NULL. Fall back to the org's first location rather than 500.
-    loc_id = current.location_id
-    if not loc_id:
-        from backend.models import Location
-        loc_id = (await db.execute(select(Location.id).where(
-            Location.org_id == current.org_id).order_by(Location.created_at).limit(1))).scalar_one_or_none()
-        if not loc_id:
-            raise HTTPException(400, "No location is set up for this sale")
+    loc_id = await _sale_location(db, current)
+    priced = await _price_sale(db, current.org_id, loc_id, data.lines, data.discount)
     sale = Sale(org_id=current.org_id, location_id=loc_id,
                 sale_number=await next_number(db, current.org_id, "sale"), client_id=data.client_id,
                 seller_id=current.id, account_id=data.account_id, discount=data.discount)
     db.add(sale)
     await db.flush()
 
-    # Tax is resolved per line on its share of the whole-sale discount (the discount lowers the
-    # taxable amount), location-aware and honouring product/category/service exceptions.
-    line_totals = [q2(li.unit_price * li.qty * (1 - (li.discount or 0) / 100)) for li in data.lines]
-    subtotal = q2(sum(line_totals))
-    taxable_share = max(subtotal - (data.discount or 0), 0) / subtotal if subtotal else 0.0
-    total = 0.0
+    total = priced["subtotal"]
     total_cost = 0.0
-    tax_total = 0.0
-    tax_imposed = 0.0
-    for li, line_total in zip(data.lines, line_totals):
+    for li, pl in zip(data.lines, priced["lines"]):
         cost = 0.0
-        category_id = None
-        if li.kind == "product" and li.ref_id:
-            part = (await db.execute(select(Part).where(
-                Part.id == li.ref_id, Part.org_id == current.org_id))).scalar_one_or_none()
-            if not part:
-                raise HTTPException(404, f"Product not found: {li.description}")
-            category_id = part.category_id
+        part = pl["part"]
+        if part is not None:
             sl = (await db.execute(select(StockLevel).where(
                 StockLevel.part_id == li.ref_id,
                 StockLevel.location_id == loc_id))).scalar_one_or_none()
@@ -268,34 +324,23 @@ async def create_sale(
                                  ref_type="sale", ref_id=sale.id))
             from backend.services import inventory_alerts as _alerts  # 144bo: low-stock alert
             await _alerts.maybe_low_stock_by_id(db, current.org_id, li.ref_id)
-        if li.kind == "service" and li.ref_id and category_id is None:
-            from backend.models import Service
-            category_id = (await db.execute(select(Service.category_id).where(
-                Service.id == li.ref_id, Service.org_id == current.org_id))).scalar_one_or_none()
-        tx = await resolve_taxes(db, current.org_id, doc_family="tickets_sales",
-                                 net_amount=q2(line_total * taxable_share),
-                                 item_type=("product" if li.kind == "product" else "service"),
-                                 item_id=li.ref_id, category_id=category_id, location_id=loc_id)
-        line_tax = tx["tax_total"]
-        tax_imposed += sum(t["amount"] for t in tx["taxes"] if t["mode"] != "included")
+        tx = pl["tax"]
         db.add(SaleLine(sale_id=sale.id, kind=li.kind, ref_id=li.ref_id,
                         description=li.description, qty=li.qty, unit_price=li.unit_price,
                         cost_price=cost / li.qty if li.qty else 0, discount=li.discount,
-                        total=line_total, tax_amount=line_tax,
+                        total=pl["total"], tax_amount=tx["tax_total"],
                         tax_detail=json.dumps(tx["taxes"]) if tx["taxes"] else None))
-        total += line_total
         total_cost += cost
-        tax_total += line_tax
 
     # 144bb — POS rewards: coupon / gift card / loyalty fold into the sale discount and
     # decrement their ledgers. No-op (and byte-identical) when no reward fields are passed.
-    tax_imposed = q2(tax_imposed)
+    tax_imposed = priced["tax_imposed"]
     reward_amt, reward_detail = await _pos_redemptions(db, current.org_id, sale, data.client_id, total, data,
                                                        tax=tax_imposed)
     sale.discount = q2((data.discount or 0) + reward_amt)
     # Imposed tax is added on top; included tax is already inside the line prices.
     sale.total = q2(max(total + tax_imposed - sale.discount, 0))
-    sale.tax_total = q2(tax_total)
+    sale.tax_total = priced["tax_total"]
     sale.total_cost = q2(total_cost)
 
     # Payment straight into a cashbox (signed ledger entry linked to the sale)

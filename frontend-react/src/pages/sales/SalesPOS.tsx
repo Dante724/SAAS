@@ -8,6 +8,8 @@ type Product = { id: string; name?: string; sku?: string; sell_price?: number; q
 type Service = { id: string; name?: string; price?: number; duration_min?: number };
 type ClientLite = { id: string; name?: string; phone?: string };
 type Account = { id: string; name?: string };
+type QuoteTax = { tax_id: string; name: string; rate: number; mode: string; amount: number };
+type Quote = { subtotal: number; discount: number; taxes: QuoteTax[]; tax_total: number; tax_imposed: number; total: number };
 type CartLine = { key: string; kind: "product" | "service"; ref_id: string; description: string; unit_price: number; qty: number; discount: number; stock?: number };
 
 export default function SalesPOS() {
@@ -57,7 +59,28 @@ export default function SalesPOS() {
   const remove = (key: string) => setCart((c) => c.filter((l) => l.key !== key));
 
   const subtotal = cart.reduce((s, l) => s + l.unit_price * l.qty * (1 - l.discount / 100), 0);
-  const total = Math.max(subtotal - discount, 0);
+  // The server prices the cart (location taxes, exceptions, imposed tax on top) so the Charge
+  // button shows exactly what POST /sales will record. Rewards are still applied at charge.
+  const [quote, setQuote] = useState<Quote | null>(null);
+  const [quoteErr, setQuoteErr] = useState<string | null>(null);
+  const quoteKey = JSON.stringify([discount, cart.map((l) => [l.kind, l.ref_id, l.qty, l.unit_price, l.discount])]);
+  const [quotedKey, setQuotedKey] = useState("");
+  useEffect(() => {
+    if (cart.length === 0) { setQuote(null); setQuoteErr(null); setQuotedKey(quoteKey); return; }
+    let live = true;
+    const h = setTimeout(() => {
+      api.post<Quote>("/sales/quote", {
+        discount,
+        lines: cart.map((l) => ({ kind: l.kind, ref_id: l.ref_id, description: l.description, qty: l.qty, unit_price: l.unit_price, discount: l.discount })),
+      }).then((r) => { if (live) { setQuote(r); setQuoteErr(null); setQuotedKey(quoteKey); } })
+        .catch((e: any) => { if (live) { setQuote(null); setQuoteErr(e.message || "Couldn't price the cart"); setQuotedKey(quoteKey); } });
+    }, 200);
+    return () => { live = false; clearTimeout(h); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quoteKey]);
+  const quoting = cart.length > 0 && quotedKey !== quoteKey;
+  const total = quote && !quoting ? quote.total : null;
+  const hasRewards = !!(coupon.trim() || giftCard.trim() || redeemPts > 0);
 
   async function charge() {
     if (cart.length === 0) { flash("Cart is empty"); return; }
@@ -175,14 +198,23 @@ export default function SalesPOS() {
               </div>
             )}
 
-            <div className="flex items-center justify-between"><span className="text-sm font-bold text-ink-primary">Total</span><span className="text-xl font-black font-mono text-primary">{money(total)}</span></div>
+            {quote && quote.taxes.map((t) => (
+              <div key={t.tax_id} className="flex items-center justify-between text-xs">
+                <span className="text-ink-secondary">{t.name} ({t.rate}%){t.mode === "included" ? " · incl." : ""}</span>
+                <span className={`font-mono font-semibold ${quoting ? "text-ink-tertiary" : "text-ink-primary"}`}>{money(t.amount)}</span>
+              </div>
+            ))}
+            {quoteErr && !quoting && <p className="text-[11px] text-rose-600">{quoteErr}</p>}
+
+            <div className="flex items-center justify-between"><span className="text-sm font-bold text-ink-primary">Total</span><span className={`text-xl font-black font-mono ${quoting ? "text-ink-tertiary" : "text-primary"}`}>{total !== null ? money(total) : quote ? money(quote.total) : cart.length ? "—" : money(0)}</span></div>
+            {hasRewards && <p className="text-[10px] text-ink-tertiary -mt-2">Coupon, gift card and points are deducted when you charge.</p>}
             <div><label className="block text-[10px] font-bold uppercase tracking-wider text-ink-tertiary mb-1">Take payment into</label>
               <select value={accountId} onChange={(e) => setAccountId(e.target.value)} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-lg appearance-none">
                 <option value="">No payment (park sale)</option>
                 {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
             </div>
-            <button onClick={charge} disabled={busy || cart.length === 0} className="w-full py-2.5 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-sm font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-50 flex items-center justify-center gap-2"><M n="point_of_sale" c="text-base" />{busy ? "Processing…" : `Charge ${money(total)}`}</button>
+            <button onClick={charge} disabled={busy || cart.length === 0 || quoting} className="w-full py-2.5 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-sm font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-50 flex items-center justify-center gap-2"><M n="point_of_sale" c="text-base" />{busy ? "Processing…" : total !== null ? `Charge ${money(total)}` : cart.length ? (quoting ? "Pricing…" : "Charge") : `Charge ${money(0)}`}</button>
           </div>
         </aside>
       </div>
