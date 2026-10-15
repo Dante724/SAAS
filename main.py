@@ -207,8 +207,18 @@ app.mount("/static", StaticFiles(directory=os.path.join(frontend_dir, "static"))
 react_dir = os.path.join(os.path.dirname(__file__), "frontend-react", "dist")
 _react_index = os.path.join(react_dir, "index.html")
 _have_react = os.path.isfile(_react_index)
+class _HashedAssets(StaticFiles):
+    """Vite file names carry a content hash, so they can be cached for a year without ever going
+    stale; a new build references new names."""
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        if resp.status_code in (200, 304):
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return resp
+
+
 if os.path.isdir(os.path.join(react_dir, "assets")):
-    app.mount("/assets", StaticFiles(directory=os.path.join(react_dir, "assets")), name="react-assets")
+    app.mount("/assets", _HashedAssets(directory=os.path.join(react_dir, "assets")), name="react-assets")
 
 
 _NOT_BUILT = ("<!doctype html><meta charset=utf-8><title>RepairOS</title>"
@@ -221,7 +231,9 @@ def _serve_react():
     # The old fallback served the legacy shell, whose hashed bundle no longer exists — a blank
     # page. Say what's wrong instead (deployed environments refuse to boot without the build).
     if _have_react:
-        return FileResponse(_react_index)
+        # The shell names the current hashed bundles. Without a cache policy browsers reused a
+        # stale copy heuristically, so after a deploy people kept running the previous release.
+        return FileResponse(_react_index, headers={"Cache-Control": "no-cache"})
     return HTMLResponse(_NOT_BUILT, status_code=503)
 
 

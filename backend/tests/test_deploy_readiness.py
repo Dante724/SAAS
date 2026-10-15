@@ -44,3 +44,17 @@ def test_lockfiles_pin_every_dependency_with_hashes(lock):
     assert text.count("--hash=sha256:") >= len(pins)
     for must in ("fastapi==", "sqlalchemy==", "boto3=="):
         assert must in text
+
+
+@pytest.mark.asyncio
+async def test_app_shell_revalidates_and_hashed_assets_are_immutable(client, monkeypatch):
+    """index.html had no Cache-Control, so browsers kept serving the previous release's shell
+    (and its old bundles) after a deploy."""
+    if not main._have_react:
+        pytest.skip("React build not present")
+    r = await client.get("/settings")
+    assert r.headers.get("cache-control") == "no-cache"
+    import re
+    asset = re.search(r'/assets/[^"]+\.js', r.text).group(0)
+    a = await client.get(asset)
+    assert a.status_code == 200 and "immutable" in a.headers.get("cache-control", "")
