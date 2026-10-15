@@ -213,3 +213,32 @@ def test_migration_converts_and_clears_flags(tmp_path):
                               "FROM notification_rules")).all()
         assert [tuple(r) for r in rows] == [("ready", "status_changed", "sms", "t1", 1)]
         assert c.execute(text("SELECT COUNT(*) FROM order_statuses WHERE triggers_notification = 1")).scalar() == 0
+
+
+# ── a status's own message replaces the every-status one on that channel ──────────────────────
+def test_status_overrides_is_per_channel():
+    from types import SimpleNamespace as R
+
+    from backend.services.notification_rules import _status_overrides
+    every_email, every_sms = R(channel="email", trigger_status_key=None), R(channel="sms", trigger_status_key=None)
+    own_email = R(channel="email", trigger_status_key="ready")
+    assert _status_overrides([every_email, every_sms, own_email]) == [every_sms, own_email]
+    assert _status_overrides([every_email, every_sms]) == [every_email, every_sms]
+
+
+@pytest.mark.asyncio
+async def test_own_status_message_replaces_every_status_message(client, tenant, db):
+    org = await _org(client, tenant)
+    await _statuses(client, tenant)
+    db.add(NotificationRule(org_id=org, module="order", scope="client", event="status_changed",
+                            trigger_status_key="ready", channel="email", active=True))
+    await db.commit()
+    oid = await _order(client, tenant)
+    await _move(client, tenant, oid, "ready")              # own email only, not the seeded one too
+    logs = await _logs(db, oid, "status_changed")
+    own = (await db.execute(select(NotificationRule.id).where(
+        NotificationRule.org_id == org, NotificationRule.trigger_status_key == "ready"))).scalar_one()
+    assert [(lg.channel, lg.rule_id) for lg in logs] == [("email", own)]
+    await _move(client, tenant, oid, "diagnosed")          # other statuses keep the every-status email
+    logs = await _logs(db, oid, "status_changed")
+    assert len(logs) == 2 and logs[-1].rule_id != own

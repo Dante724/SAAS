@@ -1,6 +1,6 @@
 // Vitest: the status editor and Settings › Notifications read customer messages from the same rules.
 import { describe, it, expect, vi } from "vitest";
-import { cellRules, channelPhrase, firesOnStatus, firingLabel, statusEvent, toggleCell, type NotifRule } from "./notifRules";
+import { cellRules, channelPhrase, firesOnStatus, firingLabel, statusEvent, toggleCell, withOverrides, type NotifRule } from "./notifRules";
 
 const rule = (p: Partial<NotifRule>): NotifRule => ({ id: Math.random().toString(36).slice(2), module: "order", scope: "client",
   event: "status_changed", channel: "email", trigger_status_key: null, record_type: null, active: true, ...p });
@@ -34,6 +34,12 @@ describe("firesOnStatus — the editor's read-out", () => {
   it("an unsaved status only gets the every-status rules", () => {
     const rules = [...seeded, rule({ channel: "sms", trigger_status_key: "ready" })];
     expect(firesOnStatus(rules, "work_order", "status_changed", undefined).map((x) => x.channel)).toEqual(["email"]);
+  });
+  it("a status's own message replaces the every-status one on that channel only", () => {
+    const rules = [...seeded, rule({ channel: "sms" }), rule({ channel: "email", trigger_status_key: "ready" })];
+    const f = firesOnStatus(rules, "work_order", "status_changed", "ready");
+    expect(f.map((x) => firingLabel(x, "work_order")).sort()).toEqual(["Email", "Text · via Every status change"]);
+    expect(withOverrides(firesOnStatus(rules, "work_order", "status_changed", "diagnosed")).map((x) => x.channel).sort()).toEqual(["email", "sms"]);
   });
   it("flags location-scoped rules", () => {
     const [f] = firesOnStatus([rule({ trigger_status_key: "ready", location_id: "L1" })], "work_order", "status_changed", "ready");

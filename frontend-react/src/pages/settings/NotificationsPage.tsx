@@ -152,10 +152,9 @@ export default function CustomerMessages({ rules, templates, statusesFor, shopNa
 
   const RowView = ({ row }: { row: Row }) => {
     const st = rowStat(row); const ca = catchAllFor(row);
-    const doubled = ca ? channels.filter(([c]) => isOn(row, c) && isOn(ca, c)).map(([, l]) => l.toLowerCase()) : [];
-    const note = row.allStatuses && ownStatusCount(row.event)
-      ? `Also goes out on the ${ownStatusCount(row.event)} ${ownStatusCount(row.event) === 1 ? "status below that has its" : "statuses below that have their"} own message`
-      : row.id === "any" ? `One message whenever the ${noun} moves to a new status` : row.sub;
+    const replaces = ca ? channels.filter(([c]) => isOn(row, c) && isOn(ca, c)).map(([, l]) => l.toLowerCase()) : [];
+    const base = row.id === "any" ? `One message whenever the ${noun} moves to a new status` : row.sub;
+    const note = row.allStatuses && ownStatusCount(row.event) ? `${base}. Statuses with their own message send that instead` : base;
     return (
       <div className="group flex items-start gap-3 px-4 py-3.5 hover:bg-slate-50/70 cursor-pointer" onClick={() => { setAdding(false); setEditing(row); }}>
         {row.color ? <span className="mt-1.5 w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: row.color, boxShadow: `0 0 0 3px ${row.color}22` }} />
@@ -167,7 +166,7 @@ export default function CustomerMessages({ rules, templates, statusesFor, shopNa
           <div className="mt-1 flex flex-wrap gap-x-2 text-[11px]">
             {st.sent > 0 && <span className="text-ink-tertiary">Sent {st.sent} this week{st.last ? ` · last ${ago(st.last)}` : ""}</span>}
             {st.failed > 0 && <span className="text-rose-600">{st.failed} didn't go through</span>}
-            {doubled.length > 0 && <span className="text-amber-700">Customers also get the “{ca!.label}” {doubled.join(" and ")}, so 2 arrive</span>}
+            {replaces.length > 0 && <span className="text-ink-tertiary">Sent instead of the “{ca!.label}” {replaces.join(" and ")}</span>}
           </div>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0" onClick={(e) => e.stopPropagation()}>

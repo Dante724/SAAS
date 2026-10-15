@@ -58,8 +58,10 @@ A single status change can fan out to several side-effects, all in
   "every status change" rule it was nearly always ignored. Flagged statuses were
   converted to equivalent per-status rules (`services/legacy_status_notifs.py`,
   migration `nt144p4`, startup self-heal) and the flag cleared; an old client posting
-  `triggers_notification: true` gets the same conversion. The status editor shows what
-  the rules send and toggles the status's own rule.
+  `triggers_notification: true` gets the same conversion. A status's own rule replaces
+  the "every status change" / "job finished" rule on the same channel
+  (`_status_overrides`), so the customer gets one message per channel. The status editor
+  shows what the rules send and toggles the status's own rule.
 - `triggers_payment` → exposes a payment context.
 - `locks_edits` → subsequent line add/edit/delete return **409**.
 - `is_terminal` → sets `closed_at` and **activates warranty** (§8).

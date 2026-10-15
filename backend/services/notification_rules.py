@@ -113,6 +113,13 @@ def _rule_matches(rule: NotificationRule, *, event: str, status_key: Optional[st
     return True
 
 
+def _status_overrides(matched: list) -> list:
+    """A status's own message replaces the catch-all ("Every status change" / "Job finished")
+    on that channel, so the customer gets one message per channel, not two."""
+    own = {r.channel for r in matched if r.trigger_status_key}
+    return [r for r in matched if r.trigger_status_key or r.channel not in own]
+
+
 async def _render(db: AsyncSession, org_id: str, order: Order, rule: NotificationRule):
     """Render the rule's template against the order's variables. Falls back to a
     plain status line when the rule has no template attached."""
@@ -176,7 +183,8 @@ async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
     if not order:
         return {"sent": 0, "scheduled": 0}
 
-    matched = [r for r in rules if _rule_matches(r, event=event, status_key=status_key, order=order)]
+    matched = _status_overrides(
+        [r for r in rules if _rule_matches(r, event=event, status_key=status_key, order=order)])
     sent = scheduled = 0
     for rule in matched:
         subject, body, tpl_id = await _render(db, org_id, order, rule)

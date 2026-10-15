@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog, selectDialog } from "../../lib/dialog";
-import { CHANNEL_LABEL, cellRules, channelPhrase, firesOnStatus, firingLabel, statusEvent, toggleCell, type NotifRule } from "../../lib/notifRules";
+import { CHANNEL_LABEL, cellRules, channelPhrase, firesOnStatus, firingLabel, statusEvent, toggleCell, withOverrides, type NotifRule } from "../../lib/notifRules";
 
 /* Settings › Statuses — the list (grouped by stage, live job counts, icon badges) and the edit panel
    (plain-English summary, example text, everyday switches up front, the rest under Advanced).
@@ -328,8 +328,8 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
   const key: string | undefined = status?.key;
   const formEvent = statusEvent({ status_group: f.status_group });
   const ownEvent = status?.id ? statusEvent(status) : formEvent;
-  const fires = rules ? [...firesOnStatus(rules, rt, formEvent, key).filter((x) => !x.own),
-    ...(key ? firesOnStatus(rules, rt, ownEvent, key).filter((x) => x.own) : [])] : [];
+  const fires = rules ? withOverrides([...firesOnStatus(rules, rt, formEvent).filter((x) => !x.own),
+    ...(key ? firesOnStatus(rules, rt, ownEvent, key).filter((x) => x.own) : [])]) : [];
   const msgChannels = ["sms", "email", ...(providers.whatsapp === "live" || (rules || []).some((r) => r.channel === "whatsapp") ? ["whatsapp"] : [])];
   async function flipMessage(ch: string) {
     if (!rules || !key || msgBusy) return; setMsgBusy(ch);

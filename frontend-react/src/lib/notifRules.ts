@@ -38,13 +38,20 @@ export async function toggleCell(api: Api, rules: NotifRule[], rt: string, event
 
 export type Firing = { channel: string; own: boolean; rule: NotifRule };
 
+/** A status's own message replaces the every-status one on that channel (one message per
+    channel). Mirrors backend/services/notification_rules._status_overrides. */
+export function withOverrides(fs: Firing[]): Firing[] {
+  const own = new Set(fs.filter((f) => f.own).map((f) => f.channel));
+  return fs.filter((f) => f.own || !own.has(f.channel));
+}
+
 /** What goes out when a job of record type `rt` enters status `key` (undefined = a status not
-    saved yet: only the every-status rules apply). One entry per active matching rule. */
+    saved yet: only the every-status rules apply). One entry per message actually sent. */
 export function firesOnStatus(rules: NotifRule[], rt: string, event: string, key?: string): Firing[] {
-  return rules.filter((r) => r.active && isCustomerRule(r) && r.event === event
+  return withOverrides(rules.filter((r) => r.active && isCustomerRule(r) && r.event === event
     && (!r.record_type || r.record_type === rt)
     && (!r.trigger_status_key || r.trigger_status_key === key))
-    .map((r) => ({ channel: r.channel, own: !!r.trigger_status_key, rule: r }));
+    .map((r) => ({ channel: r.channel, own: !!r.trigger_status_key, rule: r })));
 }
 
 /** "Email · via Every status change", "Text", "Text · one location" — one line per firing rule. */
