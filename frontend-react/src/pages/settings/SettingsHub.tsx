@@ -12,6 +12,7 @@ import { NAV, CATS, SEC_CAT, searchSections, type SectionId } from "./settingsRe
 import { SetupChecklist } from "./SetupChecklist";
 import { StatusList, StatusEditor } from "./StatusesSettings";
 import GeneralSettings from "./GeneralSettings";
+import CustomerMessages from "./NotificationsPage";
 import { TeamPage, RoleEditor, Avatar } from "./TeamSettings";
 import { ChecklistList, ChecklistEditor } from "./ChecklistSettings";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
@@ -358,16 +359,21 @@ export default function SettingsHub() {
 
 
           {sec === "notifications" && (
-            <NotificationsSettings
-              rules={lists.notifications || []}
-              templates={notifTemplates || []}
-              automations={lists.automation || []}
-              reloadRules={() => reloadSec("notifications")}
-              reloadTemplates={() => reloadNotifTemplates()}
-              onEditAutomation={(row) => setEditing({ sec: "automation", row })}
-              onDeleteAutomation={(r) => delRow("automation", r)}
-              flash={flash}
-            />
+            <CustomerMessages rules={lists.notifications || []} templates={notifTemplates || []} shopName={co?.name || ""}
+              statusesFor={(rt) => api.get<any>(`/statuses?record_type=${rt}`).then((r) => r.items || [])}
+              reload={() => { reloadSec("notifications"); reloadNotifTemplates(); }} flash={flash}
+              renderOther={(v) => (
+                <NotificationsSettings fixedView={v}
+                  rules={lists.notifications || []}
+                  templates={notifTemplates || []}
+                  automations={lists.automation || []}
+                  reloadRules={() => reloadSec("notifications")}
+                  reloadTemplates={() => reloadNotifTemplates()}
+                  onEditAutomation={(row) => setEditing({ sec: "automation", row })}
+                  onDeleteAutomation={(r) => delRow("automation", r)}
+                  flash={flash}
+                />
+              )} />
           )}
 
           {sec === "templates" && (
@@ -662,13 +668,15 @@ function eventsFor(internal: boolean, module: string): [string, string][] {
 }
 const EVENT_LABEL = (internal: boolean, m: string, e: string) => (eventsFor(internal, m).find(([k]) => k === e)?.[1]) || e.replace(/_/g, " ");
 
-function NotificationsSettings({ rules, templates, automations, reloadRules, reloadTemplates, onEditAutomation, onDeleteAutomation, flash }: {
+function NotificationsSettings({ fixedView, rules, templates, automations, reloadRules, reloadTemplates, onEditAutomation, onDeleteAutomation, flash }: {
+  fixedView?: "internal" | "automations";
   rules: any[]; templates: any[]; automations: any[];
   reloadRules: () => void; reloadTemplates: () => void;
   onEditAutomation: (row: any | null) => void; onDeleteAutomation: (r: any) => void;
   flash: (m: string) => void;
 }) {
-  const [view, setView] = useState<"external" | "internal" | "automations">("external");
+  const [viewState, setView] = useState<"external" | "internal" | "automations">("external");
+  const view = fixedView || viewState;
   const isInternal = view === "internal";
   const mods = isInternal ? INTERNAL_MODULES : EXTERNAL_MODULES;
   const [module, setModule] = useState<string>("order");
@@ -702,17 +710,17 @@ function NotificationsSettings({ rules, templates, automations, reloadRules, rel
 
   return (
     <div className="max-w-3xl space-y-5">
-      <DeliveryStatusBanner />
+      {!fixedView && <DeliveryStatusBanner />}
 
       {/* External / Internal / Automations */}
-      <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+      {!fixedView && <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
         {([["external", "External (clients)"], ["internal", "Internal (staff)"], ["automations", "Automations"]] as const).map(([v, label]) => (
           <button key={v} onClick={() => setView(v)}
             className={"px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors " + (view === v ? "bg-white text-ink-primary shadow-clay-sm" : "text-ink-tertiary hover:text-ink-secondary")}>
             {label}
           </button>
         ))}
-      </div>
+      </div>}
 
       {view === "automations" ? (
         <>

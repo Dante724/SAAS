@@ -557,6 +557,16 @@ def _track_url(order: Order, suffix: str = "") -> str:
     return f"{base}/track/{token}{suffix}"
 
 
+async def _status_name(db, org_id, order: Order) -> str:
+    """The shop's name for the order's status ("Waiting parts"), never the internal key."""
+    from backend.models import OrderStatus
+    rt = "estimate" if order.is_estimate else "work_order"
+    name = (await db.execute(select(OrderStatus.name).where(
+        OrderStatus.org_id == org_id, OrderStatus.key == order.status,
+        OrderStatus.record_type == rt))).scalars().first()
+    return name or (order.status or "").replace("_", " ").capitalize()
+
+
 async def _resolve(db, org_id, order: Order, current=None):
     """Return (doc_map, rows) — document-level variables and per-line row maps."""
     org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
@@ -772,7 +782,7 @@ async def _resolve(db, org_id, order: Order, current=None):
         "{Payer Address}": g(payer, "address"),
         # Ticket
         "{Order Number}": order.order_number,
-        "{Order Status}": order.status,
+        "{Order Status}": await _status_name(db, org_id, order),
         "{Order Created Date}": _fmt_date(order.created_at),
         "{Order Done Date}": _fmt_date(order.closed_at),
         "{Order Due Date}": _fmt_date(order.due_at),

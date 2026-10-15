@@ -141,8 +141,10 @@ async def _render(db: AsyncSession, org_id: str, order: Order, rule: Notificatio
     if ev == "closed":
         return (f"Order {order.order_number} complete",
                 f"Your order {order.order_number} is complete.", None)
+    from backend.routers.documents import _status_name
+    status = await _status_name(db, org_id, order)
     return (f"Update on {order.order_number}",
-            f"Your order {order.order_number} is now: {order.status}", None)
+            f"Your order {order.order_number} is now: {status}", None)
 
 
 async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
