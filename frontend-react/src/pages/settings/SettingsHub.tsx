@@ -107,6 +107,16 @@ export default function SettingsHub() {
   const [co, setCo] = useState<any>(null);
   const [statuses, setStatuses] = useState<any[]>([]);
   const [statusRT, setStatusRT] = useState<string>("work_order");  // 144ij — which pipeline is being edited
+  const statusDrag = useRef<number | null>(null);
+  const [statusOver, setStatusOver] = useState<number | null>(null);
+  async function moveStatus(from: number, to: number) {
+    if (from === to || to < 0 || to >= statuses.length) return;
+    const prev = statuses;
+    const next = [...statuses]; const [it] = next.splice(from, 1); next.splice(to, 0, it);
+    setStatuses(next);
+    try { await api.post("/statuses/reorder", { ordered_ids: next.map((x: any) => x.id) }); flash("Order saved"); }
+    catch (e: any) { setStatuses(prev); flash(`Couldn't save the order: ${e.message}`); }
+  }
   const [lists, setLists] = useState<Record<string, any[] | null>>({});
   const [roles, setRoles] = useState<any[] | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -206,7 +216,7 @@ export default function SettingsHub() {
       { k: "name", label: "Name", type: "text", req: true }, { k: "kind", label: "Kind", type: "select", opts: ["product", "asset"], def: "product" },
       { k: "scope", label: "Scope", type: "select", opts: ["location", "company"], def: "location" }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
     statuses: { create: "/statuses", upd: (id) => `/statuses/${id}`, del: (id) => `/statuses/${id}`, reload: () => reloadSec("statuses"), fields: [
-      { k: "name", label: "Name", type: "text", req: true }, { k: "status_group", label: "Group", type: "select", opts: ["new", "in_progress", "done", "delivered", "cancelled"], def: "in_progress" },
+      { k: "name", label: "Name", type: "text", req: true }, { k: "status_group", label: "Group", type: "select", opts: ["new", "in_progress", "pending", "ready", "closed", "dropped"], def: "in_progress" },
       { k: "color", label: "Colour", type: "color", def: "#888888" }, { k: "is_default", label: "Default status", type: "checkbox" },
       { k: "triggers_invoice", label: "Triggers invoice", type: "checkbox" }, { k: "triggers_notification", label: "Triggers notification", type: "checkbox" }, { k: "triggers_payment", label: "Prompts payment", type: "checkbox" }, { k: "locks_edits", label: "Locks edits (freeze after this status)", type: "checkbox" },
       { k: "time_limit_min", label: "Time limit (minutes, blank = none)", type: "number" }, { k: "moves_asset_to", label: "Auto-move asset to (warehouse/status key)", type: "text" },
@@ -439,13 +449,25 @@ export default function SettingsHub() {
                 </div>
                 <div className="divide-y divide-slate-100">
                   {statuses.length === 0 && <div className="p-5 text-xs text-ink-tertiary">Loading statuses…</div>}
-                  {statuses.map((s: any) => (
-                    <div key={s.id} className="px-5 py-3 flex items-center gap-3 text-xs group">
+                  {statuses.map((s: any, idx: number) => (
+                    <div key={s.id} draggable onDragStart={() => { statusDrag.current = idx; }} onDragEnd={() => { statusDrag.current = null; setStatusOver(null); }}
+                      onDragOver={(e) => { e.preventDefault(); setStatusOver(idx); }} onDragLeave={() => setStatusOver((d) => (d === idx ? null : d))}
+                      onDrop={(e) => { e.preventDefault(); const f = statusDrag.current; setStatusOver(null); if (f !== null) moveStatus(f, idx); }}
+                      className={`pl-2 pr-5 py-3 flex items-center gap-3 text-xs group ${statusOver === idx ? "border-t-2 border-t-primary" : ""}`}>
+                      <div className="flex items-center gap-0.5">
+                        <M n="drag_indicator" c="text-ink-tertiary cursor-grab text-base" />
+                        <div className="flex flex-col opacity-40 group-hover:opacity-100">
+                          <button aria-label={`Move ${s.name} up`} disabled={idx === 0} onClick={() => moveStatus(idx, idx - 1)} className="text-ink-tertiary hover:text-primary disabled:opacity-20 leading-none"><M n="expand_less" c="text-base" /></button>
+                          <button aria-label={`Move ${s.name} down`} disabled={idx === statuses.length - 1} onClick={() => moveStatus(idx, idx + 1)} className="text-ink-tertiary hover:text-primary disabled:opacity-20 leading-none"><M n="expand_more" c="text-base" /></button>
+                        </div>
+                      </div>
                       <span className="w-3 h-3 rounded-full" style={{ background: s.color || "#94a3b8" }} />
                       <span className="font-bold text-ink-primary">{s.name}</span>
                       <span className="text-[10px] uppercase tracking-wide text-ink-tertiary bg-slate-100 px-1.5 py-0.5 rounded">{(s.status_group || "").replace(/_/g, " ")}</span>
                       {s.time_limit_min ? <span className="text-[10px] text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded font-bold">SLA {s.time_limit_min}m</span> : null}
                       {(s.require_comment || s.require_payment || s.require_checklist) && <span className="text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-bold">gated</span>}
+                      {s.allow_messages === false && <span className="text-[10px] text-ink-secondary bg-slate-100 px-1.5 py-0.5 rounded font-bold">no messages</span>}
+                      {s.allow_messages === true && <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded font-bold">messages on</span>}
                       <span className="ml-auto font-mono text-ink-tertiary text-[11px]">{s.key}</span>
                       <button onClick={() => setStatusEdit(s)} className="text-primary font-semibold hover:underline">Edit</button>
                       <button onClick={() => delRow("statuses", s)} className="text-rose-600 font-semibold hover:underline">Delete</button>
@@ -2024,6 +2046,7 @@ function StatusEditorDrawer({ status, recordType = "work_order", onClose, onSave
   useEffect(() => { api.get<any>("/settings/warehouses").then((r) => setWarehouses(r.items || r || [])).catch(() => setWarehouses([])); }, []);
   const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
   const terminal = f.status_group === "closed" || f.status_group === "dropped";
+  const hasMessages = (status?.record_type || recordType) === "work_order" || (status?.record_type || recordType) === "estimate";
 
   async function save() {
     if (!f.name?.trim()) { setErr("Name is required"); return; }
@@ -2035,6 +2058,7 @@ function StatusEditorDrawer({ status, recordType = "work_order", onClose, onSave
       moves_asset_to: f.moves_asset_to || null, time_limit_min: f.time_limit_min ? Number(f.time_limit_min) : null,
       require_comment: !!f.require_comment, require_payment: !!f.require_payment, require_checklist: !!f.require_checklist,
       record_type: status?.record_type || recordType,
+      allow_messages: f.allow_messages ?? null,
     };
     try {
       if (isNew) await api.post("/statuses", body); else await api.put(`/statuses/${status.id}`, body);
@@ -2060,6 +2084,11 @@ function StatusEditorDrawer({ status, recordType = "work_order", onClose, onSave
   if (reqs.length) summary += ` Requires ${reqs.join(" and ")} first.`;
   if (f.time_limit_min) summary += ` Flags overdue after ${f.time_limit_min} min.`;
   if (terminal) summary += " Closes the order (terminal).";
+  if (hasMessages) {
+    if (f.allow_messages === true) summary += " Customers can message the shop.";
+    else if (f.allow_messages === false) summary += " Customers can't message the shop.";
+    else if (terminal) summary += " Customers can still message for a while after closing.";
+  }
 
   const lblc = "block text-[11px] font-bold text-ink-tertiary uppercase mb-1";
   const fld = "glass-input w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg";
@@ -2129,6 +2158,24 @@ function StatusEditorDrawer({ status, recordType = "work_order", onClose, onSave
               </select>
             </div>
           </div>
+
+          {hasMessages && (
+            <div>
+              <div className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary mb-2"><M n="chat" c="text-xs mr-1" />Customer messages</div>
+              <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-50">
+                {([[null, "Automatic"], [true, "Allow"], [false, "Block"]] as [boolean | null, string][]).map(([v, l]) => (
+                  <button key={l} type="button" onClick={() => set("allow_messages", v)}
+                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${(f.allow_messages ?? null) === v ? "bg-white text-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>{l}</button>
+                ))}
+              </div>
+              <p className="text-[11px] text-ink-tertiary mt-1.5">
+                {f.allow_messages === true ? "Customers can always message the shop from their tracking link while the order is in this status."
+                  : f.allow_messages === false ? "The message box is hidden. Customers see \"Start a new request\" instead."
+                  : terminal ? "Customers can message for a few days after the order closes (Settings › Public pages), then see \"Start a new request\"."
+                  : "Customers can message the shop while the order is in this status."}
+              </p>
+            </div>
+          )}
 
           <div>
             <div className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary mb-2"><M n="verified_user" c="text-xs mr-1" />Require before entering</div>
@@ -2836,7 +2883,20 @@ function PublicAppointmentEditor() {
           </div>
           <div className="border-t border-slate-100 pt-2">
             <div className="text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Customer actions</div>
-            <Toggle k="oe_allow_messages" label="Let customers message the shop" />
+            <Toggle k="oe_allow_messages" label="Let customers message the shop" hint="Each status can also allow or block messages (Statuses › Edit)" />
+            {cfg.oe_allow_messages !== false && (
+              <label className="flex items-center justify-between gap-3 py-2 pl-4">
+                <span><span className="text-sm font-semibold text-ink-primary">Keep messages open after closing</span>
+                  <span className="block text-[11px] text-ink-tertiary">For warranty questions. After this, customers see "Start a new request". 0 = close right away.</span></span>
+                <span className="flex items-center gap-1.5 flex-shrink-0">
+                  <input type="number" min={0} max={365} value={cfg.oe_msg_days_after_close ?? 14}
+                    onChange={(e) => set("oe_msg_days_after_close", e.target.value === "" ? "" : Math.max(0, Math.min(365, Number(e.target.value))))}
+                    onBlur={() => save({ oe_msg_days_after_close: Number(cfg.oe_msg_days_after_close) || 0 })}
+                    className="w-16 bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5 text-right" aria-label="Days after closing" />
+                  <span className="text-xs text-ink-secondary">days</span>
+                </span>
+              </label>
+            )}
             <Toggle k="oe_allow_recommend" label="Let customers approve recommended services" />
             <Toggle k="oe_allow_staff_reply" label="Let staff reply on the public page" />
             <Toggle k="oe_show_scheduled" label="Show the scheduled date" />

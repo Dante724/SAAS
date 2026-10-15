@@ -150,6 +150,7 @@ class Organisation(Base):
     # 144bb — public-page feature switches (estimate approval, customer messaging)
     oe_allow_approval: Mapped[bool] = mapped_column(Boolean, default=True)
     oe_allow_messages: Mapped[bool] = mapped_column(Boolean, default=True)
+    oe_msg_days_after_close: Mapped[int] = mapped_column(Integer, default=14)  # customer messages stay open N days after closing
     oe_allow_recommend: Mapped[bool] = mapped_column(Boolean, default=True)  # 144bd: customer approves recommended services
     oe_allow_staff_reply: Mapped[bool] = mapped_column(Boolean, default=True)  # 144be: staff can reply to customers on the public page
     oe_show_scheduled: Mapped[bool] = mapped_column(Boolean, default=False)  # 144dr: show "Scheduled for" on the track page
@@ -450,6 +451,9 @@ class OrderStatus(Base):
     require_comment: Mapped[bool] = mapped_column(Boolean, default=False)     # a comment must exist on the order
     require_payment: Mapped[bool] = mapped_column(Boolean, default=False)     # order must be fully paid (balance <= 0)
     require_checklist: Mapped[bool] = mapped_column(Boolean, default=False)   # every checklist item must be filled
+    # Can the customer message the shop while an order is in this status? None = automatic:
+    # open statuses yes, closed ones for Organisation.oe_msg_days_after_close days (services/messaging_rule).
+    allow_messages: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     location: Mapped["Location"] = relationship(back_populates="order_statuses")
 

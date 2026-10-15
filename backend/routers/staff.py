@@ -3,7 +3,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -860,6 +860,7 @@ async def get_public_pages(
         "oe_show_zero_price_services": org.oe_show_zero_price_services,
         "oe_allow_approval": getattr(org, "oe_allow_approval", True),
         "oe_allow_messages": getattr(org, "oe_allow_messages", True),
+        "oe_msg_days_after_close": getattr(org, "oe_msg_days_after_close", None) if getattr(org, "oe_msg_days_after_close", None) is not None else 14,
         "oe_allow_recommend": getattr(org, "oe_allow_recommend", True),
         "oe_show_scheduled": getattr(org, "oe_show_scheduled", False),
         "book_show_employee_step": getattr(org, "book_show_employee_step", True),
@@ -896,6 +897,7 @@ class PublicPagesIn(BaseModel):
     oe_show_zero_price_services: Optional[bool] = None
     oe_allow_approval: Optional[bool] = None
     oe_allow_messages: Optional[bool] = None
+    oe_msg_days_after_close: Optional[int] = Field(default=None, ge=0, le=365)
     oe_allow_recommend: Optional[bool] = None
     oe_allow_staff_reply: Optional[bool] = None
     oe_show_scheduled: Optional[bool] = None            # 144dr

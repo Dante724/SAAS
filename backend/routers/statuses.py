@@ -110,6 +110,7 @@ def _ser(s: OrderStatus) -> dict:
         "record_type": s.record_type, "converts_to_order": s.converts_to_order,
         "require_comment": s.require_comment, "require_payment": s.require_payment,
         "require_checklist": s.require_checklist,
+        "allow_messages": s.allow_messages,
     }
 
 
@@ -206,6 +207,7 @@ class StatusIn(BaseModel):
     require_comment: bool = False
     require_payment: bool = False
     require_checklist: bool = False
+    allow_messages: Optional[bool] = None   # None = automatic (see services/messaging_rule)
 
 
 def _resolve_rt(data: "StatusIn") -> str:
@@ -249,7 +251,7 @@ async def create_status(
         triggers_payment=data.triggers_payment, locks_edits=data.locks_edits,
         time_limit_min=data.time_limit_min, moves_asset_to=data.moves_asset_to,
         require_comment=data.require_comment, require_payment=data.require_payment,
-        require_checklist=data.require_checklist,
+        require_checklist=data.require_checklist, allow_messages=data.allow_messages,
     )
     db.add(s)
     await db.commit()
@@ -285,6 +287,8 @@ async def update_status(
     s.require_comment = data.require_comment
     s.require_payment = data.require_payment
     s.require_checklist = data.require_checklist
+    if "allow_messages" in data.model_fields_set:
+        s.allow_messages = data.allow_messages
     await db.commit()
     return _ser(s)
 

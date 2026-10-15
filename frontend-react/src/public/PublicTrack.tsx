@@ -25,7 +25,7 @@ type Track = {
   total_converted?: number; fx_rate?: number; currency_symbol?: string;
   lines?: Line[]; recommendations?: Rec[]; updates?: Update[]; timeline?: TL[];
   custom_fields?: { label: string; value: string }[];   // fields the shop set to show on the portal
-  invoice?: any; has_signature?: boolean; allow_messages?: boolean; allow_recommend?: boolean;
+  invoice?: any; has_signature?: boolean; allow_messages?: boolean; messages_until?: string | null; can_new_request?: boolean; allow_recommend?: boolean;
   // 144ix — branding + pickup + review
   logo_data?: string | null; brand_color?: string | null; website?: string | null;
   shop_address?: string | null; shop_phone?: string | null; location_name?: string | null;
@@ -86,6 +86,7 @@ export default function PublicTrack() {
   const [signOpen, setSignOpen] = useState(false);
   const [recSel, setRecSel] = useState<Record<string, boolean>>({});
   const [msg, setMsg] = useState("");
+  const [reqSent, setReqSent] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number>(0);
   // review capture
@@ -173,6 +174,17 @@ export default function PublicTrack() {
       if (!r.ok) throw new Error();
       setMsg(""); flash("Message sent — the shop will see it");
     } catch { flash("Could not send your message"); }
+  }
+
+  async function sendNewRequest() {
+    const body = msg.trim(); if (!body) return;
+    try {
+      const r = await fetch("/api/public/track/" + token + "/new-request", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body }),
+      });
+      if (!r.ok) throw new Error();
+      setMsg(""); setReqSent(true);
+    } catch { flash("Could not send your request"); }
   }
 
   if (err)
@@ -485,9 +497,25 @@ export default function PublicTrack() {
           {d.allow_messages !== false && (
             <div className={sec}>
               <div className={secH}>Message the shop</div>
+              {d.messages_until && (
+                <p className="mb-2 text-[13px] text-ink-tertiary">Questions about this repair? You can message the shop until {new Date(d.messages_until).toLocaleDateString()}.</p>
+              )}
               <textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={2} placeholder="Ask a question or add a note…"
                 className="w-full resize-y rounded-lg border border-slate-300 bg-white p-2.5 text-sm text-ink-primary outline-none focus:border-primary" />
               <button onClick={sendMessage} className="mt-2 rounded-lg bg-primary px-3.5 py-2 text-sm font-bold text-white hover:opacity-90">Send message</button>
+            </div>
+          )}
+          {d.allow_messages === false && d.can_new_request && (
+            <div className={sec}>
+              <div className={secH}>Need something else?</div>
+              {reqSent ? (
+                <div className="flex items-center gap-2 text-[14px] font-semibold text-ink-primary"><Check size={16} className="text-emerald-600" /> Request sent. The shop will contact you.</div>
+              ) : (<>
+                <p className="mb-2 text-[13px] text-ink-tertiary">This repair is complete. Describe the new problem and the shop will get back to you.</p>
+                <textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={2} placeholder="What's going on?"
+                  className="w-full resize-y rounded-lg border border-slate-300 bg-white p-2.5 text-sm text-ink-primary outline-none focus:border-primary" />
+                <button onClick={sendNewRequest} className="mt-2 rounded-lg bg-primary px-3.5 py-2 text-sm font-bold text-white hover:opacity-90">Start a new request</button>
+              </>)}
             </div>
           )}
         </main>

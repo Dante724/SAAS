@@ -344,8 +344,9 @@ async def track(token: str, db: AsyncSession = Depends(get_db)):
         "scheduled_for": (order.scheduled_for.isoformat() if order.scheduled_for else None) if getattr(org, "oe_show_scheduled", False) else None,
         "scheduled_to": (order.scheduled_to.isoformat() if getattr(order, "scheduled_to", None) else None) if getattr(org, "oe_show_scheduled", False) else None,
         "awaiting_approval": await _can_sign(db, order),
-        # 144cv — messaging is off once the order is closed (box hidden client-side, enforced server-side)
-        "allow_messages": getattr(org, "oe_allow_messages", True) and not await _order_is_closed(db, order),
+        # Per-status messaging rule (services/messaging_rule): box hidden client-side, enforced
+        # server-side. When it's closed for this order, the page offers "Start a new request".
+        **(await _message_fields(db, order, org)),
         "allow_recommend": getattr(org, "oe_allow_recommend", True),
         "recommendations": await _public_recommendations(db, order),
         "checklist": await _public_checklist(db, order),
@@ -508,7 +509,7 @@ async def portal_order(token: str, order_id: str, db: AsyncSession = Depends(get
         "lines": [{"description": ln.description, "qty": ln.qty,
                    "unit_price": ln.unit_price, "line_type": ln.line_type} for ln in lines],
         "can_approve": bool(order.is_estimate) and await _approval_enabled(db, client.org_id),
-        "allow_messages": await _messages_enabled(db, client.org_id),
+        **(await _message_fields(db, order, await _org(db, client.org_id))),
         "allow_recommend": await _recommend_enabled(db, client.org_id),
         "recommendations": await _public_recommendations(db, order),
         "timeline": [{"to": lg.to_status,
@@ -545,12 +546,6 @@ async def portal_respond(token: str, order_id: str, data: AcceptIn, request: Req
 class MessageIn(BaseModel):
     body: str
     name: Optional[str] = None
-
-
-async def _messages_enabled(db: AsyncSession, org_id: str) -> bool:
-    from backend.models import Organisation as _O
-    org = (await db.execute(select(_O).where(_O.id == org_id))).scalar_one_or_none()
-    return getattr(org, "oe_allow_messages", True) if org else True
 
 
 async def _approval_enabled(db: AsyncSession, org_id: str) -> bool:
@@ -656,23 +651,24 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
     return {"approved": approved, "declined": declined}
 
 
-async def _order_is_closed(db: AsyncSession, order: "Order") -> bool:
-    """144cv — is this order in a terminal (closed) status right now? Resolved from the org's
-    configurable status table (is_terminal); falls back to the built-in terminal keys when the
-    status row isn't found. Based on CURRENT status so a reopened order is messageable again."""
-    from backend.models import OrderStatus
-    s = (await db.execute(select(OrderStatus).where(
-        OrderStatus.org_id == order.org_id, OrderStatus.key == order.status,
-        OrderStatus.record_type == "work_order"))).scalars().first()
-    if s is not None:
-        return bool(s.is_terminal)
-    return order.status in ("done", "delivered", "dropped", "closed", "canceled")
+async def _org(db: AsyncSession, org_id: str):
+    return (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
+
+
+async def _message_fields(db: AsyncSession, order: "Order", org) -> dict:
+    from backend.services.messaging_rule import messaging_state
+    st = await messaging_state(db, order, org)
+    return {"allow_messages": st["open"], "messages_until": st["until"],
+            # closed for this order (not switched off shop-wide) → offer a new request instead
+            "can_new_request": st["reason"] in ("status", "expired")}
 
 
 async def _post_client_message(db: AsyncSession, order: "Order", body: str, who: str):
-    if not await _messages_enabled(db, order.org_id):
+    from backend.services.messaging_rule import messaging_state
+    st = await messaging_state(db, order, await _org(db, order.org_id))
+    if st["reason"] == "off":
         raise HTTPException(403, "Messaging is turned off for this shop")
-    if await _order_is_closed(db, order):
+    if not st["open"]:
         raise HTTPException(403, "This order is closed — messaging is no longer available.")
     body = (body or "").strip()
     if not body:
@@ -692,6 +688,46 @@ async def track_message(token: str, data: MessageIn, db: AsyncSession = Depends(
         (await db.execute(select(Client).where(Client.id == order.client_id))).scalar_one_or_none().name
         if order.client_id else "Customer")
     await _post_client_message(db, order, data.body, who)
+    await db.commit()
+    return {"ok": True}
+
+
+class NewRequestIn(BaseModel):
+    body: str
+
+
+@router.post("/track/{token}/new-request", status_code=201)
+async def track_new_request(token: str, data: NewRequestIn, request: Request, db: AsyncSession = Depends(get_db)):
+    """Messaging closed on a finished order → the customer files a new request instead. It
+    lands as an inquiry linked to the same customer and naming the same device, so staff can
+    turn it into a work order in one click."""
+    from datetime import timedelta as _td
+
+    from backend.models import Lead
+    from backend.routers.feed import log_system_event
+    from backend.services.messaging_rule import messaging_state
+    from backend.services.ratelimit import client_ip as _ip
+    from backend.services.ratelimit import enforce as _rate
+    _rate("track_new_req", f"{_ip(request)}:{token}", limit=3, window_sec=3600)
+    order = await _load(db, token)
+    st = await messaging_state(db, order, await _org(db, order.org_id))
+    if st["reason"] not in ("status", "expired"):
+        raise HTTPException(409, "Send a message on this order instead")
+    body = (data.body or "").strip()[:2000]
+    if not body:
+        raise HTTPException(400, "Tell the shop what you need")
+    client = (await db.execute(select(Client).where(Client.id == order.client_id))).scalar_one_or_none() if order.client_id else None
+    device = (await db.execute(select(Device).where(Device.id == order.device_id))).scalar_one_or_none() if order.device_id else None
+    dev = " ".join(p for p in [getattr(device, "brand", None), getattr(device, "model", None)] if p)
+    ref = f"Follow-up to {order.order_number or 'a previous order'}" + (f" ({dev})" if dev else "")
+    lead = Lead(org_id=order.org_id, location_id=order.location_id,
+                name=(client.name if client else "Customer")[:200],
+                phone=(client.phone if client else None), email=(client.email if client else None),
+                client_id=client.id if client else None, source="web",
+                inquiry=f"{ref}: {body}"[:2000], sla_due_at=_dt.utcnow() + _td(minutes=60))
+    db.add(lead)
+    await db.flush()
+    await log_system_event(db, order.org_id, "lead", lead.id, f"New request from the track page — {ref}")
     await db.commit()
     return {"ok": True}
 
