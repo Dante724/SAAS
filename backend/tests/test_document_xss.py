@@ -43,12 +43,13 @@ async def test_record_values_are_escaped_in_rendered_documents(client, tenant):
 @pytest.mark.asyncio
 async def test_brand_color_cannot_break_out_of_style(client, tenant, db):
     org = (await db.execute(select(Organisation))).scalars().first()
-    org.brand_primary_color = '#000;"><script>alert(1)</script>'
+    # The column is VARCHAR(9) (Postgres enforces it), so use a breakout that fits in 9 chars.
+    org.brand_primary_color = '#0"><img'
     await db.commit()
     oid = await _order(client, tenant)
     r = await client.post("/api/documents/preview", json={"body_html": "{Approve Button}", "order_id": oid,
                                                           "doc_type": "estimate"}, headers=tenant)
-    assert "<script>" not in r.json()["html"]
+    assert '"><img' not in r.json()["html"]
 
 
 @pytest.mark.asyncio
