@@ -51,7 +51,9 @@ const Field = ({ label, hint, children }: { label: string; hint?: string; childr
   <label className="block"><span className="block text-xs font-medium text-ink-secondary mb-1.5">{label}</span>{children}{hint && <span className="block text-[11px] text-ink-tertiary mt-1">{hint}</span>}</label>
 );
 
-export default function FinanceNumbering({ currency }: { currency: string }) {
+const DOC_ICON: Record<string, string> = { order: "build", invoice: "receipt_long", inquiry: "contact_support", sale: "point_of_sale", po: "shopping_cart", transfer: "swap_horiz", estimate: "request_quote" };
+
+export default function FinanceNumbering({ currency, shop }: { currency: string; shop?: { name?: string; address?: string; phone?: string; email?: string; logo?: string | null } }) {
   const [num, setNum] = useState<any[] | null>(null);
   const [taxes, setTaxes] = useState<any[] | null>(null);
   const [ents, setEnts] = useState<any[] | null>(null);
@@ -69,40 +71,105 @@ export default function FinanceNumbering({ currency }: { currency: string }) {
   }
   useEffect(() => { reload(); api.get<any>("/staff/locations").then((r) => setLocations(r.items || r || [])).catch(() => {}); }, []);
 
+  const cur = currency || "$";
+  const inv = (num || []).find((r) => r.doc_type === "invoice" && r.scope_key === "org");
+  const invNo = inv ? renderNumber(inv.template, Number(inv.next_value) || 1) : "INV-00001";
+  const jobTaxes = (stacks.tickets_sales || []).map((id) => (taxes || []).find((t) => t.id === id)).filter(Boolean) as any[];
+  const ent = (ents || []).find((e) => e.is_default) || (ents || [])[0];
+  const lines: [string, number][] = [["Screen replacement", 189], ["Labour", 40]];
+  const net = lines.reduce((a, [, v]) => a + v, 0);
+  const taxLines = jobTaxes.map((t) => { const r = (Number(t.rate) || 0) / 100; return { t, amount: t.mode === "included" ? net - net / (1 + r) : net * r }; });
+  const added = taxLines.filter((x) => x.t.mode !== "included").reduce((a, x) => a + x.amount, 0);
+  const money = (v: number) => `${cur}${v.toFixed(2)}`;
+  const go = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  const taxSummary = jobTaxes.length ? `${jobTaxes.reduce((a, t) => a + (Number(t.rate) || 0), 0)}% ${jobTaxes.every((t) => t.mode === "included") ? "included" : "added"}` : "Not charged";
+  const bizName = ent?.name || shop?.name || "Your shop";
+
   return (
-    <div className="max-w-3xl space-y-5 pb-16">
+    <div className="max-w-5xl pb-16">
       {toast && <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-clay-drawer z-[70]">{toast}</div>}
-      <div>
+      <div className="mb-5">
         <h2 className="text-base font-semibold text-ink-primary">Finance & numbering</h2>
-        <p className="text-xs text-ink-tertiary">How your documents are numbered, the sales tax you charge, and the details printed on invoices.</p>
+        <p className="text-xs text-ink-tertiary">Your document numbers, the tax you charge, and who the invoice is from. The invoice on the right updates as you change things.</p>
       </div>
-      <Numbering rows={num} onSaved={(m) => { flash(m); reload(); }} />
-      <Taxes taxes={taxes} stacks={stacks} exc={exc} locations={locations} currency={currency} onChanged={(m) => { if (m) flash(m); reload(); }} />
-      <Entities ents={ents} onChanged={(m) => { if (m) flash(m); reload(); }} />
+
+      <div className="grid sm:grid-cols-3 gap-3 mb-5">
+        {([["sec-numbers", "tag", "Next invoice", invNo, true], ["sec-tax", "percent", "Tax on jobs", taxSummary, !jobTaxes.length], ["sec-biz", "badge", "Invoices are from", bizName, false]] as [string, string, string, string, boolean][]).map(([id, icon, label, value, mono]) => (
+          <button key={id} onClick={() => go(id)} className="text-left bg-white rounded-2xl border border-slate-200/90 shadow-clay-card px-4 py-3.5 hover:border-slate-300 transition-colors">
+            <div className="flex items-center gap-1.5 text-[11px] text-ink-tertiary"><M n={icon} c="text-[13px]" />{label}</div>
+            <div className={`mt-1 text-base font-semibold truncate ${id === "sec-tax" && !jobTaxes.length ? "text-amber-700" : "text-ink-primary"} ${mono && id === "sec-numbers" ? "font-mono" : ""}`}>{value}</div>
+          </button>
+        ))}
+      </div>
+
+      <div className="grid xl:grid-cols-[minmax(0,1fr)_300px] gap-5 items-start">
+        <div className="space-y-5 min-w-0">
+          <div id="sec-numbers" className="scroll-mt-4"><Numbering rows={num} onSaved={(m) => { flash(m); reload(); }} /></div>
+          <div id="sec-tax" className="scroll-mt-4"><Taxes taxes={taxes} stacks={stacks} exc={exc} locations={locations} currency={cur} onChanged={(m) => { if (m) flash(m); reload(); }} /></div>
+          <div id="sec-biz" className="scroll-mt-4"><Entities ents={ents} shopName={shop?.name} onChanged={(m) => { if (m) flash(m); reload(); }} /></div>
+        </div>
+
+        <aside className="xl:sticky xl:top-4" aria-label="Invoice preview">
+          <div className="text-[11px] font-semibold text-ink-tertiary mb-2 px-1">Your next invoice</div>
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
+            <div className="h-1.5 bg-primary" />
+            <div className="p-4 text-[11px]">
+              <div className="flex items-start gap-2.5">
+                <span className="w-9 h-9 rounded-lg bg-slate-50 border border-slate-100 grid place-items-center overflow-hidden flex-shrink-0">
+                  {shop?.logo ? <img src={shop.logo} alt="" className="w-full h-full object-contain" /> : <span className="text-xs font-semibold text-ink-secondary">{bizName.slice(0, 1).toUpperCase()}</span>}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-semibold text-ink-primary truncate">{bizName}</div>
+                  <div className="text-ink-tertiary leading-snug">{ent?.address || shop?.address || ""}</div>
+                  {ent?.tax_id && <div className="text-ink-tertiary">Tax ID {ent.tax_id}</div>}
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <div className="text-[9px] font-semibold tracking-wider text-ink-tertiary">INVOICE</div>
+                  <div className="font-mono text-xs font-semibold text-ink-primary">{invNo}</div>
+                </div>
+              </div>
+              <div className="mt-4 space-y-1.5">
+                {lines.map(([l, v]) => <div key={l} className="flex justify-between text-ink-secondary"><span>{l}</span><span>{money(v)}</span></div>)}
+              </div>
+              <div className="mt-3 pt-2.5 border-t border-dashed border-slate-200 space-y-1">
+                <div className="flex justify-between text-ink-secondary"><span>Subtotal</span><span>{money(net)}</span></div>
+                {taxLines.map(({ t, amount }) => (
+                  <div key={t.id} className="flex justify-between text-ink-secondary"><span>{(() => { const n = t.name_for_document || t.name; return n.includes(`${Number(t.rate)}%`) ? n : `${n} ${Number(t.rate)}%`; })()}{t.mode === "included" ? " (included)" : ""}</span><span>{money(amount)}</span></div>
+                ))}
+                {!taxLines.length && <div className="flex justify-between text-amber-700"><span>No tax</span><span>{money(0)}</span></div>}
+                <div className="flex justify-between text-xs font-semibold text-ink-primary pt-1.5"><span>Total</span><span>{money(net + added)}</span></div>
+              </div>
+              {ent?.bank_name && <div className="mt-3 text-[10px] text-ink-tertiary">Pay to {ent.bank_name}{ent.bank_account ? ` · ${ent.bank_account}` : ""}</div>}
+            </div>
+          </div>
+          <p className="text-[10px] text-ink-tertiary text-center mt-2">Sample lines. Tax and totals follow your settings.</p>
+        </aside>
+      </div>
     </div>
   );
 }
 
 function Numbering({ rows, onSaved }: { rows: any[] | null; onSaved: (m: string) => void }) {
   const [open, setOpen] = useState<string | null>(null);
+  const editing = (rows || []).find((r) => `${r.doc_type}:${r.scope_key}` === open);
   return (
-    <Card icon="tag" title="Document numbers" hint="What each new work order, invoice and sale is numbered. Numbers never go backwards.">
+    <Card icon="tag" title="Document numbers" hint="Each new document takes the next number. Pick one to change how it looks.">
       {!rows && <div className="text-xs text-ink-tertiary">Loading…</div>}
-      <div className="-mx-2">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
         {(rows || []).map((r) => {
-          const id = `${r.doc_type}:${r.scope_key}`;
-          return open === id
-            ? <NumberEditor key={id} row={r} onClose={() => setOpen(null)} onSaved={(m) => { setOpen(null); onSaved(m); }} />
-            : (
-              <button key={id} onClick={() => setOpen(id)} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-slate-50 text-left">
-                <span className="text-sm text-ink-primary w-40 truncate">{docLabel(r.doc_type)}{r.scope_key !== "org" ? <span className="text-[11px] text-ink-tertiary"> · one location</span> : null}</span>
-                <span className="font-mono text-sm font-semibold text-ink-primary">{renderNumber(r.template, Number(r.next_value) || 1)}</span>
-                <span className="text-[11px] text-ink-tertiary">next</span>
-                <span className="ml-auto text-xs font-semibold text-primary">Change</span>
-              </button>
-            );
+          const id = `${r.doc_type}:${r.scope_key}`; const on = open === id;
+          return (
+            <button key={id} onClick={() => setOpen(on ? null : id)} aria-pressed={on}
+              className={`text-left rounded-xl border p-3 transition-colors ${on ? "border-primary bg-primary/5 ring-2 ring-primary/15" : "border-slate-200 hover:border-slate-300 hover:bg-slate-50/60"}`}>
+              <div className="flex items-center gap-1.5 text-[11px] text-ink-tertiary">
+                <M n={DOC_ICON[r.doc_type] || "description"} c="text-[13px]" />{docLabel(r.doc_type)}{r.scope_key !== "org" ? " · one location" : ""}
+              </div>
+              <div className="mt-1.5 font-mono text-[15px] font-semibold text-ink-primary truncate">{renderNumber(r.template, Number(r.next_value) || 1)}</div>
+            </button>
+          );
         })}
       </div>
+      {editing && <div className="mt-3"><NumberEditor key={open!} row={editing} onClose={() => setOpen(null)} onSaved={(m) => { setOpen(null); onSaved(m); }} /></div>}
     </Card>
   );
 }
@@ -170,89 +237,82 @@ function NumberEditor({ row, onClose, onSaved }: { row: any; onClose: () => void
   );
 }
 
-const FAMILIES: [string, string, string][] = [["tickets_sales", "Jobs, invoices and sales", "What customers pay"], ["posting", "Stock you receive", "Tax on parts you buy in"]];
+const FAMILIES: [string, string][] = [["tickets_sales", "What customers pay"], ["posting", "Stock you receive"]];
 
 function Taxes({ taxes, stacks, exc, locations, currency, onChanged }: {
   taxes: any[] | null; stacks: Record<string, string[]>; exc: any[] | null; locations: any[]; currency: string; onChanged: (m?: string) => void;
 }) {
+  const [fam, setFam] = useState("tickets_sales");
   const [edit, setEdit] = useState<any | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const list = taxes || [];
+  const on = stacks[fam] || [];
   const nameOf = (id: string) => list.find((t) => t.id === id)?.name || "A removed tax";
-  async function toggle(fam: string, id: string) {
-    const cur = stacks[fam] || [];
-    const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
-    setBusy(fam);
+  async function toggle(id: string) {
+    const next = on.includes(id) ? on.filter((x) => x !== id) : [...on, id];
+    setBusy(true);
     try { await api.put("/settings/tax-rules", { doc_family: fam, tax_ids: next }); onChanged(); }
-    catch (e: any) { onChanged(e?.message || "Couldn't save"); } finally { setBusy(null); }
+    catch (e: any) { onChanged(e?.message || "Couldn't save"); } finally { setBusy(false); }
   }
   async function delExc(id: string) { try { await api.del(`/settings/tax-exceptions/${id}`); onChanged("Exception removed"); } catch (e: any) { onChanged(e?.message); } }
   const sample = 100;
+  const addedRate = on.reduce((a, id) => { const t = list.find((x) => x.id === id); return a + (t && t.mode !== "included" ? Number(t.rate) || 0 : 0); }, 0);
 
   return (
-    <Card icon="percent" title="Sales tax" hint="Add the taxes you charge, then choose where they apply."
-      right={<button onClick={() => setEdit({ name: "", rate: "", mode: "imposed", location_scope: "all", location_ids: [] })} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-primary hover:bg-slate-50"><M n="add" c="text-sm" />Add tax</button>}>
-      {taxes == null ? <div className="text-xs text-ink-tertiary">Loading…</div> : list.length === 0 && !edit ? (
-        <div className="rounded-xl border border-dashed border-slate-300 p-5 text-center">
-          <div className="text-sm text-ink-primary">No sales tax yet</div>
-          <div className="text-[11px] text-ink-tertiary mt-0.5">Add your state or provincial rate, for example 8.25%.</div>
-        </div>
-      ) : (
-        <div className="-mx-2">
-          {list.map((t) => (
-            edit?.id === t.id ? <TaxEditor key={t.id} tax={edit} locations={locations} onClose={() => setEdit(null)} onSaved={(m) => { setEdit(null); onChanged(m); }} />
-              : (
-                <button key={t.id} onClick={() => setEdit({ ...t })} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-slate-50 text-left">
-                  <span className="text-sm text-ink-primary flex-1 truncate">{t.name}</span>
-                  {t.location_scope && t.location_scope !== "all" && <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-slate-100 text-ink-secondary">{(t.location_ids || []).length} location{(t.location_ids || []).length === 1 ? "" : "s"}</span>}
-                  <span className="text-[11px] text-ink-tertiary">{t.mode === "included" ? "Included in price" : "Added on top"}</span>
-                  <span className="font-mono text-sm font-semibold text-ink-primary w-16 text-right">{Number(t.rate)}%</span>
+    <Card icon="percent" title="Tax" hint="Add the rates you charge, then switch on the ones that apply."
+      right={<button onClick={() => setEdit({ name: "", rate: "", mode: "imposed", location_scope: "all", location_ids: [] })} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-primary hover:bg-slate-50"><M n="add" c="text-sm" />Add a rate</button>}>
+      {taxes == null ? <div className="text-xs text-ink-tertiary">Loading…</div> : (<>
+        {list.length > 0 && (
+          <div className="flex items-center gap-3 mb-3">
+            <div className="inline-flex rounded-xl bg-slate-100 p-1">
+              {FAMILIES.map(([v, l]) => (
+                <button key={v} onClick={() => { setFam(v); setEdit(null); }} aria-pressed={fam === v}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${fam === v ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>{l}</button>
+              ))}
+            </div>
+            <span className={`ml-auto text-xs ${on.length ? "text-ink-secondary" : "text-amber-700"}`}>
+              {on.length ? (addedRate ? <>{currency}{sample} becomes <span className="font-semibold text-ink-primary">{currency}{(sample * (1 + addedRate / 100)).toFixed(2)}</span></> : "Tax is included in your prices") : "No tax is charged"}
+            </span>
+          </div>
+        )}
+        {list.length === 0 && !edit && (
+          <div className="rounded-2xl border border-dashed border-slate-300 p-6 text-center">
+            <span className="w-10 h-10 rounded-xl bg-primary/10 text-primary grid place-items-center mx-auto mb-2"><M n="percent" c="text-lg" /></span>
+            <div className="text-sm text-ink-primary">Add your sales tax</div>
+            <div className="text-[11px] text-ink-tertiary mt-0.5 mb-3">For example your state rate, or GST and PST in Canada.</div>
+            <button onClick={() => setEdit({ name: "Sales tax", rate: "", mode: "imposed", location_scope: "all", location_ids: [] })} className="px-4 py-2 rounded-xl bg-ink-primary text-white text-xs font-semibold">Add a rate</button>
+          </div>
+        )}
+        <div className="rounded-xl border border-slate-200 divide-y divide-slate-100 overflow-hidden">
+          {list.map((t) => {
+            const pos = on.indexOf(t.id); const sel = pos >= 0;
+            return edit?.id === t.id ? <div key={t.id} className="p-1"><TaxEditor tax={edit} locations={locations} onClose={() => setEdit(null)} onSaved={(m) => { setEdit(null); onChanged(m); }} /></div> : (
+              <div key={t.id} className={`flex items-center gap-3 px-3.5 py-3 ${sel ? "bg-primary/[0.03]" : ""}`}>
+                <button type="button" role="switch" aria-checked={sel} aria-label={`Charge ${t.name}`} disabled={busy} onClick={() => toggle(t.id)}
+                  className={`w-10 h-6 rounded-full flex-shrink-0 relative transition-colors disabled:opacity-60 ${sel ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${sel ? "left-[18px]" : "left-0.5"}`} /></button>
+                <button onClick={() => setEdit({ ...t })} className="min-w-0 flex-1 text-left group">
+                  <span className="block text-sm text-ink-primary truncate group-hover:text-primary">{t.name}</span>
+                  <span className="block text-[11px] text-ink-tertiary">{t.mode === "included" ? "Already included in prices" : "Added on top of prices"}{t.location_scope === "selected" ? ` · ${(t.location_ids || []).length} location${(t.location_ids || []).length === 1 ? "" : "s"}` : ""}{sel && on.length > 1 ? ` · applied ${pos + 1}${["st", "nd", "rd"][pos] || "th"}` : ""}</span>
                 </button>
-              )
-          ))}
-          {edit && !edit.id && <TaxEditor tax={edit} locations={locations} onClose={() => setEdit(null)} onSaved={(m) => { setEdit(null); onChanged(m); }} />}
-        </div>
-      )}
-
-      {list.length > 0 && (
-        <div className="mt-4 pt-4 border-t border-slate-100 space-y-4">
-          {FAMILIES.map(([fam, label, hint]) => {
-            const on = stacks[fam] || [];
-            // Taxes added on top (US/Canada style); included taxes don't change the price.
-            const total = on.reduce((a, id) => { const t = list.find((x) => x.id === id); return a + (t && t.mode !== "included" ? Number(t.rate) || 0 : 0); }, 0);
-            return (
-              <div key={fam}>
-                <div className="flex items-baseline gap-2 mb-1.5">
-                  <span className="text-sm text-ink-primary">{label}</span><span className="text-[11px] text-ink-tertiary">{hint}</span>
-                  {on.length > 0 && total > 0 && <span className="ml-auto text-[11px] text-ink-tertiary">{currency}{sample} → about {currency}{(sample * (1 + total / 100)).toFixed(2)}</span>}
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {list.map((t) => { const i = on.indexOf(t.id); const sel = i >= 0; return (
-                    <button key={t.id} type="button" onClick={() => toggle(fam, t.id)} disabled={busy === fam} aria-pressed={sel}
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border transition-colors disabled:opacity-60 ${sel ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-dashed border-slate-300 text-ink-tertiary hover:text-ink-secondary"}`}>
-                      {sel ? <span className="w-4 h-4 rounded-full bg-primary text-white text-[10px] grid place-items-center">{i + 1}</span> : <M n="add" c="text-[12px]" />}{t.name} {Number(t.rate)}%
-                    </button>
-                  ); })}
-                </div>
-                {on.length === 0 && <div className="text-[11px] text-amber-700 mt-1.5">No tax is charged here.</div>}
+                <span className={`px-2.5 py-1 rounded-lg font-mono text-sm font-semibold ${sel ? "bg-primary/10 text-primary" : "bg-slate-100 text-ink-secondary"}`}>{Number(t.rate)}%</span>
               </div>
             );
           })}
-          {(exc || []).length > 0 && (
-            <div>
-              <div className="text-sm text-ink-primary mb-1">Exceptions</div>
-              {(exc || []).map((e) => (
-                <div key={e.id} className="group flex items-center gap-2 py-1.5 text-xs">
-                  <span className="text-ink-secondary">{e.target_type === "labor" ? "Labour" : e.target_type.charAt(0).toUpperCase() + e.target_type.slice(1)}</span>
-                  <span className="text-ink-tertiary">in {e.doc_family === "posting" ? "stock received" : "jobs and sales"}</span>
-                  <span className="ml-auto font-semibold text-ink-primary">{e.exempt ? "No tax" : nameOf(e.tax_id)}</span>
-                  <button aria-label="Remove exception" onClick={() => delExc(e.id)} className="w-6 h-6 rounded-md grid place-items-center text-ink-tertiary hover:bg-rose-50 hover:text-rose-600"><M n="close" c="text-sm" /></button>
-                </div>
-              ))}
-            </div>
-          )}
+          {edit && !edit.id && <div className="p-1"><TaxEditor tax={edit} locations={locations} onClose={() => setEdit(null)} onSaved={(m) => { setEdit(null); onChanged(m); }} /></div>}
         </div>
-      )}
+        {(exc || []).filter((e) => e.doc_family === fam).length > 0 && (
+          <div className="mt-4">
+            <div className="text-[11px] font-semibold text-ink-tertiary mb-1">Exceptions</div>
+            {(exc || []).filter((e) => e.doc_family === fam).map((e) => (
+              <div key={e.id} className="flex items-center gap-2 py-1.5 text-xs">
+                <span className="text-ink-secondary">{e.target_type === "labor" ? "Labour" : e.target_type.charAt(0).toUpperCase() + e.target_type.slice(1)}</span>
+                <span className="ml-auto font-semibold text-ink-primary">{e.exempt ? "No tax" : nameOf(e.tax_id)}</span>
+                <button aria-label="Remove exception" onClick={() => delExc(e.id)} className="w-6 h-6 rounded-md grid place-items-center text-ink-tertiary hover:bg-rose-50 hover:text-rose-600"><M n="close" c="text-sm" /></button>
+              </div>
+            ))}
+          </div>
+        )}
+      </>)}
     </Card>
   );
 }
@@ -323,31 +383,42 @@ function TaxEditor({ tax, locations, onClose, onSaved }: { tax: any; locations: 
 
 const ENT_MORE: [string, string][] = [["vat_no", "VAT number"], ["registration_no", "Registration number"], ["bank_name", "Bank name"], ["bank_account", "Bank account"], ["phone", "Phone"], ["email", "Email"], ["director", "Owner or director"]];
 
-function Entities({ ents, onChanged }: { ents: any[] | null; onChanged: (m?: string) => void }) {
+function Entities({ ents, shopName, onChanged }: { ents: any[] | null; shopName?: string; onChanged: (m?: string) => void }) {
   const [edit, setEdit] = useState<any | null>(null);
   const list = ents || [];
   async function makeDefault(e: any) { try { await api.put(`/settings/legal-entities/${e.id}`, { ...e, is_default: true }); onChanged("Default updated"); } catch (er: any) { onChanged(er?.message); } }
   return (
-    <Card icon="badge" title="Business details on invoices" hint="The registered business name, tax number and bank details printed on invoices. Most shops need just one."
-      right={<button onClick={() => setEdit({ name: "", tax_id: "", address: "", is_default: list.length === 0 })} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-primary hover:bg-slate-50"><M n="add" c="text-sm" />Add business</button>}>
-      {ents == null ? <div className="text-xs text-ink-tertiary">Loading…</div> : (
-        <div className="-mx-2">
-          {list.length === 0 && !edit && <div className="px-2 text-xs text-ink-tertiary">None yet. Invoices use your shop details from General.</div>}
+    <Card icon="badge" title="Who the invoice is from" hint="The registered business, tax number and bank details printed on invoices.">
+      {ents == null ? <div className="text-xs text-ink-tertiary">Loading…</div> : (<>
+        {list.length === 0 && !edit && (
+          <div className="flex items-center gap-3 rounded-xl bg-slate-50 px-4 py-3.5">
+            <M n="storefront" c="text-lg text-ink-tertiary" />
+            <div className="min-w-0 flex-1"><div className="text-sm text-ink-primary">{shopName || "Your shop"}</div><div className="text-[11px] text-ink-tertiary">Using your shop details from General</div></div>
+            <button onClick={() => setEdit({ name: shopName || "", tax_id: "", address: "", is_default: true })} className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-primary hover:bg-slate-50 flex-shrink-0">Add tax ID and bank details</button>
+          </div>
+        )}
+        <div className="grid sm:grid-cols-2 gap-2.5">
           {list.map((e) => (
-            edit?.id === e.id ? <EntityEditor key={e.id} ent={edit} onClose={() => setEdit(null)} onSaved={(m) => { setEdit(null); onChanged(m); }} />
-              : (
-                <div key={e.id} onClick={() => setEdit({ ...e })} className="group flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-slate-50 cursor-pointer">
-                  <span className="min-w-0"><span className="block text-sm text-ink-primary truncate">{e.name}</span>
-                    <span className="block text-[11px] text-ink-tertiary truncate">{[e.tax_id && `Tax ID ${e.tax_id}`, e.address].filter(Boolean).join(" · ") || "No tax ID or address yet"}</span></span>
+            edit?.id === e.id ? null : (
+              <button key={e.id} onClick={() => setEdit({ ...e })} className="group text-left rounded-xl border border-slate-200 p-3.5 hover:border-slate-300 hover:bg-slate-50/60">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-ink-primary truncate">{e.name}</span>
                   {e.is_default ? <span className="ml-auto text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700">Default</span>
-                    : <button onClick={(ev) => { ev.stopPropagation(); makeDefault(e); }} className="ml-auto text-[11px] font-semibold text-primary opacity-0 group-hover:opacity-100 focus:opacity-100">Make default</button>}
-                  <M n="chevron_right" c="text-base text-ink-tertiary" />
+                    : <span role="button" tabIndex={0} onClick={(ev) => { ev.stopPropagation(); makeDefault(e); }} onKeyDown={(ev) => { if (ev.key === "Enter") { ev.stopPropagation(); makeDefault(e); } }} className="ml-auto text-[11px] font-semibold text-primary opacity-0 group-hover:opacity-100">Make default</span>}
                 </div>
-              )
+                <div className="text-[11px] text-ink-tertiary mt-1 truncate">{e.tax_id ? `Tax ID ${e.tax_id}` : "No tax ID yet"}</div>
+                <div className="text-[11px] text-ink-tertiary truncate">{e.address || "No address yet"}</div>
+              </button>
+            )
           ))}
-          {edit && !edit.id && <EntityEditor ent={edit} onClose={() => setEdit(null)} onSaved={(m) => { setEdit(null); onChanged(m); }} />}
+          {list.length > 0 && !edit && (
+            <button onClick={() => setEdit({ name: "", tax_id: "", address: "", is_default: false })} className="rounded-xl border border-dashed border-slate-300 p-3.5 text-xs font-semibold text-ink-secondary hover:bg-slate-50 grid place-items-center min-h-[84px]">
+              <span className="flex items-center gap-1.5"><M n="add" c="text-sm" />Another business</span>
+            </button>
+          )}
         </div>
-      )}
+        {edit && <div className="mt-2"><EntityEditor ent={edit} onClose={() => setEdit(null)} onSaved={(m) => { setEdit(null); onChanged(m); }} /></div>}
+      </>)}
     </Card>
   );
 }

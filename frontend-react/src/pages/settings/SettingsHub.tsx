@@ -398,7 +398,7 @@ export default function SettingsHub() {
             </SectionCard></div>
           )}
 
-          {sec === "finance" && <FinanceNumbering currency={co?.currency || "$"} />}
+          {sec === "finance" && <FinanceNumbering currency={co?.currency || "$"} shop={{ name: co?.name, address: co?.company_address, phone: co?.company_phone, email: co?.company_email, logo: co?.logo_data }} />}
           {sec === "ecommerce" && <EcommerceSettings />}
           {sec === "sso" && <SsoSettings />}
           {sec === "approvals" && <ApprovalsSettings />}
