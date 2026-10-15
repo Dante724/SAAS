@@ -5,7 +5,6 @@
   "description": "Playwright + Lighthouse e2e for the RepairOS technician PWA",
   "scripts": {
     "test": "playwright test",
-    "test:frontend": "node ../frontend/tests/industry_modal.test.js",
     "install-browsers": "playwright install --with-deps chromium"
   },
   "devDependencies": {

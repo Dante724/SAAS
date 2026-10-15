@@ -225,12 +225,6 @@ def _serve_react():
     return HTMLResponse(_NOT_BUILT, status_code=503)
 
 
-def _serve_legacy():
-    # The legacy SPA shell — carries the login / signup / reset / verify / invite
-    # screens. Its own JS hands off to "/" (React) once a session exists.
-    return FileResponse(os.path.join(frontend_dir, "index.html"))
-
-
 @app.get("/", include_in_schema=False)
 async def serve_frontend():
     return _serve_react()
