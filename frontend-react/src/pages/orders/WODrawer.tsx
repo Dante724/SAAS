@@ -16,6 +16,7 @@ import { Gate, useMe } from "../../context/Me";
 import { useCurrencies } from "../../hooks/useCurrencies";
 import CatalogPicker, { type CatalogItem } from "../../components/CatalogPicker";
 import StatusControl, { type FullStatus } from "../../components/StatusControl";
+import { escapeHtml } from "../../lib/safeHtml";
 
 type Emp = { id: string; name: string };
 type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean };
@@ -180,13 +181,13 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   }
   function printWO() {
     const w = window.open("", "_blank", "width=420,height=640"); if (!w) return;
-    w.document.write(`<html><head><title>${woNum}</title><style>body{font-family:Inter,system-ui,sans-serif;padding:22px;color:#14213f}h1{font-size:16px;margin:0 0 4px}.k{font-size:10px;font-weight:800;text-transform:uppercase;color:#9aa7c4;letter-spacing:.05em;margin-top:12px}.v{font-size:14px;font-weight:600}hr{border:none;border-top:1px dashed #c9d3ea;margin:12px 0}</style></head><body>
-      <h1>RepairOS · Workshop Central</h1><div class="v" style="font-family:monospace">${woNum}</div><hr/>
-      <div class="k">Client</div><div class="v">${(c.name || "Walk-in")} ${c.phone ? "· " + c.phone : ""}</div>
-      <div class="k">${dev.asset_label || "Device"}</div><div class="v">${hasDevice ? devTitle : "No device"}${dev.serial ? " · SN " + dev.serial : ""}</div>
-      <div class="k">Status</div><div class="v">${(d.status || "").replace(/_/g, " ")}</div>
-      <div class="k">Complaint</div><div class="v">${d.complaint || "—"}</div>
-      <div class="k">Total</div><div class="v">${money(d.total)}</div>
+    w.document.write(`<html><head><title>${escapeHtml(woNum)}</title><style>body{font-family:Inter,system-ui,sans-serif;padding:22px;color:#14213f}h1{font-size:16px;margin:0 0 4px}.k{font-size:10px;font-weight:800;text-transform:uppercase;color:#9aa7c4;letter-spacing:.05em;margin-top:12px}.v{font-size:14px;font-weight:600}hr{border:none;border-top:1px dashed #c9d3ea;margin:12px 0}</style></head><body>
+      <h1>RepairOS · Workshop Central</h1><div class="v" style="font-family:monospace">${escapeHtml(woNum)}</div><hr/>
+      <div class="k">Client</div><div class="v">${escapeHtml(c.name || "Walk-in")} ${c.phone ? "· " + escapeHtml(c.phone) : ""}</div>
+      <div class="k">${escapeHtml(dev.asset_label || "Device")}</div><div class="v">${escapeHtml(hasDevice ? devTitle : "No device")}${dev.serial ? " · SN " + escapeHtml(dev.serial) : ""}</div>
+      <div class="k">Status</div><div class="v">${escapeHtml((d.status || "").replace(/_/g, " "))}</div>
+      <div class="k">Complaint</div><div class="v">${escapeHtml(d.complaint || "—")}</div>
+      <div class="k">Total</div><div class="v">${escapeHtml(money(d.total))}</div>
     </body></html>`);
     w.document.close(); w.focus(); w.print();
   }

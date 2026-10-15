@@ -108,7 +108,7 @@ class Organisation(Base):
     currency_position: Mapped[str] = mapped_column(String(10), default="before")  # before|after
     # Build 144cd: org-wide security policy. When on, every member must set up an
     # authenticator (TOTP) before using the app, and can't turn their own 2FA off.
-    require_mfa: Mapped[bool] = mapped_column(Boolean, default=True)
+    require_mfa: Mapped[bool] = mapped_column(Boolean, default=False)   # opt-in: owners enable it
     # Build 144ce: subscription lifecycle, controlled from the separate /admin portal.
     # sub_status drives the portal's segments: trial | active | trial_lost | churned | suspended
     # ("new" is derived = trial started within 14 days; "paid" = active; "lost paid" = churned).
@@ -275,7 +275,8 @@ class Employee(Base):
     token_version: Mapped[int] = mapped_column(Integer, default=0)
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     mfa_secret: Mapped[Optional[str]] = mapped_column(String(64))          # base32 TOTP secret
-    mfa_recovery_codes: Mapped[Optional[str]] = mapped_column(Text)        # JSON list of hashed single-use codes  # bump to revoke all issued tokens (lost-device logout)
+    mfa_recovery_codes: Mapped[Optional[str]] = mapped_column(Text)        # JSON list of hashed single-use codes
+    mfa_last_step: Mapped[Optional[int]] = mapped_column(Integer)          # last accepted TOTP time step (replay guard)  # bump to revoke all issued tokens (lost-device logout)
     # Build 144cb: email verification. Existing users default unverified; verification
     # is enforced only where the org opts in, so this never locks out current logins.
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False)

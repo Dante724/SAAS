@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
+import { escapeHtml, printHtmlInFrame, sanitizeHtml } from "../../lib/safeHtml";
 
 /* 144hr — Full-screen visual document editor: Edit⇄Preview, rich text (font family /
    size / colour), a left Blocks panel (add / reorder / remove sections), and a right
@@ -21,10 +22,11 @@ const SIZES = [10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 40, 48];
 
 function pillHTML(tok: string) {
   const label = tok.replace(/^\{|\}$/g, "");
-  return `<span class="tok-pill" contenteditable="false" data-tok="${tok}">${label}</span>`;
+  return `<span class="tok-pill" contenteditable="false" data-tok="${escapeHtml(tok)}">${escapeHtml(label)}</span>`;
 }
 function hydrate(html: string) {
-  return (html || "").replace(/\{[A-Z][^{}]*\}/g, (m) => pillHTML(m));
+  // Saved templates go into the live editor DOM: strip anything that could run script first.
+  return sanitizeHtml(html || "").replace(/\{[A-Z][^{}]*\}/g, (m) => pillHTML(m));
 }
 function serialize(root: HTMLElement) {
   const clone = root.cloneNode(true) as HTMLElement;
@@ -266,11 +268,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
         margin_mm: meta.margin_mm ?? null, font_family: meta.font_family || "Inter",
       });
       const html = r?.html; if (!html) return;
-      const ifr = document.createElement("iframe");
-      ifr.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
-      ifr.srcdoc = html;
-      ifr.onload = () => { try { ifr.contentWindow?.focus(); ifr.contentWindow?.print(); } catch { /* noop */ } setTimeout(() => ifr.remove(), 2000); };
-      document.body.appendChild(ifr);
+      printHtmlInFrame(html);
     } catch (e: any) { setErr(e?.message || "Print failed"); }
   }
 
@@ -436,7 +434,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
               className={`doc-canvas bg-white shadow-lg outline-none text-sm text-ink-primary ${mode === "edit" ? "editing" : ""}`}
               style={{ width: pageW, maxWidth: "100%", minHeight: pageMinH, padding: padPx, fontFamily: meta.font_family || "Inter", lineHeight: 1.5, display: mode === "edit" ? "block" : "none" }} />
             {mode === "preview" && (
-              <div className="doc-canvas bg-white shadow-lg text-sm text-ink-primary" style={{ width: pageW, maxWidth: "100%", minHeight: pageMinH, padding: padPx, fontFamily: meta.font_family || "Inter", lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: preview || "<p style='color:#999'>Loading preview…</p>" }} />
+              <div className="doc-canvas bg-white shadow-lg text-sm text-ink-primary" style={{ width: pageW, maxWidth: "100%", minHeight: pageMinH, padding: padPx, fontFamily: meta.font_family || "Inter", lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: preview ? sanitizeHtml(preview) : "<p style='color:#999'>Loading preview…</p>" }} />
             )}
           </div>
           {mode === "preview" && sample && <div className="absolute top-3 left-1/2 -translate-x-1/2 text-[11px] text-ink-tertiary bg-white/80 border border-slate-200 rounded-full px-3 py-1">Preview using {sample}</div>}

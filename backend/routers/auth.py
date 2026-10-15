@@ -278,8 +278,11 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
 
 @router.post("/token", response_model=TokenResponse)
 async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
-    # Build 144bz: throttle brute-force — 10 attempts / 5 min per IP+username
-    _rate("login", f"{_ip(request)}:{(form.username or '').lower()}", limit=10, window_sec=300)
+    # Build 144bz: throttle brute-force — 10 attempts / 5 min per IP+username, plus a per-account
+    # ceiling that no choice of source IP can reset (distributed guessing).
+    _user = (form.username or "").strip().lower()
+    _rate("login", f"{_ip(request)}:{_user}", limit=10, window_sec=300)
+    _rate("login_acct", _user, limit=30, window_sec=900)
     result = await db.execute(select(Employee).where(Employee.email == form.username))
     employee = result.scalar_one_or_none()
     if not employee or not verify_password(form.password, employee.password_hash):
@@ -306,9 +309,16 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
     # B1: MFA gate — when enabled, a valid TOTP or recovery code is required.
     if employee.mfa_enabled and employee.mfa_secret:
         from backend.services.mfa import consume_recovery_code
-        from backend.services.mfa import verify as _mfa_verify
+        from backend.services.mfa import verify_step as _mfa_step
         code = (getattr(form, "client_secret", None) or "").strip()  # OAuth2 form carries it
-        ok = bool(code) and _mfa_verify(employee.mfa_secret, code)
+        step = _mfa_step(employee.mfa_secret, code) if code else None
+        # Each TOTP code works once: refuse a step at or before the last one accepted.
+        if step is not None and employee.mfa_last_step is not None and step <= employee.mfa_last_step:
+            step = None
+        ok = step is not None
+        if ok:
+            employee.mfa_last_step = step
+            await db.commit()
         if not ok and code:
             used, remaining = consume_recovery_code(employee.mfa_recovery_codes, code)
             if used:
@@ -316,6 +326,8 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
                 await db.commit()
                 ok = True
         if not ok:
+            if code:   # a wrong second factor after a correct password: cap guesses per account
+                _rate("mfa_fail", employee.id, limit=5, window_sec=900)
             raise HTTPException(status_code=401, detail="MFA code required or invalid",
                                 headers={"X-MFA-Required": "1"})
 
@@ -372,6 +384,7 @@ async def password_forgot(data: ForgotRequest, request: Request, db: AsyncSessio
     """Start a reset. Always returns 200 with the same message whether or not the
     email exists — never leak which addresses are registered. Rate-limited."""
     _rate("forgot", f"{_ip(request)}:{(data.email or '').lower()}", limit=5, window_sec=900)
+    _rate("forgot_acct", (data.email or "").strip().lower(), limit=10, window_sec=3600)
     emp = (await db.execute(select(Employee).where(Employee.email == data.email))).scalar_one_or_none()
     if emp and emp.active:
         await _tok.invalidate_all(db, employee_id=emp.id, kind="reset")

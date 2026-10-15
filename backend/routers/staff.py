@@ -661,7 +661,7 @@ async def get_company(
         "clock_wo_enabled": org.clock_wo_enabled if org.clock_wo_enabled is not None else True,
         "clock_attendance_enabled": org.clock_attendance_enabled if org.clock_attendance_enabled is not None else True,
         "clock_labour_billing": bool(getattr(org, "clock_labour_billing", False)),
-        "require_mfa": bool(getattr(org, "require_mfa", True)),
+        "require_mfa": bool(getattr(org, "require_mfa", False)),
     }
 
 

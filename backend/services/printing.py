@@ -10,6 +10,7 @@ resolution, which matters because a fuzzy barcode is a barcode that doesn't scan
 """
 import io
 from datetime import datetime
+from xml.sax.saxutils import escape as _x
 from typing import Optional
 
 from reportlab.graphics.barcode import code128
@@ -188,12 +189,14 @@ def render_document(*, title: str, org_name: str, number: Optional[str],
     ss = _styles()
     story = []
 
-    story.append(Paragraph(org_name or "", ss["Small"]))
-    story.append(Paragraph(f"{title}{f' — {number}' if number else ''}", ss["Title"]))
+    # Paragraph() parses its text as markup (<img src=...>, <link>, <font>...). Everything here
+    # is data — supplier names, notes, references — so escape it to plain text.
+    story.append(Paragraph(_x(org_name or ""), ss["Small"]))
+    story.append(Paragraph(_x(f"{title}{f' — {number}' if number else ''}"), ss["Title"]))
     story.append(Spacer(1, 4))
 
     if meta:
-        mt = Table([[Paragraph(f"<b>{k}</b>", ss["Small"]), Paragraph(str(v), ss["Small"])]
+        mt = Table([[Paragraph(f"<b>{_x(str(k))}</b>", ss["Small"]), Paragraph(_x(str(v)), ss["Small"])]
                     for k, v in meta if v is not None], hAlign="LEFT", colWidths=[90, 320])
         mt.setStyle(TableStyle([("BOTTOMPADDING", (0, 0), (-1, -1), 2),
                                 ("TOPPADDING", (0, 0), (-1, -1), 2)]))
@@ -204,7 +207,7 @@ def render_document(*, title: str, org_name: str, number: Optional[str],
 
     if footer:
         story.append(Spacer(1, 14))
-        story.append(Paragraph(footer, ss["Small"]))
+        story.append(Paragraph(_x(str(footer)), ss["Small"]))
 
     story.append(Spacer(1, 22))
     sig = Table([["Prepared by ______________________", "Approved by ______________________"]],

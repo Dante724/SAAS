@@ -33,14 +33,25 @@ class EndpointIn(BaseModel):
     active: bool = True
 
 
+async def _require_public_url(url: str) -> None:
+    """Endpoints must be public http(s) addresses — never internal services or cloud
+    metadata. Checked again on every delivery (services/webhooks.py)."""
+    import asyncio
+
+    from backend.core.ssrf import UnsafeURLError, assert_safe_url
+    try:
+        await asyncio.to_thread(assert_safe_url, (url or "").strip())
+    except UnsafeURLError:
+        raise HTTPException(400, "URL must be a public http:// or https:// address")
+
+
 @router.post("", status_code=201)
 async def create_endpoint(
     data: EndpointIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
-    if not data.url.startswith(("http://", "https://")):
-        raise HTTPException(400, "URL must start with http:// or https://")
+    await _require_public_url(data.url)
     e = WebhookEndpoint(org_id=current.org_id, url=data.url.strip(), events=data.events or "*",
                         active=data.active)
     db.add(e)
@@ -65,7 +76,11 @@ async def update_endpoint(
         WebhookEndpoint.id == eid, WebhookEndpoint.org_id == current.org_id))).scalar_one_or_none()
     if not e:
         raise HTTPException(404, "Endpoint not found")
-    for k, v in data.model_dump(exclude_unset=True).items():
+    changes = data.model_dump(exclude_unset=True)
+    if "url" in changes:
+        await _require_public_url(changes["url"])
+        changes["url"] = changes["url"].strip()
+    for k, v in changes.items():
         setattr(e, k, v)
     await db.commit()
     return {"ok": True}

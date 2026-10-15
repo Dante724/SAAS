@@ -16,6 +16,19 @@ _PLACEHOLDER_SECRETS = {
 }
 
 
+def _valid_fernet_keys(raw: str) -> bool:
+    keys = [k.strip() for k in (raw or "").split(",") if k.strip()]
+    if not keys:
+        return False
+    try:
+        from cryptography.fernet import Fernet
+        for k in keys:
+            Fernet(k.encode())
+    except Exception:
+        return False
+    return True
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -33,6 +46,11 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "*"                     # csv allowlist; "*" disallowed in production
     LOG_LEVEL: str = "INFO"
     REDIS_URL: str = ""                        # set -> shared rate-limit store across instances (else in-process)
+    # How many reverse proxies (load balancer, CDN…) sit in front of the app. 0 = clients connect
+    # directly, so X-Forwarded-For is ignored (a client could write anything there). N = trust the
+    # address appended by the N-th proxy from the right. Alternatively run uvicorn with
+    # --proxy-headers --forwarded-allow-ips=<proxy ip> and leave this at 0.
+    TRUSTED_PROXY_HOPS: int = 0
     LOG_JSON: bool = False                      # structured JSON logs (recommended in prod)
 
     # -- Notification providers (absent keys -> simulated/logged) --
@@ -129,6 +147,13 @@ class Settings(BaseSettings):
         return self.ENVIRONMENT.lower() == "production"
 
     @property
+    def is_deployed(self) -> bool:
+        """Production *and* staging: anything reachable by real users gets the fail-closed
+        config checks and hardening (no demo seed, no simulated payments, no default admin,
+        no runtime DDL, hidden API docs). Only development and test are relaxed."""
+        return self.ENVIRONMENT.lower() in ("production", "staging")
+
+    @property
     def is_sqlite(self) -> bool:
         return self.DATABASE_URL.startswith("sqlite")
 
@@ -147,8 +172,9 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _fail_closed_in_prod(self) -> "Settings":
-        """Refuse to run production with a placeholder secret or wildcard CORS."""
-        if self.is_production:
+        """Refuse to run production or staging with placeholder secrets, wildcard CORS, or
+        secrets-at-rest left unencrypted."""
+        if self.is_deployed:
             if self.SECRET_KEY in _PLACEHOLDER_SECRETS or len(self.SECRET_KEY) < 32:
                 raise ValueError(
                     "SECRET_KEY must be a strong (>=32 char) value in production. "
@@ -156,6 +182,15 @@ class Settings(BaseSettings):
                 )
             if "*" in self.cors_origin_list:
                 raise ValueError("CORS_ORIGINS must be an explicit allowlist in production (no '*').")
+            # OAuth tokens and shop integration credentials are encrypted with this key. Without
+            # it, OAuth tokens were stored in plaintext and shop credentials fell back to a key
+            # derived from SECRET_KEY (the JWT signing key).
+            if not _valid_fernet_keys(self.TOKEN_ENCRYPTION_KEY):
+                raise ValueError(
+                    "TOKEN_ENCRYPTION_KEY must be set in production/staging (comma-separated Fernet "
+                    "keys, newest first). Generate: python -c \"from cryptography.fernet import "
+                    "Fernet; print(Fernet.generate_key().decode())\""
+                )
             # Webhook signing secrets must be set for any payment provider actually in
             # use, so inbound provider callbacks can't be forged. Gate each only on its
             # provider being configured — don't break shops that don't use it.

@@ -18,6 +18,7 @@ import { assetStatusTone } from "./statusTone";
 import { cachedPref, loadPref, savePref } from "../../lib/userPref";
 import Pager from "../../components/Pager";
 import { alertDialog, confirmDialog, promptDialog } from "../../lib/dialog";
+import { printHtmlInFrame } from "../../lib/safeHtml";
 
 type Tab = "stock" | "devices" | "services" | "bundles" | "purchase-orders"
   | "postings" | "reservations" | "conversions" | "transfers" | "stock-takes" | "write-offs" | "returns" | "bins";
@@ -99,11 +100,7 @@ export default function InventoryHub() {
     try {
       const r = await api.post<any>(url, body);
       const html = r?.html; if (!html) return;
-      const ifr = document.createElement("iframe");
-      ifr.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
-      ifr.srcdoc = html;
-      ifr.onload = () => { try { ifr.contentWindow?.focus(); ifr.contentWindow?.print(); } catch { /* noop */ } setTimeout(() => ifr.remove(), 2000); };
-      document.body.appendChild(ifr); setLabelDlg(false);
+      printHtmlInFrame(html); setLabelDlg(false);
     } catch { /* noop */ }
   }
   const labelSelCount = labelMode === "asset" ? asel.size : psel.size;

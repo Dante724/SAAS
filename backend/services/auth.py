@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 import bcrypt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy import select
@@ -44,7 +44,13 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
+# While a user owes 2FA enrollment (their org requires it), only these API paths answer:
+# enough to load who they are, enroll, refresh and sign out.
+MFA_ENROLLMENT_PATHS = ("/api/mfa/", "/api/auth/me", "/api/auth/refresh", "/api/auth/logout")
+
+
 async def get_current_employee(
+    request: Request,
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> Employee:
@@ -88,6 +94,12 @@ async def get_current_employee(
     if (employee.access_start and employee.access_start > today) or \
        (employee.access_end and employee.access_end < today):
         raise HTTPException(status_code=403, detail="Your access is outside its allowed dates.")
+    # Org-mandated 2FA is enforced here, on every request — not just flagged at login for the
+    # client to (maybe) act on. Checked per request so tokens issued earlier are covered too.
+    if org is not None and getattr(org, "require_mfa", False) and not employee.mfa_enabled:
+        if not request.url.path.startswith(MFA_ENROLLMENT_PATHS):
+            raise HTTPException(status_code=403, detail="Set up two-factor authentication to continue.",
+                                headers={"X-MFA-Enrollment-Required": "1"})
     return employee
 
 

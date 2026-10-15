@@ -9,7 +9,7 @@ EMAIL, PW, NAME = "admin@repairos.dev", "admin123", "Admin"
 
 async def main():
     from backend.config import settings
-    if settings.is_production:  # known password = backdoor; dev/demo databases only
+    if settings.is_deployed:  # known password = backdoor; dev/demo databases only
         raise SystemExit("Refusing: ENVIRONMENT=production. reset_admin.py is for local/demo databases only.")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

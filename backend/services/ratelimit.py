@@ -36,11 +36,15 @@ def _get_redis():
 
 
 def client_ip(request) -> str:
-    """Best-effort caller IP (respects a single proxy hop)."""
-    fwd = request.headers.get("x-forwarded-for") if request else None
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return getattr(getattr(request, "client", None), "host", None) or "unknown"
+    """Caller IP for rate limiting. X-Forwarded-For is client-writable, so only the hops our
+    own proxies appended are trusted (settings.TRUSTED_PROXY_HOPS); never the left-most entry,
+    which an attacker can rotate on every request to dodge limits."""
+    peer = getattr(getattr(request, "client", None), "host", None) or "unknown"
+    hops = int(getattr(settings, "TRUSTED_PROXY_HOPS", 0) or 0)
+    if hops <= 0 or request is None:
+        return peer
+    chain = [p.strip() for p in (request.headers.get("x-forwarded-for") or "").split(",") if p.strip()]
+    return chain[-hops] if len(chain) >= hops else (chain[0] if chain else peer)
 
 
 def _too_many(retry: int) -> HTTPException:

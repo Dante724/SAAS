@@ -65,9 +65,22 @@ async def _attempt(delivery, url: str, secret: str, body: str) -> None:
         delivery.status = "pending"
         delivery.error = "httpx unavailable; delivery skipped"
         return
+    import asyncio
+
+    from backend.core.ssrf import UnsafeURLError, pinned_target
+    # Re-validate on every attempt (DNS can change after the endpoint was saved) and
+    # connect to the exact address that passed the check.
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(url, content=body, headers={
+        target, host_header, extensions = await asyncio.to_thread(pinned_target, url)
+    except UnsafeURLError:
+        delivery.status = "failed"
+        delivery.error = "Blocked: URL does not resolve to a public address"
+        return
+    try:
+        # follow_redirects=False: a public endpoint must not bounce us to an internal one.
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
+            resp = await client.post(target, content=body, extensions=extensions, headers={
+                **host_header,
                 "Content-Type": "application/json",
                 "X-RepairOS-Event": json.loads(body).get("event", ""),
                 "X-RepairOS-Signature": f"sha256={signature}",
@@ -80,5 +93,7 @@ async def _attempt(delivery, url: str, secret: str, body: str) -> None:
             delivery.status = "failed"
             delivery.error = f"HTTP {resp.status_code}"
     except Exception as e:  # network error, bad URL, timeout, etc.
+        # Store a generic reason only — raw socket errors would turn delivery logs into a
+        # port/host scanner for whoever configured the endpoint.
         delivery.status = "failed"
-        delivery.error = str(e)[:500]
+        delivery.error = "Timed out" if isinstance(e, httpx.TimeoutException) else "Connection failed"
