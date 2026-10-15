@@ -14,7 +14,8 @@ type Svc = { id: string; name: string; price?: number; duration_min?: number; ca
 type Staff = { id: string; name: string };
 type Loc = { id: string; name: string; address?: string | null; phone?: string | null; working_hours?: Record<string, { open?: string; close?: string; closed?: boolean }> };
 type Cfg = {
-  shop_name: string; logo_data?: string | null; color?: string | null;
+  shop_name: string; logo_data?: string | null; color?: string | null; currency?: string;
+  asset_label?: string; identifier?: { kind: "vin" | "hin" | "serial"; label: string; hint: string };
   show_employee_step?: boolean; time_slot?: number; window_days?: number;
   services: Svc[]; staff: Staff[]; locations: Loc[];
 };
@@ -24,9 +25,10 @@ type StepK = "loc" | "svc" | "emp" | "time" | "you";
 const slug = location.pathname.split("/book/")[1]?.replace(/\/$/, "") || "";
 const WEEK = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
+let CUR = "$";   // the shop's currency symbol, set once the page config loads
 function money(n?: number) {
   if (n == null || n === 0) return "Free";
-  return "₹" + Number(n).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+  return CUR + Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 function todayHours(l?: Loc | null) {
   const h = l?.working_hours; if (!h) return null;
@@ -66,6 +68,7 @@ export default function PublicAppointment() {
   // details
   const [phone, setPhone] = useState(""); const [name, setName] = useState("");
   const [email, setEmail] = useState(""); const [note, setNote] = useState("");
+  const [ident, setIdent] = useState("");
   const [hello, setHello] = useState<string | null>(null);
   const helloAsked = useRef("");
   // flow — navigate by KEY: the employee step comes and goes per service,
@@ -85,7 +88,7 @@ export default function PublicAppointment() {
     fetch("/api/public/appointment/" + slug).then(async (r) => {
       if (!r.ok) throw new Error();
       const c: Cfg = await r.json();
-      setCfg(c);
+      CUR = c.currency || "$"; setCfg(c);
       setLocId(c.locations?.[0]?.id || null);
       setStepK((c.locations || []).length > 1 ? "loc" : "svc");
     }).catch(() => setErr("This appointment page is unavailable."));
@@ -188,7 +191,7 @@ export default function PublicAppointment() {
         body: JSON.stringify({
           name: name.trim(), phone: phone.trim() || null, email: email.trim() || null,
           service_id: svc?.id || null, employee_id: empId, location_id: locId,
-          date, time, note: fullNote || null,
+          date, time, note: fullNote || null, identifier: ident.trim() || null,
         }),
       });
       const d = await r.json();
@@ -209,7 +212,7 @@ export default function PublicAppointment() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: name.trim(), phone: phone.trim() || null, email: email.trim() || null,
-          issue: (issue || note).trim() || null, service_name: svc?.name || null,
+          issue: (issue || note).trim() || null, service_name: svc?.name || null, identifier: ident.trim() || null,
         }),
       });
       if (!r.ok) throw new Error((await r.json()).detail || "Could not send your request");
@@ -283,7 +286,14 @@ export default function PublicAppointment() {
         <h2 className="text-lg font-extrabold text-ink-primary">Leave a request</h2>
         <p className="mt-1 text-[13px] text-ink-tertiary">Tell us what you need and {cfg.shop_name} will call you back.</p>
         <label className={lbl}>What's the problem?</label>
-        <textarea value={issue} onChange={(e) => setIssue(e.target.value)} rows={3} className={input + " resize-y"} placeholder="e.g. Screen cracked on an iPhone 14, flickers when touched…" />
+        <textarea value={issue} onChange={(e) => setIssue(e.target.value)} rows={3} className={input + " resize-y"} placeholder={cfg.identifier?.kind === "vin" ? "e.g. Brakes squeal when stopping, check engine light on…" : cfg.identifier?.kind === "hin" ? "e.g. Outboard won't start after winter storage…" : "e.g. Screen cracked on an iPhone 14, flickers when touched…"} />
+        {cfg.identifier && (<>
+          <label className={lbl}>{cfg.asset_label ? `${cfg.asset_label} ` : ""}{cfg.identifier.label} <span className="font-normal text-ink-tertiary">(optional)</span></label>
+          <input value={ident} onChange={(e) => setIdent(cfg.identifier!.kind === "serial" ? e.target.value : e.target.value.toUpperCase())} maxLength={40}
+            autoCapitalize="characters" autoCorrect="off" spellCheck={false} className={input + " font-mono tracking-wide"}
+            placeholder={cfg.identifier.kind === "vin" ? "1HGCM82633A004352" : cfg.identifier.kind === "hin" ? "ABC12345D404" : ""} />
+          <div className="mt-1 text-[12px] text-ink-tertiary">{cfg.identifier.hint}{ident.trim() && cfg.identifier.kind === "vin" && ident.replace(/[\s-]/g, "").length !== 17 ? ` You've entered ${ident.replace(/[\s-]/g, "").length}.` : ""}{ident.trim() && cfg.identifier.kind === "hin" && ident.replace(/[\s-]/g, "").length !== 12 ? ` You've entered ${ident.replace(/[\s-]/g, "").length}.` : ""}</div>
+        </>)}
         <label className={lbl}>Your name</label>
         <input value={name} onChange={(e) => setName(e.target.value)} className={input} />
         <label className={lbl}>Phone</label>
@@ -451,6 +461,13 @@ export default function PublicAppointment() {
           <input value={name} onChange={(e) => setName(e.target.value)} className={input} />
           <label className={lbl}>Email <span className="font-normal text-ink-tertiary">(optional)</span></label>
           <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" className={input} />
+          {cfg.identifier && (<>
+            <label className={lbl}>{cfg.asset_label ? `${cfg.asset_label} ` : ""}{cfg.identifier.label} <span className="font-normal text-ink-tertiary">(optional)</span></label>
+            <input value={ident} onChange={(e) => setIdent(cfg.identifier!.kind === "serial" ? e.target.value : e.target.value.toUpperCase())} maxLength={40}
+              autoCapitalize="characters" autoCorrect="off" spellCheck={false} className={input + " font-mono tracking-wide"}
+              placeholder={cfg.identifier.kind === "vin" ? "1HGCM82633A004352" : cfg.identifier.kind === "hin" ? "ABC12345D404" : ""} />
+            <div className="mt-1 text-[12px] text-ink-tertiary">{cfg.identifier.hint}{ident.trim() && cfg.identifier.kind === "vin" && ident.replace(/[\s-]/g, "").length !== 17 ? ` You've entered ${ident.replace(/[\s-]/g, "").length}.` : ""}{ident.trim() && cfg.identifier.kind === "hin" && ident.replace(/[\s-]/g, "").length !== 12 ? ` You've entered ${ident.replace(/[\s-]/g, "").length}.` : ""}</div>
+          </>)}
           <label className={lbl}>Anything we should know? <span className="font-normal text-ink-tertiary">(optional)</span></label>
           <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className={input + " resize-y"} />
           {flash && <div className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-[13px] font-semibold text-rose-600">{flash}</div>}

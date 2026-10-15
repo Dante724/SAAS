@@ -966,6 +966,9 @@ async def appointment_config(slug: str, response: Response, db: AsyncSession = D
         Location.org_id == org.id, Location.active == True))).scalars().all()  # noqa: E712
     return {
         "shop_name": org.name,
+        "currency": getattr(org, "currency", None) or "$",
+        # The item the customer brings, in the shop's industry wording, and the ID to ask for.
+        **_booking_asset(org),
         "logo_data": org.logo_data if org.page_show_logo else None,
         "color": org.page_color, "radius": org.page_radius,
         "show_language": org.page_show_language,
@@ -991,6 +994,37 @@ async def appointment_config(slug: str, response: Response, db: AsyncSession = D
                        "address": l.address, "phone": l.phone,
                        "working_hours": l.working_hours or {}} for l in locs],
     }
+
+
+# Booking asks for the one ID a customer can find on their item: VIN for vehicles, HIN for
+# boats, a serial number for everything else.
+_BOOKING_ID = {
+    "vin": ("VIN", "17 characters. On the dashboard by the windshield, or the driver's door frame."),
+    "hin": ("HIN (hull ID)", "12 characters. Usually on the back of the hull, top right of the transom."),
+    "serial": ("Serial number", "Usually on a label underneath or on the back, or in the settings."),
+}
+
+
+def _booking_id_kind(org) -> str:
+    from backend.services import industry as _ind
+    primary = (_ind.identifier_rule(_ind.normalize_template_key(getattr(org, "industry_template", None))) or {}).get("primary")
+    return primary if primary in ("vin", "hin") else "serial"
+
+
+def _booking_asset(org) -> dict:
+    from backend.services import industry as _ind
+    d = _ind.describe(getattr(org, "industry_template", None))
+    kind = _booking_id_kind(org)
+    label, hint = _BOOKING_ID[kind]
+    return {"asset_label": d.get("asset_label") or "Item", "identifier": {"kind": kind, "label": label, "hint": hint}}
+
+
+def _booking_id_note(org, raw: Optional[str]) -> Optional[str]:
+    """'VIN: 1HGCM82633A004352' for the appointment note, tidied the same way assets are."""
+    from backend.services.identifiers import normalize
+    kind = _booking_id_kind(org)
+    v = normalize(kind, (raw or "")[:40])
+    return f"{_BOOKING_ID[kind][0].split(' (')[0]}: {v}" if v else None
 
 
 async def _service_duration(db, org, service_id):
@@ -1087,6 +1121,7 @@ class PublicAppointmentIn(BaseModel):
     date: str          # YYYY-MM-DD
     time: str          # HH:MM
     note: Optional[str] = None
+    identifier: Optional[str] = None   # VIN / HIN / serial, per the shop's industry
 
 
 @router.post("/appointment/{slug}", status_code=201)
@@ -1175,7 +1210,8 @@ async def create_public_appointment(slug: str, data: PublicAppointmentIn, reques
                 client_id=client_id, client_name=data.name.strip(),
                 service_id=data.service_id, employee_id=emp_id,
                 scheduled_for=start, duration_min=dur,
-                note=(data.note or "") + (f" | contact: {data.phone or data.email or ''}".rstrip()))
+                note=" | ".join(p for p in [data.note or None, _booking_id_note(org, data.identifier),
+                                            f"contact: {data.phone or data.email or ''}".rstrip()] if p))
     db.add(b)
     from backend.routers.feed import log_system_event
     from sqlalchemy.exc import IntegrityError
@@ -1207,6 +1243,7 @@ class AppointmentRequestIn(BaseModel):
     email: Optional[str] = None
     issue: Optional[str] = None
     service_name: Optional[str] = None
+    identifier: Optional[str] = None
 
 
 @router.post("/appointment/{slug}/request", status_code=201)
@@ -1225,7 +1262,7 @@ async def appointment_request(slug: str, data: AppointmentRequestIn, request: Re
     from datetime import timedelta as _td
     inquiry = " · ".join(p for p in [
         (f"Service: {data.service_name.strip()}" if data.service_name else None),
-        (data.issue or "").strip() or None] if p) or "Online appointment request"
+        (data.issue or "").strip() or None, _booking_id_note(org, data.identifier)] if p) or "Online appointment request"
     lead = Lead(org_id=org.id, name=data.name.strip()[:200],
                 phone=(data.phone or "")[:40] or None, email=(data.email or "")[:200] or None,
                 source="web", inquiry=inquiry[:2000],
