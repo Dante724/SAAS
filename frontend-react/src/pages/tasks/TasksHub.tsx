@@ -1,4 +1,5 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
@@ -9,7 +10,7 @@ type Task = { id: string; title?: string; description?: string; status?: string;
 type Emp = { id: string; name: string };
 type Feed = { id: string; body?: string; kind?: string; author_name?: string; created_at?: string };
 
-const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString([], { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—");
+const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—");
 const STATUS_LABEL: Record<string, string> = { todo: "To do", in_progress: "In progress", done: "Done" };
 
 export default function TasksHub() {
@@ -72,7 +73,7 @@ export default function TasksHub() {
         <div className="flex items-center gap-2 flex-wrap">
           <button onClick={() => setCreate(true)} className="h-[38px] px-4 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New task</button>
           <div className="flex items-center gap-1.5 ml-1">
-            {[["all", "All"], ["overdue", "Overdue"], ["done", "Completed"], ...statuses.map((s) => [s, STATUS_LABEL[s] || s] as [string, string])].map(([id, label]) => (
+            {[["all", "All"], ...statuses.filter((s) => s !== "done").map((s) => [s, STATUS_LABEL[s] || humanize(s)] as [string, string]), ["done", "Done"], ["overdue", "Late"]].map(([id, label]) => (
               <button key={id} onClick={() => setFilter(id)} className={`px-3 py-1.5 rounded-full text-[11px] font-semibold ${filter === id ? "bg-primary text-white shadow-xs" : "bg-slate-100 text-ink-secondary hover:bg-slate-200"}`}>{label}</button>
             ))}
           </div>

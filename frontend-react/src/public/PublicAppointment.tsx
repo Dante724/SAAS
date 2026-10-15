@@ -30,13 +30,19 @@ function money(n?: number) {
   if (n == null || n === 0) return "Free";
   return CUR + Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
+// "09:00" → "9 AM", "17:30" → "5:30 PM" — the same clock the rest of the app shows.
+function clock(hhmm: string) {
+  const [h, m] = hhmm.split(":").map(Number);
+  if (Number.isNaN(h)) return hhmm;
+  return new Date(2000, 0, 1, h, m || 0).toLocaleTimeString([], { hour: "numeric", minute: m ? "2-digit" : undefined });
+}
 function todayHours(l?: Loc | null) {
   const h = l?.working_hours;
   // No hours saved yet: the server books 09:00–18:00 every day, so say that rather than "Closed".
-  if (!h || !Object.keys(h).length) return "Open today 09:00–18:00";
+  if (!h || !Object.keys(h).length) return `Open today ${clock("09:00")}–${clock("18:00")}`;
   const d = h[WEEK[(new Date().getDay() + 6) % 7]];
   if (!d || d.closed) return "Closed today";
-  return d.open && d.close ? `Open today ${d.open}–${d.close}` : null;
+  return d.open && d.close ? `Open today ${clock(d.open)}–${clock(d.close)}` : null;
 }
 function fmtDay(iso: string) {
   const d = new Date(iso + "T00:00:00");

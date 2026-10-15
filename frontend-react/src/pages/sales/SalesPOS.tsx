@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import Shell, { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import NewClientDrawer from "../../components/NewClientDrawer";
-import { money } from "../orders/types";
+import { currencySymbol, money } from "../orders/types";
 
 type Product = { id: string; name?: string; sku?: string; sell_price?: number; qty_available?: number; image_data?: string | null; low_stock?: boolean };
 type Service = { id: string; name?: string; price?: number; duration_min?: number };
@@ -162,7 +162,7 @@ export default function SalesPOS() {
           {/* totals + charge */}
           <div className="px-5 py-4 border-t border-slate-200/80 space-y-3 bg-slate-50/40">
             <div className="flex items-center justify-between text-xs"><span className="text-ink-secondary">Subtotal</span><span className="font-mono font-semibold text-ink-primary">{money(subtotal)}</span></div>
-            <div className="flex items-center justify-between text-xs"><span className="text-ink-secondary">Discount (₹)</span><input type="number" value={discount} onChange={(e) => setDiscount(Math.max(0, Number(e.target.value)))} className="glass-input w-24 px-2 py-1 rounded-lg text-xs text-right font-mono" /></div>
+            <div className="flex items-center justify-between text-xs"><span className="text-ink-secondary">Discount ({currencySymbol()})</span><input type="number" value={discount} onChange={(e) => setDiscount(Math.max(0, Number(e.target.value)))} className="glass-input w-24 px-2 py-1 rounded-lg text-xs text-right font-mono" /></div>
 
             {/* 144bb — rewards: coupon / gift card / loyalty applied server-side at charge */}
             <button onClick={() => setShowRewards((v) => !v)} className="flex items-center gap-1.5 text-[11px] font-semibold text-primary hover:underline"><M n="redeem" c="text-sm" />Rewards &amp; credits<M n={showRewards ? "expand_less" : "expand_more"} c="text-sm" /></button>

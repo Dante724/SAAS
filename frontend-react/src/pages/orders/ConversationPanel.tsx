@@ -5,7 +5,7 @@ import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 
 type Msg = { id: string; from: "staff" | "customer"; who?: string; body: string; at?: string };
-const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "");
+const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
 
 export default function ConversationPanel({ orderId }: { orderId: string }) {
   const [msgs, setMsgs] = useState<Msg[] | null>(null);

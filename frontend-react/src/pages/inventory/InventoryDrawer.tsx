@@ -2,7 +2,7 @@ import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
-import { Product, money } from "./types";
+import { Product, currencySymbol, money } from "./types";
 import CustomFields from "../../components/CustomFields";
 import CategoryPicker from "../../components/CategoryPicker";
 import CatalogPicker, { CatalogItem } from "../../components/CatalogPicker";
@@ -234,8 +234,8 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                 <div className="p-4 rounded-xl bg-blue-50/50 border border-blue-100 space-y-3">
                   <div className="flex items-center justify-between"><span className="text-[11px] font-bold text-primary uppercase tracking-wider">Pricing & margin</span><span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800">Margin: {margin}%</span></div>
                   <div className="grid grid-cols-2 gap-3">
-                    <div><label className={lbl}>Cost price (₹)</label><input type="number" value={p.cost_price ?? 0} onChange={(e) => set("cost_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>
-                    <div><label className={lbl}>Store price (₹)</label><input type="number" value={p.sell_price ?? 0} onChange={(e) => set("sell_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>
+                    <div><label className={lbl}>Cost price ({currencySymbol()})</label><input type="number" value={p.cost_price ?? 0} onChange={(e) => set("cost_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>
+                    <div><label className={lbl}>Store price ({currencySymbol()})</label><input type="number" value={p.sell_price ?? 0} onChange={(e) => set("sell_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>
                   </div>
                   <div className="text-[11px] text-ink-tertiary flex items-center justify-between pt-1"><span>Repair price (on work orders):</span><span className="font-semibold text-ink-secondary">= store price ({money(Number(p.sell_price) || 0)})</span></div>
                 </div>
@@ -402,8 +402,8 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                 <div><label className={lbl}>Standard duration (min)</label><input type="number" value={p.duration_min ?? 60} onChange={(e) => set("duration_min", e.target.value)} className={`${field} font-mono`} /></div>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div><label className={lbl}>Base labor fee (₹)</label><input type="number" value={p.price ?? 0} onChange={(e) => set("price", e.target.value)} className={`${field} font-mono font-bold`} /></div>
-                <div><label className={lbl}>Cost (₹)</label><input type="number" value={p.cost_price ?? 0} onChange={(e) => set("cost_price", e.target.value)} className={`${field} font-mono`} /></div>
+                <div><label className={lbl}>Labor price ({currencySymbol()})</label><input type="number" value={p.price ?? 0} onChange={(e) => set("price", e.target.value)} className={`${field} font-mono font-bold`} /></div>
+                <div><label className={lbl}>Cost ({currencySymbol()})</label><input type="number" value={p.cost_price ?? 0} onChange={(e) => set("cost_price", e.target.value)} className={`${field} font-mono`} /></div>
               </div>
               <label className="flex items-center justify-between cursor-pointer p-3 rounded-xl bg-slate-50/90 border border-slate-200/80"><span className="text-ink-secondary font-medium">This is a labor operation</span><input type="checkbox" checked={!!p.is_labor} onChange={(e) => set("is_labor", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
               {/* 144ax G3 — flat-rate labour: bill the standard duration × the fee as an hourly rate */}
@@ -482,7 +482,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                   </select>
                 </div>
                 <div>
-                  <label className={lbl}>{(p.price_mode || "sum") === "fixed" ? "Kit price (₹)" : "Price (auto)"}</label>
+                  <label className={lbl}>{(p.price_mode || "sum") === "fixed" ? `Kit price (${currencySymbol()})` : "Price (auto)"}</label>
                   <input type="number" value={(p.price_mode || "sum") === "fixed" ? (p.price ?? 0) : stdTotal} disabled={(p.price_mode || "sum") !== "fixed"} onChange={(e) => set("price", e.target.value)} className={`${field} font-mono font-bold disabled:opacity-60`} />
                 </div>
               </div>

@@ -32,7 +32,7 @@ type Feedback = {
 };
 type Track = {
   shop_name?: string; order_number?: string; stage_label?: string; is_estimate?: boolean;
-  stages?: { label: string }[]; stage_index?: number; awaiting_approval?: boolean;
+  stages?: { label: string }[]; stage_index?: number; stopped?: boolean; awaiting_approval?: boolean;
   device?: string; asset_label?: string; complaint?: string; total?: number;
   total_converted?: number; fx_rate?: number; currency_symbol?: string;
   lines?: Line[]; recommendations?: Rec[]; updates?: Update[]; timeline?: TL[];
@@ -61,11 +61,11 @@ function fmtDoc(d: Track) {
     const v = d.total_converted != null ? d.total_converted : (d.total || 0) * d.fx_rate;
     return d.currency_symbol + Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 });
   }
-  return (d?.currency_symbol || "₹") + Number(d?.total || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+  return (d?.currency_symbol || "$") + Number(d?.total || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
-const money = (n: number, sym = "₹") => sym + Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+const money = (n: number, sym = "$") => sym + Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
 const fmtDate = (s?: string) =>
-  s ? new Date(s).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+  s ? new Date(s).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
 const initials = (s?: string) =>
   (s || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase() || "R";
 
@@ -212,7 +212,7 @@ export default function PublicTrack() {
   if (!d) return <div className="min-h-screen bg-surface" />;
 
   const isEst = d.is_estimate === true || (d.awaiting_approval && !d.has_signature);
-  const sym = d.currency_symbol || "₹";
+  const sym = d.currency_symbol || "$";
   const tint = stageTint(d);
   const accent = d.brand_color || "#0059ba";
   const nStages = d.stages?.length ?? 6;
@@ -267,7 +267,6 @@ export default function PublicTrack() {
           {/* details */}
           <div className="grid grid-cols-2 gap-2.5">
             <Detail label={d.asset_label || "Device"} value={d.device || "—"} />
-            <Detail label="Estimated total" value={<span className="text-base font-extrabold text-primary">{fmtDoc(d)}</span>} />
             {d.complaint && (
               <div className="col-span-2 rounded-lg bg-slate-50 p-3">
                 <div className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary">Reported issue</div>
@@ -277,9 +276,12 @@ export default function PublicTrack() {
             {(d.custom_fields || []).map((f) => <Detail key={f.label} label={f.label} value={f.value} />)}
           </div>
 
-          {/* status stepper */}
+          {/* status stepper (a stopped job — not collected, cancelled — says so instead) */}
           <div className={sec}>
             <div className={secH}>Status</div>
+            {d.stopped ? (
+              <div className="rounded-lg bg-slate-50 p-3 text-[13px] text-ink-secondary">This {isEst ? "estimate" : "job"} was closed: <span className="font-semibold text-ink-primary">{d.stage_label}</span>. Contact {d.shop_name || "the shop"} if you have questions.</div>
+            ) : (
             <div className="flex items-center">
               {(d.stages || []).map((s, i) => {
                 const done = i < (d.stage_index || 0), cur = i === (d.stage_index || 0);
@@ -301,6 +303,7 @@ export default function PublicTrack() {
                 );
               })}
             </div>
+            )}
           </div>
 
           {/* #3 — review capture (settings active; near completion or already rated) */}
@@ -516,7 +519,7 @@ export default function PublicTrack() {
             <div className={sec}>
               <div className={secH}>Message the shop</div>
               {d.messages_until && (
-                <p className="mb-2 text-[13px] text-ink-tertiary">Questions about this repair? You can message the shop until {new Date(d.messages_until).toLocaleDateString()}.</p>
+                <p className="mb-2 text-[13px] text-ink-tertiary">Questions about this repair? You can message the shop until {new Date(d.messages_until).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}.</p>
               )}
               <textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={2} placeholder="Ask a question or add a note…"
                 className="w-full resize-y rounded-lg border border-slate-300 bg-white p-2.5 text-sm text-ink-primary outline-none focus:border-primary" />

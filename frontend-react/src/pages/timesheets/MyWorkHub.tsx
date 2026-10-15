@@ -71,6 +71,7 @@ export default function MyWorkHub() {
   const card = "bg-white rounded-2xl border border-slate-200/90 shadow-sm";
   return (
     <Shell title="My work">
+      <div className="flex-1 overflow-y-auto p-6">
       <div className="max-w-4xl mx-auto space-y-5">
         {flash && <div className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">{flash}</div>}
 
@@ -183,6 +184,7 @@ export default function MyWorkHub() {
             </div>
           )}
         </div>
+      </div>
       </div>
     </Shell>
   );

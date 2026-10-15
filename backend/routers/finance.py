@@ -136,10 +136,18 @@ async def list_invoices(
     if oids:
         rows = (await db.execute(select(Order.id, Order.order_number).where(Order.id.in_(oids)))).all()
         numbers = {oid: num for oid, num in rows}
+    # Customer name and date for each row (this shop's clients only), so the list tells
+    # invoices apart without opening them.
+    from backend.models import Client
+    cids = {i.client_id for i in invs if i.client_id}
+    names = dict((await db.execute(select(Client.id, Client.name).where(
+        Client.org_id == current.org_id, Client.id.in_(cids)))).all()) if cids else {}
     items = []
     for i in invs:
         d = _ser_invoice(i)
         d["order_number"] = numbers.get(i.order_id)
+        d["client_name"] = names.get(i.client_id)
+        d["created_at"] = i.created_at.isoformat() if getattr(i, "created_at", None) else None
         items.append(d)
     return {"total": total, "items": items}
 

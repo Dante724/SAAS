@@ -5,7 +5,7 @@ import Shell, { M } from "../../components/Shell";
 import ScanStockPanel from "../../components/ScanStockPanel";
 import { api, openAuthedDoc } from "../../api/client";
 import { isoDate } from "../../lib/localDate";
-import { Product, Supplier, PO, Service, Bundle, Asset, money } from "./types";
+import { Product, Supplier, PO, Service, Bundle, Asset, currencySymbol, money } from "./types";
 import { analyzePaste, gridToRows, mergeRemap, loadRememberedMap, saveRememberedMap, FIELD_LABELS, FIELD_ORDER } from "./pasteMap";
 import type { PasteField, PostRow } from "./pasteMap";
 import InventoryDrawer, { DrawerKind } from "./InventoryDrawer";
@@ -401,7 +401,7 @@ export default function InventoryHub() {
               <thead><tr className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary uppercase tracking-wider">
                 <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" checked={pAllSel} onChange={pToggleAll} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
                 <th className="py-3.5 px-3">Product</th><th className="py-3.5 px-3">Category</th><th className="py-3.5 px-3">Unit</th>
-                <th className="py-3.5 px-3 text-right">Cost (₹)</th><th className="py-3.5 px-3 text-right">Sell Price (₹)</th><th className="py-3.5 px-3 text-right">Margin</th><th className="py-3.5 px-3 text-center">In Stock</th>{cfg.enable_reservations && <th className="py-3.5 px-3 text-center">Reserved</th>}<th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
+                <th className="py-3.5 px-3 text-right">Cost ({currencySymbol()})</th><th className="py-3.5 px-3 text-right">Sell price ({currencySymbol()})</th><th className="py-3.5 px-3 text-right">Margin</th><th className="py-3.5 px-3 text-center">In Stock</th>{cfg.enable_reservations && <th className="py-3.5 px-3 text-center">Reserved</th>}<th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-xs">
                 {/* 144bu — table-body skeleton (chrome stays real; geometry matches rows → no layout shift) */}
@@ -452,7 +452,7 @@ export default function InventoryHub() {
                       <td className="py-3.5 px-3 text-ink-tertiary">{p.uom || "pcs"}</td>
                       <td className="py-3.5 px-3 font-mono tabular-nums text-ink-secondary text-right">{money(p.avg_cost || p.cost_price)}</td>
                       <td className="py-3.5 px-3 font-mono tabular-nums font-bold text-ink-primary text-right">{money(p.sell_price)}</td>
-                      <td className="py-3.5 px-3 font-semibold tabular-nums text-emerald-700 text-right">{p.margin_pct != null ? `${p.margin_pct}%` : "—"}</td>
+                      <td className="py-3.5 px-3 font-semibold tabular-nums text-emerald-700 text-right">{(() => { const m = p.margin_pct ?? ((p.sell_price || 0) > 0 && p.cost_price != null ? Math.round((((p.sell_price || 0) - (p.cost_price || 0)) / (p.sell_price || 1)) * 100) : null); return m != null ? `${m}%` : "—"; })()}</td>
                       <td className="py-3.5 px-3 text-center">{pill ? <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${pill.cls}`}><span className={`w-1.5 h-1.5 rounded-full ${pill.dot}`} />{pill.label}</span> : <span className="font-semibold tabular-nums text-ink-primary">{p.qty_available ?? 0}</span>}</td>
                       {cfg.enable_reservations && <td className="py-3.5 px-3 text-center font-semibold tabular-nums text-ink-secondary">{p.qty_reserved ? <span className="text-amber-700">{p.qty_reserved}</span> : <span className="text-ink-tertiary">—</span>}</td>}
                       <td className="py-3.5 pr-5 pl-2 text-right" onClick={(e) => e.stopPropagation()}><button aria-label="More options" className="p-1.5 rounded-lg text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="more_vert" c="text-base" /></button></td>
@@ -514,7 +514,7 @@ export default function InventoryHub() {
             <table className="w-full text-left border-collapse">
               <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary uppercase tracking-wider"><tr>
                 <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" className="w-4 h-4 rounded border-slate-300 text-primary" /></th>
-                <th className="py-3.5 px-3">PO Number</th><th className="py-3.5 px-3">Supplier</th><th className="py-3.5 px-3">Expected</th><th className="py-3.5 px-3 text-right">Total (₹)</th><th className="py-3.5 px-3 text-center">Status</th><th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
+                <th className="py-3.5 px-3">PO Number</th><th className="py-3.5 px-3">Supplier</th><th className="py-3.5 px-3">Expected</th><th className="py-3.5 px-3 text-right">Total ({currencySymbol()})</th><th className="py-3.5 px-3 text-center">Status</th><th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-xs">
                 {!pos && <SkeletonRows cols={7} />}

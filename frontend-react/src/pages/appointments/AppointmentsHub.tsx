@@ -15,7 +15,7 @@ function F({ l, v }: { l: string; v: string }) {
   return <div><div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary mb-0.5">{l}</div><div className="text-sm font-semibold text-ink-primary">{v || "—"}</div></div>;
 }
 const dayKey = (iso?: string) => (iso ? new Date(iso).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" }) : "Unscheduled");
-const time = (iso?: string) => (iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—");
+const time = (iso?: string) => (iso ? new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "—");
 
 export default function AppointmentsHub() {
   const [rows, setRows] = useState<Appointment[] | null>(null);
@@ -131,7 +131,7 @@ export default function AppointmentsHub() {
             </div>
           );
         })()}
-        {view === "agenda" && rows?.length === 0 && <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-12 text-center"><M n="calendar_month" c="text-3xl text-ink-placeholder" /><p className="text-sm font-bold text-ink-secondary mt-2">No appointments yet</p><p className="text-xs text-ink-tertiary">Create an appointment or wait for online requests.</p></div>}
+        {view === "agenda" && rows?.length === 0 && <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-12 text-center"><M n="calendar_month" c="mx-auto mb-2 text-3xl text-ink-placeholder" /><p className="text-sm font-bold text-ink-secondary mt-2">No appointments yet</p><p className="text-xs text-ink-tertiary">Create an appointment or wait for online requests.</p></div>}
         {view === "agenda" && Object.entries(groups).map(([day, list]) => (
           <div key={day}>
             <div className="text-[11px] font-bold uppercase tracking-wider text-ink-tertiary mb-2">{day}</div>

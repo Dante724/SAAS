@@ -65,7 +65,7 @@ export function MeProvider({ children }: { children: ReactNode }) {
 
   // deny-wins, default-allow — identical rule to legacy App.can and the API's require_perm
   const can = (code?: string) => canPerm(me, code);
-  const fmt = (n?: number) => `${me?.currency || "₹"}${(n ?? 0).toLocaleString(getLocale(), { maximumFractionDigits: 0 })}`;
+  const fmt = (n?: number) => `${me?.currency || "$"}${(n ?? 0).toLocaleString(getLocale(), { maximumFractionDigits: 0 })}`;
 
   return <MeContext.Provider value={{ me, loading, can, fmt, refresh }}>{children}</MeContext.Provider>;
 }

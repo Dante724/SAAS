@@ -11,7 +11,7 @@ import Pager from "../../components/Pager";
 import { Gate } from "../../context/Me";
 
 type Kpis = { new?: number; urgent?: number; overdue?: number; receivables?: number };
-type Status = { id: string; name?: string; key?: string; status_group?: string };
+type Status = { id: string; name?: string; key?: string; status_group?: string; color?: string };
 type SavedView = { id: string; name: string; params: any; is_shared?: boolean; mine?: boolean };
 
 // Toggleable table columns (checkbox + action columns are always shown)
@@ -34,10 +34,19 @@ const PILL: Record<string, [string, string]> = {
   done: ["bg-green-100 text-green-800 border-green-200", "bg-green-600"],
   delivered: ["bg-slate-100 text-slate-700 border-slate-200", "bg-slate-500"],
 };
-function pill(status?: string) {
+// The status's own name and colour from Settings › Statuses; the key is only a fallback.
+function pill(status?: string, st?: Status) {
   const key = (status || "").toLowerCase().replace(/\s+/g, "_");
+  const label = st?.name || (status || "—").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  if (st?.color) {
+    return (
+      <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold inline-flex items-center gap-1.5 text-ink-primary whitespace-nowrap"
+        style={{ background: `${st.color}1f`, boxShadow: `inset 0 0 0 1px ${st.color}40` }}>
+        <span className="w-1.5 h-1.5 rounded-full" style={{ background: st.color }} />{label}
+      </span>
+    );
+  }
   const [cls, dot] = PILL[key] || ["bg-slate-100 text-slate-700 border-slate-200", "bg-slate-500"];
-  const label = (status || "—").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
   return (
     <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border inline-flex items-center gap-1.5 ${cls}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />{label}
@@ -52,6 +61,7 @@ export default function WorkOrdersHub() {
   const [open, setOpen] = useState<Order | null>(null);
   const [create, setCreate] = useState<null | "order" | "estimate">(null);
   const [statuses, setStatuses] = useState<Status[]>([]);
+  const [estStatuses, setEstStatuses] = useState<Status[]>([]);
   const [filter, setFilter] = useState<string | null>(null);   // status key
   // Multi-facet filter panel (client-side over the loaded set, same as status + text).
   const [fltOpen, setFltOpen] = useState(false);
@@ -135,7 +145,12 @@ export default function WorkOrdersHub() {
     // Same numbers as the Home dashboard (one server-side definition of urgent/overdue).
     api.get<{ kpis?: Kpis }>("/reports/company-dashboard").then((r) => setKpis(r.kpis || {})).catch(() => setKpis(null));
   }
-  useEffect(() => { refetch(); api.get<any>("/statuses").then((r) => setStatuses(r.items || r || [])).catch(() => {}); }, []);
+  useEffect(() => {
+    refetch(); api.get<any>("/statuses").then((r) => setStatuses(r.items || r || [])).catch(() => {});
+    api.get<any>("/statuses?record_type=estimate").then((r) => setEstStatuses(r.items || r || [])).catch(() => {});
+  }, []);
+  const stOf = (o: Order) => (o.is_estimate ? estStatuses : statuses).find((x) => norm(x.key || x.name) === norm(o.status))
+    || [...statuses, ...estStatuses].find((x) => norm(x.key || x.name) === norm(o.status));
   // Deep-open from a scan (?open=<id>): open the WO drawer straight away, then clear the param.
   const [sp, setSp] = useSearchParams();
   const openParam = sp.get("open");
@@ -338,7 +353,7 @@ export default function WorkOrdersHub() {
                   {showCol("order_id") && <td className="py-3.5 px-4 font-mono font-bold text-primary"><span className="inline-flex items-center gap-1.5">{o.order_number || o.id}{!!(o.client_msg_unread && o.client_msg_unread > 0) && <span title={`${o.client_msg_unread} unread customer message(s)`} className="inline-flex items-center gap-0.5 text-[9px] font-bold bg-primary text-white px-1.5 py-0.5 rounded-full"><M n="forum" c="text-[10px]" />{o.client_msg_unread}</span>}{(o as any).checklists_pending && <span role="img" aria-label="Checklist incomplete" title="Checklist incomplete" className="w-2 h-2 rounded-full bg-amber-500" />}</span></td>}
                   {showCol("client") && <td className="py-3.5 px-4"><span className="font-semibold text-[13px] text-ink-primary">{o.client?.name || "Walk-in"}</span><span className="text-[11px] font-normal text-ink-tertiary block">{o.client?.phone || ""}</span></td>}
                   {showCol("device") && <td className="py-3.5 px-4 text-ink-primary font-semibold">{deviceName(o.device)}</td>}
-                  {showCol("status") && <td className="py-3.5 px-4"><div className="flex items-center gap-1.5">{pill(o.status)}{flags[o.id]?.stalled && (
+                  {showCol("status") && <td className="py-3.5 px-4"><div className="flex items-center gap-1.5">{pill(o.status, stOf(o))}{flags[o.id]?.stalled && (
                     <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-rose-100 text-rose-700 border border-rose-200" title={flags[o.id]?.over_by_min ? `~${Math.round(flags[o.id]!.over_by_min!)} min over typical` : "Running long"}><M n="schedule" c="text-[11px]" />Stalled</span>
                   )}</div></td>}
                   {showCol("assignee") && <td className="py-3.5 px-4">{o.assigned_to?.name || "—"}</td>}
@@ -396,7 +411,7 @@ export default function WorkOrdersHub() {
         {view === "scheduler" && (() => {
           const list = sched || [];
           const sameDay = (iso: string, d: Date) => { const x = new Date(iso); return x.getFullYear() === d.getFullYear() && x.getMonth() === d.getMonth() && x.getDate() === d.getDate(); };
-          const hhmm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          const hhmm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
           const today = new Date(); today.setHours(0, 0, 0, 0);
           const step = (n: number) => setAnchor((a) => { const d = new Date(a); if (schedMode === "day") d.setDate(d.getDate() + n); else if (schedMode === "month") d.setMonth(d.getMonth() + n); else d.setDate(d.getDate() + n * 7); return d; });
           const dayItems = (d: Date) => list.filter((o) => o.scheduled_for && sameDay(o.scheduled_for, d)).sort((a, b) => a.scheduled_for.localeCompare(b.scheduled_for));
@@ -412,7 +427,7 @@ export default function WorkOrdersHub() {
                 </div>
                 <div className="text-[11px] font-bold text-ink-primary truncate">{o.client_name || "Walk-in"}</div>
                 <div className="mt-1 flex items-center justify-between gap-1">
-                  <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-semibold inline-flex items-center gap-1 ${cls}`}><span className={`w-1 h-1 rounded-full ${dot}`} />{(o.status || "").replace(/_/g, " ")}</span>
+                  <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-semibold inline-flex items-center gap-1 ${cls}`}><span className={`w-1 h-1 rounded-full ${dot}`} />{stOf(o)?.name || (o.status || "").replace(/_/g, " ")}</span>
                   {o.assigned_to_name && <span className="text-[9px] text-ink-tertiary truncate">{o.assigned_to_name}</span>}
                 </div>
               </button>
@@ -550,7 +565,7 @@ export default function WorkOrdersHub() {
                     <div key={o.id} className="px-4 py-2.5 flex items-center gap-3">
                       <span className="font-bold text-ink-primary font-mono">{o.order_number || o.id?.slice(0, 8)}</span>
                       <span className="flex-1 text-ink-secondary truncate">{o.client || "—"}{o.archive_reason ? ` · ${o.archive_reason}` : ""}</span>
-                      <span className="text-ink-tertiary capitalize">{(o.status || "").replace(/_/g, " ")}</span>
+                      <span className="text-ink-tertiary capitalize">{stOf(o)?.name || (o.status || "").replace(/_/g, " ")}</span>
                       <button onClick={() => restoreOne(o.id)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-primary border border-primary/30 hover:bg-primary/10"><M n="restore" c="text-[13px]" />Restore</button>
                     </div>
                   ))}

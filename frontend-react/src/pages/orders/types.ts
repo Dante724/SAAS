@@ -22,10 +22,11 @@ export function deviceName(d: Order["device"]) {
 }
 // Org currency symbol — the React equivalent of legacy `fmt._sym`. MeProvider sets it
 // from /api/auth/me at boot; persisted so it's correct on the very first render too.
-let _sym = "₹";
+let _sym = "$";
 try { const s = localStorage.getItem("ros_cur_sym"); if (s) _sym = s; } catch { /* ignore */ }
+export const currencySymbol = () => _sym;
 export function setCurrencySymbol(sym?: string) {
-  _sym = sym || "₹";
+  _sym = sym || "$";
   try { localStorage.setItem("ros_cur_sym", _sym); } catch { /* ignore */ }
 }
 // `sym` overrides the org default — used for per-account multi-currency displays (e.g. CashHub).

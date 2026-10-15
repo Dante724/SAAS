@@ -1,4 +1,5 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
@@ -345,7 +346,7 @@ export default function ReportsHub() {
   const [page, setPage] = useState(1);
   const [ppage, setPpage] = useState(1);
 
-  useEffect(() => { api.get<any>("/reports/dashboard").then(setDash).catch(() => setDash({})); }, []);
+  useEffect(() => { api.get<any>("/reports/dashboard").then((r) => setDash(r?.stats || r || {})).catch(() => setDash({})); }, []);
   useEffect(() => { api.get<any>("/staff/locations").then((r) => setLocs(r.items || r || [])).catch(() => setLocs([])); }, []);
   useEffect(() => { api.get<Catalog>("/reports/catalog").then((c) => { setCat(c); const first = c.tabs?.[0]?.reports?.[0]?.key; if (first) run(first); }).catch(() => setCat({ tabs: [] })); }, []);
 
@@ -424,7 +425,9 @@ export default function ReportsHub() {
 
   const colLabel = (c: any) => typeof c === "string" ? c : (c.label || c.key);
   const colKey = (c: any, i: number) => typeof c === "string" ? c : (c.key ?? i);
-  const cell = (v: any) => (typeof v === "number" ? <span className={`font-mono tabular-nums ${v < 0 ? "text-rose-600 font-semibold" : ""}`}>{v.toLocaleString(getLocale())}</span> : String(v ?? "—"));
+  // Raw keys from the server ("technician", "in_repair") read as words; names and emails are left alone.
+  const cell = (v: any) => (typeof v === "number" ? <span className={`font-mono tabular-nums ${v < 0 ? "text-rose-600 font-semibold" : ""}`}>{v.toLocaleString(getLocale())}</span>
+    : typeof v === "string" && /^[a-z]+(_[a-z]+)*$/.test(v) ? humanize(v) : String(v ?? "—"));
   const cellVal = (row: any, c: any, ci: number) => Array.isArray(row) ? row[ci] : row[colKey(c, ci)];
 
   // ── derived view: search-filter + sort + numeric totals ──
@@ -729,7 +732,7 @@ export default function ReportsHub() {
                 <Pager total={viewRows.length} page={safePage} pageSize={REPORT_PAGE} onPage={setPage}
                        noun={q.trim() ? "matching rows" : "rows"} />
               )}
-              {!loading && !result && <div className="p-12 text-center"><M n="insert_chart" c="text-4xl text-ink-placeholder" /><p className="mt-2 text-xs text-ink-tertiary">Pick a report from the left to get started.</p></div>}
+              {!loading && !result && <div className="p-12 text-center"><M n="insert_chart" c="mx-auto mb-2 text-4xl text-ink-placeholder" /><p className="mt-2 text-xs text-ink-tertiary">Pick a report from the left to get started.</p></div>}
             </div>
           </div>
         </div>

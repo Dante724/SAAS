@@ -1,4 +1,5 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
 import { api } from "../../api/client";
@@ -183,7 +184,7 @@ export default function ClientsHub() {
                       <td className="py-3 px-4 font-bold text-ink-primary">{c.name || "—"}</td>
                       <td className="py-3 px-4 font-mono">{c.phone || "—"}</td>
                       <td className="py-3 px-4 text-ink-tertiary">{c.email || "—"}</td>
-                      <td className="py-3 px-4"><span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-purple-100 text-purple-800 border border-purple-200">{c.loyalty_tier || "Standard"}</span></td>
+                      <td className="py-3 px-4"><span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-purple-100 text-purple-800 border border-purple-200">{c.loyalty_tier?.toLowerCase() === "vip" ? "VIP" : humanize(c.loyalty_tier) || "Standard"}</span></td>
                       <td className="py-3 px-4 text-right font-mono font-bold text-ink-primary">{money(c.balance ?? 0)}</td>
                       <td className="py-3 px-4 font-mono font-semibold text-ink-primary">{c.devices?.length ?? 0}</td>
                       <td className="py-3 px-4 font-mono font-semibold text-ink-primary">{c.order_count ?? 0}</td>

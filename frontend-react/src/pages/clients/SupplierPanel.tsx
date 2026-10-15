@@ -94,7 +94,7 @@ export default function SupplierPanel({ supplierId, onSaved }: { supplierId: str
             <div><label className={lbl}>Lead time (days)</label>
               <input type="number" min={0} value={f.lead_days ?? ""} onChange={(e) => setF({ ...f, lead_days: e.target.value === "" ? undefined : Number(e.target.value) })} className={fld} /></div>
             <div><label className={lbl}>PO currency</label>
-              <input value={f.currency || ""} onChange={(e) => setF({ ...f, currency: e.target.value })} placeholder="₹" className={fld} /></div>
+              <input value={f.currency || ""} onChange={(e) => setF({ ...f, currency: e.target.value })} placeholder="$" className={fld} /></div>
           </div>
           <div className="flex justify-end"><button onClick={saveHeader} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : "Save supplier details"}</button></div>
 

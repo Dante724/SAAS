@@ -7,7 +7,7 @@ import Pager from "../../components/Pager";
 import { confirmDialog, alertDialog } from "../../lib/dialog";
 
 // Marketing: campaigns (SMS/email blasts by segment) + call log — legacy /comms surface.
-const d = (iso?: string) => (iso ? new Date(iso).toLocaleString([], { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—");
+const d = (iso?: string) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—");
 
 export default function MarketingHub() {
   const [tab, setTab] = useState<"campaigns" | "calls">("campaigns");
@@ -56,8 +56,8 @@ export default function MarketingHub() {
 
       <div className="flex-1 overflow-y-auto px-6 py-5">
         {tab === "campaigns" && (
-          <div className="max-w-3xl space-y-3">
-            <div className="flex justify-end"><button onClick={() => setDraft({ channel: "sms", segment: "all" })} className="px-4 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New campaign</button></div>
+          <div className="space-y-3">
+            <div className="flex"><button onClick={() => setDraft({ channel: "sms", segment: "all" })} className="px-4 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New campaign</button></div>
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
               <table className="w-full text-left text-xs">
                 <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[10px] font-bold uppercase tracking-wider"><th className="py-3 px-4">Name</th><th className="py-3 px-4">Channel</th><th className="py-3 px-4">Segment</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Recipients</th><th className="py-3 px-4 text-right">Action</th></tr></thead>
@@ -82,7 +82,7 @@ export default function MarketingHub() {
         )}
 
         {tab === "calls" && (
-          <div className="max-w-3xl bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
             <table className="w-full text-left text-xs">
               <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[10px] font-bold uppercase tracking-wider"><th className="py-3 px-4">When</th><th className="py-3 px-4">Direction</th><th className="py-3 px-4">From → To</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Duration</th><th className="py-3 px-4">Recording</th></tr></thead>
               <tbody className="divide-y divide-slate-100">

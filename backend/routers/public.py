@@ -260,10 +260,23 @@ async def track(token: str, db: AsyncSession = Depends(get_db)):
         ).order_by(desc(OrderComment.created_at))
     )).scalars().all()
 
+    # The shop's own status names; any status outside the six-step flow is placed by its group,
+    # and a dropped job ("Not collected", "Cancelled") stops the progress bar instead of
+    # pretending it's back at "Received".
+    from backend.models import OrderStatus as _OS
+    _sts = {s.key: s for s in (await db.execute(select(_OS).where(
+        _OS.org_id == order.org_id,
+        _OS.record_type == ("estimate" if getattr(order, "is_estimate", False) else "work_order")))).scalars().all()}
+    _cur_st = _sts.get(order.status)
+    _group = getattr(_cur_st, "status_group", None)
+    stopped = _group == "dropped"
     try:
         stage_index = STAGE_FLOW.index(order.status)
     except ValueError:
-        stage_index = 0
+        stage_index = {"new": 0, "pending": 2, "in_progress": 3, "ready": 4, "closed": 5}.get(_group or "", 0)
+
+    def _label(key):
+        return STAGE_LABEL.get(key) or (_sts[key].name if key in _sts else (key or "").replace("_", " ").capitalize())
 
     # Display currency for the public page: order snapshot → client pref → base.
     from backend.services import currency as _cur
@@ -334,8 +347,9 @@ async def track(token: str, db: AsyncSession = Depends(get_db)):
         "fx_rate": _fx,
         "total_converted": q2((order.total or 0) * _fx) if _fx else order.total,
         "status": order.status,
-        "stage_label": STAGE_LABEL.get(order.status, order.status.replace("_", " ").title()),
+        "stage_label": _label(order.status),
         "stage_index": stage_index,
+        "stopped": stopped,
         "stages": [{"key": s, "label": STAGE_LABEL[s]} for s in STAGE_FLOW],
         "shop_name": org.name if org else "Repair shop",
         "shop_phone": shop_phone,
@@ -360,7 +374,7 @@ async def track(token: str, db: AsyncSession = Depends(get_db)):
         "has_signature": bool((await db.execute(select(DocumentSignature.id).where(
             DocumentSignature.order_id == order.id).limit(1))).first()),
         "timeline": [
-            {"to": l.to_status, "label": STAGE_LABEL.get(l.to_status, l.to_status),
+            {"to": l.to_status, "label": _label(l.to_status),
              "at": l.changed_at.isoformat() if l.changed_at else None}
             for l in logs
         ],

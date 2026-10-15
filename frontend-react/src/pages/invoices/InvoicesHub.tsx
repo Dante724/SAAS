@@ -13,7 +13,7 @@ import { money } from "../orders/types";
 // Invoices are day-to-day front-desk work (issue, take payment, resend), so they get their own
 // page next to Sales instead of a tab inside Finance — which also kept staff who only need
 // invoices out of P&L and payroll. Finance links here from its Outstanding figure.
-type Invoice = { id: string; invoice_number?: string; status?: string; total?: number; amount_paid?: number; balance_due?: number; order_number?: string; issued_at?: string; einvoice_status?: string; einvoice_number?: string };
+type Invoice = { id: string; invoice_number?: string; status?: string; total?: number; amount_paid?: number; balance_due?: number; order_number?: string; issued_at?: string; created_at?: string; client_name?: string | null; einvoice_status?: string; einvoice_number?: string };
 const INV_PAGE_SIZE = 50;
 
 export default function InvoicesHub() {
@@ -37,7 +37,7 @@ export default function InvoicesHub() {
     try { await api.patch(`/finance/invoices/${id}/einvoice`, { status: "cleared" }); reloadInvoices(); }
     catch { await alertDialog("Could not update status"); }
   }
-  const cols = einv ? 9 : 8;
+  const cols = einv ? 11 : 10;
   const invPages = Math.max(1, Math.ceil((invoices?.length ?? 0) / INV_PAGE_SIZE));
   const pageInv = (invoices || []).slice((Math.min(invPage, invPages) - 1) * INV_PAGE_SIZE, Math.min(invPage, invPages) * INV_PAGE_SIZE);
 
@@ -54,7 +54,7 @@ export default function InvoicesHub() {
             <table className="w-full text-left border-collapse text-xs">
               <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[10px] font-bold uppercase tracking-wider">
                 <th className="py-3 pl-4 pr-2 w-10"><input type="checkbox" checked={!!invoices?.length && invoices.every((i) => invSel.has(i.id))} onChange={(e) => setInvSel(e.target.checked ? new Set((invoices || []).map((i) => i.id)) : new Set())} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
-                <th className="py-3 px-4">Invoice #</th><th className="py-3 px-4">Order</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Total</th><th className="py-3 px-4 text-right">Paid</th><th className="py-3 px-4 text-right">Balance</th>{einv && <th className="py-3 px-4">E-invoice</th>}<th className="py-3 px-4"></th>
+                <th className="py-3 px-4">Invoice #</th><th className="py-3 px-4">Customer</th><th className="py-3 px-4">Date</th><th className="py-3 px-4">Job</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Total</th><th className="py-3 px-4 text-right">Paid</th><th className="py-3 px-4 text-right">Balance</th>{einv && <th className="py-3 px-4">E-invoice</th>}<th className="py-3 px-4"></th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
                 {!invoices && <SkeletonRows cols={cols} />}
@@ -65,11 +65,13 @@ export default function InvoicesHub() {
                     <tr key={i.id} className="hover:bg-blue-50/30">
                       <td className="py-2.5 pl-4 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={invSel.has(i.id)} onChange={() => setInvSel((s) => { const n = new Set(s); n.has(i.id) ? n.delete(i.id) : n.add(i.id); return n; })} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
                       <td className="py-2.5 px-4 font-mono font-bold text-primary">{i.invoice_number}</td>
+                      <td className="py-2.5 px-4 font-semibold text-ink-primary">{i.client_name || <span className="font-normal text-ink-tertiary">Walk-in</span>}</td>
+                      <td className="py-2.5 px-4 text-ink-secondary whitespace-nowrap">{(i.issued_at || i.created_at) ? new Date((i.issued_at || i.created_at)!).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) : "—"}</td>
                       <td className="py-2.5 px-4 font-mono">{i.order_number || "—"}</td>
                       <td className="py-2.5 px-4"><span className={`px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ${paid ? "bg-emerald-100 text-emerald-800" : /partial/i.test(i.status || "") ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"}`}>{humanize(i.status)}</span></td>
                       <td className="py-2.5 px-4 text-right font-mono font-bold text-ink-primary">{money(i.total)}</td>
                       <td className="py-2.5 px-4 text-right font-mono text-emerald-600">{money(i.amount_paid)}</td>
-                      <td className="py-2.5 px-4 text-right font-mono font-bold text-rose-600">{money(i.balance_due)}</td>
+                      <td className={`py-2.5 px-4 text-right font-mono font-bold ${(i.balance_due || 0) > 0 ? "text-rose-600" : "text-ink-tertiary"}`}>{money(i.balance_due)}</td>
                       {einv && <td className="py-2.5 px-4">
                         {(!i.einvoice_status || i.einvoice_status === "none") ? (
                           <button onClick={() => issueEinvoice(i.id)} className="px-2 py-1 rounded-lg border border-slate-200 bg-white text-ink-secondary text-[11px] font-semibold hover:bg-slate-50">Issue e-invoice</button>

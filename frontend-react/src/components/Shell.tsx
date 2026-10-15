@@ -246,10 +246,10 @@ export default function Shell({ title, children }: { title: string; children: Re
         <main className="flex-1 flex flex-col min-w-0 bg-[#f7f8fd] overflow-hidden">
           <header className="h-[52px] bg-white/80 backdrop-blur-md border-b border-slate-200/80 px-6 flex items-center justify-between flex-shrink-0 z-10">
             <div className="flex items-center gap-4">
-              <h1 className="text-base font-bold text-ink-primary tracking-tight">{t(title)}</h1>
-              <button onClick={() => setPalette(true)} className="relative w-64 text-left group">
+              <h1 className="text-base font-bold text-ink-primary tracking-tight whitespace-nowrap">{t(title)}</h1>
+              <button onClick={() => setPalette(true)} className="relative w-64 flex-shrink-0 text-left group">
                 <M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" />
-                <div className="w-full bg-slate-100/80 group-hover:bg-white text-xs pl-8 pr-12 py-1.5 rounded-lg border border-slate-200/70 font-medium text-ink-placeholder">{t("Search orders, clients, serials…")}</div>
+                <div className="w-full bg-slate-100/80 group-hover:bg-white text-xs pl-8 pr-12 py-1.5 rounded-lg border border-slate-200/70 font-medium text-ink-placeholder whitespace-nowrap overflow-hidden text-ellipsis">{t("Search jobs, customers…")}</div>
                 <span className="absolute right-2 top-1.5 text-[10px] bg-white border border-slate-200 text-ink-tertiary font-mono px-1 rounded shadow-2xs">⌘K</span>
               </button>
             </div>
@@ -524,12 +524,12 @@ function NotificationsPanel({ onClose, onChanged }: { onClose: () => void; onCha
         </div>
         <div className="max-h-[60vh] overflow-y-auto divide-y divide-slate-100">
           {items == null && <div className="px-4 py-6 text-xs text-ink-tertiary">Loading…</div>}
-          {items?.length === 0 && <div className="px-4 py-10 text-center"><M n="notifications" c="text-2xl text-ink-placeholder" /><div className="text-xs text-ink-tertiary mt-2">{t("You're all caught up.")}</div></div>}
+          {items?.length === 0 && <div className="px-4 py-10 text-center"><M n="notifications" c="mx-auto mb-2 text-2xl text-ink-placeholder" /><div className="text-xs text-ink-tertiary mt-2">{t("You're all caught up.")}</div></div>}
           {items?.map((n) => (
             <div key={n.id} className={`group relative w-full hover:bg-blue-50/50 ${n.read ? "" : "bg-blue-50/30"}`}>
               <button onClick={() => open(n)} className="w-full text-left px-4 py-3 pr-9 flex gap-3">
                 <span className={`mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0 ${n.read ? "bg-transparent" : "bg-primary"}`} />
-                <div className="min-w-0"><div className="text-xs font-bold text-ink-primary">{n.title || n.kind || "Update"}</div>{n.body && <div className="text-[11px] text-ink-secondary mt-0.5 line-clamp-2">{n.body}</div>}<div className="text-[10px] text-ink-tertiary mt-1">{n.created_at ? new Date(n.created_at).toLocaleString([], { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : ""}</div></div>
+                <div className="min-w-0"><div className="text-xs font-bold text-ink-primary">{n.title || n.kind || "Update"}</div>{n.body && <div className="text-[11px] text-ink-secondary mt-0.5 line-clamp-2">{n.body}</div>}<div className="text-[10px] text-ink-tertiary mt-1">{n.created_at ? new Date(n.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}</div></div>
               </button>
               <button onClick={(e) => dismiss(n, e)} title={t("Dismiss")} aria-label={t("Dismiss")}
                 className="absolute top-2 right-2 w-6 h-6 rounded-md flex items-center justify-center text-ink-placeholder hover:text-rose-600 hover:bg-rose-50 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity">

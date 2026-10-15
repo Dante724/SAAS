@@ -957,10 +957,19 @@ async def company_dashboard(
     def is_open(o): return grp.get(o.status) not in closed_groups
 
     wo_today = sum(1 for o in orders if o.created_at >= today0)
+    # Payments carry no org_id: they belong to this shop through their job, invoice or account
+    # (one branch: through that branch's jobs). Every money total below uses the same scope.
+    from sqlalchemy import or_
+    if location_id:
+        mine = Payment.order_id.in_([o.id for o in orders] or ['_'])
+    else:
+        mine = or_(Payment.order_id.in_(select(Order.id).where(Order.org_id == oid)),
+                   Payment.invoice_id.in_(select(Invoice.id).where(Invoice.org_id == oid)),
+                   Payment.account_id.in_(select(Account.id).where(Account.org_id == oid)))
     revenue_today = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0))
-        .where(Payment.order_id.in_([o.id for o in orders] or ['_']), Payment.kind != "refund", Payment.paid_at >= today0))).scalar() or 0
+        .where(mine, Payment.kind != "refund", Payment.paid_at >= today0))).scalar() or 0
     refunds_today = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0))
-        .where(Payment.kind == "refund", Payment.paid_at >= today0))).scalar() or 0
+        .where(mine, Payment.kind == "refund", Payment.paid_at >= today0))).scalar() or 0
 
     new_count = sum(1 for o in orders if grp.get(o.status) == "new")
     urgent = sum(1 for o in orders if o.priority >= 1 and is_open(o))
@@ -1005,7 +1014,7 @@ async def company_dashboard(
     wo_month = [o for o in orders if o.created_at >= month0]
     won_month = [o for o in wo_month if grp.get(o.status) in closed_groups]
     revenue_month = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0))
-        .where(Payment.kind != "refund", Payment.paid_at >= month0))).scalar() or 0
+        .where(mine, Payment.kind != "refund", Payment.paid_at >= month0))).scalar() or 0
     closed_total = sum((o.total or 0) for o in orders if grp.get(o.status) in closed_groups)
     closed_n = sum(1 for o in orders if grp.get(o.status) in closed_groups)
     avg_wo = q2(closed_total / closed_n) if closed_n else 0

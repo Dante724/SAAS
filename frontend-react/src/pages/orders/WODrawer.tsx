@@ -43,7 +43,7 @@ type Timing = {
 type Tab = "general" | "services" | "checklists" | "invoices" | "activity";
 
 const or = (real: any, sample: string) => (real != null && real !== "" ? String(real) : sample);
-const fmtDT = (iso?: string | null) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "");
+const fmtDT = (iso?: string | null) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
 const fmtDur = (min?: number | null) => {
   if (min == null) return "";
   if (min < 60) return `${Math.round(min)} min`;
@@ -1197,8 +1197,11 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
       )}
 
       <div className="bg-slate-50/90 rounded-2xl p-4 border border-slate-200 space-y-2">
-        <div className="flex justify-between text-xs text-ink-secondary"><span>Subtotal ({shown.length} items)</span><span className="font-mono font-semibold text-ink-primary">{money(shown.reduce((s, l) => s + (l.total || 0), 0))}</span></div>
-        <div className="pt-2 border-t border-slate-200 flex justify-between items-baseline"><span className="text-xs font-bold text-ink-primary">Grand Total</span><span className="text-lg font-black font-mono text-primary">{money(total)}</span></div>
+        {/* Totals are for the whole job, whatever filter is on. No lines yet but a price on the job
+            (agreed at check-in) reads as the quoted price, not a $0 subtotal next to a real total. */}
+        {(lines || []).length > 0 && <div className="flex justify-between text-xs text-ink-secondary"><span>Subtotal ({(lines || []).length} {(lines || []).length === 1 ? "line" : "lines"})</span><span className="font-mono font-semibold text-ink-primary">{money((lines || []).reduce((s, l) => s + (l.total || 0), 0))}</span></div>}
+        <div className={`${(lines || []).length ? "pt-2 border-t border-slate-200 " : ""}flex justify-between items-baseline`}><span className="text-xs font-bold text-ink-primary">{(lines || []).length ? "Grand total" : "Quoted price"}</span><span className="text-lg font-black font-mono text-primary">{money(total)}</span></div>
+        {!(lines || []).length && !!total && <div className="text-[11px] text-ink-tertiary">Agreed when the job came in. Add services and parts to build the invoice.</div>}
       </div>
     </div>
   );

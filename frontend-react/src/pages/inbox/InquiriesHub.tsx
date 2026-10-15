@@ -8,7 +8,7 @@ type Column = { key: string; label: string; cards: Lead[] };
 
 const SRC_ICON: Record<string, string> = { phone: "call", whatsapp: "chat", sms: "sms", email: "mail", instagram: "photo_camera", facebook: "thumb_up", web: "public", walk_in: "directions_walk" };
 const COL_ACCENT: Record<string, string> = { new: "bg-blue-500", in_progress: "bg-amber-500", won: "bg-emerald-500", lost: "bg-slate-400" };
-const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString([], { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—");
+const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—");
 function sla(l: Lead) {
   if (!l.sla_due_at || l.status === "won" || l.status === "lost") return null;
   const ms = new Date(l.sla_due_at).getTime() - Date.now();

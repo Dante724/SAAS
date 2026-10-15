@@ -16,7 +16,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "Contacts": "Contactos", "Sales": "Ventas", "Invoices": "Facturas",
     "Inventory": "Inventario", "Finance": "Finanzas", "Reports": "Informes",
     "Settings": "Ajustes", "Workshop Central": "Central del taller",
-    "Search orders, clients, serials…": "Buscar órdenes, clientes, series…",
+    "Search jobs, customers…": "Buscar trabajos, clientes…",
     "Notifications": "Notificaciones", "You're all caught up.": "Estás al día.",
     "Mark all read": "Marcar todo leído", "Navigate": "Navegar", "Results": "Resultados",
     "Search or jump to…": "Buscar o ir a…", "Light": "Claro", "Dark": "Oscuro",

@@ -9,7 +9,9 @@ type Msg = { id: string; direction?: string; body?: string; status?: string; cre
 
 const CH: Record<string, string> = { whatsapp: "WhatsApp", sms: "SMS", email: "Email", instagram: "Instagram", facebook: "Facebook", telegram: "Telegram", web: "Web" };
 const QUICK = ["On our way to diagnose it now.", "It's ready for pickup!", "Your estimate is approved — starting the repair.", "Can you confirm a good time to call?"];
-const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleString([], { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
+// "Neha Gupta" → "NG" (first letters of the first two words), not the first two letters.
+const initialsOf = (n?: string) => (n || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase() || "?";
+const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
 
 export default function ChatsHub() {
   const [threads, setThreads] = useState<Thread[] | null>(null);
@@ -90,7 +92,7 @@ export default function ChatsHub() {
             {shown.map((t) => (
               <button key={t.id} onClick={() => open(t)} className={`w-full text-left px-4 py-3 border-b border-slate-100 hover:bg-blue-50/40 transition-colors ${sel?.id === t.id ? "bg-blue-50/60" : ""}`}>
                 <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-emerald-500 to-teal-600 text-white font-bold flex items-center justify-center text-xs flex-shrink-0">{nameOf(t).slice(0, 2).toUpperCase()}</div>
+                  <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-emerald-500 to-teal-600 text-white font-bold flex items-center justify-center text-xs flex-shrink-0">{initialsOf(nameOf(t))}</div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between"><span className="text-xs font-bold text-ink-primary truncate">{nameOf(t)}</span><span className="text-[10px] text-ink-tertiary flex-shrink-0">{fmt(t.last_message_at)}</span></div>
                     <div className="flex items-center gap-1.5"><span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-100 text-ink-secondary font-bold">{CH[t.channel || "web"] || t.channel}</span><span className="text-[11px] text-ink-tertiary truncate">{t.last_body || t.contact_phone}</span></div>
@@ -108,7 +110,7 @@ export default function ChatsHub() {
           ) : (
             <>
               <div className="px-6 py-4 border-b border-slate-200/80 bg-white/60 flex items-center gap-3">
-                <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-emerald-500 to-teal-600 text-white font-bold flex items-center justify-center text-xs">{nameOf(sel).slice(0, 2).toUpperCase()}</div>
+                <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-emerald-500 to-teal-600 text-white font-bold flex items-center justify-center text-xs">{initialsOf(nameOf(sel))}</div>
                 <div><h3 className="text-sm font-bold text-ink-primary">{nameOf(sel)}</h3><p className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />{CH[sel.channel || "web"] || sel.channel} · {sel.contact_phone}</p></div>
                 {/* Create split button */}
                 <div className="ml-auto relative">

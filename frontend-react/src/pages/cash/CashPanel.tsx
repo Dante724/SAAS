@@ -5,7 +5,7 @@ import { api } from "../../api/client";
 import NewAccountDrawer, { Account } from "./NewAccountDrawer";
 import CashDrawer from "./CashDrawer";
 import Pager from "../../components/Pager";
-import { money } from "../orders/types";
+import { currencySymbol, money } from "../orders/types";
 import { promptDialog } from "../../lib/dialog";
 import { todayTotals } from "../../lib/cashStats";
 
@@ -52,7 +52,7 @@ export default function CashPanel() {
     } catch (e: any) { flash(`Failed: ${e.message}`); }
   }
 
-  const sym = sel?.currency_code ? (CCY[sel.currency_code] || "") : "₹";
+  const sym = sel?.currency_code ? (CCY[sel.currency_code] || "") : currencySymbol();
   // Pagination — 50/page, reset when the selected account changes. Totals below stay full-set.
   const PAGE_SIZE = 50;
   const [txnPage, setTxnPage] = useState(1);
@@ -100,7 +100,7 @@ export default function CashPanel() {
                 <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-primary to-primary-container text-white flex items-center justify-center shadow-clay-sm shrink-0"><M n={iconFor(a)} c="text-base" /></div>
                 <div className="min-w-0 flex-1">
                   <div className="text-xs font-bold text-ink-primary truncate">{a.name}</div>
-                  <div className="font-mono text-xs font-bold text-ink-secondary">{money(a.balance, a.currency_code ? (CCY[a.currency_code] || "") : "₹")}</div>
+                  <div className="font-mono text-xs font-bold text-ink-secondary">{money(a.balance, a.currency_code ? (CCY[a.currency_code] || "") : currencySymbol())}</div>
                 </div>
                 <button aria-label="More options" onClick={(e) => { e.stopPropagation(); setMenu(menu === a.id ? null : a.id); }} className="text-ink-tertiary hover:text-ink-primary p-0.5 shrink-0"><M n="more_vert" c="text-base" /></button>
                 {menu === a.id && (
@@ -177,7 +177,7 @@ export default function CashPanel() {
                   const corrected = t.status === "corrected";
                   return (
                     <tr key={t.id} className={`hover:bg-blue-50/30 ${del ? "opacity-50 line-through" : ""}`} title={del ? `Deleted${t.void_reason ? `: ${t.void_reason}` : ""}` : corrected ? "Corrected — see the linked adjustment row" : ""}>
-                      <td className="py-2.5 px-4 text-ink-tertiary">{t.actual_date ? new Date(t.actual_date).toLocaleString([], { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}</td>
+                      <td className="py-2.5 px-4 text-ink-tertiary">{t.actual_date ? new Date(t.actual_date).toLocaleString([], { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }) : "—"}</td>
                       <td className="py-2.5 px-4 text-ink-primary font-semibold">{t.comment || "—"}{corrected && <span className="ml-2 text-[10px] font-bold text-amber-600 no-underline">CORRECTED</span>}{t.reverses_txn_id && <span className="ml-2 text-[10px] font-bold text-sky-600 no-underline">ADJUSTMENT</span>}</td>
                       <td className="py-2.5 px-4">{t.cash_flow_item || "—"}</td>
                       <td className="py-2.5 px-4 text-right font-mono font-bold text-emerald-600">{inc ? money(Math.abs(t.amount || 0), sym) : ""}</td>

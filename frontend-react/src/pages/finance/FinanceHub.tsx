@@ -5,7 +5,7 @@ import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import { api, openAuthedDoc } from "../../api/client";
 import Pager from "../../components/Pager";
-import { money } from "../orders/types";
+import { currencySymbol, money } from "../orders/types";
 import { alertDialog, promptDialog } from "../../lib/dialog";
 import { isoMonth } from "../../lib/localDate";
 import { useMe } from "../../context/Me";
@@ -54,7 +54,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
   const isoLocal = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const [pFrom, setPFrom] = useState(() => isoLocal(new Date(new Date().getFullYear(), new Date().getMonth(), 1)));
   const [pTo, setPTo] = useState(() => isoLocal(new Date()));
-  const cur = (n?: number) => `${pack?.currency_symbol || "₹"}${(n ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  const cur = (n?: number) => `${pack?.currency_symbol || currencySymbol()}${(n ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
   async function loadPnl() {
     setPnlBusy(true);
     try { setPnl(await api.get<any>(`/finance/pnl?date_from=${pFrom}&date_to=${pTo}`)); }
@@ -111,11 +111,11 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
         {tab === "overview" && (<>
           {can("can_export_accountant") && (
             <div className="flex items-center justify-between flex-wrap gap-2">
-              <div><h3 className="text-sm font-bold text-ink-primary">This month at a glance</h3><p className="text-xs text-ink-tertiary">Your books are done when the day is done — hand your accountant one clean file.</p></div>
+              <div><h3 className="text-sm font-bold text-ink-primary">Since you started</h3><p className="text-xs text-ink-tertiary">Paid invoices, money still owed and expenses, all time. Pick dates to export a period for your accountant.</p></div>
               <div className="flex items-center gap-1.5 flex-wrap">
-                <input type="date" value={exFrom} onChange={(e) => setExFrom(e.target.value)} aria-label="Export from date" className="glass-input py-1.5 px-2 text-xs rounded-lg" />
+                <DateField mode="date" value={exFrom} onChange={setExFrom} placeholder="From" className="w-36" />
                 <span className="text-ink-tertiary text-xs">→</span>
-                <input type="date" value={exTo} onChange={(e) => setExTo(e.target.value)} aria-label="Export to date" className="glass-input py-1.5 px-2 text-xs rounded-lg" />
+                <DateField mode="date" value={exTo} onChange={setExTo} placeholder="To" className="w-36" />
                 <button onClick={() => { const qs = [exFrom && `date_from=${exFrom}`, exTo && `date_to=${exTo}`].filter(Boolean).join("&"); openAuthedDoc(`/finance/export/accountant.csv${qs ? `?${qs}` : ""}`).catch(() => alertDialog("Could not export.")); }} className="px-3.5 py-2 rounded-lg bg-white border border-slate-200 text-ink-secondary hover:bg-slate-50 text-xs font-bold flex items-center gap-1.5 shadow-clay-sm"><M n="download" c="text-sm" />Export for accountant</button>
               </div>
             </div>
