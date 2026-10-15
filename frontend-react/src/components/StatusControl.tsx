@@ -37,7 +37,6 @@ function hint(s: FullStatus, isEstimate?: boolean): string {
   if (s.converts_to_order) parts.push("converts to work order");
   if (s.triggers_invoice) parts.push("invoices");
   if (s.triggers_payment) parts.push("needs payment");
-  if (s.triggers_notification) parts.push("notifies client");
   if (s.shows_accept) parts.push(isEstimate ? "client sign-off" : "client accept");
   if (s.moves_asset_to) parts.push("moves asset");
   if (s.locks_edits) parts.push("locks edits");

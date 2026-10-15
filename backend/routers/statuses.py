@@ -7,11 +7,11 @@ Closed/dropped groups are terminal and open the payment window.
 """
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func, delete, update
 from pydantic import BaseModel
 from typing import Optional
 from backend.db.database import get_db
-from backend.models import OrderStatus, Employee
+from backend.models import OrderStatus, Employee, NotificationRule
 from backend.services.auth import get_current_employee, require_perm, record_scope
 
 router = APIRouter(prefix="/api/statuses", tags=["statuses"],
@@ -24,6 +24,7 @@ TERMINAL_GROUPS = {"closed", "dropped"}
 # now configurable). key, name, group, color, default, triggers...
 DEFAULT_STATUSES = [
     # key, name, group, color, is_default, t_invoice, t_notify, t_payment, terminal
+    # (t_notify is historical: customer messages are notification rules now, so it's unused)
     ("new",            "New",            "new",         "#4f8ef7", True,  False, True,  False, False),
     ("diagnosed",      "Diagnosed",      "in_progress", "#f5a623", False, False, True,  False, False),
     ("waiting_parts",  "Waiting parts",  "pending",     "#f06daa", False, False, True,  False, False),
@@ -134,7 +135,7 @@ async def ensure_seeded(db: AsyncSession, org_id: str):
             db.add(OrderStatus(
                 org_id=org_id, key=key, name=name, status_group=grp, color=color,
                 sort_order=i, is_default=dflt, triggers_invoice=t_inv,
-                triggers_notification=t_not, triggers_payment=t_pay, is_terminal=term,
+                triggers_notification=False, triggers_payment=t_pay, is_terminal=term,
                 record_type="work_order",
             ))
         await db.commit()
@@ -150,7 +151,6 @@ async def ensure_seeded(db: AsyncSession, org_id: str):
                 sort_order=i, is_estimate=True, record_type="estimate",
                 shows_accept=accept, converts_to_order=conv,
                 is_terminal=grp in ("closed", "dropped"),
-                triggers_notification=(key == "est_sent"),
             ))
         await db.commit()
     # 144ij — seed the three newer Orderry pipelines, each independently.
@@ -217,6 +217,8 @@ class StatusIn(BaseModel):
     color: str = "#888888"
     is_default: bool = False
     triggers_invoice: bool = False
+    # Deprecated: customer messages are notification rules. True is still accepted from old
+    # clients and converted into an equivalent per-status rule (services/legacy_status_notifs).
     triggers_notification: bool = False
     triggers_payment: bool = False
     locks_edits: bool = False
@@ -276,6 +278,8 @@ async def create_status(
         require_checklist=data.require_checklist, allow_messages=data.allow_messages,
     )
     db.add(s)
+    await db.flush()
+    await _legacy_flag_to_rules(db, current.org_id)
     await db.commit()
     await db.refresh(s)
     return _ser(s)
@@ -297,7 +301,15 @@ async def update_status(
     s.status_group = data.status_group
     s.color = data.color
     s.is_default = data.is_default
+    was_terminal = bool(s.is_terminal)
     s.is_terminal = data.status_group in TERMINAL_GROUPS
+    if was_terminal != s.is_terminal:
+        # A status's own rules fire on the event its change evaluates (closed for a
+        # finishing status, else status_changed); keep them firing when the stage flips.
+        await db.execute(update(NotificationRule).where(
+            NotificationRule.org_id == current.org_id, NotificationRule.trigger_status_key == s.key,
+            NotificationRule.event == ("status_changed" if s.is_terminal else "closed"))
+            .values(event="closed" if s.is_terminal else "status_changed"))
     s.triggers_invoice = data.triggers_invoice
     s.triggers_notification = data.triggers_notification
     s.triggers_payment = data.triggers_payment
@@ -311,8 +323,16 @@ async def update_status(
     s.require_checklist = data.require_checklist
     if "allow_messages" in data.model_fields_set:
         s.allow_messages = data.allow_messages
+    await db.flush()
+    await _legacy_flag_to_rules(db, current.org_id)
     await db.commit()
     return _ser(s)
+
+
+async def _legacy_flag_to_rules(db: AsyncSession, org_id: str) -> None:
+    """An old client sending triggers_notification=True gets the per-status rule it meant."""
+    from backend.services.legacy_status_notifs import convert
+    await convert(db, org_id)
 
 
 class ReorderIn(BaseModel):

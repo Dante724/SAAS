@@ -191,6 +191,16 @@ async def init_db():
         if made:
             await session.commit()
 
+    # Retire OrderStatus.triggers_notification: turn flagged statuses into equivalent
+    # per-status rules (only where no rule already fires) and clear the flag. Runs after the
+    # starter-rule seed above so "covered" sees those rules. Idempotent. In production the
+    # equivalent runs inside Alembic migration nt144p4.
+    from backend.services import legacy_status_notifs as _legacy
+    async with AsyncSessionLocal() as session:
+        for oid in org_ids:
+            await _legacy.convert(session, oid)
+        await session.commit()
+
     # 144an — seed the manual workflow stage for POs created before the field existed, mapping
     # each PO's receipt state to a sensible starting stage. Idempotent (only NULL rows). In
     # production the equivalent runs inside the matching Alembic migration.

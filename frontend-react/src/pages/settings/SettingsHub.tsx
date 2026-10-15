@@ -212,7 +212,7 @@ export default function SettingsHub() {
     statuses: { create: "/statuses", upd: (id) => `/statuses/${id}`, del: (id) => `/statuses/${id}`, reload: () => reloadSec("statuses"), fields: [
       { k: "name", label: "Name", type: "text", req: true }, { k: "status_group", label: "Group", type: "select", opts: ["new", "in_progress", "pending", "ready", "closed", "dropped"], def: "in_progress" },
       { k: "color", label: "Colour", type: "color", def: "#888888" }, { k: "is_default", label: "Default status", type: "checkbox" },
-      { k: "triggers_invoice", label: "Triggers invoice", type: "checkbox" }, { k: "triggers_notification", label: "Triggers notification", type: "checkbox" }, { k: "triggers_payment", label: "Prompts payment", type: "checkbox" }, { k: "locks_edits", label: "Locks edits (freeze after this status)", type: "checkbox" },
+      { k: "triggers_invoice", label: "Triggers invoice", type: "checkbox" }, { k: "triggers_payment", label: "Prompts payment", type: "checkbox" }, { k: "locks_edits", label: "Locks edits (freeze after this status)", type: "checkbox" },
       { k: "time_limit_min", label: "Time limit (minutes, blank = none)", type: "number" }, { k: "moves_asset_to", label: "Auto-move asset to (warehouse/status key)", type: "text" },
       { k: "require_comment", label: "Require a comment before entering", type: "checkbox" }, { k: "require_checklist", label: "Require all checklist items done", type: "checkbox" }, { k: "require_payment", label: "Require full payment before entering", type: "checkbox" } ] },
     pricing: { create: "/pricing/types", upd: (id) => `/pricing/types/${id}`, del: (id) => `/pricing/types/${id}`, reload: () => reloadSec("pricing"), fields: [
@@ -470,7 +470,8 @@ export default function SettingsHub() {
       )}
       {statusEdit && (
         <StatusEditor status={statusEdit === "new" ? null : statusEdit} recordType={statusRT} statuses={statuses}
-          onClose={() => setStatusEdit(null)} onSaved={(m) => { flash(m || "Saved"); setStatusEdit(null); reloadSec("statuses"); }} />
+          onClose={() => setStatusEdit(null)} onSaved={(m) => { flash(m || "Saved"); setStatusEdit(null); reloadSec("statuses"); }}
+          onOpenNotifications={() => { setStatusEdit(null); setSec("notifications"); }} />
       )}
       {formFieldsFor && (
         <FormFieldsDrawer type={formFieldsFor} onClose={() => setFormFieldsFor(null)} onChanged={() => reloadSec("forms")} />
