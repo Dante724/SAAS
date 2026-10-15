@@ -6,6 +6,7 @@ import { Product, money } from "./types";
 import CustomFields from "../../components/CustomFields";
 import CategoryPicker from "../../components/CategoryPicker";
 import CatalogPicker, { CatalogItem } from "../../components/CatalogPicker";
+import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../../lib/formLayout";
 
 export type DrawerKind = "product" | "service" | "asset" | "bundle";
 type Props = { kind: DrawerKind; id?: string | null; initial?: any; onClose: () => void; onSaved?: () => void };
@@ -107,9 +108,13 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
   const set = (k: string, v: any) => setP((s: any) => ({ ...s, [k]: v }));
   const margin = (() => { const sell = Number(p.sell_price ?? p.price ?? 0), cost = Number(p.cost_price ?? p.avg_cost ?? 0); return sell > 0 ? Math.round((sell - cost) / sell * 100) : 0; })();
 
+  const layout = useFormLayout("product", kind === "product");
+  const star = (k: string) => reqStar(layout, k);
   async function save() {
     try {
       if (kind === "product") {
+        const m = missingRequired(layout, { category: has(p.category_id), description: has(p.description), code: has(p.code), sku: has(p.sku) }, p.custom_data);
+        if (m) { flash(m); return; }
         const body = { name: p.name, code: p.code, sku: p.sku, barcode: p.barcode, brand: p.brand, description: p.description,
           category_id: p.category_id || null, uom: p.uom || "pcs", cost_price: Number(p.cost_price) || 0, sell_price: Number(p.sell_price) || 0,
           min_stock: p.min_stock ?? 0, serialized: !!p.serialized, expiry_tracking: !!p.expiry_tracking, warranty_days: p.warranty_days ?? 0,
@@ -190,16 +195,10 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
 
           {kind === "product" && ptab === "details" && (<>
             <div className="space-y-3.5">
+              <div><label className={lbl}>Name <span className="text-rose-500">*</span></label><input value={p.name || ""} onChange={(e) => set("name", e.target.value)} className={field} /></div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className={lbl}>Type</label><select value={p.type || "Part"} onChange={(e) => set("type", e.target.value)} className={`${field} appearance-none`}><option>Part</option><option>Accessory</option><option>Consumable</option></select></div>
-                <div><label className={lbl}>Category</label><CategoryPicker entity="product" value={p.category_id} onChange={(id) => set("category_id", id)} /></div>
-              </div>
-              <div><label className={lbl}>Name <span className="text-rose-500">*</span></label><input value={p.name || ""} onChange={(e) => set("name", e.target.value)} className={field} /></div>
-              <div><label className={lbl}>Description</label><textarea value={p.description || ""} onChange={(e) => set("description", e.target.value)} className={`${field} h-20 resize-none`} placeholder="Optional details..." /></div>
-              <div className="grid grid-cols-3 gap-3">
                 <div><label className={lbl}>Unit <span className="text-rose-500">*</span></label><input value={p.uom || "pcs"} onChange={(e) => set("uom", e.target.value)} className={field} /></div>
-                <div><label className={lbl}>Code</label><input value={p.code || ""} onChange={(e) => set("code", e.target.value)} className={`${field} font-mono`} /></div>
-                <div><label className={lbl}>SKU</label><input value={p.sku || ""} onChange={(e) => set("sku", e.target.value)} className={`${field} font-mono`} /></div>
               </div>
               <div className="pt-1 flex items-center gap-2 flex-wrap">
                 <button type="button" onClick={() => setShowCode((v) => !v)} disabled={!p.barcode}
@@ -217,43 +216,55 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                 </div>
               )}
             </div>
-            <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-3">
-              <div className="text-[11px] font-bold text-ink-primary uppercase tracking-wider">Stock tracking & policies</div>
-              <label className="flex items-center justify-between cursor-pointer"><span className="text-ink-secondary font-medium">Expiration tracking</span><input type="checkbox" checked={!!p.expiry_tracking} onChange={(e) => set("expiry_tracking", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
-              <label className="flex items-center justify-between cursor-pointer"><span className="text-ink-secondary font-medium">Enable serial-number tracking <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">one-way</span></span><input type="checkbox" checked={!!p.serialized} onChange={(e) => set("serialized", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
-              <div className="flex items-center justify-between"><span className="text-ink-secondary font-medium">Min stock (reorder at)</span><input type="number" value={p.min_stock ?? 0} onChange={(e) => set("min_stock", Number(e.target.value))} className="glass-input w-20 px-2 py-1 rounded-lg text-xs text-right font-mono" /></div>
-            </div>
-            <div className="p-4 rounded-xl bg-blue-50/50 border border-blue-100 space-y-3">
-              <div className="flex items-center justify-between"><span className="text-[11px] font-bold text-primary uppercase tracking-wider">Pricing & margin</span><span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800">Margin: {margin}%</span></div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className={lbl}>Cost price (₹)</label><input type="number" value={p.cost_price ?? 0} onChange={(e) => set("cost_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>
-                <div><label className={lbl}>Store price (₹)</label><input type="number" value={p.sell_price ?? 0} onChange={(e) => set("sell_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>
-              </div>
-              <div className="text-[11px] text-ink-tertiary flex items-center justify-between pt-1"><span>Repair price (on work orders):</span><span className="font-semibold text-ink-secondary">= store price ({money(Number(p.sell_price) || 0)})</span></div>
-            </div>
-            <CustomFields entity="product" value={p.custom_data || {}} onChange={(cd) => set("custom_data", cd)} creating={!editing} />
-            {(() => {
-              const compat = p.compatibility_json || {};
-              const fits: { brand?: string; model?: string }[] = Array.isArray(compat.fits) ? compat.fits : [];
-              const setFits = (next: any[]) => set("compatibility_json", { ...compat, fits: next });
-              return (
-                <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] font-bold text-ink-primary uppercase tracking-wider">Compatible devices</span>
-                    <button type="button" onClick={() => setFits([...fits, { brand: "", model: "" }])} className="text-[11px] font-bold text-primary hover:underline">+ Add</button>
-                  </div>
-                  <p className="text-[10px] text-ink-tertiary">Flagged as “Fits” when adding parts on a matching device. Blank model = any model of that brand.</p>
-                  {fits.length === 0 && <p className="text-[11px] text-ink-tertiary">None yet.</p>}
-                  {fits.map((f, i) => (
-                    <div key={i} className="flex items-center gap-1.5">
-                      <input className={field} placeholder="Brand (e.g. Apple)" value={f.brand || ""} onChange={(e) => setFits(fits.map((x, j) => j === i ? { ...x, brand: e.target.value } : x))} />
-                      <input className={field} placeholder="Model (blank = any)" value={f.model || ""} onChange={(e) => setFits(fits.map((x, j) => j === i ? { ...x, model: e.target.value } : x))} />
-                      <button aria-label="Close" type="button" onClick={() => setFits(fits.filter((_, j) => j !== i))} className="text-ink-tertiary hover:text-rose-500 shrink-0"><M n="close" c="text-sm" /></button>
-                    </div>
-                  ))}
+            {/* Built-in and custom fields in the order set in Settings → Forms → Customize. */}
+            <LayoutFields layout={layout} gap="gap-x-3 gap-y-4" blocks={{
+              category: { half: true, el: <div><label className={lbl}>Category{star("category")}</label><CategoryPicker entity="product" value={p.category_id} onChange={(id) => set("category_id", id)} /></div> },
+              description: { el: <div><label className={lbl}>Description{star("description")}</label><textarea value={p.description || ""} onChange={(e) => set("description", e.target.value)} className={`${field} h-20 resize-none`} placeholder="Optional details..." /></div> },
+              code: { half: true, el: <div><label className={lbl}>Code{star("code")}</label><input value={p.code || ""} onChange={(e) => set("code", e.target.value)} className={`${field} font-mono`} /></div> },
+              sku: { half: true, el: <div><label className={lbl}>SKU{star("sku")}</label><input value={p.sku || ""} onChange={(e) => set("sku", e.target.value)} className={`${field} font-mono`} /></div> },
+              stock_policy: { el: <>
+                <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-3">
+                  <div className="text-[11px] font-bold text-ink-primary uppercase tracking-wider">Stock tracking & policies</div>
+                  <label className="flex items-center justify-between cursor-pointer"><span className="text-ink-secondary font-medium">Expiration tracking</span><input type="checkbox" checked={!!p.expiry_tracking} onChange={(e) => set("expiry_tracking", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
+                  <label className="flex items-center justify-between cursor-pointer"><span className="text-ink-secondary font-medium">Enable serial-number tracking <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">one-way</span></span><input type="checkbox" checked={!!p.serialized} onChange={(e) => set("serialized", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
+                  <div className="flex items-center justify-between"><span className="text-ink-secondary font-medium">Min stock (reorder at)</span><input type="number" value={p.min_stock ?? 0} onChange={(e) => set("min_stock", Number(e.target.value))} className="glass-input w-20 px-2 py-1 rounded-lg text-xs text-right font-mono" /></div>
                 </div>
-              );
-            })()}
+              </> },
+              pricing: { el: <>
+                <div className="p-4 rounded-xl bg-blue-50/50 border border-blue-100 space-y-3">
+                  <div className="flex items-center justify-between"><span className="text-[11px] font-bold text-primary uppercase tracking-wider">Pricing & margin</span><span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800">Margin: {margin}%</span></div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className={lbl}>Cost price (₹)</label><input type="number" value={p.cost_price ?? 0} onChange={(e) => set("cost_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>
+                    <div><label className={lbl}>Store price (₹)</label><input type="number" value={p.sell_price ?? 0} onChange={(e) => set("sell_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>
+                  </div>
+                  <div className="text-[11px] text-ink-tertiary flex items-center justify-between pt-1"><span>Repair price (on work orders):</span><span className="font-semibold text-ink-secondary">= store price ({money(Number(p.sell_price) || 0)})</span></div>
+                </div>
+              </> },
+              compatibility: { el: <>
+                {(() => {
+                  const compat = p.compatibility_json || {};
+                  const fits: { brand?: string; model?: string }[] = Array.isArray(compat.fits) ? compat.fits : [];
+                  const setFits = (next: any[]) => set("compatibility_json", { ...compat, fits: next });
+                  return (
+                    <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] font-bold text-ink-primary uppercase tracking-wider">Compatible devices</span>
+                        <button type="button" onClick={() => setFits([...fits, { brand: "", model: "" }])} className="text-[11px] font-bold text-primary hover:underline">+ Add</button>
+                      </div>
+                      <p className="text-[10px] text-ink-tertiary">Flagged as “Fits” when adding parts on a matching device. Blank model = any model of that brand.</p>
+                      {fits.length === 0 && <p className="text-[11px] text-ink-tertiary">None yet.</p>}
+                      {fits.map((f, i) => (
+                        <div key={i} className="flex items-center gap-1.5">
+                          <input className={field} placeholder="Brand (e.g. Apple)" value={f.brand || ""} onChange={(e) => setFits(fits.map((x, j) => j === i ? { ...x, brand: e.target.value } : x))} />
+                          <input className={field} placeholder="Model (blank = any)" value={f.model || ""} onChange={(e) => setFits(fits.map((x, j) => j === i ? { ...x, model: e.target.value } : x))} />
+                          <button aria-label="Close" type="button" onClick={() => setFits(fits.filter((_, j) => j !== i))} className="text-ink-tertiary hover:text-rose-500 shrink-0"><M n="close" c="text-sm" /></button>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </> },
+            }} custom={(ids) => <CustomFields entity="product" only={ids} bare={!!ids} value={p.custom_data || {}} onChange={(cd) => set("custom_data", cd)} creating={!editing} />} />
           </>)}
 
           {kind === "product" && ptab === "stock" && (<>

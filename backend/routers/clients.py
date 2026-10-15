@@ -149,7 +149,8 @@ async def create_client(
         if payload.get(k) is None:
             payload.pop(k, None)
     # 144gp — enforce custom-field rules (required / lock / conditional visibility).
-    from backend.routers.forms import resolve_custom_data
+    from backend.routers.forms import resolve_custom_data, check_entity_required
+    await check_entity_required(db, current.org_id, "client", data)
     payload["custom_data"] = await resolve_custom_data(
         db, current.org_id, "client", data.custom_data, creating=True)
     # Consent defaults from org policy unless explicitly provided

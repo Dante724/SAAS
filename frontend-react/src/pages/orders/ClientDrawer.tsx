@@ -12,6 +12,7 @@ import AssetDrawer from "./AssetDrawer";
 import CreateOrderDrawer from "./CreateOrderDrawer";
 import SupplierPanel from "../clients/SupplierPanel";
 import { useTerminology } from "../../lib/useTerminology";
+import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../../lib/formLayout";
 
 const BASE_TABS = ["General info", "Devices & Assets", "Work orders", "Purchases", "Loyalty & Payout", "Communications"];
 
@@ -67,7 +68,11 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
     } catch (e: any) { setToast(e.message || "Could not add credit"); }
     finally { setBusy(false); }
   }
+  const layout = useFormLayout("client");
   async function save() {
+    // Only what this screen edits is checked here (lead source + custom fields).
+    const m = missingRequired(layout, { source: has(source) }, cd);
+    if (m) { setToast(m); return; }
     setBusy(true);
     try {
       await api.patch(`/clients/${clientId}`, {
@@ -144,14 +149,21 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
                   <button onClick={() => setNewWO(true)} className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110">+ New Work Order</button>
                 </div>
               </div>
+              {/* Built-in and custom fields in the order set in Settings → Forms → Customize. */}
+              <LayoutFields layout={layout} blocks={{
+                phone: { half: true, el: <F l="Phone number" v={c.phone || ""} /> },
+                email: { half: true, el: <F l="Email address" v={c.email || ""} /> },
+                source: { half: true, el: <div><label className="block text-[11px] font-bold text-ink-tertiary uppercase mb-1">Lead source{reqStar(layout, "source")}</label>
+                  <DirectorySelect dirKey="lead_source" value={source} onChange={setSource} className="glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full" /></div> },
+                loyalty_tier: { half: true, el: <F l="Loyalty tier" v={c.loyalty_tier || ""} /> },
+                discount_card: { half: true, el: <F l="Discount card / Member ID" v={c.discount_card || ""} /> },
+                address: { el: <F l="Billing & home address" v={c.address || ""} /> },
+                notes: (c as any).notes ? { el: <F l="Notes" v={(c as any).notes} /> } : null,
+              }} custom={(ids) => <CustomFields entity="client" only={ids} bare={!!ids} value={cd} onChange={setCd} creating={false} inputSize="sm" />} />
               <div className="grid grid-cols-2 gap-3">
-                <F l="Phone number" v={c.phone || ""} /><F l="Email address" v={c.email || ""} />
-                <div><label className="text-[11px] font-semibold text-ink-tertiary">Lead source</label>
-                  <DirectorySelect dirKey="lead_source" value={source} onChange={setSource} className="glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full mt-1" /></div><F l="Loyalty tier" v={c.loyalty_tier || ""} />
-                <F l="Discount card / Member ID" v={c.discount_card || ""} /><F l="Orders" v={String(c.order_count ?? 0)} />
+                <F l="Orders" v={String(c.order_count ?? 0)} />
                 {c.currency_code && <F l="Billing currency" v={c.currency_code} />}
               </div>
-              <F l="Billing & home address" v={c.address || ""} />
               <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm space-y-2.5">
                 <div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">Billing details (for invoices)</div>
                 <div className="grid grid-cols-2 gap-2.5">
@@ -166,7 +178,6 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
                 </div>
               </div>
               <DiscountMatrix disc={disc} onChange={setDisc} />
-              <CustomFields entity="client" value={cd} onChange={setCd} creating={false} inputSize="sm" />
               <GdprCard clientId={clientId} onErased={onClose} />
               <div className="text-[11px] font-bold uppercase tracking-wider text-ink-tertiary mt-2">Registered {term.assets.toLowerCase()} on file</div>
               {(c.devices || []).length === 0 && <div className="text-xs text-ink-tertiary">No {term.assets.toLowerCase()} on file.</div>}

@@ -12,7 +12,8 @@ type Field = { id: string; field_label: string; field_type: string; required: bo
   options?: string[]; directory_key?: string | null; [k: string]: any };
 // required: "" optional · "intake" when the record is created · "close" before a work order closes.
 type Require = "" | "intake" | "close";
-type Item = { ref: string; kind: "system" | "custom" | "header"; key: string; label: string; visible: boolean; required: boolean; require: Require; field?: Field };
+type Item = { ref: string; kind: "system" | "custom" | "header"; key: string; label: string; visible: boolean; required: boolean; require: Require;
+  requirable?: boolean; field?: Field };
 type Sugg = { label: string; field_type: string; options: string[] };
 
 const TYPES: [string, string][] = [["text", "Short text"], ["textarea", "Long text"], ["number", "Number"], ["select", "Pick one"],
@@ -21,7 +22,11 @@ const TYPE_LABEL = Object.fromEntries(TYPES) as Record<string, string>;
 const HINT: Record<string, string> = { text: "Type here", textarea: "Longer answer", number: "0", select: "Choose…",
   multiselect: "Choose one or more", bool: "Yes / No", date: "mm/dd/yyyy", link: "https://" };
 const SYS_HINT: Record<string, string> = { client: "Search by name or phone", asset: "Brand · model · IMEI / serial",
-  complaint: "What's the issue?", priority: "Normal", manager: "Select", assignee: "Unassigned", scheduled_for: "Date and time" };
+  complaint: "What's the issue?", priority: "Normal", manager: "Select", assignee: "Unassigned", scheduled_for: "Date and time",
+  phone: "(555) 555-0123", email: "name@email.com", address: "Billing / home address", source: "Choose…", loyalty_tier: "Standard",
+  discount_card: "Member ID", notes: "Internal notes", asset_type: "Device", condition: "Good", brand: "Apple", model: "iPhone 15",
+  identifiers: "Serial / IMEI / VIN", color: "Black", category: "Choose…", description: "Optional details", code: "Code", sku: "SKU",
+  stock_policy: "Expiry · serial numbers · min stock", pricing: "Cost and store price", compatibility: "Brands and models it fits" };
 
 export default function FormCustomizer({ form, typeId, title }: { form: FormKey; typeId?: string | null; title?: string }) {
   const [items, setItems] = useState<Item[] | null>(null);
@@ -129,6 +134,14 @@ export default function FormCustomizer({ form, typeId, title }: { form: FormKey;
           <span className={`ml-auto text-xs font-semibold flex items-center gap-1 ${state === "error" ? "text-rose-600" : "text-emerald-700"}`}>
             {state === "saving" && "Saving…"}{state === "saved" && <><M n="check" c="text-sm" />Saved</>}{state === "error" && "Couldn't save — try again"}</span>
         </div>
+        {(form === "client" || form === "product") && (
+          <div className="rounded-xl border border-slate-200 bg-white/60 px-3 py-2.5 mb-2 flex items-center gap-2.5" title="Always first and always required">
+            <M n="lock" c="text-ink-tertiary text-base" />
+            <div className="flex-1 min-w-0"><div className="text-xs font-semibold text-ink-secondary mb-1">Name<span className="text-rose-500">*</span>
+              <span className="ml-1.5 px-1.5 py-px rounded bg-slate-100 text-[10px] font-semibold text-ink-tertiary">Always first</span></div>
+              <div className="h-8 rounded-lg bg-slate-50 border border-slate-200/80" /></div>
+          </div>
+        )}
         {items.filter((i) => i.visible).length === 0 && (
           <div className="text-sm text-ink-tertiary py-3 flex items-center gap-2">No fields yet.
             <button onClick={() => setAddAt(0)} className="font-semibold text-primary hover:underline">Add the first one</button></div>
@@ -226,7 +239,7 @@ function FieldPanel({ it, dirs, form, onLabel, onField, onRequired, onHide, onDe
           <input value={label} onChange={(e) => setLabel(e.target.value)} onBlur={() => label.trim() && label !== it.label && onLabel(label.trim())}
             onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} className="glass-input w-full rounded-lg px-3 py-2 text-sm font-semibold" /></div>
       )}
-      {it.kind !== "header" && !(isBool && form !== "order") && (
+      {it.kind !== "header" && it.requirable !== false && !(isBool && form !== "order") && (
         <div><label className={lbl}>Required</label>
           <div className="flex flex-wrap gap-1.5"><button onClick={() => onRequired("")} className={chip(!it.require)}>Optional</button>
             {!isBool && <button onClick={() => onRequired("intake")} className={chip(it.require === "intake")}>At intake</button>}
@@ -267,7 +280,9 @@ function FieldPanel({ it, dirs, form, onLabel, onField, onRequired, onHide, onDe
               placeholder="If applicable" className="glass-input w-full rounded-lg px-3 py-2 text-sm" /></div>
         )}
       </>)}
-      {it.kind === "system" && <p className="text-xs text-ink-tertiary">Built-in fields can be moved, hidden or made required. Their answer type is fixed.</p>}
+      {it.kind === "system" && <p className="text-xs text-ink-tertiary">{it.requirable === false
+        ? "Built-in — can be moved or hidden. It always has a value, so it can't be made required."
+        : "Built-in fields can be moved, hidden or made required. Their answer type is fixed."}</p>}
       <div className="flex items-center justify-between pt-2 border-t border-slate-100">
         {it.kind !== "header" && <button onClick={onHide} className="text-xs font-semibold text-ink-secondary hover:text-ink-primary flex items-center gap-1"><M n="visibility_off" c="text-sm" />Hide from form</button>}
         {it.kind !== "system" && <button onClick={onDelete} className="text-xs font-semibold text-rose-600 hover:text-rose-700 flex items-center gap-1 ml-auto"><M n="delete" c="text-sm" />Delete</button>}

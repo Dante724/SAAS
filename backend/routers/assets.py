@@ -141,6 +141,8 @@ async def create_asset(
 ):
     if data.owner_type == "client" and not data.client_id:
         raise HTTPException(400, "Client is required for a client-owned asset")
+    from backend.routers.forms import check_entity_required
+    await check_entity_required(db, current.org_id, "device", data)   # built-ins the device form requires
     serial = data.serial
     generated = False
     if not serial and not data.imei and not data.vin and not data.hin:

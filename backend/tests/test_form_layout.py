@@ -47,7 +47,8 @@ async def test_entity_form_layout_and_suggestions(client, tenant):
     f = (await client.post("/api/forms/entity-fields", json={"entity_type": "client", "field_label": "Company", "field_type": "text"},
                            headers=tenant)).json()
     lay = (await client.get("/api/forms/layout?form=client", headers=tenant)).json()
-    assert [i["ref"] for i in lay["items"]] == [f"cf:{f['id']}"]
+    refs = [i["ref"] for i in lay["items"]]
+    assert refs[0] == f"cf:{f['id']}" and "sys:phone" in refs and "sys:email" in refs
     assert "company" not in {s["label"].lower() for s in lay["suggestions"]}   # already added
 
 

@@ -308,6 +308,8 @@ async def create_product(data: ProductIn, db: AsyncSession = Depends(get_db),
     dup = (await db.execute(select(Part).where(Part.org_id == current.org_id, Part.name == data.name))).scalar_one_or_none()
     if dup:
         raise HTTPException(409, "A product with this name already exists (name is the unique identifier)")
+    from backend.routers.forms import check_entity_required
+    await check_entity_required(db, current.org_id, "product", data)   # built-ins the product form requires
     payload = data.model_dump()
     # enforce required custom fields (Settings → Forms → Products) on create
     payload["custom_data"] = await resolve_custom_data(

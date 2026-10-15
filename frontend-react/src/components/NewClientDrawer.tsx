@@ -4,6 +4,7 @@ import { M } from "./Shell";
 import { api } from "../api/client";
 import CustomFields from "./CustomFields";
 import { useCurrencies } from "../hooks/useCurrencies";
+import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../lib/formLayout";
 
 export type NewClient = { id: string; name?: string; phone?: string; email?: string };
 
@@ -16,9 +17,14 @@ export default function NewClientDrawer({ prefillName, onClose, onCreated }: { p
   const [err, setErr] = useState<string | null>(null);
   const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
   const { opts: curOpts, multi: multiCurrency } = useCurrencies();
+  const layout = useFormLayout("client");
+  const star = (k: string) => reqStar(layout, k);
 
   async function save() {
     if (!f.name?.trim()) { setErr("Name is required"); return; }
+    const m = missingRequired(layout, { phone: has(f.phone), email: has(f.email), address: has(f.address), source: has(f.source),
+      discount_card: has(f.discount_card), notes: has(f.notes) }, f.custom_data);
+    if (m) { setErr(m); return; }
     setBusy(true); setErr(null);
     try {
       const c = await api.post<NewClient>("/clients", {
@@ -48,27 +54,23 @@ export default function NewClientDrawer({ prefillName, onClose, onCreated }: { p
             ))}
           </div>
           <div><label className={lbl}>Name <span className="text-rose-500">*</span></label><input autoFocus value={f.name} onChange={(e) => set("name", e.target.value)} className={field} placeholder={f.client_type === "company" ? "Company name" : "Full name"} /></div>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl}>Phone</label><input value={f.phone || ""} onChange={(e) => set("phone", e.target.value)} className={`${field} font-mono`} placeholder="+91 …" /></div>
-            <div><label className={lbl}>Email</label><input value={f.email || ""} onChange={(e) => set("email", e.target.value)} className={field} placeholder="name@email.com" /></div>
-          </div>
-          <div><label className={lbl}>Address</label><input value={f.address || ""} onChange={(e) => set("address", e.target.value)} className={field} placeholder="Billing / home address" /></div>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl}>Lead source</label><DirectorySelect dirKey="lead_source" value={f.source || ""} onChange={(v) => set("source", v)} className={field} /></div>
-            <div><label className={lbl}>Loyalty tier</label>
-              <select value={f.loyalty_tier} onChange={(e) => set("loyalty_tier", e.target.value)} className={`${field} appearance-none`}><option value="standard">Standard</option><option value="silver">Silver</option><option value="gold">Gold</option><option value="vip">VIP</option></select></div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl}>Discount card / Member ID</label><input value={f.discount_card || ""} onChange={(e) => set("discount_card", e.target.value)} className={`${field} font-mono`} /></div>
-            {multiCurrency && (
-              <div><label className={lbl}>Billing currency</label>
-                <select value={f.currency_code || ""} onChange={(e) => set("currency_code", e.target.value)} className={`${field} appearance-none`}>
-                  <option value="">Base currency</option>{curOpts.map(([c, l]) => <option key={c} value={c}>{l}</option>)}
-                </select></div>
-            )}
-          </div>
-          <div><label className={lbl}>Notes</label><textarea value={f.notes || ""} onChange={(e) => set("notes", e.target.value)} className={`${field} h-16 resize-none`} placeholder="Optional internal notes…" /></div>
-          <CustomFields entity="client" value={f.custom_data || {}} onChange={(cd) => set("custom_data", cd)} creating />
+          {/* Built-in and custom fields in the order set in Settings → Forms → Customize. */}
+          <LayoutFields layout={layout} blocks={{
+            phone: { half: true, el: <div><label className={lbl}>Phone{star("phone")}</label><input value={f.phone || ""} onChange={(e) => set("phone", e.target.value)} className={`${field} font-mono`} placeholder="(555) 555-0123" /></div> },
+            email: { half: true, el: <div><label className={lbl}>Email{star("email")}</label><input value={f.email || ""} onChange={(e) => set("email", e.target.value)} className={field} placeholder="name@email.com" /></div> },
+            address: { el: <div><label className={lbl}>Address{star("address")}</label><input value={f.address || ""} onChange={(e) => set("address", e.target.value)} className={field} placeholder="Billing / home address" /></div> },
+            source: { half: true, el: <div><label className={lbl}>Lead source{star("source")}</label><DirectorySelect dirKey="lead_source" value={f.source || ""} onChange={(v) => set("source", v)} className={field} /></div> },
+            loyalty_tier: { half: true, el: <div><label className={lbl}>Loyalty tier</label>
+              <select value={f.loyalty_tier} onChange={(e) => set("loyalty_tier", e.target.value)} className={`${field} appearance-none`}><option value="standard">Standard</option><option value="silver">Silver</option><option value="gold">Gold</option><option value="vip">VIP</option></select></div> },
+            discount_card: { half: true, el: <div><label className={lbl}>Discount card / Member ID{star("discount_card")}</label><input value={f.discount_card || ""} onChange={(e) => set("discount_card", e.target.value)} className={`${field} font-mono`} /></div> },
+            notes: { el: <div><label className={lbl}>Notes{star("notes")}</label><textarea value={f.notes || ""} onChange={(e) => set("notes", e.target.value)} className={`${field} h-16 resize-none`} placeholder="Optional internal notes…" /></div> },
+          }} custom={(ids) => <CustomFields entity="client" only={ids} bare={!!ids} value={f.custom_data || {}} onChange={(cd) => set("custom_data", cd)} creating />} />
+          {multiCurrency && (
+            <div className="w-1/2 pr-1.5"><label className={lbl}>Billing currency</label>
+              <select value={f.currency_code || ""} onChange={(e) => set("currency_code", e.target.value)} className={`${field} appearance-none`}>
+                <option value="">Base currency</option>{curOpts.map(([c, l]) => <option key={c} value={c}>{l}</option>)}
+              </select></div>
+          )}
           {err && <div className="text-status-overdue-ink font-semibold">{err}</div>}
         </div>
 

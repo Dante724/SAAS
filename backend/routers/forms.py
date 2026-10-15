@@ -677,7 +677,24 @@ SYSTEM_FIELDS: dict[str, list[tuple[str, str]]] = {
     "order": [("client", "Client"), ("asset", "Device / asset"), ("complaint", "Fault reported / complaint"),
               ("priority", "Priority"), ("manager", "Manager"), ("assignee", "Technician"),
               ("scheduled_for", "Scheduled for")],
-    "client": [], "device": [], "product": [],
+    # Name always comes first on these forms and is always required, so it isn't listed.
+    "client": [("phone", "Phone"), ("email", "Email"), ("address", "Address"), ("source", "Lead source"),
+               ("loyalty_tier", "Loyalty tier"), ("discount_card", "Discount card / Member ID"), ("notes", "Notes")],
+    "device": [("asset_type", "Type"), ("condition", "Condition"), ("brand", "Brand"), ("model", "Model"),
+               ("identifiers", "Serial / IMEI / VIN"), ("color", "Color")],
+    "product": [("category", "Category"), ("description", "Description"), ("code", "Code"), ("sku", "SKU"),
+                ("stock_policy", "Stock tracking"), ("pricing", "Pricing"), ("compatibility", "Compatible devices")],
+}
+# Built-ins that always carry a value (or are whole sections), so "required" would mean nothing.
+_NO_REQUIRE = {"order": {"priority"}, "client": {"loyalty_tier"}, "device": {"asset_type"},
+               "product": {"stock_policy", "pricing", "compatibility"}}
+# Built-in key → which create-payload attributes fill it (any non-empty one counts).
+_ENTITY_SYS_ATTRS = {
+    "client": {"phone": ("phone",), "email": ("email",), "address": ("address",), "source": ("source",),
+               "discount_card": ("discount_card",), "notes": ("notes",)},
+    "device": {"condition": ("condition",), "brand": ("brand",), "model": ("model",),
+               "identifiers": ("serial", "imei", "vin", "hin"), "color": ("color",)},
+    "product": {"category": ("category_id",), "description": ("description",), "code": ("code",), "sku": ("sku",)},
 }
 _LEGACY_KEY = {"vehicle": "asset"}   # old SystemFieldsEditor keys
 
@@ -763,15 +780,16 @@ async def build_layout(db, org_id: str, form: str, type_id: Optional[str]) -> li
         visible = cfg.get("visible", True) is not False
         if ref.startswith("sys:") and ref[4:] in sys_by:
             k = ref[4:]
-            lvl = _level(cfg.get("required"), form) if visible else ""
+            requirable = k not in _NO_REQUIRE.get(form, set())
+            lvl = _level(cfg.get("required"), form) if visible and requirable else ""
             out.append({"ref": ref, "kind": "system", "key": k, "label": sys_by[k], "visible": visible,
-                        "required": lvl == "intake", "require": lvl})
+                        "required": lvl == "intake", "require": lvl, "requirable": requirable})
         elif ref.startswith("cf:") and ref[3:] in cf_by:
             fld = cf_by[ref[3:]]
             lvl = "" if fld.field_type == "header" or not visible else (
                 "intake" if fld.required else _level(cfg.get("required"), form))
             out.append({"ref": ref, "kind": "header" if fld.field_type == "header" else "custom", "key": fld.field_key,
-                        "label": fld.field_label, "visible": visible,
+                        "label": fld.field_label, "visible": visible, "requirable": fld.field_type != "header",
                         "required": lvl == "intake", "require": lvl, "field": _ser_field(fld), "_row": fld})
         else:
             return
@@ -857,6 +875,20 @@ async def shown_values(db, org_id: str, flag: str, order=None, device=None, clie
     return out
 
 
+async def check_entity_required(db, org_id: str, form: str, data) -> None:
+    """422 when a client / device / product create leaves a built-in field empty that its form
+    (Settings → Forms → Customize) requires. Custom fields are checked by resolve_custom_data."""
+    attrs = _ENTITY_SYS_ATTRS.get(form, {})
+    missing = []
+    for it in await build_layout(db, org_id, form, None):
+        if it["kind"] != "system" or not it["visible"] or it["require"] != "intake" or it["key"] not in attrs:
+            continue
+        if all(_is_empty(getattr(data, a, None)) for a in attrs[it["key"]]):
+            missing.append(it["label"])
+    if missing:
+        raise HTTPException(422, f"Fill in {', '.join(missing)} first.")
+
+
 async def missing_at_intake(db, org_id: str, type_id: Optional[str], data) -> list[str]:
     """Labels of fields the work-order form requires at intake that a create payload leaves
     empty. The form checks this too; this keeps API callers and stale forms honest."""
@@ -940,6 +972,8 @@ async def save_layout(
         # A hidden field can't be required — it would block saving a form that doesn't show it.
         lvl = _level(it.required, data.form) if it.visible else ""
         if it.ref.startswith("sys:") and it.ref[4:] in sys_keys:
+            if it.ref[4:] in _NO_REQUIRE.get(data.form, set()):
+                lvl = ""
             clean.append({"ref": it.ref, "visible": it.visible, "required": lvl})
         elif it.ref.startswith("cf:") and it.ref[3:] in customs:
             f = customs[it.ref[3:]]

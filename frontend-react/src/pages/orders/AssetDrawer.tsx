@@ -9,6 +9,7 @@ import { useTerminology, assetNoun } from "../../lib/useTerminology";
 import { identifierFields } from "../../lib/assetIdentifiers";
 import ScanButton from "../../components/ScanButton";
 import { assetStatusTone } from "../inventory/statusTone";
+import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../../lib/formLayout";
 
 const TABS = ["General", "Work orders", "History"];
 
@@ -46,7 +47,11 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
     const h = setTimeout(() => { api.get<any>(`/clients?limit=8&q=${encodeURIComponent(q.trim())}`).then((r) => setResults(r.items || [])).catch(() => setResults([])); }, 250);
     return () => clearTimeout(h);
   }, [q, picking]);
+  const layout = useFormLayout("device");
   async function save() {
+    const m = missingRequired(layout, { condition: has(a.condition), brand: has(a.brand), model: has(a.model), color: has(a.color),
+      identifiers: [a.serial, a.imei, a.vin, a.hin].some(has) }, a.custom_data);
+    if (m) { setToast(m); return; }
     setBusy(true);
     try {
       const body = { owner_type: a.owner_type || "client", client_id: (a.owner_type || "client") === "client" ? a.client_id : null,
@@ -70,8 +75,8 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
   }
   const title = [a.brand, a.model].filter(Boolean).join(" ") || assetNoun(a, term);
   const isClient = (a.owner_type || "client") === "client";
-  const E = ({ l, k, mono, scan }: { l: string; k: keyof Asset; mono?: boolean; scan?: boolean }) => (
-    <div><label className="block text-[11px] font-bold text-ink-tertiary uppercase mb-1">{l}</label>
+  const E = ({ l, k, mono, scan, req }: { l: string; k: keyof Asset; mono?: boolean; scan?: boolean; req?: string }) => (
+    <div><label className="block text-[11px] font-bold text-ink-tertiary uppercase mb-1">{l}{req && reqStar(layout, req)}</label>
       <div className="flex items-center gap-1.5">
         <input value={(a[k] as string) || ""} onChange={(e) => set(k, e.target.value)} className={`glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full ${mono ? "font-mono" : ""}`} />
         {scan && <ScanButton title={`Scan ${l}`} onScan={(code) => set(k, code)} />}
@@ -139,16 +144,18 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
                 </div>
               </div>
               <div className="text-[11px] font-bold uppercase tracking-wider text-ink-tertiary">Device details</div>
-              <div className="grid grid-cols-2 gap-3">
-                <E l="Type" k="asset_type" /><E l="Condition" k="condition" />
-                <div><label className="block text-[11px] font-bold text-ink-tertiary uppercase mb-1">Brand</label>
-                  <NameSuggestInput field="brand" value={(a.brand as string) || ""} onChange={(v) => set("brand", v)} className="glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full" /></div>
-                <div><label className="block text-[11px] font-bold text-ink-tertiary uppercase mb-1">Model</label>
-                  <NameSuggestInput field="model" brand={(a.brand as string) || ""} value={(a.model as string) || ""} onChange={(v) => set("model", v)} className="glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full" /></div>
-                {identifierFields(term.identifier?.allowed, term.identifier?.primary).map((f) => <E key={f.kind} l={f.label} k={f.kind as keyof Asset} mono scan />)}
-                <E l="Color" k="color" />
-              </div>
-              <CustomFields entity="device" value={a.custom_data || {}} onChange={(cd) => set("custom_data", cd)} creating={creating} inputSize="sm" />
+              {/* Built-in and custom fields in the order set in Settings → Forms → Customize. */}
+              <LayoutFields layout={layout} blocks={{
+                asset_type: { half: true, el: E({ l: "Type", k: "asset_type" }) },
+                condition: { half: true, el: E({ l: "Condition", k: "condition", req: "condition" }) },
+                brand: { half: true, el: <div><label className="block text-[11px] font-bold text-ink-tertiary uppercase mb-1">Brand{reqStar(layout, "brand")}</label>
+                  <NameSuggestInput field="brand" value={(a.brand as string) || ""} onChange={(v) => set("brand", v)} className="glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full" /></div> },
+                model: { half: true, el: <div><label className="block text-[11px] font-bold text-ink-tertiary uppercase mb-1">Model{reqStar(layout, "model")}</label>
+                  <NameSuggestInput field="model" brand={(a.brand as string) || ""} value={(a.model as string) || ""} onChange={(v) => set("model", v)} className="glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full" /></div> },
+                identifiers: { el: <div className="grid grid-cols-2 gap-3">{identifierFields(term.identifier?.allowed, term.identifier?.primary).map((f) =>
+                  <div key={f.kind}>{E({ l: f.label, k: f.kind as keyof Asset, mono: true, scan: true, req: "identifiers" })}</div>)}</div> },
+                color: { half: true, el: E({ l: "Color", k: "color", req: "color" }) },
+              }} custom={(ids) => <CustomFields entity="device" only={ids} bare={!!ids} value={a.custom_data || {}} onChange={(cd) => set("custom_data", cd)} creating={creating} inputSize="sm" />} />
               {woNum && (<>
                 <div className="text-[11px] font-bold uppercase tracking-wider text-ink-tertiary">Active work order</div>
                 <div className="bg-white rounded-xl border border-slate-200/90 p-3.5 shadow-sm flex items-center gap-3"><span className="w-9 h-9 rounded-lg bg-blue-50 text-primary grid place-items-center text-[11px] font-extrabold">WO</span><div className="flex-1"><div className="text-xs font-bold text-ink-primary">{woNum}</div><div className="text-[11px] text-ink-tertiary">Linked to this asset</div></div><M n="chevron_right" c="text-ink-tertiary text-base" /></div>
