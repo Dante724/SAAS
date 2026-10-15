@@ -8,14 +8,10 @@ a shop can go from "close job" to "client paid" with no document-building step.
 """
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import Invoice, Order, Organisation
-
-
-def _inv_number(n: int) -> str:
-    return f"INV-{n:05d}"
 
 
 async def invoice_orders(db: AsyncSession, inv: "Invoice") -> list["Order"]:
@@ -134,12 +130,11 @@ async def auto_draft_on_close(db: AsyncSession, order: Order) -> Invoice | None:
     if existing:
         return existing
 
-    count = (await db.execute(select(func.count()).select_from(Invoice)
-             .where(Invoice.org_id == order.org_id))).scalar() or 0
+    from backend.services.numbering import next_number
     subtotal = float(getattr(order, "subtotal", 0) or 0) or float(order.total or 0)
     due_days = getattr(org, "default_due_days", None) or 30
     inv = Invoice(
-        invoice_number=_inv_number(count + 1),
+        invoice_number=await next_number(db, order.org_id, "invoice"),   # shared, locked sequence
         org_id=order.org_id,
         order_id=order.id,
         client_id=order.client_id,

@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import settings
 from backend.models import Account, Invoice, Order, Payment, PaymentIntent
 from backend.services.numbering import next_number
-from backend.services.money import q2, q4
+from backend.services.money import minor_units, q2, q4
 
 
 # ── Gateways ─────────────────────────────────────────────────────────────────
@@ -52,7 +52,7 @@ class StripeGateway(PaymentGateway):
         # Stripe's SDK is sync; call its REST API directly via httpx to stay async
         # and avoid a hard dependency. Amounts are in the smallest currency unit.
         import httpx
-        amount_minor = int(round(intent.amount * 100))
+        amount_minor = minor_units(intent.amount, intent.currency)
         c = self.creds
         data = {
             "mode": "payment",
@@ -90,7 +90,7 @@ class SquareGateway(PaymentGateway):
     async def create_checkout(self, *, intent: PaymentIntent, description: str) -> dict:
         import httpx
         c = self.creds
-        amount_minor = int(round(intent.amount * 100))
+        amount_minor = minor_units(intent.amount, intent.currency)
         payload = {
             "idempotency_key": intent.id,
             "quick_pay": {
@@ -202,7 +202,14 @@ async def org_provider(db: AsyncSession, org_id: str) -> str:
 # ── Intent creation ──────────────────────────────────────────────────────────
 async def create_intent(db: AsyncSession, *, org_id: str, order_id: Optional[str],
                         amount: float, account_id: Optional[str],
-                        currency: str = "usd") -> PaymentIntent:
+                        currency: Optional[str] = None) -> PaymentIntent:
+    # Stored money is always in the org's base currency, so that's what a checkout must charge.
+    # Hard-coding "usd" turned an INR 5,000 balance into a $5,000 checkout.
+    if not currency:
+        from backend.models import Organisation
+        org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
+        currency = ((org.currency_code if org else None) or "usd")
+    currency = currency.lower()
     invoice_id = None
     description = "RepairOS payment"
     if order_id:
@@ -212,7 +219,8 @@ async def create_intent(db: AsyncSession, *, org_id: str, order_id: Optional[str
             from fastapi import HTTPException
             raise HTTPException(404, "Order not found")
         description = f"Order {o.order_number}"
-        inv = (await db.execute(select(Invoice).where(Invoice.order_id == order_id))).scalar_one_or_none()
+        from backend.services.order_money import primary_invoice
+        inv = await primary_invoice(db, order_id)
         invoice_id = inv.id if inv else None
     gw = await resolve_gateway(db, org_id, await org_provider(db, org_id))
     intent = PaymentIntent(
@@ -234,6 +242,18 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
     """Idempotently reconcile a succeeded intent into the cash system."""
     if intent.status == "succeeded" and intent.payment_id:
         return intent  # already reconciled
+    # Claim the intent atomically before posting anything: the Stripe webhook, Square webhook and
+    # the public /refresh can all land concurrently, and a plain status check let two of them both
+    # post a Transaction + Payment (double amount_paid). The conditional UPDATE row-locks on
+    # Postgres, so the loser re-evaluates "payment_id IS NULL" after the winner commits.
+    from sqlalchemy import update as _upd
+    claimed = await db.execute(_upd(PaymentIntent)
+        .where(PaymentIntent.id == intent.id, PaymentIntent.payment_id.is_(None),
+               PaymentIntent.status != "processing")
+        .values(status="processing").execution_options(synchronize_session=False))
+    if claimed.rowcount == 0:
+        await db.refresh(intent)
+        return intent
 
     account = None
     if intent.account_id:
@@ -248,7 +268,8 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
     if intent.invoice_id:
         inv = (await db.execute(select(Invoice).where(Invoice.id == intent.invoice_id))).scalar_one_or_none()
     if not inv and intent.order_id:
-        inv = (await db.execute(select(Invoice).where(Invoice.order_id == intent.order_id))).scalar_one_or_none()
+        from backend.services.order_money import primary_invoice
+        inv = await primary_invoice(db, intent.order_id)
         if not inv:
             o = (await db.execute(select(Order).where(Order.id == intent.order_id))).scalar_one_or_none()
             inv = Invoice(invoice_number=await next_number(db, intent.org_id, "invoice"), org_id=intent.org_id,
@@ -277,11 +298,25 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
     db.add(pay)
     await db.flush()
     if inv:
-        inv.amount_paid = (inv.amount_paid or 0) + intent.amount
-        inv.status = "paid" if inv.amount_paid >= (inv.total or 0) else "partial"
+        inv.amount_paid = q2((inv.amount_paid or 0) + intent.amount)   # quantize before comparing
+        inv.status = "paid" if inv.amount_paid >= q2(inv.total or 0) else "partial"
     intent.payment_id = pay.id
     intent.status = "succeeded"
     intent.updated_at = datetime.utcnow()
+    # The client paid online: reflect it on their balance like every in-store payment path does
+    # (it was never posted, so the client kept showing the full amount owed).
+    _client_id = inv.client_id if inv else None
+    if _client_id:
+        from backend.services.ledger import post_contact_ledger
+        await post_contact_ledger(db, intent.org_id, _client_id, "income", -abs(intent.amount),
+                                  note=f"Online payment ({intent.provider})", ref_type="payment",
+                                  ref_id=pay.id)
+    if intent.order_id:
+        _ord = (await db.execute(select(Order).where(Order.id == intent.order_id))).scalar_one_or_none()
+        if _ord:
+            from backend.services.order_money import cancel_open_pay_links
+            await db.flush()
+            await cancel_open_pay_links(db, _ord)
 
     # Build 144w: workflow automations for payment_received (best-effort).
     if intent.order_id:
@@ -404,7 +439,7 @@ async def terminal_connection_token(db: AsyncSession, org_id: str) -> str:
 async def terminal_payment_intent(db: AsyncSession, org_id: str, *, amount: float, currency: str, intent_id: str) -> dict:
     key = await _stripe_key(db, org_id)
     import httpx
-    data = {"amount": str(int(round(amount * 100))), "currency": currency,
+    data = {"amount": str(minor_units(amount, currency)), "currency": currency,
             "payment_method_types[]": "card_present", "capture_method": "automatic",
             "metadata[intent_id]": intent_id}
     async with httpx.AsyncClient(timeout=15.0) as client:

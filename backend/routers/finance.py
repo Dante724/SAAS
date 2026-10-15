@@ -64,9 +64,6 @@ class ExpenseIn(BaseModel):
     location_id: Optional[str] = None
     expense_date: Optional[str] = None
 
-def _inv_number(seq: int) -> str:
-    return f"INV-{seq:05d}"
-
 def _ser_invoice(inv: Invoice) -> dict:
     return {
         "id": inv.id, "invoice_number": inv.invoice_number,
@@ -291,9 +288,7 @@ async def create_invoice(
     current: Employee = Depends(require_perm("can_create_invoices")),
 ):
     from backend.models import InvoiceOrder, InvoiceLine, Order
-    count = (await db.execute(
-        select(func.count()).select_from(Invoice).where(Invoice.org_id == current.org_id)
-    )).scalar() or 0
+    from backend.services.numbering import next_number
 
     # 144ed — the order list: explicit order_ids, with the legacy single order_id
     # folded in first and de-duped while preserving order.
@@ -329,7 +324,8 @@ async def create_invoice(
             return None
 
     inv = Invoice(
-        invoice_number=_inv_number(count + 1),
+        # One numbering path for every invoice (was count+1 here, a sequence elsewhere → duplicates)
+        invoice_number=await next_number(db, current.org_id, "invoice"),
         org_id=current.org_id,
         order_id=order_ids[0] if order_ids else None,
         client_id=data.client_id,
@@ -506,8 +502,16 @@ async def record_payment(
     inv = result.scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    # Negative amounts used to post +|amount| into the cashbox while reducing amount_paid; an
+    # amount above the balance silently over-collected.
+    if data.amount is None or data.amount <= 0:
+        raise HTTPException(400, "Payment amount must be positive")
+    remaining = q2(float(inv.total or 0) - float(inv.amount_paid or 0))
+    if data.amount > remaining + 0.005:
+        raise HTTPException(400, f"Payment exceeds the invoice balance ({remaining:g})")
     payment = Payment(
         invoice_id=invoice_id,
+        order_id=inv.order_id,          # so the order's own paid/balance math sees invoice payments
         client_id=inv.client_id,
         method=data.method,
         amount=data.amount,
@@ -537,6 +541,12 @@ async def record_payment(
         await post_contact_ledger(db, current.org_id, inv.client_id, "income", -abs(data.amount),
                                   note=f"Payment for invoice {inv.invoice_number or invoice_id}",
                                   ref_type="payment", ref_id=payment.id, created_by_id=current.id)
+    if inv.order_id:
+        from backend.services.order_money import cancel_open_pay_links
+        order = (await db.execute(select(Order).where(Order.id == inv.order_id))).scalar_one_or_none()
+        if order:
+            await db.flush()
+            await cancel_open_pay_links(db, order)
     await db.commit()
     return {"ok": True, "amount_paid": inv.amount_paid, "status": inv.status}
 

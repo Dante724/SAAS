@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,6 +47,29 @@ class SaleLineIn(BaseModel):
     qty: float = 1
     unit_price: float = 0
     discount: float = 0  # pct
+
+    # Security phase 3: negative qty passed both stock guards and ADDED stock; negative prices
+    # zeroed sales; >100% discounts made totals negative.
+    @field_validator("qty")
+    @classmethod
+    def _qty_positive(cls, v):
+        if v <= 0:
+            raise ValueError("Quantity must be greater than zero")
+        return v
+
+    @field_validator("unit_price")
+    @classmethod
+    def _price_non_negative(cls, v):
+        if v < 0:
+            raise ValueError("Price can't be negative")
+        return v
+
+    @field_validator("discount")
+    @classmethod
+    def _pct_range(cls, v):
+        if not 0 <= v <= 100:
+            raise ValueError("Discount must be between 0 and 100%")
+        return v
 
 
 class SaleIn(BaseModel):
@@ -188,7 +211,8 @@ async def create_sale(
         line_total = q2(li.unit_price * li.qty * (1 - (li.discount or 0) / 100))
         cost = 0.0
         if li.kind == "product" and li.ref_id:
-            part = (await db.execute(select(Part).where(Part.id == li.ref_id))).scalar_one_or_none()
+            part = (await db.execute(select(Part).where(
+                Part.id == li.ref_id, Part.org_id == current.org_id))).scalar_one_or_none()
             if not part:
                 raise HTTPException(404, f"Product not found: {li.description}")
             sl = (await db.execute(select(StockLevel).where(

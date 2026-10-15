@@ -1594,7 +1594,10 @@ async def receive_po(
         # can never land against an order that was never actually sent to the supplier.
         raise HTTPException(409, "Mark this purchase order as ordered before receiving")
     by_id = {r.po_line_id: r for r in data.lines}
-    po_lines = (await db.execute(select(POLine).where(POLine.po_id == po_id))).scalars().all()
+    # Lock the PO's lines for this receive: two concurrent "receive the remainder" calls both read
+    # the same qty_received and doubled stock and supplier AP. The loser now waits and sees 0 left.
+    po_lines = (await db.execute(select(POLine).where(POLine.po_id == po_id)
+                                 .with_for_update())).scalars().all()
     basis = po.alloc_basis if po.alloc_basis in _ALLOC_BASES else "value"
     weights = await _po_part_weights(db, po_lines) if basis == "weight" else {}
     # Build 144al — landed cost: when the PO opts in, spread its charges (shipping/transit/custom)

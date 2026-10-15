@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -83,6 +83,35 @@ class LineIn(BaseModel):
     ref_id: Optional[str] = None
     save_to_catalog: bool = False          # build 126: persist a custom line as a catalog item
     catalog_kind: Optional[str] = None     # service|product (when save_to_catalog)
+
+    # Security phase 3: negative quantities/prices/discounts and >100% discounts used to
+    # create phantom stock and zero/negative totals that slipped past every guard.
+    @field_validator("qty")
+    @classmethod
+    def _qty_positive(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError("Quantity must be greater than zero")
+        return v
+
+    @field_validator("unit_price", "cost_price", "discount")
+    @classmethod
+    def _non_negative(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("Prices, costs and discounts can't be negative")
+        return v
+
+    @field_validator("discount_type")
+    @classmethod
+    def _known_discount_type(cls, v):
+        if v is not None and v not in ("pct", "fixed"):
+            raise ValueError("discount_type must be 'pct' or 'fixed'")
+        return v
+
+    @model_validator(mode="after")
+    def _pct_at_most_100(self):
+        if (self.discount_type or "pct") == "pct" and (self.discount or 0) > 100:
+            raise ValueError("A percentage discount can't exceed 100%")
+        return self
 
 class OrderIn(BaseModel):
     client_id: Optional[str] = None
@@ -509,7 +538,7 @@ async def bulk_action(
             from backend.models import Invoice
             # skip if order already has an invoice
             existing = (await db.execute(
-                select(Invoice).where(Invoice.order_id == o.id)
+                select(Invoice.id).where(Invoice.order_id == o.id).limit(1)
             )).scalar_one_or_none()
             if existing:
                 continue
@@ -595,7 +624,8 @@ async def create_order(
     _perms_create = await _order_perms(db, current)
     for li in data.lines:
         await _apply_client_discount(db, current.org_id, data.client_id, li)
-        await _guard_discount_approval(db, current.org_id, _perms_create, li.discount, li.discount_type, is_owner=not current.role_id)
+        await _guard_discount_approval(db, current.org_id, _perms_create, li.discount, li.discount_type, is_owner=not current.role_id,
+                                          base=(li.qty or 0) * (li.unit_price or 0))
         # 144ha — margin-floor guardrail on create (block a below-floor line)
         _mg = await evaluate_line_margin(
             db, current.org_id, kind=li.kind, ref_id=li.ref_id, unit_price=li.unit_price or 0,
@@ -1235,7 +1265,7 @@ async def _apply_status_change(db, current, order, new_status, note=None):
 
     # Per-status trigger: auto-create invoice
     if target and target.triggers_invoice:
-        existing_inv = (await db.execute(select(Invoice).where(Invoice.order_id == order.id))).scalar_one_or_none()
+        existing_inv = (await db.execute(select(Invoice.id).where(Invoice.order_id == order.id).limit(1))).scalar_one_or_none()
         if not existing_inv:
             _inv = Invoice(invoice_number=await next_number(db, current.org_id, "invoice"), org_id=current.org_id,
                            order_id=order.id, client_id=order.client_id, status="draft",
@@ -1790,7 +1820,8 @@ async def invoice_preview(
     lines = [{"description": l.description, "qty": l.qty, "unit_price": l.unit_price,
               "line_type": l.line_type, "total": q2((l.qty or 0) * (l.unit_price or 0))}
              for l in order.lines]
-    balance = q2((order.total or 0) - (order.prepayment_total or 0))
+    from backend.services.order_money import balance_due
+    balance = await balance_due(db, order)
     return {
         "order_id": order.id, "order_number": order.order_number,
         "client": order.client.name if order.client else "Walk-in",
@@ -1823,7 +1854,8 @@ async def payment_link(
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
-    balance = q2((order.total or 0) - (order.prepayment_total or 0))
+    from backend.services.order_money import balance_due
+    balance = await balance_due(db, order)   # net of every payment, not just prepayments
     if balance <= 0:
         raise HTTPException(400, "Nothing to collect: order balance is zero.")
     # reuse an existing live link unless regenerating
@@ -1842,7 +1874,7 @@ async def payment_link(
         existing.status = "canceled"   # revoke the stale link before issuing a new one
     try:
         intent = await pay.create_intent(db, org_id=current.org_id, order_id=order_id,
-                                         amount=balance, account_id=None, currency="usd")
+                                         amount=balance, account_id=None)   # org base currency
     except RuntimeError as e:
         raise HTTPException(502, f"Gateway error: {e}")
     base = (settings.PUBLIC_BASE_URL or "").rstrip("/")
@@ -2326,6 +2358,13 @@ async def _archive_order(db, current, order_id, reason, do_refund):
             db.add(Payment(order_id=order_id, client_id=order.client_id, method="refund",
                            kind="refund", amount=net_paid, account_id=acct.id if acct else None,
                            received_by_id=current.id, reference=f"Archive refund: {reason}"[:200]))
+            if order.client_id:
+                # The cash goes back, so the client's ledger must show it — otherwise the reversed
+                # charge leaves them with phantom store credit equal to what they were refunded.
+                from backend.services.ledger import post_contact_ledger
+                await post_contact_ledger(db, current.org_id, order.client_id, "refund", abs(net_paid),
+                                          note=f"Refund on archived order {order.order_number}",
+                                          ref_type="refund", ref_id=refund.id, created_by_id=current.id)
             if acct:
                 from backend.routers.cash import post_transaction
                 await post_transaction(db, current.org_id, acct.id, "refund", -net_paid,
@@ -2358,6 +2397,9 @@ async def _archive_order(db, current, order_id, reason, do_refund):
                 _ded = (_l.qty or 0) - (_l.pending_stock or 0)
                 if _ded > 0:
                     await _reverse_fulfillment(db, order, _l.ref_id, _ded)
+                    # The parts are back on the shelf: the line no longer holds stock. Without this,
+                    # restore -> archive (or delete the line) returned the same parts again.
+                    _l.pending_stock = _l.qty or 0
     if not order.is_estimate:
         from backend.services.payroll import CommissionEngine
         await CommissionEngine(db, current.org_id).reverse_for_deletion(order)
@@ -2919,12 +2961,17 @@ async def _order_perms(db, current):
     return perms
 
 
-async def _guard_discount_approval(db, org_id, perms, discount, discount_type, is_owner=False):
-    """144hd — a percent discount above the org threshold needs approval rights.
+async def _guard_discount_approval(db, org_id, perms, discount, discount_type, is_owner=False,
+                                   base: float | None = None):
+    """144hd — a discount above the org threshold needs approval rights.
     Default-allow (matching the app's RBAC): blocked only when a role explicitly
-    sets can_approve_discount to False. Owners (no role) always pass."""
-    if is_owner or (discount_type or "pct") != "pct" or (discount or 0) <= 0:
+    sets can_approve_discount to False. Owners (no role) always pass. A fixed-amount
+    discount is judged as its percentage of the line (base = qty x unit price): skipping
+    fixed discounts let any role give a 100% discount without approval."""
+    if is_owner or (discount or 0) <= 0:
         return
+    if (discount_type or "pct") == "fixed":
+        discount = 100.0 if not base or base <= 0 else min(100.0, float(discount) / float(base) * 100)
     if perms.get("can_approve_discount") is not False:
         return
     org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
@@ -3093,7 +3140,8 @@ async def add_line(
 
     await _apply_client_discount(db, current.org_id, order.client_id, data)
     await _auto_apply_tax(db, current.org_id, data)
-    await _guard_discount_approval(db, current.org_id, perms, data.discount, data.discount_type, is_owner=not current.role_id)
+    await _guard_discount_approval(db, current.org_id, perms, data.discount, data.discount_type, is_owner=not current.role_id,
+                                   base=(data.qty or 0) * (data.unit_price or 0))
     # 144gy — margin-floor guardrail: block a line discounted below the org's minimum.
     from backend.routers.pricing import evaluate_line_margin
     _mg = await evaluate_line_margin(
@@ -3278,6 +3326,35 @@ class LineUpdate(BaseModel):
     co_technicians: Optional[list] = None            # 144av #3
 
 
+    # Security phase 3: negative quantities/prices/discounts and >100% discounts used to
+    # create phantom stock and zero/negative totals that slipped past every guard.
+    @field_validator("qty")
+    @classmethod
+    def _qty_positive(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError("Quantity must be greater than zero")
+        return v
+
+    @field_validator("unit_price", "cost_price", "discount")
+    @classmethod
+    def _non_negative(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("Prices, costs and discounts can't be negative")
+        return v
+
+    @field_validator("discount_type")
+    @classmethod
+    def _known_discount_type(cls, v):
+        if v is not None and v not in ("pct", "fixed"):
+            raise ValueError("discount_type must be 'pct' or 'fixed'")
+        return v
+
+    @model_validator(mode="after")
+    def _pct_at_most_100(self):
+        if (self.discount_type or "pct") == "pct" and (self.discount or 0) > 100:
+            raise ValueError("A percentage discount can't exceed 100%")
+        return self
+
 @router.patch("/{order_id}/lines/{line_id}")
 async def update_line(
     order_id: str,
@@ -3324,7 +3401,8 @@ async def update_line(
                 await _reverse_fulfillment(db, order, line.ref_id, physical)
     # 144hd — discount-approval gate on edit
     await _guard_discount_approval(db, current.org_id, await _order_perms(db, current),
-                                   line.discount, line.discount_type, is_owner=not current.role_id)
+                                   line.discount, line.discount_type, is_owner=not current.role_id,
+                                   base=(line.qty or 0) * (line.unit_price or 0))
     # 144ha — margin-floor guardrail also on edit (can't cheap-add then discount here)
     from backend.routers.pricing import evaluate_line_margin
     _mg = await evaluate_line_margin(

@@ -88,20 +88,36 @@ async def create_refund(
         Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
     if not acct:
         raise HTTPException(404, "Cashbox not found")
-    # Never refund more than the order actually received (net of prior refunds), so a cashbox
-    # can't be drained past what the customer paid.
-    if data.order_id:
-        paid = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0.0)).where(
-            Payment.order_id == data.order_id, Payment.kind.in_(["payment", "prepayment"])))).scalar() or 0.0
-        prior = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0.0)).where(
-            Payment.order_id == data.order_id, Payment.kind == "refund"))).scalar() or 0.0
-        net_paid = q2(float(paid) - abs(float(prior)))
-        if data.amount > net_paid + 1e-6:
-            raise HTTPException(400, f"Cannot refund more than was paid ({net_paid:g})")
+    # Every refund belongs to an order (directly or via its goods return) and is capped at what that
+    # order actually received net of ALL prior refunds — refunds from this endpoint, archive refunds
+    # and overpayment refunds all record a refund Payment, which order_money counts. Previously the
+    # cap ignored this endpoint's own refunds (repeatable) and was skipped without an order_id.
+    order_id = data.order_id
+    if not order_id and data.return_id:
+        ret = (await db.execute(select(ClientReturn).where(
+            ClientReturn.id == data.return_id, ClientReturn.org_id == current.org_id))).scalar_one_or_none()
+        order_id = ret.order_id if ret else None
+    if not order_id:
+        raise HTTPException(400, "A refund must reference the order (or a return for an order) it repays")
+    locked = (await db.execute(select(Order).where(
+        Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
+    if not locked:
+        raise HTTPException(404, "Order not found")
+    from backend.services.order_money import net_paid as _net_paid
+    net_paid = await _net_paid(db, order_id)
+    if data.amount > net_paid + 1e-6:
+        raise HTTPException(400, f"Cannot refund more than was paid ({net_paid:g})")
+    data.order_id = order_id
     refund = Refund(org_id=current.org_id, order_id=data.order_id, return_id=data.return_id,
                     account_id=data.account_id, amount=data.amount, reason=data.reason)
     db.add(refund)
     await db.flush()
+    from backend.routers.cash import open_drawer_shift
+    _shift = await open_drawer_shift(db, current.org_id, acct)
+    db.add(Payment(order_id=order_id, client_id=locked.client_id, method="cash" if _shift else "refund",
+                   kind="refund", amount=data.amount, account_id=data.account_id, received_by_id=current.id,
+                   shift_id=_shift,   # cash handed back from a drawer reduces that drawer's expected cash
+                   reference=f"Refund: {data.reason or ''}"[:200]))
     # Money out of the cashbox (signed ledger)
     from backend.routers.cash import post_transaction
     await post_transaction(db, current.org_id, data.account_id, "refund", -data.amount,

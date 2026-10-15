@@ -68,7 +68,8 @@ async def post_contact_ledger(
     c = (await db.execute(select(Client).where(
         Client.id == client_id, Client.org_id == org_id))).scalar_one_or_none()
     if c is not None:
-        c.balance = q2(float(c.balance or 0) + amt)
+        from backend.services.money import add_to_column
+        await add_to_column(db, c, "balance", amt)
     return entry
 
 
@@ -97,7 +98,8 @@ async def adjust_supplier_ap(
     not commit — the caller owns the transaction.
     """
     d = q2(delta)
-    supplier.balance = q2(float(supplier.balance or 0) + d)
+    from backend.services.money import add_to_column
+    await add_to_column(db, supplier, "balance", d)
     await post_contact_ledger(db, org_id, getattr(supplier, "client_id", None), entry_type, -d,
                               note=note, ref_type=ref_type, ref_id=ref_id, created_by_id=created_by_id)
     return supplier.balance

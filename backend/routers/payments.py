@@ -56,7 +56,7 @@ class CheckoutIn(BaseModel):
     order_id: Optional[str] = None
     amount: float
     account_id: Optional[str] = None
-    currency: str = "usd"
+    currency: Optional[str] = None      # default: the org's base currency
 
 
 @router.post("/checkout", status_code=201)
@@ -164,9 +164,10 @@ async def refresh_intent_status(intent_id: str, db: AsyncSession = Depends(get_d
     return _ser(intent)
 
 
-def _minor_units(amount) -> int:
+def _minor_units(amount, currency: str) -> int:
     # Must match how the gateways sent the amount at checkout (services/payments.py).
-    return int(round(float(amount) * 100))
+    from backend.services.money import minor_units
+    return minor_units(amount, currency)
 
 
 @router.post("/square/webhook")
@@ -202,7 +203,7 @@ async def square_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         for s in secrets)
     require_signature(secrets, verified, "Square")
     money = payment.get("amount_money") or {}
-    if money.get("amount") is not None and int(money["amount"]) != _minor_units(intent.amount):
+    if money.get("amount") is not None and int(money["amount"]) != _minor_units(intent.amount, intent.currency):
         log.warning("Square webhook amount mismatch for intent %s", intent.id)
         raise HTTPException(400, "Amount mismatch")
     if money.get("currency") and money["currency"].lower() != (intent.currency or "").lower():
@@ -279,7 +280,7 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     if i.provider != "stripe" or (meta.get("org_id") and meta["org_id"] != i.org_id):
         log.warning("Stripe webhook does not match intent %s (provider/org)", i.id)
         raise HTTPException(400, "Event does not match payment")
-    if obj.get("amount_total") is not None and int(obj["amount_total"]) != _minor_units(i.amount):
+    if obj.get("amount_total") is not None and int(obj["amount_total"]) != _minor_units(i.amount, i.currency):
         log.warning("Stripe webhook amount mismatch for intent %s", i.id)
         raise HTTPException(400, "Amount mismatch")
     if obj.get("currency") and obj["currency"].lower() != (i.currency or "").lower():
