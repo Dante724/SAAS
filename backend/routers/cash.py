@@ -51,8 +51,16 @@ router = APIRouter(prefix="/api/cash", tags=["cash"],
 async def post_transaction(db, org_id, account_id, txn_type, amount, *,
                            cash_flow_item_id=None, comment=None, ref_type=None,
                            ref_id=None, employee_id=None, transfer_pair_id=None,
-                           fx_rate=None, is_retroactive=False, actual_date=None):
-    """Create a transaction and update the account balance in one step."""
+                           fx_rate=None, is_retroactive=False, actual_date=None,
+                           native_amount=False):
+    """Create a transaction and update the account balance in one step.
+
+    Documents (orders, invoices, sales, postings, refunds, client/supplier settlements) are
+    priced in the org's base currency. Posting such an amount into a till held in another
+    currency added e.g. 100 GBP-worth of order money as 100 USD, so a document leg must hit a
+    base-currency account. Manual entries and transfers (which carry fx_rate) are native already;
+    corrections pass native_amount=True because their delta is typed against the account itself.
+    """
     txn = Transaction(
         org_id=org_id, account_id=account_id, txn_type=txn_type, amount=amount,
         cash_flow_item_id=cash_flow_item_id, comment=comment, ref_type=ref_type,
@@ -65,6 +73,13 @@ async def post_transaction(db, org_id, account_id, txn_type, amount, *,
     # tenant's balance (the transaction row is org-stamped, but the balance mutation wasn't scoped).
     acc = (await db.execute(select(Account).where(
         Account.id == account_id, Account.org_id == org_id))).scalar_one_or_none()
+    if acc and acc.currency_code and ref_type not in (None, "manual") and fx_rate is None \
+            and not native_amount:
+        base = await _org_base_code(db, org_id)
+        if acc.currency_code.upper() != base.upper():
+            raise HTTPException(422, f"“{acc.name}” holds {acc.currency_code}, but this document is in "
+                                     f"{base}. Take the payment into a {base} account, then transfer "
+                                     "between accounts if the money is held in another currency.")
     if acc:
         from backend.services.money import add_to_column
         txn.balance_after = q2(await add_to_column(db, acc, "balance", amount))  # A1: running-balance snapshot
@@ -332,6 +347,7 @@ async def correct_transaction(
         cash_flow_item_id=orig.cash_flow_item_id,
         comment=f"Correction: {data.reason.strip()}",
         ref_type=orig.ref_type, ref_id=orig.ref_id, employee_id=current.id,
+        native_amount=True,
     )
     corr.reverses_txn_id = orig.id       # link the delta row to the original
     orig.status = "corrected"            # original stays intact, just flagged
