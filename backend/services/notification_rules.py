@@ -256,19 +256,31 @@ async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = No
         NotificationLog.org_id == org_id, NotificationLog.status == "scheduled",
         NotificationLog.send_at.isnot(None), NotificationLog.send_at <= now))).scalars().all()
     sent = failed = 0
+    from sqlalchemy import update as _update
     for log in due:
         if not log.recipient:
             log.status = "skipped"
+            await db.commit()
             continue
-        result = await _send(db, org_id, log.channel, 
+        # Claim the row before sending and commit after each message: the old loop sent
+        # everything and committed once at the end, so a crash mid-sweep re-sent every message
+        # already delivered, and two runners could both send the same row. A row left in
+        # "sending" by a crash is never re-sent automatically (no duplicates to customers).
+        claimed = await db.execute(_update(NotificationLog)
+            .where(NotificationLog.id == log.id, NotificationLog.status == "scheduled")
+            .values(status="sending").execution_options(synchronize_session=False))
+        await db.commit()
+        if claimed.rowcount == 0:
+            continue
+        result = await _send(db, org_id, log.channel,
             recipient=log.recipient, subject=log.subject, body=log.body)
         log.status = result["status"]
         log.error = result.get("error")
+        await db.commit()
         if log.status == "sent":
             sent += 1
         else:
             failed += 1
-    await db.commit()
     return {"due": len(due), "sent": sent, "failed": failed}
 
 

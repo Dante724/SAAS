@@ -51,8 +51,69 @@ async def emit_event(db: AsyncSession, org_id: str, event: str, payload: dict) -
                                    payload=body, status="pending", attempts=0)
         db.add(delivery)
         await db.flush()
-        await _attempt(delivery, ep.url, ep.secret, body)
+        # Transactional outbox: the row commits (or rolls back) with the caller's change, and
+        # the POST happens only after commit. Sending inline used to notify subscribers about
+        # changes that were then rolled back, and stalled the request on slow endpoints.
+        db.info.setdefault(_OUTBOX_KEY, []).append(delivery.id)
     # caller owns the commit
+
+
+_OUTBOX_KEY = "repairos_webhook_outbox"
+
+
+def _register_outbox_hooks() -> None:
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session
+
+    @event.listens_for(Session, "after_commit")
+    def _flush_outbox(session):
+        ids = session.info.pop(_OUTBOX_KEY, None)
+        if ids:
+            from backend.core.jobs import job_runner
+            try:
+                job_runner.enqueue(deliver_pending, list(ids), retries=2, name="webhook-outbox")
+            except RuntimeError:   # no running loop (sync context): the retry sweep delivers them
+                pass
+
+    @event.listens_for(Session, "after_rollback")
+    def _drop_outbox(session):
+        session.info.pop(_OUTBOX_KEY, None)
+
+
+_register_outbox_hooks()
+
+
+async def deliver_pending(delivery_ids: list) -> int:
+    """Attempt committed, still-pending deliveries by id (post-commit outbox worker). Rows that
+    were rolled back simply don't exist. Anything that fails is retried by the periodic sweep."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.models import WebhookDelivery, WebhookEndpoint
+    sent = 0
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(
+            select(WebhookDelivery, WebhookEndpoint)
+            .join(WebhookEndpoint, WebhookEndpoint.id == WebhookDelivery.endpoint_id)
+            .where(WebhookDelivery.id.in_(delivery_ids), WebhookDelivery.status == "pending"))).all()
+        for delivery, ep in rows:
+            if not await claim_delivery(db, delivery, ("pending",)):
+                continue      # the retry sweep got there first
+            await _attempt(delivery, ep.url, ep.secret, delivery.payload)
+            await db.commit()
+            sent += 1
+    return sent
+
+
+async def claim_delivery(db, delivery, from_statuses) -> bool:
+    """Atomically move a delivery to "sending" so exactly one worker (post-commit outbox or the
+    retry sweep, in any process) attempts it. Commits the claim."""
+    from sqlalchemy import update
+
+    from backend.models import WebhookDelivery
+    res = await db.execute(update(WebhookDelivery)
+        .where(WebhookDelivery.id == delivery.id, WebhookDelivery.status.in_(from_statuses))
+        .values(status="sending").execution_options(synchronize_session=False))
+    await db.commit()
+    return res.rowcount == 1
 
 
 async def _attempt(delivery, url: str, secret: str, body: str) -> None:

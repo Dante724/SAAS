@@ -1286,27 +1286,6 @@ async def _apply_status_change(db, current, order, new_status, note=None):
     # Only fall back to the legacy NotificationTemplate dispatch when NO rule matched
     # this event — that stops the two systems double-sending while keeping
     # template-only orgs working. Both are best-effort: never block the status change.
-    rules_matched = 0
-    try:
-        from backend.services import notification_rules as _nr
-        _ev = "closed" if is_closing else "status_changed"
-        _res = await _nr.evaluate(db, org_id=current.org_id, order_id=order.id,
-                                  event=_ev, status_key=data.status)
-        rules_matched = (_res or {}).get("matched", 0)
-        # 144jb: Internal › Workflows — notify the assignee + manager (staff-scoped rules).
-        await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
-                                     event=_ev, status_key=data.status, actor_id=current.id)
-    except Exception:  # noqa: BLE001
-        pass
-    if rules_matched == 0 and (not target or target.triggers_notification):
-        try:
-            from backend.services.notifications import dispatch_order_notifications
-            await dispatch_order_notifications(
-                db, org_id=current.org_id, order_id=order.id,
-                trigger_event="status_change", status_key=data.status)
-        except Exception:  # noqa: BLE001
-            import logging
-            logging.getLogger("repairos").exception("status notification dispatch failed for order %s", order.id)
     # Build 144w: workflow automations for status_changed (create task / assign /
     # tag / webhook). Order.status is already the new value here.
     try:
@@ -1342,6 +1321,32 @@ async def _apply_status_change(db, current, order, new_status, note=None):
                 note=_note, ref_type="order", ref_id=order.id, created_by_id=current.id)
 
     await db.commit()
+
+    # Customer/staff messages go out only AFTER the status change is committed — sending them
+    # inside the transaction meant a failed commit still texted the customer about a change
+    # that never happened.
+    rules_matched = 0
+    try:
+        from backend.services import notification_rules as _nr
+        _ev = "closed" if is_closing else "status_changed"
+        _res = await _nr.evaluate(db, org_id=current.org_id, order_id=order.id,
+                                  event=_ev, status_key=data.status)
+        rules_matched = (_res or {}).get("matched", 0)
+        # 144jb: Internal › Workflows — notify the assignee + manager (staff-scoped rules).
+        await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
+                                     event=_ev, status_key=data.status, actor_id=current.id)
+    except Exception:  # noqa: BLE001
+        pass
+    if rules_matched == 0 and (not target or target.triggers_notification):
+        try:
+            from backend.services.notifications import dispatch_order_notifications
+            await dispatch_order_notifications(
+                db, org_id=current.org_id, order_id=order.id,
+                trigger_event="status_change", status_key=data.status)
+        except Exception:  # noqa: BLE001
+            import logging
+            logging.getLogger("repairos").exception("status notification dispatch failed for order %s", order.id)
+    await db.commit()   # persist the notification log rows written above
 
     # Notify the assigned technician their job's status moved (unless they did it).
     if order.assigned_to_id and order.assigned_to_id != current.id:
