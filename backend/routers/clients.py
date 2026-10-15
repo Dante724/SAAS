@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,7 +58,7 @@ class DeviceIn(BaseModel):
     asset_group_id: Optional[str] = None
     custom_data: Optional[dict] = None
 
-def _ser_client(c: Client, supplier=None) -> dict:
+def _ser_client(c: Client, supplier=None, order_count=None) -> dict:
     return {
         # Build 144am — supplier role facet: the mirrored PO-facing Supplier row (lead
         # time, PO currency, what we owe). None when this contact isn't a supplier. Lets
@@ -82,14 +82,14 @@ def _ser_client(c: Client, supplier=None) -> dict:
         "devices": [{"id": d.id, "brand": d.brand, "model": d.model, "serial": d.serial,
                      "imei": d.imei, "vin": d.vin, "hin": d.hin, "condition": d.condition,
                      "custom_data": d.custom_data or {}} for d in c.devices],
-        "order_count": len(c.orders),
+        "order_count": len(c.orders) if order_count is None else order_count,
     }
 
 @router.get("")
 async def list_clients(
     search: Optional[str] = None,
     role: str = "all",                 # Build 114: all | client | supplier
-    skip: int = 0, limit: int = 50,
+    skip: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
@@ -98,7 +98,7 @@ async def list_clients(
 
     q = (select(Client)
          .where(Client.org_id == current.org_id)
-         .options(selectinload(Client.devices), selectinload(Client.orders))
+         .options(selectinload(Client.devices))   # order counts come from one grouped query below
          .order_by(Client.name))
     q = scoping.scope_clients(q, scope_role, current)
     if role == "supplier":
@@ -117,7 +117,11 @@ async def list_clients(
     elif role == "client":
         count_q = count_q.where(Client.is_supplier == False)  # noqa: E712
     total = (await db.execute(count_q)).scalar()
-    return {"total": total, "items": [_ser_client(c) for c in clients]}
+    from backend.models import Order
+    ids = [c.id for c in clients]
+    counts = dict((await db.execute(select(Order.client_id, func.count()).where(
+        Order.client_id.in_(ids)).group_by(Order.client_id))).all()) if ids else {}
+    return {"total": total, "items": [_ser_client(c, order_count=counts.get(c.id, 0)) for c in clients]}
 
 @router.post("", status_code=201)
 async def create_client(

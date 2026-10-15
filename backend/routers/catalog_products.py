@@ -6,6 +6,7 @@ write-off (serial -> specific serials, non-serial -> qty with FEFO when expiry
 tracking is on), barcode generation, and Excel import/export. Stock *balances*
 and movements continue to live under /api/inventory.
 """
+import asyncio
 import io
 from typing import Optional
 
@@ -250,14 +251,29 @@ async def list_products(search: Optional[str] = None, category_id: Optional[str]
         wh_location_id = (await db.execute(select(Warehouse.location_id).where(
             Warehouse.id == warehouse_id, Warehouse.org_id == current.org_id))).scalar_one_or_none()
     rows = (await db.execute(q.order_by(Part.name))).scalars().all()
+    # Stock and variant counts for the whole page in two grouped queries (this used to be two
+    # queries per product — ~2,000 round trips for a 1,000-item catalogue).
+    ids = [p.id for p in rows]
+    stock: dict = {}
+    variants: dict = {}
+    if ids:
+        sq = select(StockLevel.part_id, func.coalesce(func.sum(StockLevel.qty_available), 0),
+                    func.coalesce(func.sum(StockLevel.qty_reserved), 0)).where(StockLevel.part_id.in_(ids))
+        if warehouse_id:
+            cond = StockLevel.warehouse_id == warehouse_id
+            if wh_location_id:
+                cond = cond | ((StockLevel.warehouse_id.is_(None)) & (StockLevel.location_id == wh_location_id))
+            sq = sq.where(cond)
+        stock = {pid: (qty, res) for pid, qty, res in (await db.execute(sq.group_by(StockLevel.part_id))).all()}
+        variants = dict((await db.execute(select(Part.parent_id, func.count()).where(
+            Part.parent_id.in_(ids)).group_by(Part.parent_id))).all())
     out = []
     for p in rows:
         # warehouse_id scopes the stock figure to one warehouse; parts with no stock there drop out.
-        qty, res = await _stock_for(db, p.id, warehouse_id, wh_location_id)
+        qty, res = stock.get(p.id, (0, 0))
         if warehouse_id and qty == 0 and res == 0:
             continue
-        vc = (await db.execute(select(func.count()).select_from(Part).where(Part.parent_id == p.id))).scalar() or 0
-        out.append(_ser_product(p, qty, res, vc))
+        out.append(_ser_product(p, qty, res, variants.get(p.id, 0)))
     return {"items": out}
 
 
@@ -365,7 +381,7 @@ async def export_products(db: AsyncSession = Depends(get_db), current: Employee 
     for p in rows:
         ws.append(safe_row([p.code, p.sku, p.barcode, p.name, path(p.category_id), p.uom, p.cost_price,
                             p.sell_price, p.min_stock, p.warranty_days, "yes" if p.serialized else "no"]))
-    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    buf = io.BytesIO(); await asyncio.to_thread(wb.save, buf); buf.seek(0)
     return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              headers={"Content-Disposition": 'attachment; filename="products.xlsx"'})
 
