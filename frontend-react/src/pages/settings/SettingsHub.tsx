@@ -12,6 +12,7 @@ import { getLang, setLang, LANGS } from "../../i18n";
 import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
 import { NAV, CATS, SEC_CAT, searchSections, type SectionId } from "./settingsRegistry";
 import { SetupChecklist } from "./SetupChecklist";
+import { StatusList, StatusEditor } from "./StatusesSettings";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
 
 // Full section set = the registry sections + a few that have no nav entry of their own.
@@ -107,8 +108,6 @@ export default function SettingsHub() {
   const [co, setCo] = useState<any>(null);
   const [statuses, setStatuses] = useState<any[]>([]);
   const [statusRT, setStatusRT] = useState<string>("work_order");  // 144ij — which pipeline is being edited
-  const statusDrag = useRef<number | null>(null);
-  const [statusOver, setStatusOver] = useState<number | null>(null);
   async function moveStatus(from: number, to: number) {
     if (from === to || to < 0 || to >= statuses.length) return;
     const prev = statuses;
@@ -434,49 +433,9 @@ export default function SettingsHub() {
           )}
 
           {sec === "statuses" && (
-            <div className="max-w-3xl space-y-5">
-              {/* 144ij — one engine, five pipelines. Orderry parity (breadth) with our richer per-status automation (depth). */}
-              <div className="flex flex-wrap gap-1.5">
-                {([["work_order", "Work orders"], ["estimate", "Estimates"], ["inquiry", "Inquiries"], ["invoice", "Invoices"], ["transfer", "Transfers"], ["purchase_order", "Purchase orders"]] as [string, string][]).map(([rt, label]) => (
-                  <button key={rt} onClick={() => { setStatusRT(rt); setStatuses([]); }}
-                    className={`px-3 py-1.5 rounded-full text-xs font-bold transition-colors ${statusRT === rt ? "bg-primary text-white shadow-clay-sm" : "bg-white border border-slate-200 text-ink-secondary hover:border-slate-300"}`}>{label}</button>
-                ))}
-              </div>
-              <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-                <div className="p-3.5 border-b border-slate-100 flex items-center justify-between">
-                  <span className="text-xs font-bold text-ink-primary uppercase tracking-wider">{({ work_order: "Work order", estimate: "Estimate", inquiry: "Inquiry", invoice: "Invoice", transfer: "Transfer", purchase_order: "Purchase order" } as Record<string, string>)[statusRT]} statuses</span>
-                  <button onClick={() => setStatusEdit("new")} className="text-primary text-xs font-semibold hover:underline flex items-center gap-1"><M n="add" c="text-sm" />Add status</button>
-                </div>
-                <div className="divide-y divide-slate-100">
-                  {statuses.length === 0 && <div className="p-5 text-xs text-ink-tertiary">Loading statuses…</div>}
-                  {statuses.map((s: any, idx: number) => (
-                    <div key={s.id} draggable onDragStart={() => { statusDrag.current = idx; }} onDragEnd={() => { statusDrag.current = null; setStatusOver(null); }}
-                      onDragOver={(e) => { e.preventDefault(); setStatusOver(idx); }} onDragLeave={() => setStatusOver((d) => (d === idx ? null : d))}
-                      onDrop={(e) => { e.preventDefault(); const f = statusDrag.current; setStatusOver(null); if (f !== null) moveStatus(f, idx); }}
-                      className={`pl-2 pr-5 py-3 flex items-center gap-3 text-xs group ${statusOver === idx ? "border-t-2 border-t-primary" : ""}`}>
-                      <div className="flex items-center gap-0.5">
-                        <M n="drag_indicator" c="text-ink-tertiary cursor-grab text-base" />
-                        <div className="flex flex-col opacity-40 group-hover:opacity-100">
-                          <button aria-label={`Move ${s.name} up`} disabled={idx === 0} onClick={() => moveStatus(idx, idx - 1)} className="text-ink-tertiary hover:text-primary disabled:opacity-20 leading-none"><M n="expand_less" c="text-base" /></button>
-                          <button aria-label={`Move ${s.name} down`} disabled={idx === statuses.length - 1} onClick={() => moveStatus(idx, idx + 1)} className="text-ink-tertiary hover:text-primary disabled:opacity-20 leading-none"><M n="expand_more" c="text-base" /></button>
-                        </div>
-                      </div>
-                      <span className="w-3 h-3 rounded-full" style={{ background: s.color || "#94a3b8" }} />
-                      <span className="font-bold text-ink-primary">{s.name}</span>
-                      <span className="text-[10px] uppercase tracking-wide text-ink-tertiary bg-slate-100 px-1.5 py-0.5 rounded">{(s.status_group || "").replace(/_/g, " ")}</span>
-                      {s.time_limit_min ? <span className="text-[10px] text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded font-bold">SLA {s.time_limit_min}m</span> : null}
-                      {(s.require_comment || s.require_payment || s.require_checklist) && <span className="text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-bold">gated</span>}
-                      {s.allow_messages === false && <span className="text-[10px] text-ink-secondary bg-slate-100 px-1.5 py-0.5 rounded font-bold">no messages</span>}
-                      {s.allow_messages === true && <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded font-bold">messages on</span>}
-                      <span className="ml-auto font-mono text-ink-tertiary text-[11px]">{s.key}</span>
-                      <button onClick={() => setStatusEdit(s)} className="text-primary font-semibold hover:underline">Edit</button>
-                      <button onClick={() => delRow("statuses", s)} className="text-rose-600 font-semibold hover:underline">Delete</button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              {(statusRT === "work_order" || statusRT === "estimate") && <TransitionsCard statuses={statuses} onFlash={flash} />}
-            </div>
+            <StatusList statuses={statuses} recordType={statusRT} onRecordType={(rt) => { setStatusRT(rt); setStatuses([]); }}
+              onOpen={(s) => setStatusEdit(s)} onAdd={() => setStatusEdit("new")} onMove={moveStatus}
+              onDeleted={() => reloadSec("statuses")} onFlash={flash} />
           )}
 
           {sec === "team" && (
@@ -617,7 +576,7 @@ export default function SettingsHub() {
           onClose={() => setPayrollEdit(null)} onSaved={(m) => { flash(m || "Saved"); setPayrollEdit(null); reloadPayrollRules(); }} />
       )}
       {statusEdit && (
-        <StatusEditorDrawer status={statusEdit === "new" ? null : statusEdit} recordType={statusRT}
+        <StatusEditor status={statusEdit === "new" ? null : statusEdit} recordType={statusRT} statuses={statuses}
           onClose={() => setStatusEdit(null)} onSaved={(m) => { flash(m || "Saved"); setStatusEdit(null); reloadSec("statuses"); }} />
       )}
       {formFieldsFor && (
@@ -631,68 +590,6 @@ export default function SettingsHub() {
   );
 }
 
-/* ── Status transition matrix (which status may follow which) → /statuses/transitions ── */
-function TransitionsCard({ statuses, onFlash }: { statuses: any[]; onFlash: (m: string) => void }) {
-  const [edges, setEdges] = useState<any[]>([]);
-  const [busy, setBusy] = useState(false);
-  const wo = statuses.filter((s) => !s.is_estimate);
-  const load = () => api.get<any>("/statuses/transitions").then((r) => setEdges(r.items || [])).catch(() => setEdges([]));
-  useEffect(() => { load(); }, []);
-  // org-wide edges only (role_id null); key = from>to
-  const orgEdges = edges.filter((e) => !e.role_id);
-  const edgeId = (fromId: string, toId: string) => orgEdges.find((e) => e.from_status_id === fromId && e.to_status_id === toId)?.id;
-  const toggle = async (fromId: string, toId: string) => {
-    if (busy) return; setBusy(true);
-    const existing = edgeId(fromId, toId);
-    try {
-      if (existing) await api.del(`/statuses/transitions/${existing}`);
-      else await api.post("/statuses/transitions", { from_status_id: fromId, to_status_id: toId });
-      await load();
-    } catch (e: any) { onFlash(`Failed: ${e.message}`); } finally { setBusy(false); }
-  };
-  const byId = (id: string) => wo.find((s) => s.id === id);
-  const targets = (fromId: string) => orgEdges.filter((e) => e.from_status_id === fromId).map((e) => e.to_status_id);
-  const [addFor, setAddFor] = useState<string | null>(null);
-  return (
-    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 space-y-2">
-      <h3 className="text-xs font-bold text-ink-primary">Status transitions</h3>
-      <p className="text-[11px] text-ink-tertiary">Pick which statuses each one can move <span className="font-semibold">to</span>. A status with none set is <span className="text-emerald-600 font-semibold">open</span> — it can move to any status.</p>
-      {wo.length === 0 ? <div className="text-xs text-ink-tertiary py-2">Add statuses first.</div> : (
-        <div className="divide-y divide-slate-100">
-          {wo.map((fr) => {
-            const outs = targets(fr.id);
-            const remaining = wo.filter((t) => t.id !== fr.id && !outs.includes(t.id));
-            return (
-              <div key={fr.id} className="flex items-start gap-2 py-2.5 flex-wrap">
-                <span className="inline-flex items-center gap-1.5 font-bold text-xs text-ink-primary min-w-[104px] pt-1">
-                  <span className="w-2.5 h-2.5 rounded-full" style={{ background: fr.color }} />{fr.name}
-                </span>
-                <span className="text-[11px] text-ink-tertiary pt-1.5">can move to</span>
-                <div className="flex items-center gap-1.5 flex-wrap flex-1">
-                  {outs.length === 0 && <span className="text-[11px] font-semibold text-emerald-600 pt-1">open — any status</span>}
-                  {outs.map((toId) => { const t = byId(toId); if (!t) return null; return (
-                    <span key={toId} className="inline-flex items-center gap-1 pl-2 pr-1 py-1 rounded-full text-[11px] font-bold bg-blue-50 text-primary">
-                      {t.name}
-                      <button aria-label="Remove" onClick={() => toggle(fr.id, toId)} disabled={busy} title="Remove" className="w-4 h-4 rounded-full grid place-items-center hover:bg-blue-100"><M n="close" c="text-[11px]" /></button>
-                    </span>
-                  ); })}
-                  {remaining.length > 0 && (addFor === fr.id ? (
-                    <select autoFocus value="" onChange={(e) => { if (e.target.value) { toggle(fr.id, e.target.value); setAddFor(null); } }} onBlur={() => setAddFor(null)}
-                      className="glass-input py-1 px-2 text-[11px] font-semibold text-ink-primary rounded-full">
-                      <option value="">Select…</option>{remaining.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                    </select>
-                  ) : (
-                    <button onClick={() => setAddFor(fr.id)} className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-bold text-ink-tertiary border border-dashed border-slate-300 hover:border-primary hover:text-primary"><M n="add" c="text-[11px]" />add</button>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
 
 /* ── Locations (working hours + per-location resources) → /staff/locations, /resources ── */
 const DAYS: [string, string][] = [["mon", "Mon"], ["tue", "Tue"], ["wed", "Wed"], ["thu", "Thu"], ["fri", "Fri"], ["sat", "Sat"], ["sun", "Sun"]];
@@ -2027,180 +1924,6 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
             <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button>
             <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Add rule" : "Save"}</button>
           </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Status editor (Orderry-plus: live preview + plain-English summary) ──
-const STATUS_GROUPS: [string, string][] = [["new", "New"], ["in_progress", "In progress"], ["pending", "Pending"], ["ready", "Ready"], ["closed", "Closed"], ["dropped", "Dropped"]];
-const STATUS_SWATCHES = ["#1D9E75", "#378ADD", "#EF9F27", "#D4537E", "#7F77DD", "#D85A30", "#888780"];
-function StatusEditorDrawer({ status, recordType = "work_order", onClose, onSaved }: { status: any | null; recordType?: string; onClose: () => void; onSaved: (m?: string) => void }) {
-  const isNew = !status?.id;
-  const [f, setF] = useState<any>(status || { name: "", color: "#378ADD", status_group: "in_progress", is_default: false,
-    triggers_invoice: false, triggers_notification: false, triggers_payment: false, locks_edits: false,
-    moves_asset_to: "", time_limit_min: null, require_comment: false, require_payment: false, require_checklist: false, is_estimate: false });
-  const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
-  const [warehouses, setWarehouses] = useState<any[]>([]);
-  useEffect(() => { api.get<any>("/settings/warehouses").then((r) => setWarehouses(r.items || r || [])).catch(() => setWarehouses([])); }, []);
-  const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
-  const terminal = f.status_group === "closed" || f.status_group === "dropped";
-  const hasMessages = (status?.record_type || recordType) === "work_order" || (status?.record_type || recordType) === "estimate";
-
-  async function save() {
-    if (!f.name?.trim()) { setErr("Name is required"); return; }
-    setBusy(true); setErr(null);
-    const body = {
-      name: f.name.trim(), color: f.color, status_group: f.status_group, is_default: !!f.is_default,
-      triggers_invoice: !!f.triggers_invoice, triggers_notification: !!f.triggers_notification,
-      triggers_payment: !!f.triggers_payment, locks_edits: !!f.locks_edits,
-      moves_asset_to: f.moves_asset_to || null, time_limit_min: f.time_limit_min ? Number(f.time_limit_min) : null,
-      require_comment: !!f.require_comment, require_payment: !!f.require_payment, require_checklist: !!f.require_checklist,
-      record_type: status?.record_type || recordType,
-      allow_messages: f.allow_messages ?? null,
-    };
-    try {
-      if (isNew) await api.post("/statuses", body); else await api.put(`/statuses/${status.id}`, body);
-      onSaved(isNew ? "Status added" : "Status saved");
-    } catch (e: any) { setErr(e?.message || "Could not save"); setBusy(false); }
-  }
-
-  // Plain-English behaviour summary from the toggles.
-  const acts: string[] = [];
-  if (f.triggers_invoice) acts.push("creates an invoice");
-  if (f.triggers_notification) acts.push("notifies the customer");
-  if (f.triggers_payment) acts.push("prompts for payment");
-  if (f.locks_edits) acts.push("locks further edits");
-  if (f.moves_asset_to) acts.push(`moves the asset to ${f.moves_asset_to}`);
-  const reqs: string[] = [];
-  if (f.require_comment) reqs.push("a comment");
-  if (f.require_payment) reqs.push("full payment");
-  if (f.require_checklist) reqs.push("a completed checklist");
-  const nm = f.name?.trim() || "this status";
-  let summary = `Entering ${nm} `;
-  summary += acts.length ? acts.join(", ").replace(/, ([^,]*)$/, " and $1") : "does nothing automatic";
-  summary += ".";
-  if (reqs.length) summary += ` Requires ${reqs.join(" and ")} first.`;
-  if (f.time_limit_min) summary += ` Flags overdue after ${f.time_limit_min} min.`;
-  if (terminal) summary += " Closes the order (terminal).";
-  if (hasMessages) {
-    if (f.allow_messages === true) summary += " Customers can message the shop.";
-    else if (f.allow_messages === false) summary += " Customers can't message the shop.";
-    else if (terminal) summary += " Customers can still message for a while after closing.";
-  }
-
-  const lblc = "block text-[11px] font-bold text-ink-tertiary uppercase mb-1";
-  const fld = "glass-input w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg";
-  const Action = ({ k, icon, label }: { k: string; icon: string; label: string }) => (
-    <label className="flex items-center gap-2.5 py-2 border-t border-slate-100 first:border-0 cursor-pointer text-xs">
-      <M n={icon} c="text-base text-ink-tertiary" /><span className="text-ink-primary">{label}</span>
-      <button type="button" onClick={() => set(k, !f[k])} className={`ml-auto w-10 h-6 rounded-full flex-shrink-0 relative transition-colors ${f[k] ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${f[k] ? "left-[18px]" : "left-0.5"}`} /></button>
-    </label>
-  );
-  const ReqPill = ({ k, label }: { k: string; label: string }) => (
-    <button type="button" onClick={() => set(k, !f[k])} className={`text-[12px] px-3 py-1.5 rounded-full font-semibold border transition-colors ${f[k] ? "bg-primary/10 text-primary border-primary/30" : "border-slate-200 text-ink-secondary hover:border-slate-300"}`}>{f[k] && <M n="check" c="text-[12px] mr-0.5" />}{label}</button>
-  );
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative w-[480px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
-        <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
-        <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-100">
-          <div className="min-w-0">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-primary block">Statuses › {isNew ? "New" : "Edit"}</span>
-            <h2 className="font-bold text-ink-primary truncate">{f.name?.trim() || "New status"}</h2>
-          </div>
-          <span className="ml-auto inline-flex items-center px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap" style={{ background: (f.color || "#888") + "22", color: f.color || "#888" }}>{f.name?.trim() || "Preview"}</span>
-          <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary flex-shrink-0"><M n="close" c="text-base" /></button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-5 space-y-5">
-          {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
-
-          <div className="space-y-3">
-            <div className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary"><M n="tag" c="text-xs mr-1" />Identity</div>
-            <div><label className={lblc}>Name</label><input value={f.name || ""} onChange={(e) => set("name", e.target.value)} className={fld} placeholder="e.g. Ready for pickup" /></div>
-            <div>
-              <label className={lblc}>Colour</label>
-              <div className="flex items-center gap-2 flex-wrap">
-                {STATUS_SWATCHES.map((c) => (
-                  <button key={c} type="button" onClick={() => set("color", c)} title={c}
-                    className={`w-7 h-7 rounded-full flex-shrink-0 grid place-items-center ${f.color === c ? "ring-2 ring-primary ring-offset-2" : ""}`} style={{ background: c }}>
-                    {f.color === c && <M n="check" c="text-xs text-white" />}
-                  </button>
-                ))}
-                <label className="w-7 h-7 rounded-full border border-dashed border-slate-300 grid place-items-center cursor-pointer text-ink-tertiary flex-shrink-0 hover:border-primary hover:text-primary" title="Custom colour">
-                  <M n="colorize" c="text-sm" /><input type="color" value={f.color || "#888888"} onChange={(e) => set("color", e.target.value)} className="sr-only" />
-                </label>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3 items-end">
-              <div><label className={lblc}>Group</label>
-                <select value={f.status_group} onChange={(e) => set("status_group", e.target.value)} className={fld}>{STATUS_GROUPS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
-              <label className="flex items-center justify-between py-2 cursor-pointer text-xs"><span className="font-semibold text-ink-primary">Default for new orders</span>
-                <button type="button" onClick={() => set("is_default", !f.is_default)} className={`w-10 h-6 rounded-full flex-shrink-0 relative transition-colors ${f.is_default ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${f.is_default ? "left-[18px]" : "left-0.5"}`} /></button></label>
-            </div>
-          </div>
-
-          <div>
-            <div className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary mb-1"><M n="bolt" c="text-xs mr-1" />When an order enters this status</div>
-            <Action k="triggers_invoice" icon="receipt" label="Create an invoice" />
-            <Action k="triggers_notification" icon="notifications" label="Notify the customer" />
-            <Action k="triggers_payment" icon="payments" label="Prompt for payment" />
-            <Action k="locks_edits" icon="lock" label="Lock further edits" />
-            <div className="flex items-center gap-2.5 py-2 border-t border-slate-100 text-xs">
-              <M n="inventory_2" c="text-base text-ink-tertiary" /><span className="text-ink-primary">Move asset to</span>
-              <select value={f.moves_asset_to || ""} onChange={(e) => set("moves_asset_to", e.target.value)} className="ml-auto glass-input py-1.5 px-2 text-xs font-semibold text-ink-primary rounded-lg w-44">
-                <option value="">— Don't move —</option>
-                {warehouses.filter((w) => w.kind !== "product").map((w) => <option key={w.id} value={w.name}>{w.name}</option>)}
-                {f.moves_asset_to && !warehouses.some((w) => w.name === f.moves_asset_to) && <option value={f.moves_asset_to}>{f.moves_asset_to}</option>}
-              </select>
-            </div>
-          </div>
-
-          {hasMessages && (
-            <div>
-              <div className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary mb-2"><M n="chat" c="text-xs mr-1" />Customer messages</div>
-              <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-50">
-                {([[null, "Automatic"], [true, "Allow"], [false, "Block"]] as [boolean | null, string][]).map(([v, l]) => (
-                  <button key={l} type="button" onClick={() => set("allow_messages", v)}
-                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${(f.allow_messages ?? null) === v ? "bg-white text-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>{l}</button>
-                ))}
-              </div>
-              <p className="text-[11px] text-ink-tertiary mt-1.5">
-                {f.allow_messages === true ? "Customers can always message the shop from their tracking link while the order is in this status."
-                  : f.allow_messages === false ? "The message box is hidden. Customers see \"Start a new request\" instead."
-                  : terminal ? "Customers can message for a few days after the order closes (Settings › Public pages), then see \"Start a new request\"."
-                  : "Customers can message the shop while the order is in this status."}
-              </p>
-            </div>
-          )}
-
-          <div>
-            <div className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary mb-2"><M n="verified_user" c="text-xs mr-1" />Require before entering</div>
-            <div className="flex gap-2 flex-wrap">
-              <ReqPill k="require_comment" label="Comment" />
-              <ReqPill k="require_payment" label="Full payment" />
-              <ReqPill k="require_checklist" label="Checklist done" />
-            </div>
-          </div>
-
-          <div>
-            <div className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary mb-2"><M n="schedule" c="text-xs mr-1" />Timing</div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-ink-secondary">Flag overdue after</span>
-              <input type="number" min={0} value={f.time_limit_min ?? ""} onChange={(e) => set("time_limit_min", e.target.value)} placeholder="—" className="glass-input py-1.5 px-2 text-xs font-mono font-bold text-ink-primary rounded-lg w-20 text-right" />
-              <span className="text-xs text-ink-secondary">min</span>
-            </div>
-          </div>
-
-          <div className="bg-blue-50/70 rounded-lg px-3 py-2.5 text-[12px] text-primary leading-relaxed"><M n="auto_awesome" c="text-sm mr-1" />{summary}</div>
-        </div>
-
-        <div className="px-5 py-4 border-t border-slate-100 flex justify-end gap-2 bg-slate-50/60">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Add status" : "Save status"}</button>
         </div>
       </div>
     </div>

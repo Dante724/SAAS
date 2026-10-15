@@ -185,7 +185,29 @@ async def list_statuses(
                                   OrderStatus.record_type == rt)
         .order_by(OrderStatus.sort_order)
     )).scalars().all()
-    return {"groups": GROUPS, "record_types": RECORD_TYPES, "items": [_ser(s) for s in rows]}
+    counts = await _job_counts(db, current.org_id, rt) if rt in ("work_order", "estimate") else None
+    items = []
+    for s in rows:
+        d = _ser(s)
+        if counts is not None:
+            cur, recent = counts
+            # Open statuses: jobs in them now. Closed ones: jobs that closed there in the last 30 days.
+            d["job_count"] = recent.get(s.key, 0) if s.is_terminal else cur.get(s.key, 0)
+            d["in_use"] = cur.get(s.key, 0)
+        items.append(d)
+    return {"groups": GROUPS, "record_types": RECORD_TYPES, "items": items}
+
+
+async def _job_counts(db: AsyncSession, org_id: str, rt: str) -> tuple[dict, dict]:
+    from datetime import datetime, timedelta
+
+    from backend.models import Order
+    base = (Order.org_id == org_id, Order.archived == False, Order.is_estimate == (rt == "estimate"))  # noqa: E712
+    cur = dict((await db.execute(select(Order.status, func.count()).where(*base).group_by(Order.status))).all())
+    since = datetime.utcnow() - timedelta(days=30)
+    recent = dict((await db.execute(select(Order.status, func.count()).where(
+        *base, Order.closed_at >= since).group_by(Order.status))).all())
+    return cur, recent
 
 
 class StatusIn(BaseModel):
@@ -314,14 +336,39 @@ async def reorder_statuses(
 @router.delete("/{status_id}")
 async def delete_status(
     status_id: str,
+    move_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
+    """Retire a status. With ``move_to`` (another status key of the same type), jobs currently
+    in it move there first — a plain status change: it's logged, but no automations run."""
     s = (await db.execute(select(OrderStatus).where(OrderStatus.id == status_id, OrderStatus.org_id == current.org_id))).scalar_one_or_none()
     if not s:
         raise HTTPException(404, "Status not found")
     if s.is_default:
         raise HTTPException(400, "Cannot delete the default status")
+    if move_to:
+        if s.record_type not in ("work_order", "estimate"):
+            raise HTTPException(400, "Only work order and estimate statuses hold jobs")
+        target = (await db.execute(select(OrderStatus).where(
+            OrderStatus.org_id == current.org_id, OrderStatus.key == move_to, OrderStatus.active == True,  # noqa: E712
+            OrderStatus.record_type == s.record_type, OrderStatus.id != s.id))).scalars().first()
+        if not target:
+            raise HTTPException(400, "Pick another active status to move the jobs to")
+        from datetime import datetime
+
+        from backend.models import Order, OrderStatusLog
+        now = datetime.utcnow()
+        orders = (await db.execute(select(Order).where(
+            Order.org_id == current.org_id, Order.status == s.key,
+            Order.is_estimate == (s.record_type == "estimate")))).scalars().all()
+        for o in orders:
+            o.status = target.key
+            o.status_entered_at = now
+            if target.is_terminal and not o.closed_at:
+                o.closed_at = now
+            db.add(OrderStatusLog(order_id=o.id, from_status=s.key, to_status=target.key,
+                                  changed_by_id=current.id, note=f"Status \"{s.name}\" was removed"))
     s.active = False
     await db.commit()
     return {"ok": True}
