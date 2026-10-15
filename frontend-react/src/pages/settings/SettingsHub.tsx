@@ -257,6 +257,12 @@ export default function SettingsHub() {
         require_mfa: co.require_mfa, clock_wo_enabled: co.clock_wo_enabled, clock_attendance_enabled: co.clock_attendance_enabled,
         clock_labour_billing: co.clock_labour_billing, rounding_enabled: co.rounding_enabled,
       });
+      // Switching industry also seeds its starter brands/models and refreshes the app's wording.
+      const prevInd = coSaved.current?.industry_template;
+      if (co.industry_template && co.industry_template !== prevInd) {
+        await api.put("/settings/industry-template", { template_key: co.industry_template });
+        resetTerminology();
+      }
       flash("Settings saved");
       return true;
     } catch (e: any) { flash(`Failed: ${e.message}`); return false; }
@@ -423,7 +429,7 @@ export default function SettingsHub() {
 
           {sec === "industry" && (
             <div className="max-w-4xl space-y-5">
-              <IndustryTemplatePicker onSaved={() => reloadSec("industry")} />
+              <IndustryNote onChange={() => setSec("general")} />
               <AssetCatalog />
             </div>
           )}
@@ -2846,41 +2852,19 @@ function AssetCatalog() {
   );
 }
 
-function IndustryTemplatePicker({ onSaved }: { onSaved?: () => void }) {
-  const [data, setData] = useState<any>(null);
-  const [pick, setPick] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
-  useEffect(() => {
-    api.get<any>("/settings/industry-template").then((r) => { setData(r); setPick(r?.current || ""); }).catch(() => setData({ templates: [] }));
-  }, []);
-  const cur = data?.describe;
-  async function save() {
-    if (!pick || pick === data?.current) return;
-    setBusy(true); setMsg("");
-    try {
-      await api.put("/settings/industry-template", { template_key: pick });
-      resetTerminology();
-      setMsg("Saved. New records use this template; existing ones keep their own wording.");
-      const r = await api.get<any>("/settings/industry-template"); setData(r);
-      onSaved?.();
-    } catch (e: any) { setMsg(e.message || "Could not switch template"); }
-    finally { setBusy(false); }
-  }
+/* Industry is chosen in General › What you repair; this section only says which one is active. */
+function IndustryNote({ onChange }: { onChange: () => void }) {
+  const [d, setD] = useState<any>(null);
+  useEffect(() => { api.get<any>("/settings/industry-template").then(setD).catch(() => setD(null)); }, []);
+  const cur = (d?.templates || []).find((t: any) => t.key === d?.current);
   return (
-    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-5 space-y-3">
-      <div><h4 className="text-sm font-bold text-ink-primary">Industry template</h4>
-        <p className="text-xs text-ink-tertiary mt-0.5">Sets what an asset is called across the app{cur ? <> — currently <span className="font-semibold text-ink-secondary">{cur.asset_label}</span></> : ""}.</p></div>
-      <div className="flex flex-wrap items-end gap-2">
-        <div className="flex-1 min-w-[220px]">
-          <label className="block text-[11px] font-semibold text-ink-secondary mb-1">Template</label>
-          <select value={pick} onChange={(e) => setPick(e.target.value)} className="glass-input w-full px-3 py-2 rounded-lg text-xs">
-            {(data?.templates || []).map((t: any) => <option key={t.key} value={t.key}>{t.label} — {t.asset_label}</option>)}
-          </select>
-        </div>
-        <button onClick={save} disabled={busy || !pick || pick === data?.current} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">Save</button>
+    <div className="flex items-center gap-3 bg-white rounded-2xl border border-slate-200/90 shadow-clay-card px-5 py-4">
+      <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n="handyman" c="text-lg" /></span>
+      <div className="min-w-0">
+        <div className="text-sm text-ink-primary">{cur ? <>Your shop repairs: <span className="font-semibold">{cur.label}</span></> : "What your shop repairs"}</div>
+        <div className="text-[11px] text-ink-tertiary">The brands, models and groups below follow this. Change it in General.</div>
       </div>
-      {msg && <p className="text-[11px] text-ink-secondary">{msg}</p>}
+      <button onClick={onChange} className="ml-auto px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex-shrink-0">Change</button>
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { M } from "../../components/Shell";
 import CurrencyManager from "../../components/CurrencyManager";
 import { getLang, setLang, LANGS } from "../../i18n";
+import { api } from "../../api/client";
 
 /* Settings › General — the shop's profile. Edits land in local state and save together from a
    bar that only appears when something changed; a live preview shows how customers see the
@@ -23,8 +24,9 @@ const snap = (co: any) => JSON.stringify(SAVED_KEYS.map((k) => co?.[k] ?? null))
 
 const INDUSTRY_ICON: Record<string, string> = {
   general: "inventory_2", auto: "directions_car", powersports: "bolt", marine: "sailing", mobile_phone: "smartphone",
-  computer: "laptop", small_engine: "settings_suggest", tools: "hammer", bike: "pedal_bike",
+  computer: "laptop", small_engine: "settings_suggest", tools: "hammer", bike: "pedal_bike", fleet_truck: "local_shipping",
 };
+const LEGACY: Record<string, string> = { generic: "general", device_repair: "mobile_phone", auto_repair: "auto", tool_repair: "tools", appliance_repair: "general" };
 
 function Section({ icon, title, hint, children }: { icon: string; title: string; hint?: string; children: ReactNode }) {
   return (
@@ -60,6 +62,14 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
   const [saving, setSaving] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  // The industry list comes from the server (same registry Industry & assets uses); the static
+  // list is only a fallback if that call fails.
+  const [tpls, setTpls] = useState<{ key: string; label: string; asset_label?: string; asset_label_plural?: string }[] | null>(null);
+  useEffect(() => { api.get<any>("/settings/industry-template").then((r) => setTpls(r.templates || null)).catch(() => setTpls(null)); }, []);
+  const industryTiles = tpls?.length
+    ? tpls.map((t) => ({ key: t.key, name: t.label, noun: t.asset_label_plural || t.asset_label || "" }))
+    : opts.industries.map(([v, l]) => { const [name, noun] = l.split(" — "); return { key: v, name: name.replace(/^Generic$/, "Something else"), noun: noun || "" }; });
+  const currentIndustry = LEGACY[co.industry_template] || co.industry_template || "general";
   const dirty = snap(co) !== snap(saved.current);
   const set = (k: string, v: any) => setCo((s: any) => ({ ...s, [k]: v }));
 
@@ -174,17 +184,16 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
 
           <CurrencyManager />
 
-          <Section icon="handyman" title="What you repair" hint="Sets the words used across the app: vehicles, vessels, devices… and which ID to ask for.">
+          <Section icon="handyman" title="What you repair" hint="Sets the words used across the app (vehicles, vessels, devices…), the ID to ask for, and starter brands and models. Jobs you already have keep their wording.">
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-              {opts.industries.map(([v, l]) => {
-                const [name, noun] = l.split(" — ");
-                const on = (co.industry_template || "general") === v;
+              {industryTiles.map(({ key: v, name, noun }) => {
+                const on = currentIndustry === v;
                 return (
                   <button key={v} type="button" onClick={() => set("industry_template", v)} aria-pressed={on}
                     className={`relative text-left rounded-xl border p-3 transition-colors ${on ? "border-primary bg-primary/5 ring-2 ring-primary/15" : "border-slate-200 hover:border-slate-300 hover:bg-slate-50"}`}>
                     {on && <span className="absolute top-2 right-2 w-5 h-5 rounded-full bg-primary text-white grid place-items-center"><M n="check" c="text-[12px]" /></span>}
                     <span className={`w-8 h-8 rounded-lg grid place-items-center mb-2 ${on ? "bg-primary text-white" : "bg-slate-100 text-ink-secondary"}`}><M n={INDUSTRY_ICON[v] || "inventory_2"} c="text-base" /></span>
-                    <span className="block text-xs font-semibold text-ink-primary">{name.replace(/^Generic$/, "Something else")}</span>
+                    <span className="block text-xs font-semibold text-ink-primary pr-5">{name}</span>
                     {noun && <span className="block text-[11px] text-ink-tertiary">{noun}</span>}
                   </button>
                 );

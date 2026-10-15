@@ -324,10 +324,11 @@ def template(key: Optional[str]) -> dict:
 
 
 def template_list() -> list[dict]:
-    """[{key, label, asset_label, wo_button, group_count}] for the settings picker."""
+    """[{key, label, asset_label, asset_label_plural, wo_button, group_count}] for the settings picker."""
     out = []
     for k, t in TEMPLATES.items():
         out.append({"key": k, "label": t["label"], "asset_label": t["asset_label"],
+                    "asset_label_plural": t.get("asset_label_plural") or t["asset_label"] + "s",
                     "wo_button": t["wo_button"], "group_count": len(t["groups"])})
     return out
 
