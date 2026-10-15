@@ -2035,14 +2035,16 @@ async def list_conversions(
     current: Employee = Depends(get_current_employee),
 ):
     """Assets converted into sellable products (Orderry's Conversions tab)."""
-    from sqlalchemy import or_
+    from sqlalchemy import and_, or_
 
     from backend.models import Client, Device, Part
-    client_ids = (await db.execute(
-        select(Client.id).where(Client.org_id == current.org_id))).scalars().all()
+    # Same org scoping as the asset list (144do): the old `owner_type == "company"` arm listed
+    # every shop's converted company assets.
+    client_ids = select(Client.id).where(Client.org_id == current.org_id)
     rows = (await db.execute(select(Device).where(
         Device.converted_to_part_id.is_not(None),
-        or_(Device.client_id.in_(client_ids), Device.owner_type == "company"))
+        or_(Device.org_id == current.org_id,
+            and_(Device.org_id.is_(None), Device.client_id.in_(client_ids))))
         .order_by(Device.id))).scalars().all()
     # resolve the converted products so we can show their real sell price
     part_ids = [d.converted_to_part_id for d in rows if d.converted_to_part_id]

@@ -14,7 +14,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -491,8 +491,12 @@ _DECODE_FIELD = {"vin": "vin", "hin": "hin", "imei": "imei"}  # kinds with a Dev
 
 async def _match_existing(db, org_id, kind, value) -> Optional[Device]:
     """Find an existing asset by identifier, scoped to this org's assets."""
-    client_ids = (await db.execute(select(Client.id).where(Client.org_id == org_id))).scalars().all()
-    base = or_(Device.client_id.in_(client_ids), Device.owner_type == "company")
+    # Devices carry org_id; legacy rows without it are matched through the owning client. The old
+    # `owner_type == "company"` arm had no org filter, so a scan could return another shop's
+    # company-owned asset.
+    client_ids = select(Client.id).where(Client.org_id == org_id)
+    base = or_(Device.org_id == org_id,
+               and_(Device.org_id.is_(None), Device.client_id.in_(client_ids)))
     col = {"vin": Device.vin, "hin": Device.hin, "imei": Device.imei}.get(kind, Device.serial)
     return (await db.execute(select(Device).where(base, col == value))).scalars().first()
 
