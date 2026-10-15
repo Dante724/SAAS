@@ -7,6 +7,7 @@ import TagChips from "../../components/TagChips";
 import { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import { Order, deviceName, money } from "./types";
+import { Avatar, deviceIcon, dueText, friendlyDate } from "./look";
 import { api, openAuthedDoc } from "../../api/client";
 import { readAsDataUrl } from "../../lib/files";
 import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
@@ -201,6 +202,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   const c = d.client || {}; const dev = d.device || {};
   const hasDevice = !!dev.id;
   const devTitle = deviceName(d.device) !== "—" ? deviceName(d.device) : (dev.asset_label || "Device");
+  const isClosed = !!statuses.find((st) => st.key === d.status && ["closed", "dropped"].includes(st.status_group || ""));
+  const due = dueText(d.due_at, !isClosed);
 
   // 144dd — tab badges reflect real state (no always-on dots). Amber Checklists dot only when a
   // required checklist item is still undone; red Activity count only when a customer message is unread.
@@ -219,9 +222,9 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   const HOLD_PRESETS = [7, 14, 30];
   const ProcurementCard = () => (
     <div className="rounded-2xl border border-slate-200/90 bg-white shadow-sm p-4 space-y-3">
-      <h4 className="text-xs font-bold uppercase tracking-wider text-ink-tertiary flex items-center gap-1.5"><M n="shopping_cart" c="text-sm text-primary" />Parts procurement</h4>
+      <h4 className="text-xs font-bold text-ink-tertiary flex items-center gap-1.5"><M n="shopping_cart" c="text-sm text-primary" />Parts procurement</h4>
       <div className="space-y-1.5">
-        <div className="text-[10px] font-bold uppercase tracking-wide text-ink-tertiary">Order parts (supplier PO)</div>
+        <div className="text-[10px] font-bold text-ink-tertiary">Order parts (supplier PO)</div>
         <div className="flex items-center gap-1.5 flex-wrap">
           <select value={poSupplier} onChange={(e) => { setPoSupplier(e.target.value); setPoMsg(null); }} className="glass-input rounded-lg px-2 py-2 text-xs font-semibold text-ink-primary max-w-[180px]">
             <option value="">— Supplier —</option>
@@ -237,7 +240,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
       </div>
       <div className="border-t border-slate-200/70" />
       <div className="space-y-1.5">
-        <div className="text-[10px] font-bold uppercase tracking-wide text-ink-tertiary">Reserve in-stock parts</div>
+        <div className="text-[10px] font-bold text-ink-tertiary">Reserve in-stock parts</div>
         <div className="flex items-center gap-1.5 flex-wrap">
           <span className="text-[11px] text-ink-tertiary">Hold for</span>
           {HOLD_PRESETS.map((n) => (
@@ -274,13 +277,13 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
         {/* Header */}
         <header className="px-6 py-4 border-b border-slate-200/90 bg-white/95 backdrop-blur flex items-center justify-between flex-shrink-0">
           <div className="flex items-center gap-3">
-            <span className="font-mono text-xs font-bold px-2.5 py-1 rounded bg-blue-50 text-primary border border-blue-200">{woNum}</span>
-            <h3 className="text-base font-extrabold text-ink-primary tracking-tight">{hasDevice ? devTitle : (c.name || "Work order")}</h3>
+            <span className="font-mono text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-100 text-ink-secondary">{woNum}</span>
+            <h3 className="text-base font-semibold text-ink-primary tracking-tight">{hasDevice ? devTitle : (c.name || "Work order")}</h3>
             <StatusControl statuses={statuses} currentKey={d.status} elapsedMin={timing?.elapsed_min}
               isEstimate={!!(order as any).is_estimate} onChange={changeStatus} />
             {urgent && (
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-ping" />Urgent (Same-Day)
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200 flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />{(d.priority ?? 0) >= 2 ? "Urgent" : "High priority"}
               </span>
             )}
           </div>
@@ -312,7 +315,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
           <div className="px-6 py-2 border-b border-amber-200 bg-amber-50 flex-shrink-0 flex items-start gap-2 text-[11px] text-amber-800">
             <M n="local_shipping" c="text-sm mt-0.5" />
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span className="font-bold uppercase tracking-wide">Waiting on PO</span>
+              <span className="font-semibold">Waiting on parts</span>
               {incomingPo.map((p, i) => (
                 <span key={i} className="font-semibold">{p.po_number}
                   <span className="font-normal text-amber-700"> ({humanize(p.status)}{p.expected_at ? `, exp ${new Date(p.expected_at).toLocaleDateString()}` : ""}) — {p.parts.map((x) => `${x.part}×${x.outstanding}`).join(", ")}</span>
@@ -350,10 +353,10 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
         )}
 
         {/* Tabs */}
-        <nav className="px-6 border-b border-slate-200 flex space-x-6 text-xs font-semibold bg-slate-50/70 flex-shrink-0">
+        <nav className="px-6 border-b border-slate-200/80 flex space-x-6 text-xs font-medium bg-white flex-shrink-0">
           {TABS.map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)}
-              className={`py-3 border-b-2 transition-colors flex items-center gap-1.5 ${tab === t.id ? "text-primary border-primary font-bold" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>
+              className={`py-3 border-b-2 transition-colors flex items-center gap-1.5 ${tab === t.id ? "text-ink-primary border-primary font-semibold" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>
               <span>{t.label}</span>
               {t.badge && <span className="text-[10px] bg-rose-100 text-rose-700 px-1.5 rounded-full font-mono font-bold">{t.badge}</span>}
               {t.dot && <span role="img" aria-label="Checklist incomplete" title="Checklist incomplete" className={`w-2 h-2 rounded-full ${t.dot}`} />}
@@ -370,31 +373,32 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
         <WatchOutBanner device={d.device} client={d.client} onChanged={reload} onFlash={flash} />
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto p-6 bg-[#f8faff] space-y-6">
+        <div className="flex-1 overflow-y-auto p-6 bg-slate-50/70 space-y-6">
           {tab === "general" && (
             <div className="space-y-5">
               {(urgent || d.scheduled_for || d.due_at) && (
-                <div className="bg-gradient-to-r from-blue-50 to-indigo-50/60 border border-blue-200/80 text-blue-900 rounded-xl p-3.5 flex items-center justify-between shadow-2xs">
+                <div className="bg-white border border-slate-200/90 rounded-2xl p-3.5 flex items-center justify-between shadow-clay-sm">
                   <div className="flex items-center gap-3">
-                    <div className="w-7 h-7 rounded-lg bg-primary text-white flex items-center justify-center"><M n="schedule" c="text-sm" /></div>
+                    <div className={`w-9 h-9 rounded-xl grid place-items-center ${urgent ? "bg-rose-50 text-rose-600" : "bg-primary/10 text-primary"}`}><M n="schedule" c="text-base" /></div>
                     <div>
-                      <p className="text-xs font-bold text-ink-primary">{urgent ? "Expedited priority order — SLA active" : "Scheduled order"}</p>
-                      <p className="text-[11px] text-ink-secondary">{d.due_at ? `Target delivery: ${fmtDT(d.due_at)}` : d.scheduled_for ? `Scheduled: ${fmtDT(d.scheduled_for)}` : "Tracking active"}</p>
+                      <p className="text-sm font-semibold text-ink-primary">{urgent ? ((d.priority ?? 0) >= 2 ? "Urgent job, same day" : "High priority job") : "Booked job"}</p>
+                      <p className="text-xs text-ink-secondary">{[d.scheduled_for ? `Booked for ${friendlyDate(d.scheduled_for)}` : null, d.due_at ? `due ${fmtDT(d.due_at)}` : null].filter(Boolean).join(" · ") || "Being tracked"}</p>
                     </div>
                   </div>
-                  <span className="text-[10px] font-bold bg-white text-primary px-2.5 py-1 rounded-full border border-blue-200 shadow-2xs uppercase tracking-wider">{urgent ? "Priority High" : "Scheduled"}</span>
+                  {due ? <span className={`text-[11px] font-semibold px-2.5 py-1 rounded-full ${due[1] ? "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200" : "bg-slate-100 text-ink-secondary"}`}>{due[0]}</span>
+                    : <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-slate-100 text-ink-secondary">{urgent ? "Priority" : "Booked"}</span>}
                 </div>
               )}
 
               {/* Client + Device cards */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div onClick={() => c.id && setSub("client")} className="bg-white rounded-xl border border-slate-200/90 p-4 shadow-sm hover:border-primary/50 transition-all cursor-pointer group">
+                <div onClick={() => c.id && setSub("client")} className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-clay-sm hover:border-primary/40 hover:shadow-clay-card transition-all cursor-pointer group">
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-2.5">
-                      <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-primary to-indigo-600 text-white font-bold flex items-center justify-center text-sm shadow-clay-sm">{(c.name || "?").slice(0, 2).toUpperCase()}</div>
+                      <Avatar name={c.name} size={40} />
                       <div>
-                        <div className="flex items-center gap-1.5"><h4 className="text-sm font-bold text-ink-primary group-hover:text-primary transition-colors">{c.name || "Unknown client"}</h4></div>
-                        <p className="text-xs text-ink-secondary font-mono">{c.phone || "No phone"}</p>
+                        <div className="flex items-center gap-1.5"><h4 className="text-sm font-semibold text-ink-primary group-hover:text-primary transition-colors">{c.name || "Unknown client"}</h4></div>
+                        <p className="text-xs text-ink-secondary tabular-nums">{c.phone || "No phone"}</p>
                       </div>
                     </div>
                     <M n="open_in_new" c="text-ink-tertiary group-hover:text-primary transition-colors text-sm" />
@@ -402,26 +406,26 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                   <div className="mt-3 pt-2.5 border-t border-slate-100 text-xs text-ink-tertiary flex items-center justify-between">
                     <span className="truncate">{c.email || "No email"}</span>
                     {c.balance ? <span className={`text-[11px] font-bold ${c.balance > 0 ? "text-rose-600" : "text-emerald-600"}`}>{c.balance > 0 ? "Owes " : "Credit "}{money(Math.abs(c.balance))}</span>
-                      : <span className="text-[11px] font-semibold text-emerald-600 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Client on file</span>}
+                      : <span className="text-[11px] font-semibold text-emerald-600 flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Nothing owed</span>}
                   </div>
                 </div>
                 {hasDevice ? (
-                <div onClick={() => setSub("asset")} className="bg-white rounded-xl border border-slate-200/90 p-4 shadow-sm hover:border-primary/50 transition-all cursor-pointer group">
+                <div onClick={() => setSub("asset")} className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-clay-sm hover:border-primary/40 hover:shadow-clay-card transition-all cursor-pointer group">
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-2.5">
-                      <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center border border-purple-100"><M n="smartphone" c="text-xl" /></div>
+                      <div className="w-10 h-10 rounded-xl bg-slate-100 text-ink-secondary flex items-center justify-center"><M n={deviceIcon(d.device)} c="text-xl" /></div>
                       <div>
-                        <div className="flex items-center gap-1.5"><h4 className="text-sm font-bold text-ink-primary group-hover:text-primary transition-colors">{devTitle}</h4>
-                          {d.warranty_until && <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold uppercase">Warranty Active</span>}
+                        <div className="flex items-center gap-1.5"><h4 className="text-sm font-semibold text-ink-primary group-hover:text-primary transition-colors">{devTitle}</h4>
+                          {d.warranty_until && <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-semibold">Under warranty</span>}
                         </div>
                         <p className="text-xs text-ink-secondary">{[dev.color, dev.asset_type].filter(Boolean).join(" · ") || dev.asset_label || "Device"}</p>
                       </div>
                     </div>
-                    <button onClick={(e) => { e.stopPropagation(); setSub("asset"); }} className="flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-50 text-primary border border-blue-100 text-[11px] font-bold hover:bg-blue-100 transition-colors shrink-0"><M n="open_in_new" c="text-sm" />Details</button>
+                    <button onClick={(e) => { e.stopPropagation(); setSub("asset"); }} className="flex items-center gap-1 px-2 py-1 rounded-lg text-primary text-[11px] font-semibold hover:bg-primary/10 transition-colors shrink-0"><M n="open_in_new" c="text-sm" />Details</button>
                   </div>
                   {(dev.serial || dev.imei) && (
-                  <div className="mt-3 pt-2.5 border-t border-slate-100 text-xs font-mono text-ink-tertiary flex items-center justify-between">
-                    {dev.serial && <span>SN: {dev.serial}</span>}{dev.imei && <span className="text-ink-secondary">IMEI: {dev.imei}</span>}
+                  <div className="mt-3 pt-2.5 border-t border-slate-100 text-xs text-ink-tertiary flex items-center justify-between">
+                    {dev.serial && <span>Serial <span className="font-mono text-ink-secondary">{dev.serial}</span></span>}{dev.imei && <span>IMEI <span className="font-mono text-ink-secondary">{dev.imei}</span></span>}
                   </div>)}
                 </div>
                 ) : (
@@ -438,20 +442,20 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               </div>
 
               {/* Order parameters */}
-              <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-sm space-y-4">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-ink-tertiary">Order Parameters &amp; Scheduling</h4>
+              <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-clay-sm space-y-4">
+                <h4 className="text-sm font-semibold text-ink-primary">Job details</h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <Ro label="Work Order Type"><Sel value={d.is_estimate ? "Estimate" : "Hardware Repair"} opts={["Hardware Repair", "Diagnostics", "Warranty", "Maintenance", "Estimate"]} /></Ro>
-                  <Ro label="Priority"><Sel value={urgent ? "Urgent (Same-Day Expedited)" : "Normal"} opts={["Normal", "High Priority", "Urgent (Same-Day Expedited)"]} red={urgent} /></Ro>
+                  <Ro label="Job type"><Sel value={d.is_estimate ? "Estimate" : "Hardware Repair"} opts={["Hardware Repair", "Diagnostics", "Warranty", "Maintenance", "Estimate"]} /></Ro>
+                  <Ro label="Priority"><Sel value={(d.priority ?? 0) >= 2 ? "Urgent, same day" : urgent ? "High" : "Normal"} opts={["Normal", "High", "Urgent, same day"]} red={urgent} /></Ro>
                   <Ro label="Manager"><SelEmp value={d.manager?.id || ""} emps={emps} onChange={(id) => reassign("manager_id", id)} /></Ro>
-                  <Ro label="Specialist / Assignee"><SelEmp value={d.assigned_to?.id || ""} emps={emps} onChange={(id) => reassign("assigned_to_id", id)} /></Ro>
-                  <Ro label="Time &amp; people">
+                  <Ro label="Technician"><SelEmp value={d.assigned_to?.id || ""} emps={emps} onChange={(id) => reassign("assigned_to_id", id)} /></Ro>
+                  <Ro label="Time on this job">
                     {byEmp.length > 0 ? (
                       <div className="rounded-lg bg-slate-50 border border-slate-200/70 p-2 space-y-1">
-                        <div className="text-[10px] font-bold uppercase tracking-wide text-ink-tertiary">On this job</div>
+                        <div className="text-[11px] font-medium text-ink-tertiary">On this job</div>
                         {byEmp.map((b: any) => (
                           <div key={b.employee_id} className="flex items-center justify-between text-[11px]">
-                            <span className="flex items-center gap-1.5">{b.running && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />}<span className="font-semibold text-ink-primary">{b.employee_name}</span></span>
+                            <span className="flex items-center gap-1.5"><Avatar name={b.employee_name} size={20} />{b.running && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />}<span className="font-semibold text-ink-primary">{b.employee_name}</span></span>
                             <span className="flex items-center gap-2">
                               <span className="font-mono text-ink-secondary">{secHM(b.total_seconds)}{b.running ? " · running" : ""}</span>
                               {b.running && <button type="button" onClick={() => stopEntry(b.employee_id)} className="px-1.5 py-0.5 rounded-md bg-rose-50 text-rose-600 border border-rose-200 text-[10px] font-bold hover:bg-rose-100">Stop</button>}
@@ -461,21 +465,22 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                       </div>
                     ) : <span className="text-[11px] text-ink-tertiary">Start the job timer from the header, or clock into a specific line under Services &amp; products.</span>}
                   </Ro>
-                  <Ro label="Scheduled For">
+                  <Ro label="Booked for">
                     <div className="relative">
                       <DateField mode="datetime" value={d.scheduled_for ? d.scheduled_for.slice(0, 16) : ""} onChange={(v) => reschedule(v)} />
                     </div>
                   </Ro>
-                  <Ro label="Target SLA / Due Date">
-                    <div className="relative">
-                      <input readOnly value={d.due_at ? fmtDT(d.due_at) : "—"} className={`glass-input w-full py-2 px-3 pr-8 text-xs font-bold rounded-xl ${d.due_at ? "text-rose-800 bg-rose-50/40 border-rose-200" : "text-ink-primary"}`} />
-                      <M n="timer" c={`absolute right-2.5 top-2.5 text-sm pointer-events-none ${d.due_at ? "text-rose-600" : "text-ink-tertiary"}`} />
+                  <Ro label="Due">
+                    <div className={`w-full py-2 px-3 text-xs rounded-xl border flex items-center gap-2 ${due?.[1] ? "text-rose-700 bg-rose-50/60 border-rose-200" : "text-ink-primary bg-slate-50 border-slate-200"}`}>
+                      <M n="timer" c={`text-sm ${due?.[1] ? "text-rose-600" : "text-ink-tertiary"}`} />
+                      <span className="font-semibold">{d.due_at ? fmtDT(d.due_at) : "No due date"}</span>
+                      {due && <span className={`ml-auto text-[11px] ${due[1] ? "font-semibold" : "text-ink-tertiary"}`}>{due[0]}</span>}
                     </div>
                   </Ro>
                 </div>
                 <div className="space-y-1">
-                  <label className="block text-[11px] font-bold text-ink-tertiary uppercase">Complaint / Reported Malfunction</label>
-                  <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200 text-xs font-medium text-ink-primary">{or(d.complaint, "No complaint recorded yet.")}</div>
+                  <label className="block text-xs font-medium text-ink-secondary">What the customer reported</label>
+                  <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200 text-sm text-ink-primary leading-relaxed">{or(d.complaint, "No complaint recorded yet.")}</div>
                 </div>
                 <JobCardFields orderId={order.id} typeId={(d as any).type_id} value={(d as any).custom_data} onFlash={flash}
                   onSaved={(cd) => setD({ ...d, custom_data: cd } as Detail)} />
@@ -487,12 +492,12 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               <IntakePhotos orderId={order.id} photos={d.intake_photos} onChanged={reload} onFlash={flash} />
 
               {/* Barcode */}
-              <div className="bg-white rounded-xl border border-slate-200/90 p-3.5 flex items-center justify-between">
+              <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 flex items-center justify-between shadow-clay-sm">
                 <div className="flex items-center gap-3">
                   <div className="p-2 rounded-lg bg-slate-100 text-ink-primary"><M n="qr_code_2" c="text-2xl" /></div>
-                  <div><span className="font-mono text-xs font-bold tracking-widest text-ink-primary">{woNum}</span><p className="text-[10px] text-ink-tertiary">Bench Ticket Code · Scan with handheld barcode gun</p></div>
+                  <div><span className="font-mono text-xs font-bold tracking-widest text-ink-primary">{woNum}</span><p className="text-[11px] text-ink-tertiary">Bench ticket code. Scan it with a barcode gun to open this job.</p></div>
                 </div>
-                <button onClick={printWO} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50 flex items-center gap-1.5 transition-colors"><M n="print" c="text-xs" />Print Sticker</button>
+                <button onClick={printWO} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50 flex items-center gap-1.5 transition-colors"><M n="print" c="text-xs" />Print sticker</button>
               </div>
             </div>
           )}
@@ -515,14 +520,14 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
         {/* Footer */}
         <footer className="px-6 py-3.5 border-t border-slate-200/90 bg-white/95 backdrop-blur-md flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
           <div className="flex items-center gap-4">
-            <label className="flex items-center gap-2 text-xs font-semibold text-ink-secondary"><input checked={!!(d as any).estimate_approved_at} readOnly disabled className="rounded text-primary h-4 w-4" type="checkbox" /><span>Client Approved</span></label>
+            <label className="flex items-center gap-2 text-xs font-semibold text-ink-secondary"><input checked={!!(d as any).estimate_approved_at} readOnly disabled className="rounded text-primary h-4 w-4" type="checkbox" /><span>Customer approved</span></label>
             <button onClick={openTrackingLink} className="text-xs text-primary font-bold hover:underline flex items-center gap-1"><M n="link" c="text-xs" />Tracking link</button>
             <button onClick={printWO} className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-1 border border-slate-200 rounded-lg px-2 py-1 bg-white"><M n="print" c="text-xs" />Print WO</button>
             <button onClick={del} className="text-xs text-rose-600 hover:text-rose-700 font-semibold flex items-center gap-1 hover:bg-rose-50 rounded-lg px-2 py-1 transition-colors"><M n="delete" c="text-xs" />Delete</button>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={onClose} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 transition-colors">Close</button>
-            <button onClick={markDone} className="px-5 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="task_alt" c="text-sm" />Mark Done &amp; Close</button>
+            <button onClick={markDone} className="px-5 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="task_alt" c="text-sm" />Mark done and close</button>
           </div>
         </footer>
 
@@ -537,20 +542,21 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
 /* ---- field helpers ---- */
 function Ro({ label, children }: { label: string; children: React.ReactNode }) {
-  return <div><label className="block text-[11px] font-bold text-ink-tertiary uppercase mb-1">{label}</label>{children}</div>;
+  return <div><label className="block text-xs font-medium text-ink-secondary mb-1.5">{label}</label>{children}</div>;
 }
 // Read-only display of a work-order attribute. (These were <select>s with no onChange — they
 // never persisted — so they're rendered as static fields to avoid implying they're editable.)
 function Sel({ value, red }: { value: string; opts?: string[]; red?: boolean }) {
   return (
-    <div className={`w-full py-2 px-3 text-xs rounded-xl border ${red ? "font-bold text-rose-700 bg-rose-50/50 border-rose-200" : "font-semibold text-ink-primary bg-slate-50 border-slate-200"}`}>{value}</div>
+    <div className={`w-full py-2 px-3 text-xs rounded-xl border flex items-center gap-2 ${red ? "font-semibold text-rose-700 bg-rose-50/60 border-rose-200" : "font-medium text-ink-primary bg-slate-50 border-slate-200"}`}>{red && <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />}{value}</div>
   );
 }
 function SelEmp({ value, emps, onChange }: { value: string; emps: Emp[]; onChange: (id: string) => void }) {
   return (
     <div className="relative">
-      <select value={value} onChange={(e) => onChange(e.target.value)} className="glass-input w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-xl appearance-none">
-        <option value="">— Unassigned —</option>
+      <span className="absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none"><Avatar name={emps.find((e) => e.id === value)?.name} size={22} /></span>
+      <select value={value} onChange={(e) => onChange(e.target.value)} className="glass-input w-full py-2 pl-9 pr-3 text-xs font-medium text-ink-primary rounded-xl appearance-none">
+        <option value="">Unassigned</option>
         {emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
       </select>
       <M n="expand_more" c="absolute right-2.5 top-2.5 text-ink-tertiary pointer-events-none text-sm" />
@@ -566,11 +572,11 @@ function NotesEditor({ initTech, initConcl, diagnosis, onSave }: { initTech: str
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
       <div className="space-y-1">
-        <label className="text-[11px] font-bold text-ink-tertiary uppercase flex items-center gap-1"><M n="sticky_note_2" c="text-xs text-amber-500" />Manager Notes (Internal)</label>
+        <label className="text-[11px] font-bold text-ink-tertiary flex items-center gap-1"><M n="sticky_note_2" c="text-xs text-amber-500" />Manager notes (only your team sees these)</label>
         <div className="glass-input w-full p-2.5 text-xs text-ink-secondary rounded-xl min-h-[52px]">{diagnosis || "—"}</div>
       </div>
       <div className="space-y-1">
-        <label className="text-[11px] font-bold text-ink-tertiary uppercase flex items-center gap-1"><M n="engineering" c="text-xs text-primary" />Technician Bench Notes</label>
+        <label className="text-[11px] font-bold text-ink-tertiary flex items-center gap-1"><M n="engineering" c="text-xs text-primary" />Technician bench notes</label>
         <textarea value={tech} onChange={(e) => setTech(e.target.value)} rows={2} className="glass-input w-full p-2.5 text-xs text-ink-secondary rounded-xl resize-none" placeholder="Working notes…" />
         <textarea value={concl} onChange={(e) => setConcl(e.target.value)} rows={2} className="glass-input w-full p-2.5 text-xs text-ink-secondary rounded-xl resize-none" placeholder="Conclusion the customer sees…" />
         <div className="flex justify-end"><button onClick={() => onSave(tech, concl)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50">Save notes</button></div>
@@ -639,7 +645,7 @@ function WatchOutBanner({ device, client, onChanged, onFlash }: {
     <div className="px-6 py-2.5 bg-amber-50 border-b border-amber-200 flex-shrink-0">
       {editing ? (
         <div className="space-y-2">
-          <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-800 uppercase tracking-wider"><M n="warning" c="text-sm" />Watch-outs</div>
+          <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-800"><M n="warning" c="text-sm" />Watch-outs</div>
           {device?.id && <input value={dev} onChange={(e) => setDev(e.target.value)} placeholder="Asset warning (e.g. battery swollen — handle with care)" className="w-full glass-input rounded-lg px-2.5 py-1.5 text-xs" />}
           {client?.id && <input value={cli} onChange={(e) => setCli(e.target.value)} placeholder={`Customer warning${client.name ? ` for ${client.name}` : ""}`} className="w-full glass-input rounded-lg px-2.5 py-1.5 text-xs" />}
           <div className="flex gap-2"><button onClick={save} disabled={busy} className="px-3 py-1 rounded-lg bg-amber-600 text-white text-xs font-bold disabled:opacity-50">Save</button><button onClick={() => { setEditing(false); setDev(device?.watch_out || ""); setCli(client?.watch_out || ""); }} className="px-2 py-1 text-xs font-semibold text-ink-tertiary">Cancel</button></div>
@@ -700,7 +706,7 @@ function IntakePhotos({ orderId, photos, onChanged, onFlash }: {
   return (
     <div className="bg-white rounded-xl border border-slate-200/90 p-3.5 space-y-2.5">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2"><M n="photo_camera" c="text-base text-primary" /><h5 className="text-xs font-bold text-ink-primary uppercase tracking-wide">Intake photos</h5><span className="text-[10px] text-ink-tertiary">condition at check-in</span></div>
+        <div className="flex items-center gap-2"><M n="photo_camera" c="text-base text-primary" /><h5 className="text-xs font-bold text-ink-primary">Intake photos</h5><span className="text-[10px] text-ink-tertiary">condition at check-in</span></div>
         <label className={`px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-ink-secondary text-xs font-semibold flex items-center gap-1 cursor-pointer ${busy ? "opacity-50 pointer-events-none" : ""}`}>
           <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => { add(e.target.files); e.currentTarget.value = ""; }} />
           <M n="add" c="text-xs" />{busy ? "…" : "Add"}
@@ -716,7 +722,7 @@ function IntakePhotos({ orderId, photos, onChanged, onFlash }: {
             return (
             <span key={p.id} className="relative group">
               <AuthedImage src={viewUrl} alt="intake" onClick={() => setAnnotate(p)} className="w-16 h-16 rounded-lg object-cover border border-slate-200 bg-slate-100 cursor-pointer" />
-              {hasMark && <span className="absolute top-0.5 left-0.5 text-[8px] font-bold uppercase bg-primary text-white px-1 rounded">{showOrig[p.id] ? "orig" : "marked"}</span>}
+              {hasMark && <span className="absolute top-0.5 left-0.5 text-[8px] font-bold bg-primary text-white px-1 rounded">{showOrig[p.id] ? "orig" : "marked"}</span>}
               {/* mark up always edits the ORIGINAL, so re-marking stays non-destructive */}
               <button onClick={() => setAnnotate(p)} className="absolute bottom-0.5 left-0.5 w-5 h-5 rounded-md bg-ink-primary/85 text-white flex items-center justify-center opacity-0 group-hover:opacity-100" title="Mark up"><M n="edit" c="text-[12px]" /></button>
               {hasMark && <button onClick={() => setShowOrig((s) => ({ ...s, [p.id]: !s[p.id] }))} className="absolute bottom-0.5 right-0.5 w-5 h-5 rounded-md bg-ink-primary/85 text-white flex items-center justify-center opacity-0 group-hover:opacity-100" title={showOrig[p.id] ? "Show marked" : "Show original"}><M n="swap_horiz" c="text-[12px]" /></button>}
@@ -810,7 +816,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
           <div className="flex items-center space-x-3 min-w-0">
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-none ${tagCls(k)}`}><M n={k.includes("serv") ? "build" : k.includes("lab") ? "search_check" : "inventory_2"} c="text-base" /></div>
             <div className="min-w-0">
-              <div className="flex items-center gap-2"><h5 className="text-xs font-bold text-ink-primary truncate">{l.description || "Item"}</h5><span className={`text-[9px] uppercase px-1.5 py-0.5 rounded font-bold ${tagCls(k)}`}>{l.kind || l.line_type || "item"}</span></div>
+              <div className="flex items-center gap-2"><h5 className="text-xs font-bold text-ink-primary truncate">{l.description || "Item"}</h5><span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${tagCls(k)}`}>{l.kind || l.line_type || "item"}</span></div>
               <p className="text-[11px] text-ink-tertiary font-mono">Qty: {l.qty ?? 1} · Unit: {money(l.unit_price)}{l.discount ? ` · Disc ${l.discount}${l.discount_type === "pct" ? "%" : ""}` : ""}</p>
             </div>
           </div>
@@ -841,7 +847,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
               </button>
               {openPick && (
                 <div className="absolute z-20 mt-1 w-56 bg-white rounded-xl border border-slate-200 shadow-xl p-1.5 max-h-64 overflow-auto">
-                  <div className="text-[9px] font-bold uppercase tracking-wider text-ink-tertiary px-2 py-1">Assign technician</div>
+                  <div className="text-[9px] font-bold text-ink-tertiary px-2 py-1">Assign technician</div>
                   <button onClick={() => { patchLine(l.id, { technician_id: null, co_technicians: [] }); setAssignOpen(null); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-ink-secondary">Unassigned</button>
                   {(emps || []).map((e) => (
                     <button key={e.id} onClick={() => { patchLine(l.id, { technician_id: e.id, co_technicians: [] }); setAssignOpen(null); }}
@@ -852,7 +858,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                   {l.technician_id && (
                     <>
                       <div className="flex items-center justify-between px-2 py-1 border-t border-slate-100 mt-1">
-                        <span className="text-[9px] font-bold uppercase tracking-wider text-ink-tertiary">Split with</span>
+                        <span className="text-[9px] font-bold text-ink-tertiary">Split with</span>
                         <span className="flex gap-1">{[0.5, 0.6, 0.7].map((r) => (
                           <button key={r} onClick={() => setSplitRatio(r)}
                             className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${splitRatio === r ? "bg-blue-50 text-primary" : "text-ink-tertiary hover:text-ink-primary"}`}>{Math.round(r * 100)}/{Math.round((1 - r) * 100)}</button>
@@ -906,7 +912,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
 
       {/* Add a line — margin guardrail (block/warn) applies on save */}
       <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm space-y-2.5">
-        <div className="text-[11px] font-bold uppercase tracking-wider text-ink-tertiary">Add service or product</div>
+        <div className="text-[11px] font-bold text-ink-tertiary">Add service or product</div>
         {pick ? (
           <div className="flex flex-wrap items-end gap-2">
             <div className="flex-1 min-w-[160px]"><label className="block text-[10px] font-semibold text-ink-tertiary mb-1">Item</label>
@@ -934,7 +940,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
         <div key={tech || "all"} className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
           {groupBy && (
             <div className="bg-slate-50/90 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
-              <div className="flex items-center gap-2"><span className={`w-2 h-2 rounded-full ${dot[gi % dot.length]}`} /><span className="text-xs font-bold text-ink-primary uppercase tracking-wide">{tech === "Unassigned" || !tech ? "Unassigned" : empName(tech)}</span><span className="text-[10px] text-ink-tertiary">({ls.length} line items)</span></div>
+              <div className="flex items-center gap-2"><span className={`w-2 h-2 rounded-full ${dot[gi % dot.length]}`} /><span className="text-xs font-bold text-ink-primary">{tech === "Unassigned" || !tech ? "Unassigned" : empName(tech)}</span><span className="text-[10px] text-ink-tertiary">({ls.length} line items)</span></div>
               <span className="font-mono text-xs font-bold text-ink-primary">Subtotal: {money(ls.reduce((s, l) => s + (l.total || 0), 0))}</span>
             </div>
           )}
@@ -947,7 +953,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
       {recs.length > 0 && (
         <div className="rounded-2xl border-2 border-dashed border-purple-300 bg-purple-50/40 p-4 space-y-3">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2"><M n="auto_awesome" c="text-purple-600 text-sm" /><h5 className="text-xs font-bold text-purple-900 uppercase tracking-wide">Suggested Add-ons &amp; Recommendations</h5></div>
+            <div className="flex items-center gap-2"><M n="auto_awesome" c="text-purple-600 text-sm" /><h5 className="text-xs font-bold text-purple-900">Suggested add-ons &amp; Recommendations</h5></div>
             <span className="text-[10px] bg-purple-100 text-purple-700 font-bold px-2 py-0.5 rounded-full">Automated Upsell</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1049,7 +1055,7 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
         return (
           <div key={c.id} className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-4 space-y-3.5">
             <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-              <div className="flex items-center gap-2"><M n={pct === 100 ? "done_all" : "checklist"} c={pct === 100 ? "text-emerald-600 text-base" : "text-amber-600 text-base"} /><h5 className="text-xs font-bold text-ink-primary uppercase tracking-wide">{c.title || c.name || "Checklist"} ({done} of {items.length})</h5></div>
+              <div className="flex items-center gap-2"><M n={pct === 100 ? "done_all" : "checklist"} c={pct === 100 ? "text-emerald-600 text-base" : "text-amber-600 text-base"} /><h5 className="text-xs font-bold text-ink-primary">{c.title || c.name || "Checklist"} ({done} of {items.length})</h5></div>
               <div className="flex items-center gap-2"><span className={`text-[11px] font-mono font-bold ${pct === 100 ? "text-emerald-600" : "text-ink-tertiary"}`}>{pct}%</span><button aria-label="Remove" onClick={() => removeCl(c.id)} title="Remove" className="text-ink-tertiary hover:text-rose-600"><M n="delete" c="text-sm" /></button></div>
             </div>
             <div className="space-y-2 text-xs font-medium text-ink-primary">
@@ -1186,7 +1192,7 @@ function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySy
       <div className="bg-gradient-to-br from-[#14213f] to-[#1e305b] text-white rounded-2xl p-5 shadow-clay-card relative overflow-hidden">
         <div className="relative z-10 flex flex-wrap items-center justify-between gap-4">
           <div>
-            <span className="text-[11px] font-bold uppercase tracking-wider text-blue-200/80">Outstanding Balance</span>
+            <span className="text-[11px] font-bold text-blue-200/80">Still to pay</span>
             <div className="flex items-baseline gap-3 mt-1"><h2 className="text-3xl font-extrabold font-mono tracking-tight text-white">{money(due)}</h2><span className="text-xs px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30 font-semibold">{due > 0 ? "Balance due" : "Settled"}</span></div>
             <p className="text-xs text-blue-200/70 mt-1">Grand Total {money(t)} · {money(paid)} Collected</p>
             {isForeign && (
@@ -1194,7 +1200,7 @@ function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySy
             )}
             {multiCurrency && (
               <div className="mt-2 flex items-center gap-1.5">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-blue-200/70">Currency</span>
+                <span className="text-[10px] font-bold text-blue-200/70">Currency</span>
                 <select value={currencyCode || base?.code || ""} onChange={(e) => changeCurrency(e.target.value)} className="bg-white/10 border border-white/20 rounded-lg px-2 py-0.5 text-[11px] font-bold text-white [&>option]:text-ink-primary">
                   {curOpts.map(([c, l]) => <option key={c} value={c}>{l}</option>)}
                 </select>
@@ -1220,7 +1226,7 @@ function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySy
 
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-3.5 space-y-2.5">
         <div className="flex items-center justify-between">
-          <h5 className="text-xs font-bold text-ink-primary uppercase tracking-wider">Requested deposit</h5>
+          <h5 className="text-xs font-bold text-ink-primary">Requested deposit</h5>
           {dep > 0 && <span className="text-[11px] font-bold text-emerald-600">{money(conv(dep))} requested</span>}
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
@@ -1241,7 +1247,7 @@ function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySy
 
       {due > 0 && (
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-3.5 space-y-2.5">
-          <h5 className="text-xs font-bold text-ink-primary uppercase tracking-wider">Rewards &amp; credits</h5>
+          <h5 className="text-xs font-bold text-ink-primary">Rewards &amp; credits</h5>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
             <div className="flex gap-1.5"><input value={rwPts} onChange={(e) => setRwPts(e.target.value)} type="number" placeholder="Points" className="glass-input flex-1 px-2.5 py-1.5 rounded-lg font-mono text-ink-primary" /><button disabled={rwBusy} onClick={() => redeem("loyalty")} className="px-2.5 py-1.5 rounded-lg bg-blue-50 text-primary border border-blue-100 font-bold hover:bg-blue-100 disabled:opacity-60">Redeem</button></div>
             <div className="flex gap-1.5"><input value={rwCoupon} onChange={(e) => setRwCoupon(e.target.value)} placeholder="Coupon code" className="glass-input flex-1 px-2.5 py-1.5 rounded-lg font-mono text-ink-primary" /><button disabled={rwBusy} onClick={() => redeem("coupon")} className="px-2.5 py-1.5 rounded-lg bg-blue-50 text-primary border border-blue-100 font-bold hover:bg-blue-100 disabled:opacity-60">Apply</button></div>
@@ -1252,9 +1258,9 @@ function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySy
 
       {data && data.invoices.length > 0 && (
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
-          <div className="p-3.5 border-b border-slate-100 flex items-center justify-between"><h5 className="text-xs font-bold text-ink-primary uppercase tracking-wider">Generated Invoices</h5><span className="text-[11px] text-ink-tertiary">{data.invoices.length} billing records</span></div>
+          <div className="p-3.5 border-b border-slate-100 flex items-center justify-between"><h5 className="text-xs font-bold text-ink-primary">Invoices</h5><span className="text-[11px] text-ink-tertiary">{data.invoices.length} billing records</span></div>
           <table className="w-full text-xs text-left">
-            <thead className="bg-slate-50 text-[10px] text-ink-tertiary uppercase font-bold"><tr><th className="py-2.5 px-4">Invoice #</th><th className="py-2.5 px-4">Status</th><th className="py-2.5 px-4 text-right">Amount</th></tr></thead>
+            <thead className="bg-slate-50 text-[10px] text-ink-tertiary font-bold"><tr><th className="py-2.5 px-4">Invoice #</th><th className="py-2.5 px-4">Status</th><th className="py-2.5 px-4 text-right">Amount</th></tr></thead>
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
               {data.invoices.map((i) => (
                 <tr key={i.id} className="hover:bg-slate-50/50"><td className="py-2.5 px-4 font-mono font-bold text-primary">{i.invoice_number}</td>
@@ -1268,7 +1274,7 @@ function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySy
 
       {data && data.payments.length > 0 && (
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
-          <div className="p-3.5 border-b border-slate-100 flex items-center justify-between"><h5 className="text-xs font-bold text-ink-primary uppercase tracking-wider">Payment Ledger</h5><span className="text-[11px] text-emerald-600 font-mono font-bold">{money(paid)} Collected</span></div>
+          <div className="p-3.5 border-b border-slate-100 flex items-center justify-between"><h5 className="text-xs font-bold text-ink-primary">Payments</h5><span className="text-[11px] text-emerald-600 font-mono font-bold">{money(paid)} Collected</span></div>
           <div className="p-3 space-y-2">
             {data.payments.map((p) => (
               <div key={p.id} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs">
@@ -1293,14 +1299,14 @@ function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySy
           <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-md p-5 space-y-4">
             <div className="flex items-center justify-between"><h4 className="text-sm font-bold text-ink-primary">{modal === "prepay" ? "Take prepayment" : "Take payment"}</h4><button aria-label="Close" onClick={() => setModal(null)} className="text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-lg" /></button></div>
             <div className="text-xs text-ink-secondary">Remaining balance: <b className="font-mono">{money(ctx.remaining)}</b></div>
-            <div><label className="block text-[11px] font-bold text-ink-tertiary uppercase mb-1">Amount <span className="text-ink-tertiary font-normal normal-case">({base?.code || "base"})</span></label><input value={amount} onChange={(e) => setAmount(e.target.value)} type="number" className="glass-input w-full py-2 px-3 text-sm font-bold font-mono rounded-xl" />
+            <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Amount <span className="text-ink-tertiary font-normal normal-case">({base?.code || "base"})</span></label><input value={amount} onChange={(e) => setAmount(e.target.value)} type="number" className="glass-input w-full py-2 px-3 text-sm font-bold font-mono rounded-xl" />
               {isForeign && amount && !isNaN(parseFloat(amount)) && (
                 <p className="mt-1 text-[11px] text-ink-tertiary font-mono">≈ {currencySymbol}{conv(parseFloat(amount)).toFixed(2)} {currencyCode} <span className="text-ink-placeholder">at the document rate</span></p>
               )}</div>
             <div className="grid grid-cols-2 gap-3">
-              <div><label className="block text-[11px] font-bold text-ink-tertiary uppercase mb-1">Method</label>
+              <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Method</label>
                 <select value={method} onChange={(e) => { setMethod(e.target.value); const a = (ctx.accounts_by_method[e.target.value] || [])[0]; setAccount(a?.id || ""); }} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl"><option value="cash">Cash</option><option value="cashless">Cashless / UPI</option><option value="card">Card</option></select></div>
-              <div><label className="block text-[11px] font-bold text-ink-tertiary uppercase mb-1">Account</label>
+              <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Account</label>
                 <select value={account} onChange={(e) => setAccount(e.target.value)} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl">{accts.length === 0 && <option value="">No account</option>}{accts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
             </div>
             <div className="flex justify-end gap-2 pt-1"><button onClick={() => setModal(null)} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button><button onClick={submit} className="px-4 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110">Record {modal === "prepay" ? "prepayment" : "payment"}</button></div>
@@ -1348,7 +1354,7 @@ function ActivityTab({ orderId, clientPhone, onFlash }: { orderId: string; clien
         ))}
       </div>
       <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm space-y-4">
-        <h5 className="text-xs font-bold text-ink-primary uppercase tracking-wide">Notifications &amp; delivery</h5>
+        <h5 className="text-xs font-bold text-ink-primary">Notifications &amp; delivery</h5>
         {logs.length === 0 ? (
           <div className="text-[11px] text-ink-tertiary">No notifications sent for this order yet.</div>
         ) : (
@@ -1359,7 +1365,7 @@ function ActivityTab({ orderId, clientPhone, onFlash }: { orderId: string; clien
                 <div>
                   <p className="font-bold text-ink-primary flex items-center gap-2">
                     {(l.subject || String(l.trigger_event || "Notification").replace(/_/g, " "))}
-                    <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-slate-100 text-ink-secondary">{String(l.channel || "").toUpperCase()}</span>
+                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-ink-secondary">{String(l.channel || "").toUpperCase()}</span>
                     <span className={`text-[10px] font-semibold ${l.status === "failed" ? "text-rose-600" : l.status === "sent" ? "text-emerald-600" : "text-amber-600"}`}>{humanize(l.status)}</span>
                   </p>
                   {l.body && <p className="text-[11px] text-ink-tertiary line-clamp-2">{l.body}</p>}
@@ -1372,7 +1378,7 @@ function ActivityTab({ orderId, clientPhone, onFlash }: { orderId: string; clien
       </div>
       <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm space-y-3">
         <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-          <div className="flex items-center gap-2"><M n="chat" c="text-primary text-base" /><h5 className="text-xs font-bold text-ink-primary uppercase tracking-wide">Client SMS / WhatsApp Thread</h5></div>
+          <div className="flex items-center gap-2"><M n="chat" c="text-primary text-base" /><h5 className="text-xs font-bold text-ink-primary">Customer text and WhatsApp thread</h5></div>
           <span className="text-[10px] text-emerald-600 font-semibold flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> {clientPhone || "Not connected"}</span>
         </div>
         {sent.length > 0 && (
