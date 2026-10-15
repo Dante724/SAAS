@@ -250,6 +250,8 @@ _DOC_BLOCKS = {
     "invoice_header": ("Header", '<div style="display:flex;justify-content:space-between;align-items:flex-start">{Company Logo}<div style="text-align:right"><h1 style="margin:0">Invoice</h1><div>{Invoice Number}</div><div>Due {Invoice Due Date}</div></div></div>'),
     "client": ("Client", '<p><strong>For:</strong> {Client Name}<br/>{Client Phone} · {Client Email}<br/>{Client Address}</p>'),
     "device": ("Device / asset", '<p><strong>Device:</strong> {Asset Brand} {Asset Model} · SN {Asset Serial Number}</p>'),
+    # Forms → Customize → "Shows on: Printed receipt" decides which fields this lists.
+    "custom_fields": ("Form details", '<div>{Custom Fields}</div>'),
     "items": ("Line items", '<h3>Work</h3><table style="width:100%;border-collapse:collapse;margin:8px 0"><thead><tr><th style="border:1px solid #ddd;padding:6px;text-align:left;background:#f5f5f5">#</th><th style="border:1px solid #ddd;padding:6px;text-align:left;background:#f5f5f5">Item</th><th style="border:1px solid #ddd;padding:6px;text-align:left;background:#f5f5f5">Qty</th><th style="border:1px solid #ddd;padding:6px;text-align:left;background:#f5f5f5">Price</th><th style="border:1px solid #ddd;padding:6px;text-align:left;background:#f5f5f5">Amount</th></tr></thead><tbody><tr><td style="border:1px solid #ddd;padding:6px">{Row Number}</td><td style="border:1px solid #ddd;padding:6px">{Product Name}</td><td style="border:1px solid #ddd;padding:6px">{Product Qty}</td><td style="border:1px solid #ddd;padding:6px">{Product Price}</td><td style="border:1px solid #ddd;padding:6px">{Product Amount}</td></tr></tbody></table>'),
     "totals": ("Totals", '<p style="text-align:right">Subtotal {Subtotal}<br/>Tax {Tax Value}<br/><strong>Total {Order Total}</strong><br/>Balance due {Order Balance Due}</p>'),
     "deposit": ("Deposit", '<p style="text-align:right">Deposit required: <strong>{Order Prepayment}</strong></p>'),
@@ -263,15 +265,15 @@ _DOC_BLOCKS = {
 # describe their own and the same in-house engine assembles the blocks.
 DOC_PRESETS: dict[str, dict] = {
     "estimate_standard": {"label": "Standard estimate", "doc_type": "estimate",
-                          "blocks": ["header", "client", "device", "items", "totals", "summary", "signature"]},
+                          "blocks": ["header", "client", "device", "custom_fields", "items", "totals", "summary", "signature"]},
     "invoice_detailed": {"label": "Detailed invoice", "doc_type": "invoice",
                          "blocks": ["invoice_header", "client", "items", "totals", "terms"]},
     "receipt_simple": {"label": "Simple receipt", "doc_type": "receipt",
                        "blocks": ["header", "client", "items", "totals"]},
     "warranty_slip": {"label": "Warranty slip", "doc_type": "work_order",
-                      "blocks": ["header", "client", "device", "terms", "signature"]},
+                      "blocks": ["header", "client", "device", "custom_fields", "terms", "signature"]},
     "work_order_full": {"label": "Full work order", "doc_type": "work_order",
-                        "blocks": ["header", "client", "device", "items", "totals", "summary", "signature", "terms"]},
+                        "blocks": ["header", "client", "device", "custom_fields", "items", "totals", "summary", "signature", "terms"]},
 }
 
 
@@ -299,6 +301,8 @@ def generate_document_template(*, prompt: str = "", doc_type: str = "estimate", 
     keys = ["invoice_header" if invoice else "header", "client"]
     if any(w in p for w in ("device", "asset", "vehicle", "serial", "imei", "vin", "phone", "laptop")):
         keys.append("device")
+    if any(w in p for w in ("custom field", "intake details", "form details", "passcode", "accessor")):
+        keys.append("custom_fields")
     keys.append("items")
     if any(w in p for w in ("deposit", "prepay", "down payment", "upfront")):
         keys.append("deposit")

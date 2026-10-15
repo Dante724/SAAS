@@ -248,6 +248,19 @@ function FieldPanel({ it, dirs, form, onLabel, onField, onRequired, onHide, onDe
               placeholder="Charger, Case, SIM card" className="glass-input w-full rounded-lg px-3 py-2 text-sm" />}
           </div>
         )}
+        {form !== "product" && (
+          <div><label className={lbl}>Shows on</label>
+            <div className="flex flex-wrap gap-1.5">
+              <button onClick={onHide} title="Hide this field from the form" className={chip(true)}>Form</button>
+              {form === "order" && <button disabled={it.require === "close"} onClick={() => onField({ show_on_job_card: !f.show_on_job_card })}
+                className={`${chip(f.show_on_job_card !== false || it.require === "close")} disabled:opacity-60`}>Job card</button>}
+              <button onClick={() => onField({ show_on_print: !f.show_on_print })} className={chip(!!f.show_on_print)}>Printed receipt</button>
+              <button onClick={() => onField({ show_in_portal: !f.show_in_portal })} className={chip(!!f.show_in_portal)}>Customer portal</button>
+            </div>
+            <p className="text-[11px] text-ink-tertiary mt-1.5">
+              {form === "order" && it.require === "close" ? "Needed before closing, so it always shows on the job card. " : ""}
+              Receipts list it wherever a template has the “Form details” block; the portal shows it on the customer's tracking page.</p></div>
+        )}
         {f.field_type !== "bool" && (
           <div><label className={lbl}>Hint inside the box</label>
             <input value={ph} onChange={(e) => setPh(e.target.value)} onBlur={() => ph !== (f.placeholder || "") && onField({ placeholder: ph || null })}

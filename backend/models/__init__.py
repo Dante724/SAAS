@@ -1408,6 +1408,9 @@ class CustomField(Base):
     lock_after_create: Mapped[bool] = mapped_column(Boolean, default=False)
     # 144gp Phase C — surface this field's value on printouts / the customer portal
     show_on_print: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Forms step 2 — "Shows on": the work order screen (job card) and the customer portal / tracking page
+    show_on_job_card: Mapped[bool] = mapped_column(Boolean, default=True)
+    show_in_portal: Mapped[bool] = mapped_column(Boolean, default=False)
     # 144gq — auto-fill source: "asset.<attr>" (from the linked device) or
     # "last_order.<field_key>" (from the client's most recent order). Pre-fills on open.
     autofill_source: Mapped[Optional[str]] = mapped_column(String(80))

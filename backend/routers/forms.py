@@ -88,6 +88,8 @@ class FieldIn(BaseModel):
     required: bool = False
     lock_after_create: bool = False
     show_on_print: bool = False
+    show_on_job_card: Optional[bool] = None   # None = leave as is (older editors don't send it)
+    show_in_portal: Optional[bool] = None
     autofill_source: Optional[str] = None
     placeholder: Optional[str] = None
     options: List[str] = []
@@ -125,6 +127,8 @@ class EntityFieldIn(BaseModel):
     required: bool = False
     lock_after_create: bool = False
     show_on_print: bool = False
+    show_on_job_card: Optional[bool] = None   # None = leave as is (older editors don't send it)
+    show_in_portal: Optional[bool] = None
     autofill_source: Optional[str] = None
     placeholder: Optional[str] = None
     options: List[str] = []
@@ -156,6 +160,8 @@ def _ser_field(f: CustomField) -> dict:
         "field_label": f.field_label, "field_type": f.field_type,
         "required": f.required, "lock_after_create": getattr(f, "lock_after_create", False),
         "show_on_print": getattr(f, "show_on_print", False),
+        "show_on_job_card": getattr(f, "show_on_job_card", True) is not False,
+        "show_in_portal": bool(getattr(f, "show_in_portal", False)),
         "autofill_source": getattr(f, "autofill_source", None),
         "placeholder": f.placeholder,
         "options": f.options or [], "directory_key": getattr(f, "directory_key", None),
@@ -177,6 +183,17 @@ def _ser_field(f: CustomField) -> dict:
 
 
 UPSELL_OPS = {"is", "is_not", "lt", "gt"}
+
+
+def _apply_shows_on(f: CustomField, data) -> None:
+    if getattr(data, "show_on_job_card", None) is not None:
+        f.show_on_job_card = data.show_on_job_card
+    elif f.show_on_job_card is None:
+        f.show_on_job_card = True
+    if getattr(data, "show_in_portal", None) is not None:
+        f.show_in_portal = data.show_in_portal
+    elif f.show_in_portal is None:
+        f.show_in_portal = False
 
 
 def _apply_upsell_cfg(f: CustomField, data) -> None:
@@ -460,6 +477,7 @@ async def add_field(
         show_when_value=data.show_when_value,
     )
     _apply_upsell_cfg(f, data)
+    _apply_shows_on(f, data)
     db.add(f)
     await db.commit()
     await db.refresh(f)
@@ -489,6 +507,7 @@ async def update_field(
     f.show_when_op = _clean_show(data.show_when_op)
     f.show_when_value = data.show_when_value
     _apply_upsell_cfg(f, data)
+    _apply_shows_on(f, data)
     await db.commit()
     return _ser_field(f)
 
@@ -573,6 +592,7 @@ async def add_entity_field(
         show_when_op=_clean_show(data.show_when_op),
         show_when_value=data.show_when_value)
     _apply_upsell_cfg(f, data)
+    _apply_shows_on(f, data)
     db.add(f)
     await db.commit()
     await db.refresh(f)
@@ -804,6 +824,36 @@ async def missing_before_close(db, org_id: str, order) -> list[str]:
             fld = it["_row"]
             if _field_visible(fld, values) and not _cf_filled(fld, values.get(fld.field_key)):
                 out.append(it["label"])
+    return out
+
+
+def _fmt_value(v) -> str:
+    if isinstance(v, bool):
+        return "Yes" if v else "No"
+    if isinstance(v, list):
+        return ", ".join(str(x) for x in v)
+    return str(v)
+
+
+async def shown_values(db, org_id: str, flag: str, order=None, device=None, client=None) -> list[dict]:
+    """[{label, value}] for the custom fields that "Show on" an output — flag is "show_on_print"
+    (printed receipt) or "show_in_portal" (customer tracking page / portal). Work-order fields
+    first (that type's, in form order), then the device's, then the client's. Fields hidden in
+    Customize, hidden by their show-rule, or left empty are skipped."""
+    out = []
+    sources = [("order", order, order.type_id if order is not None else None), ("device", device, None), ("client", client, None)]
+    for form, rec, type_id in sources:
+        if rec is None or (form == "order" and not type_id):
+            continue
+        values = rec.custom_data or {}
+        hidden = await hidden_field_ids(db, org_id, form, type_id)
+        for f in (await db.execute(_layout_custom_q(org_id, form, type_id).order_by(CustomField.sort_order))).scalars().all():
+            if f.field_type == "header" or f.id in hidden or not getattr(f, flag, False) or not _field_visible(f, values):
+                continue
+            v = values.get(f.field_key)
+            if v is None or v == [] or (isinstance(v, str) and not v.strip()):
+                continue
+            out.append({"label": f.field_label, "value": _fmt_value(v)})
     return out
 
 

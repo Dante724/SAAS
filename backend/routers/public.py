@@ -308,8 +308,13 @@ async def track(token: str, db: AsyncSession = Depends(get_db)):
     shop_address = (loc.address if (loc and getattr(loc, "address", None)) else getattr(org, "company_address", None))
     shop_phone = (loc.phone if (loc and getattr(loc, "phone", None)) else getattr(org, "company_phone", None))
 
+    # Forms → Customize → "Shows on: Customer portal" — only fields the shop ticked, never the rest.
+    from backend.routers.forms import shown_values
+    custom_fields = await shown_values(db, order.org_id, "show_in_portal", order=order, device=device, client=client)
+
     return {
         "lines": lines_pub,
+        "custom_fields": custom_fields,
         "logo_data": (org.logo_data if (org and _show_logo) else None),
         "brand_color": brand_color,
         "website": getattr(org, "website", None) if org else None,
@@ -495,7 +500,10 @@ async def portal_order(token: str, order_id: str, db: AsyncSession = Depends(get
             EventFeedItem.visibility == "client").order_by(desc(EventFeedItem.created_at))
     )).scalars().all()
     card = _order_card(order)
+    from backend.routers.forms import shown_values
+    _dev = (await db.execute(select(Device).where(Device.id == order.device_id))).scalar_one_or_none() if order.device_id else None
     card.update({
+        "custom_fields": await shown_values(db, client.org_id, "show_in_portal", order=order, device=_dev, client=client),
         "diagnosis": order.diagnosis,
         "lines": [{"description": ln.description, "qty": ln.qty,
                    "unit_price": ln.unit_price, "line_type": ln.line_type} for ln in lines],

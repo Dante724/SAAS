@@ -24,6 +24,7 @@ type Track = {
   device?: string; asset_label?: string; complaint?: string; total?: number;
   total_converted?: number; fx_rate?: number; currency_symbol?: string;
   lines?: Line[]; recommendations?: Rec[]; updates?: Update[]; timeline?: TL[];
+  custom_fields?: { label: string; value: string }[];   // fields the shop set to show on the portal
   invoice?: any; has_signature?: boolean; allow_messages?: boolean; allow_recommend?: boolean;
   // 144ix — branding + pickup + review
   logo_data?: string | null; brand_color?: string | null; website?: string | null;
@@ -249,6 +250,7 @@ export default function PublicTrack() {
                 <div className="mt-0.5 text-[13px] font-semibold text-ink-primary">{d.complaint}</div>
               </div>
             )}
+            {(d.custom_fields || []).map((f) => <Detail key={f.label} label={f.label} value={f.value} />)}
           </div>
 
           {/* status stepper */}

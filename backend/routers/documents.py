@@ -86,7 +86,7 @@ VARIABLE_GROUPS = [
                 # Orderry-exact names
                 "{Order Malfunction}", "{Order Comment}", "{Order Address}", "{Order Duration}",
                 "{Order Resource}", "{Order Scheduled For}", "{Order Scheduled To}",
-                "{Urgent}", "{Order Type}"]),
+                "{Urgent}", "{Order Type}", "{Custom Fields}"]),
     ("Device", ["{Asset Owner}", "{Asset Warehouse}", "{Asset Type}", "{Asset Brand}",
                 "{Asset Model}", "{Asset Modification}", "{Asset Color}", "{Asset Year}",
                 "{Asset Cost}", "{Asset Serial Number}", "{Asset Description}",
@@ -156,6 +156,18 @@ async def _custom_field_defs(db, org_id):
 
 def _cf_varname(f) -> str:
     return "{%s %s}" % (_CF_PREFIX.get(f.entity_type, "Order"), f.field_label)
+
+
+async def _custom_fields_block(db, org_id, order=None, device=None, client=None):
+    """{Custom Fields} — every custom field set to show on the printed receipt (Settings → Forms →
+    Customize → Shows on), as a label/value table. Empty when none apply."""
+    from backend.routers.forms import shown_values
+    rows = await shown_values(db, org_id, "show_on_print", order=order, device=device, client=client)
+    if not rows:
+        return ""
+    return _Html("<table style='width:100%;border-collapse:collapse;margin:6px 0'><tbody>" + "".join(
+        f"<tr><td style='padding:3px 8px 3px 0;color:#555;white-space:nowrap;vertical-align:top'>{_esc(r['label'])}</td>"
+        f"<td style='padding:3px 0;font-weight:600'>{_esc(r['value'])}</td></tr>" for r in rows) + "</tbody></table>")
 
 
 def _fmt_cf(val) -> str:
@@ -920,6 +932,7 @@ async def _resolve(db, org_id, order: Order, current=None):
         src = {"order": order, "client": client, "device": dev}.get(f.entity_type)
         val = (getattr(src, "custom_data", None) or {}).get(f.field_key) if src else None
         doc.setdefault(_cf_varname(f), _fmt_cf(val))
+    doc["{Custom Fields}"] = await _custom_fields_block(db, org_id, order=order, device=dev, client=client)
 
     return doc, rows
 
@@ -1222,6 +1235,10 @@ async def _resolve_invoice(db, org_id, inv: Invoice):
             continue
         val = (getattr(client, "custom_data", None) or {}).get(f.field_key) if client else None
         doc.setdefault(_cf_varname(f), _fmt_cf(val))
+    _inv_order = (await db.execute(select(Order).where(Order.id == inv.order_id, Order.org_id == org_id)
+                                   .options(selectinload(Order.device)))).scalar_one_or_none() if getattr(inv, "order_id", None) else None
+    doc["{Custom Fields}"] = await _custom_fields_block(db, org_id, order=_inv_order,
+                                                      device=_inv_order.device if _inv_order else None, client=client)
     return doc, rows
 
 

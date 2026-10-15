@@ -45,6 +45,7 @@ const BLOCKS: { key: string; label: string; icon: string; html: () => string }[]
   { key: "header", label: "Header", icon: "view_headline", html: () => `<div style="display:flex;justify-content:space-between;align-items:flex-start">${pillHTML("{Company Logo}")}<div style="text-align:right"><h1 style="margin:0">${pillHTML("{Company Name}")}</h1><div>${pillHTML("{Company Address}")}</div></div></div>` },
   { key: "client", label: "Client", icon: "person", html: () => `<p><strong>For:</strong> ${pillHTML("{Client Name}")}<br/>${pillHTML("{Client Phone}")} · ${pillHTML("{Client Email}")}<br/>${pillHTML("{Client Address}")}</p>` },
   { key: "device", label: "Device / asset", icon: "devices", html: () => `<p><strong>Device:</strong> ${pillHTML("{Asset Brand}")} ${pillHTML("{Asset Model}")} · SN ${pillHTML("{Asset Serial Number}")}</p>` },
+  { key: "custom_fields", label: "Form details", icon: "list_alt", html: () => `<div>${pillHTML("{Custom Fields}")}</div>` },
   { key: "items", label: "Line items", icon: "table", html: () => `<h3>Work</h3>${itemsTableHTML()}` },
   { key: "totals", label: "Totals", icon: "functions", html: () => `<p style="text-align:right">Subtotal ${pillHTML("{Subtotal}")}<br/>Tax ${pillHTML("{Tax Value}")}<br/><strong>Total ${pillHTML("{Order Total}")}</strong><br/>Balance due ${pillHTML("{Order Balance Due}")}</p>` },
   { key: "summary", label: "Work summary", icon: "notes", html: () => `<p style="font-size:12px;color:#555">${pillHTML("{Work Summary}")}</p>` },
