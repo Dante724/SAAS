@@ -115,8 +115,6 @@ POST /api/feed/{entity_type}/{entity_id} [staff]
 # finance
 PATCH /api/finance/invoices/{invoice_id}/einvoice [staff]
 # forms
-PATCH /api/forms/entity-fields/reorder [staff]
-PATCH /api/forms/types/{type_id}/fields/reorder [staff]
 # inbox
 POST /api/inbox/threads [staff]
 PATCH /api/inbox/threads/{thread_id} [staff]

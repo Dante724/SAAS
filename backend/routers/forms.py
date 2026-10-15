@@ -12,7 +12,7 @@ from backend.services.auth import get_current_employee, require_perm
 
 router = APIRouter(prefix="/api/forms", tags=["forms-editor"])
 
-VALID_ENTITIES = {"order", "invoice", "contact", "product", "vehicle"}
+VALID_ENTITIES = {"order", "invoice", "contact", "product", "vehicle", "client", "device"}
 
 
 class LayoutIn(BaseModel):
@@ -36,9 +36,9 @@ async def get_system_layout(
         select(FormLayout).where(
             FormLayout.org_id == current.org_id,
             FormLayout.entity == entity,
-            FormLayout.type_id == (type_id or None),
+            FormLayout.type_id.is_(None) if not type_id else FormLayout.type_id == type_id,
         )
-    )).scalar_one_or_none()
+    )).scalars().first()
     return {"entity": entity, "type_id": type_id, "fields": (row.data if row and row.data else [])}
 
 
@@ -54,9 +54,9 @@ async def put_system_layout(
         select(FormLayout).where(
             FormLayout.org_id == current.org_id,
             FormLayout.entity == data.entity,
-            FormLayout.type_id == (data.type_id or None),
+            FormLayout.type_id.is_(None) if not data.type_id else FormLayout.type_id == data.type_id,
         )
-    )).scalar_one_or_none()
+    )).scalars().first()
     if not row:
         row = FormLayout(org_id=current.org_id, entity=data.entity, type_id=data.type_id or None)
         db.add(row)
@@ -426,7 +426,8 @@ async def list_fields(
         .where(CustomField.org_id == current.org_id, CustomField.type_id == type_id)
         .order_by(CustomField.sort_order)
     )
-    return {"items": [_ser_field(f) for f in result.scalars().all()]}
+    hidden = await hidden_field_ids(db, current.org_id, "order", type_id)   # hidden in Customize
+    return {"items": [_ser_field(f) for f in result.scalars().all() if f.id not in hidden]}
 
 
 @router.post("/types/{type_id}/fields", status_code=201)
@@ -510,7 +511,7 @@ async def delete_field(
 async def reorder_fields(
     type_id: str, data: FieldReorder,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     result = await db.execute(
         select(CustomField).where(CustomField.org_id == current.org_id, CustomField.type_id == type_id)
@@ -541,7 +542,8 @@ async def list_entity_fields(
             CustomField.type_id.is_(None),
             CustomField.entity_type == entity,
         ).order_by(CustomField.sort_order))).scalars().all()
-    return {"entity": entity, "items": [_ser_field(f) for f in rows]}
+    hidden = await hidden_field_ids(db, current.org_id, entity, None)   # hidden in Customize
+    return {"entity": entity, "items": [_ser_field(f) for f in rows if f.id not in hidden]}
 
 
 @router.post("/entity-fields", status_code=201)
@@ -629,7 +631,7 @@ async def autofill_values(
 async def reorder_entity_fields(
     entity: str, data: FieldReorder,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     if entity not in ENTITY_TYPES:
         raise HTTPException(400, "entity must be client, device or product")
@@ -641,3 +643,182 @@ async def reorder_entity_fields(
             rows[fid].sort_order = idx
     await db.commit()
     return {"ok": True}
+
+
+# ── Form layout: one ordered list per form (built-in + custom fields) ─────────
+# The Customize screen edits this; the work-order form renders in this order. Built-in fields
+# have no rows, so their order/visibility/required live in FormLayout.data as
+# [{ref: "sys:<key>" | "cf:<id>", visible, required}]. Custom fields keep sort_order/required
+# on their rows too (written on save) so older readers stay correct.
+LAYOUT_FORMS = {"order", "client", "device", "product"}
+
+# Built-in fields per form that the form actually renders and that can move / hide / be required.
+SYSTEM_FIELDS: dict[str, list[tuple[str, str]]] = {
+    "order": [("client", "Client"), ("asset", "Device / asset"), ("complaint", "Fault reported / complaint"),
+              ("priority", "Priority"), ("manager", "Manager"), ("assignee", "Technician"),
+              ("scheduled_for", "Scheduled for")],
+    "client": [], "device": [], "product": [],
+}
+_LEGACY_KEY = {"vehicle": "asset"}   # old SystemFieldsEditor keys
+
+# One-click suggestions for "+ Add a field", by industry template. Kept short and practical.
+_SUG = lambda label, ftype="text", options=None: {"label": label, "field_type": ftype, "options": options or []}  # noqa: E731
+SUGGESTIONS: dict[str, dict[str, list[dict]]] = {
+    "order": {
+        "mobile_phone": [_SUG("Passcode"), _SUG("Pattern lock"), _SUG("Battery health %", "number"),
+                         _SUG("Water damage", "bool"), _SUG("Accessories received", "multiselect",
+                                                          ["Charger", "Case", "SIM card", "Memory card", "Box"]),
+                         _SUG("Data backup needed", "bool"), _SUG("Approve repairs up to", "number")],
+        "computer": [_SUG("Login password"), _SUG("Charger received", "bool"), _SUG("Operating system", "select",
+                     ["Windows 11", "Windows 10", "macOS", "ChromeOS", "Linux"]), _SUG("Data backup needed", "bool"),
+                     _SUG("Approve repairs up to", "number")],
+        "auto": [_SUG("Mileage in", "number"), _SUG("Fuel level", "select", ["Empty", "1/4", "1/2", "3/4", "Full"]),
+                 _SUG("Keys received", "bool"), _SUG("Customer waiting", "bool"), _SUG("Approve repairs up to", "number")],
+        "small_engine": [_SUG("Engine hours", "number"), _SUG("Fuel type", "select", ["Gas", "Diesel", "Mixed 50:1", "Battery"]),
+                         _SUG("Pick-up / delivery", "bool"), _SUG("Approve repairs up to", "number")],
+        "_default": [_SUG("Passcode"), _SUG("Accessories received", "multiselect", ["Charger", "Case", "Cable", "Box"]),
+                     _SUG("Condition notes", "textarea"), _SUG("Approve repairs up to", "number"),
+                     _SUG("Preferred contact", "select", ["Call", "Text", "Email"])],
+    },
+    "client": {"_default": [_SUG("Preferred contact", "select", ["Call", "Text", "Email"]), _SUG("Company"),
+                            _SUG("Birthday", "date"), _SUG("Tax exempt", "bool"), _SUG("Second phone")]},
+    "device": {"_default": [_SUG("Storage", "select", ["64 GB", "128 GB", "256 GB", "512 GB", "1 TB"]), _SUG("Carrier"),
+                            _SUG("Purchase date", "date"), _SUG("Under manufacturer warranty", "bool")]},
+    "product": {"_default": [_SUG("Supplier part number"), _SUG("Compatible with", "textarea"), _SUG("Bin location")]},
+}
+
+
+def _layout_custom_q(org_id: str, form: str, type_id: Optional[str]):
+    q = select(CustomField).where(CustomField.org_id == org_id)
+    if form == "order":
+        return q.where(CustomField.type_id == type_id)
+    return q.where(CustomField.type_id.is_(None), CustomField.entity_type == form)
+
+
+async def _layout_row(db, org_id: str, form: str, type_id: Optional[str], fallback: bool = True):
+    def q(tid):
+        return select(FormLayout).where(FormLayout.org_id == org_id, FormLayout.entity == form,
+                                        FormLayout.type_id.is_(None) if not tid else FormLayout.type_id == tid)
+    row = (await db.execute(q(type_id))).scalars().first()
+    if row is None and fallback and type_id:
+        row = (await db.execute(q(None))).scalars().first()
+    return row
+
+
+async def hidden_field_ids(db, org_id: str, form: str, type_id: Optional[str]) -> set:
+    row = await _layout_row(db, org_id, form, type_id)
+    return {i["ref"][3:] for i in (row.data or []) if isinstance(i, dict) and str(i.get("ref", "")).startswith("cf:")
+            and i.get("visible") is False} if row else set()
+
+
+async def build_layout(db, org_id: str, form: str, type_id: Optional[str]) -> list[dict]:
+    customs = (await db.execute(_layout_custom_q(org_id, form, type_id).order_by(CustomField.sort_order))).scalars().all()
+    system = SYSTEM_FIELDS.get(form, [])
+    row = await _layout_row(db, org_id, form, type_id)
+    saved = []
+    for i in (row.data or []) if row else []:
+        if not isinstance(i, dict):
+            continue
+        ref = i.get("ref") or (f"sys:{_LEGACY_KEY.get(i.get('key'), i.get('key'))}" if i.get("key") else None)
+        if ref:
+            saved.append({**i, "ref": ref})
+    sys_by = {k: lbl for k, lbl in system}
+    cf_by = {f.id: f for f in customs}
+    out, seen = [], set()
+
+    def add(ref, cfg=None):
+        if ref in seen:
+            return
+        cfg = cfg or {}
+        if ref.startswith("sys:") and ref[4:] in sys_by:
+            k = ref[4:]
+            out.append({"ref": ref, "kind": "system", "key": k, "label": sys_by[k],
+                        "visible": cfg.get("visible", True) is not False, "required": bool(cfg.get("required", False))})
+        elif ref.startswith("cf:") and ref[3:] in cf_by:
+            fld = cf_by[ref[3:]]
+            out.append({"ref": ref, "kind": "header" if fld.field_type == "header" else "custom", "key": fld.field_key,
+                        "label": fld.field_label, "visible": cfg.get("visible", True) is not False,
+                        "required": bool(fld.required), "field": _ser_field(fld)})
+        else:
+            return
+        seen.add(ref)
+
+    for i in saved:
+        add(i["ref"], i)
+    if not saved:
+        # Never customised: keep today's look — the type's own fields first, then the built-ins.
+        for f_ in customs:
+            add(f"cf:{f_.id}")
+    for k, _ in system:
+        add(f"sys:{k}")
+    for f_ in customs:
+        add(f"cf:{f_.id}")
+    return out
+
+
+async def _template_key(db, org_id: str) -> str:
+    from backend.models import Organisation
+    from backend.services import industry as _ind
+    org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
+    return _ind.normalize_template_key(getattr(org, "industry_template", None))
+
+
+@router.get("/layout")
+async def get_layout(
+    form: str,
+    type_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    if form not in LAYOUT_FORMS:
+        raise HTTPException(400, "form must be order, client, device or product")
+    if form == "order" and not type_id:
+        raise HTTPException(422, "type_id is required for the work order form")
+    items = await build_layout(db, current.org_id, form, type_id)
+    have = {i["label"].strip().lower() for i in items}
+    tk = await _template_key(db, current.org_id)
+    lib = SUGGESTIONS.get(form, {})
+    sugg = [x for x in (lib.get(tk) or lib.get("_default") or []) if x["label"].lower() not in have]
+    return {"form": form, "type_id": type_id, "items": items, "suggestions": sugg}
+
+
+class LayoutItemIn(BaseModel):
+    ref: str
+    visible: bool = True
+    required: bool = False
+
+
+class LayoutSaveIn(BaseModel):
+    form: str
+    type_id: Optional[str] = None
+    items: List[LayoutItemIn]
+
+
+@router.put("/layout")
+async def save_layout(
+    data: LayoutSaveIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_manage_settings")),
+):
+    if data.form not in LAYOUT_FORMS:
+        raise HTTPException(400, "form must be order, client, device or product")
+    customs = {f.id: f for f in (await db.execute(_layout_custom_q(current.org_id, data.form, data.type_id))).scalars().all()}
+    sys_keys = {k for k, _ in SYSTEM_FIELDS.get(data.form, [])}
+    clean, order = [], 0
+    for it in data.items:
+        if it.ref.startswith("sys:") and it.ref[4:] in sys_keys:
+            clean.append({"ref": it.ref, "visible": it.visible, "required": it.required and it.visible})
+        elif it.ref.startswith("cf:") and it.ref[3:] in customs:
+            f = customs[it.ref[3:]]
+            f.sort_order = order
+            order += 1
+            # A hidden field can't be required — it would block saving a form that doesn't show it.
+            f.required = bool(it.required and it.visible) if f.field_type != "header" else False
+            clean.append({"ref": it.ref, "visible": it.visible})
+    row = await _layout_row(db, current.org_id, data.form, data.type_id, fallback=False)
+    if not row:
+        row = FormLayout(org_id=current.org_id, entity=data.form, type_id=data.type_id or None)
+        db.add(row)
+    row.data = clean
+    await db.commit()
+    return {"ok": True, "items": await build_layout(db, current.org_id, data.form, data.type_id)}
