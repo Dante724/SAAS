@@ -125,6 +125,7 @@ async def test_sso_refuses_plain_http_idp_and_foreign_redirects(client, tenant, 
 async def test_sso_client_secret_is_encrypted_at_rest(client, tenant, db, monkeypatch):
     from cryptography.fernet import Fernet
     from sqlalchemy import select
+
     from backend.config import settings
     from backend.models import SsoConnection
     from backend.services import crypto

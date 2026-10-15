@@ -53,6 +53,7 @@ async def test_global_middleware_counts_through_the_shared_store(client, monkeyp
 
 def test_redis_is_retried_after_a_failure(monkeypatch):
     import time as _t
+
     from backend.config import settings
     monkeypatch.setattr(settings, "REDIS_URL", "redis://127.0.0.1:1/0")
     monkeypatch.setattr(ratelimit, "_redis", False)

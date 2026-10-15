@@ -49,8 +49,8 @@ def open_xlsx(raw: bytes):
     import io
     import zipfile
 
-    from fastapi import HTTPException
     import openpyxl
+    from fastapi import HTTPException
 
     if len(raw) > MAX_XLSX_BYTES:
         raise HTTPException(413, f"File too large (max {MAX_XLSX_BYTES // (1024 * 1024)} MB)")

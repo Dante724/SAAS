@@ -11,7 +11,6 @@ import pytest
 from sqlalchemy import select
 
 
-
 async def _account(client, h, name="Till"):
     await client.post("/api/cash/accounts", json={"name": name, "payment_option": "cash"}, headers=h)
     return [x for x in (await client.get("/api/cash/accounts", headers=h)).json()["items"]
