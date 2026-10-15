@@ -203,6 +203,54 @@ async def _rep_work_orders_closed(db, org, df, dt, **kw):
     return cols, data
 
 
+async def _rep_lead_source_revenue(db, org, df, dt, **kw):
+    """Which lead sources bring paying customers: new clients, orders and money received in the
+    period, grouped by the client's lead source (Settings → Directories → Lead sources)."""
+    src = func.coalesce(func.nullif(Client.source, ""), "Not recorded")
+    new_clients = dict((await db.execute(select(src, func.count()).where(
+        Client.org_id == org, Client.created_at >= df, Client.created_at <= dt).group_by(src))).all())
+    oq = _loc_filter(select(src, func.count(Order.id), func.coalesce(func.sum(Order.total), 0))
+        .join(Client, Client.id == Order.client_id).where(
+        Order.org_id == org, Order.is_estimate == False,  # noqa: E712
+        Order.created_at >= df, Order.created_at <= dt), kw).group_by(src)
+    orders = {k: (n, t) for k, n, t in (await db.execute(oq)).all()}
+    # A payment names its client directly or only through its order — attribute either way.
+    pq = (select(src, func.coalesce(func.sum(Payment.amount), 0))
+          .select_from(Payment).outerjoin(Order, Order.id == Payment.order_id)
+          .join(Client, Client.id == func.coalesce(Payment.client_id, Order.client_id))
+          .where(Client.org_id == org, func.coalesce(Payment.kind, "payment") != "refund",
+                 Payment.paid_at >= df, Payment.paid_at <= dt).group_by(src))
+    paid = dict((await db.execute(pq)).all())
+    keys = sorted(set(new_clients) | set(orders) | set(paid), key=lambda k: -float(paid.get(k, 0) or 0))
+    cols = ["Lead source", "New clients", "Work orders", "Order value", "Paid", "Avg paid / new client"]
+    data = []
+    for k in keys:
+        n_new = new_clients.get(k, 0)
+        n_ord, val = orders.get(k, (0, 0))
+        p = float(paid.get(k, 0) or 0)
+        data.append([k, n_new, n_ord, q2(val), q2(p), q2(p / n_new) if n_new else "—"])
+    return cols, data
+
+
+async def _rep_cancellations(db, org, df, dt, **kw):
+    """Why jobs get cancelled: work orders that entered a dropped status in the period, by the
+    reason captured at cancellation (Settings → Directories → Cancellation reasons)."""
+    from backend.models import OrderStatus
+    dropped = [k for (k,) in (await db.execute(select(OrderStatus.key).where(
+        OrderStatus.org_id == org, OrderStatus.status_group == "dropped"))).all()]
+    if not dropped:
+        return ["Reason", "Work orders", "Share", "Lost value"], []
+    reason = func.coalesce(func.nullif(Order.cancel_reason, ""), "No reason given")
+    q = _loc_filter(select(reason, func.count(), func.coalesce(func.sum(Order.total), 0)).where(
+        Order.org_id == org, Order.status.in_(dropped), Order.is_estimate == False,  # noqa: E712
+        func.coalesce(Order.closed_at, Order.created_at) >= df,
+        func.coalesce(Order.closed_at, Order.created_at) <= dt), kw).group_by(reason)
+    rows = sorted((await db.execute(q)).all(), key=lambda r: -r[1])
+    total = sum(r[1] for r in rows) or 1
+    cols = ["Reason", "Work orders", "Share", "Lost value"]
+    return cols, [[r, n, f"{round(n * 100 / total)}%", q2(v)] for r, n, v in rows]
+
+
 async def _rep_wo_profit(db, org, df, dt, **kw):
     """Per-order: revenue, cost, gross profit, markup %."""
     _q = _loc_filter(select(Order).where(
@@ -755,6 +803,8 @@ REPORTS = {
     "labor_cost":       ("Labor", "Labor cost summary", _rep_labor_cost),
     "wo_closed":        ("Work Orders", "Work orders closed", _rep_work_orders_closed),
     "wo_profit":        ("Finance", "Work orders profit", _rep_wo_profit),
+    "lead_sources":     ("Customers", "Revenue by lead source", _rep_lead_source_revenue),
+    "cancellations":    ("Work Orders", "Cancellations by reason", _rep_cancellations),
     "technicians":      ("Work Orders", "Technicians performance", _rep_technicians),
     "provided_services":("Assortment", "Provided services (Ready+Closed)", _rep_provided_services),
     "sold_products":    ("Assortment", "Sold products (Ready+Closed)", _rep_sold_products),

@@ -217,3 +217,8 @@ POST /api/timeclock/shift/clock-out [staff]
 POST /api/timeclock/start [staff]
 POST /api/timeclock/stop [staff]
 POST /api/timeclock/switch [staff]
+
+## Staff — inline "+ Add option" in a directory-backed dropdown (lead source, custom fields).
+## Adds one value to an existing list only (no rename/merge/delete); the front desk can't stop
+## for an admin. Managing lists stays behind can_manage_settings.
+POST /api/directories/by-key/{key}/items [staff]

@@ -155,6 +155,7 @@ class RescheduleIn(BaseModel):
 class StatusChange(BaseModel):
     status: str
     note: Optional[str] = None
+    reason: Optional[str] = None   # cancellation reason when moving into a dropped status
 
 class CommentIn(BaseModel):
     body: str
@@ -270,6 +271,7 @@ def _serialize_order(o: Order) -> dict:
         "id": o.id,
         "order_number": o.order_number,
         "status": o.status,
+        "cancel_reason": getattr(o, "cancel_reason", None),
         "priority": o.priority,
         "complaint": o.complaint,
         "diagnosis": o.diagnosis,
@@ -439,7 +441,7 @@ class BulkActionIn(BaseModel):
     order_ids: List[str]
     action: str            # set_status | assign | set_priority | create_invoice | group_invoice | archive | restore
     value: Optional[str] = None
-    reason: Optional[str] = None   # 144-G: archive reason
+    reason: Optional[str] = None   # 144-G: archive reason; also the cancellation reason for set_status
     refund: bool = True            # 144-G: refund payments when bulk-archiving
 
 
@@ -507,7 +509,8 @@ async def bulk_action(
                 if not o:
                     skipped.append({"id": oid, "reason": "Order not found"})
                     continue
-                await _apply_status_change(db, current, o, data.value, note="Bulk update")
+                await _apply_status_change(db, current, o, data.value, note="Bulk update",
+                                           reason=getattr(data, "reason", None))
                 done += 1
             except HTTPException as e:
                 await db.rollback()
@@ -1123,17 +1126,17 @@ async def change_status(
     order = result.scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
-    return await _apply_status_change(db, current, order, data.status, note=data.note)
+    return await _apply_status_change(db, current, order, data.status, note=data.note, reason=data.reason)
 
 
-async def _apply_status_change(db, current, order, new_status, note=None):
+async def _apply_status_change(db, current, order, new_status, note=None, reason=None):
     """Shared gate + side-effect flow for a single-step status change, used by the
     single-order PATCH endpoint and the bulk set_status path so both enforce the same
     transition RBAC, completion + pending-stock-write-off gates, status_entered_at,
     audit, ledger, commissions and (best-effort) notifications. The original endpoint
     body is preserved verbatim; it is simply reached via ``data`` rebuilt from the
     arguments so both callers share one code path."""
-    data = StatusChange(status=new_status, note=note)
+    data = StatusChange(status=new_status, note=note, reason=reason)
     await _guard_order_access(db, current, order)
 
     # Resolve the target status from the configurable status table, scoped to this
@@ -1217,6 +1220,8 @@ async def _apply_status_change(db, current, order, new_status, note=None):
         OrderStatus.record_type == _rt))).scalars().first() or False
     _prev_status = order.status
     order.status = data.status
+    if target and (target.status_group or "") == "dropped" and (data.reason or "").strip():
+        order.cancel_reason = data.reason.strip()[:120]
     order.status_entered_at = datetime.utcnow()
     from backend.services.audit import record as _audit_sc
     await _audit_sc(db, org_id=current.org_id, actor_id=current.id, action="order.status_change",

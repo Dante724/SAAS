@@ -479,6 +479,9 @@ class Order(Base):
     complaint: Mapped[Optional[str]] = mapped_column(Text)
     diagnosis: Mapped[Optional[str]] = mapped_column(Text)
     internal_notes: Mapped[Optional[str]] = mapped_column(Text)
+    # Why a job was cancelled (a value from the "Cancellation reasons" directory), set when the
+    # order enters a dropped-group status. Feeds the cancellations-by-reason report.
+    cancel_reason: Mapped[Optional[str]] = mapped_column(String(120))
     tech_notes: Mapped[Optional[str]] = mapped_column(Text)   # 144bj: technician's working notes
     conclusion: Mapped[Optional[str]] = mapped_column(Text)   # 144bj: conclusion / client recommendations
     labour_total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
