@@ -13,6 +13,7 @@ export type Order = {
   assigned_to?: { name?: string } | null;
   created_at?: string;
   scheduled_for?: string | null;
+  due_at?: string | null;
 };
 
 export function deviceName(d: Order["device"]) {
