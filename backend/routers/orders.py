@@ -238,10 +238,12 @@ def _calc_line(line: "LineIn") -> float:
     return q2(after_discount * (1 + line.tax_rate / 100))
 
 
-async def _auto_apply_tax(db, org_id: str, data: "LineIn") -> None:
+async def _auto_apply_tax(db, org_id: str, data: "LineIn", location_id: str | None = None) -> None:
     """When a line has no explicit tax, apply the org's default tax stack for the
-    Tickets&Sales family (honouring product/category exceptions). Stamps a single
-    effective rate/mode onto the line so existing per-line math keeps working."""
+    Tickets&Sales family (honouring product/category exceptions and location-scoped
+    taxes for the order's location). Stamps a single effective rate/mode onto the
+    line so existing per-line math keeps working — which can't represent a stack
+    that mixes included and imposed taxes, so that combination is refused."""
     if data.tax_id or (data.tax_rate or 0):
         return
     try:
@@ -250,13 +252,19 @@ async def _auto_apply_tax(db, org_id: str, data: "LineIn") -> None:
         return
     item_type = "product" if data.kind == "product" else ("service" if (data.kind == "service" or data.line_type == "labour") else None)
     res = await resolve_taxes(db, org_id, doc_family="tickets_sales", net_amount=100.0,
-                              item_type=item_type, item_id=data.ref_id)
+                              item_type=item_type, item_id=data.ref_id, location_id=location_id)
     if res.get("exempt"):
         data.tax_rate, data.tax_mode = 0.0, "imposed"
         return
     taxes = res.get("taxes") or []
     if taxes:
-        # single-rate stamp: sum rates of the resolved stack, mode from the first
+        modes = {t["mode"] for t in taxes}
+        if len(modes) > 1:
+            names = ", ".join(f"{t['name']} ({t['mode']})" for t in taxes)
+            raise HTTPException(422, f"The default tax stack mixes included and imposed taxes ({names}), "
+                                     f"which can't be applied to one line. Set every tax in the stack "
+                                     f"to the same mode, or set the line's tax explicitly.")
+        # single-rate stamp: sum rates of the resolved stack (all share one mode)
         data.tax_rate = q4(sum(t["rate"] or 0 for t in taxes))
         data.tax_mode = taxes[0]["mode"]
         data.tax_id = taxes[0]["tax_id"]
@@ -836,7 +844,7 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
         if _hide_cost or _fixed_cost:
             li.cost_price = await _catalog_cost(db, current.org_id, li.kind, li.ref_id)
         await _apply_client_discount(db, current.org_id, data.client_id, li)
-        await _auto_apply_tax(db, current.org_id, li)   # launch B4: lines on a new job were never taxed
+        await _auto_apply_tax(db, current.org_id, li, data.location_id)   # launch B4: lines on a new job were never taxed
         await _guard_discount_approval(db, current.org_id, _perms_create, li.discount, li.discount_type, is_owner=not current.role_id,
                                           base=(li.qty or 0) * (li.unit_price or 0))
         # 144ha — margin-floor guardrail on create (block a below-floor line)
@@ -3751,7 +3759,7 @@ async def add_line(
             li = LineIn(line_type=ltype, kind=kind, ref_id=eff_ref_id,
                         description=f"{name} ({bundle.name})",
                         qty=c.qty * data.qty, unit_price=q2(price * factor))
-            await _auto_apply_tax(db, current.org_id, li)
+            await _auto_apply_tax(db, current.org_id, li, order.location_id)
             t = _calc_line(li)
             nl = OrderLine(order_id=order_id, line_type=li.line_type, kind=li.kind, ref_id=li.ref_id,
                            description=li.description, qty=li.qty, unit_price=li.unit_price,
@@ -3786,7 +3794,7 @@ async def add_line(
             return {"ok": True, "line_id": existing.id, "merged": True}
 
     await _apply_client_discount(db, current.org_id, order.client_id, data)
-    await _auto_apply_tax(db, current.org_id, data)
+    await _auto_apply_tax(db, current.org_id, data, order.location_id)
     await _guard_discount_approval(db, current.org_id, perms, data.discount, data.discount_type, is_owner=not current.role_id,
                                    base=(data.qty or 0) * (data.unit_price or 0))
     # 144gy — margin-floor guardrail: block a line discounted below the org's minimum.
