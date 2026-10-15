@@ -14,19 +14,13 @@ import { buildReportConfig, pickChartColumns } from "./reportConfig";
 const REPORT_PAGE = 50;
 
 // Build a spreadsheet (xlsx/csv) from an array-of-arrays and trigger a download.
-// SheetJS is lazy-loaded so it never enters the main bundle. Shared by the report
+// The writer is lazy-loaded so it never enters the main bundle. Shared by the report
 // export and the custom-report export.
 async function exportAoa(aoa: (string | number)[][], fmt: "xlsx" | "csv", name: string) {
-  const XLSX = await import("xlsx");
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  let blob: Blob;
-  if (fmt === "csv") {
-    blob = new Blob([XLSX.utils.sheet_to_csv(ws)], { type: "text/csv;charset=utf-8" });
-  } else {
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Report");
-    blob = new Blob([XLSX.write(wb, { bookType: "xlsx", type: "array" })], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  }
+  const { toCsv, toXlsx } = await import("../../lib/sheet");
+  const blob = fmt === "csv"
+    ? new Blob(["\ufeff" + toCsv(aoa)], { type: "text/csv;charset=utf-8" })   // BOM: Excel reads UTF-8
+    : new Blob([toXlsx(aoa) as BlobPart], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url; a.download = `${name}.${fmt}`;
@@ -372,7 +366,7 @@ export default function ReportsHub() {
 
   // Export the rows the user is actually looking at — filtered + sorted + totals —
   // built client-side from `viewRows` (see below) so the file matches the screen.
-  // SheetJS is loaded on demand so it never bloats the main bundle.
+  // The sheet writer is loaded on demand so it never bloats the main bundle.
   async function download(fmt: "xlsx" | "csv") {
     if (!active || !result) return;
     setExporting(true);
