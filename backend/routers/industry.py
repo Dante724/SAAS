@@ -31,6 +31,7 @@ from backend.models import (
 from backend.services import industry as I
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.lookups import decode_hin, decode_imei, decode_vin
+from backend.core.spreadsheet import MAX_IMPORT_ROWS, too_many_rows
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 scan_router = APIRouter(prefix="/api/assets", tags=["assets"])
@@ -447,7 +448,11 @@ async def import_directory_csv(
 
     made = {"brands": 0, "models": 0}
     brand_cache: dict[tuple, AssetBrand] = {}
-    for raw in reader:
+    import itertools
+    rows = list(itertools.islice(reader, MAX_IMPORT_ROWS + 1))
+    if len(rows) > MAX_IMPORT_ROWS:
+        raise HTTPException(413, too_many_rows(len(rows)))
+    for raw in rows:
         row = {(k or "").strip().lower(): (v or "").strip() for k, v in raw.items()}
         bname = row.get("brand")
         if not bname:

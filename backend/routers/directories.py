@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Directory, DirectoryItem, Employee
 from backend.services.auth import get_current_employee, require_perm
-from backend.core.spreadsheet import safe_row, unguard_cell
+from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row, too_many_rows, unguard_cell
 
 router = APIRouter(prefix="/api/directories", tags=["settings"])
 
@@ -299,6 +299,8 @@ async def import_items(
     # skip a header row that literally says "value"
     if rows and rows[0] and rows[0][0].strip().lower() == "value":
         rows = rows[1:]
+    if len(rows) > MAX_IMPORT_ROWS:
+        raise HTTPException(413, too_many_rows(len(rows)))
     # first pass: create all values so parents can resolve
     for r in rows:
         if not r or not r[0].strip():

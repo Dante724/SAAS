@@ -103,6 +103,8 @@ class Settings(BaseSettings):
     # ── B3: media storage ─────────────────────────────────────────────────
     MEDIA_BACKEND: str = "db"          # db | local | s3  (db = legacy inline; local/s3 = offloaded)
     MEDIA_MAX_BYTES: int = 8 * 1024 * 1024   # Build 144cq: hard cap on any single upload (8 MB)
+    # Whole request body cap (base64 of an 8 MB upload is ~11 MB of JSON). 0 disables.
+    MAX_REQUEST_BYTES: int = 16 * 1024 * 1024
     MEDIA_LOCAL_DIR: str = "/tmp/repairos-media"
     MEDIA_S3_BUCKET: str = ""
     MEDIA_S3_REGION: str = ""

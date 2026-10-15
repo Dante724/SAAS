@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -11,7 +11,7 @@ from backend.db.database import get_db
 from backend.models import Client, Device, Employee
 from backend.services.auth import get_current_employee, require_perm, record_scope
 from backend.services.money import q2
-from backend.core.spreadsheet import safe_row
+from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
 
 router = APIRouter(prefix="/api/clients", tags=["clients"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -483,7 +483,7 @@ async def client_purchases(
 
 # ── Build 82: CRM data ops — import, merge, export ───────────────────────────
 class ImportIn(BaseModel):
-    rows: list[dict]                 # raw rows as parsed from the CSV/sheet
+    rows: list[dict] = Field(max_length=MAX_IMPORT_ROWS)  # raw rows as parsed from the CSV/sheet
     mapping: dict[str, str] = {}     # {source_column: client_field}
     update_existing: bool = True     # match on phone/email and update rather than duplicate
     dry_run: bool = False            # preview the outcome without writing

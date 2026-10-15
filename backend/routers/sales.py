@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +24,7 @@ from backend.models import (
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.numbering import next_number
 from backend.services.money import q2, q4
-from backend.core.spreadsheet import safe_row
+from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
 
 router = APIRouter(prefix="/api/sales", tags=["sales"])
 st_router = APIRouter(prefix="/api/stocktake", tags=["stocktake"])
@@ -618,7 +618,7 @@ async def stocktake_lines(
 
 
 class CountImportIn(BaseModel):
-    rows: list[dict]                        # [{code, counted_qty}, ...]
+    rows: list[dict] = Field(max_length=MAX_IMPORT_ROWS)  # [{code, counted_qty}, ...]
     code_field: str = "code"
     qty_field: str = "counted_qty"
     register_unknown: bool = False

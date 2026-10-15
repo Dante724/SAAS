@@ -23,7 +23,9 @@ from backend.models import (
 from backend.services.auth import get_current_employee, require_perm
 from backend.routers.forms import resolve_custom_data
 from backend.services.money import q2
-from backend.core.spreadsheet import safe_row, unguard_cell
+from backend.core.spreadsheet import (
+    MAX_IMPORT_ROWS, MAX_XLSX_BYTES, open_xlsx, safe_row, too_many_rows, unguard_cell,
+)
 
 router = APIRouter(prefix="/api/catalog", tags=["catalog-products"])
 
@@ -371,9 +373,10 @@ async def export_products(db: AsyncSession = Depends(get_db), current: Employee 
 @router.post("/products/import")
 async def import_products(file: UploadFile = File(...), db: AsyncSession = Depends(get_db),
                           current: Employee = Depends(require_perm("can_manage_inventory"))):
-    import openpyxl
-    wb = openpyxl.load_workbook(io.BytesIO(await file.read()), read_only=True)
+    wb = open_xlsx(await file.read(MAX_XLSX_BYTES + 1))
     ws = wb.active
+    if (ws.max_row or 0) - 1 > MAX_IMPORT_ROWS:
+        raise HTTPException(413, too_many_rows(ws.max_row - 1))
     header = [str(c.value).strip() if c.value is not None else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
     idx = {name: header.index(name) for name in _COLS if name in header}
     if "Name" not in idx:

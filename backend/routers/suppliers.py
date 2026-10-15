@@ -15,7 +15,7 @@ from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +31,7 @@ from backend.models import (
 )
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.money import q2
+from backend.core.spreadsheet import MAX_IMPORT_ROWS
 
 router = APIRouter(prefix="/api/suppliers", tags=["inventory"])
 
@@ -284,7 +285,7 @@ async def delete_supplier(
 
 # ── price-list import ────────────────────────────────────────────────────────
 class PriceListIn(BaseModel):
-    rows: list[dict]
+    rows: list[dict] = Field(max_length=MAX_IMPORT_ROWS)
     mapping: dict[str, str]        # {source_column: field}  field ∈ IMPORTABLE
     match_on: str = "sku"          # sku|barcode
     create_missing: bool = False   # add products the price list has and we don't
