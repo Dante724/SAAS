@@ -5,6 +5,7 @@ tenant login can never produce. This is where you (the operator) see all
 organisations by lifecycle segment, control each account's term and per-employee
 access windows, set discounts, and generate coupon codes.
 """
+import asyncio
 from datetime import date
 from typing import Optional
 
@@ -66,7 +67,7 @@ async def admin_login(data: AdminLogin, request: Request, db: AsyncSession = Dep
     _rate("admin_login_acct", (data.email or "").strip().lower(), limit=20, window_sec=900)
     admin = (await db.execute(select(PlatformAdmin).where(
         PlatformAdmin.email == (data.email or "").lower()))).scalar_one_or_none()
-    if not admin or not admin.active or not verify_password(data.password, admin.password_hash):
+    if not admin or not admin.active or not await asyncio.to_thread(verify_password, data.password, admin.password_hash):
         raise HTTPException(401, "Invalid platform credentials")
     return {"access_token": create_platform_token(admin.id), "token_type": "bearer", "name": admin.name}
 

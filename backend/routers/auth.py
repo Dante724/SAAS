@@ -1,3 +1,4 @@
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -253,7 +254,7 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
         role_id=admin_role.id,
         name=data.name,
         email=data.email,
-        password_hash=hash_password(data.password),
+        password_hash=await asyncio.to_thread(hash_password, data.password),
     )
     db.add(employee)
 
@@ -276,6 +277,9 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
         role="admin",
     )
 
+_DUMMY_HASH = hash_password("timing-equaliser-not-a-real-password")
+
+
 @router.post("/token", response_model=TokenResponse)
 async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
     # Build 144bz: throttle brute-force — 10 attempts / 5 min per IP+username, plus a per-account
@@ -285,7 +289,11 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
     _rate("login_acct", _user, limit=30, window_sec=900)
     result = await db.execute(select(Employee).where(Employee.email == form.username))
     employee = result.scalar_one_or_none()
-    if not employee or not verify_password(form.password, employee.password_hash):
+    # Unknown emails pay the same bcrypt cost as wrong passwords, so response time doesn't
+    # reveal which addresses have accounts.
+    if not employee:
+        await asyncio.to_thread(verify_password, form.password, _DUMMY_HASH)
+    if not employee or not await asyncio.to_thread(verify_password, form.password, employee.password_hash):
         raise HTTPException(status_code=401, detail="Incorrect email or password")
     if not employee.active:
         raise HTTPException(status_code=403, detail="Account disabled")
@@ -320,7 +328,7 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
             employee.mfa_last_step = step
             await db.commit()
         if not ok and code:
-            used, remaining = consume_recovery_code(employee.mfa_recovery_codes, code)
+            used, remaining = await asyncio.to_thread(consume_recovery_code, employee.mfa_recovery_codes, code)
             if used:
                 employee.mfa_recovery_codes = remaining
                 await db.commit()
@@ -420,7 +428,7 @@ async def password_reset(data: ResetRequest, db: AsyncSession = Depends(get_db))
     emp = await _tok.redeem(db, raw=data.token, kind="reset")
     if not emp:
         raise HTTPException(400, "This reset link is invalid or has expired")
-    emp.password_hash = hash_password(data.new_password)
+    emp.password_hash = await asyncio.to_thread(hash_password, data.new_password)
     emp.token_version = (emp.token_version or 0) + 1   # log out everywhere
     emp.email_verified = True                           # proving email access verifies it
     await db.commit()
@@ -500,7 +508,7 @@ async def invite_accept(data: InviteAccept, db: AsyncSession = Depends(get_db)):
     emp = Employee(
         org_id=inv.org_id, location_id=inv.location_id, role_id=inv.role_id,
         name=(data.name or inv.name or inv.email.split("@")[0]),
-        email=inv.email, password_hash=hash_password(data.password),
+        email=inv.email, password_hash=await asyncio.to_thread(hash_password, data.password),
         email_verified=True)
     db.add(emp)
     inv.accepted_at = _dt.utcnow()

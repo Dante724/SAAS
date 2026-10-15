@@ -1,3 +1,4 @@
+import asyncio
 from datetime import date, datetime
 from typing import Optional
 
@@ -188,7 +189,7 @@ async def create_employee(
         name=data.name, email=data.email,
         # Without a password, store a random one nobody knows; the welcome email lets
         # the teammate choose their own.
-        password_hash=hash_password(data.password or secrets.token_urlsafe(32)),
+        password_hash=await asyncio.to_thread(hash_password, data.password or secrets.token_urlsafe(32)),
         phone=data.phone, role_id=data.role_id,
         location_id=data.location_id,
         wage_type=data.wage_type, wage_value=data.wage_value,
@@ -275,7 +276,7 @@ async def reset_password(
     await _assert_can_manage(db, current, emp)
     if len(data.password) < MIN_PASSWORD_LEN:
         raise HTTPException(400, f"Password must be at least {MIN_PASSWORD_LEN} characters")
-    emp.password_hash = hash_password(data.password)
+    emp.password_hash = await asyncio.to_thread(hash_password, data.password)
     emp.token_version = (emp.token_version or 0) + 1   # sign out existing sessions
     await db.commit()
     return {"ok": True}

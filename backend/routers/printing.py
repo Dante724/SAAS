@@ -3,11 +3,12 @@
 Label templates live under Settings; the print endpoints return a PDF stream for the
 products or documents you ask for.
 """
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -148,8 +149,11 @@ async def delete_template(
 
 
 # ── print labels ─────────────────────────────────────────────────────────────
+MAX_LABELS = 2000      # one sheet render; ~a few seconds of reportlab CPU
+
+
 class PrintLabelsIn(BaseModel):
-    part_ids: list[str]
+    part_ids: list[str] = Field(max_length=500)
     template_id: Optional[str] = None
     copies: int = 1
 
@@ -166,6 +170,8 @@ async def print_labels(
         raise HTTPException(400, "Pick at least one product")
     if data.copies < 1 or data.copies > 100:
         raise HTTPException(422, "copies must be between 1 and 100")
+    if len(data.part_ids) * data.copies > MAX_LABELS:
+        raise HTTPException(422, f"At most {MAX_LABELS} labels per sheet — print in batches")
 
     tpl = None
     if data.template_id:
@@ -202,7 +208,8 @@ async def print_labels(
         "price": overrides.get(p.id, p.sell_price),
     } for p in parts]
 
-    pdf = printing.render_labels(
+    pdf = await asyncio.to_thread(
+        printing.render_labels,
         items,
         width_mm=tpl.width_mm if tpl else 50,
         height_mm=tpl.height_mm if tpl else 30,
@@ -230,7 +237,8 @@ async def print_posting(
 
     rows = [[name, sku or "", f"{ln.qty:g}", f"{float(ln.unit_cost or 0):.2f}",
              f"{float(ln.total or 0):.2f}"] for ln, name, sku in lines]
-    pdf = printing.render_document(
+    pdf = await asyncio.to_thread(
+        printing.render_document,
         title="Goods received", org_name=await _org_name(db, current.org_id), lang=await _org_lang(db, current.org_id),
         number=d.number,
         meta=[("Date", d.created_at.strftime("%Y-%m-%d") if d.created_at else None),
@@ -273,7 +281,8 @@ async def print_purchase_order(
             ("Ordered", po.ordered_at.strftime("%Y-%m-%d") if po.ordered_at else None),
             ("Expected", po.expected_at.strftime("%Y-%m-%d") if po.expected_at else None),
             ("Status", po.status)]
-    pdf = printing.render_document(
+    pdf = await asyncio.to_thread(
+        printing.render_document,
         title="Purchase order", org_name=await _org_name(db, current.org_id), lang=await _org_lang(db, current.org_id),
         number=po.po_number,
         meta=[m for m in meta if m[1]],
@@ -321,7 +330,8 @@ async def print_write_off(
              # only comments marked public belong on a document that leaves the building
              (ln.comment or "") if ln.comment_public else ""]
             for ln, name, sku in lines]
-    pdf = printing.render_document(
+    pdf = await asyncio.to_thread(
+        printing.render_document,
         title="Write-off act", org_name=await _org_name(db, current.org_id), lang=await _org_lang(db, current.org_id),
         number=d.number,
         meta=[("Date", d.created_at.strftime("%Y-%m-%d") if d.created_at else None),
@@ -350,7 +360,8 @@ async def print_return(
 
     rows = [[name, sku or "", f"{ln.qty:g}", f"{float(ln.unit_cost or 0):.2f}",
              f"{float(ln.total or 0):.2f}"] for ln, name, sku in lines]
-    pdf = printing.render_document(
+    pdf = await asyncio.to_thread(
+        printing.render_document,
         title="Return to supplier", org_name=await _org_name(db, current.org_id), lang=await _org_lang(db, current.org_id),
         number=d.number,
         meta=[("Date", d.created_at.strftime("%Y-%m-%d") if d.created_at else None),
@@ -380,7 +391,8 @@ async def print_transfer(
     rows = [[name, sku or "", f"{ln.qty:g}",
              "" if ln.qty_received is None else f"{ln.qty_received:g}"]
             for ln, name, sku in lines]
-    pdf = printing.render_document(
+    pdf = await asyncio.to_thread(
+        printing.render_document,
         title="Stock transfer", org_name=await _org_name(db, current.org_id), lang=await _org_lang(db, current.org_id),
         number=t.transfer_number,
         meta=[("Status", t.status),
@@ -421,7 +433,8 @@ async def print_settlement_act(
         rows.append([part.name, part.sku or "", f"{ln.system_qty or 0:g}",
                      f"{ln.counted_qty:g}", f"{v:+g}", f"{value:+.2f}", flags])
 
-    pdf = printing.render_document(
+    pdf = await asyncio.to_thread(
+        printing.render_document,
         title="Stocktake settlement act", org_name=await _org_name(db, current.org_id), lang=await _org_lang(db, current.org_id),
         number=st_id[:8],
         meta=[("Type", st.kind), ("Status", st.status),
@@ -492,7 +505,8 @@ async def print_payroll_statement(
             e.event or "", e.note or "",
             f"{amt:+.2f}", f"{running:.2f}"])
 
-    pdf = printing.render_document(
+    pdf = await asyncio.to_thread(
+        printing.render_document,
         title="Payroll statement", org_name=await _org_name(db, current.org_id), lang=await _org_lang(db, current.org_id),
         number=emp.name,
         meta=[("Employee", emp.name),

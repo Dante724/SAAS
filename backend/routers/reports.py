@@ -1,3 +1,4 @@
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends
@@ -842,7 +843,7 @@ async def export_report(
     for i, col in enumerate(cols, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = max(14, len(str(col)) + 4)
     buf = io.BytesIO()
-    wb.save(buf)
+    await asyncio.to_thread(wb.save, buf)
     buf.seek(0)
     fname = f"{report_key}_{df.strftime('%Y%m%d')}_{dt.strftime('%Y%m%d')}.xlsx"
     return StreamingResponse(
