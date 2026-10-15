@@ -13,6 +13,7 @@ import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
 import { NAV, CATS, SEC_CAT, searchSections, type SectionId } from "./settingsRegistry";
 import { SetupChecklist } from "./SetupChecklist";
 import { StatusList, StatusEditor } from "./StatusesSettings";
+import { ChecklistList, ChecklistEditor } from "./ChecklistSettings";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
 
 // Full section set = the registry sections + a few that have no nav entry of their own.
@@ -528,9 +529,8 @@ export default function SettingsHub() {
 
 
           {sec === "checklists" && (
-            <div className="max-w-3xl"><SectionCard title="Checklist templates" count={lists.checklists?.length} onAdd={() => setChecklistEdit(null)}>
-              <SecTable rows={lists.checklists} onRowClick={(r) => setChecklistEdit(r)} onDelete={(r) => delRow("checklists", r)} cols={[["Template", (t) => val(t, ["name", "title"])], ["Steps", (t) => String((t?.steps || []).length || 0)], ["Applies to", (t) => (t?.scope === "selected" ? `${(t?.type_ids || []).length} type(s)` : "All types")]]} />
-            </SectionCard></div>
+            <ChecklistList templates={lists.checklists} onOpen={(t) => setChecklistEdit(t)} onNew={(starter) => setChecklistEdit(starter || null)}
+              onChanged={() => reloadSec("checklists")} onFlash={flash} />
           )}
 
           {sec === "directories" && <DirectoriesManager />}
@@ -583,7 +583,7 @@ export default function SettingsHub() {
         <FormFieldsDrawer type={formFieldsFor} onClose={() => setFormFieldsFor(null)} onChanged={() => reloadSec("forms")} />
       )}
       {checklistEdit !== undefined && (
-        <ChecklistTemplateDrawer tpl={checklistEdit} onClose={() => setChecklistEdit(undefined)} onSaved={() => { setChecklistEdit(undefined); reloadSec("checklists"); }} />
+        <ChecklistEditor tpl={checklistEdit} onClose={() => setChecklistEdit(undefined)} onSaved={() => { setChecklistEdit(undefined); reloadSec("checklists"); }} />
       )}
       {toast && <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-clay-drawer z-[70]">{toast}</div>}
     </Shell>
@@ -1924,117 +1924,6 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
             <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button>
             <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Add rule" : "Save"}</button>
           </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Checklist template builder ─────────────────────────────────────────
-const CL_KINDS = ["check_result", "yes_no", "text", "textarea", "number", "date", "dropdown", "multiselect", "file"];
-function ChecklistTemplateDrawer({ tpl, onClose, onSaved }: { tpl: any | null; onClose: () => void; onSaved: () => void }) {
-  // Editor model: steps[{title, items[{label, field_kind, required, client_visible, affects_result, options}]}].
-  const flatten = (t: any) => (t?.steps || []).map((s: any) => ({
-    title: s.title || "",
-    items: (s.sections || []).flatMap((sec: any) => (sec.items || [])).map((i: any) => ({
-      label: i.label || "", field_kind: i.field_kind || "check_result", required: !!i.required,
-      client_visible: !!i.client_visible, affects_result: i.affects_result !== false, options: (i.options || []).join(", "),
-    })),
-  }));
-  const [name, setName] = useState(tpl?.name || "");
-  const [scope, setScope] = useState<string>(tpl?.scope || "all");
-  const [typeIds, setTypeIds] = useState<string[]>(tpl?.type_ids || []);
-  const [steps, setSteps] = useState<any[]>(tpl?.steps?.length ? flatten(tpl) : [{ title: "Step 1", items: [] }]);
-  const [types, setTypes] = useState<any[]>([]);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => { api.get<any>("/forms/types").then((r) => setTypes(r.items || [])).catch(() => {}); }, []);
-
-  const upStep = (si: number, patch: any) => setSteps((s) => s.map((st, i) => i === si ? { ...st, ...patch } : st));
-  const addStep = () => setSteps((s) => [...s, { title: `Step ${s.length + 1}`, items: [] }]);
-  const delStep = (si: number) => setSteps((s) => s.filter((_, i) => i !== si));
-  const addItem = (si: number) => upStep(si, { items: [...steps[si].items, { label: "", field_kind: "check_result", required: true, client_visible: false, affects_result: true, options: "" }] });
-  const upItem = (si: number, ii: number, patch: any) => upStep(si, { items: steps[si].items.map((it: any, i: number) => i === ii ? { ...it, ...patch } : it) });
-  const delItem = (si: number, ii: number) => upStep(si, { items: steps[si].items.filter((_: any, i: number) => i !== ii) });
-
-  async function save() {
-    if (!name.trim()) { alertDialog("Name the template"); return; }
-    // Items without a label used to be dropped silently, so a template could "save" with no
-    // fields at all and then fail when applied to a work order.
-    const unlabeled = steps.find((st) => st.items.some((i: any) => !i.label.trim()));
-    if (unlabeled) { alertDialog(`Give every item in “${unlabeled.title || "Step"}” a label, or remove it`); return; }
-    if (!steps.some((st) => st.items.length)) { alertDialog("Add at least one item — use “+ Add item” under a step"); return; }
-    setBusy(true);
-    const body = {
-      name: name.trim(), scope, type_ids: scope === "selected" ? typeIds : [],
-      steps: steps.map((st) => ({
-        title: st.title || "Step", description: null,
-        sections: [{ title: "", allow_notes: false, items: st.items.map((i: any) => ({
-          label: i.label.trim(), field_kind: i.field_kind, required: i.required, client_visible: i.client_visible,
-          affects_result: i.affects_result, options: (["dropdown", "multiselect"].includes(i.field_kind) ? i.options.split(",").map((o: string) => o.trim()).filter(Boolean) : []),
-        })) }],
-      })),
-    };
-    try {
-      if (tpl?.id) await api.put(`/checklist-templates/${tpl.id}`, body);
-      else await api.post("/checklist-templates", body);
-      onSaved();
-    } catch (e: any) { alertDialog(e.message || "Could not save template"); }
-    finally { setBusy(false); }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative w-[560px] max-w-full bg-white h-full shadow-drawer flex flex-col">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
-          <h2 className="font-bold text-ink-primary">{tpl?.id ? "Edit checklist template" : "New checklist template"}</h2>
-          <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
-          <div>
-            <label className="block font-semibold text-ink-secondary mb-1">Template name</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Intake diagnostics" className="glass-input w-full px-3 py-2 rounded-lg" />
-          </div>
-          <div>
-            <label className="block font-semibold text-ink-secondary mb-1">Applies to</label>
-            <select value={scope} onChange={(e) => setScope(e.target.value)} className="glass-input px-3 py-2 rounded-lg"><option value="all">All work-order types</option><option value="selected">Selected types</option></select>
-            {scope === "selected" && (
-              <div className="flex flex-wrap gap-1.5 mt-2">{types.map((t) => { const on = typeIds.includes(t.id); return (
-                <button key={t.id} onClick={() => setTypeIds((s) => on ? s.filter((x) => x !== t.id) : [...s, t.id])} className={`px-2.5 py-1 rounded-full font-semibold border ${on ? "bg-primary text-white border-primary" : "bg-white text-ink-secondary border-slate-200"}`}>{t.name}</button>
-              ); })}</div>
-            )}
-          </div>
-          {steps.map((st, si) => (
-            <div key={si} className="rounded-xl border border-slate-200 p-3 space-y-2.5">
-              <div className="flex items-center gap-2">
-                <input value={st.title} onChange={(e) => upStep(si, { title: e.target.value })} placeholder="Step title" className="glass-input flex-1 px-2 py-1.5 rounded-lg font-semibold" />
-                <button aria-label="Delete" onClick={() => delStep(si)} className="text-ink-tertiary hover:text-rose-600"><M n="delete" c="text-sm" /></button>
-              </div>
-              {st.items.map((it: any, ii: number) => (
-                <div key={ii} className="rounded-lg bg-slate-50 border border-slate-200 p-2 space-y-1.5">
-                  <div className="flex items-center gap-1.5">
-                    <input value={it.label} onChange={(e) => upItem(si, ii, { label: e.target.value })} placeholder="Item label" className="glass-input flex-1 px-2 py-1 rounded" />
-                    <select value={it.field_kind} onChange={(e) => upItem(si, ii, { field_kind: e.target.value })} className="glass-input px-1.5 py-1 rounded">{CL_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}</select>
-                    <button aria-label="Close" onClick={() => delItem(si, ii)} className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>
-                  </div>
-                  {["dropdown", "multiselect"].includes(it.field_kind) && (
-                    <input value={it.options} onChange={(e) => upItem(si, ii, { options: e.target.value })} placeholder="opt1, opt2" className="glass-input w-full px-2 py-1 rounded" />
-                  )}
-                  <div className="flex flex-wrap gap-3 text-[11px] text-ink-secondary">
-                    <label className="flex items-center gap-1"><input type="checkbox" checked={it.required} onChange={(e) => upItem(si, ii, { required: e.target.checked })} className="accent-primary" />Required</label>
-                    <label className="flex items-center gap-1"><input type="checkbox" checked={it.client_visible} onChange={(e) => upItem(si, ii, { client_visible: e.target.checked })} className="accent-primary" />Client-visible</label>
-                    <label className="flex items-center gap-1"><input type="checkbox" checked={it.affects_result} onChange={(e) => upItem(si, ii, { affects_result: e.target.checked })} className="accent-primary" />Fail fails checklist</label>
-                  </div>
-                </div>
-              ))}
-              <button onClick={() => addItem(si)} className="text-primary font-semibold hover:underline">+ Add item</button>
-            </div>
-          ))}
-          <button onClick={addStep} className="w-full py-2 rounded-lg border border-dashed border-slate-300 text-ink-secondary font-semibold hover:bg-slate-50">+ Add step</button>
-        </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
-          <button onClick={onClose} className="px-3 py-2 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">{tpl?.id ? "Save changes" : "Create template"}</button>
         </div>
       </div>
     </div>
