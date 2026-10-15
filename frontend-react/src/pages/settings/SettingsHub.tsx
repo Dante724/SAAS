@@ -17,6 +17,7 @@ import CustomerMessages from "./NotificationsPage";
 import PublicPagesSettings from "./PublicPagesSettings";
 import { PricingPage, InventoryPage } from "./PricingInventory";
 import FinanceNumbering from "./FinanceNumbering";
+import DocumentTemplatesPage from "./DocumentTemplatesPage";
 import { TeamPage, RoleEditor, Avatar } from "./TeamSettings";
 import { ChecklistList, ChecklistEditor } from "./ChecklistSettings";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
@@ -184,7 +185,6 @@ export default function SettingsHub() {
       }));
     }
   }, [sec]);
-  const val = (o: any, keys: string[], fb = "—") => { for (const k of keys) { const v = o?.[k]; if (v !== undefined && v !== null && v !== "") return String(v); } return fb; };
 
   // ── Inline editors for config entities (create / edit / delete) ──
   type Field = { k: string; label: string; type: "text" | "number" | "select" | "color" | "checkbox" | "textarea" | "date"; opts?: string[]; def?: any; req?: boolean; vars?: boolean; counter?: boolean };
@@ -393,9 +393,8 @@ export default function SettingsHub() {
           )}
 
           {sec === "templates" && (
-            <div className="max-w-3xl"><SectionCard title="Document templates" count={lists.templates?.length} onAdd={() => setEditing({ sec: "templates", row: null })}>
-              <SecTable rows={lists.templates} onRowClick={(r) => setEditing({ sec: "templates", row: r })} onDelete={(r) => delRow("templates", r)} cols={[["Template", (t) => val(t, ["name", "title"])], ["Type", (t) => val(t, ["doc_type", "group", "type"])], ["Size", (t) => val(t, ["page_size", "size"])], ["Default", (t) => (t?.is_default ? "Yes" : "—")]]} />
-            </SectionCard></div>
+            <DocumentTemplatesPage templates={lists.templates} onOpen={(row) => setEditing({ sec: "templates", row })}
+              onChanged={() => reloadSec("templates")} onFlash={flash} />
           )}
 
           {sec === "finance" && <FinanceNumbering currency={co?.currency || "$"} shop={{ name: co?.name, address: co?.company_address, phone: co?.company_phone, email: co?.company_email, logo: co?.logo_data }} />}

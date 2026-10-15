@@ -9,10 +9,13 @@ import { escapeHtml, printHtmlInFrame, sanitizeHtml } from "../../lib/safeHtml";
    variables slide-over. Pills + blocks serialize to plain HTML + {Tokens} on save. */
 
 type Grp = { group: string; items: string[] };
+const MOST_USED = ["{Company Name}", "{Company Logo}", "{Company Phone}", "{Client Name}", "{Client Phone}", "{Order Number}",
+  "{Order Created Date}", "{Asset Brand}", "{Asset Model}", "{Asset Serial Number}", "{Order Complaint}", "{Items Table}",
+  "{All Items Table}", "{Order Total}", "{Order Balance Due}", "{Barcode}"];
 const DOC_TYPES = ["estimate", "invoice", "receipt", "work_order", "label", "other"];
 // small identifying icon per variable group (Material Symbols names)
 const GROUP_ICON: Record<string, string> = {
-  Company: "storefront", "Legal entity": "gavel", Interactive: "bolt", Client: "person",
+  "Most used": "auto_awesome", Company: "storefront", "Legal entity": "gavel", Interactive: "bolt", Client: "person",
   Payer: "account_balance_wallet", Ticket: "receipt_long", Device: "devices", Tables: "table_rows",
   Employees: "badge", Finance: "payments", Invoice: "description", Date: "calendar_today",
   Links: "link", Other: "more_horiz", "Custom fields": "tune",
@@ -88,6 +91,8 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
   const [presets, setPresets] = useState<{ key: string; label: string; doc_type: string }[]>([]);
+  const [empty, setEmpty] = useState(false);          // blank page → offer a starting layout
+  const [blankOk, setBlankOk] = useState(false);      // "Start blank" dismisses that offer
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -167,6 +172,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
   // ── blocks ──
   function refreshBlocks() {
     const ed = edRef.current; if (!ed) return;
+    setEmpty(!(ed.textContent || "").trim() && !ed.querySelector("img,table,hr,[data-var]"));
     const secs = Array.from(ed.querySelectorAll(":scope > section")) as HTMLElement[];
     secs.forEach((s) => { if (!s.dataset.bid) s.dataset.bid = Math.random().toString(36).slice(2, 9); });
     setBlocks(secs.map((s) => ({ id: s.dataset.bid!, label: s.dataset.label || "Section" })));
@@ -245,7 +251,13 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
   }
 
   const ql = q.trim().toLowerCase();
-  const shown = useMemo(() => groups.map((g) => ({ ...g, items: ql ? g.items.filter((i) => i.toLowerCase().includes(ql)) : g.items })).filter((g) => g.items.length), [groups, ql]);
+  // "Most used" sits on top, open, so the everyday fields are one click away.
+  const shown = useMemo(() => {
+    const all = new Set(groups.flatMap((g) => g.items));
+    const most = { group: "Most used", items: MOST_USED.filter((t) => all.has(t)) };
+    const list = (most.items.length && !ql ? [most, ...groups] : groups);
+    return list.map((g) => ({ ...g, items: ql ? g.items.filter((i) => i.toLowerCase().includes(ql)) : g.items })).filter((g) => g.items.length);
+  }, [groups, ql]);
   // paper-true canvas: real physical size → px at 96dpi (1mm = 3.7795px)
   const MM = 3.7795;
   const PRESET_MM: Record<string, [number, number | null]> = { a4: [210, 297], letter: [215.9, 279.4], receipt80: [80, null], receipt58: [58, null] };
@@ -430,7 +442,24 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
                 className="flex-1 w-full bg-slate-900 text-slate-100 font-mono text-xs p-4 outline-none resize-none" />
             </div>
           )}
-          <div className="min-h-full flex justify-center py-8 px-6">
+          <div className="relative min-h-full flex justify-center py-8 px-6">
+            {mode === "edit" && empty && !blankOk && code === null && presets.length > 0 && (
+              <div className="absolute top-20 left-1/2 -translate-x-1/2 z-[5] w-[420px] max-w-[90%] bg-white rounded-2xl border border-slate-200 shadow-clay-drawer p-5">
+                <div className="text-sm font-semibold text-ink-primary">Start from a layout</div>
+                <div className="text-[11px] text-ink-tertiary mb-3">Pick one and change anything you like. Your logo and details fill in automatically.</div>
+                <div className="space-y-1.5">
+                  {[...presets].sort((a, b) => Number(b.doc_type === meta.doc_type) - Number(a.doc_type === meta.doc_type)).map((p) => (
+                    <button key={p.key} onClick={() => { setBlankOk(true); buildDoc(p.key); }} disabled={aiBusy}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors disabled:opacity-60 ${p.doc_type === meta.doc_type ? "border-primary/40 bg-primary/5" : "border-slate-200 hover:border-slate-300"}`}>
+                      <M n="description" c="text-base text-primary" />
+                      <span className="text-sm text-ink-primary flex-1">{p.label}</span>
+                      {p.doc_type === meta.doc_type && <span className="text-[10px] font-semibold text-primary">Suggested</span>}
+                    </button>
+                  ))}
+                </div>
+                <button onClick={() => { setBlankOk(true); focusEditor(); }} className="mt-3 w-full text-center text-xs font-semibold text-ink-secondary hover:text-ink-primary py-1.5">Start with a blank page</button>
+              </div>
+            )}
             <div ref={edRef} contentEditable={mode === "edit"} suppressContentEditableWarning onInput={refreshBlocks} onKeyUp={saveSel} onMouseUp={saveSel}
               className={`doc-canvas bg-white shadow-lg outline-none text-sm text-ink-primary ${mode === "edit" ? "editing" : ""}`}
               style={{ width: pageW, maxWidth: "100%", minHeight: pageMinH, padding: padPx, fontFamily: meta.font_family || "Inter", lineHeight: 1.5, display: mode === "edit" ? "block" : "none" }} />
@@ -452,7 +481,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
               <p className="text-[11px] text-ink-tertiary px-2 pt-1 pb-2">Click a variable to drop it into the page at your cursor.</p>
               {shown.length === 0 && <div className="text-xs text-ink-tertiary px-2 py-3">No matches.</div>}
               {shown.map((g) => {
-                const isOpen = ql ? true : (open[g.group] ?? false);
+                const isOpen = ql ? true : (open[g.group] ?? g.group === "Most used");
                 return (
                   <div key={g.group}>
                     <button type="button" onClick={() => setOpen((o) => ({ ...o, [g.group]: !isOpen }))} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-200/60 text-left"><M n={GROUP_ICON[g.group] || "label"} c="text-[16px] text-ink-tertiary shrink-0" /><span className="text-[11px] font-bold text-ink-secondary uppercase tracking-wide flex-1">{g.group}</span><M n={isOpen ? "expand_less" : "expand_more"} c="text-sm text-ink-tertiary" /></button>

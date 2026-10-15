@@ -115,7 +115,7 @@ table[data-density="compact"] > tbody > tr > td { padding-top: .4rem; padding-bo
 .doc-canvas hr{border:0;border-top:1px solid #e5e7eb;margin:.8em 0}
 .doc-canvas ul{list-style:disc;margin:.4em 0;padding-left:1.4em}
 .doc-canvas table{width:100%;border-collapse:collapse;margin:8px 0}
-.doc-canvas:empty::before{content:"Type your document, or click “Starter layout” to begin…";color:#9ca3af}
+.doc-canvas:empty::before{content:"Type your document, or add a variable from the right…";color:#9ca3af}
 
 /* 144hr — block outlines in edit mode */
 .doc-canvas.editing section[data-block]{outline:1px dashed #dbe1ea;outline-offset:6px;border-radius:2px}
