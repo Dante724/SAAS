@@ -96,10 +96,12 @@ def display_name(item, asset=None) -> str:
 
 
 async def item_names(db: AsyncSession, org_id: str, item_ids) -> dict:
-    """{item_id: (name, sort_order)} for this shop's items only."""
+    """{item_id: (name, sort_order)} for this shop's items only. Empty for a shop outside the
+    eligible industries, so its documents and tracking page never show items (even ones left
+    over from before it changed industry)."""
     from backend.models import Device, OrderItem
     ids = [i for i in set(item_ids or []) if i]
-    if not ids:
+    if not ids or not available(await org_of(db, org_id)):
         return {}
     items = (await db.execute(select(OrderItem).where(
         OrderItem.org_id == org_id, OrderItem.id.in_(ids)))).scalars().all()

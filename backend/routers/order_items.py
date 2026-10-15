@@ -89,6 +89,8 @@ async def list_items(order_id: str, db: AsyncSession = Depends(get_db),
     if on:
         await ma.ensure_primary(db, order)
         await db.commit()
+    if not ma.available(org):   # other industries never see items, not even leftovers
+        return {"available": False, "enabled": False, "items": [], "split_from": None, "split_off": [], "job_unbilled": 0.0}
     return {"available": ma.available(org), "enabled": on, "items": await _list(db, order),
             **(await _links(db, order))}
 
@@ -112,7 +114,7 @@ async def item_candidates(order_id: str, db: AsyncSession = Depends(get_db),
                           current: Employee = Depends(get_current_employee)):
     """The job customer's other items (this shop only) that aren't on the job yet."""
     order = await _order(db, current, order_id)
-    if not order.client_id:
+    if not order.client_id or not ma.enabled(await ma.org_of(db, current.org_id)):
         return {"items": []}
     on_job = select(OrderItem.asset_id).where(OrderItem.org_id == current.org_id, OrderItem.order_id == order.id,
                                               OrderItem.asset_id.isnot(None))

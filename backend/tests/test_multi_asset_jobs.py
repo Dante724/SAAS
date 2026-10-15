@@ -105,15 +105,38 @@ async def test_items_lines_and_outcomes(client):
 
 
 @pytest.mark.asyncio
-async def test_switching_industry_turns_it_off_but_keeps_items(client):
+async def test_switching_industry_hides_items_and_keeps_the_data(client):
     h = await _shop(client)
     await _on(client, h)
-    oid, _, _ = await _job(client, h)
-    await client.post(f"/api/orders/{oid}/items", json={"label": "Grinder"}, headers=h)
+    oid, cid, _ = await _job(client, h)
+    line = {"line_type": "labour", "kind": "custom", "description": "Grinder service", "qty": 1, "unit_price": 40}
+    item = (await client.post(f"/api/orders/{oid}/items", json={"label": "Grinder"}, headers=h)).json()
+    r = await client.post(f"/api/orders/{oid}/lines", json={**line, "order_item_id": item["id"]}, headers=h)
+    assert r.status_code == 201, r.text
+    await client.post("/api/assets", json={"owner_type": "client", "client_id": cid, "brand": "Makita", "serial": "M-1"}, headers=h)
     await client.put("/api/staff/company", json={"industry_template": "auto"}, headers=h)
+    # Other industries never see items: not in the job, not as candidates, not on documents.
     r = (await client.get(f"/api/orders/{oid}/items", headers=h)).json()
-    assert r["enabled"] is False and r["available"] is False and len(r["items"]) == 2
+    assert r["enabled"] is False and r["available"] is False and r["items"] == []
+    assert (await client.get(f"/api/orders/{oid}/items/candidates", headers=h)).json() == {"items": []}
+    html = (await client.post("/api/documents/print-view", json={"body_html": "{All Items Table}", "doc_type": "work_order",
+                                                                  "order_id": oid}, headers=h)).json()["html"]
+    assert "Grinder service" in html and "Whole job" not in html and "Grinder subtotal" not in html
     assert (await client.post(f"/api/orders/{oid}/items", json={"label": "Drill"}, headers=h)).status_code == 409
+    assert (await client.put("/api/staff/company", json={"multi_asset_jobs": True}, headers=h)).status_code == 422
+    # Back to an eligible industry: the items are still there.
+    await client.put("/api/staff/company", json={"industry_template": "tools"}, headers=h)
+    assert len((await client.get(f"/api/orders/{oid}/items", headers=h)).json()["items"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_every_other_industry_is_refused(client):
+    for ind in ("auto", "marine", "powersports", "bike", "fleet_truck", "general"):
+        h = await _shop(client, ind)
+        assert (await client.put("/api/staff/company", json={"multi_asset_jobs": True}, headers=h)).status_code == 422, ind
+        oid, _, _ = await _job(client, h)
+        assert (await client.get(f"/api/orders/{oid}/items", headers=h)).json()["available"] is False
+        assert (await client.post(f"/api/orders/{oid}/items", json={"label": "x"}, headers=h)).status_code == 409
 
 
 @pytest.mark.asyncio
