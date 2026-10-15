@@ -2198,12 +2198,17 @@ function ChecklistTemplateDrawer({ tpl, onClose, onSaved }: { tpl: any | null; o
 
   async function save() {
     if (!name.trim()) { alertDialog("Name the template"); return; }
+    // Items without a label used to be dropped silently, so a template could "save" with no
+    // fields at all and then fail when applied to a work order.
+    const unlabeled = steps.find((st) => st.items.some((i: any) => !i.label.trim()));
+    if (unlabeled) { alertDialog(`Give every item in “${unlabeled.title || "Step"}” a label, or remove it`); return; }
+    if (!steps.some((st) => st.items.length)) { alertDialog("Add at least one item — use “+ Add item” under a step"); return; }
     setBusy(true);
     const body = {
       name: name.trim(), scope, type_ids: scope === "selected" ? typeIds : [],
       steps: steps.map((st) => ({
         title: st.title || "Step", description: null,
-        sections: [{ title: "", allow_notes: false, items: st.items.filter((i: any) => i.label.trim()).map((i: any) => ({
+        sections: [{ title: "", allow_notes: false, items: st.items.map((i: any) => ({
           label: i.label.trim(), field_kind: i.field_kind, required: i.required, client_visible: i.client_visible,
           affects_result: i.affects_result, options: (["dropdown", "multiselect"].includes(i.field_kind) ? i.options.split(",").map((o: string) => o.trim()).filter(Boolean) : []),
         })) }],

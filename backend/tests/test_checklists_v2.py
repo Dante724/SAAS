@@ -159,3 +159,27 @@ async def test_permission_gate_on_templates(client):
     TH = {"Authorization": f"Bearer {tok['access_token']}"}
     r = await client.post("/api/checklist-templates", json=_tpl_payload("X"), headers=TH)
     assert r.status_code == 403
+
+
+# ── a template with nothing to fill in can't be saved (phase 4 bug report) ──────────────
+@pytest.mark.asyncio
+async def test_template_without_fields_is_refused(client, tenant):
+    """Steps saved but every unlabeled item was silently dropped, so applying the template to a
+    work order failed with 422 'This template has no fields'. Saving now says what's missing."""
+    r = await client.post("/api/checklist-templates", json={
+        "name": "Empty intake", "steps": [{"title": "Step 1", "sections": [{"title": "", "items": []}]}]},
+        headers=tenant)
+    assert r.status_code == 422 and "at least one item" in r.text
+    r = await client.post("/api/checklist-templates", json={
+        "name": "Blank label", "steps": [{"title": "Intake", "sections": [{"title": "", "items": [{"label": "  "}]}]}]},
+        headers=tenant)
+    assert r.status_code == 422 and "Intake" in r.text and "label" in r.text
+
+    ok = await client.post("/api/checklist-templates", json={
+        "name": "Real intake", "steps": [{"title": "Intake", "sections": [{"title": "", "items": [{"label": "Screen cracked?"}]}]}]},
+        headers=tenant)
+    assert ok.status_code == 201, ok.text
+    r = await client.put(f"/api/checklist-templates/{ok.json()['id']}", json={
+        "name": "Real intake", "steps": [{"title": "Intake", "sections": [{"title": "", "items": []}]}]},
+        headers=tenant)
+    assert r.status_code == 422
