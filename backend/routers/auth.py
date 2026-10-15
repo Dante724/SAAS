@@ -352,13 +352,26 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
     """Exchange a still-valid token for a fresh one (sliding session for the
-    PWA, which keeps a long-lived session on-device and refreshes on launch)."""
+    PWA, which keeps a long-lived session on-device and refreshes on launch).
+    The original sign-in time travels with it, capping the whole session."""
+    import jwt as _jwt
+    from backend.services.auth import session_expired
+    presented = (request.headers.get("authorization") or "").split(" ", 1)[-1]
+    claims = _jwt.decode(presented, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    auth_time = claims.get("auth_time")
+    if session_expired(auth_time):
+        raise HTTPException(status_code=401, detail="Session expired. Please sign in again.",
+                            headers={"WWW-Authenticate": "Bearer"})
     role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-    token = create_access_token({"sub": current.id, "org_id": current.org_id, "tv": current.token_version or 0})
+    data = {"sub": current.id, "org_id": current.org_id, "tv": current.token_version or 0}
+    if auth_time is not None:
+        data["auth_time"] = int(auth_time)
+    token = create_access_token(data)
     return TokenResponse(
         access_token=token, employee_id=current.id, org_id=current.org_id,
         name=current.name, role=role.name if role else "staff",

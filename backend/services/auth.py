@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 import bcrypt
@@ -40,14 +40,41 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """`auth_time` is when the user actually signed in. /refresh carries it forward, so a
+    session can slide for at most REFRESH_TOKEN_EXPIRE_MINUTES — before, refreshing every day
+    kept one sign-in (or one stolen token) alive forever."""
+    import time
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode.update({"exp": expire})
+    now = int(time.time())        # epoch seconds — JWT NumericDate, timezone-free
+    auth_time = int(to_encode.setdefault("auth_time", now))
+    ttl = int((expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)).total_seconds())
+    session_end = auth_time + settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60
+    to_encode.update({"exp": min(now + ttl, session_end)})
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+def session_expired(auth_time: Optional[int]) -> bool:
+    import time
+    if auth_time is None:
+        return False
+    return time.time() >= int(auth_time) + settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60
 
 # While a user owes 2FA enrollment (their org requires it), only these API paths answer:
 # enough to load who they are, enroll, refresh and sign out.
 MFA_ENROLLMENT_PATHS = ("/api/mfa/", "/api/auth/me", "/api/auth/refresh", "/api/auth/logout")
+
+
+def assert_org_active(org, today=None) -> None:
+    """Suspended or lapsed orgs are locked out of every credential they hold — staff tokens
+    and public-API keys alike."""
+    from datetime import date as _date
+    if org is None:
+        return
+    today = today or _date.today()
+    if org.sub_status == "suspended":
+        raise HTTPException(status_code=403, detail="This account is suspended. Please contact support.")
+    if getattr(org, "sub_end", None) and org.sub_end < today:
+        raise HTTPException(status_code=403, detail="Your subscription has ended. Please contact support to renew.")
 
 
 async def get_current_employee(
@@ -87,11 +114,7 @@ async def get_current_employee(
     today = _date.today()
     org = (await db.execute(select(Organisation).where(
         Organisation.id == employee.org_id))).scalar_one_or_none()
-    if org is not None:
-        if org.sub_status == "suspended":
-            raise HTTPException(status_code=403, detail="This account is suspended. Please contact support.")
-        if getattr(org, "sub_end", None) and org.sub_end < today:
-            raise HTTPException(status_code=403, detail="Your subscription has ended. Please contact support to renew.")
+    assert_org_active(org, today)
     if (employee.access_start and employee.access_start > today) or \
        (employee.access_end and employee.access_end < today):
         raise HTTPException(status_code=403, detail="Your access is outside its allowed dates.")

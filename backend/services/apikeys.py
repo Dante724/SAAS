@@ -57,6 +57,11 @@ async def get_api_principal(
         ApiKey.key_hash == hash_key(token), ApiKey.active == True))).scalar_one_or_none()  # noqa: E712
     if not row:
         raise HTTPException(401, "Invalid or revoked API key")
+    # A suspended or lapsed shop's integrations stop with it (keys used to keep working).
+    from backend.models import Organisation
+    from backend.services.auth import assert_org_active
+    assert_org_active((await db.execute(select(Organisation).where(
+        Organisation.id == row.org_id))).scalar_one_or_none())
     row.last_used_at = datetime.utcnow()
     await db.commit()
     scopes = {s.strip() for s in (row.scopes or "").split(",") if s.strip()}
