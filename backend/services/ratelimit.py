@@ -12,16 +12,22 @@ from fastapi import HTTPException
 from backend.config import settings
 
 _HITS: dict = defaultdict(deque)
-_redis = None   # None = untried, False = unavailable, else a client
+_redis = None          # None = untried / retry due, False = unavailable, else a client
+_redis_retry_at = 0.0  # after a failure, try Redis again at this time (was: never again)
+_REDIS_RETRY_S = 30
+_calls = 0
+_PRUNE_EVERY = 1000
 
 
 def _get_redis():
-    """Lazily connect once. Returns a live client or None (fall back in-process)."""
-    global _redis
-    if _redis is not None:
-        return _redis or None
+    """Connect lazily. Returns a live client or None (fall back in-process). A failure is
+    retried after _REDIS_RETRY_S instead of disabling the shared store for the process lifetime."""
+    global _redis, _redis_retry_at
+    if _redis:
+        return _redis
     if not getattr(settings, "REDIS_URL", ""):
-        _redis = False
+        return None
+    if _redis is False and time.time() < _redis_retry_at:
         return None
     try:
         import redis
@@ -31,8 +37,20 @@ def _get_redis():
         _redis = c
         return c
     except Exception:   # noqa: BLE001 — any failure => in-process fallback
-        _redis = False
+        _redis, _redis_retry_at = False, time.time() + _REDIS_RETRY_S
         return None
+
+
+def _redis_failed():
+    global _redis, _redis_retry_at
+    _redis, _redis_retry_at = False, time.time() + _REDIS_RETRY_S
+
+
+def _prune(now: float) -> None:
+    """Drop keys with no hits in the last hour — one entry per IP/user ever seen otherwise
+    stays in memory for the life of the worker."""
+    for k in [k for k, dq in _HITS.items() if not dq or dq[-1] < now - 3600]:
+        _HITS.pop(k, None)
 
 
 def client_ip(request) -> str:
@@ -67,9 +85,13 @@ def enforce(bucket: str, key: str, limit: int, window_sec: int) -> None:
         except HTTPException:
             raise
         except Exception:   # noqa: BLE001 — Redis hiccup => fall back to in-process
-            pass
+            _redis_failed()
     # in-process sliding window (single instance)
+    global _calls
     now = time.time()
+    _calls += 1
+    if _calls % _PRUNE_EVERY == 0:
+        _prune(now)
     dq = _HITS[(bucket, key)]
     cutoff = now - window_sec
     while dq and dq[0] < cutoff:
