@@ -7,6 +7,7 @@ import uuid
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from backend.models import (
     AssetBrand,
@@ -191,3 +192,66 @@ async def test_new_columns_default_null_for_legacy_records(db):
     # a device created without a template keeps null (renders via legacy fallback)
     assert d.template_key is None
     assert d.asset_group_id is None
+
+
+# ── concurrent seeding ───────────────────────────────────────────────────────
+# Opening Settings › Industry & assets fires several GET /api/settings/asset-* at
+# once and each seeds the active template. Two seeds racing for the same
+# org/template must both succeed and leave exactly one copy of every default.
+async def _assert_single_copy(db, oid, tk):
+    async def dupes(col, *key):
+        return (await db.execute(select(*key, func.count()).where(
+            col.org_id == oid, col.template_key == tk).group_by(*key)
+            .having(func.count() > 1))).all()
+
+    assert await dupes(AssetGroup, AssetGroup.key) == []
+    assert await dupes(AssetBrand, AssetBrand.asset_group_id, AssetBrand.name) == []
+    assert await dupes(AssetModel, AssetModel.brand_id, AssetModel.name) == []
+    assert await dupes(AssetIdentifierRule, AssetIdentifierRule.asset_group_id) == []
+    groups = (await db.execute(select(AssetGroup.key).where(
+        AssetGroup.org_id == oid, AssetGroup.template_key == tk))).scalars().all()
+    assert sorted(groups) == sorted(g["key"] for g in I.TEMPLATES[tk]["groups"])
+
+
+async def test_concurrent_seeds_same_org_template(db):
+    import asyncio
+
+    TestSession = async_sessionmaker(db.bind, expire_on_commit=False)
+    oid = await _org(db)
+    async with TestSession() as s1, TestSession() as s2:
+        await asyncio.gather(I.ensure_industry_seed(s1, oid, only_template="tools"),
+                             I.ensure_industry_seed(s2, oid, only_template="tools"))
+    await _assert_single_copy(db, oid, "tools")
+
+
+async def test_seed_that_lost_the_race_rereads_instead_of_failing(db):
+    """Deterministic replay of the logged 500: the loser reads 'no groups yet',
+    the winner then commits the whole seed, and only then does the loser write."""
+    import asyncio
+
+    TestSession = async_sessionmaker(db.bind, expire_on_commit=False)
+    oid = await _org(db)
+    winner_done = asyncio.Event()
+    async with TestSession() as loser, TestSession() as winner:
+        real_execute = loser.execute
+        first = True
+
+        async def stale_execute(*a, **kw):
+            nonlocal first
+            res = await real_execute(*a, **kw)
+            if first:   # loser has seen the empty directory — now let the winner finish
+                first = False
+                await winner_done.wait()
+            return res
+
+        loser.execute = stale_execute
+
+        async def run_winner():
+            await asyncio.sleep(0)
+            await I.ensure_industry_seed(winner, oid, only_template="tools")
+            winner_done.set()
+
+        _, lost = await asyncio.gather(run_winner(),
+                                       I.ensure_industry_seed(loser, oid, only_template="tools"))
+    assert lost == {"groups": 0, "rules": 0, "brands": 0, "models": 0}
+    await _assert_single_copy(db, oid, "tools")
