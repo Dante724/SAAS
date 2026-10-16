@@ -904,17 +904,19 @@ async def profit_and_loss(
     date_to: Optional[str] = None,
     location_id: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_see_profit")),
 ):
     """Owner P&L: net revenue − parts COGS − operating expenses, org-scoped."""
+    from backend.services.auth import check_location_access
     from backend.services.finance_pnl import compute_pnl
+    await check_location_access(db, current, location_id)
     return await compute_pnl(db, current.org_id, date_from, date_to, location_id)
 
 
 @router.get("/reports/summary")
 async def finance_summary(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_finance")),
 ):
     total_revenue = (await db.execute(
         select(func.sum(Invoice.total)).where(Invoice.org_id == current.org_id, Invoice.status == "paid")

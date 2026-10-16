@@ -37,7 +37,8 @@ async def _can_override_reservation(db, current) -> bool:
         return True
     from backend.models import Role
     role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-    return bool(role and (role.permissions or {}).get("can_override_reservation") is True)
+    from backend.services.permissions import role_allows
+    return bool(role and role_allows(role, "can_override_reservation"))
 
 
 # ─────────────────────────────── SALES ───────────────────────────────

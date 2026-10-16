@@ -347,6 +347,7 @@ async def track(token: str, db: AsyncSession = Depends(get_db)):
         "fx_rate": _fx,
         "total_converted": q2((order.total or 0) * _fx) if _fx else order.total,
         "status": order.status,
+        "is_estimate": bool(getattr(order, "is_estimate", False)),
         "stage_label": _label(order.status),
         "stage_index": stage_index,
         "stopped": stopped,

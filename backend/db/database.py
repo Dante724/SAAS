@@ -201,6 +201,18 @@ async def init_db():
             await _legacy.convert(session, oid)
         await session.commit()
 
+    # Roles become explicit allow-lists (new permissions start off). Snapshot any legacy role
+    # so it grants exactly what it granted before. Idempotent. In production the equivalent
+    # runs inside Alembic migration rp144p8.
+    from sqlalchemy import select as _sel
+
+    from backend.models import Role as _Role
+    from backend.services.permissions import make_explicit as _make_explicit
+    async with AsyncSessionLocal() as session:
+        changed = [r for r in (await session.execute(_sel(_Role))).scalars().all() if _make_explicit(r)]
+        if changed:
+            await session.commit()
+
     # 144an — seed the manual workflow stage for POs created before the field existed, mapping
     # each PO's receipt state to a sensible starting stage. Idempotent (only NULL rows). In
     # production the equivalent runs inside the matching Alembic migration.

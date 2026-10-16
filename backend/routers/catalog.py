@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 from backend.db.database import get_db
 from backend.models import Employee, Part, Service
 from backend.services.auth import get_current_employee, require_perm
+from backend.services.redact import can_see_costs
 
 router = APIRouter(prefix="/api/catalog", tags=["catalog"])
 
@@ -119,7 +120,7 @@ async def create_service(
         org_id=current.org_id, name=data.name, description=(data.description or "")[:2000],
         category=data.category, category_id=data.category_id,
         is_labor=data.is_labor, unit=(data.unit or "pc")[:24],
-        price=data.price, cost_price=data.cost_price,
+        price=data.price, cost_price=data.cost_price if await can_see_costs(db, current) else 0,
         duration_min=max(0, data.duration_min or 0), flat_rate=data.flat_rate,
         warranty_days=data.warranty_days, barcode=data.barcode,
         bookable=data.bookable,
@@ -148,7 +149,8 @@ async def update_service(
     s.is_labor = data.is_labor
     s.unit = (data.unit or "pc")[:24]
     s.price = data.price
-    s.cost_price = data.cost_price
+    if "cost_price" in data.model_fields_set and await can_see_costs(db, current):
+        s.cost_price = data.cost_price
     s.duration_min = max(0, data.duration_min or 0)
     s.flat_rate = data.flat_rate
     s.warranty_days = data.warranty_days

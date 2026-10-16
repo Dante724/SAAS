@@ -463,7 +463,8 @@ async def bulk_action(
         if current.role_id:
             from backend.models import Role
             _role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-            if _role and (_role.permissions or {}).get("can_delete_orders") is False:
+            from backend.services.permissions import role_allows as _ra
+            if _role is None or not _ra(_role, "can_delete_orders"):
                 raise HTTPException(403, "Your role does not allow deleting orders")
         reason = (data.reason or "Bulk delete").strip()
         done, skipped = 0, []
@@ -633,7 +634,10 @@ async def create_order(
     stock_writeoffs = []  # (part_id, qty, line_obj) to apply after order flush
     from backend.routers.pricing import evaluate_line_margin
     _perms_create = await _order_perms(db, current)
+    _hide_cost = bool(current.role_id) and not _perms_create.get("can_view_purchase_price")
     for li in data.lines:
+        if _hide_cost:
+            li.cost_price = await _catalog_cost(db, current.org_id, li.kind, li.ref_id)
         await _apply_client_discount(db, current.org_id, data.client_id, li)
         await _guard_discount_approval(db, current.org_id, _perms_create, li.discount, li.discount_type, is_owner=not current.role_id,
                                           base=(li.qty or 0) * (li.unit_price or 0))
@@ -795,7 +799,8 @@ async def create_order(
     if current.role_id:
         from backend.models import Role
         role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-        perms = (role.permissions or {}) if role else {}
+        from backend.services.permissions import effective_permissions as _eff
+        perms = _eff(role) if role else {c: False for c in _all_codes()}
     can_add_without_stock = bool(perms.get("can_add_without_stock", True))  # default allow unless explicitly false
 
     # write off products from stock at order creation; if not enough on hand
@@ -3007,12 +3012,19 @@ async def _recalc_order(db, order):
     order.total = total
 
 
+def _all_codes():
+    from backend.services.permissions import ALL_CODES
+    return ALL_CODES
+
+
 async def _order_perms(db, current):
+    """The role's effective permissions ({code: bool} for every catalogue code); {} = owner."""
     perms = {}
     if current.role_id:
         from backend.models import Role
+        from backend.services.permissions import effective_permissions
         role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-        perms = (role.permissions or {}) if role else {}
+        perms = effective_permissions(role) if role else {c: False for c in _all_codes()}
     return perms
 
 
@@ -3064,6 +3076,16 @@ async def _validate_line_assignment(db, org_id, *, technician_id=None, co_techni
             raise HTTPException(422, "A selected technician doesn't belong to this organization.")
 
 
+
+async def _catalog_cost(db, org_id, kind, ref_id) -> float:
+    """The catalog cost of the service/product a line points at (0 when it points at nothing)."""
+    if not ref_id or kind not in ("service", "product"):
+        return 0.0
+    from backend.models import Part, Service as _Svc
+    model = _Svc if kind == "service" else Part
+    row = (await db.execute(select(model.cost_price).where(model.id == ref_id, model.org_id == org_id))).scalar_one_or_none()
+    return float(row or 0)
+
 @router.post("/{order_id}/lines", status_code=201)
 async def add_line(
     order_id: str,
@@ -3097,6 +3119,10 @@ async def add_line(
                 data.qty = data.booked_hours
 
     perms = await _order_perms(db, current)
+    # Someone who can't see costs never saw the catalog cost, so whatever they sent is ignored
+    # and the line takes the catalog's cost (0 for a custom line).
+    if current.role_id and not perms.get("can_view_purchase_price"):
+        data.cost_price = await _catalog_cost(db, current.org_id, data.kind, data.ref_id)
 
     # Build 126 (Orderry parity): a custom line can be saved to the catalog as a reusable
     # service or product, or kept as a one-off for this order only. When saving, we create
@@ -3433,6 +3459,8 @@ async def update_line(
     if not line:
         raise HTTPException(404, "Line not found")
     payload = data.model_dump(exclude_unset=True)
+    if current.role_id and not (await _order_perms(db, current)).get("can_view_purchase_price"):
+        payload.pop("cost_price", None)
     if "order_item_id" in payload:
         payload["order_item_id"] = payload["order_item_id"] or None
         if payload["order_item_id"]:
@@ -3456,8 +3484,9 @@ async def update_line(
             perms = {}
             if current.role_id:
                 from backend.models import Role
+                from backend.services.permissions import effective_permissions as _eff
                 role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-                perms = (role.permissions or {}) if role else {}
+                perms = _eff(role) if role else {c: False for c in _all_codes()}
             await _maybe_deduct(db, order, line, delta, perms, current)
         else:
             dec = -delta

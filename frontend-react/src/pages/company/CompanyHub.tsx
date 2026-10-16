@@ -99,14 +99,16 @@ function Dashboard() {
   };
   const k = d?.kpis ?? {}, t = d?.today ?? {}, m = d?.monthly ?? {};
   const isZero = (n?: number) => !n;
+  // A role that can't see money gets null for it from the server; those tiles are left out.
+  const has = (v: unknown) => v !== null && v !== undefined;
   const stats: SummaryStat[] = [
     { label: "New jobs today", value: String(t.work_orders ?? 0), onClick: () => navigate("/orders") },
-    { label: "Paid today", value: money(t.revenue), hint: t.refunds ? `${money(t.refunds)} refunded` : undefined, onClick: () => navigate("/finance") },
+    ...(has(t.revenue) ? [{ label: "Paid today", value: money(t.revenue), hint: t.refunds ? `${money(t.refunds)} refunded` : undefined, onClick: () => navigate("/finance") }] : []),
     { label: "Waiting to start", value: String(k.new ?? 0), onClick: () => navigate("/orders?status=new") },
     { label: "Urgent", value: String(k.urgent ?? 0), onClick: () => navigate("/orders?priority=urgent") },
     { label: "Late", value: String(k.overdue ?? 0), tone: "bad", zero: isZero(k.overdue), onClick: () => navigate("/orders") },
-    { label: "To collect", value: money(k.receivables), onClick: () => navigate("/invoices") },
-    { label: "In your accounts", value: money(k.total_money), hint: `${money(k.cash)} cash · ${money(k.cashless)} bank`, onClick: () => navigate("/finance") },
+    ...(has(k.receivables) ? [{ label: "To collect", value: money(k.receivables), onClick: () => navigate("/invoices") }] : []),
+    ...(has(k.total_money) ? [{ label: "In your accounts", value: money(k.total_money), hint: `${money(k.cash)} cash · ${money(k.cashless)} bank`, onClick: () => navigate("/finance") }] : []),
   ];
   return (
     <div className="space-y-6">
@@ -169,9 +171,9 @@ function Dashboard() {
           <div className="grid grid-cols-2 gap-4 text-sm">
             <Metric l="Jobs in" v={String(m.work_orders_created ?? 0)} />
             <Metric l="Jobs finished" v={String(m.work_orders_won ?? 0)} />
-            <Metric l="Paid" v={money(m.revenue)} />
+            {m.revenue !== null && m.revenue !== undefined && <Metric l="Paid" v={money(m.revenue)} />}
             <Metric l="Finished share" v={`${m.conversion ?? 0}%`} />
-            <Metric l="Average job" v={money(m.avg_work_order)} />
+            {m.avg_work_order !== null && m.avg_work_order !== undefined && <Metric l="Average job" v={money(m.avg_work_order)} />}
           </div>
         </div>
         <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-5">

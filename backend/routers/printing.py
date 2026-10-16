@@ -475,7 +475,8 @@ async def print_payroll_statement(
         from backend.models import Role
         role = (await db.execute(select(Role).where(
             Role.id == current.role_id))).scalar_one_or_none()
-        if (role.permissions or {}).get("can_manage_payroll") is False if role else False:
+        from backend.services.permissions import role_allows as _ra
+        if role is None or not _ra(role, "can_manage_payroll"):
             can_manage = False
     if current.id != employee_id and not can_manage:
         raise HTTPException(403, "You can only print your own payroll statement")

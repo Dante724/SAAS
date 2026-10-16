@@ -83,16 +83,6 @@ class RoleIn(BaseModel):
     payroll_visibility_days: Optional[int] = None
 
 
-def _apply_role_scope(r: "Role", data: "RoleIn") -> None:
-    for field, value in (("contact_scope", data.contact_scope),
-                         ("order_scope", data.order_scope),
-                         ("warehouse_scope", data.warehouse_scope)):
-        if value not in ("all", "own", "selected"):
-            raise HTTPException(422, f"{field} must be all|own|selected")
-        setattr(r, field, value)
-    r.warehouse_ids = data.warehouse_ids or None
-    r.payroll_visibility_days = data.payroll_visibility_days
-
 class TaskIn(BaseModel):
     title: str
     description: Optional[str] = None
@@ -143,7 +133,8 @@ async def _denied_for_role(db: AsyncSession, org_id: str, role_id: Optional[str]
     role = (await db.execute(select(Role).where(Role.id == role_id, Role.org_id == org_id))).scalar_one_or_none()
     if not role:
         raise HTTPException(400, "Unknown role")
-    return {k for k, v in (role.permissions or {}).items() if v is False}
+    from backend.services.permissions import ALL_CODES, role_allows
+    return {c for c in ALL_CODES if not role_allows(role, c)}
 
 
 async def _assert_can_assign_role(db: AsyncSession, current: Employee, role_id: Optional[str]) -> None:
@@ -437,18 +428,17 @@ async def list_roles(
                        "employee_count": counts.get(r.id, 0)} for r in roles]}
 
 
+# Role create/update share the role editor's rules (routers/rbac.py): explicit allow-lists,
+# no granting what you don't have, no loosening your own limits, no editing your own role.
 @router.post("/roles", status_code=201)
 async def create_role(
     data: RoleIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_roles")),
 ):
-    r = Role(org_id=current.org_id, name=data.name, permissions=data.permissions)
-    _apply_role_scope(r, data)
-    db.add(r)
-    await db.commit()
-    await db.refresh(r)
-    return {"id": r.id, "name": r.name}
+    from backend.routers import rbac as _rbac
+    r = await _rbac.create_role(_rbac.RoleIn(**data.model_dump(exclude_unset=True)), db, current)
+    return {"id": r["id"], "name": r["name"]}
 
 
 @router.put("/roles/{role_id}")
@@ -457,13 +447,8 @@ async def update_role(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_roles")),
 ):
-    r = (await db.execute(select(Role).where(Role.id == role_id, Role.org_id == current.org_id))).scalar_one_or_none()
-    if not r:
-        raise HTTPException(404, "Role not found")
-    r.name = data.name
-    r.permissions = data.permissions
-    _apply_role_scope(r, data)
-    await db.commit()
+    from backend.routers import rbac as _rbac
+    await _rbac.update_role(role_id, _rbac.RoleIn(**data.model_dump(exclude_unset=True)), db, current)
     return {"ok": True}
 
 

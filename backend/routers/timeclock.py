@@ -514,9 +514,9 @@ async def _can_manage(db: AsyncSession, emp: Employee) -> bool:
     if not emp.role_id:
         return True
     from backend.models import Role
+    from backend.services.permissions import role_allows
     role = (await db.execute(select(Role).where(Role.id == emp.role_id))).scalar_one_or_none()
-    perms = (role.permissions or {}) if role else {}
-    return perms.get("can_manage_payroll") is not False
+    return role is not None and role_allows(role, "can_manage_payroll")
 
 
 class ManualIn(BaseModel):

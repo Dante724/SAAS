@@ -1,9 +1,9 @@
 """RBAC v2 — the permission catalog (grounded in the Orderry roles research).
 
-Backward compatible: Role.permissions stays a flat {perm_key: bool} dict and
-require_perm keeps default-allow semantics (deny only on explicit False). This
-module adds a *structured catalog* for the UI (grouped, searchable) plus role
-templates and a location-scope helper. No behaviour change for existing roles.
+Role.permissions is a flat {perm_key: bool} dict. Roles are explicit allow-lists
+(perms_explicit): a code is granted only when set to True, so new codes start off.
+Legacy roles are snapshotted to an allow-list that grants exactly what they granted
+before (see make_explicit), so existing roles don't change.
 """
 import json
 
@@ -38,6 +38,9 @@ CATALOG = {
         ("can_manage_shared_filters", "Create, edit and delete shared filters"),
         ("can_add_custom_service", "Add custom services outside Catalog"),
         ("can_add_custom_product", "Add custom products outside Catalog"),
+        ("can_add_services", "Add services to a job"),
+        ("can_add_products", "Add products and parts to a job"),
+        ("can_approve_discount", "Approve discounts above the shop's limit"),
         ("can_add_without_stock", "Add products without deduction"),
         ("can_create_payment_links", "Create payment links"),
     ],
@@ -122,12 +125,30 @@ CATALOG = {
         ("can_delete_orders", "Delete and archive work orders"),
         ("can_recommend", "Create recommendations on work orders"),
         ("can_publish_recommend", "Send recommendations to clients"),
+        ("can_approve_rec_for_customer", "Approve recommendations on the customer's behalf (by phone)"),
         ("can_reply_customer", "Reply to customers from the inbox"),
     ],
 }
 
 # All valid codes (flat), for validation.
 ALL_CODES = {code for group in CATALOG.values() for code, _ in group}
+
+# Listed in the catalogue but not wired to any screen yet: switching them off does nothing
+# today, so the role editor shows them as "coming soon". tests/test_permission_catalog.py keeps
+# this list honest both ways (every code here is unchecked, every unchecked code is here).
+NOT_YET_ENFORCED = {
+    "can_set_discount_type", "can_set_cost_price", "display_in_managers", "display_in_assignees",
+    "can_see_asset_cost", "can_view_own_compensation", "can_create_estimates", "can_delete_tickets",
+    "can_view_asset_info", "can_view_item_prices", "can_view_invoices_tab",
+    "can_edit_closed_ticket", "can_manage_shared_filters", "can_add_custom_service",
+    "can_add_custom_product", "can_create_payment_links", "can_create_purchase_orders",
+    "can_view_labors", "can_delete_products", "can_track_serials", "can_manage_bundles",
+    "can_delete_sales", "can_sell_services", "can_edit_sale_price", "can_export_sales",
+    "can_view_invoices", "can_delete_invoices", "can_edit_issued_invoices", "can_create_incomes",
+    "can_retroactive_cash", "can_view_cashflow_any_period", "can_manage_accounts",
+    "can_create_returns", "can_delete_refunds", "can_accrue_payroll", "can_create_penalties",
+    "can_create_bonuses", "can_export_payroll",
+}
 
 # Seed templates (deny-lists per template; anything not listed = allowed).
 TEMPLATES = {
@@ -142,11 +163,57 @@ TEMPLATES = {
 }
 
 
+# Codes that were always opt-in (only an explicit True grants them), even for legacy roles.
+OPT_IN = {"can_override_reservation"}
+
+
 def role_allows(role, perm_key: str) -> bool:
-    """Deny-wins check against a flat {code: bool} permissions dict. Default-allow
-    for unknown/omitted keys (preserves legacy behaviour)."""
-    perms = (role.permissions or {}) if role else {}
+    """The one permission check. No role (the owner) = everything.
+
+    Explicit roles (perms_explicit) are default-deny: only a code set to True is granted, so
+    a permission added later stays off until someone turns it on. Legacy roles keep the old
+    deny-wins rule (granted unless set to False) until they're snapshotted."""
+    if not role:
+        return True
+    perms = role.permissions or {}
+    if not getattr(role, "perms_explicit", False) and perms.get("all") == "write":
+        return True               # the shop creator's legacy "admin" role: everything
+    if getattr(role, "perms_explicit", False) or perm_key in OPT_IN:
+        return perms.get(perm_key) is True
     return perms.get(perm_key) is not False
+
+
+def effective_permissions(role) -> dict:
+    """{code: bool} for every catalogue code, as role_allows sees it."""
+    return {code: role_allows(role, code) for code in sorted(ALL_CODES)}
+
+
+def explicit_permissions(role) -> dict:
+    """Snapshot a role into an allow-list that grants exactly what it grants today."""
+    return effective_permissions(role)
+
+
+def full_access_permissions() -> dict:
+    """Every code granted, opt-in ones included (the shop creator's admin role)."""
+    return {code: True for code in ALL_CODES}
+
+
+def make_explicit(role) -> bool:
+    """Convert a legacy role in place (idempotent). Returns True if it changed."""
+    if getattr(role, "perms_explicit", False):
+        return False
+    role.permissions = explicit_permissions(role)
+    role.perms_explicit = True
+    return True
+
+
+def new_role_permissions(template: str | None = None, overrides: dict | None = None) -> dict:
+    """Permissions for a role created now: every current code on (except the opt-in ones),
+    then the template's denies, then what the editor set."""
+    perms = {code: code not in OPT_IN for code in ALL_CODES}
+    perms.update(TEMPLATES.get(template or "", {}))
+    perms.update({k: bool(v) for k, v in (overrides or {}).items()})
+    return perms
 
 
 def in_location_scope(role, location_id) -> bool:

@@ -230,6 +230,10 @@ class Role(Base):
     home_feed_sources: Mapped[Optional[dict]] = mapped_column(JSON)   # list of feed signal keys this role sees on Home (null/empty = all)
     home_route: Mapped[Optional[str]] = mapped_column(String(40))     # landing page for this role (e.g. "/my-work"); null = Home ("/")
     permissions: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
+    # True once every permission is written out explicitly (allow-list). Explicit roles are
+    # default-deny: a permission added to the catalogue later stays off until someone turns
+    # it on. Legacy roles (False) keep default-allow until snapshotted (services/permissions).
+    perms_explicit: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     employees: Mapped[list["Employee"]] = relationship(back_populates="role")
 
 

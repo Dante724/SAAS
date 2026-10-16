@@ -13,6 +13,7 @@ from backend.models import Employee, Part, StockLevel, StockMovement
 from backend.services import stock_posting
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.numbering import next_number
+from backend.services.redact import can_see_costs, drop_cost_fields
 
 router = APIRouter(prefix="/api/inventory", tags=["inventory"])
 
@@ -164,7 +165,10 @@ async def create_part(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_products")),
 ):
-    part = Part(org_id=current.org_id, **data.model_dump())
+    payload = data.model_dump()
+    if not await can_see_costs(db, current):
+        drop_cost_fields(payload)
+    part = Part(org_id=current.org_id, **payload)
     db.add(part)
     await db.commit()
     await db.refresh(part)
@@ -196,7 +200,10 @@ async def update_part(
         raise HTTPException(404, "Part not found")
     # exclude_unset so a client that omits a field (e.g. an older bundle without weight)
     # leaves it untouched instead of nulling it.
-    for k, v in data.model_dump(exclude_unset=True).items():
+    payload = data.model_dump(exclude_unset=True)
+    if not await can_see_costs(db, current):
+        drop_cost_fields(payload)
+    for k, v in payload.items():
         setattr(part, k, v)
     await db.commit()
     return {"ok": True}
@@ -1323,7 +1330,8 @@ async def send_po(
     if thr and float(po.total or 0) > thr and current.role_id:
         from backend.models import Role
         role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-        if role and (role.permissions or {}).get("can_manage_settings") is False:
+        from backend.services.permissions import role_allows as _ra
+        if role is None or not _ra(role, "can_manage_settings"):
             raise HTTPException(403, f"PO total {float(po.total or 0):g} is over the approval limit "
                                      f"of {thr:g} — a manager must send it.")
     sup = (await db.execute(select(Supplier).where(Supplier.id == po.supplier_id))).scalar_one_or_none()
@@ -1974,14 +1982,14 @@ async def reorder_digest(
     title = f"{len(items)} product{'' if len(items) == 1 else 's'} to reorder (~{total})"
     body = f"Soonest to run out: {top}." if top else "Review the reorder forecast in Inventory."
     # recipients: owners (no role) + roles that aren't explicitly denied inventory
-    roles = {r.id: (r.permissions or {}) for r in (await db.execute(
+    from backend.services.permissions import role_allows as _ra
+    roles = {r.id: r for r in (await db.execute(
         select(Role).where(Role.org_id == current.org_id))).scalars().all()}
     emps = (await db.execute(select(Employee).where(
         Employee.org_id == current.org_id, Employee.active == True))).scalars().all()  # noqa: E712
     sent = 0
     for e in emps:
-        perms = roles.get(e.role_id, {}) if e.role_id else {}
-        if perms.get("can_manage_inventory") is False:
+        if e.role_id and (e.role_id not in roles or not _ra(roles[e.role_id], "can_manage_inventory")):
             continue
         n = await push.notify(db, org_id=current.org_id, employee_id=e.id,
                               kind="inventory.reorder", title=title, body=body,

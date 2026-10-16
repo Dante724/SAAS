@@ -236,7 +236,8 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
         allowed_actions=list(_WH_ACTIONS)))
     await db.flush()
 
-    admin_role = Role(org_id=org.id, name="admin", permissions={"all": "write"})
+    from backend.services.permissions import full_access_permissions
+    admin_role = Role(org_id=org.id, name="admin", permissions=full_access_permissions(), perms_explicit=True)
     db.add(admin_role)
     await db.flush()
 
@@ -535,7 +536,8 @@ async def me(current: Employee = Depends(get_current_employee),
             Role.id == current.role_id))).scalar_one_or_none()
         if role:
             role_name = role.name
-            permissions = role.permissions or {}
+            from backend.services.permissions import effective_permissions
+            permissions = effective_permissions(role)
             home_route = getattr(role, "home_route", None) or None
     return {
         "id": current.id,

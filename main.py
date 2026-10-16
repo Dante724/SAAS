@@ -148,6 +148,10 @@ app = FastAPI(
     **_docs_kwargs,
 )
 
+# Innermost: cost/margin fields leave the server only for roles allowed to see them.
+from backend.core.cost_redaction import CostRedactionMiddleware  # noqa: E402
+
+app.add_middleware(CostRedactionMiddleware)
 app.add_middleware(RequestContextMiddleware)
 from backend.core.observability import MetricsMiddleware, RateLimitMiddleware, SecurityHeadersMiddleware
 

@@ -14,7 +14,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Employee, Role
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.permissions import ALL_CODES, CATALOG, TEMPLATES
+from backend.services.permissions import (
+    ALL_CODES,
+    CATALOG,
+    NOT_YET_ENFORCED,
+    TEMPLATES,
+    make_explicit,
+    new_role_permissions,
+    role_allows,
+)
 
 router = APIRouter(prefix="/api/settings/rbac", tags=["settings"])
 
@@ -22,7 +30,10 @@ router = APIRouter(prefix="/api/settings/rbac", tags=["settings"])
 @router.get("/catalog")
 async def permission_catalog(current: Employee = Depends(get_current_employee)):
     """Grouped permission catalog for the role-editor UI (searchable matrix)."""
-    return {"catalog": {group: [{"code": code, "label": label} for code, label in perms]
+    # `enforced: false` = listed for completeness but not wired to any screen yet; the role
+    # editor shows it as "coming soon" so switching it off isn't mistaken for protection.
+    return {"catalog": {group: [{"code": code, "label": label, "enforced": code not in NOT_YET_ENFORCED}
+                                for code, label in perms]
                         for group, perms in CATALOG.items()},
             "templates": list(TEMPLATES.keys())}
 
@@ -93,13 +104,63 @@ def _validate(perms: dict):
         raise HTTPException(422, f"Unknown permission codes: {sorted(unknown)}")
 
 
+# ── No self-widening ──────────────────────────────────────────────────────────
+# Whoever edits roles (anyone but the owner) can only hand out what they have themselves,
+# can't loosen record/location limits they're under, and can't edit their own role.
+_NARROW = {"own", "selected"}
+
+
+async def _editor_role(db: AsyncSession, current: Employee) -> Optional[Role]:
+    if not current.role_id:
+        return None                 # the owner
+    role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
+    if role is None:
+        raise HTTPException(403, "Your role is missing; ask the owner")
+    return role
+
+
+def _assert_scope_not_wider(editor: Role, data: "RoleIn") -> None:
+    for field in ("order_scope", "contact_scope", "warehouse_scope", "location_scope"):
+        if getattr(editor, field, "all") in _NARROW and getattr(data, field, "all") not in _NARROW:
+            raise HTTPException(403, f"You can't give a role wider access than your own ({field.replace('_', ' ')})")
+    if getattr(editor, "location_scope", "all") == "selected":
+        mine = set(json.loads(editor.location_ids or "[]"))
+        if not set(data.location_ids or []) <= mine:
+            raise HTTPException(403, "You can't give a role locations you don't have")
+
+
+async def guard_role_change(db: AsyncSession, current: Employee, role: Optional[Role],
+                            new_perms: dict, data: Optional["RoleIn"] = None) -> dict:
+    """Check (and for a new role, cap) a role change. Returns the permissions to save."""
+    editor = await _editor_role(db, current)
+    if editor is None:
+        return new_perms
+    if role is not None and role.id == editor.id:
+        raise HTTPException(403, "You can't change your own role. Ask the owner or another manager.")
+    held = {c for c in ALL_CODES if role_allows(editor, c)}
+    if role is None:
+        # A new role: anything the editor doesn't have is simply left off.
+        new_perms = {c: (v and c in held) for c, v in new_perms.items()}
+    else:
+        before = {c for c in ALL_CODES if role_allows(role, c)}
+        added = {c for c, v in new_perms.items() if v and c not in before}
+        beyond = sorted(added - held)
+        if beyond:
+            raise HTTPException(403, f"You can't grant permissions you don't have: {', '.join(beyond)}")
+    if data is not None:
+        _assert_scope_not_wider(editor, data)
+    return new_perms
+
+
 @router.post("/roles", status_code=201)
 async def create_role(data: RoleIn, db: AsyncSession = Depends(get_db),
                       current: Employee = Depends(require_perm("can_manage_roles"))):
-    perms = dict(TEMPLATES.get(data.template, {})) if data.template else {}
-    perms.update(data.permissions)
-    _validate(perms)
-    r = Role(org_id=current.org_id, name=data.name, permissions=perms,
+    _validate(data.permissions)
+    if data.template and data.template not in TEMPLATES:
+        raise HTTPException(422, f"Unknown template. Valid: {list(TEMPLATES)}")
+    perms = new_role_permissions(data.template, data.permissions)
+    perms = await guard_role_change(db, current, None, perms, data)
+    r = Role(org_id=current.org_id, name=data.name, permissions=perms, perms_explicit=True,
              location_scope=data.location_scope,
              location_ids=json.dumps(data.location_ids) if data.location_ids else None)
     _apply_scope(r, data)
@@ -125,8 +186,13 @@ async def update_role(role_id: str, data: RoleIn, db: AsyncSession = Depends(get
         data = RoleIn(**{**data.model_dump(), **missing})
     if data.location_scope not in ("all", "selected"):
         raise HTTPException(422, "location_scope must be all|selected")
+    # Codes the editor didn't send keep their current value (the role is an explicit allow-list).
+    make_explicit(r)
+    merged = {**(r.permissions or {}), **{k: bool(v) for k, v in data.permissions.items()}}
+    merged = await guard_role_change(db, current, r, merged, data)
     r.name = data.name
-    r.permissions = data.permissions
+    r.permissions = merged
+    r.perms_explicit = True
     r.location_scope = data.location_scope
     r.location_ids = json.dumps(data.location_ids) if data.location_ids else None
     _apply_scope(r, data)

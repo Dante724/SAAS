@@ -236,8 +236,51 @@ async def delete_recommendation(
     current: Employee = Depends(require_perm("can_recommend")),
 ):
     r = await _rec(db, current.org_id, order_id, rec_id)
+    if r.status == "approved":
+        # The approved work is already on the job (and maybe invoiced); deleting the
+        # recommendation would leave that line with no record of who agreed to it.
+        raise HTTPException(409, "The customer already approved this. Remove the line from the job instead.")
     await db.delete(r)
     await db.commit()
+
+
+class ApproveForCustomerIn(BaseModel):
+    how: str = "phone"            # phone | in_person
+    customer_name: Optional[str] = None
+
+
+@router.post("/{order_id}/recommendations/{rec_id}/approve-for-customer")
+async def approve_for_customer(
+    order_id: str,
+    rec_id: str,
+    data: ApproveForCustomerIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_approve_rec_for_customer")),
+):
+    """The customer said yes on the phone or at the counter: staff record it. Logged with who
+    took the approval and how, so it never reads as the customer clicking it themselves."""
+    if data.how not in ("phone", "in_person"):
+        raise HTTPException(422, "how must be phone|in_person")
+    order = await _order(db, current.org_id, order_id)
+    r = (await db.execute(select(Recommendation).where(
+        Recommendation.id == rec_id, Recommendation.org_id == current.org_id,
+        Recommendation.order_id == order_id).with_for_update())).scalar_one_or_none()
+    if not r:
+        raise HTTPException(404, "Recommendation not found")
+    if r.status not in ("draft", "sent", "declined"):
+        raise HTTPException(409, "This recommendation was already approved")
+    line = await approve_recommendation(db, r)
+    who = (data.customer_name or "").strip()[:120] or "Customer"
+    r.decided_by_name = f"{who}, {'by phone' if data.how == 'phone' else 'in person'} (taken by {current.name})"[:200]
+    r.decline_reason = None
+    r.remind_after = None
+    order.total = q2(float(order.total or 0) + float(line.total or 0))
+    from backend.services import audit
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="rec.approve_for_customer",
+                       entity_type="recommendation", entity_id=r.id, diff={"how": data.how, "name": who})
+    await db.commit()
+    await db.refresh(r)
+    return serialize_rec(r)
 
 
 class ReplyIn(BaseModel):

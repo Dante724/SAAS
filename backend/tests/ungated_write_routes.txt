@@ -96,10 +96,6 @@ POST /api/clients/{client_id}/devices [staff]
 POST /api/clients/{client_id}/portal-link [staff]
 # comms
 POST /api/comms/calls/{call_id}/ai [staff]
-# custom-reports
-POST /api/custom-reports [staff]
-DELETE /api/custom-reports/{rid} [staff]
-PUT /api/custom-reports/{rid} [staff]
 # documents
 POST /api/documents/ai-generate [staff]
 POST /api/documents/preview [staff]

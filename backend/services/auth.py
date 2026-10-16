@@ -98,6 +98,9 @@ async def get_current_employee(
     employee = result.scalar_one_or_none()
     if employee is None or not employee.active:
         raise credentials_exception
+    # Remembered for response-level rules (cost redaction in main.py) without re-reading the token.
+    request.state.employee_id = employee.id
+    request.state.employee_role_id = employee.role_id
     # Lost-device logout: a token carrying a stale version is rejected. Tokens
     # minted before this feature have no "tv" claim and stay valid until expiry.
     tv = payload.get("tv")
@@ -128,13 +131,16 @@ async def get_current_employee(
 
 
 async def has_perm(db: AsyncSession, employee: Employee, perm_key: str) -> bool:
-    """Default-allow: False only when the employee's role explicitly sets the permission to
-    False. Employees with no role (org owners) have every permission."""
+    """Does this person's role grant the permission? (services/permissions.role_allows.)
+    Employees with no role (org owners) have every permission."""
     if not employee.role_id:
         return True
     from backend.models import Role
+    from backend.services.permissions import role_allows
     role = (await db.execute(select(Role).where(Role.id == employee.role_id))).scalar_one_or_none()
-    return ((role.permissions or {}) if role else {}).get(perm_key) is not False
+    if role is None:
+        return False          # a dangling role id never fails open
+    return role_allows(role, perm_key)
 
 
 async def assert_perm(db: AsyncSession, employee: Employee, perm_key: str) -> None:
@@ -145,10 +151,8 @@ async def assert_perm(db: AsyncSession, employee: Employee, perm_key: str) -> No
 
 
 def require_perm(perm_key: str):
-    """Dependency factory for role-based gating. Default-allow (matching the
-    existing can_add_without_stock semantics): the action is blocked only when
-    the employee's role explicitly sets the permission to False. Employees with
-    no role (org owners) are always allowed."""
+    """Dependency factory for role-based gating (see has_perm). Employees with no role
+    (org owners) are always allowed."""
     async def _checker(
         db: AsyncSession = Depends(get_db),
         current: Employee = Depends(get_current_employee),

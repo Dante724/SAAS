@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 @router.get("/dashboard")
 async def dashboard(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_reports")),
 ):
     oid = current.org_id
 
@@ -1020,27 +1020,32 @@ async def company_dashboard(
     avg_wo = q2(closed_total / closed_n) if closed_n else 0
     conversion = round(len(won_month) / len(wo_month) * 100, 0) if wo_month else 0
 
+    # Money on Home follows the role: balances need "see balance", takings and amounts owed
+    # need finance access. Counts stay visible to everyone.
+    from backend.services.auth import has_perm
+    see_bal = await has_perm(db, current, "can_view_balance")
+    see_fin = await has_perm(db, current, "can_view_finance")
     return {
         "today": {
             "work_orders": wo_today,
-            "revenue": q2(revenue_today),
-            "refunds": q2(refunds_today),
+            "revenue": q2(revenue_today) if see_fin else None,
+            "refunds": q2(refunds_today) if see_fin else None,
         },
         "kpis": {
             "new": new_count, "urgent": urgent, "overdue": overdue,
-            "receivables": q2(receivables),
-            "ar": q2(float(ar)), "ap": q2(float(ap)),
-            "total_money": q2(cash_bal + cashless_bal),
-            "cash": q2(cash_bal), "cashless": q2(cashless_bal),
+            "receivables": q2(receivables) if see_fin else None,
+            "ar": q2(float(ar)) if see_fin else None, "ap": q2(float(ap)) if see_fin else None,
+            "total_money": q2(cash_bal + cashless_bal) if see_bal else None,
+            "cash": q2(cash_bal) if see_bal else None, "cashless": q2(cashless_bal) if see_bal else None,
         },
         "status_mix": [{"group": g, "count": c} for g, c in mix.items()],
         "by_assignee": assignee_rows,
         "monthly": {
             "work_orders_created": len(wo_month),
             "work_orders_won": len(won_month),
-            "revenue": q2(revenue_month),
+            "revenue": q2(revenue_month) if see_fin else None,
             "conversion": conversion,
-            "avg_work_order": avg_wo,
+            "avg_work_order": avg_wo if see_fin else None,
         },
     }
 

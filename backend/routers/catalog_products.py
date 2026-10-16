@@ -24,6 +24,7 @@ from backend.models import (
 from backend.services.auth import get_current_employee, require_perm
 from backend.routers.forms import resolve_custom_data
 from backend.services.money import q2
+from backend.services.redact import can_see_costs, drop_cost_fields
 from backend.core.spreadsheet import (
     MAX_IMPORT_ROWS, MAX_XLSX_BYTES, open_xlsx, safe_row, too_many_rows, unguard_cell,
 )
@@ -311,6 +312,8 @@ async def create_product(data: ProductIn, db: AsyncSession = Depends(get_db),
     from backend.routers.forms import check_entity_required
     await check_entity_required(db, current.org_id, "product", data)   # built-ins the product form requires
     payload = data.model_dump()
+    if not await can_see_costs(db, current):
+        drop_cost_fields(payload)          # can't see costs, can't set them
     # enforce required custom fields (Settings → Forms → Products) on create
     payload["custom_data"] = await resolve_custom_data(
         db, current.org_id, "product", payload.get("custom_data"), creating=True)
@@ -379,9 +382,10 @@ async def export_products(db: AsyncSession = Depends(get_db), current: Employee 
         while cid and cid in cats:
             names.append(cats[cid].name); cid = cats[cid].parent_id
         return " > ".join(reversed(names))
+    show_cost = await can_see_costs(db, current)     # the cost column stays empty otherwise
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Products"; ws.append(_COLS)
     for p in rows:
-        ws.append(safe_row([p.code, p.sku, p.barcode, p.name, path(p.category_id), p.uom, p.cost_price,
+        ws.append(safe_row([p.code, p.sku, p.barcode, p.name, path(p.category_id), p.uom, p.cost_price if show_cost else None,
                             p.sell_price, p.min_stock, p.warranty_days, "yes" if p.serialized else "no"]))
     buf = io.BytesIO(); await asyncio.to_thread(wb.save, buf); buf.seek(0)
     return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -456,6 +460,12 @@ async def update_product(pid: str, data: ProductIn, db: AsyncSession = Depends(g
     if not p:
         raise HTTPException(404, "Product not found")
     payload = data.model_dump()
+    # A cost that wasn't sent (or that the editor isn't allowed to see) is left alone
+    # instead of being reset to the 0 default.
+    if "cost_price" not in data.model_fields_set:
+        payload.pop("cost_price", None)
+    if not await can_see_costs(db, current):
+        drop_cost_fields(payload)
     # serialization is irreversible once enabled — cannot be turned off here
     if p.serialized and not payload.get("serialized"):
         raise HTTPException(409, "Serialization cannot be disabled once enabled (Orderry rule)")
@@ -500,7 +510,8 @@ async def create_variant(pid: str, data: VariantIn, db: AsyncSession = Depends(g
     v = Part(org_id=current.org_id, parent_id=base.id, name=name,
              sku=data.sku, barcode=data.barcode, category_id=base.category_id,
              uom=base.uom, barcode_type=base.barcode_type, serialized=base.serialized,
-             cost_price=data.cost_price if data.cost_price is not None else base.cost_price,
+             cost_price=(data.cost_price if data.cost_price is not None and await can_see_costs(db, current)
+                         else base.cost_price),
              sell_price=data.sell_price if data.sell_price is not None else base.sell_price,
              variant_attrs=data.variant_attrs)
     db.add(v); await db.commit(); await db.refresh(v)

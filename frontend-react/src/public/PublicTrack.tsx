@@ -229,8 +229,9 @@ export default function PublicTrack() {
     : d.awaiting_approval ? (d.is_estimate ? "Your estimate is ready for you to review" : "We need your approval to continue")
     : stageIdx >= nStages - 1 ? `Your ${thing} is done`
     : nearEnd ? `Your ${thing} is ready for pickup`
+    : isEst ? `Your estimate for your ${d.device || "repair"}`
     : stageIdx === 0 ? `We've received your ${thing}`
-    : `Your ${thing}: ${(d.stage_label || "").toLowerCase()}`;
+    : (d.stage_label || "In progress");
   const ago = updatedAt ? `Updated ${new Date(updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "";
 
   const H2 = ({ children }: { children: React.ReactNode }) => <h2 className="mb-3 text-[17px] font-semibold text-ink-primary">{children}</h2>;
@@ -254,8 +255,9 @@ export default function PublicTrack() {
           <div className="mt-8">
             {d.awaiting_approval && <span className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[12px] font-medium text-amber-800">Waiting for your approval</span>}
             <h1 className="text-[24px] sm:text-[28px] font-semibold leading-tight tracking-[-0.02em] text-ink-primary">{headline}</h1>
-            <p className="mt-1.5 text-[15px] text-ink-tertiary">{d.stopped ? `${d.stage_label}. Contact ${d.shop_name || "the shop"} if you have questions.` : [d.stage_label, ago].filter(Boolean).join(" · ")}</p>
-            {!d.stopped && (d.stages || []).length > 0 && (
+            <p className="mt-1.5 text-[15px] text-ink-tertiary">{d.stopped ? `${d.stage_label}. Contact ${d.shop_name || "the shop"} if you have questions.`
+              : [isEst ? `Status: ${d.stage_label}` : (headline === d.stage_label ? d.device : d.stage_label), ago].filter(Boolean).join(" · ")}</p>
+            {!d.stopped && !isEst && (d.stages || []).length > 0 && (
               <div className="mt-5">
                 <div className="flex gap-1">
                   {(d.stages || []).map((_, i) => (
@@ -318,7 +320,7 @@ export default function PublicTrack() {
                               <button type="button" onClick={() => setRecSel((s) => ({ ...s, [r.id]: !on }))} aria-pressed={on}
                                 className="flex h-12 w-full items-center justify-center gap-2 border-t text-[15px] font-semibold rounded-b-xl"
                                 style={on ? { borderColor: accent, background: accent, color: onAccent } : { borderColor: "rgb(var(--c-line-200))", color: accent }}>
-                                {on ? <><Check size={17} /> Added</> : "Add to my repair"}
+                                {on ? <><Check size={17} /> Added</> : isEst ? "Add to my estimate" : "Add to my repair"}
                               </button>
                             </div>
                           );
