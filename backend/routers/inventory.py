@@ -1639,9 +1639,16 @@ async def receive_po(
     plan = []   # (pl, recv, part, rline)
     for pl in po_lines:
         rline = by_id.get(pl.id)
-        recv = rline.qty if rline else (pl.qty_ordered - pl.qty_received)  # default: receive remainder
+        left = (pl.qty_ordered or 0) - (pl.qty_received or 0)
+        recv = rline.qty if rline else left  # default: receive remainder
         if recv <= 0:
             continue
+        # B21: more than is still outstanding would post phantom stock and over-bill the
+        # supplier balance. Extra units go on a new PO (or a stock posting) instead.
+        if recv > left + 1e-9:
+            name = (await db.execute(select(Part.name).where(Part.id == pl.part_id))).scalar_one_or_none() or "a line"
+            raise HTTPException(409, f"Receiving {recv:g} of {name}, but only {max(left, 0):g} "
+                                     f"{'is' if left == 1 else 'are'} still to come on this order")
         part = (await db.execute(select(Part).where(Part.id == pl.part_id))).scalar_one_or_none()
         if not part:
             continue

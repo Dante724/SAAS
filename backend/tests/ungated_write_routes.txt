@@ -133,7 +133,6 @@ POST /api/mfa/activate [staff]
 POST /api/mfa/disable [staff]
 POST /api/mfa/enroll [staff]
 # notifications
-POST /api/notifications/test [staff]
 # orders
 POST /api/orders/bulk [staff]
 POST /api/orders/filters/saved [staff]

@@ -59,7 +59,34 @@ async def cancel_open_pay_links(db: AsyncSession, order: Order) -> int:
         return 0
     open_ = (await db.execute(select(PaymentIntent).where(
         PaymentIntent.order_id == order.id,
-        PaymentIntent.status.in_(["created", "pending"])))).scalars().all()
+        PaymentIntent.status.in_(["created", "viewed", "pending"])))).scalars().all()
     for i in open_:
         i.status = "canceled"
+        if i.provider == "stripe" and i.provider_ref:
+            await _expire_stripe_checkout(db, i)
     return len(open_)
+
+
+async def _expire_stripe_checkout(db: AsyncSession, intent: PaymentIntent) -> bool:
+    """Close the Stripe-hosted checkout too, so a customer holding the old link can't pay on
+    Stripe's page after the order is settled (B3). Best effort: if Stripe can't be reached the
+    link is still cancelled here, and a late payment is still recorded (as an overpayment)
+    rather than lost. Square links aren't closed yet: only Square's order id is stored, not
+    the payment-link id its API needs."""
+    import logging
+
+    import httpx
+
+    from backend.config import settings
+    from backend.services import org_creds
+    key = (await org_creds.effective(db, intent.org_id, "stripe")).get("secret_key") or settings.STRIPE_SECRET_KEY
+    if not key:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.post(f"https://api.stripe.com/v1/checkout/sessions/{intent.provider_ref}/expire",
+                                  auth=(key, ""))
+        return r.status_code == 200
+    except httpx.HTTPError:
+        logging.getLogger("repairos.payments").warning("could not expire Stripe checkout for intent %s", intent.id)
+        return False

@@ -312,7 +312,14 @@ async def apply_coupon(
     if already:
         raise HTTPException(400, "Coupon already applied to this order")
     discount = q2((order.total or 0) * c.value / 100.0) if c.kind == "pct" else q2(c.value)
-    discount = min(discount, q2(order.total or 0))
+    # Cap at what's still owed, not the order total: a coupon on an order that's already
+    # (partly) paid would otherwise leave it "overpaid", and that overpayment can be refunded
+    # from the till — a coupon turned into cash (B12).
+    from backend.services.order_money import balance_due
+    owed = await balance_due(db, order)
+    if owed <= 0:
+        raise HTTPException(400, "Nothing is owed on this order, so a coupon can't be applied")
+    discount = min(discount, owed)
     # Guarded atomic increment: `c.uses += 1` let concurrent redemptions both pass the
     # max_uses check above and overshoot the limit.
     res = await db.execute(sa_update(type(c)).where(

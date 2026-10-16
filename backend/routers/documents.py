@@ -18,6 +18,7 @@ from datetime import datetime
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from backend.services.html_clean import clean_template_html
 from backend.db.database import get_db
 from backend.models import (
     DocumentTemplate, GeneratedDocument, Order, OrderLine, Client,
@@ -382,7 +383,7 @@ async def create_template(
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     t = DocumentTemplate(org_id=current.org_id, name=data.name, doc_type=data.doc_type,
-                         body_html=data.body_html, auto_print_on=data.auto_print_on,
+                         body_html=clean_template_html(data.body_html), auto_print_on=data.auto_print_on,
                          is_default=data.is_default,
                          page_size=data.page_size or "a4",
                          page_w_mm=data.page_w_mm, page_h_mm=data.page_h_mm, margin_mm=data.margin_mm,
@@ -407,7 +408,7 @@ async def update_template(
         raise HTTPException(404, "Template not found")
     t.name = data.name
     t.doc_type = data.doc_type
-    t.body_html = data.body_html
+    t.body_html = clean_template_html(data.body_html)
     t.auto_print_on = data.auto_print_on
     t.is_default = data.is_default
     t.page_size = data.page_size or "a4"
@@ -978,6 +979,9 @@ async def _resolve(db, org_id, order: Order, current=None):
 
 def _render(body: str, doc: dict, rows: list) -> str:
     """Expand repeating product rows, then substitute document-level variables."""
+    # Every print / preview / PDF goes through here, so templates saved before server-side
+    # cleaning existed (and bodies sent straight to /preview) are cleaned too (H5).
+    body = clean_template_html(body)
     def repeat(m):
         open_tag, inner, close_tag = m.group(1), m.group(2), m.group(3)
         if not _ROW_MARKER_RE.search(inner):

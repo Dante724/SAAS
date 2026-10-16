@@ -401,7 +401,8 @@ class TestSendIn(BaseModel):
 async def send_test(
     data: TestSendIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    # Same gate as editing the messages: a sample is filled from a real customer's job.
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     """144jc — send a test message to the signed-in user, like Orderry's 'Send test'.
     Variables are sent literally (not resolved) so you can check delivery + formatting."""

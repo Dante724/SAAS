@@ -69,8 +69,8 @@ async def gdpr_export(
         Client.id == client_id, Client.org_id == current.org_id))).scalar_one_or_none()
     if not cl:
         raise HTTPException(404, "Client not found")
-    from backend.models import (Appointment, ChatMessage, ChatThread, Feedback, InboxMessage,
-                                InboxThread, Invoice, LoyaltyLedger, NotificationLog, Payment)
+    from backend.models import (Appointment, Call, ChatMessage, ChatThread, Feedback, InboxMessage,
+                                InboxThread, Invoice, Lead, LoyaltyLedger, NotificationLog, Payment)
     devices = (await db.execute(select(Device).where(Device.client_id == client_id))).scalars().all()
     orders = (await db.execute(select(Order).where(
         Order.org_id == current.org_id, Order.client_id == client_id))).scalars().all()
@@ -97,6 +97,8 @@ async def gdpr_export(
                                           ChatThread.client_id == client_id)]
     inbox_ids = [t.id for t in await rows(InboxThread, InboxThread.org_id == current.org_id,
                                            InboxThread.client_id == client_id)]
+    calls = await rows(Call, Call.org_id == current.org_id, Call.client_id == client_id)
+    leads = await rows(Lead, Lead.org_id == current.org_id, Lead.client_id == client_id)
     chats = await rows(ChatMessage, ChatMessage.thread_id.in_(chat_ids or ["_"]), order=ChatMessage.created_at)
     inbox = await rows(InboxMessage, InboxMessage.thread_id.in_(inbox_ids or ["_"]), order=InboxMessage.created_at)
 
@@ -133,6 +135,12 @@ async def gdpr_export(
         "feedback": [{"rating": f.rating, "comment": f.comment, "submitted_at": iso(f.submitted_at)}
                      for f in feedback],
         "loyalty": [{"points": x.points, "note": x.note, "created_at": iso(x.created_at)} for x in loyalty],
+        "calls": [{"direction": c.direction, "from": c.from_number, "to": c.to_number, "status": c.status,
+                   "duration_s": c.duration_s, "transcript": c.transcript, "summary": c.summary,
+                   "recording_url": c.recording_url, "created_at": iso(getattr(c, "created_at", None))}
+                  for c in calls],
+        "inquiries": [{"name": x.name, "phone": x.phone, "email": x.email, "source": x.source,
+                       "inquiry": x.inquiry, "status": x.status, "created_at": iso(x.created_at)} for x in leads],
     }
 
 
@@ -212,6 +220,50 @@ async def _erase_related(db, org_id: str, client_id: str) -> None:
                      .values(comment=None))
     await db.execute(update(Order).where(Order.org_id == org_id, Order.client_id == client_id)
                      .values(signature=None))
+    await _erase_media(db, org_id, client_id)
+
+
+async def _erase_media(db, org_id: str, client_id: str) -> None:
+    """Photos, signatures and files about the subject (P9): intake photos and markups, the
+    e-signature images and signer details, photos/files on their jobs' and their own feed,
+    recommendation photos and asset pictures. The stored bytes are destroyed, not just
+    unlinked. Signature hashes, totals and dates stay as the record that something was signed.
+    Documents (PDFs) are generated on request and never stored, so there is nothing to erase."""
+    from backend.models import DocumentSignature, EventFeedItem, MediaBlob, Recommendation
+    from backend.services import media as media_svc
+    orders = (await db.execute(select(Order).where(
+        Order.org_id == org_id, Order.client_id == client_id))).scalars().all()
+    order_ids = [o.id for o in orders]
+    blob_ids: set[str] = set()
+    for o in orders:
+        blob_ids.update(i for i in (o.intake_photos or []) if i)
+        blob_ids.update(v for v in (o.intake_markups or {}).values() if v)
+        if o.signature_blob_id:
+            blob_ids.add(o.signature_blob_id)
+        o.intake_photos, o.intake_markups, o.signature_blob_id = [], {}, None
+    feed = (await db.execute(select(EventFeedItem).where(
+        EventFeedItem.org_id == org_id,
+        EventFeedItem.item_type.in_(("photo", "signature", "file")),
+        ((EventFeedItem.entity_type == "order") & EventFeedItem.entity_id.in_(order_ids or ["_"]))
+        | ((EventFeedItem.entity_type == "client") & (EventFeedItem.entity_id == client_id))))).scalars().all()
+    for f in feed:
+        if f.media_blob_id:
+            blob_ids.add(f.media_blob_id)
+        f.media_data, f.media_blob_id, f.media_name = None, None, None
+        f.body = "[erased]"
+    if order_ids:
+        await db.execute(update(DocumentSignature).where(
+            DocumentSignature.org_id == org_id, DocumentSignature.order_id.in_(order_ids))
+            .values(signature_png=None, signer_name=None, signer_ip=None, user_agent=None))
+        await db.execute(update(Recommendation).where(
+            Recommendation.org_id == org_id, Recommendation.order_id.in_(order_ids))
+            .values(media_data=None))
+    await db.execute(update(Device).where(Device.client_id == client_id).values(image_data=None))
+    await db.flush()
+    if blob_ids:
+        blobs = (await db.execute(select(MediaBlob).where(
+            MediaBlob.org_id == org_id, MediaBlob.id.in_(blob_ids)))).scalars().all()
+        await media_svc.erase(db, blobs)
 
 
 # ── GDPR: consent record (proof-of-consent, Art. 7) ──────────────────────────

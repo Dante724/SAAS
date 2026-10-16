@@ -51,8 +51,11 @@ async def verify_org_webhook(db: AsyncSession, org_id: str, request: Request) ->
 
 def unsigned_webhooks_allowed() -> bool:
     """Only local development and the test suite may accept unsigned provider events.
-    Staging and production always fail closed."""
-    return (settings.ENVIRONMENT or "").lower() in ("development", "test")
+    Staging and production always fail closed, and so does a server where ENVIRONMENT was
+    never set (it defaults to "development", so a deploy that forgot it used to accept forged
+    webhooks; M4/M5)."""
+    return ("ENVIRONMENT" in settings.model_fields_set
+            and (settings.ENVIRONMENT or "").lower() in ("development", "test"))
 
 
 async def provider_secrets(db: AsyncSession, org_id: str, provider: str, field: str,

@@ -725,7 +725,9 @@ async def refund_overpayment(
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
     """Refund an overpayment (prepayments exceeded the order total) from a cashbox."""
-    o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    # Row lock (B11): two refunds at once both read the same overpayment and paid it out twice.
+    o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
+                          .with_for_update())).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
     acc = (await db.execute(select(Account).where(Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()

@@ -518,6 +518,17 @@ async def record_payment(
     remaining = q2(float(inv.total or 0) - float(inv.amount_paid or 0))
     if data.amount > remaining + 0.005:
         raise HTTPException(400, f"Payment exceeds the invoice balance ({remaining:g})")
+    # B10: cash taken against an invoice belongs to the open drawer shift, like order payments,
+    # or the till close never counts it. A shift sent by the client must be this shop's.
+    shift_id = data.shift_id
+    if shift_id:
+        await _shift_or_404(db, current.org_id, shift_id)
+    elif data.method == "cash" and data.account_id:
+        from backend.models import Account
+        from backend.routers.cash import open_drawer_shift
+        _acc = (await db.execute(select(Account).where(
+            Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
+        shift_id = await open_drawer_shift(db, current.org_id, _acc)
     payment = Payment(
         invoice_id=invoice_id,
         order_id=inv.order_id,          # so the order's own paid/balance math sees invoice payments
@@ -525,7 +536,7 @@ async def record_payment(
         method=data.method,
         amount=data.amount,
         reference=data.reference,
-        shift_id=data.shift_id,
+        shift_id=shift_id,
         account_id=data.account_id,
         received_by_id=current.id,
     )
@@ -586,8 +597,11 @@ async def _expected_cash(db, shift: CashShift) -> dict:
     can explain a discrepancy."""
     cash_in = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0.0)).where(
         Payment.shift_id == shift.id, Payment.method == "cash", Payment.kind != "refund"))).scalar() or 0.0
+    # Refunds paid out of this drawer: cash refunds, and archive refunds (method "refund"),
+    # which carry the shift only when they went back through a cash till (B10).
     cash_refunds = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0.0)).where(
-        Payment.shift_id == shift.id, Payment.method == "cash", Payment.kind == "refund"))).scalar() or 0.0
+        Payment.shift_id == shift.id, Payment.method.in_(("cash", "refund")),
+        Payment.kind == "refund"))).scalar() or 0.0
     pay_in = (await db.execute(select(func.coalesce(func.sum(CashDrawerMovement.amount), 0.0)).where(
         CashDrawerMovement.shift_id == shift.id, CashDrawerMovement.direction == "in"))).scalar() or 0.0
     pay_out = (await db.execute(select(func.coalesce(func.sum(CashDrawerMovement.amount), 0.0)).where(

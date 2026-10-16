@@ -113,7 +113,8 @@ async def _pos_redemptions(db, org_id, sale, client_id, gross, data):
         # guarded atomic increment (like the gift-card path) — refuse if a concurrent
         # redemption hit max_uses between the read above and this write.
         res = await db.execute(sa_update(Coupon)
-            .where(Coupon.id == c.id, or_(Coupon.max_uses.is_(None), Coupon.uses < Coupon.max_uses))
+            .where(Coupon.id == c.id, or_(Coupon.max_uses.is_(None), Coupon.max_uses == 0,   # 0 = unlimited
+                                       Coupon.uses < Coupon.max_uses))
             .values(uses=Coupon.uses + 1))
         if res.rowcount == 0:
             raise HTTPException(400, "Coupon usage limit reached")

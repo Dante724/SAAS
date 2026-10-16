@@ -32,6 +32,10 @@ async def _order(db: AsyncSession, current: Employee, order_id: str) -> Order:
     o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
+    # M3: a role limited to its own jobs can't list, edit or invoice items on a colleague's job.
+    from backend.services import scoping
+    if not await scoping.can_view_order(db, current, o):
+        raise HTTPException(403, "You can only act on work orders assigned to you")
     return o
 
 

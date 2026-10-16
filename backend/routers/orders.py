@@ -528,6 +528,10 @@ async def bulk_action(
         .options(selectinload(Order.client), selectinload(Order.assigned_to))
     )
     orders = result.scalars().all()
+    # M3: a role limited to its own jobs can't reach colleagues' jobs through a bulk action
+    # (each single-order route already enforces this via _guard_order_access).
+    from backend.services import scoping as _scoping
+    orders = [o for o in orders if await _scoping.can_view_order(db, current, o)]
     from backend.routers.feed import log_system_event
     n = 0
     for o in orders:
@@ -2376,10 +2380,14 @@ async def order_reservations(
 
 
 async def _archive_order(db, current, order_id, reason, do_refund):
+    # Row lock (B1): two archive-with-refund requests at once both saw the same unrefunded
+    # balance and refunded it twice.
     order = (await db.execute(
-        select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+        select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
+        .with_for_update())).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
     if order.archived:
         raise HTTPException(400, "Order is already archived")
 
@@ -2418,8 +2426,11 @@ async def _archive_order(db, current, order_id, reason, do_refund):
                             account_id=acct.id if acct else None, amount=net_paid, reason=reason)
             db.add(refund)
             await db.flush()
+            from backend.routers.cash import open_drawer_shift
             db.add(Payment(order_id=order_id, client_id=order.client_id, method="refund",
                            kind="refund", amount=net_paid, account_id=acct.id if acct else None,
+                           # cash handed back from a till comes out of that drawer's count (B10)
+                           shift_id=await open_drawer_shift(db, current.org_id, acct),
                            received_by_id=current.id, reference=f"Archive refund: {reason}"[:200]))
             if order.client_id:
                 # The cash goes back, so the client's ledger must show it — otherwise the reversed
@@ -2508,6 +2519,7 @@ async def _restore_order(db, current, order_id):
         select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
     if not order.archived:
         raise HTTPException(400, "Order is not archived")
     order.archived = False
