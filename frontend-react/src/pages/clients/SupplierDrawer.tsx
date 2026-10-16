@@ -53,7 +53,7 @@ export default function SupplierDrawer({ supplier, onClose, onSaved }: { supplie
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
       <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative h-full w-full max-w-[680px] bg-white dark:bg-[#151b2e] shadow-clay-card flex flex-col border-l border-slate-200/90">
+      <div className="relative h-full w-full max-w-[680px] bg-raised shadow-clay-card flex flex-col border-l border-slate-200/90">
         {/* header */}
         <div className="px-6 pt-5 pb-3 border-b border-slate-100">
           <div className="flex items-start justify-between">

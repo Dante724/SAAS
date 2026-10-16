@@ -103,7 +103,7 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
             {(creating ? [TABS[0]] : TABS).map((t, i) => <button key={t} onClick={() => setTab(i)} className={`py-3 border-b-2 transition-colors ${tab === i ? "text-primary border-primary font-bold" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{t}</button>)}
           </div>
         </header>
-        <div className="flex-1 overflow-y-auto p-6 bg-[#f8faff] space-y-4">
+        <div className="flex-1 overflow-y-auto p-6 bg-canvas space-y-4">
           {tab === 0 ? (
             <>
               <div className="text-[11px] font-bold text-ink-tertiary">Ownership</div>

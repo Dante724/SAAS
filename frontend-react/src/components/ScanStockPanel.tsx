@@ -44,7 +44,7 @@ export default function ScanStockPanel({ onClose, onPosted }: { onClose: () => v
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-ink-primary/45 backdrop-blur-[2px]" onClick={onClose}>
-      <div className="w-[380px] bg-white dark:bg-[#151b2e] rounded-2xl shadow-clay-card border border-slate-200/80 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+      <div className="w-[380px] bg-raised rounded-2xl shadow-clay-card border border-slate-200/80 overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
           <span className="text-sm font-bold text-ink-primary flex items-center gap-2"><M n="qr_code_scanner" c="text-base text-primary" />Scan to stock</span>
           <button aria-label="Close" onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary"><M n="close" c="text-base" /></button>

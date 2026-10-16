@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { hueText, tint } from "../../lib/tint";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
@@ -32,7 +33,7 @@ const initials = (n: string) => (n || "?").trim().split(/\s+/).slice(0, 2).map((
 
 export function Avatar({ name, size = 36 }: { name: string; size?: number }) {
   const c = hue(name);
-  return <span className="rounded-full grid place-items-center font-semibold flex-shrink-0" style={{ width: size, height: size, background: `${c}1f`, color: c, fontSize: size * 0.36 }}>{initials(name)}</span>;
+  return <span className="rounded-full grid place-items-center font-semibold flex-shrink-0" style={{ width: size, height: size, background: tint(c), color: hueText(c), fontSize: size * 0.36 }}>{initials(name)}</span>;
 }
 
 type Tab = "people" | "roles" | "pay";

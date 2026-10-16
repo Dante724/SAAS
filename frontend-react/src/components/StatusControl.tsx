@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { tint } from "../lib/tint";
 import { M } from "./Shell";
 
 // 144ik/il — status UI, split into two pieces so neither is cramped:
@@ -73,7 +74,7 @@ export function StatusStepper({ statuses, currentKey }: { statuses: FullStatus[]
                 style={{ width: "50%", background: gi < curGroupIdx ? groupColor(GROUP_ORDER[gi + 1] || g) : "#e2e8f0" }} />}
               <span className="relative z-10 rounded-full flex items-center justify-center transition-all"
                 style={current
-                  ? { width: 18, height: 18, background: `${col}26`, border: `2px solid ${col}` }
+                  ? { width: 18, height: 18, background: tint(col, 15), border: `2px solid ${col}` }
                   : done
                   ? { width: 16, height: 16, background: col, color: "#fff" }
                   : { width: 12, height: 12, background: "var(--surface-2, #fff)", border: "1.5px solid #cbd5e1" }}>

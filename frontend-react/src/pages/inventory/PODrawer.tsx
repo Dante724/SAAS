@@ -237,7 +237,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
       <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative h-full w-full max-w-[720px] bg-white dark:bg-[#151b2e] shadow-clay-card flex flex-col border-l border-slate-200/90">
+      <div className="relative h-full w-full max-w-[720px] bg-raised shadow-clay-card flex flex-col border-l border-slate-200/90">
         {/* header */}
         <div className="px-6 pt-5 pb-3 border-b border-slate-100 flex items-start justify-between">
           <div className="flex items-center gap-2.5">
@@ -258,7 +258,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                         {editable2 && <M n="expand_more" c="text-[13px]" />}
                       </button>
                       {statusMenu && (
-                        <div className="absolute left-0 top-8 z-20 w-52 max-h-72 overflow-y-auto bg-white dark:bg-[#1c2439] rounded-xl shadow-clay-card border border-slate-200/80 py-1 text-xs">
+                        <div className="absolute left-0 top-8 z-20 w-52 max-h-72 overflow-y-auto bg-raised rounded-xl shadow-clay-card border border-slate-200/80 py-1 text-xs">
                           <div className="px-3 py-1.5 text-[11px] font-bold text-ink-tertiary">Set status</div>
                           {pipeline.map((s) => (
                             <button key={s.key} onClick={() => setWorkflow(s.key)}
@@ -292,7 +292,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
               <div className="relative">
                 <button aria-label="Send to supplier" onClick={() => setSendMenu((v) => !v)} disabled={busy} title="Send to supplier" className="w-8 h-8 rounded-lg grid place-items-center text-ink-tertiary hover:text-primary hover:bg-slate-100"><M n="send" c="text-base" /></button>
                 {sendMenu && (
-                  <div className="absolute right-0 top-9 z-10 w-40 bg-white dark:bg-[#1c2439] rounded-xl shadow-clay-card border border-slate-200/80 py-1 text-xs">
+                  <div className="absolute right-0 top-9 z-10 w-40 bg-raised rounded-xl shadow-clay-card border border-slate-200/80 py-1 text-xs">
                     {[["email", "Email"], ["sms", "SMS"], ["whatsapp", "WhatsApp"]].map(([c, l]) => (
                       <button key={c} onClick={() => sendPo(c)} className="w-full text-left px-3 py-2 hover:bg-slate-100 text-ink-secondary font-semibold">{l}</button>
                     ))}
@@ -539,14 +539,14 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
 
         {/* edit action bar */}
         {po && editing && (
-          <div className="px-6 py-3 border-t border-slate-100 flex items-center justify-end gap-2 bg-white dark:bg-[#151b2e]">
+          <div className="px-6 py-3 border-t border-slate-100 flex items-center justify-end gap-2 bg-raised">
             <button onClick={() => { setEditing(false); setEd(null); }} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold hover:bg-slate-100">Cancel</button>
             <button onClick={saveEdit} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50 flex items-center gap-1.5"><M n="check" c="text-sm" />{busy ? "Saving…" : "Save changes"}</button>
           </div>
         )}
         {/* receive action bar */}
         {po && canReceive && !editing && (
-          <div className="px-6 py-3 border-t border-slate-100 flex items-center justify-between bg-white dark:bg-[#151b2e]">
+          <div className="px-6 py-3 border-t border-slate-100 flex items-center justify-between bg-raised">
             <div className="flex items-center gap-3">
               <span className="text-[11px] text-ink-tertiary">{outstanding} outstanding · receiving {toReceive}</span>
               {/* 144ar — freight billed with THIS delivery, capitalised into these units' cost */}

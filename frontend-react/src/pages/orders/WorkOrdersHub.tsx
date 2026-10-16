@@ -1,4 +1,5 @@
 import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
+import { tint } from "../../lib/tint";
 import PageSummary, { type SummaryStat } from "../../components/PageSummary";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -42,7 +43,7 @@ function pill(status?: string, st?: Status) {
   if (st?.color) {
     return (
       <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold inline-flex items-center gap-1.5 text-ink-primary whitespace-nowrap"
-        style={{ background: `${st.color}1f`, boxShadow: `inset 0 0 0 1px ${st.color}40` }}>
+        style={{ background: tint(st.color), boxShadow: `inset 0 0 0 1px ${tint(st.color, 25)}` }}>
         <span className="w-1.5 h-1.5 rounded-full" style={{ background: st.color }} />{label}
       </span>
     );

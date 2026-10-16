@@ -180,7 +180,7 @@ export default function Shell({ title, children }: { title: string; children: Re
     <div className="bg-surface text-ink-primary antialiased h-screen w-screen overflow-hidden select-none flex flex-col font-sans">
       <div className="flex flex-1 overflow-hidden relative">
         {/* SIDEBAR */}
-        <aside className={`${railCollapsed ? "w-[64px]" : "w-[200px]"} flex-shrink-0 bg-white/70 backdrop-blur-xl border-r border-slate-200/80 flex flex-col justify-between z-10 transition-[width] duration-200`}>
+        <aside className={`${railCollapsed ? "w-[64px]" : "w-[200px]"} flex-shrink-0 bg-sidebar border-r border-slate-200/80 flex flex-col justify-between z-10 transition-[width] duration-200`}>
           <div className="p-3 space-y-0.5 overflow-y-auto">
             <div className={`flex items-center gap-2.5 px-2 pt-1 pb-3 ${railCollapsed ? "justify-center" : ""}`}>
               <div className="w-8 h-8 rounded-xl bg-primary flex items-center justify-center text-white shadow-clay-sm shrink-0"><M n="build" c="text-lg" /></div>
@@ -243,7 +243,7 @@ export default function Shell({ title, children }: { title: string; children: Re
         </aside>
 
         {/* MAIN */}
-        <main className="flex-1 flex flex-col min-w-0 bg-[#f7f8fd] overflow-hidden">
+        <main className="flex-1 flex flex-col min-w-0 bg-canvas overflow-hidden">
           <header className="h-[52px] bg-white/80 backdrop-blur-md border-b border-slate-200/80 px-6 flex items-center justify-between flex-shrink-0 z-10">
             <div className="flex items-center gap-4">
               <h1 className="text-base font-bold text-ink-primary tracking-tight whitespace-nowrap">{t(title)}</h1>
@@ -577,7 +577,7 @@ function ScanBox() {
       <button onClick={() => setOpen((o) => !o)} title="Scan (barcode / IMEI / order)" aria-label="Scan"
         className="w-8 h-8 rounded-full border border-slate-200 bg-white flex items-center justify-center text-ink-secondary hover:text-ink-primary shadow-xs"><M n="qr_code_scanner" c="text-sm" /></button>
       {open && (
-        <div className="absolute right-0 mt-2 w-64 bg-white dark:bg-[#151b2e] rounded-xl border border-slate-200/80 shadow-clay-card z-50 p-2.5">
+        <div className="absolute right-0 mt-2 w-64 bg-raised rounded-xl border border-slate-200/80 shadow-clay-card z-50 p-2.5">
           <div className="text-[11px] font-bold text-ink-tertiary mb-1.5">Scan or type a code</div>
           <input ref={ref} value={val} onChange={(e) => { setVal(e.target.value); setMsg(null); }}
             onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") setOpen(false); }}

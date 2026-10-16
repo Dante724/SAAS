@@ -122,7 +122,7 @@ export default function DateField({
       </button>
 
       {open && (
-        <div className="absolute z-50 mt-1 left-0 bg-white dark:bg-[#151b2e] rounded-xl shadow-clay-card border border-slate-200/80 p-2 w-[212px]">
+        <div className="absolute z-50 mt-1 left-0 bg-raised rounded-xl shadow-clay-card border border-slate-200/80 p-2 w-[212px]">
           {showCal && (
             <>
               <div className="flex items-center justify-between mb-1">

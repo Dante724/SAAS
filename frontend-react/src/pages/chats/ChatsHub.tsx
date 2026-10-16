@@ -130,7 +130,7 @@ export default function ChatsHub() {
                   )}
                 </div>
               </div>
-              <div className="flex-1 overflow-y-auto p-6 space-y-3 bg-[#f8faff]">
+              <div className="flex-1 overflow-y-auto p-6 space-y-3 bg-canvas">
                 {msgs.length === 0 && <p className="text-xs text-ink-tertiary text-center">No messages yet. Outbound is simulated until channel provider keys are connected.</p>}
                 {msgs.map((m) => {
                   const out = m.direction === "out" || m.direction === "outbound";

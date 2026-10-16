@@ -119,7 +119,7 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
             })}
           </div>
         </header>
-        <div className="flex-1 overflow-y-auto p-6 bg-[#f8faff] space-y-4">
+        <div className="flex-1 overflow-y-auto p-6 bg-canvas space-y-4">
           {tab === 0 ? (
             <>
               {/* Build 144am — one contact, switchable roles. Customer is always on; toggle
