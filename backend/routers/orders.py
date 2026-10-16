@@ -1771,6 +1771,44 @@ async def order_incoming_po(
     return {"items": out}
 
 
+@router.get("/{order_id}/purchase-orders")
+async def order_purchase_orders(
+    order_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Every PO linked to this job — open and finished — line by line, for the work order's
+    "Parts & purchase orders" panel (ADR-144po)."""
+    from backend.models import Part, POLine, Supplier
+    from backend.services.po_links import pos_for_order
+    order = (await db.execute(select(Order).where(
+        Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
+    pos = await pos_for_order(db, current.org_id, order_id)
+    sup_names = {s.id: s.name for s in (await db.execute(select(Supplier).where(
+        Supplier.id.in_({p.supplier_id for p in pos})))).scalars().all()} if pos else {}
+    out = []
+    for po in pos:
+        lines = (await db.execute(select(POLine).where(POLine.po_id == po.id))).scalars().all()
+        rel = [l for l in lines if l.reserved_order_id == order_id] or lines
+        names = {p.id: p.name for p in (await db.execute(select(Part).where(
+            Part.id.in_({l.part_id for l in rel})))).scalars().all()} if rel else {}
+        out.append({
+            "po_id": po.id, "po_number": po.po_number, "status": po.status,
+            "workflow_status": po.workflow_status, "supplier": sup_names.get(po.supplier_id),
+            "raised_here": po.source_order_id == order_id,
+            "ordered_at": po.ordered_at.isoformat() if po.ordered_at else None,
+            "expected_at": po.expected_at.isoformat() if po.expected_at else None,
+            "received_at": po.received_at.isoformat() if po.received_at else None,
+            "lines": [{"part": names.get(l.part_id, "Part"), "ordered": l.qty_ordered or 0,
+                       "received": l.qty_received or 0,
+                       "outstanding": max((l.qty_ordered or 0) - (l.qty_received or 0), 0)} for l in rel],
+        })
+    return {"items": out}
+
+
 @router.get("/{order_id}/labor")
 async def order_labor(
     order_id: str,
@@ -2194,6 +2232,8 @@ async def create_po_from_order(
             await db.flush()
             part_id = part.id
             l.ref_id = part_id            # link the line so future deductions work
+            if not order.is_estimate:
+                l.pending_stock = short   # nothing was taken from stock for it yet: owed on arrival
             created_parts.append({"id": part.id, "name": part.name})
         needed.append((part_id, short, l.cost_price or 0.0, l.description))
 

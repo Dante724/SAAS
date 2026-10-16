@@ -90,16 +90,19 @@ async def list_clients(
     search: Optional[str] = None,
     role: str = "all",                 # Build 114: all | client | supplier
     skip: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=1000),
+    q: Optional[str] = Query(None, alias="q"),   # the pickers send ?q=; same as ?search=
+    sort: str = "name",                # name | recent (pickers list the newest clients before you type)
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
     from backend.services import scoping
     scope_role = await scoping.role_for(db, current)
+    search = (search or q or "").strip() or None
 
     q = (select(Client)
          .where(Client.org_id == current.org_id)
          .options(selectinload(Client.devices))   # order counts come from one grouped query below
-         .order_by(Client.name))
+         .order_by(Client.created_at.desc() if sort == "recent" else Client.name))
     q = scoping.scope_clients(q, scope_role, current)
     if role == "supplier":
         q = q.where(Client.is_supplier == True)  # noqa: E712

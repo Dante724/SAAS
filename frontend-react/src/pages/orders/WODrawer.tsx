@@ -1,5 +1,6 @@
 import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
 import RecommendationsPanel from "./RecommendationsPanel";
+import PartsPOPanel from "./PartsPOPanel";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -66,43 +67,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   // 144y/144as — procure the parts this WO needs: raise a PO for the shortfall, and/or
   // reserve on-hand stock for the job. Gated to staff with inventory access.
   const canBuy = can("can_manage_inventory");
-  const [suppliers, setSuppliers] = useState<{ id: string; name: string }[]>([]);
-  const [poSupplier, setPoSupplier] = useState("");
-  const [poMsg, setPoMsg] = useState<string | null>(null);
-  const [poBusy, setPoBusy] = useState(false);
-  const [onlyShort, setOnlyShort] = useState(true);
-  const [autoSend, setAutoSend] = useState(false);
-  useEffect(() => { if (canBuy) api.get<any>("/suppliers").then((r) => setSuppliers(r.items || r || [])).catch(() => {}); }, [canBuy]);
-  async function raisePO() {
-    if (!poSupplier) { setPoMsg("Pick a supplier first"); return; }
-    setPoBusy(true);
-    try {
-      const r = await api.post<any>(`/orders/${order.id}/create-po`, { supplier_id: poSupplier, only_shortfall: onlyShort, auto_send: autoSend });
-      setPoMsg(r.line_count ? `PO ${r.po_number} raised — ${r.line_count} part(s)${r.sent ? ", sent to supplier" : ""}` : "Nothing short of stock to order");
-      loadIncomingPo();
-    } catch (e: any) { setPoMsg(e.message || "Couldn't raise PO"); } finally { setPoBusy(false); }
-  }
-  // Reserve on-hand stock for this job, for a hold period.
-  const [holdDays, setHoldDays] = useState(7);
-  const [resBusy, setResBusy] = useState(false);
-  const [resMsg, setResMsg] = useState<string | null>(null);
-  const [reservations, setReservations] = useState<{ id: string; part: string; qty: number; expires_at?: string | null }[]>([]);
-  const loadReservations = () => api.get<any>(`/orders/${order.id}/reservations`).then((r) => setReservations(r.items || [])).catch(() => {});
-  useEffect(() => { if (canBuy) loadReservations(); /* eslint-disable-next-line */ }, [order.id, canBuy]);
-  async function reserveStock() {
-    setResBusy(true); setResMsg(null);
-    try {
-      const r = await api.post<any>(`/orders/${order.id}/reserve-stock`, { hold_days: holdDays });
-      const held = (r.reserved || []).reduce((n: number, x: any) => n + (x.qty || 0), 0);
-      setResMsg(held ? `Reserved ${held} unit(s) for ${r.hold_days} day(s)${(r.short || []).length ? " · some parts short of stock" : ""}` : "Nothing in stock to reserve (raise a PO instead)");
-      loadReservations();
-    } catch (e: any) { setResMsg(e.message || "Couldn't reserve"); } finally { setResBusy(false); }
-  }
-  async function releaseHold(id: string) {
-    try { await api.post(`/inventory/reservations/${id}/release`, {}); loadReservations(); }
-    catch (e: any) { setResMsg(e.message || "Couldn't release"); }
-  }
-  const daysLeft = (iso?: string | null) => { if (!iso) return null; const ms = new Date(iso).getTime() - Date.now(); return Math.max(0, Math.ceil(ms / 86400000)); };
+  const [partsOpen, setPartsOpen] = useState(false);   // ADR-144po: the ⋯ → Parts & purchase orders panel
+  const [menuOpen, setMenuOpen] = useState(false);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
 
   const reload = () => api.get<Detail>(`/orders/${order.id}`).then(setD).catch(() => {});
@@ -229,57 +195,6 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   ];
   const TABS = ALL_TABS.filter((t) => t.id !== "invoices" || can("can_view_invoices_tab")); // legacy data-perm parity
 
-  // 144au — Parts procurement now lives on the Services & products tab (next to the parts),
-  // not in the General settings form. Reserve uses preset holds (chips) instead of a number box.
-  const HOLD_PRESETS = [7, 14, 30];
-  const ProcurementCard = () => (
-    <div className="rounded-2xl border border-slate-200/90 bg-white shadow-sm p-4 space-y-3">
-      <h4 className="text-xs font-bold text-ink-tertiary flex items-center gap-1.5"><M n="shopping_cart" c="text-sm text-primary" />Parts procurement</h4>
-      <div className="space-y-1.5">
-        <div className="text-[11px] font-bold text-ink-tertiary">Order parts (supplier PO)</div>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <select value={poSupplier} onChange={(e) => { setPoSupplier(e.target.value); setPoMsg(null); }} className="glass-input rounded-lg px-2 py-2 text-xs font-semibold text-ink-primary max-w-[180px]">
-            <option value="">— Supplier —</option>
-            {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-          <button type="button" onClick={raisePO} disabled={poBusy} className="px-3 py-2 rounded-lg bg-primary text-white text-[11px] font-bold hover:bg-primary-container disabled:opacity-50 flex items-center gap-1"><M n="add_shopping_cart" c="text-sm" />{poBusy ? "Raising…" : "Raise PO"}</button>
-        </div>
-        <div className="flex items-center gap-3 text-[11px] text-ink-secondary">
-          <label className="flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={onlyShort} onChange={(e) => setOnlyShort(e.target.checked)} />Only what's short of stock</label>
-          <label className="flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={autoSend} onChange={(e) => setAutoSend(e.target.checked)} />Mark ordered &amp; notify supplier</label>
-        </div>
-        {poMsg && <div className="text-[11px] text-primary font-semibold">{poMsg}</div>}
-      </div>
-      <div className="border-t border-slate-200/70" />
-      <div className="space-y-1.5">
-        <div className="text-[11px] font-bold text-ink-tertiary">Reserve in-stock parts</div>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="text-[11px] text-ink-tertiary">Hold for</span>
-          {HOLD_PRESETS.map((n) => (
-            <button key={n} type="button" onClick={() => setHoldDays(n)}
-              className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors ${holdDays === n ? "bg-blue-50 text-primary border-blue-200" : "text-ink-secondary border-slate-200 hover:bg-slate-50"}`}>{n}d</button>
-          ))}
-          <button type="button" onClick={reserveStock} disabled={resBusy} className="ml-1 px-3 py-2 rounded-lg bg-white border border-slate-200 text-ink-primary text-[11px] font-bold hover:bg-slate-50 disabled:opacity-50 flex items-center gap-1"><M n="lock_clock" c="text-sm" />{resBusy ? "Reserving…" : "Reserve stock"}</button>
-        </div>
-        {resMsg && <div className="text-[11px] text-ink-secondary">{resMsg}</div>}
-        {reservations.length > 0 && (
-          <div className="space-y-1 pt-0.5">
-            {reservations.map((r) => (
-              <div key={r.id} className="flex items-center justify-between text-[11px] bg-slate-50/70 rounded-lg border border-slate-200/70 px-2 py-1">
-                <span className="font-semibold text-ink-primary truncate">{r.part}</span>
-                <span className="flex items-center gap-2 shrink-0">
-                  <span className="tabular-nums text-ink-secondary">×{r.qty}</span>
-                  {daysLeft(r.expires_at) != null && <span className="text-ink-tertiary">· until {r.expires_at ? new Date(r.expires_at).toLocaleDateString() : ""}</span>}
-                  <button aria-label="Release hold" type="button" onClick={() => releaseHold(r.id)} className="text-ink-tertiary hover:text-rose-600" title="Release hold"><M n="lock_open" c="text-sm" /></button>
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 40 }}>
       <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
@@ -287,7 +202,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 
         {/* Header */}
-        <header className="px-6 py-4 border-b border-slate-200/90 bg-white/95 backdrop-blur flex items-center justify-between flex-shrink-0">
+        <header className="relative z-20 px-6 py-4 border-b border-slate-200/90 bg-white/95 backdrop-blur flex items-center justify-between flex-shrink-0">
           <div className="flex items-center gap-3">
             <span className="tabular-nums text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-100 text-ink-secondary">{woNum}</span>
             <h3 className="text-base font-semibold text-ink-primary tracking-tight">{hasDevice ? devTitle : (c.name || "Work order")}</h3>
@@ -313,29 +228,42 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                 <M n="play_arrow" c="text-sm" />Timer{timerTotalSec > 0 ? ` · ${secHM(timerTotalSec)}` : ""}
               </button>
             ))}
-            <button aria-label="Actions" className="p-1.5 rounded-lg text-ink-secondary hover:text-ink-primary hover:bg-slate-100 border border-slate-200/80 transition-colors" title="Actions"><M n="more_horiz" c="text-base" /></button>
+            {incomingPo.length > 0 && (
+              <button type="button" onClick={() => setPartsOpen(true)} title={incomingPo.map((p) => `${p.po_number}: ${p.parts.map((x) => `${x.part} ×${x.outstanding}`).join(", ")}`).join("\n")}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 transition-colors">
+                <M n="local_shipping" c="text-sm" />Waiting on parts
+              </button>
+            )}
+            <div className="relative">
+              <button aria-label="More actions" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)}
+                className="p-1.5 rounded-lg text-ink-secondary hover:text-ink-primary hover:bg-slate-100 border border-slate-200/80 transition-colors" title="More actions"><M n="more_horiz" c="text-base" /></button>
+              {menuOpen && (<>
+                <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(false)} />
+                <div role="menu" className="absolute right-0 top-full mt-1 z-40 w-64 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5">
+                  <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); setPartsOpen(true); }}
+                    className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-50">
+                    <M n="local_shipping" c="text-base text-ink-tertiary" />
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-sm text-ink-primary">Parts &amp; purchase orders</span>
+                      <span className="block text-[11px] text-ink-tertiary">{incomingPo.length ? `${incomingPo.length} on order` : "Order or hold parts for this job"}</span>
+                    </span>
+                  </button>
+                  <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); navigator.clipboard?.writeText(`${window.location.origin}/orders?open=${order.id}`).then(() => flash("Link copied")).catch(() => {}); }}
+                    className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-50">
+                    <M n="link" c="text-base text-ink-tertiary" /><span className="text-sm text-ink-primary">Copy link to this job</span>
+                  </button>
+                </div>
+              </>)}
+            </div>
             <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100 transition-colors" title="Close"><M n="close" c="text-lg" /></button>
           </div>
         </header>
+        {partsOpen && <PartsPOPanel orderId={order.id} canBuy={canBuy} isEstimate={!!(order as any).is_estimate}
+          onClose={() => setPartsOpen(false)} onChanged={() => { loadIncomingPo(); reload(); }} />}
 
         <div className="px-6 py-2 border-b border-slate-200/70 bg-white/95 flex-shrink-0">
           <TagChips entityType="order" entityId={order.id} />
         </div>
-
-        {/* Waiting on PO — parts this job needs are on order from a supplier */}
-        {incomingPo.length > 0 && (
-          <div className="px-6 py-2 border-b border-amber-200 bg-amber-50 flex-shrink-0 flex items-start gap-2 text-[11px] text-amber-800">
-            <M n="local_shipping" c="text-sm mt-0.5" />
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span className="font-semibold">Waiting on parts</span>
-              {incomingPo.map((p, i) => (
-                <span key={i} className="font-semibold">{p.po_number}
-                  <span className="font-normal text-amber-700"> ({humanize(p.status)}{p.expected_at ? `, exp ${new Date(p.expected_at).toLocaleDateString()}` : ""}) — {p.parts.map((x) => `${x.part}×${x.outstanding}`).join(", ")}</span>
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* Cycle-time band — predicted ready + stall detection (Feature 2) */}
         {timing && !timing.is_terminal && (timing.stalled || timing.typical_min != null || timing.predicted_ready_at) && (
@@ -520,7 +448,6 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             <div className="space-y-4">
               <ServicesTab orderId={order.id} deviceId={d.device?.id} lines={d.lines} total={d.total} onFlash={flash} onChanged={reload}
                 labor={labor} onClockIn={(lineId) => startTimer(lineId)} isEstimate={!!(order as any).is_estimate} emps={emps} />
-              {canBuy && !(order as any).is_estimate && <ProcurementCard />}
             </div>
           )}
           {tab === "checklists" && <ChecklistsTab orderId={order.id} typeId={(d as any).type_id} />}

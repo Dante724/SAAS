@@ -3,6 +3,7 @@ import { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import ScanButton from "../../components/ScanButton";
 import { api } from "../../api/client";
+import { useClientSearch } from "../../hooks/useClientSearch";
 import { readAsDataUrl } from "../../lib/files";
 import { alertDialog } from "../../lib/dialog";
 import AuthedImage from "../../components/AuthedImage";
@@ -46,7 +47,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
     api.get<{ items: any[] }>(`/forms/layout?form=order&type_id=${typeId}`).then((r) => setLayout(r.items || null)).catch(() => setLayout(null));
   }, [typeId]);
   const [q, setQ] = useState("");
-  const [results, setResults] = useState<ClientLite[]>([]);
+  const [cOpen, setCOpen] = useState(false);   // client dropdown open (opens on tap, lists newest first)
   const [client, setClient] = useState<ClientLite | null>(prefillClient || null);
   const [priority, setPriority] = useState(0);
   const [managerId, setManagerId] = useState(""); const [assigneeId, setAssigneeId] = useState("");
@@ -109,11 +110,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
 
   useEffect(() => { api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(() => {}); }, []);
   useEffect(() => { api.get<any>("/forms/types").then((r) => { const it: WOType[] = r.items || []; setWoTypes(it); if (it.length) setType((cur) => it.some((t) => t.name === cur) ? cur : it[0].name); }).catch(() => {}); }, []);
-  useEffect(() => {
-    if (client || q.trim().length < 2) { setResults([]); return; }
-    const h = setTimeout(() => { api.get<any>(`/clients?limit=8&q=${encodeURIComponent(q.trim())}`).then((r) => setResults(r.items || [])).catch(() => setResults([])); }, 250);
-    return () => clearTimeout(h);
-  }, [q, client]);
+  const results = useClientSearch<ClientLite>(q, cOpen && !client);
 
   const subtotal = lines.reduce((s, l) => s + (l.price || 0), 0);
   // Taxes/discounts are applied server-side from the org's tax rules when the order is created;
@@ -206,13 +203,18 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                   <div className="flex items-center gap-2">
                     <div className="relative flex-1">
                       <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-ink-tertiary"><M n="search" c="text-base" /></div>
-                      <input value={q} onChange={(e) => setQ(e.target.value)} className="glass-input block w-full pl-10 pr-4 py-2.5 rounded-xl text-sm font-semibold text-ink-primary" placeholder="Search client by name, phone or email… (blank = walk-in)" />
-                      {(results.length > 0 || q.trim().length >= 2) && (
-                        <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5">
-                          {results.map((r) => <button key={r.id} onClick={() => setClient(r)} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-sm"><span className="font-semibold text-ink-primary">{r.name}</span><span className="text-ink-tertiary font-mono text-xs">{r.phone}</span></button>)}
-                          <button onClick={() => setNewClient(true)} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-sm text-primary font-bold border-t border-slate-100 mt-1"><M n="person_add" c="text-base" />Create new client{q.trim() ? ` "${q.trim()}"` : ""}</button>
+                      <input value={q} onChange={(e) => { setQ(e.target.value); setCOpen(true); }} onFocus={() => setCOpen(true)} onClick={() => setCOpen(true)}
+                        onKeyDown={(e) => { if (e.key === "Escape") setCOpen(false); }} role="combobox" aria-expanded={cOpen} autoComplete="off"
+                        className="glass-input block w-full pl-10 pr-4 py-2.5 rounded-xl text-sm font-semibold text-ink-primary" placeholder="Search client by name, phone or email… (blank = walk-in)" />
+                      {cOpen && (<>
+                        <div className="fixed inset-0 z-[9]" onClick={() => setCOpen(false)} />
+                        <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 max-h-72 overflow-y-auto">
+                          {!q.trim() && results.length > 0 && <div className="px-2.5 pt-1 pb-0.5 text-[11px] text-ink-tertiary">Recent clients</div>}
+                          {q.trim() && results.length === 0 && <div className="px-2.5 py-2 text-xs text-ink-tertiary">No client matches "{q.trim()}"</div>}
+                          {results.map((r) => <button key={r.id} onClick={() => { setClient(r); setCOpen(false); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-sm"><span className="font-semibold text-ink-primary">{r.name}</span><span className="text-ink-tertiary font-mono text-xs">{r.phone}</span></button>)}
+                          <button onClick={() => { setNewClient(true); setCOpen(false); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-sm text-primary font-bold border-t border-slate-100 mt-1"><M n="person_add" c="text-base" />Create new client{q.trim() ? ` "${q.trim()}"` : ""}</button>
                         </div>
-                      )}
+                      </>)}
                     </div>
                     <button aria-label="New client" type="button" onClick={() => setNewClient(true)} title="New client" className="w-11 h-11 flex-shrink-0 rounded-xl bg-blue-50 text-primary border border-blue-100 flex items-center justify-center hover:bg-blue-100"><M n="person_add" c="text-lg" /></button>
                   </div>
@@ -480,7 +482,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
           )}
         </footer>
       </div>
-      {newClient && <NewClientDrawer prefillName={q.trim()} onClose={() => setNewClient(false)} onCreated={(c) => { setClient(c); setNewClient(false); setQ(""); setResults([]); }} />}
+      {newClient && <NewClientDrawer prefillName={q.trim()} onClose={() => setNewClient(false)} onCreated={(c) => { setClient(c); setNewClient(false); setQ(""); }} />}
     </div>
   );
 }

@@ -2,6 +2,7 @@ import NameSuggestInput from "../../components/NameSuggestInput";
 import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
+import { useClientSearch } from "../../hooks/useClientSearch";
 import { confirmDialog } from "../../lib/dialog";
 import { money } from "./types";
 import CustomFields from "../../components/CustomFields";
@@ -40,13 +41,9 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
   }, [tab, assetId, moves]);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const [q, setQ] = useState(""); const [results, setResults] = useState<ClientLite[]>([]); const [picking, setPicking] = useState(false);
+  const [q, setQ] = useState(""); const [picking, setPicking] = useState(false);
   const set = (k: keyof Asset, v: any) => setA((s) => ({ ...s, [k]: v }));
-  useEffect(() => {
-    if (!picking || q.trim().length < 2) { setResults([]); return; }
-    const h = setTimeout(() => { api.get<any>(`/clients?limit=8&q=${encodeURIComponent(q.trim())}`).then((r) => setResults(r.items || [])).catch(() => setResults([])); }, 250);
-    return () => clearTimeout(h);
-  }, [q, picking]);
+  const results = useClientSearch<ClientLite>(q, picking);   // opens with the newest clients, searches as you type
   const layout = useFormLayout("device");
   async function save() {
     const m = missingRequired(layout, { condition: has(a.condition), brand: has(a.brand), model: has(a.model), color: has(a.color),
@@ -124,10 +121,12 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
                     </div>
                   ) : (
                     <div className="relative">
-                      <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search client by name or phone…" className="glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full" />
-                      {results.length > 0 && (
-                        <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5">
-                          {results.map((r) => <button key={r.id} onClick={() => { set("client_id", r.id); setA((s) => ({ ...s, owner_name: r.name })); setPicking(false); setResults([]); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-sm"><span className="font-semibold text-ink-primary">{r.name}</span><span className="text-ink-tertiary font-mono text-xs">{r.phone}</span></button>)}
+                      <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape") setPicking(false); }} autoComplete="off" placeholder="Search client by name or phone…" className="glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full" />
+                      {(results.length > 0 || q.trim()) && (
+                        <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 max-h-72 overflow-y-auto">
+                          {!q.trim() && <div className="px-2.5 pt-1 pb-0.5 text-[11px] text-ink-tertiary">Recent clients</div>}
+                          {q.trim() && results.length === 0 && <div className="px-2.5 py-2 text-xs text-ink-tertiary">No client matches "{q.trim()}"</div>}
+                          {results.map((r) => <button key={r.id} onClick={() => { set("client_id", r.id); setA((s) => ({ ...s, owner_name: r.name })); setPicking(false); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-sm"><span className="font-semibold text-ink-primary">{r.name}</span><span className="text-ink-tertiary font-mono text-xs">{r.phone}</span></button>)}
                         </div>
                       )}
                       <button onClick={() => setPicking(false)} className="absolute right-2 top-2.5 text-xs text-ink-tertiary">Cancel</button>

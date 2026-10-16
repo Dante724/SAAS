@@ -1168,7 +1168,13 @@ async def edit_po(
     if "supplier_invoice_date" in sent:
         po.supplier_invoice_date = _date.fromisoformat(data.supplier_invoice_date) if data.supplier_invoice_date else None
     if "expected_at" in sent:
+        _was = po.expected_at
         po.expected_at = datetime.fromisoformat(data.expected_at) if data.expected_at else None
+        if po.expected_at != _was:
+            from backend.services.po_links import notify_po_change
+            await notify_po_change(db, current.org_id, po,
+                                   f"now expected {po.expected_at:%b %-d}" if po.expected_at else "expected date cleared",
+                                   actor_id=current.id)
     if "notes" in sent:
         po.notes = data.notes or None
     if data.on_credit is not None:
@@ -1354,6 +1360,8 @@ async def send_po(
                             body=body, author_id=current.id, delivered=True))
         thread.last_message_at = datetime.utcnow()
         logged = True
+    from backend.services.po_links import notify_po_change
+    await notify_po_change(db, current.org_id, po, "sent to the supplier", actor_id=current.id)
     await db.commit()
     return {"ok": True, "channel": data.channel, "po_number": po.po_number, "logged": logged}
 
@@ -1372,6 +1380,8 @@ async def cancel_po(
     _guard_po_transition(po.status, "cancelled")
     po.status = "cancelled"
     po.workflow_status = "po_cancelled"   # keep the manual stage in step with a cancel
+    from backend.services.po_links import notify_po_change
+    await notify_po_change(db, current.org_id, po, "cancelled, so these parts aren't coming", actor_id=current.id)
     await db.commit()
     return {"ok": True, "status": po.status}
 
@@ -1416,6 +1426,9 @@ async def set_po_status(
             raise HTTPException(409, f"Can't move a {cur} purchase order to ordered")
         po.status = "ordered"
         po.ordered_at = po.ordered_at or datetime.utcnow()
+    from backend.services.po_links import notify_po_change
+    await notify_po_change(db, current.org_id, po, "marked ordered" if po.status == "ordered" else f"back to {po.status}",
+                           actor_id=current.id)
     await db.commit()
     return {"ok": True, "status": po.status}
 
@@ -1446,7 +1459,14 @@ async def set_po_workflow(
         OrderStatus.active == True, OrderStatus.key == data.workflow_status))).scalar_one_or_none()  # noqa: E712
     if not valid:
         raise HTTPException(422, "Unknown purchase-order status for this workspace")
+    changed = po.workflow_status != data.workflow_status
     po.workflow_status = data.workflow_status
+    if changed:
+        label = (await db.execute(select(OrderStatus.name).where(
+            OrderStatus.org_id == current.org_id, OrderStatus.record_type == "purchase_order",
+            OrderStatus.key == data.workflow_status))).scalar_one_or_none() or data.workflow_status
+        from backend.services.po_links import notify_po_change
+        await notify_po_change(db, current.org_id, po, f"stage is now {label}", actor_id=current.id)
     await db.commit()
     return {"ok": True, "workflow_status": po.workflow_status}
 
@@ -1665,20 +1685,25 @@ async def receive_po(
         # ── Reserve-on-receive (P1-D): goods a work order was waiting on stay earmarked
         #    for it instead of landing as free stock. Orderry reserves incoming goods too;
         #    we go further by keeping the exact cost layer as well. ──
-        if pl.reserved_order_id:
+        from backend.services.po_links import apply_receipt_to_orders
+        to_reserve = recv - await apply_receipt_to_orders(db, current.org_id, po, pl, recv)
+        if pl.reserved_order_id and to_reserve > 0:
             from backend.models import StockReservation
             rsl = (await db.execute(select(StockLevel).where(
                 StockLevel.part_id == pl.part_id, StockLevel.location_id == po.location_id))).scalar_one_or_none()
             if rsl:
-                rsl.qty_reserved = (rsl.qty_reserved or 0) + recv
+                rsl.qty_reserved = (rsl.qty_reserved or 0) + to_reserve
                 db.add(StockReservation(org_id=current.org_id, part_id=pl.part_id,
                                         location_id=po.location_id, order_id=pl.reserved_order_id,
-                                        qty=recv, released=False))
+                                        qty=to_reserve, released=False))
         received_cost_now += recv * unit_cost
         received_any = True
     if received_any:
         fully = all((pl.qty_received or 0) >= pl.qty_ordered for pl in po_lines)
         po.status = "received" if fully else "partial"
+        from backend.services.po_links import notify_po_change
+        await notify_po_change(db, current.org_id, po, "all parts arrived" if fully else "some parts arrived",
+                               actor_id=current.id)
         po.received_at = datetime.utcnow()
         po.received_cost = (po.received_cost or 0) + received_cost_now
         po.freight_capitalised = q2((po.freight_capitalised or 0) + freight_added_now)

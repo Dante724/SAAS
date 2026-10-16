@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Shell, { M } from "../../components/Shell";
 import { api } from "../../api/client";
+import { useClientSearch } from "../../hooks/useClientSearch";
 import NewClientDrawer from "../../components/NewClientDrawer";
 import { currencySymbol, money } from "../orders/types";
 
@@ -25,7 +26,6 @@ export default function SalesPOS() {
   const [accountId, setAccountId] = useState("");
   const [client, setClient] = useState<ClientLite | null>(null);
   const [clientQ, setClientQ] = useState("");
-  const [clientResults, setClientResults] = useState<ClientLite[]>([]);
   const [newClient, setNewClient] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -34,11 +34,8 @@ export default function SalesPOS() {
   useEffect(() => { api.get<{ items: Product[] }>("/catalog/products").then((r) => setProducts(r.items || [])).catch(() => {}); }, []);
   useEffect(() => { api.get<{ items: Service[] }>("/catalog/services").then((r) => setServices(r.items || [])).catch(() => {}); }, []);
   useEffect(() => { api.get<{ items: Account[] }>("/cash/accounts").then((r) => { setAccounts(r.items || []); if (r.items?.[0]) setAccountId(r.items[0].id); }).catch(() => {}); }, []);
-  useEffect(() => {
-    if (client || clientQ.trim().length < 2) { setClientResults([]); return; }
-    const h = setTimeout(() => api.get<{ items: ClientLite[] }>(`/clients?limit=6&q=${encodeURIComponent(clientQ.trim())}`).then((r) => setClientResults(r.items || [])).catch(() => {}), 250);
-    return () => clearTimeout(h);
-  }, [clientQ, client]);
+  const [cOpen, setCOpen] = useState(false);
+  const clientResults = useClientSearch<ClientLite>(clientQ, cOpen && !client, 6);
 
   const grid = useMemo(() => {
     const term = q.trim().toLowerCase();
@@ -125,13 +122,17 @@ export default function SalesPOS() {
               <div className="glass-input flex items-center gap-2 px-3 py-2 rounded-lg text-xs"><M n="person" c="text-sm text-ink-tertiary" /><span className="font-semibold text-ink-primary">{client.name}</span><span className="text-ink-tertiary">{client.phone}</span><button onClick={() => { setClient(null); setClientQ(""); }} className="ml-auto text-primary font-semibold">Change</button></div>
             ) : (
               <div className="flex items-center gap-2">
-                <div className="relative flex-1"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-xs" /><input value={clientQ} onChange={(e) => setClientQ(e.target.value)} className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg" placeholder="Attach client (optional)…" />
-                  {(clientResults.length > 0 || clientQ.trim().length >= 2) && (
-                    <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5">
-                      {clientResults.map((r) => <button key={r.id} onClick={() => { setClient(r); setClientResults([]); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-xs"><span className="font-semibold text-ink-primary">{r.name}</span><span className="text-ink-tertiary font-mono">{r.phone}</span></button>)}
+                <div className="relative flex-1"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-xs" /><input value={clientQ} onChange={(e) => { setClientQ(e.target.value); setCOpen(true); }} onFocus={() => setCOpen(true)} onClick={() => setCOpen(true)}
+                    onKeyDown={(e) => { if (e.key === "Escape") setCOpen(false); }} autoComplete="off" className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg" placeholder="Attach client (optional)…" />
+                  {cOpen && (<>
+                    <div className="fixed inset-0 z-[9]" onClick={() => setCOpen(false)} />
+                    <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 max-h-72 overflow-y-auto">
+                      {!clientQ.trim() && clientResults.length > 0 && <div className="px-2.5 pt-1 pb-0.5 text-[11px] text-ink-tertiary">Recent clients</div>}
+                      {clientQ.trim() && clientResults.length === 0 && <div className="px-2.5 py-2 text-xs text-ink-tertiary">No client matches "{clientQ.trim()}"</div>}
+                      {clientResults.map((r) => <button key={r.id} onClick={() => { setClient(r); setCOpen(false); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-xs"><span className="font-semibold text-ink-primary">{r.name}</span><span className="text-ink-tertiary font-mono">{r.phone}</span></button>)}
                       <button onClick={() => setNewClient(true)} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-xs text-primary font-bold border-t border-slate-100 mt-1"><M n="person_add" c="text-sm" />Create new client{clientQ.trim() ? ` "${clientQ.trim()}"` : ""}</button>
                     </div>
-                  )}
+                  </>)}
                 </div>
                 <button aria-label="New client" onClick={() => setNewClient(true)} title="New client" className="w-8 h-8 flex-shrink-0 rounded-lg bg-blue-50 text-primary border border-blue-100 flex items-center justify-center hover:bg-blue-100"><M n="person_add" c="text-base" /></button>
               </div>
@@ -187,7 +188,7 @@ export default function SalesPOS() {
         </aside>
       </div>
       {toast && <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-clay-drawer z-[60]">{toast}</div>}
-      {newClient && <NewClientDrawer prefillName={clientQ.trim()} onClose={() => setNewClient(false)} onCreated={(c) => { setClient(c); setNewClient(false); setClientQ(""); setClientResults([]); flash(`Client "${c.name}" created & attached`); }} />}
+      {newClient && <NewClientDrawer prefillName={clientQ.trim()} onClose={() => setNewClient(false)} onCreated={(c) => { setClient(c); setNewClient(false); setClientQ(""); flash(`Client "${c.name}" created & attached`); }} />}
     </Shell>
   );
 }
