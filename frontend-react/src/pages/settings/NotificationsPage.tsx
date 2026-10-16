@@ -198,8 +198,8 @@ export default function CustomerMessages({ rules, templates, statusesFor, shopNa
       {view !== "customers" ? renderOther(view) : (<>
         {testMode.length > 0 && (
           <div className="flex items-center gap-3 rounded-2xl bg-amber-50 border border-amber-200/80 px-4 py-3">
-            <span className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 grid place-items-center flex-shrink-0"><M n="science" c="text-base" /></span>
-            <div className="text-xs text-amber-900"><span className="font-semibold">{testMode.join(" and ")} are in test mode.</span> They're saved in the log but nobody receives them until you connect {testMode.length === 2 ? "a phone number and a mail account" : testMode[0] === "Texts" ? "a phone number" : "a mail account"}.</div>
+            <span className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 grid place-items-center flex-shrink-0"><M n="warning" c="text-base" /></span>
+            <div className="min-w-0 flex-1 text-xs text-amber-900 leading-relaxed"><span className="font-semibold">{testMode.join(" and ")} are in test mode.</span> They're saved in the log but nobody receives them until you connect {testMode.length === 2 ? "a phone number and a mail account" : testMode[0] === "Texts" ? "a phone number" : "a mail account"}.</div>
           </div>
         )}
 

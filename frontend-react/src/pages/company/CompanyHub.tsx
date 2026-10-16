@@ -106,7 +106,7 @@ function Dashboard() {
     { label: "Urgent", value: String(k.urgent ?? 0), onClick: () => navigate("/orders?priority=urgent") },
     { label: "Late", value: String(k.overdue ?? 0), tone: "bad", zero: isZero(k.overdue), onClick: () => navigate("/orders") },
     { label: "To collect", value: money(k.receivables), onClick: () => navigate("/invoices") },
-    { label: "In your accounts", value: money(k.total_money), hint: `Cash ${money(k.cash)} · card and bank ${money(k.cashless)}`, onClick: () => navigate("/finance") },
+    { label: "In your accounts", value: money(k.total_money), hint: `${money(k.cash)} cash · ${money(k.cashless)} bank`, onClick: () => navigate("/finance") },
   ];
   return (
     <div className="space-y-6">

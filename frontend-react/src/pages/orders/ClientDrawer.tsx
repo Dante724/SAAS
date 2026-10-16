@@ -1,4 +1,5 @@
 import DirectorySelect from "../../components/DirectorySelect";
+import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import TagChips from "../../components/TagChips";
 import { M } from "../../components/Shell";
@@ -54,7 +55,7 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
       disc_materials_mode: r.disc_materials_mode || "none", disc_materials_value: r.disc_materials_value || 0, disc_materials_price_type_id: r.disc_materials_price_type_id || "",
     });
   }).catch(() => {}); }, [clientId]);
-  const initials = (c.name || "C").slice(0, 2).toUpperCase();
+  const initials = (c.name || "C").trim().split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase() || "C";
   const bal = c.balance || 0;
   const [creditOpen, setCreditOpen] = useState(false);
   const [creditVal, setCreditVal] = useState("");
@@ -108,7 +109,7 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
           </div>
           <div className="flex items-center gap-3 pb-3">
             <div className="w-11 h-11 rounded-full bg-primary grid place-items-center text-white font-bold shadow-clay-sm">{initials}</div>
-            <div><div className="text-base font-bold text-ink-primary">{c.name || "Client"}</div><div className="text-xs text-ink-tertiary">{c.order_count ?? 0} work orders · {c.loyalty_tier || "Standard"}</div></div>
+            <div><div className="text-base font-bold text-ink-primary">{c.name || "Client"}</div><div className="text-xs text-ink-tertiary">{c.order_count ?? 0} work orders · {c.loyalty_tier?.toLowerCase() === "vip" ? "VIP" : humanize(c.loyalty_tier) || "Standard"}</div></div>
           </div>
           <div className="pb-3"><TagChips entityType="contact" entityId={clientId} /></div>
           <div className="flex gap-6 overflow-x-auto text-xs font-semibold">
