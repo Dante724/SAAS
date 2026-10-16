@@ -211,7 +211,7 @@ export default function CustomerMessages({ rules, templates, statusesFor, shopNa
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-5">
           <div className="text-[11px] font-semibold text-ink-tertiary mb-3">What your customer gets</div>
           <div className="relative grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="hidden md:block absolute top-5 left-[12%] right-[12%] h-0.5 bg-gradient-to-r from-primary/30 via-primary/20 to-primary/30" />
+            <div className="hidden md:block absolute top-5 left-[12%] right-[12%] h-0.5 bg-primary/30" />
             {MOMENTS.map((m) => {
               const on = listed.filter((r) => r.moment === m.key && anyOn(r));
               const first = on[0];
@@ -224,7 +224,7 @@ export default function CustomerMessages({ rules, templates, statusesFor, shopNa
                   <span className={`text-[11px] ${on.length ? "text-primary" : "text-ink-tertiary"}`}>{on.length ? `${on.length} message${on.length === 1 ? "" : "s"}` : "Nothing sent"}</span>
                   {peek === m.key && first && (
                     <span className="absolute top-full mt-2 z-20 w-56 text-left rounded-2xl rounded-tl-md bg-white border border-slate-200 shadow-clay-drawer px-3 py-2 text-[11.5px] leading-snug text-ink-primary">
-                      <span className="block text-[10px] font-semibold text-ink-tertiary mb-0.5">{first.label}</span>{previewOf(first)}
+                      <span className="block text-[11px] font-semibold text-ink-tertiary mb-0.5">{first.label}</span>{previewOf(first)}
                     </span>
                   )}
                 </button>
@@ -480,15 +480,15 @@ function MessageEditor({ row, rt, channels, rules, templates, shopName, flash, s
               ) : (
                 <div className="rounded-[28px] border-[6px] border-slate-800 bg-slate-50 overflow-hidden mx-auto w-[220px]">
                   <div className="bg-white px-3 py-2 text-center border-b border-slate-100">
-                    <div className="w-7 h-7 rounded-full bg-slate-200 mx-auto grid place-items-center text-[10px] font-semibold text-ink-secondary">{(shopName || "S").slice(0, 1).toUpperCase()}</div>
-                    <div className="text-[10px] text-ink-secondary mt-0.5 truncate">{shopName || "Your shop"}</div>
+                    <div className="w-7 h-7 rounded-full bg-slate-200 mx-auto grid place-items-center text-[11px] font-semibold text-ink-secondary">{(shopName || "S").slice(0, 1).toUpperCase()}</div>
+                    <div className="text-[11px] text-ink-secondary mt-0.5 truncate">{shopName || "Your shop"}</div>
                   </div>
                   <div className="p-2.5 min-h-[220px] flex flex-col justify-end">
                     <div className="self-start max-w-[92%] bg-white border border-slate-200 rounded-2xl rounded-bl-md px-2.5 py-1.5 text-[11.5px] text-ink-primary leading-snug whitespace-pre-wrap break-words shadow-sm">{preview}</div>
                   </div>
                 </div>
               )}
-              <p className="text-[10px] text-ink-tertiary mt-2 text-center">Sample customer and job. Real details are filled in when it sends.</p>
+              <p className="text-[11px] text-ink-tertiary mt-2 text-center">Sample customer and job. Real details are filled in when it sends.</p>
             </div>
           </div>
           {err && <div className="mt-4 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}

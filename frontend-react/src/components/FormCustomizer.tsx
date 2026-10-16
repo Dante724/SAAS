@@ -138,7 +138,7 @@ export default function FormCustomizer({ form, typeId, title }: { form: FormKey;
           <div className="rounded-xl border border-slate-200 bg-white/60 px-3 py-2.5 mb-2 flex items-center gap-2.5" title="Always first and always required">
             <M n="lock" c="text-ink-tertiary text-base" />
             <div className="flex-1 min-w-0"><div className="text-xs font-semibold text-ink-secondary mb-1">Name<span className="text-rose-500">*</span>
-              <span className="ml-1.5 px-1.5 py-px rounded bg-slate-100 text-[10px] font-semibold text-ink-tertiary">Always first</span></div>
+              <span className="ml-1.5 px-1.5 py-px rounded bg-slate-100 text-[11px] font-semibold text-ink-tertiary">Always first</span></div>
               <div className="h-8 rounded-lg bg-slate-50 border border-slate-200/80" /></div>
           </div>
         )}
@@ -159,8 +159,8 @@ export default function FormCustomizer({ form, typeId, title }: { form: FormKey;
                 {it.kind === "header" ? (
                   <div className="flex items-center gap-2 px-3 py-2">
                     <M n="drag_indicator" c="text-ink-tertiary cursor-grab text-base" />
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-ink-primary flex-1">{it.label}</span>
-                    <span className="text-[10px] font-semibold text-ink-tertiary">Section</span>
+                    <span className="text-[11px] font-bold text-ink-primary flex-1">{it.label}</span>
+                    <span className="text-[11px] font-semibold text-ink-tertiary">Section</span>
                     <Arrows idx={idx} n={items.length} move={move} />
                   </div>
                 ) : (
@@ -169,9 +169,9 @@ export default function FormCustomizer({ form, typeId, title }: { form: FormKey;
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5 text-xs font-semibold text-ink-secondary mb-1">
                         {it.label}{it.require === "intake" && <span className="text-rose-500">*</span>}
-                        {it.require === "close" && <span className="px-1.5 py-px rounded bg-amber-50 text-[10px] font-semibold text-amber-700">Before closing</span>}
-                        {it.kind === "system" && <span className="px-1.5 py-px rounded bg-slate-100 text-[10px] font-semibold text-ink-tertiary">Built-in</span>}
-                        {it.field?.directory_key && <span className="px-1.5 py-px rounded bg-violet-50 text-[10px] font-semibold text-violet-700">List: {dirs.find((d) => d.key === it.field?.directory_key)?.name || it.field.directory_key}</span>}
+                        {it.require === "close" && <span className="px-1.5 py-px rounded bg-amber-50 text-[11px] font-semibold text-amber-700">Before closing</span>}
+                        {it.kind === "system" && <span className="px-1.5 py-px rounded bg-slate-100 text-[11px] font-semibold text-ink-tertiary">Built-in</span>}
+                        {it.field?.directory_key && <span className="px-1.5 py-px rounded bg-violet-50 text-[11px] font-semibold text-violet-700">List: {dirs.find((d) => d.key === it.field?.directory_key)?.name || it.field.directory_key}</span>}
                       </div>
                       <div className="h-8 rounded-lg bg-slate-50 border border-slate-200/80 flex items-center px-3 text-xs text-ink-tertiary truncate">
                         {it.kind === "system" ? SYS_HINT[it.key] || "" : (it.field?.placeholder || HINT[it.field?.field_type || "text"])}</div>
@@ -223,7 +223,7 @@ function FieldPanel({ it, dirs, form, onLabel, onField, onRequired, onHide, onDe
   const [opts, setOpts] = useState((it.field?.options || []).join(", "));
   const [ph, setPh] = useState(it.field?.placeholder || "");
   const f = it.field;
-  const lbl = "block text-[11px] font-bold uppercase tracking-wider text-ink-tertiary mb-1.5";
+  const lbl = "block text-[11px] font-bold   text-ink-tertiary mb-1.5";
   const chip = (on: boolean) => `px-3 py-1.5 rounded-lg text-xs font-semibold border ${on ? "bg-primary text-white border-primary" : "bg-white text-ink-secondary border-slate-200 hover:border-slate-300"}`;
   const isChoice = f && (f.field_type === "select" || f.field_type === "multiselect");
   // A yes/no always has an answer at intake, so "required" for it only means "ticked before closing".

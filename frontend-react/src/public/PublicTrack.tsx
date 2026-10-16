@@ -204,7 +204,7 @@ export default function PublicTrack() {
       <div className="min-h-screen bg-surface text-ink-primary grid place-items-center px-5">
         <div className="text-center">
           <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-rose-50 text-rose-600"><X size={26} /></div>
-          <div className="text-lg font-extrabold">Order not found</div>
+          <div className="text-lg font-bold">Order not found</div>
           <div className="mt-1.5 text-sm text-ink-tertiary">This tracking link may be invalid or expired.</div>
         </div>
       </div>
@@ -225,13 +225,13 @@ export default function PublicTrack() {
   const recCount = openRecs.filter((x) => recSel[x.id]).length;
 
   const Pill = (
-    <span className="inline-flex items-center gap-1.5 rounded-full px-3 py-[5px] text-[12.5px] font-extrabold"
+    <span className="inline-flex items-center gap-1.5 rounded-full px-3 py-[5px] text-[12.5px] font-bold"
       style={{ background: tint.bg, color: tint.fg }}>
       <span className="h-[7px] w-[7px] rounded-full" style={{ background: tint.fg }} />{d.stage_label}
     </span>
   );
 
-  const secH = "mb-3 text-[11px] font-extrabold uppercase tracking-[.07em] text-ink-tertiary";
+  const secH = "mb-3 text-[11px] font-bold   text-ink-tertiary";
   const sec = "mt-6 border-t border-slate-200 pt-5";
 
   return (
@@ -244,21 +244,21 @@ export default function PublicTrack() {
             <div className="flex min-w-0 items-center gap-3">
               {d.logo_data
                 ? <img src={d.logo_data} alt={d.shop_name || "logo"} className="h-11 w-11 shrink-0 rounded-xl object-contain" style={{ background: "#fff" }} />
-                : <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl text-[17px] font-extrabold text-white" style={{ background: accent }}>{initials(d.shop_name)}</div>}
+                : <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl text-[17px] font-bold text-white" style={{ background: accent }}>{initials(d.shop_name)}</div>}
               <div className="min-w-0">
-                <div className="text-[15px] font-extrabold text-ink-primary">{d.shop_name}</div>
+                <div className="text-[15px] font-bold text-ink-primary">{d.shop_name}</div>
                 <div className="text-xs font-semibold text-ink-tertiary">Repair {isEst ? "estimate" : "tracking"}</div>
               </div>
             </div>
             <div className="min-w-0 text-right text-[12.5px] leading-relaxed text-ink-tertiary">
-              <div className="text-sm font-extrabold text-ink-primary">{d.order_number}</div>
+              <div className="text-sm font-bold text-ink-primary">{d.order_number}</div>
               {d.device && <div>{d.device}</div>}
             </div>
           </div>
 
           {/* title + status */}
           <div className="mt-5 mb-4 flex flex-wrap items-center gap-2.5">
-            <div className="text-2xl font-extrabold tracking-[-.5px] text-ink-primary">
+            <div className="text-2xl font-bold tracking-[-.5px] text-ink-primary">
               {isEst ? "Estimate" : "Work order"} {d.order_number}
             </div>
             {Pill}
@@ -269,7 +269,7 @@ export default function PublicTrack() {
             <Detail label={d.asset_label || "Device"} value={d.device || "—"} />
             {d.complaint && (
               <div className="col-span-2 rounded-lg bg-slate-50 p-3">
-                <div className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary">Reported issue</div>
+                <div className="text-[11px] font-bold text-ink-tertiary">Reported issue</div>
                 <div className="mt-0.5 text-[13px] font-semibold text-ink-primary">{d.complaint}</div>
               </div>
             )}
@@ -291,13 +291,13 @@ export default function PublicTrack() {
                       <div className="absolute left-1/2 top-[13px] z-0 h-0.5 w-full"
                         style={{ background: done ? accent : "#c2c6d5" }} />
                     )}
-                    <div className="z-10 grid h-[26px] w-[26px] place-items-center rounded-full text-[12px] font-extrabold"
+                    <div className="z-10 grid h-[26px] w-[26px] place-items-center rounded-full text-[12px] font-bold"
                       style={done || cur
                         ? { background: accent, color: "#fff", boxShadow: cur ? `0 0 0 4px ${accent}2e` : undefined }
                         : { background: "#fff", color: "#6c7a99", border: "1.5px solid #c2c6d5" }}>
                       {done ? <Check size={13} /> : i + 1}
                     </div>
-                    <div className="max-w-[64px] text-center text-[9.5px] font-bold leading-tight"
+                    <div className="max-w-[64px] text-center text-[11px] font-bold leading-tight"
                       style={{ color: done || cur ? "#14213f" : "#6c7a99" }}>{s.label}</div>
                   </div>
                 );
@@ -362,13 +362,13 @@ export default function PublicTrack() {
           {/* recommendations */}
           {d.allow_recommend !== false && (openRecs.length > 0 || decidedRecs.length > 0) && (
             <div className={sec}>
-              <div className="flex items-center gap-1.5 text-[13px] font-extrabold text-ink-primary"><ClipboardList size={15} /> Recommended for your repair</div>
+              <div className="flex items-center gap-1.5 text-[13px] font-bold text-ink-primary"><ClipboardList size={15} /> Recommended for your repair</div>
               {openRecs.length > 0 && (
                 <>
                   <div className="mt-1 mb-3 text-[12.5px] text-ink-tertiary">Pick what you'd like us to do, then approve.</div>
                   <div className="flex flex-col gap-2">
                     {byItem(openRecs).map((g) => (<div key={g.item || "_job"} className="flex flex-col gap-2">
-                    {openRecs.some((x) => x.item) && <div className="mt-1 text-[11.5px] font-extrabold uppercase tracking-wide text-ink-tertiary">{g.item ? `For your ${g.item}` : "For the whole job"}</div>}
+                    {openRecs.some((x) => x.item) && <div className="mt-1 text-[11.5px] font-bold text-ink-tertiary">{g.item ? `For your ${g.item}` : "For the whole job"}</div>}
                     {g.recs.map((r) => (
                       <label key={r.id} className="flex cursor-pointer items-center gap-3 rounded-lg border border-slate-200 px-3 py-2.5 hover:bg-slate-50">
                         <input type="checkbox" className="h-[19px] w-[19px] accent-primary" checked={!!recSel[r.id]}
@@ -378,7 +378,7 @@ export default function PublicTrack() {
                           <span className="text-sm font-bold text-ink-primary">{r.title}</span>
                           {r.note && <span className="text-xs leading-snug text-ink-tertiary">{r.note}</span>}
                         </span>
-                        <span className="whitespace-nowrap text-sm font-extrabold text-primary">{money(r.line_total, sym)}</span>
+                        <span className="whitespace-nowrap text-sm font-bold text-primary">{money(r.line_total, sym)}</span>
                       </label>
                     ))}
                     </div>))}
@@ -403,7 +403,7 @@ export default function PublicTrack() {
                         <span className="text-sm font-bold text-ink-primary">{r.title}</span>
                         {(r.note || r.item) && <span className="text-xs leading-snug text-ink-tertiary">{[r.item ? `For your ${r.item}` : "", r.note || ""].filter(Boolean).join(" · ")}</span>}
                       </span>
-                      <span className="whitespace-nowrap text-sm font-extrabold text-primary">{money(r.line_total, sym)}</span>
+                      <span className="whitespace-nowrap text-sm font-bold text-primary">{money(r.line_total, sym)}</span>
                     </div>
                   ))}
                 </div>
@@ -417,16 +417,16 @@ export default function PublicTrack() {
               <div className={secH}>Itemized {isEst ? "estimate" : "summary"}</div>
               <table className="w-full border-collapse text-[13px]">
                 <thead>
-                  <tr className="text-[10.5px] uppercase tracking-wide text-ink-tertiary">
-                    <th className="border-b-2 border-slate-300 px-1.5 pb-2 text-left font-extrabold">Description</th>
-                    <th className="border-b-2 border-slate-300 px-1.5 pb-2 text-right font-extrabold">Qty</th>
-                    <th className="border-b-2 border-slate-300 px-1.5 pb-2 text-right font-extrabold">Amount</th>
+                  <tr className="text-[10.5px] text-ink-tertiary">
+                    <th className="border-b-2 border-slate-300 px-1.5 pb-2 text-left font-bold">Description</th>
+                    <th className="border-b-2 border-slate-300 px-1.5 pb-2 text-right font-bold">Qty</th>
+                    <th className="border-b-2 border-slate-300 px-1.5 pb-2 text-right font-bold">Amount</th>
                   </tr>
                 </thead>
                 <tbody>
                   {d.lines.map((l, i) => (<Fragment key={i}>
                     {d.lines!.some((x) => x.item) && (i === 0 || (d.lines![i - 1].item || null) !== (l.item || null)) && (
-                      <tr><td colSpan={3} className="px-1.5 pb-1 pt-3 text-[11.5px] font-extrabold uppercase tracking-wide text-ink-tertiary">{l.item || "Whole job"}</td></tr>
+                      <tr><td colSpan={3} className="px-1.5 pb-1 pt-3 text-[11.5px] font-bold text-ink-tertiary">{l.item || "Whole job"}</td></tr>
                     )}
                     <tr>
                       <td className="border-b border-slate-200 px-1.5 py-2.5 align-top">
@@ -442,7 +442,7 @@ export default function PublicTrack() {
               </table>
               <div className="mt-1.5 flex justify-end">
                 <div className="min-w-[240px]">
-                  <div className="mt-1.5 flex justify-between border-t-2 border-slate-300 px-1.5 pt-2.5 text-[17px] font-extrabold text-ink-primary">
+                  <div className="mt-1.5 flex justify-between border-t-2 border-slate-300 px-1.5 pt-2.5 text-[17px] font-bold text-ink-primary">
                     <span>Total</span><span>{fmtDoc(d)}</span>
                   </div>
                 </div>
@@ -459,7 +459,7 @@ export default function PublicTrack() {
                   <div key={i} className="flex gap-3 border-b border-slate-100 py-3 last:border-0">
                     <div className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-lg bg-blue-50 text-primary">{UPD_ICON[u.type] || <MessageSquare size={15} />}</div>
                     <div className="min-w-0 flex-1">
-                      {UPD_SENDER[u.type] && <div className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary">{UPD_SENDER[u.type]}</div>}
+                      {UPD_SENDER[u.type] && <div className="text-[11px] font-bold text-ink-tertiary">{UPD_SENDER[u.type]}</div>}
                       {u.body && <div className="text-[13px] font-semibold text-ink-primary">{u.body}</div>}
                       {u.type === "photo" && u.media_data && <img src={u.media_data} alt="" className="mt-2 max-w-[160px] rounded-lg border border-slate-200" />}
                       {u.type === "signature" && u.media_data && <img src={u.media_data} alt="" className="mt-2 max-w-[160px] rounded-lg border border-slate-200 bg-white" />}
@@ -484,7 +484,7 @@ export default function PublicTrack() {
                   <div className="text-xs capitalize text-ink-tertiary">{d.invoice.status || ""}</div>
                 </div>
                 <div className="text-right">
-                  <div className="text-base font-extrabold text-ink-primary">{sym}{Number(d.invoice.total_converted != null ? d.invoice.total_converted : d.invoice.total || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
+                  <div className="text-base font-bold text-ink-primary">{sym}{Number(d.invoice.total_converted != null ? d.invoice.total_converted : d.invoice.total || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
                   {d.invoice.balance_due > 0
                     ? <div className="text-xs text-amber-700">Balance {sym}{Number(d.invoice.balance_due).toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
                     : <div className="text-xs text-emerald-600">Paid</div>}
@@ -544,10 +544,10 @@ export default function PublicTrack() {
         {/* ── sticky rail ── */}
         <aside className="flex flex-col gap-3 order-first lg:order-none lg:sticky lg:top-5">
           <div className="rounded-xl border border-slate-200 bg-white p-[18px]" style={{ borderTop: `3px solid ${accent}` }}>
-            <div className="text-[11px] font-extrabold uppercase tracking-[.07em] text-ink-tertiary">
+            <div className="text-[11px] font-bold text-ink-tertiary">
               {d.awaiting_approval ? (isEst ? "Estimate total" : "Total due") : "Total"}
             </div>
-            <div className="mt-0.5 text-[30px] font-extrabold leading-none tracking-[-.6px] text-ink-primary">{fmtDoc(d)}</div>
+            <div className="mt-0.5 text-[30px] font-bold leading-none tracking-[-.6px] text-ink-primary">{fmtDoc(d)}</div>
             {d.awaiting_approval ? (
               <>
                 <div className="mt-3.5 flex flex-col gap-2">
@@ -568,7 +568,7 @@ export default function PublicTrack() {
           {/* #5 — pickup logistics once the job is ready */}
           {nearEnd && (d.shop_address || d.shop_phone) && (
             <div className="rounded-xl border border-slate-200 bg-white p-[18px]">
-              <div className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-[.07em] text-ink-tertiary"><MapPin size={13} /> Pickup</div>
+              <div className="flex items-center gap-1.5 text-[11px] font-bold text-ink-tertiary"><MapPin size={13} /> Pickup</div>
               {d.location_name && <div className="mt-2 text-sm font-bold text-ink-primary">{d.location_name}</div>}
               {d.shop_address && <div className="mt-0.5 text-[13px] text-ink-secondary">{d.shop_address}</div>}
               {hoursLine && <div className="mt-1 flex items-center gap-1.5 text-[12px] text-ink-tertiary"><Clock size={12} /> {hoursLine}</div>}
@@ -581,7 +581,7 @@ export default function PublicTrack() {
 
           {d.has_signature && (
             <div className="rounded-xl border border-slate-200 bg-white p-[18px]">
-              <div className="text-[11px] font-extrabold uppercase tracking-[.07em] text-ink-tertiary">Signed approval</div>
+              <div className="text-[11px] font-bold text-ink-tertiary">Signed approval</div>
               <a href={`/api/public/track/${token}/certificate.pdf`} target="_blank" rel="noopener"
                 className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-300 py-2.5 text-sm font-bold text-ink-secondary hover:bg-slate-50"><Download size={15} /> Download PDF</a>
             </div>
@@ -600,7 +600,7 @@ export default function PublicTrack() {
 function Detail({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="rounded-lg bg-slate-50 p-3">
-      <div className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary">{label}</div>
+      <div className="text-[11px] font-bold text-ink-tertiary">{label}</div>
       <div className="mt-0.5 text-[15px] font-bold text-ink-primary">{value}</div>
     </div>
   );
@@ -633,7 +633,7 @@ function SignModal({ onClose, onDone }: { onClose: () => void; onDone: (sig: str
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5">
         <div className="mb-3 flex items-center justify-between">
-          <span className="text-base font-extrabold text-ink-primary">Approve estimate</span>
+          <span className="text-base font-bold text-ink-primary">Approve estimate</span>
           <button onClick={onClose} className="text-ink-tertiary hover:text-ink-primary"><X size={18} /></button>
         </div>
         <div className="mb-1.5 text-[13px] text-ink-secondary">Please sign below to approve.</div>

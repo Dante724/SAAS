@@ -183,11 +183,11 @@ export default function Shell({ title, children }: { title: string; children: Re
         <aside className={`${railCollapsed ? "w-[64px]" : "w-[200px]"} flex-shrink-0 bg-white/70 backdrop-blur-xl border-r border-slate-200/80 flex flex-col justify-between z-10 transition-[width] duration-200`}>
           <div className="p-3 space-y-0.5 overflow-y-auto">
             <div className={`flex items-center gap-2.5 px-2 pt-1 pb-3 ${railCollapsed ? "justify-center" : ""}`}>
-              <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-primary to-primary-container flex items-center justify-center text-white shadow-clay-sm shrink-0"><M n="build" c="text-lg" /></div>
+              <div className="w-8 h-8 rounded-xl bg-primary flex items-center justify-center text-white shadow-clay-sm shrink-0"><M n="build" c="text-lg" /></div>
               {!railCollapsed && (
                 <div>
-                  <div className="font-extrabold text-sm tracking-tight text-ink-primary flex items-center gap-1">RepairOS <span className="text-[9px] px-1 rounded bg-blue-100 text-primary font-bold">PRO</span></div>
-                  <p className="text-[10px] text-ink-tertiary font-medium">{t("Workshop Central")}</p>
+                  <div className="font-bold text-sm tracking-tight text-ink-primary flex items-center gap-1">RepairOS <span className="text-[11px] px-1 rounded bg-blue-100 text-primary font-bold">PRO</span></div>
+                  <p className="text-[11px] text-ink-tertiary font-medium">{t("Workshop Central")}</p>
                 </div>
               )}
             </div>
@@ -197,7 +197,7 @@ export default function Shell({ title, children }: { title: string; children: Re
               return (
                 <div key={group.name || "home"} className="pb-1">
                   {group.name && !railCollapsed && (
-                    <div className="px-2.5 pt-2.5 pb-1 text-[9px] font-bold uppercase tracking-wider text-ink-tertiary/80">{t(group.name)}</div>
+                    <div className="px-2.5 pt-2.5 pb-1 text-[11px] font-bold text-ink-tertiary/80">{t(group.name)}</div>
                   )}
                   {group.name && railCollapsed && <div className="my-1.5 mx-2 border-t border-slate-200/70" />}
                   {visible.map((it) => (
@@ -233,9 +233,9 @@ export default function Shell({ title, children }: { title: string; children: Re
           </div>
           <div className="p-3 border-t border-slate-200/80 bg-slate-50/50">
             <div className={`flex items-center gap-2 px-1 ${railCollapsed ? "justify-center" : ""}`} title={railCollapsed ? (me?.name || "") : undefined}>
-              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-bold flex items-center justify-center text-xs ring-2 ring-white shadow-sm shrink-0">{initials}</div>
+              <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center text-xs ring-2 ring-white shadow-sm shrink-0">{initials}</div>
               {!railCollapsed && <>
-                <div className="flex-1 min-w-0"><p className="text-xs font-bold text-ink-primary truncate">{me?.name || "—"}</p><p className="text-[10px] text-ink-tertiary truncate">{me?.role || me?.email || ""}</p></div>
+                <div className="flex-1 min-w-0"><p className="text-xs font-bold text-ink-primary truncate">{me?.name || "—"}</p><p className="text-[11px] text-ink-tertiary truncate">{me?.role || me?.email || ""}</p></div>
                 <M n="more_vert" c="text-ink-tertiary text-sm cursor-pointer hover:text-ink-primary" />
               </>}
             </div>
@@ -250,14 +250,14 @@ export default function Shell({ title, children }: { title: string; children: Re
               <button onClick={() => setPalette(true)} className="relative w-64 flex-shrink-0 text-left group">
                 <M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" />
                 <div className="w-full bg-slate-100/80 group-hover:bg-white text-xs pl-8 pr-12 py-1.5 rounded-lg border border-slate-200/70 font-medium text-ink-placeholder whitespace-nowrap overflow-hidden text-ellipsis">{t("Search jobs, customers…")}</div>
-                <span className="absolute right-2 top-1.5 text-[10px] bg-white border border-slate-200 text-ink-tertiary font-mono px-1 rounded shadow-2xs">⌘K</span>
+                <span className="absolute right-2 top-1.5 text-[11px] bg-white border border-slate-200 text-ink-tertiary font-mono px-1 rounded shadow-2xs">⌘K</span>
               </button>
             </div>
             <div className="flex items-center gap-3">
               <LocationSwitcher />
               <ScanBox />
               {(me?.clock_attendance_enabled || me?.clock_wo_enabled) && <TimeClockChip me={me} />}
-              <button onClick={() => setNotifOpen((o) => !o)} aria-label="Notifications" className="w-8 h-8 rounded-full border border-slate-200 bg-white flex items-center justify-center text-ink-secondary hover:text-ink-primary shadow-xs relative"><M n="notifications" c="text-sm" />{unread > 0 && <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-primary text-white text-[9px] font-bold flex items-center justify-center border-2 border-white">{unread > 9 ? "9+" : unread}</span>}</button>
+              <button onClick={() => setNotifOpen((o) => !o)} aria-label="Notifications" className="w-8 h-8 rounded-full border border-slate-200 bg-white flex items-center justify-center text-ink-secondary hover:text-ink-primary shadow-xs relative"><M n="notifications" c="text-sm" />{unread > 0 && <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-primary text-white text-[11px] font-bold flex items-center justify-center border-2 border-white">{unread > 9 ? "9+" : unread}</span>}</button>
               <div className="relative">
                 <button onClick={() => setAvatarOpen((o) => !o)} aria-label={t("Account menu")} className="w-8 h-8 rounded-full bg-primary text-white font-semibold text-xs flex items-center justify-center shadow-xs hover:brightness-110 relative">{initials}{me?.mfa_required && !me?.mfa_enabled && <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-amber-400 border-2 border-white" />}</button>
                 {avatarOpen && (
@@ -273,7 +273,7 @@ export default function Shell({ title, children }: { title: string; children: Re
                       </button>
                       <button onClick={() => setLang(lang === "en" ? "es" : lang === "es" ? "ar" : "en")} className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-ink-secondary hover:bg-slate-100 hover:text-ink-primary">
                         <span className="flex items-center gap-2.5"><M n="language" c="text-base" />{t("Language")}</span>
-                        <span className="text-[10px] font-bold bg-slate-100 text-ink-tertiary rounded px-1 uppercase">{lang}</span>
+                        <span className="text-[11px] font-bold bg-slate-100 text-ink-tertiary rounded px-1 ">{lang}</span>
                       </button>
                       <button onClick={() => { setAvatarOpen(false); setSecOpen(true); }} className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-ink-secondary hover:bg-slate-100 hover:text-ink-primary">
                         <span className="flex items-center gap-2.5"><M n="lock" c="text-base" />{t("Security & two-factor")}</span>
@@ -362,7 +362,7 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
               {me?.mfa_required
                 ? <div className="text-xs text-ink-tertiary">Your organization requires 2FA, so it can't be turned off.</div>
                 : <div className="space-y-2">
-                    <label className="block text-[11px] font-bold uppercase text-ink-tertiary">Disable (confirm password)</label>
+                    <label className="block text-[11px] font-bold text-ink-tertiary">Disable (confirm password)</label>
                     <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="Account password" className={inp} />
                     <button onClick={disable} disabled={busy || !pw} className="px-3 py-2 rounded-lg bg-rose-600 text-white text-xs font-bold disabled:opacity-50">Turn off 2FA</button>
                   </div>}
@@ -373,7 +373,7 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
             <>
               {forced && <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2">Your organization requires two-factor authentication. Set it up to continue.</div>}
               <p className="text-ink-secondary text-xs">Protect your account with an authenticator app (Google Authenticator, Authy, 1Password…). You'll enter a 6-digit code at sign-in.</p>
-              <button onClick={startEnroll} disabled={busy} className="px-4 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm disabled:opacity-50">{busy ? "…" : "Enable two-factor"}</button>
+              <button onClick={startEnroll} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm disabled:opacity-50">{busy ? "…" : "Enable two-factor"}</button>
             </>
           )}
 
@@ -385,8 +385,8 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
                 <code className="text-[11px] font-mono bg-slate-100 rounded px-2 py-1 break-all text-ink-secondary">{enroll.secret}</code>
               </div>
               <p className="text-ink-secondary text-xs">2. Enter the 6-digit code it shows:</p>
-              <input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="123456" className={`${inp} font-mono tracking-widest text-center`} />
-              <button onClick={activate} disabled={busy || code.length < 6} className="w-full px-4 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm disabled:opacity-50">{busy ? "Verifying…" : "Verify & turn on"}</button>
+              <input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="123456" className={`${inp} font-mono  text-center`} />
+              <button onClick={activate} disabled={busy || code.length < 6} className="w-full px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm disabled:opacity-50">{busy ? "Verifying…" : "Verify & turn on"}</button>
             </>
           )}
 
@@ -396,7 +396,7 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
               {recovery.length > 0 && (
                 <div>
                   <p className="text-xs text-ink-secondary mb-1">Save these recovery codes somewhere safe — they're shown once and let you back in if you lose your device:</p>
-                  <div className="grid grid-cols-2 gap-1.5 bg-slate-50 rounded-lg border border-slate-200 p-3 font-mono text-xs">
+                  <div className="grid grid-cols-2 gap-1.5 bg-slate-50 rounded-lg border border-slate-200 p-3 tabular-nums text-xs">
                     {recovery.map((c) => <span key={c} className="text-ink-primary">{c}</span>)}
                   </div>
                 </div>
@@ -450,12 +450,12 @@ function CommandPalette({ onClose }: { onClose: () => void }) {
         <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100">
           <M n="search" c="text-ink-tertiary text-base" />
           <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("Search or jump to…")} className="flex-1 text-sm outline-none bg-transparent placeholder-ink-placeholder" />
-          <span className="text-[10px] text-ink-tertiary font-mono border border-slate-200 rounded px-1">Esc</span>
+          <span className="text-[11px] text-ink-tertiary tabular-nums border border-slate-200 rounded px-1">Esc</span>
         </div>
         <div className="max-h-[52vh] overflow-y-auto p-2">
           {hits.length > 0 && (
             <div className="mb-2">
-              <div className="px-2 py-1 text-[10px] font-bold text-ink-tertiary uppercase tracking-wider">{t("Results")}</div>
+              <div className="px-2 py-1 text-[11px] font-bold text-ink-tertiary ">{t("Results")}</div>
               {hits.map((h, i) => (
                 <button key={i} onClick={() => go(h.to)} className="w-full flex items-center gap-3 px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-left">
                   <M n={h.icon} c="text-sm text-primary" /><div className="min-w-0"><div className="text-sm font-semibold text-ink-primary truncate">{h.label}</div><div className="text-[11px] text-ink-tertiary truncate">{h.sub}</div></div>
@@ -463,7 +463,7 @@ function CommandPalette({ onClose }: { onClose: () => void }) {
               ))}
             </div>
           )}
-          <div className="px-2 py-1 text-[10px] font-bold text-ink-tertiary uppercase tracking-wider">{t("Navigate")}</div>
+          <div className="px-2 py-1 text-[11px] font-bold text-ink-tertiary ">{t("Navigate")}</div>
           {filteredCmds.map((c) => (
             <button key={c.to} onClick={() => go(c.to)} className="w-full flex items-center gap-3 px-2.5 py-2 rounded-lg hover:bg-slate-100 text-left">
               <M n={c.icon} c="text-sm text-ink-tertiary" /><span className="text-sm font-medium text-ink-primary">{c.label}</span>
@@ -529,7 +529,7 @@ function NotificationsPanel({ onClose, onChanged }: { onClose: () => void; onCha
             <div key={n.id} className={`group relative w-full hover:bg-blue-50/50 ${n.read ? "" : "bg-blue-50/30"}`}>
               <button onClick={() => open(n)} className="w-full text-left px-4 py-3 pr-9 flex gap-3">
                 <span className={`mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0 ${n.read ? "bg-transparent" : "bg-primary"}`} />
-                <div className="min-w-0"><div className="text-xs font-bold text-ink-primary">{n.title || n.kind || "Update"}</div>{n.body && <div className="text-[11px] text-ink-secondary mt-0.5 line-clamp-2">{n.body}</div>}<div className="text-[10px] text-ink-tertiary mt-1">{n.created_at ? new Date(n.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}</div></div>
+                <div className="min-w-0"><div className="text-xs font-bold text-ink-primary">{n.title || n.kind || "Update"}</div>{n.body && <div className="text-[11px] text-ink-secondary mt-0.5 line-clamp-2">{n.body}</div>}<div className="text-[11px] text-ink-tertiary mt-1">{n.created_at ? new Date(n.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}</div></div>
               </button>
               <button onClick={(e) => dismiss(n, e)} title={t("Dismiss")} aria-label={t("Dismiss")}
                 className="absolute top-2 right-2 w-6 h-6 rounded-md flex items-center justify-center text-ink-placeholder hover:text-rose-600 hover:bg-rose-50 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity">
@@ -578,12 +578,12 @@ function ScanBox() {
         className="w-8 h-8 rounded-full border border-slate-200 bg-white flex items-center justify-center text-ink-secondary hover:text-ink-primary shadow-xs"><M n="qr_code_scanner" c="text-sm" /></button>
       {open && (
         <div className="absolute right-0 mt-2 w-64 bg-white dark:bg-[#151b2e] rounded-xl border border-slate-200/80 shadow-clay-card z-50 p-2.5">
-          <div className="text-[10px] font-bold uppercase tracking-wide text-ink-tertiary mb-1.5">Scan or type a code</div>
+          <div className="text-[11px] font-bold text-ink-tertiary mb-1.5">Scan or type a code</div>
           <input ref={ref} value={val} onChange={(e) => { setVal(e.target.value); setMsg(null); }}
             onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") setOpen(false); }}
             placeholder="WO-00042, IMEI, SKU…" className="glass-input rounded-lg px-3 py-2 text-sm w-full font-mono" />
           {msg && <div className="text-[11px] text-rose-600 mt-1.5">{msg} — try the ⌘K search.</div>}
-          <div className="text-[10px] text-ink-tertiary mt-1.5">Jumps to the work order, product, or asset.</div>
+          <div className="text-[11px] text-ink-tertiary mt-1.5">Jumps to the work order, product, or asset.</div>
         </div>
       )}
     </div>
@@ -627,7 +627,7 @@ function TimeClockChip({ me }: { me: any }) {
           ? <>
               <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-500" />
               {jobName && <span className="truncate max-w-[96px]">{jobName}</span>}
-              <span className="font-mono shrink-0">{job ? fmtHMS(jobSec) : fmtHMS(shiftSec)}</span>
+              <span className="tabular-nums shrink-0">{job ? fmtHMS(jobSec) : fmtHMS(shiftSec)}</span>
             </>
           : <><M n="play_arrow" c="text-sm" />{t("Clock in")}</>}
       </button>
@@ -637,10 +637,10 @@ function TimeClockChip({ me }: { me: any }) {
           <div className="absolute right-0 mt-2 w-64 bg-white rounded-xl border border-slate-200 shadow-drawer z-50 p-3 space-y-3">
             {woClock && (
               <div className="rounded-lg bg-slate-50 border border-slate-200 p-2.5">
-                <div className="text-[10px] font-bold text-ink-tertiary uppercase tracking-wide mb-1">Job timer</div>
+                <div className="text-[11px] font-bold text-ink-tertiary mb-1">Job timer</div>
                 {job ? (
                   <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-emerald-700 truncate mr-2">{jobName} · <span className="font-mono">{fmtHMS(jobSec)}</span></span>
+                    <span className="text-sm font-semibold text-emerald-700 truncate mr-2">{jobName} · <span className="tabular-nums">{fmtHMS(jobSec)}</span></span>
                     <button onClick={stopJob} disabled={busy} className="px-2.5 py-1 rounded-lg bg-rose-600 text-white text-[11px] font-semibold disabled:opacity-60">Stop</button>
                   </div>
                 ) : (
@@ -653,10 +653,10 @@ function TimeClockChip({ me }: { me: any }) {
             )}
             {attendance && (
               <div className="rounded-lg bg-slate-50 border border-slate-200 p-2.5">
-                <div className="text-[10px] font-bold text-ink-tertiary uppercase tracking-wide mb-1">Shop attendance</div>
+                <div className="text-[11px] font-bold text-ink-tertiary mb-1">Shop attendance</div>
                 {onShift ? (
                   <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-emerald-700 font-mono">{fmtHMS(shiftSec)}</span>
+                    <span className="text-sm font-semibold text-emerald-700 tabular-nums">{fmtHMS(shiftSec)}</span>
                     <button onClick={clockOut} disabled={busy} className="px-2.5 py-1 rounded-lg bg-rose-600 text-white text-[11px] font-semibold disabled:opacity-60">Clock out</button>
                   </div>
                 ) : (

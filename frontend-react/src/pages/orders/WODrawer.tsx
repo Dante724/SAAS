@@ -236,7 +236,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
     <div className="rounded-2xl border border-slate-200/90 bg-white shadow-sm p-4 space-y-3">
       <h4 className="text-xs font-bold text-ink-tertiary flex items-center gap-1.5"><M n="shopping_cart" c="text-sm text-primary" />Parts procurement</h4>
       <div className="space-y-1.5">
-        <div className="text-[10px] font-bold text-ink-tertiary">Order parts (supplier PO)</div>
+        <div className="text-[11px] font-bold text-ink-tertiary">Order parts (supplier PO)</div>
         <div className="flex items-center gap-1.5 flex-wrap">
           <select value={poSupplier} onChange={(e) => { setPoSupplier(e.target.value); setPoMsg(null); }} className="glass-input rounded-lg px-2 py-2 text-xs font-semibold text-ink-primary max-w-[180px]">
             <option value="">— Supplier —</option>
@@ -252,7 +252,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
       </div>
       <div className="border-t border-slate-200/70" />
       <div className="space-y-1.5">
-        <div className="text-[10px] font-bold text-ink-tertiary">Reserve in-stock parts</div>
+        <div className="text-[11px] font-bold text-ink-tertiary">Reserve in-stock parts</div>
         <div className="flex items-center gap-1.5 flex-wrap">
           <span className="text-[11px] text-ink-tertiary">Hold for</span>
           {HOLD_PRESETS.map((n) => (
@@ -268,7 +268,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               <div key={r.id} className="flex items-center justify-between text-[11px] bg-slate-50/70 rounded-lg border border-slate-200/70 px-2 py-1">
                 <span className="font-semibold text-ink-primary truncate">{r.part}</span>
                 <span className="flex items-center gap-2 shrink-0">
-                  <span className="font-mono text-ink-secondary">×{r.qty}</span>
+                  <span className="tabular-nums text-ink-secondary">×{r.qty}</span>
                   {daysLeft(r.expires_at) != null && <span className="text-ink-tertiary">· until {r.expires_at ? new Date(r.expires_at).toLocaleDateString() : ""}</span>}
                   <button aria-label="Release hold" type="button" onClick={() => releaseHold(r.id)} className="text-ink-tertiary hover:text-rose-600" title="Release hold"><M n="lock_open" c="text-sm" /></button>
                 </span>
@@ -289,7 +289,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
         {/* Header */}
         <header className="px-6 py-4 border-b border-slate-200/90 bg-white/95 backdrop-blur flex items-center justify-between flex-shrink-0">
           <div className="flex items-center gap-3">
-            <span className="font-mono text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-100 text-ink-secondary">{woNum}</span>
+            <span className="tabular-nums text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-100 text-ink-secondary">{woNum}</span>
             <h3 className="text-base font-semibold text-ink-primary tracking-tight">{hasDevice ? devTitle : (c.name || "Work order")}</h3>
             <StatusControl statuses={statuses} currentKey={d.status} elapsedMin={timing?.elapsed_min}
               isEstimate={!!(order as any).is_estimate} onChange={changeStatus} />
@@ -305,7 +305,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               <button onClick={stopAllTimers} title="Stop the job timer"
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="font-mono">{secHM(timerTotalSec)}</span><M n="stop" c="text-sm" />
+                <span className="tabular-nums">{secHM(timerTotalSec)}</span><M n="stop" c="text-sm" />
               </button>
             ) : (
               <button onClick={() => startTimer()} title="Start the job timer"
@@ -370,7 +370,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             <button key={t.id} onClick={() => setTab(t.id)}
               className={`py-3 border-b-2 transition-colors flex items-center gap-1.5 ${tab === t.id ? "text-ink-primary border-primary font-semibold" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>
               <span>{t.label}</span>
-              {t.badge && <span className="text-[10px] bg-rose-100 text-rose-700 px-1.5 rounded-full font-mono font-bold">{t.badge}</span>}
+              {t.badge && <span className="text-[11px] bg-rose-100 text-rose-700 px-1.5 rounded-full tabular-nums font-bold">{t.badge}</span>}
               {t.dot && <span role="img" aria-label="Checklist incomplete" title="Checklist incomplete" className={`w-2 h-2 rounded-full ${t.dot}`} />}
             </button>
           ))}
@@ -428,7 +428,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                       <div className="w-10 h-10 rounded-xl bg-slate-100 text-ink-secondary flex items-center justify-center"><M n={deviceIcon(d.device)} c="text-xl" /></div>
                       <div>
                         <div className="flex items-center gap-1.5"><h4 className="text-sm font-semibold text-ink-primary group-hover:text-primary transition-colors">{devTitle}</h4>
-                          {d.warranty_until && <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-semibold">Under warranty</span>}
+                          {d.warranty_until && <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-semibold">Under warranty</span>}
                         </div>
                         <p className="text-xs text-ink-secondary">{[dev.color, dev.asset_type].filter(Boolean).join(" · ") || dev.asset_label || "Device"}</p>
                       </div>
@@ -469,8 +469,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                           <div key={b.employee_id} className="flex items-center justify-between text-[11px]">
                             <span className="flex items-center gap-1.5"><Avatar name={b.employee_name} size={20} />{b.running && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />}<span className="font-semibold text-ink-primary">{b.employee_name}</span></span>
                             <span className="flex items-center gap-2">
-                              <span className="font-mono text-ink-secondary">{secHM(b.total_seconds)}{b.running ? " · running" : ""}</span>
-                              {b.running && <button type="button" onClick={() => stopEntry(b.employee_id)} className="px-1.5 py-0.5 rounded-md bg-rose-50 text-rose-600 border border-rose-200 text-[10px] font-bold hover:bg-rose-100">Stop</button>}
+                              <span className="tabular-nums text-ink-secondary">{secHM(b.total_seconds)}{b.running ? " · running" : ""}</span>
+                              {b.running && <button type="button" onClick={() => stopEntry(b.employee_id)} className="px-1.5 py-0.5 rounded-md bg-rose-50 text-rose-600 border border-rose-200 text-[11px] font-bold hover:bg-rose-100">Stop</button>}
                             </span>
                           </div>
                         ))}
@@ -509,7 +509,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 flex items-center justify-between shadow-clay-sm">
                 <div className="flex items-center gap-3">
                   <div className="p-2 rounded-lg bg-slate-100 text-ink-primary"><M n="qr_code_2" c="text-2xl" /></div>
-                  <div><span className="font-mono text-xs font-bold tracking-widest text-ink-primary">{woNum}</span><p className="text-[11px] text-ink-tertiary">Bench ticket code. Scan it with a barcode gun to open this job.</p></div>
+                  <div><span className="font-mono text-xs font-bold text-ink-primary">{woNum}</span><p className="text-[11px] text-ink-tertiary">Bench ticket code. Scan it with a barcode gun to open this job.</p></div>
                 </div>
                 <button onClick={printWO} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50 flex items-center gap-1.5 transition-colors"><M n="print" c="text-xs" />Print sticker</button>
               </div>
@@ -541,7 +541,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
           </div>
           <div className="flex items-center gap-2">
             <button onClick={onClose} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 transition-colors">Close</button>
-            <button onClick={markDone} className="px-5 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="task_alt" c="text-sm" />Mark done and close</button>
+            <button onClick={markDone} className="px-5 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="task_alt" c="text-sm" />Mark done and close</button>
           </div>
         </footer>
 
@@ -677,8 +677,8 @@ function JobItems({ orderId, onFlash, onChanged }: { orderId: string; onFlash: (
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm font-medium text-ink-primary">{itemName(it)}</span>
                   {it.asset?.serial && <span className="text-[11px] text-ink-tertiary">Serial <span className="font-mono">{it.asset.serial}</span></span>}
-                  {it.is_primary && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-primary/10 text-primary">Main item</span>}
-                  {it.collected_at && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700">Collected</span>}
+                  {it.is_primary && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-primary/10 text-primary">Main item</span>}
+                  {it.collected_at && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700">Collected</span>}
                 </div>
                 <ItemComplaint value={it.complaint || ""} readOnly={ro} onSave={(v) => call(() => api.patch(`/orders/${orderId}/items/${it.id}`, { complaint: v }))} />
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -798,7 +798,7 @@ function ChecklistRings({ orderId, onOpen }: { orderId: string; onOpen: () => vo
     return (
       <div key={i} className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-sm flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className={`w-10 h-10 rounded-full border-4 flex items-center justify-center font-mono font-bold text-xs ${done ? "border-emerald-500 text-emerald-600" : "border-amber-500 border-t-slate-200 text-amber-600"}`}>{pct}%</div>
+          <div className={`w-10 h-10 rounded-full border-4 flex items-center justify-center tabular-nums font-bold text-xs ${done ? "border-emerald-500 text-emerald-600" : "border-amber-500 border-t-slate-200 text-amber-600"}`}>{pct}%</div>
           <div><h5 className="text-xs font-bold text-ink-primary">{c.done} / {c.total} {c.name}</h5><p className={`text-[11px] ${done ? "text-emerald-600 font-semibold" : "text-ink-tertiary"}`}>{done ? "Complete" : "In progress"}</p></div>
         </div>
         <button onClick={onOpen} className="text-xs font-bold text-primary hover:underline">View</button>
@@ -899,7 +899,7 @@ function IntakePhotos({ orderId, photos, onChanged, onFlash }: {
   return (
     <div className="bg-white rounded-xl border border-slate-200/90 p-3.5 space-y-2.5">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2"><M n="photo_camera" c="text-base text-primary" /><h5 className="text-xs font-bold text-ink-primary">Intake photos</h5><span className="text-[10px] text-ink-tertiary">condition at check-in</span></div>
+        <div className="flex items-center gap-2"><M n="photo_camera" c="text-base text-primary" /><h5 className="text-xs font-bold text-ink-primary">Intake photos</h5><span className="text-[11px] text-ink-tertiary">condition at check-in</span></div>
         <label className={`px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-ink-secondary text-xs font-semibold flex items-center gap-1 cursor-pointer ${busy ? "opacity-50 pointer-events-none" : ""}`}>
           <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => { add(e.target.files); e.currentTarget.value = ""; }} />
           <M n="add" c="text-xs" />{busy ? "…" : "Add"}
@@ -919,7 +919,7 @@ function IntakePhotos({ orderId, photos, onChanged, onFlash }: {
               {/* mark up always edits the ORIGINAL, so re-marking stays non-destructive */}
               <button onClick={() => setAnnotate(p)} className="absolute bottom-0.5 left-0.5 w-5 h-5 rounded-md bg-ink-primary/85 text-white flex items-center justify-center opacity-0 group-hover:opacity-100" title="Mark up"><M n="edit" c="text-[12px]" /></button>
               {hasMark && <button onClick={() => setShowOrig((s) => ({ ...s, [p.id]: !s[p.id] }))} className="absolute bottom-0.5 right-0.5 w-5 h-5 rounded-md bg-ink-primary/85 text-white flex items-center justify-center opacity-0 group-hover:opacity-100" title={showOrig[p.id] ? "Show marked" : "Show original"}><M n="swap_horiz" c="text-[12px]" /></button>}
-              <button onClick={() => remove(p.id)} className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-ink-primary text-white text-[10px] leading-none opacity-0 group-hover:opacity-100" title="Remove">×</button>
+              <button onClick={() => remove(p.id)} className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-ink-primary text-white text-[11px] leading-none opacity-0 group-hover:opacity-100" title="Remove">×</button>
             </span>
             );
           })}
@@ -1003,7 +1003,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
   else groups[""] = shown;
   const dot = ["bg-primary", "bg-purple-500", "bg-emerald-500", "bg-amber-500"];
   const tagCls = (k: string) => k.includes("serv") ? "bg-blue-50 text-primary" : k.includes("lab") ? "bg-purple-50 text-purple-700" : "bg-emerald-50 text-emerald-700";
-  const avCls = ["bg-gradient-to-br from-primary to-purple-500", "bg-gradient-to-br from-emerald-500 to-primary", "bg-gradient-to-br from-amber-500 to-rose-500"];
+  const avCls = ["bg-primary", "bg-emerald-500", "bg-amber-500"];
   const avHue = (id?: string | null) => { if (!id) return "bg-slate-300"; let h = 0; for (const c of id) h = (h + c.charCodeAt(0)) % avCls.length; return avCls[h]; };
 
   // 144av #1+#2+#3 — one service/labour line row with assignee, booked-vs-actual, and split.
@@ -1021,8 +1021,8 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
           <div className="flex items-center space-x-3 min-w-0">
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-none ${tagCls(k)}`}><M n={k.includes("serv") ? "build" : k.includes("lab") ? "search_check" : "inventory_2"} c="text-base" /></div>
             <div className="min-w-0">
-              <div className="flex items-center gap-2"><h5 className="text-xs font-bold text-ink-primary truncate">{l.description || "Item"}</h5><span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${tagCls(k)}`}>{l.kind || l.line_type || "item"}</span></div>
-              <p className="text-[11px] text-ink-tertiary font-mono">Qty: {l.qty ?? 1} · Unit: {money(l.unit_price)}{l.discount ? ` · Disc ${l.discount}${l.discount_type === "pct" ? "%" : ""}` : ""}</p>
+              <div className="flex items-center gap-2"><h5 className="text-xs font-bold text-ink-primary truncate">{l.description || "Item"}</h5><span className={`text-[11px] px-1.5 py-0.5 rounded font-bold ${tagCls(k)}`}>{l.kind || l.line_type || "item"}</span></div>
+              <p className="text-[11px] text-ink-tertiary tabular-nums">Qty: {l.qty ?? 1} · Unit: {money(l.unit_price)}{l.discount ? ` · Disc ${l.discount}${l.discount_type === "pct" ? "%" : ""}` : ""}</p>
               {tagging && (
                 <select value={l.order_item_id || ""} onChange={(e) => patchLine(l.id, { order_item_id: e.target.value })} aria-label={`Which item ${l.description || "this line"} is for`}
                   className="mt-1 max-w-[220px] text-[11px] font-medium text-ink-secondary bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5">
@@ -1038,7 +1038,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                 : <button type="button" onClick={() => onClockIn(l.id)} title={`Clock into ${l.description || "this line"}`}
                     className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-emerald-700 border border-emerald-200 hover:bg-emerald-50"><M n="play_arrow" c="text-[13px]" />clock in</button>
             )}
-            <div className="text-right"><p className="font-mono font-bold text-xs text-ink-primary">{money(l.total)}</p></div>
+            <div className="text-right"><p className="tabular-nums font-bold text-xs text-ink-primary">{money(l.total)}</p></div>
           </div>
         </div>
         {/* 144av — assignee + booked/actual on service & labour lines only */}
@@ -1058,7 +1058,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
               </button>
               {openPick && (
                 <div className="absolute z-20 mt-1 w-56 bg-white rounded-xl border border-slate-200 shadow-xl p-1.5 max-h-64 overflow-auto">
-                  <div className="text-[9px] font-bold text-ink-tertiary px-2 py-1">Assign technician</div>
+                  <div className="text-[11px] font-bold text-ink-tertiary px-2 py-1">Assign technician</div>
                   <button onClick={() => { patchLine(l.id, { technician_id: null, co_technicians: [] }); setAssignOpen(null); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-ink-secondary">Unassigned</button>
                   {(emps || []).map((e) => (
                     <button key={e.id} onClick={() => { patchLine(l.id, { technician_id: e.id, co_technicians: [] }); setAssignOpen(null); }}
@@ -1069,10 +1069,10 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                   {l.technician_id && (
                     <>
                       <div className="flex items-center justify-between px-2 py-1 border-t border-slate-100 mt-1">
-                        <span className="text-[9px] font-bold text-ink-tertiary">Split with</span>
+                        <span className="text-[11px] font-bold text-ink-tertiary">Split with</span>
                         <span className="flex gap-1">{[0.5, 0.6, 0.7].map((r) => (
                           <button key={r} onClick={() => setSplitRatio(r)}
-                            className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${splitRatio === r ? "bg-blue-50 text-primary" : "text-ink-tertiary hover:text-ink-primary"}`}>{Math.round(r * 100)}/{Math.round((1 - r) * 100)}</button>
+                            className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${splitRatio === r ? "bg-blue-50 text-primary" : "text-ink-tertiary hover:text-ink-primary"}`}>{Math.round(r * 100)}/{Math.round((1 - r) * 100)}</button>
                         ))}</span>
                       </div>
                       {(emps || []).filter((e) => e.id !== l.technician_id).map((e) => (
@@ -1090,9 +1090,9 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
             <label className="flex items-center gap-1 text-ink-tertiary">Booked
               <input type="number" min={0} step={0.25} defaultValue={booked || ""} placeholder="0"
                 onBlur={(e) => { const v = Number(e.target.value || 0); if (v !== booked) patchLine(l.id, { booked_hours: v }); }}
-                className="glass-input w-14 px-1.5 py-0.5 rounded text-[11px] font-mono text-center" />h</label>
-            <span className="text-ink-tertiary">Actual <b className="font-mono text-ink-secondary">{actualH ? `${actualH.toFixed(2)}h` : "—"}</b></span>
-            {eff !== null && <span className={`font-mono font-bold px-1.5 py-0.5 rounded ${eff >= 100 ? "text-emerald-700 bg-emerald-50" : "text-amber-700 bg-amber-50"}`}>{eff}%</span>}
+                className="glass-input w-14 px-1.5 py-0.5 rounded text-[11px] tabular-nums text-center" />h</label>
+            <span className="text-ink-tertiary">Actual <b className="tabular-nums text-ink-secondary">{actualH ? `${actualH.toFixed(2)}h` : "—"}</b></span>
+            {eff !== null && <span className={`tabular-nums font-bold px-1.5 py-0.5 rounded ${eff >= 100 ? "text-emerald-700 bg-emerald-50" : "text-amber-700 bg-amber-50"}`}>{eff}%</span>}
           </div>
         )}
       </div>
@@ -1117,7 +1117,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
       {!isEstimate && onClockIn && _byEmp.length > 0 && (
         <div className="flex items-center justify-between bg-emerald-50/60 border border-emerald-200/70 rounded-xl px-3.5 py-2 text-xs">
           <span className="flex items-center gap-1.5 text-emerald-800 font-semibold"><M n="schedule" c="text-sm" />Time on job</span>
-          <span className="font-mono font-bold text-emerald-800">{_secHM(_timeTotal)}{_byEmp.some((b: any) => b.running) ? " · running" : ""}</span>
+          <span className="tabular-nums font-bold text-emerald-800">{_secHM(_timeTotal)}{_byEmp.some((b: any) => b.running) ? " · running" : ""}</span>
         </div>
       )}
 
@@ -1126,12 +1126,12 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
         <div className="text-[11px] font-bold text-ink-tertiary">Add service or product</div>
         {pick ? (
           <div className="flex flex-wrap items-end gap-2">
-            <div className="flex-1 min-w-[160px]"><label className="block text-[10px] font-semibold text-ink-tertiary mb-1">Item</label>
+            <div className="flex-1 min-w-[160px]"><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Item</label>
               <div className="glass-input px-3 py-2 rounded-lg text-xs font-semibold flex items-center justify-between"><span className="truncate">{pick.name}</span><button aria-label="Close" onClick={() => setPick(null)} className="text-ink-tertiary hover:text-rose-600 ml-2"><M n="close" c="text-sm" /></button></div></div>
-            <div className="w-16"><label className="block text-[10px] font-semibold text-ink-tertiary mb-1">Qty</label><input type="number" min={1} value={qty} onChange={(e) => setQty(Math.max(1, Number(e.target.value)))} className="glass-input w-full px-2 py-2 rounded-lg text-xs" /></div>
-            <div className="w-20"><label className="block text-[10px] font-semibold text-ink-tertiary mb-1">Disc %</label><input type="number" min={0} max={100} value={disc} onChange={(e) => setDisc(Number(e.target.value))} className="glass-input w-full px-2 py-2 rounded-lg text-xs" /></div>
+            <div className="w-16"><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Qty</label><input type="number" min={1} value={qty} onChange={(e) => setQty(Math.max(1, Number(e.target.value)))} className="glass-input w-full px-2 py-2 rounded-lg text-xs" /></div>
+            <div className="w-20"><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Disc %</label><input type="number" min={0} max={100} value={disc} onChange={(e) => setDisc(Number(e.target.value))} className="glass-input w-full px-2 py-2 rounded-lg text-xs" /></div>
             {tagging && (
-              <div className="min-w-[150px]"><label className="block text-[10px] font-semibold text-ink-tertiary mb-1">For</label>
+              <div className="min-w-[150px]"><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">For</label>
                 <select value={forItem} onChange={(e) => setForItem(e.target.value)} aria-label="Which item this is for" className="glass-input w-full px-2 py-2 rounded-lg text-xs font-semibold text-ink-primary">
                   <option value="">Whole job</option>{jobItems.map((it) => <option key={it.id} value={it.id}>{itemName(it)}</option>)}
                 </select></div>
@@ -1157,8 +1157,8 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
         <div key={tech || "all"} className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
           {groupBy && (
             <div className="bg-slate-50/90 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
-              <div className="flex items-center gap-2"><span className={`w-2 h-2 rounded-full ${dot[gi % dot.length]}`} /><span className="text-xs font-bold text-ink-primary">{tech === "Unassigned" || !tech ? "Unassigned" : empName(tech)}</span><span className="text-[10px] text-ink-tertiary">({ls.length} line items)</span></div>
-              <span className="font-mono text-xs font-bold text-ink-primary">Subtotal: {money(ls.reduce((s, l) => s + (l.total || 0), 0))}</span>
+              <div className="flex items-center gap-2"><span className={`w-2 h-2 rounded-full ${dot[gi % dot.length]}`} /><span className="text-xs font-bold text-ink-primary">{tech === "Unassigned" || !tech ? "Unassigned" : empName(tech)}</span><span className="text-[11px] text-ink-tertiary">({ls.length} line items)</span></div>
+              <span className="tabular-nums text-xs font-bold text-ink-primary">Subtotal: {money(ls.reduce((s, l) => s + (l.total || 0), 0))}</span>
             </div>
           )}
           <div className="divide-y divide-slate-100">
@@ -1171,7 +1171,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
         <div className="rounded-2xl border-2 border-dashed border-purple-300 bg-purple-50/40 p-4 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2"><M n="auto_awesome" c="text-purple-600 text-sm" /><h5 className="text-xs font-bold text-purple-900">Suggested add-ons &amp; Recommendations</h5></div>
-            <span className="text-[10px] bg-purple-100 text-purple-700 font-bold px-2 py-0.5 rounded-full">Automated Upsell</span>
+            <span className="text-[11px] bg-purple-100 text-purple-700 font-bold px-2 py-0.5 rounded-full">Automated Upsell</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {recs.map((r) => (
@@ -1179,9 +1179,9 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                 <div>
                   <div className="flex items-center gap-1.5">
                     <p className="text-xs font-bold text-ink-primary">{r.title || r.name || "Recommendation"}</p>
-                    {r.source === "checklist" && <span className="inline-flex items-center gap-0.5 text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-200 px-1.5 py-0.5 rounded-full" title={r.note || "Auto-drafted from a checklist finding"}><M n="fact_check" c="text-[11px]" />From checklist</span>}
+                    {r.source === "checklist" && <span className="inline-flex items-center gap-0.5 text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-200 px-1.5 py-0.5 rounded-full" title={r.note || "Auto-drafted from a checklist finding"}><M n="fact_check" c="text-[11px]" />From checklist</span>}
                   </div>
-                  <p className="text-[11px] font-mono text-purple-700 font-bold">{money(r.price ?? r.unit_price ?? r.amount)}</p>
+                  <p className="text-[11px] tabular-nums text-purple-700 font-bold">{money(r.price ?? r.unit_price ?? r.amount)}</p>
                   {tagging && (
                     <select value={r.order_item_id || ""} onChange={(e) => tagRec(r, e.target.value)} aria-label={`Which item ${r.title || "this recommendation"} is for`}
                       className="mt-1 max-w-[200px] text-[11px] font-medium text-ink-secondary bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5">
@@ -1189,7 +1189,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                     </select>
                   )}
                 </div>
-                <Gate perm="can_publish_recommend"><div className="flex items-center gap-1.5"><button onClick={() => act(r, true)} className="px-2 py-1 rounded bg-purple-600 text-white text-[10px] font-bold hover:bg-purple-700">Approve</button><button onClick={() => act(r, false)} className="px-2 py-1 rounded bg-slate-100 text-ink-secondary text-[10px] font-semibold hover:bg-slate-200">Reject</button></div></Gate>
+                <Gate perm="can_publish_recommend"><div className="flex items-center gap-1.5"><button onClick={() => act(r, true)} className="px-2 py-1 rounded bg-purple-600 text-white text-[11px] font-bold hover:bg-purple-700">Approve</button><button onClick={() => act(r, false)} className="px-2 py-1 rounded bg-slate-100 text-ink-secondary text-[11px] font-semibold hover:bg-slate-200">Reject</button></div></Gate>
               </div>
             ))}
           </div>
@@ -1199,8 +1199,8 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
       <div className="bg-slate-50/90 rounded-2xl p-4 border border-slate-200 space-y-2">
         {/* Totals are for the whole job, whatever filter is on. No lines yet but a price on the job
             (agreed at check-in) reads as the quoted price, not a $0 subtotal next to a real total. */}
-        {(lines || []).length > 0 && <div className="flex justify-between text-xs text-ink-secondary"><span>Subtotal ({(lines || []).length} {(lines || []).length === 1 ? "line" : "lines"})</span><span className="font-mono font-semibold text-ink-primary">{money((lines || []).reduce((s, l) => s + (l.total || 0), 0))}</span></div>}
-        <div className={`${(lines || []).length ? "pt-2 border-t border-slate-200 " : ""}flex justify-between items-baseline`}><span className="text-xs font-bold text-ink-primary">{(lines || []).length ? "Grand total" : "Quoted price"}</span><span className="text-lg font-black font-mono text-primary">{money(total)}</span></div>
+        {(lines || []).length > 0 && <div className="flex justify-between text-xs text-ink-secondary"><span>Subtotal ({(lines || []).length} {(lines || []).length === 1 ? "line" : "lines"})</span><span className="tabular-nums font-semibold text-ink-primary">{money((lines || []).reduce((s, l) => s + (l.total || 0), 0))}</span></div>}
+        <div className={`${(lines || []).length ? "pt-2 border-t border-slate-200 " : ""}flex justify-between items-baseline`}><span className="text-xs font-bold text-ink-primary">{(lines || []).length ? "Grand total" : "Quoted price"}</span><span className="text-lg font-bold tabular-nums text-primary">{money(total)}</span></div>
         {!(lines || []).length && !!total && <div className="text-[11px] text-ink-tertiary">Agreed when the job came in. Add services and parts to build the invoice.</div>}
       </div>
     </div>
@@ -1293,12 +1293,12 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
                       <span className="flex items-center gap-1.5">{i.label}{i.required && <span className="text-rose-500">*</span>}</span>
                       {i.field_kind === "check_result" && (
                         <div className="flex gap-1">{CHECK.map(([val, lbl, cls2]) => (
-                          <button key={val} onClick={() => fill(c.id, i.id, val)} className={`px-2 py-0.5 rounded text-[10px] font-bold ${String(v) === val ? `${cls2} text-white` : "bg-white border border-slate-200 text-ink-secondary"}`}>{lbl}</button>
+                          <button key={val} onClick={() => fill(c.id, i.id, val)} className={`px-2 py-0.5 rounded text-[11px] font-bold ${String(v) === val ? `${cls2} text-white` : "bg-white border border-slate-200 text-ink-secondary"}`}>{lbl}</button>
                         ))}</div>
                       )}
                       {i.field_kind === "yes_no" && (
                         <div className="flex gap-1">{[["yes", "Yes"], ["no", "No"]].map(([val, lbl]) => (
-                          <button key={val} onClick={() => fill(c.id, i.id, val)} className={`px-2 py-0.5 rounded text-[10px] font-bold ${String(v) === val ? "bg-primary text-white" : "bg-white border border-slate-200 text-ink-secondary"}`}>{lbl}</button>
+                          <button key={val} onClick={() => fill(c.id, i.id, val)} className={`px-2 py-0.5 rounded text-[11px] font-bold ${String(v) === val ? "bg-primary text-white" : "bg-white border border-slate-200 text-ink-secondary"}`}>{lbl}</button>
                         ))}</div>
                       )}
                     </div>
@@ -1316,7 +1316,7 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
                       {(i.file_ids || []).map((fid: string) => (
                         <span key={fid} className="relative group">
                           <AuthedImage src={`/api/media/${fid}`} alt="attachment" onClick={() => openAuthedDoc(`/api/media/${fid}`)} className="w-12 h-12 rounded-lg object-cover border border-slate-200 bg-slate-100 cursor-pointer" />
-                          <button onClick={() => detach(c.id, i, fid)} className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-ink-primary text-white text-[10px] leading-none opacity-0 group-hover:opacity-100" title="Remove">×</button>
+                          <button onClick={() => detach(c.id, i, fid)} className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-ink-primary text-white text-[11px] leading-none opacity-0 group-hover:opacity-100" title="Remove">×</button>
                         </span>
                       ))}
                       <label className="flex items-center gap-1 text-[11px] font-semibold text-primary cursor-pointer px-2 py-1 rounded-lg border border-dashed border-slate-300 hover:bg-slate-50">
@@ -1415,18 +1415,18 @@ function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySy
 
   return (
     <div className="space-y-5">
-      <div className="bg-gradient-to-br from-[#14213f] to-[#1e305b] text-white rounded-2xl p-5 shadow-clay-card relative overflow-hidden">
+      <div className="bg-[#14213f] text-white rounded-2xl p-5 shadow-clay-card relative overflow-hidden">
         <div className="relative z-10 flex flex-wrap items-center justify-between gap-4">
           <div>
             <span className="text-[11px] font-bold text-blue-200/80">Still to pay</span>
-            <div className="flex items-baseline gap-3 mt-1"><h2 className="text-3xl font-extrabold font-mono tracking-tight text-white">{money(due)}</h2><span className="text-xs px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30 font-semibold">{due > 0 ? "Balance due" : "Settled"}</span></div>
+            <div className="flex items-baseline gap-3 mt-1"><h2 className="text-3xl font-bold tabular-nums tracking-tight text-white">{money(due)}</h2><span className="text-xs px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30 font-semibold">{due > 0 ? "Balance due" : "Settled"}</span></div>
             <p className="text-xs text-blue-200/70 mt-1">Grand Total {money(t)} · {money(paid)} Collected</p>
             {isForeign && (
               <p className="text-xs text-blue-100 mt-1 font-mono">≈ {currencySymbol}{conv(due).toFixed(2)} {currencyCode} <span className="text-blue-200/60">(1 {currencyCode} = {fxRate && (1 / fxRate).toFixed(4)} {base?.code})</span></p>
             )}
             {multiCurrency && (
               <div className="mt-2 flex items-center gap-1.5">
-                <span className="text-[10px] font-bold text-blue-200/70">Currency</span>
+                <span className="text-[11px] font-bold text-blue-200/70">Currency</span>
                 <select value={currencyCode || base?.code || ""} onChange={(e) => changeCurrency(e.target.value)} className="bg-white/10 border border-white/20 rounded-lg px-2 py-0.5 text-[11px] font-bold text-white [&>option]:text-ink-primary">
                   {curOpts.map(([c, l]) => <option key={c} value={c}>{l}</option>)}
                 </select>
@@ -1462,7 +1462,7 @@ function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySy
           ))}
           <div className="flex items-center gap-1 ml-1">
             <input value={depInput} onChange={(e) => setDepInput(e.target.value)} inputMode="decimal" placeholder="Amount"
-              className="w-24 text-xs px-2 py-1 rounded-lg border border-slate-200 bg-white font-mono" />
+              className="w-24 text-xs px-2 py-1 rounded-lg border border-slate-200 bg-white tabular-nums" />
             <button type="button" disabled={depBusy || !depInput || isNaN(Number(depInput))} onClick={() => requestDeposit({ amount: Number(depInput) })}
               className="px-2.5 py-1 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50">Set</button>
           </div>
@@ -1477,7 +1477,7 @@ function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySy
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
             <div className="flex gap-1.5"><input value={rwPts} onChange={(e) => setRwPts(e.target.value)} type="number" placeholder="Points" className="glass-input flex-1 px-2.5 py-1.5 rounded-lg font-mono text-ink-primary" /><button disabled={rwBusy} onClick={() => redeem("loyalty")} className="px-2.5 py-1.5 rounded-lg bg-blue-50 text-primary border border-blue-100 font-bold hover:bg-blue-100 disabled:opacity-60">Redeem</button></div>
             <div className="flex gap-1.5"><input value={rwCoupon} onChange={(e) => setRwCoupon(e.target.value)} placeholder="Coupon code" className="glass-input flex-1 px-2.5 py-1.5 rounded-lg font-mono text-ink-primary" /><button disabled={rwBusy} onClick={() => redeem("coupon")} className="px-2.5 py-1.5 rounded-lg bg-blue-50 text-primary border border-blue-100 font-bold hover:bg-blue-100 disabled:opacity-60">Apply</button></div>
-            <div className="flex gap-1.5"><input value={rwGift} onChange={(e) => setRwGift(e.target.value)} placeholder="Gift card" className="glass-input flex-1 px-2.5 py-1.5 rounded-lg font-mono text-ink-primary" /><button disabled={rwBusy} onClick={() => redeem("gift")} className="px-2.5 py-1.5 rounded-lg bg-blue-50 text-primary border border-blue-100 font-bold hover:bg-blue-100 disabled:opacity-60">Redeem</button></div>
+            <div className="flex gap-1.5"><input value={rwGift} onChange={(e) => setRwGift(e.target.value)} placeholder="Gift card" className="glass-input flex-1 px-2.5 py-1.5 rounded-lg tabular-nums text-ink-primary" /><button disabled={rwBusy} onClick={() => redeem("gift")} className="px-2.5 py-1.5 rounded-lg bg-blue-50 text-primary border border-blue-100 font-bold hover:bg-blue-100 disabled:opacity-60">Redeem</button></div>
           </div>
         </div>
       )}
@@ -1486,12 +1486,12 @@ function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySy
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
           <div className="p-3.5 border-b border-slate-100 flex items-center justify-between"><h5 className="text-xs font-bold text-ink-primary">Invoices</h5><span className="text-[11px] text-ink-tertiary">{data.invoices.length} billing records</span></div>
           <table className="w-full text-xs text-left">
-            <thead className="bg-slate-50 text-[10px] text-ink-tertiary font-bold"><tr><th className="py-2.5 px-4">Invoice #</th><th className="py-2.5 px-4">Status</th><th className="py-2.5 px-4 text-right">Amount</th></tr></thead>
+            <thead className="bg-slate-50 text-[11px] text-ink-tertiary font-bold"><tr><th className="py-2.5 px-4">Invoice #</th><th className="py-2.5 px-4">Status</th><th className="py-2.5 px-4 text-right">Amount</th></tr></thead>
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
               {data.invoices.map((i) => (
                 <tr key={i.id} className="hover:bg-slate-50/50"><td className="py-2.5 px-4 font-mono font-bold text-primary">{i.invoice_number}</td>
-                  <td className="py-2.5 px-4"><span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${/(paid|settled)/i.test(i.status) ? "bg-emerald-100 text-emerald-800" : "bg-blue-100 text-blue-800"}`}>{humanize(i.status)}</span></td>
-                  <td className="py-2.5 px-4 text-right font-mono font-bold text-ink-primary">{money(i.total)}</td></tr>
+                  <td className="py-2.5 px-4"><span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${/(paid|settled)/i.test(i.status) ? "bg-emerald-100 text-emerald-800" : "bg-blue-100 text-blue-800"}`}>{humanize(i.status)}</span></td>
+                  <td className="py-2.5 px-4 text-right tabular-nums font-bold text-ink-primary">{money(i.total)}</td></tr>
               ))}
             </tbody>
           </table>
@@ -1500,12 +1500,12 @@ function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySy
 
       {data && data.payments.length > 0 && (
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
-          <div className="p-3.5 border-b border-slate-100 flex items-center justify-between"><h5 className="text-xs font-bold text-ink-primary">Payments</h5><span className="text-[11px] text-emerald-600 font-mono font-bold">{money(paid)} Collected</span></div>
+          <div className="p-3.5 border-b border-slate-100 flex items-center justify-between"><h5 className="text-xs font-bold text-ink-primary">Payments</h5><span className="text-[11px] text-emerald-600 tabular-nums font-bold">{money(paid)} Collected</span></div>
           <div className="p-3 space-y-2">
             {data.payments.map((p) => (
               <div key={p.id} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs">
                 <div className="flex items-center gap-2.5"><M n={p.kind === "refund" ? "undo" : p.method === "cash" ? "payments" : "contactless"} c={`text-sm ${p.kind === "refund" ? "text-rose-600" : "text-emerald-600"}`} /><div><p className="font-bold text-ink-primary capitalize">{p.kind} · {p.method}</p></div></div>
-                <span className={`font-mono font-bold ${p.kind === "refund" ? "text-rose-600" : "text-ink-primary"}`}>{p.kind === "refund" ? "−" : ""}{money(p.amount)}</span>
+                <span className={`tabular-nums font-bold ${p.kind === "refund" ? "text-rose-600" : "text-ink-primary"}`}>{p.kind === "refund" ? "−" : ""}{money(p.amount)}</span>
               </div>
             ))}
           </div>
@@ -1515,8 +1515,8 @@ function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySy
       {data && data.invoices.length === 0 && data.payments.length === 0 && <p className="text-xs text-ink-tertiary">No invoices or payments yet. Use Take Payment or Take Prepayment.</p>}
 
       <div className="bg-slate-50/90 p-4 rounded-xl border border-slate-200 flex items-center justify-between text-xs">
-        <div><span className="text-ink-tertiary">Collected</span><p className="text-base font-extrabold font-mono text-emerald-600">{money(paid)}</p></div>
-        <div className="text-right"><span className="text-ink-tertiary">Net Balance Due</span><p className="text-base font-extrabold font-mono text-rose-600">{money(due)}</p></div>
+        <div><span className="text-ink-tertiary">Collected</span><p className="text-base font-bold tabular-nums text-emerald-600">{money(paid)}</p></div>
+        <div className="text-right"><span className="text-ink-tertiary">Net Balance Due</span><p className="text-base font-bold tabular-nums text-rose-600">{money(due)}</p></div>
       </div>
 
       {modal && ctx && (
@@ -1524,10 +1524,10 @@ function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySy
           <div className="absolute inset-0 bg-ink-primary/40" onClick={() => setModal(null)} />
           <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-md p-5 space-y-4">
             <div className="flex items-center justify-between"><h4 className="text-sm font-bold text-ink-primary">{modal === "prepay" ? "Take prepayment" : "Take payment"}</h4><button aria-label="Close" onClick={() => setModal(null)} className="text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-lg" /></button></div>
-            <div className="text-xs text-ink-secondary">Remaining balance: <b className="font-mono">{money(ctx.remaining)}</b></div>
+            <div className="text-xs text-ink-secondary">Remaining balance: <b className="tabular-nums">{money(ctx.remaining)}</b></div>
             <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Amount <span className="text-ink-tertiary font-normal normal-case">({base?.code || "base"})</span></label><input value={amount} onChange={(e) => setAmount(e.target.value)} type="number" className="glass-input w-full py-2 px-3 text-sm font-bold font-mono rounded-xl" />
               {isForeign && amount && !isNaN(parseFloat(amount)) && (
-                <p className="mt-1 text-[11px] text-ink-tertiary font-mono">≈ {currencySymbol}{conv(parseFloat(amount)).toFixed(2)} {currencyCode} <span className="text-ink-placeholder">at the document rate</span></p>
+                <p className="mt-1 text-[11px] text-ink-tertiary tabular-nums">≈ {currencySymbol}{conv(parseFloat(amount)).toFixed(2)} {currencyCode} <span className="text-ink-placeholder">at the document rate</span></p>
               )}</div>
             <div className="grid grid-cols-2 gap-3">
               <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Method</label>
@@ -1535,7 +1535,7 @@ function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySy
               <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Account</label>
                 <select value={account} onChange={(e) => setAccount(e.target.value)} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl">{accts.length === 0 && <option value="">No account</option>}{accts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
             </div>
-            <div className="flex justify-end gap-2 pt-1"><button onClick={() => setModal(null)} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button><button onClick={submit} className="px-4 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110">Record {modal === "prepay" ? "prepayment" : "payment"}</button></div>
+            <div className="flex justify-end gap-2 pt-1"><button onClick={() => setModal(null)} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button><button onClick={submit} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110">Record {modal === "prepay" ? "prepayment" : "payment"}</button></div>
           </div>
         </div>
       )}
@@ -1567,7 +1567,7 @@ function ActivityTab({ orderId, clientPhone, onFlash }: { orderId: string; clien
   const fmtWhen = (iso?: string) => { if (!iso) return ""; try { return new Date(iso).toLocaleString(); } catch { return iso; } };
   return (
     <div className="space-y-5">
-      <div className="bg-gradient-to-r from-indigo-50 to-blue-50 rounded-2xl border border-indigo-100 p-3.5 shadow-sm">
+      <div className="bg-indigo-50 rounded-2xl border border-indigo-100 p-3.5 shadow-sm">
         <div className="flex items-center justify-between">
           <span className="text-xs font-bold text-indigo-900 flex items-center gap-1.5"><M n="auto_awesome" c="text-sm" />AI summary</span>
           <button onClick={aiSummary} disabled={aiBusy} className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[11px] font-bold shadow-clay-sm disabled:opacity-50">{aiBusy ? "Summarizing…" : aiSum ? "Regenerate" : "Summarize"}</button>
@@ -1591,11 +1591,11 @@ function ActivityTab({ orderId, clientPhone, onFlash }: { orderId: string; clien
                 <div>
                   <p className="font-bold text-ink-primary flex items-center gap-2">
                     {(l.subject || String(l.trigger_event || "Notification").replace(/_/g, " "))}
-                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-ink-secondary">{String(l.channel || "").toUpperCase()}</span>
-                    <span className={`text-[10px] font-semibold ${l.status === "failed" ? "text-rose-600" : l.status === "sent" ? "text-emerald-600" : "text-amber-600"}`}>{humanize(l.status)}</span>
+                    <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-ink-secondary">{String(l.channel || "").toUpperCase()}</span>
+                    <span className={`text-[11px] font-semibold ${l.status === "failed" ? "text-rose-600" : l.status === "sent" ? "text-emerald-600" : "text-amber-600"}`}>{humanize(l.status)}</span>
                   </p>
                   {l.body && <p className="text-[11px] text-ink-tertiary line-clamp-2">{l.body}</p>}
-                  <span className="text-[10px] text-slate-400 font-mono">{l.recipient ? `${l.recipient} · ` : ""}{fmtWhen(l.created_at)}{l.error ? ` · ${l.error}` : ""}</span>
+                  <span className="text-[11px] text-slate-400 tabular-nums">{l.recipient ? `${l.recipient} · ` : ""}{fmtWhen(l.created_at)}{l.error ? ` · ${l.error}` : ""}</span>
                 </div>
               </div>
             ))}
@@ -1605,12 +1605,12 @@ function ActivityTab({ orderId, clientPhone, onFlash }: { orderId: string; clien
       <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm space-y-3">
         <div className="flex items-center justify-between border-b border-slate-100 pb-2">
           <div className="flex items-center gap-2"><M n="chat" c="text-primary text-base" /><h5 className="text-xs font-bold text-ink-primary">Customer text and WhatsApp thread</h5></div>
-          <span className="text-[10px] text-emerald-600 font-semibold flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> {clientPhone || "Not connected"}</span>
+          <span className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> {clientPhone || "Not connected"}</span>
         </div>
         {sent.length > 0 && (
           <div className="space-y-3 p-2 bg-slate-50/70 rounded-xl max-h-48 overflow-y-auto">
             {sent.map((m, i) => (
-              <div key={i} className="flex flex-col items-end max-w-[80%] ml-auto"><div className="bg-primary text-white p-2.5 rounded-2xl rounded-tr-none shadow-2xs text-xs">{m}</div><span className="text-[9px] text-slate-400 mr-1 mt-0.5 font-mono">You · now</span></div>
+              <div key={i} className="flex flex-col items-end max-w-[80%] ml-auto"><div className="bg-primary text-white p-2.5 rounded-2xl rounded-tr-none shadow-2xs text-xs">{m}</div><span className="text-[11px] text-slate-400 mr-1 mt-0.5 tabular-nums">You · now</span></div>
             ))}
           </div>
         )}

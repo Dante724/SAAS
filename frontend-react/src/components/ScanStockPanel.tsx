@@ -51,16 +51,16 @@ export default function ScanStockPanel({ onClose, onPosted }: { onClose: () => v
         </div>
         <div className="p-4 space-y-3">
           <div className="grid grid-cols-2 gap-2">
-            <div><label className="block text-[10px] font-bold uppercase text-ink-tertiary mb-1">Location</label>
+            <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Location</label>
               <select value={loc} onChange={(e) => setLoc(e.target.value)} className="glass-input rounded-lg px-2 py-2 text-sm w-full">{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
-            <div><label className="block text-[10px] font-bold uppercase text-ink-tertiary mb-1">Action</label>
+            <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Action</label>
               <select value={mode} onChange={(e) => setMode(e.target.value as any)} className="glass-input rounded-lg px-2 py-2 text-sm w-full">
                 <option value="receive">Receive</option><option value="writeoff">Write off</option><option value="adjust">Count / adjust</option></select></div>
           </div>
           <div className="flex items-end gap-2">
-            <div className="w-20"><label className="block text-[10px] font-bold uppercase text-ink-tertiary mb-1">Qty</label>
+            <div className="w-20"><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Qty</label>
               <input type="number" min={1} value={qty} onChange={(e) => setQty(Math.max(1, Number(e.target.value) || 1))} className="glass-input rounded-lg px-2 py-2 text-sm w-full font-mono" /></div>
-            <div className="flex-1"><label className="block text-[10px] font-bold uppercase text-ink-tertiary mb-1">Scan / type code</label>
+            <div className="flex-1"><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Scan / type code</label>
               <input ref={ref} value={code} onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") post(); }} placeholder="SKU / barcode" className="glass-input rounded-lg px-3 py-2 text-sm w-full font-mono" /></div>
           </div>
           <div className="text-[11px] text-ink-tertiary">{verb} {qty} to the selected location per scan. Enter posts each one.</div>

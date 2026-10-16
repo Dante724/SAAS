@@ -136,11 +136,11 @@ export default function ClientsHub() {
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 flex flex-wrap items-center justify-between gap-3">
             {tab === "clients"
               ? <div className="flex items-center gap-2">
-                  <button onClick={() => setNewClient(true)} className="px-4 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New client</button>
+                  <button onClick={() => setNewClient(true)} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New client</button>
                   <label className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 text-xs font-semibold shadow-clay-sm flex items-center gap-1.5 cursor-pointer"><M n="open_in_new" c="text-sm" />Import CSV
                     <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) importCsv(f); e.target.value = ""; }} /></label>
                 </div>
-              : <button onClick={() => setNewSupplier(true)} className="px-4 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New supplier</button>}
+              : <button onClick={() => setNewSupplier(true)} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New supplier</button>}
             <div className="relative w-72"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" /><input value={q} onChange={(e) => setQ(e.target.value)} className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg font-medium" placeholder="Search name, phone or email…" /></div>
           </div>
 
@@ -169,7 +169,7 @@ export default function ClientsHub() {
           {tab === "clients" && (
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
               <table className="w-full text-left border-collapse text-xs">
-                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[10px] font-bold uppercase tracking-wider">
+                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
                   <th className="py-3 pl-4 pr-1 w-8"><input type="checkbox" checked={allSel} onChange={toggleAll} className="accent-primary cursor-pointer" /></th>
                   <th className="py-3 px-4">Client</th><th className="py-3 px-4">Phone</th><th className="py-3 px-4">Email</th>
                   <th className="py-3 px-4">Tier</th><th className="py-3 px-4 text-right">Balance</th><th className="py-3 px-4">{term.assets}</th><th className="py-3 px-4">Orders</th><th className="py-3 px-4 w-12 text-center">Action</th>
@@ -182,12 +182,12 @@ export default function ClientsHub() {
                     <tr key={c.id} className={`hover:bg-blue-50/40 cursor-pointer transition-colors ${sel.has(c.id) ? "bg-primary/5" : ""}`} onClick={() => setOpenClient(c.id)}>
                       <td className="py-3 pl-4 pr-1" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={sel.has(c.id)} onChange={() => toggle(c.id)} className="accent-primary cursor-pointer" /></td>
                       <td className="py-3 px-4 font-bold text-ink-primary">{c.name || "—"}</td>
-                      <td className="py-3 px-4 font-mono">{c.phone || "—"}</td>
+                      <td className="py-3 px-4 tabular-nums">{c.phone || "—"}</td>
                       <td className="py-3 px-4 text-ink-tertiary">{c.email || "—"}</td>
                       <td className="py-3 px-4"><span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-purple-100 text-purple-800 border border-purple-200">{c.loyalty_tier?.toLowerCase() === "vip" ? "VIP" : humanize(c.loyalty_tier) || "Standard"}</span></td>
-                      <td className="py-3 px-4 text-right font-mono font-bold text-ink-primary">{money(c.balance ?? 0)}</td>
-                      <td className="py-3 px-4 font-mono font-semibold text-ink-primary">{c.devices?.length ?? 0}</td>
-                      <td className="py-3 px-4 font-mono font-semibold text-ink-primary">{c.order_count ?? 0}</td>
+                      <td className="py-3 px-4 text-right tabular-nums font-bold text-ink-primary">{money(c.balance ?? 0)}</td>
+                      <td className="py-3 px-4 tabular-nums font-semibold text-ink-primary">{c.devices?.length ?? 0}</td>
+                      <td className="py-3 px-4 tabular-nums font-semibold text-ink-primary">{c.order_count ?? 0}</td>
                       <td className="py-3 px-4 text-center"><M n="chevron_right" c="text-sm text-ink-tertiary" /></td>
                     </tr>
                   ))}
@@ -200,7 +200,7 @@ export default function ClientsHub() {
           {tab === "suppliers" && (
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
               <table className="w-full text-left border-collapse text-xs">
-                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[10px] font-bold uppercase tracking-wider">
+                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
                   <th className="py-3 px-4">Supplier</th><th className="py-3 px-4">Contact</th><th className="py-3 px-4">Phone</th><th className="py-3 px-4">Email</th>
                   <th className="py-3 px-4 text-right">Lead days</th><th className="py-3 px-4 text-right">Balance</th>
                 </tr></thead>
@@ -211,10 +211,10 @@ export default function ClientsHub() {
                     <tr key={s.id} onClick={() => s.client_id ? setOpenClient(s.client_id) : setOpenSupplier(s)} className="hover:bg-blue-50/40 transition-colors cursor-pointer">
                       <td className="py-3 px-4 font-bold text-ink-primary">{s.name || "—"}</td>
                       <td className="py-3 px-4">{s.contact_name || "—"}</td>
-                      <td className="py-3 px-4 font-mono">{s.phone || "—"}</td>
+                      <td className="py-3 px-4 tabular-nums">{s.phone || "—"}</td>
                       <td className="py-3 px-4 text-ink-tertiary">{s.email || "—"}</td>
-                      <td className="py-3 px-4 text-right font-mono">{s.lead_days ?? "—"}</td>
-                      <td className="py-3 px-4 text-right font-mono font-bold text-ink-primary">{money(s.balance ?? 0)}</td>
+                      <td className="py-3 px-4 text-right tabular-nums">{s.lead_days ?? "—"}</td>
+                      <td className="py-3 px-4 text-right tabular-nums font-bold text-ink-primary">{money(s.balance ?? 0)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -250,34 +250,34 @@ function MergePreviewDialog({ preview, busy, onCancel, onConfirm }: { preview: a
       <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-md max-h-[85vh] overflow-y-auto">
         <div className="p-5 border-b border-slate-200 flex items-center gap-2">
           <span className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 grid place-items-center border border-amber-100"><M n="merge" c="text-base" /></span>
-          <div><h3 className="text-sm font-black text-ink-primary">Merge {p.sources.length} contact{p.sources.length === 1 ? "" : "s"}</h3>
+          <div><h3 className="text-sm font-bold text-ink-primary">Merge {p.sources.length} contact{p.sources.length === 1 ? "" : "s"}</h3>
             <p className="text-[11px] text-ink-tertiary">Everything below moves into <span className="font-bold text-ink-primary">{p.target.name}</span>.</p></div>
         </div>
         <div className="p-5 space-y-4 text-xs">
           <div>
-            <div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary mb-1.5">Merging in</div>
+            <div className="text-[11px] font-bold text-ink-tertiary mb-1.5">Merging in</div>
             {p.sources.map((s: any) => <div key={s.id} className="flex items-center justify-between py-0.5"><span className="font-semibold text-ink-primary">{s.name}</span><span className="text-ink-tertiary">→ removed</span></div>)}
           </div>
           <div>
-            <div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary mb-1.5">What moves {totalMoved ? `(${totalMoved})` : ""}</div>
+            <div className="text-[11px] font-bold text-ink-tertiary mb-1.5">What moves {totalMoved ? `(${totalMoved})` : ""}</div>
             {moveRows.length === 0 ? <div className="text-ink-tertiary">No linked records — just the contact details.</div> :
-              <div className="grid grid-cols-2 gap-1.5">{moveRows.map(([k, n]) => <div key={k} className="flex items-center gap-1.5"><span className="font-mono font-bold text-ink-primary">{n}</span><span className="text-ink-secondary">{LABELS[k] || k}</span></div>)}</div>}
+              <div className="grid grid-cols-2 gap-1.5">{moveRows.map(([k, n]) => <div key={k} className="flex items-center gap-1.5"><span className="tabular-nums font-bold text-ink-primary">{n}</span><span className="text-ink-secondary">{LABELS[k] || k}</span></div>)}</div>}
           </div>
           {p.field_fills.length > 0 && (
             <div>
-              <div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary mb-1.5">Blank fields filled</div>
+              <div className="text-[11px] font-bold text-ink-tertiary mb-1.5">Blank fields filled</div>
               {p.field_fills.map((f: any, i: number) => <div key={i} className="flex items-center justify-between py-0.5 gap-2"><span className="text-ink-secondary whitespace-nowrap">{FLD[f.field] || f.field}</span><span className="font-semibold text-ink-primary truncate" title={String(f.value)}>{String(f.value)}</span></div>)}
             </div>
           )}
           <div className="flex items-center justify-between pt-1 border-t border-slate-100">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">Combined balance</span>
-            <span className={`font-mono font-black ${(p.result_balance ?? 0) > 0 ? "text-rose-600" : "text-emerald-600"}`}>{Math.abs(p.result_balance ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {(p.result_balance ?? 0) > 0 ? "(owes)" : "(credit)"}</span>
+            <span className="text-[11px] font-bold text-ink-tertiary">Combined balance</span>
+            <span className={`tabular-nums font-bold ${(p.result_balance ?? 0) > 0 ? "text-rose-600" : "text-emerald-600"}`}>{Math.abs(p.result_balance ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {(p.result_balance ?? 0) > 0 ? "(owes)" : "(credit)"}</span>
           </div>
           <div className="flex items-start gap-1.5 p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-[11px] text-ink-secondary"><M n="history" c="text-sm mt-0.5" /><span>The source contacts are removed, but you can undo this right after if it's wrong.</span></div>
         </div>
         <div className="p-4 border-t border-slate-200 flex justify-end gap-2">
           <button onClick={onCancel} disabled={busy} className="px-4 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50">Cancel</button>
-          <button onClick={onConfirm} disabled={busy} className="px-4 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-50">{busy ? "Merging…" : "Merge contacts"}</button>
+          <button onClick={onConfirm} disabled={busy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-50">{busy ? "Merging…" : "Merge contacts"}</button>
         </div>
       </div>
     </div>
@@ -313,7 +313,7 @@ function NewSupplierDrawer({ onClose, onCreated }: { onClose: () => void; onCrea
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
           {[["name", "Supplier name *"], ["contact_name", "Contact person"], ["phone", "Phone"], ["email", "Email"], ["lead_days", "Lead time (days)"]].map(([k, l]) => (
             <div key={k}>
-              <label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">{l}</label>
+              <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">{l}</label>
               <input value={f[k]} onChange={set(k)} type={k === "lead_days" ? "number" : "text"} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary" />
             </div>
           ))}

@@ -77,7 +77,7 @@ export function SetupChecklist({ goSection, load = loadSetupState, navigate = (t
               <div key={x.id} className={`group flex items-center gap-3 px-3 py-2.5 rounded-xl ${x === next ? "bg-primary/5" : "hover:bg-slate-50"}`}>
                 <span aria-label={isDone ? "Done" : isSkipped ? "Skipped" : "To do"} className={`w-6 h-6 rounded-full grid place-items-center flex-shrink-0 ${isDone ? "bg-emerald-500 text-white" : isSkipped ? "bg-slate-200 text-ink-tertiary" : "border-2 border-slate-300"}`}>
                   {isDone && <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth={3}><path d="M5 12l4 4L19 6" /></svg>}
-                  {isSkipped && <span className="text-[10px] leading-none">–</span>}
+                  {isSkipped && <span className="text-[11px] leading-none">–</span>}
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className={`block text-sm ${isDone || isSkipped ? "text-ink-tertiary" : "text-ink-primary"}`}>{x.t}</span>

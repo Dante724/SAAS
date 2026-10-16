@@ -322,9 +322,9 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
           <button aria-label="Document settings" onClick={() => setSettings((s) => !s)} title="Document settings" className="w-9 h-9 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="tune" c="text-lg" /></button>
           {settings && (
             <div className="absolute right-0 top-11 z-20 w-64 bg-white border border-slate-200 rounded-xl shadow-drawer p-3 space-y-3">
-              <div><label className="block text-[10px] font-semibold text-ink-tertiary uppercase mb-1">Type</label>
+              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Type</label>
                 <select value={meta.doc_type} onChange={(e) => setMeta({ ...meta, doc_type: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5 capitalize">{DOC_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}</select></div>
-              <div><label className="block text-[10px] font-semibold text-ink-tertiary uppercase mb-1">Paper / label size</label>
+              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Paper / label size</label>
                 <select value={meta.page_size} onChange={(e) => setMeta({ ...meta, page_size: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5">
                   <option value="a4">A4 (210×297mm)</option>
                   <option value="letter">Letter (8.5×11in)</option>
@@ -334,15 +334,15 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
                 </select></div>
               {meta.page_size === "label" && (
                 <div className="grid grid-cols-2 gap-2">
-                  <div><label className="block text-[10px] font-semibold text-ink-tertiary uppercase mb-1">Width mm</label>
+                  <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Width mm</label>
                     <input type="number" value={meta.page_w_mm ?? ""} onChange={(e) => setMeta({ ...meta, page_w_mm: e.target.value ? +e.target.value : null })} placeholder="40" className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5" /></div>
-                  <div><label className="block text-[10px] font-semibold text-ink-tertiary uppercase mb-1">Height mm</label>
+                  <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Height mm</label>
                     <input type="number" value={meta.page_h_mm ?? ""} onChange={(e) => setMeta({ ...meta, page_h_mm: e.target.value ? +e.target.value : null })} placeholder="30" className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5" /></div>
                 </div>
               )}
-              <div><label className="block text-[10px] font-semibold text-ink-tertiary uppercase mb-1">Margin mm (blank = auto)</label>
+              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Margin mm (blank = auto)</label>
                 <input type="number" value={meta.margin_mm ?? ""} onChange={(e) => setMeta({ ...meta, margin_mm: e.target.value ? +e.target.value : null })} placeholder={(meta.page_size === "a4" || meta.page_size === "letter") ? "10" : "0"} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5" /></div>
-              <div><label className="block text-[10px] font-semibold text-ink-tertiary uppercase mb-1">Default font</label>
+              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Default font</label>
                 <select value={meta.font_family} onChange={(e) => setMeta({ ...meta, font_family: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5">{FONTS.map((f) => <option key={f} value={f}>{f}</option>)}</select></div>
               <label className="flex items-center gap-2 text-sm text-ink-secondary"><input type="checkbox" checked={meta.is_default} onChange={(e) => setMeta({ ...meta, is_default: e.target.checked })} /> Default for this type</label>
             </div>
@@ -407,7 +407,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
         {mode === "edit" && rail === "blocks" && (
           <aside className="w-56 bg-white border-r border-slate-200 flex flex-col shrink-0">
             <div className="px-3 py-2.5 border-b border-slate-200 flex items-center justify-between">
-              <span className="text-[11px] font-bold text-ink-secondary uppercase tracking-wide">Blocks</span>
+              <span className="text-[11px] font-bold text-ink-secondary ">Blocks</span>
               <div className="relative">
                 <button onClick={() => setAddOpen((a) => !a)} className="text-xs font-semibold text-primary flex items-center gap-0.5 hover:underline"><M n="add" c="text-[15px]" /> Add</button>
                 {addOpen && (
@@ -437,9 +437,9 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
         <div className="relative flex-1 min-w-0 overflow-auto">
           {code !== null && mode === "edit" && (
             <div className="absolute inset-0 z-10 flex flex-col bg-slate-900">
-              <div className="px-4 py-1.5 text-[11px] font-semibold text-slate-300 uppercase tracking-wide border-b border-slate-700 flex items-center gap-1"><M n="code" c="text-[14px]" /> HTML source — click the &lt;/&gt; button again to apply</div>
+              <div className="px-4 py-1.5 text-[11px] font-semibold text-slate-300 border-b border-slate-700 flex items-center gap-1"><M n="code" c="text-[14px]" /> HTML source — click the &lt;/&gt; button again to apply</div>
               <textarea value={code} onChange={(e) => setCode(e.target.value)} spellCheck={false}
-                className="flex-1 w-full bg-slate-900 text-slate-100 font-mono text-xs p-4 outline-none resize-none" />
+                className="flex-1 w-full bg-slate-900 text-slate-100 tabular-nums text-xs p-4 outline-none resize-none" />
             </div>
           )}
           <div className="relative min-h-full flex justify-center py-8 px-6">
@@ -453,7 +453,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
                       className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors disabled:opacity-60 ${p.doc_type === meta.doc_type ? "border-primary/40 bg-primary/5" : "border-slate-200 hover:border-slate-300"}`}>
                       <M n="description" c="text-base text-primary" />
                       <span className="text-sm text-ink-primary flex-1">{p.label}</span>
-                      {p.doc_type === meta.doc_type && <span className="text-[10px] font-semibold text-primary">Suggested</span>}
+                      {p.doc_type === meta.doc_type && <span className="text-[11px] font-semibold text-primary">Suggested</span>}
                     </button>
                   ))}
                 </div>
@@ -484,7 +484,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
                 const isOpen = ql ? true : (open[g.group] ?? g.group === "Most used");
                 return (
                   <div key={g.group}>
-                    <button type="button" onClick={() => setOpen((o) => ({ ...o, [g.group]: !isOpen }))} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-200/60 text-left"><M n={GROUP_ICON[g.group] || "label"} c="text-[16px] text-ink-tertiary shrink-0" /><span className="text-[11px] font-bold text-ink-secondary uppercase tracking-wide flex-1">{g.group}</span><M n={isOpen ? "expand_less" : "expand_more"} c="text-sm text-ink-tertiary" /></button>
+                    <button type="button" onClick={() => setOpen((o) => ({ ...o, [g.group]: !isOpen }))} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-200/60 text-left"><M n={GROUP_ICON[g.group] || "label"} c="text-[16px] text-ink-tertiary shrink-0" /><span className="text-[11px] font-bold text-ink-secondary flex-1">{g.group}</span><M n={isOpen ? "expand_less" : "expand_more"} c="text-sm text-ink-tertiary" /></button>
                     {isOpen && <div className="pb-1">{g.items.map((tok) => (<button key={tok} type="button" title={`Insert ${tok}`} onMouseDown={(e) => { e.preventDefault(); insertVar(tok); }} className="group/var w-full flex items-center gap-1.5 pl-3 pr-2 py-1 text-[13px] text-primary text-left rounded hover:bg-primary/5"><span className="truncate">{tok.replace(/^\{|\}$/g, "")}</span><M n="add" c="text-[13px] text-ink-tertiary opacity-0 group-hover/var:opacity-100 ml-auto shrink-0" /></button>))}</div>}
                   </div>
                 );

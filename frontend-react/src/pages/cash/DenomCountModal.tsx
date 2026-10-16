@@ -53,19 +53,19 @@ export default function DenomCountModal({
             const n = parseInt(counts[key] || "0", 10) || 0;
             return (
               <div key={key} className="flex items-center gap-2">
-                <span className="w-16 text-xs font-bold font-mono text-ink-secondary text-right">{money(d, sym)}</span>
+                <span className="w-16 text-xs font-bold tabular-nums text-ink-secondary text-right">{money(d, sym)}</span>
                 <span className="text-ink-tertiary text-xs">×</span>
                 <input type="number" min={0} inputMode="numeric" value={counts[key] || ""}
                   onChange={(e) => setCounts({ ...counts, [key]: e.target.value })}
-                  placeholder="0" className="glass-input w-16 py-1.5 px-2 text-xs font-mono font-bold rounded-lg text-center" />
-                <span className="ml-auto text-xs font-mono font-semibold text-ink-primary">{n ? money(d * n, sym) : <span className="text-ink-placeholder">—</span>}</span>
+                  placeholder="0" className="glass-input w-16 py-1.5 px-2 text-xs tabular-nums font-bold rounded-lg text-center" />
+                <span className="ml-auto text-xs tabular-nums font-semibold text-ink-primary">{n ? money(d * n, sym) : <span className="text-ink-placeholder">—</span>}</span>
               </div>
             );
           })}
         </div>
         <div className="mt-3 pt-3 border-t border-slate-200 flex items-center justify-between">
-          <span className="text-xs font-bold uppercase tracking-wider text-ink-tertiary">Counted total</span>
-          <span className="text-lg font-black font-mono text-ink-primary">{money(total, sym)}</span>
+          <span className="text-xs font-bold text-ink-tertiary">Counted total</span>
+          <span className="text-lg font-bold tabular-nums text-ink-primary">{money(total, sym)}</span>
         </div>
         <div className="mt-4 flex gap-2 justify-end">
           <button onClick={onCancel} className="px-3 py-2 rounded-lg text-xs font-semibold text-ink-tertiary hover:bg-slate-100">Cancel</button>

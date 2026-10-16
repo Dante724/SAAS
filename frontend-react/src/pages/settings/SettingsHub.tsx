@@ -26,7 +26,7 @@ import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
 // Full section set = the registry sections + a few that have no nav entry of their own.
 type Section = SectionId | "overview" | "automation" | "payroll-rules";
 
-const lbl = "block text-[11px] font-bold text-ink-tertiary uppercase mb-1";
+const lbl = "block text-[11px] font-bold text-ink-tertiary  mb-1";
 const field = "glass-input w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg";
 
 // General-settings option lists (legacy parity).
@@ -287,7 +287,7 @@ export default function SettingsHub() {
             const hits = searchSections(q);
             if (!hits.length) return <div className="text-xs text-ink-tertiary px-2.5 py-3">No settings match “{q}”.</div>;
             return hits.map((n) => (
-              <button key={n.id} onClick={() => { setSec(n.id); setQ(""); }} className="w-full text-left px-2.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-2.5 mb-0.5 text-ink-secondary hover:bg-slate-100"><M n={n.icon} c="text-base" />{n.label}<span className="ml-auto text-[10px] text-ink-tertiary font-medium">{CATS.find((c) => c.id === SEC_CAT[n.id])?.label}</span></button>
+              <button key={n.id} onClick={() => { setSec(n.id); setQ(""); }} className="w-full text-left px-2.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-2.5 mb-0.5 text-ink-secondary hover:bg-slate-100"><M n={n.icon} c="text-base" />{n.label}<span className="ml-auto text-[11px] text-ink-tertiary font-medium">{CATS.find((c) => c.id === SEC_CAT[n.id])?.label}</span></button>
             ));
           })() : CATS.map((cat) => {
             const items = NAV.filter((n) => SEC_CAT[n.id] === cat.id);
@@ -295,7 +295,7 @@ export default function SettingsHub() {
             const col = !!collapsed[cat.id];
             return (
               <div key={cat.id} className="mb-1">
-                <button onClick={() => setCollapsed((s) => ({ ...s, [cat.id]: !s[cat.id] }))} className="w-full flex items-center gap-1.5 px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary hover:text-ink-secondary">
+                <button onClick={() => setCollapsed((s) => ({ ...s, [cat.id]: !s[cat.id] }))} className="w-full flex items-center gap-1.5 px-2 py-1.5 text-[11px] font-bold text-ink-tertiary hover:text-ink-secondary">
                   {cat.label}<M n="expand_more" c={`text-sm ml-auto transition-transform ${col ? "-rotate-90" : ""}`} />
                 </button>
                 {!col && items.map((n) => (
@@ -742,7 +742,7 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
       <div className="relative w-[440px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <div>
-            <span className="text-[10px] font-bold uppercase tracking-wider text-primary block">{scopeLabel} · {modLabel}</span>
+            <span className="text-[11px] font-bold text-primary block">{scopeLabel} · {modLabel}</span>
             <h2 className="font-bold text-ink-primary">{rule?.id ? "Edit notification" : isReminder ? "New reminder" : "New notification"}</h2>
           </div>
           <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
@@ -895,7 +895,7 @@ function RichTextEditor({ value, onChange, registerInsert }: {
       </div>
       {code !== null ? (
         <textarea value={code} onChange={(e) => setCode(e.target.value)} spellCheck={false}
-          className="w-full min-h-[240px] max-h-[420px] bg-slate-900 text-slate-100 font-mono text-xs p-3 outline-none resize-y" />
+          className="w-full min-h-[240px] max-h-[420px] bg-slate-900 text-slate-100 tabular-nums text-xs p-3 outline-none resize-y" />
       ) : (
         <div ref={ref} contentEditable suppressContentEditableWarning onInput={emit} onKeyUp={saveSel} onMouseUp={saveSel}
           className="min-h-[240px] max-h-[420px] overflow-y-auto px-3 py-2 text-sm text-ink-primary focus:outline-none" />
@@ -987,7 +987,7 @@ function NotifTemplateDrawer({ tpl, module, onClose, onSaved }: {
                 <RichTextEditor value={f.body_template} onChange={(html) => set("body_template", html)} registerInsert={(fn) => { richInsert.current = fn; }} />
               ) : (
                 <textarea ref={areaRef} value={f.body_template} onChange={(e) => set("body_template", e.target.value)} rows={6}
-                  className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary font-mono" />
+                  className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary tabular-nums" />
               )}
               <VarPicker onInsert={(tok) => (isEmail ? richInsert.current?.(tok) : insertVar(tok))} module={module} />
             </div>
@@ -1128,13 +1128,13 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
       <div className="p-4 space-y-5">
         {groups.map((g) => (
           <div key={g.group}>
-            <p className="text-[10px] font-bold text-ink-tertiary uppercase tracking-wide px-1 pb-2">{g.group}</p>
+            <p className="text-[11px] font-bold text-ink-tertiary px-1 pb-2">{g.group}</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {g.cards.map((c) => (
                 <div key={c.name} className="border border-slate-200/90 rounded-xl p-3.5 flex flex-col gap-1.5 bg-white hover:border-slate-300 transition-colors">
                   <div className="flex items-start justify-between gap-2">
                     <span className="text-[13px] font-bold text-ink-primary leading-tight">{c.name}</span>
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap ${B[c.badge.tone]}`}>{c.badge.text}</span>
+                    <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold whitespace-nowrap ${B[c.badge.tone]}`}>{c.badge.text}</span>
                   </div>
                   <p className="text-[12px] text-ink-secondary leading-snug">{c.desc}</p>
                   {c.hint && <p className="text-[11px] text-ink-tertiary mt-0.5">{c.hint}</p>}
@@ -1195,7 +1195,7 @@ function CredDrawer({ provider, status, onClose, onSaved }: {
         <div className="flex-1 overflow-y-auto p-5 space-y-3">
           {fields.map((f) => (
             <div key={f.key}>
-              <label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">{f.label}</label>
+              <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">{f.label}</label>
               <input
                 type={f.secret ? "password" : "text"}
                 defaultValue={f.secret ? "" : (f.value || "")}
@@ -1230,7 +1230,7 @@ function ApiKeysCard() {
   return (
     <SectionCard title="API keys" count={keys?.length ?? undefined}>
       <div className="p-4 space-y-3">
-        {fresh && <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2">Copy your key now — it won't be shown again:<br /><span className="font-mono break-all">{fresh}</span></div>}
+        {fresh && <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2">Copy your key now — it won't be shown again:<br /><span className="tabular-nums break-all">{fresh}</span></div>}
         <div className="flex items-end gap-2">
           <div className="flex-1"><label className={lbl}>New key name</label><input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Zapier" className={field} /></div>
           <button onClick={create} disabled={busy} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">Create</button>
@@ -1266,7 +1266,7 @@ function SectionCard({ title, count, onAdd, children }: { title: string; count?:
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
       <div className="p-3.5 border-b border-slate-100 flex items-center justify-between">
-        <span className="text-xs font-bold text-ink-primary uppercase tracking-wider">{title}{count != null && <span className="ml-2 text-[10px] font-bold bg-slate-100 text-ink-secondary px-2 py-0.5 rounded-full">{count}</span>}</span>
+        <span className="text-xs font-bold text-ink-primary ">{title}{count != null && <span className="ml-2 text-[11px] font-bold bg-slate-100 text-ink-secondary px-2 py-0.5 rounded-full">{count}</span>}</span>
         {onAdd && <button onClick={onAdd} className="text-primary text-xs font-semibold hover:underline flex items-center gap-1"><M n="add" c="text-sm" />Add</button>}
       </div>
       {children}
@@ -1346,7 +1346,7 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
               <div><label className={lblc}>Full name</label><input value={f.name || ""} onChange={(e) => set("name", e.target.value)} className={fld} /></div>
               <div><label className={lblc}>Position</label><input value={f.position || ""} onChange={(e) => set("position", e.target.value)} className={fld} placeholder="Technician" /></div>
               <div><label className={lblc}>Email</label><input value={f.email || ""} onChange={(e) => set("email", e.target.value)} className={fld} /></div>
-              <div><label className={lblc}>Phone</label><input value={f.phone || ""} onChange={(e) => set("phone", e.target.value)} className={`${fld} font-mono`} /></div>
+              <div><label className={lblc}>Phone</label><input value={f.phone || ""} onChange={(e) => set("phone", e.target.value)} className={`${fld} tabular-nums`} /></div>
               <div><label className={lblc}>Name on documents</label><input value={f.public_name || ""} onChange={(e) => set("public_name", e.target.value)} className={fld} /></div>
               <div><label className={lblc}>Tax ID</label><input value={f.tax_id || ""} onChange={(e) => set("tax_id", e.target.value)} className={`${fld} font-mono`} /></div>
               <div><label className={lblc}>Hired date</label><DateField mode="date" value={(f.hired_at || "").slice(0, 10)} onChange={(v) => set("hired_at", v)} /></div>
@@ -1443,7 +1443,7 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
     try { await api.del(`/payroll/rules/${rule.id}`); onSaved("Rule deleted"); } catch (e: any) { setErr(e?.message || "Failed"); }
   }
 
-  const lblc = "block text-[11px] font-bold text-ink-tertiary uppercase mb-1";
+  const lblc = "block text-[11px] font-bold text-ink-tertiary  mb-1";
   const fld = "glass-input w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg";
   const isPct = f.calc_type === "percent";
   return (
@@ -1452,7 +1452,7 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
       <div className="relative w-[520px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
-          <div><span className="text-[10px] font-bold uppercase tracking-wider text-primary block">Team › Payroll rules</span><h2 className="font-bold text-ink-primary">{isNew ? "New commission rule" : f.name}</h2></div>
+          <div><span className="text-[11px] font-bold text-primary block">Team › Payroll rules</span><h2 className="font-bold text-ink-primary">{isNew ? "New commission rule" : f.name}</h2></div>
           <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
@@ -1516,7 +1516,7 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
           {!isNew ? <button onClick={del} className="px-3 py-2 rounded-lg text-xs font-bold text-rose-600 hover:bg-rose-50">Delete</button> : <span />}
           <div className="flex gap-2">
             <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button>
-            <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Add rule" : "Save"}</button>
+            <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Add rule" : "Save"}</button>
           </div>
         </div>
       </div>
@@ -1560,13 +1560,13 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
             {fields?.length === 0 && <div className="p-4 text-xs text-ink-tertiary">No custom fields yet.</div>}
             {fields?.map((f) => (
               <div key={f.id} className="flex items-center justify-between px-4 py-2.5 text-xs">
-                <div><span className="font-bold text-ink-primary">{f.field_label}</span><span className="ml-2 text-[10px] uppercase bg-slate-100 text-ink-tertiary px-1.5 py-0.5 rounded">{f.field_type}</span>{f.required && <span className="ml-1 text-[10px] text-rose-600 font-semibold">required</span>}{f.show_when_field_key && <span className="ml-1 text-[10px] text-primary font-semibold">conditional</span>}{f.upsell_comparator && <span className="ml-1 text-[10px] text-amber-700 font-semibold">upsell</span>}{f.gate_status_key && <span className="ml-1 text-[10px] text-rose-600 font-semibold">gate</span>}</div>
+                <div><span className="font-bold text-ink-primary">{f.field_label}</span><span className="ml-2 text-[11px] bg-slate-100 text-ink-tertiary px-1.5 py-0.5 rounded">{f.field_type}</span>{f.required && <span className="ml-1 text-[11px] text-rose-600 font-semibold">required</span>}{f.show_when_field_key && <span className="ml-1 text-[11px] text-primary font-semibold">conditional</span>}{f.upsell_comparator && <span className="ml-1 text-[11px] text-amber-700 font-semibold">upsell</span>}{f.gate_status_key && <span className="ml-1 text-[11px] text-rose-600 font-semibold">gate</span>}</div>
                 <button onClick={() => del(f.id)} className="text-rose-600 font-semibold hover:underline">Delete</button>
               </div>
             ))}
           </div>
           <div className="rounded-xl border border-slate-200 p-4 space-y-3">
-            <div className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary">Add a field</div>
+            <div className="text-[11px] font-bold text-ink-tertiary">Add a field</div>
             <input value={nf.field_label} onChange={(e) => setNf({ ...nf, field_label: e.target.value })} placeholder="Field label" className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary" />
             <div className="flex items-center gap-3">
               <select value={nf.field_type} onChange={(e) => setNf({ ...nf, field_type: e.target.value })} className="bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 capitalize">
@@ -1632,7 +1632,7 @@ function SecTable({ rows, cols, onRowClick, onDelete }: { rows: any[] | null | u
   if (rows.length === 0) return <div className="p-5 text-xs text-ink-tertiary">Nothing here yet.</div>;
   return (
     <table className="w-full text-left border-collapse text-xs">
-      <thead><tr className="bg-slate-50/60 border-b border-slate-100 text-ink-tertiary text-[10px] font-bold uppercase tracking-wider">
+      <thead><tr className="bg-slate-50/60 border-b border-slate-100 text-ink-tertiary text-[11px] font-bold ">
         {cols.map(([h]) => <th key={h} className="py-2.5 px-4">{h}</th>)}
         {(onRowClick || onDelete) && <th className="py-2.5 px-4 text-right">Actions</th>}
       </tr></thead>
@@ -1678,7 +1678,7 @@ function VarPicker({ onInsert, module }: { onInsert: (tok: string) => void; modu
   return (
     <div className="border border-slate-200 rounded-lg bg-slate-50/60 flex flex-col max-h-[460px]">
       <div className="p-2 border-b border-slate-200">
-        <div className="text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1 px-1">Insert variable</div>
+        <div className="text-[11px] font-semibold text-ink-tertiary mb-1 px-1">Insert variable</div>
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search variables…" className="w-full bg-white border border-slate-200 rounded-md text-xs px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary" />
       </div>
       <div className="flex-1 overflow-y-auto p-1.5 space-y-1">
@@ -1689,14 +1689,14 @@ function VarPicker({ onInsert, module }: { onInsert: (tok: string) => void; modu
             <div key={g.group}>
               <button type="button" onClick={() => setOpen((o) => ({ ...o, [g.group]: !isOpen }))}
                 className="w-full flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-slate-200/60 text-left">
-                <span className="text-[11px] font-bold text-ink-secondary uppercase tracking-wide">{g.group}</span>
+                <span className="text-[11px] font-bold text-ink-secondary ">{g.group}</span>
                 <M n={isOpen ? "expand_less" : "expand_more"} c="text-sm text-ink-tertiary" />
               </button>
               {isOpen && (
                 <div className="flex flex-wrap gap-1 px-1.5 pb-1.5">
                   {g.items.map((tok) => (
                     <button key={tok} type="button" onClick={() => onInsert(tok)} title={`Insert ${tok}`}
-                      className="text-[11px] font-mono px-1.5 py-0.5 rounded border border-slate-200 bg-white hover:bg-primary hover:text-white hover:border-primary transition-colors">
+                      className="text-[11px] tabular-nums px-1.5 py-0.5 rounded border border-slate-200 bg-white hover:bg-primary hover:text-white hover:border-primary transition-colors">
                       {tok.replace(/^\{|\}$/g, "")}
                     </button>
                   ))}
@@ -1769,7 +1769,7 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
           {fields.map((f) => (
             <div key={f.k}>
-              <label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">{f.label}{f.req ? " *" : ""}</label>
+              <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">{f.label}{f.req ? " *" : ""}</label>
               {f.type === "checkbox" ? (
                 <button type="button" onClick={() => setV({ ...v, [f.k]: !v[f.k] })} className={`w-10 h-6 rounded-full transition-colors ${v[f.k] ? "bg-primary" : "bg-slate-300"} relative`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${v[f.k] ? "left-[18px]" : "left-0.5"}`} /></button>
               ) : f.type === "select" ? (
@@ -1915,7 +1915,7 @@ function StatusMultiSelect({ value, list, onChange, single, placeholder }: {
             {shown.length === 0 && <div className="px-2 py-3 text-xs text-ink-tertiary text-center">{list.length === 0 ? "No statuses yet." : "No match"}</div>}
             {groups.map((g) => (
               <div key={g}>
-                <p className="px-2.5 pt-2 pb-0.5 text-[10px] font-bold text-ink-tertiary uppercase tracking-wide">{grpLabel(g)}</p>
+                <p className="px-2.5 pt-2 pb-0.5 text-[11px] font-bold text-ink-tertiary ">{grpLabel(g)}</p>
                 {shown.filter((s) => (s.status_group || "other") === g).map((s) => {
                   const sel = cur.includes(s.key);
                   return (
@@ -1956,12 +1956,12 @@ function EcommerceSettings() {
       <div className="divide-y divide-slate-100">
         {(items || []).map((i) => (
           <div key={i.id} className="px-5 py-3 flex items-center gap-2 text-xs">
-            <span className="px-2 py-0.5 rounded bg-slate-100 text-[10px] font-bold capitalize">{i.platform}</span>
+            <span className="px-2 py-0.5 rounded bg-slate-100 text-[11px] font-bold capitalize">{i.platform}</span>
             <span className="font-semibold text-ink-primary">{i.store_url || "—"}</span>
             <span className="text-ink-tertiary">{[i.sync_products && "products", i.sync_orders && "orders"].filter(Boolean).join(" + ")}</span>
             <div className="flex-1" />
-            <span className="text-[10px] text-ink-tertiary">{i.last_synced_at ? `synced ${new Date(i.last_synced_at).toLocaleDateString()}` : "never synced"}</span>
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${i.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{i.active ? "Active" : "Off"}</span>
+            <span className="text-[11px] text-ink-tertiary">{i.last_synced_at ? `synced ${new Date(i.last_synced_at).toLocaleDateString()}` : "never synced"}</span>
+            <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${i.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{i.active ? "Active" : "Off"}</span>
           </div>
         ))}
         {items && items.length === 0 && <div className="px-5 py-3 text-xs text-ink-tertiary">No stores connected.</div>}
@@ -1995,11 +1995,11 @@ function SsoSettings() {
       <div className="divide-y divide-slate-100">
         {(items || []).map((s) => (
           <div key={s.id} className="px-5 py-3 flex items-center gap-2 text-xs">
-            <span className="px-2 py-0.5 rounded bg-slate-100 text-[10px] font-bold uppercase">{s.protocol}</span>
+            <span className="px-2 py-0.5 rounded bg-slate-100 text-[11px] font-bold ">{s.protocol}</span>
             <span className="font-semibold text-ink-primary">{s.display_name}</span>
             {s.email_domain && <span className="text-ink-tertiary">@{s.email_domain}</span>}
             <div className="flex-1" />
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${s.enabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{s.enabled ? "Enabled" : "Disabled"}</span>
+            <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${s.enabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{s.enabled ? "Enabled" : "Disabled"}</span>
             <button aria-label="Delete" onClick={() => del(s.id)} className="text-rose-600"><M n="delete" c="text-sm" /></button>
           </div>
         ))}
@@ -2042,13 +2042,13 @@ function ApprovalsSettings() {
         {items && items.length === 0 && <div className="px-5 py-4 text-xs text-ink-tertiary">No {filter === "pending" ? "pending" : ""} approval requests.</div>}
         {(items || []).map((r) => (
           <div key={r.id} className="px-5 py-3 flex items-center gap-2 text-xs">
-            <span className="px-2 py-0.5 rounded bg-slate-100 text-[10px] font-bold capitalize">{(r.kind || "").replace(/_/g, " ")}</span>
-            {r.amount != null && <span className="font-mono font-bold text-ink-primary">{r.amount}</span>}
+            <span className="px-2 py-0.5 rounded bg-slate-100 text-[11px] font-bold capitalize">{(r.kind || "").replace(/_/g, " ")}</span>
+            {r.amount != null && <span className="tabular-nums font-bold text-ink-primary">{r.amount}</span>}
             {r.reason && <span className="text-ink-secondary truncate max-w-[220px]">{r.reason}</span>}
             <div className="flex-1" />
             {r.status === "pending"
               ? <><button onClick={() => decide(r.id, "approve")} disabled={busy} className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-bold">Approve</button><button onClick={() => decide(r.id, "reject")} disabled={busy} className="px-2.5 py-1 rounded-lg border border-rose-200 text-rose-600 text-[11px] font-bold">Reject</button></>
-              : <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ${pill(r.status)}`}>{r.status}</span>}
+              : <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold capitalize ${pill(r.status)}`}>{r.status}</span>}
           </div>
         ))}
       </div>
@@ -2107,22 +2107,22 @@ function AssetCatalog() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <div><div className="text-sm font-extrabold text-ink-primary">Asset catalog</div><div className="text-xs text-ink-tertiary">Groups, brands, models &amp; identifier rules for the <span className="font-bold">{tk}</span> template.</div></div>
+        <div><div className="text-sm font-bold text-ink-primary">Asset catalog</div><div className="text-xs text-ink-tertiary">Groups, brands, models &amp; identifier rules for the <span className="font-bold">{tk}</span> template.</div></div>
         <button type="button" onClick={() => setCsvOpen((o) => !o)} className={addBtn}>{csvOpen ? "Close import" : "Import CSV"}</button>
       </div>
 
       {csvOpen && (
         <div className="rounded-2xl bg-slate-50/70 border border-slate-200/80 p-3.5 space-y-2">
-          <div className="text-[11px] font-bold uppercase tracking-wider text-ink-tertiary">Bulk import — header row required: <span className="font-mono normal-case">brand,model,group</span></div>
-          <textarea value={csv} onChange={(e) => setCsv(e.target.value)} rows={5} className="glass-input block w-full py-2 px-3 text-xs font-mono text-ink-primary rounded-lg resize-none" placeholder={"brand,model,group\nApple,iPhone 15,Phone\nSamsung,Galaxy S24,Phone"} />
-          <div className="flex justify-end"><button type="button" onClick={runImport} disabled={busy} className="px-4 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Importing…" : "Import"}</button></div>
+          <div className="text-[11px] font-bold text-ink-tertiary">Bulk import — header row required: <span className="tabular-nums normal-case">brand,model,group</span></div>
+          <textarea value={csv} onChange={(e) => setCsv(e.target.value)} rows={5} className="glass-input block w-full py-2 px-3 text-xs tabular-nums text-ink-primary rounded-lg resize-none" placeholder={"brand,model,group\nApple,iPhone 15,Phone\nSamsung,Galaxy S24,Phone"} />
+          <div className="flex justify-end"><button type="button" onClick={runImport} disabled={busy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Importing…" : "Import"}</button></div>
         </div>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Groups */}
         <div className={box}>
-          <div className="px-4 py-2.5 border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">Groups ({groups.length})</div>
+          <div className="px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold text-ink-tertiary">Groups ({groups.length})</div>
           <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
             <button type="button" onClick={() => { setGsel(""); setBsel(""); }} className={`w-full text-left px-4 py-2 text-xs font-bold ${!gsel ? "bg-blue-50/60 text-primary" : "text-ink-secondary hover:bg-slate-50"}`}>All groups</button>
             {groups.map((g) => {
@@ -2131,7 +2131,7 @@ function AssetCatalog() {
                 <div key={g.id} className={`px-4 py-2 flex items-center gap-2 ${gsel === g.id ? "bg-blue-50/60" : "hover:bg-slate-50"}`}>
                   <button type="button" onClick={() => { setGsel(g.id); setBsel(""); }} className="flex-1 text-left min-w-0">
                     <div className="text-xs font-bold text-ink-primary truncate">{g.label}</div>
-                    {rule && <div className="text-[10px] text-ink-tertiary">ID: {(rule.allowed_kinds || []).map((k: string) => ID_LABEL[k] || k).join(" / ") || "—"}</div>}
+                    {rule && <div className="text-[11px] text-ink-tertiary">ID: {(rule.allowed_kinds || []).map((k: string) => ID_LABEL[k] || k).join(" / ") || "—"}</div>}
                   </button>
                   {!g.is_system && <button aria-label="Close" type="button" onClick={() => delRow("groups", g.id)} className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>}
                 </div>
@@ -2143,7 +2143,7 @@ function AssetCatalog() {
 
         {/* Brands */}
         <div className={box}>
-          <div className="px-4 py-2.5 border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">Brands ({shownBrands.length}){gsel ? ` · ${gName(gsel)}` : ""}</div>
+          <div className="px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold text-ink-tertiary">Brands ({shownBrands.length}){gsel ? ` · ${gName(gsel)}` : ""}</div>
           <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
             {shownBrands.length === 0 && <p className="px-4 py-3 text-xs text-ink-tertiary">No brands.</p>}
             {shownBrands.map((b) => (
@@ -2158,7 +2158,7 @@ function AssetCatalog() {
 
         {/* Models */}
         <div className={box}>
-          <div className="px-4 py-2.5 border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">Models ({shownModels.length}){bsel ? ` · ${brands.find((b) => b.id === bsel)?.name || ""}` : ""}</div>
+          <div className="px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold text-ink-tertiary">Models ({shownModels.length}){bsel ? ` · ${brands.find((b) => b.id === bsel)?.name || ""}` : ""}</div>
           <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
             {!bsel && <p className="px-4 py-3 text-xs text-ink-tertiary">Pick a brand to see and add its models.</p>}
             {bsel && shownModels.length === 0 && <p className="px-4 py-3 text-xs text-ink-tertiary">No models for this brand.</p>}

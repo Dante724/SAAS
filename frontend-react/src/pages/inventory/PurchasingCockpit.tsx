@@ -69,7 +69,7 @@ export default function PurchasingCockpit({ onClose, onOpenPO, onReorder }: {
               {(r) => (<><span className="font-semibold text-ink-primary truncate">{r.name}</span><span className="text-ink-tertiary">{r.available}/{r.min_stock}</span><button onClick={onReorder} className="ml-auto px-2.5 py-1 rounded-lg bg-primary text-white text-[11px] font-bold hover:bg-primary-container">Create PO</button></>)}
             </Section>
             <Section k="supplier_balances" title="Supplier balances owed" icon="account_balance_wallet" tone="bg-slate-100 text-ink-secondary">
-              {(r) => (<><span className="font-semibold text-ink-primary truncate">{r.name}</span><span className="ml-auto font-mono font-bold text-rose-600">{money(r.balance)}</span></>)}
+              {(r) => (<><span className="font-semibold text-ink-primary truncate">{r.name}</span><span className="ml-auto tabular-nums font-bold text-rose-600">{money(r.balance)}</span></>)}
             </Section>
           </>}
         </div>

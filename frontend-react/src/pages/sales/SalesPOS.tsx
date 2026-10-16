@@ -94,17 +94,17 @@ export default function SalesPOS() {
                 <button key={p.id} onClick={() => add("product", p.id, p.name, p.sell_price || 0, p.qty_available)} className="text-left bg-white rounded-xl border border-slate-200/90 shadow-clay-sm p-3 hover:border-primary/50 hover:-translate-y-0.5 transition-all">
                   <div className="flex items-center gap-2 mb-2">
                     {p.image_data ? <img src={p.image_data} alt="" className="w-9 h-9 rounded-lg object-cover border border-slate-200" /> : <div className="w-9 h-9 rounded-lg bg-blue-50 text-primary flex items-center justify-center"><M n="inventory_2" c="text-base" /></div>}
-                    <span className={`ml-auto text-[10px] font-bold px-1.5 py-0.5 rounded-full ${p.low_stock ? "bg-amber-100 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}>{p.qty_available ?? 0}</span>
+                    <span className={`ml-auto text-[11px] font-bold px-1.5 py-0.5 rounded-full ${p.low_stock ? "bg-amber-100 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}>{p.qty_available ?? 0}</span>
                   </div>
                   <div className="text-xs font-bold text-ink-primary leading-snug line-clamp-2 min-h-[32px]">{p.name}</div>
-                  <div className="text-sm font-black font-mono text-primary mt-1">{money(p.sell_price)}</div>
+                  <div className="text-sm font-bold tabular-nums text-primary mt-1">{money(p.sell_price)}</div>
                 </button>
               ))}
               {mode === "services" && grid.map((s: any) => (
                 <button key={s.id} onClick={() => add("service", s.id, s.name, s.price || 0)} className="text-left bg-white rounded-xl border border-slate-200/90 shadow-clay-sm p-3 hover:border-primary/50 hover:-translate-y-0.5 transition-all">
                   <div className="w-9 h-9 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center mb-2"><M n="build" c="text-base" /></div>
                   <div className="text-xs font-bold text-ink-primary leading-snug line-clamp-2 min-h-[32px]">{s.name}</div>
-                  <div className="flex items-center justify-between mt-1"><span className="text-sm font-black font-mono text-primary">{money(s.price)}</span>{s.duration_min ? <span className="text-[10px] text-ink-tertiary">{s.duration_min}m</span> : null}</div>
+                  <div className="flex items-center justify-between mt-1"><span className="text-sm font-bold tabular-nums text-primary">{money(s.price)}</span>{s.duration_min ? <span className="text-[11px] text-ink-tertiary">{s.duration_min}m</span> : null}</div>
                 </button>
               ))}
               {grid.length === 0 && <div className="col-span-full text-xs text-ink-tertiary py-8 text-center">No {mode} found.</div>}
@@ -144,16 +144,16 @@ export default function SalesPOS() {
             {cart.map((l) => (
               <div key={l.key} className="bg-slate-50/70 rounded-xl border border-slate-200/70 p-2.5">
                 <div className="flex items-start gap-2">
-                  <div className="flex-1 min-w-0"><div className="text-xs font-bold text-ink-primary truncate">{l.description}</div><div className="text-[11px] text-ink-tertiary font-mono">{money(l.unit_price)} each</div></div>
+                  <div className="flex-1 min-w-0"><div className="text-xs font-bold text-ink-primary truncate">{l.description}</div><div className="text-[11px] text-ink-tertiary tabular-nums">{money(l.unit_price)} each</div></div>
                   <button aria-label="Close" onClick={() => remove(l.key)} className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>
                 </div>
                 <div className="flex items-center justify-between mt-2">
                   <div className="flex items-center gap-1.5">
                     <button aria-label="Remove" onClick={() => setQty(l.key, -1)} className="w-6 h-6 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-ink-secondary hover:bg-slate-50"><M n="remove" c="text-xs" /></button>
-                    <span className="text-xs font-bold font-mono w-6 text-center">{l.qty}</span>
+                    <span className="text-xs font-bold tabular-nums w-6 text-center">{l.qty}</span>
                     <button aria-label="Add" onClick={() => setQty(l.key, 1)} className="w-6 h-6 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-ink-secondary hover:bg-slate-50"><M n="add" c="text-xs" /></button>
                   </div>
-                  <span className="text-xs font-black font-mono text-ink-primary">{money(l.unit_price * l.qty * (1 - l.discount / 100))}</span>
+                  <span className="text-xs font-bold tabular-nums text-ink-primary">{money(l.unit_price * l.qty * (1 - l.discount / 100))}</span>
                 </div>
               </div>
             ))}
@@ -161,28 +161,28 @@ export default function SalesPOS() {
 
           {/* totals + charge */}
           <div className="px-5 py-4 border-t border-slate-200/80 space-y-3 bg-slate-50/40">
-            <div className="flex items-center justify-between text-xs"><span className="text-ink-secondary">Subtotal</span><span className="font-mono font-semibold text-ink-primary">{money(subtotal)}</span></div>
+            <div className="flex items-center justify-between text-xs"><span className="text-ink-secondary">Subtotal</span><span className="tabular-nums font-semibold text-ink-primary">{money(subtotal)}</span></div>
             <div className="flex items-center justify-between text-xs"><span className="text-ink-secondary">Discount ({currencySymbol()})</span><input type="number" value={discount} onChange={(e) => setDiscount(Math.max(0, Number(e.target.value)))} className="glass-input w-24 px-2 py-1 rounded-lg text-xs text-right font-mono" /></div>
 
             {/* 144bb — rewards: coupon / gift card / loyalty applied server-side at charge */}
             <button onClick={() => setShowRewards((v) => !v)} className="flex items-center gap-1.5 text-[11px] font-semibold text-primary hover:underline"><M n="redeem" c="text-sm" />Rewards &amp; credits<M n={showRewards ? "expand_less" : "expand_more"} c="text-sm" /></button>
             {showRewards && (
               <div className="space-y-2 rounded-xl border border-slate-200/70 bg-white/70 p-2.5">
-                <div className="flex items-center justify-between gap-2"><span className="text-[11px] text-ink-secondary flex-shrink-0">Coupon code</span><input value={coupon} onChange={(e) => setCoupon(e.target.value.toUpperCase())} className="glass-input w-32 px-2 py-1 rounded-lg text-xs font-mono uppercase" placeholder="SAVE10" /></div>
-                <div className="flex items-center justify-between gap-2"><span className="text-[11px] text-ink-secondary flex-shrink-0">Gift card</span><input value={giftCard} onChange={(e) => setGiftCard(e.target.value.toUpperCase())} className="glass-input w-32 px-2 py-1 rounded-lg text-xs font-mono uppercase" placeholder="GC-XXXX" /></div>
+                <div className="flex items-center justify-between gap-2"><span className="text-[11px] text-ink-secondary flex-shrink-0">Coupon code</span><input value={coupon} onChange={(e) => setCoupon(e.target.value.toUpperCase())} className="glass-input w-32 px-2 py-1 rounded-lg text-xs font-mono " placeholder="SAVE10" /></div>
+                <div className="flex items-center justify-between gap-2"><span className="text-[11px] text-ink-secondary flex-shrink-0">Gift card</span><input value={giftCard} onChange={(e) => setGiftCard(e.target.value.toUpperCase())} className="glass-input w-32 px-2 py-1 rounded-lg text-xs tabular-nums " placeholder="GC-XXXX" /></div>
                 <div className="flex items-center justify-between gap-2"><span className="text-[11px] text-ink-secondary flex-shrink-0">Loyalty points</span><input type="number" min={0} value={redeemPts} onChange={(e) => setRedeemPts(Math.max(0, Number(e.target.value)))} disabled={!client} className="glass-input w-32 px-2 py-1 rounded-lg text-xs text-right font-mono disabled:opacity-50" /></div>
-                {!client && <p className="text-[10px] text-ink-tertiary">Attach a client to redeem loyalty points.</p>}
+                {!client && <p className="text-[11px] text-ink-tertiary">Attach a client to redeem loyalty points.</p>}
               </div>
             )}
 
-            <div className="flex items-center justify-between"><span className="text-sm font-bold text-ink-primary">Total</span><span className="text-xl font-black font-mono text-primary">{money(total)}</span></div>
-            <div><label className="block text-[10px] font-bold uppercase tracking-wider text-ink-tertiary mb-1">Take payment into</label>
+            <div className="flex items-center justify-between"><span className="text-sm font-bold text-ink-primary">Total</span><span className="text-xl font-bold tabular-nums text-primary">{money(total)}</span></div>
+            <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Take payment into</label>
               <select value={accountId} onChange={(e) => setAccountId(e.target.value)} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-lg appearance-none">
                 <option value="">No payment (park sale)</option>
                 {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
             </div>
-            <button onClick={charge} disabled={busy || cart.length === 0} className="w-full py-2.5 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-sm font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-50 flex items-center justify-center gap-2"><M n="point_of_sale" c="text-base" />{busy ? "Processing…" : `Charge ${money(total)}`}</button>
+            <button onClick={charge} disabled={busy || cart.length === 0} className="w-full py-2.5 rounded-xl bg-primary text-white text-sm font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-50 flex items-center justify-center gap-2"><M n="point_of_sale" c="text-base" />{busy ? "Processing…" : `Charge ${money(total)}`}</button>
           </div>
         </aside>
       </div>

@@ -30,7 +30,7 @@ export default function ConversationPanel({ orderId }: { orderId: string }) {
       <div className="px-4 py-2.5 border-b border-slate-100 flex items-center gap-2">
         <M n="forum" c="text-base text-primary" />
         <span className="text-xs font-bold text-ink-primary">Customer conversation</span>
-        <span className="text-[10px] text-ink-tertiary font-semibold ml-auto">Messages here show on the customer's status page</span>
+        <span className="text-[11px] text-ink-tertiary font-semibold ml-auto">Messages here show on the customer's status page</span>
       </div>
       <div className="max-h-64 overflow-y-auto p-3 space-y-2 bg-slate-50/40">
         {!msgs && <div className="text-xs text-ink-tertiary py-6 text-center">Loading…</div>}
@@ -41,7 +41,7 @@ export default function ConversationPanel({ orderId }: { orderId: string }) {
             <div key={m.id} className={`flex ${staff ? "justify-end" : "justify-start"}`}>
               <div className={`max-w-[78%] rounded-2xl px-3 py-2 ${staff ? "bg-primary text-white rounded-br-sm" : "bg-white border border-slate-200 text-ink-primary rounded-bl-sm"}`}>
                 <div className="text-[13px] leading-snug whitespace-pre-wrap break-words">{m.body}</div>
-                <div className={`text-[9px] mt-1 ${staff ? "text-white/70" : "text-ink-tertiary"}`}>{m.who || (staff ? "Staff" : "Customer")} · {fmt(m.at)}</div>
+                <div className={`text-[11px] mt-1 ${staff ? "text-white/70" : "text-ink-tertiary"}`}>{m.who || (staff ? "Staff" : "Customer")} · {fmt(m.at)}</div>
               </div>
             </div>
           );

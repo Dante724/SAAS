@@ -254,7 +254,7 @@ function ListEditor({ dir, onChanged, onDelete }: { dir: Dir; onChanged: () => v
                 <button onClick={() => { setEditId(i.id); setEditVal(i.value); }} title="Click to rename" className="flex-1 min-w-0 text-left text-ink-primary truncate">{i.value}</button>
               )}
               {i.parent_id && <span className="text-[11px] text-ink-tertiary">under {byId(i.parent_id)?.value || "—"}</span>}
-              {i.location_id && <span className="px-1.5 py-0.5 rounded-md bg-primary/10 text-primary text-[10px] font-semibold">{locs.find((l) => l.id === i.location_id)?.name || "1 location"}</span>}
+              {i.location_id && <span className="px-1.5 py-0.5 rounded-md bg-primary/10 text-primary text-[11px] font-semibold">{locs.find((l) => l.id === i.location_id)?.name || "1 location"}</span>}
               {counts && <span className={`text-[11px] tabular-nums whitespace-nowrap ${i.uses ? "text-ink-secondary" : "text-ink-tertiary"}`}>{usesText(i.uses)}</span>}
               <button onClick={() => mergeInto(i)} className="px-2 py-1.5 rounded-lg text-[11px] font-semibold text-ink-tertiary hover:text-primary hover:bg-slate-100">Merge</button>
               <button onClick={() => archive(i)} className="px-2 py-1.5 rounded-lg text-[11px] font-semibold text-ink-tertiary hover:text-rose-600 hover:bg-rose-50">Hide</button>

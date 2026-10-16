@@ -78,7 +78,7 @@ export default function DocumentTemplatesPage({ templates, onOpen, onChanged, on
         <div className="px-3.5 py-3 border-t border-slate-100">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-ink-primary truncate">{t.name}</span>
-            {t.is_default && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 flex-shrink-0">Default</span>}
+            {t.is_default && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 flex-shrink-0">Default</span>}
           </div>
           <div className="text-[11px] text-ink-tertiary">{t.doc_type === "label" ? "Label" : (t.page_size || "a4").toUpperCase()}{(t.print_statuses || []).length ? ` · only in ${(t.print_statuses || []).length} status${(t.print_statuses || []).length === 1 ? "" : "es"}` : ""}</div>
         </div>

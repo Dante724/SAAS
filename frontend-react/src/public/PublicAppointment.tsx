@@ -258,7 +258,7 @@ export default function PublicAppointment() {
           <div className="mx-auto grid h-14 w-14 place-items-center rounded-full" style={{ background: `${accent}1f` }}>
             <Check size={28} style={{ color: accent }} />
           </div>
-          <h1 className="mt-4 text-xl font-extrabold text-ink-primary">
+          <h1 className="mt-4 text-xl font-bold text-ink-primary">
             {done.kind === "booked" ? "You're booked!" : "Request received"}
           </h1>
           <p className="mt-1.5 text-sm text-ink-secondary">
@@ -273,7 +273,7 @@ export default function PublicAppointment() {
           )}
           {(loc?.address || loc?.phone) && (
             <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4 text-left">
-              <div className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-[.07em] text-ink-tertiary"><MapPin size={13} /> {loc?.name || "Find us"}</div>
+              <div className="flex items-center gap-1.5 text-[11px] font-bold text-ink-tertiary"><MapPin size={13} /> {loc?.name || "Find us"}</div>
               {loc?.address && <div className="mt-1.5 text-[13px] text-ink-secondary">{loc.address}</div>}
               {todayHours(loc) && <div className="mt-1 flex items-center gap-1.5 text-xs text-ink-tertiary"><Clock size={12} /> {todayHours(loc)}</div>}
               <div className="mt-3 flex gap-2">
@@ -291,14 +291,14 @@ export default function PublicAppointment() {
   if (reqMode) {
     return (
       <Shell accent={accent} cfg={cfg} onBack={() => { setReqMode(false); setFlash(null); }}>
-        <h2 className="text-lg font-extrabold text-ink-primary">Leave a request</h2>
+        <h2 className="text-lg font-bold text-ink-primary">Leave a request</h2>
         <p className="mt-1 text-[13px] text-ink-tertiary">Tell us what you need and {cfg.shop_name} will call you back.</p>
         <label className={lbl}>What's the problem?</label>
         <textarea value={issue} onChange={(e) => setIssue(e.target.value)} rows={3} className={input + " resize-y"} placeholder={cfg.identifier?.kind === "vin" ? "e.g. Brakes squeal when stopping, check engine light on…" : cfg.identifier?.kind === "hin" ? "e.g. Outboard won't start after winter storage…" : "e.g. Screen cracked on an iPhone 14, flickers when touched…"} />
         {cfg.identifier && (<>
           <label className={lbl}>{cfg.asset_label ? `${cfg.asset_label} ` : ""}{cfg.identifier.label} <span className="font-normal text-ink-tertiary">(optional)</span></label>
           <input value={ident} onChange={(e) => setIdent(cfg.identifier!.kind === "serial" ? e.target.value : e.target.value.toUpperCase())} maxLength={40}
-            autoCapitalize="characters" autoCorrect="off" spellCheck={false} className={input + " font-mono tracking-wide"}
+            autoCapitalize="characters" autoCorrect="off" spellCheck={false} className={input + " tabular-nums "}
             placeholder={cfg.identifier.kind === "vin" ? "1HGCM82633A004352" : cfg.identifier.kind === "hin" ? "ABC12345D404" : ""} />
           <div className="mt-1 text-[12px] text-ink-tertiary">{cfg.identifier.hint}{ident.trim() && cfg.identifier.kind === "vin" && ident.replace(/[\s-]/g, "").length !== 17 ? ` You've entered ${ident.replace(/[\s-]/g, "").length}.` : ""}{ident.trim() && cfg.identifier.kind === "hin" && ident.replace(/[\s-]/g, "").length !== 12 ? ` You've entered ${ident.replace(/[\s-]/g, "").length}.` : ""}</div>
         </>)}
@@ -320,7 +320,7 @@ export default function PublicAppointment() {
       {/* ── location ── */}
       {stepK === "loc" && (
         <>
-          <h2 className="text-lg font-extrabold text-ink-primary">Where would you like to go?</h2>
+          <h2 className="text-lg font-bold text-ink-primary">Where would you like to go?</h2>
           <div className="mt-4 flex flex-col gap-2.5">
             {locs.map((l) => (
               <button key={l.id} onClick={() => { setLocId(l.id); setStepK("svc"); }}
@@ -337,7 +337,7 @@ export default function PublicAppointment() {
       {/* ── service + catch-all ── */}
       {stepK === "svc" && (
         <>
-          <h2 className="text-lg font-extrabold text-ink-primary">What can we help with?</h2>
+          <h2 className="text-lg font-bold text-ink-primary">What can we help with?</h2>
           {cats.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-2">
               {[null, ...cats].map((c) => (
@@ -357,7 +357,7 @@ export default function PublicAppointment() {
                   <span className="flex items-center gap-2 font-bold text-ink-primary"><Wrench size={15} style={{ color: accent }} /> {s.name}</span>
                   <span className="mt-0.5 block text-[13px] text-ink-tertiary">{[s.category, s.duration_min ? `${s.duration_min} min` : null].filter(Boolean).join(" · ")}</span>
                 </span>
-                <span className="whitespace-nowrap text-sm font-extrabold text-ink-primary">{money(s.price)}</span>
+                <span className="whitespace-nowrap text-sm font-bold text-ink-primary">{money(s.price)}</span>
               </button>
             ))}
             <div className={"rounded-xl border p-4 " + (catchAll ? "border-2" : "border-dashed border-slate-300")} style={catchAll ? { borderColor: accent } : undefined}>
@@ -385,7 +385,7 @@ export default function PublicAppointment() {
       {/* ── specialist ── */}
       {stepK === "emp" && (
         <>
-          <h2 className="text-lg font-extrabold text-ink-primary">Anyone in particular?</h2>
+          <h2 className="text-lg font-bold text-ink-primary">Anyone in particular?</h2>
           <div className="mt-4 flex flex-col gap-2.5">
             <button onClick={() => { setEmpId(null); goTime(svc, null); }} className={cardBtn + " border-slate-200 flex items-center gap-3"}>
               <span className="grid h-9 w-9 place-items-center rounded-full" style={{ background: `${accent}1f`, color: accent }}><Sparkles size={16} /></span>
@@ -394,7 +394,7 @@ export default function PublicAppointment() {
             </button>
             {staffFor.map((e) => (
               <button key={e.id} onClick={() => { setEmpId(e.id); goTime(svc, e.id); }} className={cardBtn + " border-slate-200 flex items-center gap-3"}>
-                <span className="grid h-9 w-9 place-items-center rounded-full text-sm font-extrabold text-white" style={{ background: accent }}>{e.name.slice(0, 1).toUpperCase()}</span>
+                <span className="grid h-9 w-9 place-items-center rounded-full text-sm font-bold text-white" style={{ background: accent }}>{e.name.slice(0, 1).toUpperCase()}</span>
                 <span className="flex items-center gap-2 font-bold text-ink-primary"><User size={14} className="text-ink-tertiary" /> {e.name}</span>
               </button>
             ))}
@@ -405,7 +405,7 @@ export default function PublicAppointment() {
       {/* ── time ── */}
       {stepK === "time" && (
         <>
-          <h2 className="text-lg font-extrabold text-ink-primary">Pick a time</h2>
+          <h2 className="text-lg font-bold text-ink-primary">Pick a time</h2>
           <div className="mt-1 text-[13px] text-ink-tertiary">
             {svc ? <>{svc.name} · {svc.duration_min || cfg.time_slot || 60} min · {money(svc.price)}</> : "We'll confirm the details when you arrive"}
           </div>
@@ -426,9 +426,9 @@ export default function PublicAppointment() {
                     <button key={d.date} disabled={off} onClick={() => pickDay(d.date)}
                       className={"min-w-[64px] rounded-xl border px-2 py-2 text-center " + (off ? "opacity-40 " : "") + "border-slate-200"}
                       style={sel ? { background: accent, borderColor: accent, color: "#fff" } : undefined}>
-                      <div className={"text-[10px] font-bold uppercase " + (sel ? "" : "text-ink-tertiary")}>{f.dow}</div>
-                      <div className="text-lg font-extrabold leading-tight">{f.num}</div>
-                      <div className={"text-[10px] font-semibold " + (sel ? "" : "text-ink-tertiary")}>{off ? "—" : `${d.free} free`}</div>
+                      <div className={"text-[11px] font-bold  " + (sel ? "" : "text-ink-tertiary")}>{f.dow}</div>
+                      <div className="text-lg font-bold leading-tight">{f.num}</div>
+                      <div className={"text-[11px] font-semibold " + (sel ? "" : "text-ink-tertiary")}>{off ? "—" : `${d.free} free`}</div>
                     </button>
                   );
                 })}
@@ -437,7 +437,7 @@ export default function PublicAppointment() {
               {slots !== null && slots.length === 0 && <div className="mt-4 text-sm text-ink-tertiary">No times left this day — try another.</div>}
               {Object.entries(grouped).map(([g, list]) => (
                 <div key={g} className="mt-4">
-                  <div className="text-[11px] font-extrabold uppercase tracking-[.07em] text-ink-tertiary">{g}</div>
+                  <div className="text-[11px] font-bold text-ink-tertiary">{g}</div>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {list.map((t) => (
                       <button key={t} onClick={() => setTime(t)} className="rounded-lg border px-4 py-2 text-sm font-bold"
@@ -458,7 +458,7 @@ export default function PublicAppointment() {
       {/* ── details ── */}
       {stepK === "you" && (
         <>
-          <h2 className="text-lg font-extrabold text-ink-primary">Almost done</h2>
+          <h2 className="text-lg font-bold text-ink-primary">Almost done</h2>
           <div className="mt-1 text-[13px] text-ink-tertiary">
             {[svc?.name || (catchAll ? "Repair visit" : null), date && time ? `${date} at ${time}` : null].filter(Boolean).join(" · ")}
           </div>
@@ -472,7 +472,7 @@ export default function PublicAppointment() {
           {cfg.identifier && (<>
             <label className={lbl}>{cfg.asset_label ? `${cfg.asset_label} ` : ""}{cfg.identifier.label} <span className="font-normal text-ink-tertiary">(optional)</span></label>
             <input value={ident} onChange={(e) => setIdent(cfg.identifier!.kind === "serial" ? e.target.value : e.target.value.toUpperCase())} maxLength={40}
-              autoCapitalize="characters" autoCorrect="off" spellCheck={false} className={input + " font-mono tracking-wide"}
+              autoCapitalize="characters" autoCorrect="off" spellCheck={false} className={input + " tabular-nums "}
               placeholder={cfg.identifier.kind === "vin" ? "1HGCM82633A004352" : cfg.identifier.kind === "hin" ? "ABC12345D404" : ""} />
             <div className="mt-1 text-[12px] text-ink-tertiary">{cfg.identifier.hint}{ident.trim() && cfg.identifier.kind === "vin" && ident.replace(/[\s-]/g, "").length !== 17 ? ` You've entered ${ident.replace(/[\s-]/g, "").length}.` : ""}{ident.trim() && cfg.identifier.kind === "hin" && ident.replace(/[\s-]/g, "").length !== 12 ? ` You've entered ${ident.replace(/[\s-]/g, "").length}.` : ""}</div>
           </>)}
@@ -504,11 +504,11 @@ function Shell({ accent, cfg, steps, at, onBack, children }: {
           )}
           {cfg?.logo_data
             ? <img src={cfg.logo_data} alt={cfg.shop_name} className="h-10 w-10 shrink-0 rounded-xl object-contain" style={{ background: "#fff" }} />
-            : <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-[15px] font-extrabold text-white" style={{ background: accent }}>
+            : <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-[15px] font-bold text-white" style={{ background: accent }}>
                 {(cfg?.shop_name || "R").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase()}
               </div>}
           <div className="min-w-0">
-            <div className="truncate text-[15px] font-extrabold text-ink-primary">{cfg?.shop_name || "Book an appointment"}</div>
+            <div className="truncate text-[15px] font-bold text-ink-primary">{cfg?.shop_name || "Book an appointment"}</div>
             <div className="text-xs font-semibold text-ink-tertiary">Book an appointment</div>
           </div>
         </div>

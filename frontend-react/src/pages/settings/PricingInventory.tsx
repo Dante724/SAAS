@@ -114,7 +114,7 @@ export function PricingPage({ types, currency, onAdd, onEdit, onDelete, tiers }:
                 <div key={t.id} onClick={() => onEdit(t)} className="group relative rounded-xl border border-slate-200 p-3.5 cursor-pointer hover:border-slate-300 hover:bg-slate-50/60">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-ink-primary truncate">{t.name}</span>
-                    {t.is_default && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-primary/10 text-primary">Default</span>}
+                    {t.is_default && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-primary/10 text-primary">Default</span>}
                     <button aria-label={`Delete ${t.name}`} onClick={(e) => { e.stopPropagation(); onDelete(t); }}
                       className="ml-auto w-6 h-6 rounded-md grid place-items-center text-ink-tertiary hover:bg-rose-50 hover:text-rose-600 opacity-0 group-hover:opacity-100 focus:opacity-100"><M n="close" c="text-sm" /></button>
                   </div>
@@ -122,8 +122,8 @@ export function PricingPage({ types, currency, onAdd, onEdit, onDelete, tiers }:
                   <div className="text-[11px] text-ink-tertiary">{cur}100 cost sells for {cur}{(100 * (1 + mk / 100)).toFixed(2)} · {pct(mk).toFixed(0)}% margin</div>
                   {(t.location_scope && t.location_scope !== "all") || t.starts_at || t.ends_at ? (
                     <div className="flex gap-1 mt-2">
-                      {t.location_scope && t.location_scope !== "all" && <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-slate-100 text-ink-secondary">Some locations</span>}
-                      {(t.starts_at || t.ends_at) && <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700">Limited dates</span>}
+                      {t.location_scope && t.location_scope !== "all" && <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-slate-100 text-ink-secondary">Some locations</span>}
+                      {(t.starts_at || t.ends_at) && <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700">Limited dates</span>}
                     </div>
                   ) : null}
                 </div>

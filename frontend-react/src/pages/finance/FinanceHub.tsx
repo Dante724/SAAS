@@ -1,4 +1,5 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import PageSummary, { type SummaryStat } from "../../components/PageSummary";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
@@ -88,12 +89,12 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
   const accounts: Account[] = cash?.accounts || [];
 
   // Each KPI jumps to the Finance tab that explains it; Outstanding opens the Invoices page.
-  const KPIS: { l: string; v: string; icon: string; tint: string; tab?: Tab; to?: string }[] = [
-    { l: "Total cash", v: money(cash?.total_cash), icon: "account_balance_wallet", tint: "bg-emerald-50 text-emerald-600", tab: can("can_view_cashbox") ? "cashboxes" : "balances" },
-    { l: "Revenue (paid)", v: money(fin?.total_revenue), icon: "trending_up", tint: "bg-blue-50 text-primary", tab: "pnl" },
-    { l: "Outstanding", v: money(fin?.total_outstanding), icon: "pending_actions", tint: "bg-amber-50 text-amber-600", to: "/invoices" },
-    { l: "Expenses", v: money(fin?.total_expenses), icon: "trending_down", tint: "bg-rose-50 text-rose-600", tab: "pnl" },
-    { l: "Gross profit", v: money(fin?.gross_profit), icon: "savings", tint: "bg-indigo-50 text-indigo-600", tab: "pnl" },
+  const kpiStats: SummaryStat[] = [
+    { label: "Cash and bank now", value: money(cash?.total_cash), onClick: () => setTab(can("can_view_cashbox") ? "cashboxes" : "balances") },
+    { label: "Paid invoices", value: money(fin?.total_revenue), onClick: () => setTab("pnl") },
+    { label: "Still owed to you", value: money(fin?.total_outstanding), onClick: () => navigate("/invoices") },
+    { label: "Expenses", value: money(fin?.total_expenses), onClick: () => setTab("pnl") },
+    { label: "Profit before tax", value: money(fin?.gross_profit), tone: (fin?.gross_profit || 0) < 0 ? "bad" : undefined, onClick: () => setTab("pnl") },
   ];
 
   return (
@@ -120,31 +121,15 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
               </div>
             </div>
           )}
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-            {KPIS.map((k) => {
-              const clickable = !!(k.tab || k.to);
-              const go = () => (k.to ? navigate(k.to) : setTab(k.tab!));
-              return (
-                <div key={k.l}
-                  onClick={clickable ? go : undefined}
-                  role={clickable ? "button" : undefined}
-                  tabIndex={clickable ? 0 : undefined}
-                  onKeyDown={clickable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } } : undefined}
-                  className={`bg-white rounded-xl p-3 border border-slate-200/80 shadow-clay-sm flex items-center justify-between ${clickable ? "cursor-pointer hover:border-primary/50 hover:shadow-clay-card transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40" : ""}`}>
-                  <div><span className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">{k.l}</span><p className="text-lg font-black font-mono text-ink-primary">{k.v}</p></div>
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${k.tint}`}><M n={k.icon} c="text-base" /></div>
-                </div>
-              );
-            })}
-          </div>
+          <PageSummary stats={kpiStats} />
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-            <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary uppercase tracking-wider">Cash accounts</div>
+            <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary ">Cash accounts</div>
             <div className="divide-y divide-slate-100">
               {accounts.length === 0 && <div className="p-6 text-xs text-ink-tertiary">No accounts.</div>}
               {accounts.map((a) => (
                 <div key={a.id} className="px-5 py-3 flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2.5"><div className="w-8 h-8 rounded-lg bg-blue-50 text-primary flex items-center justify-center"><M n={a.payment_option === "cash" ? "payments" : a.payment_option === "card" ? "credit_card" : "account_balance"} c="text-sm" /></div><span className="font-bold text-ink-primary">{a.name}</span>{a.is_virtual && <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-100 text-ink-tertiary font-bold uppercase">Virtual</span>}</div>
-                  <span className="font-mono font-bold text-ink-primary">{money(a.balance)}</span>
+                  <div className="flex items-center gap-2.5"><div className="w-8 h-8 rounded-lg bg-blue-50 text-primary flex items-center justify-center"><M n={a.payment_option === "cash" ? "payments" : a.payment_option === "card" ? "credit_card" : "account_balance"} c="text-sm" /></div><span className="font-bold text-ink-primary">{a.name}</span>{a.is_virtual && <span className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 text-ink-tertiary font-bold ">Virtual</span>}</div>
+                  <span className="tabular-nums font-bold text-ink-primary">{money(a.balance)}</span>
                 </div>
               ))}
             </div>
@@ -160,15 +145,15 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
                 <DateField mode="date" value={pFrom} onChange={setPFrom} className="w-36" />
                 <span className="text-ink-tertiary">→</span>
                 <DateField mode="date" value={pTo} onChange={setPTo} className="w-36" />
-                <button onClick={loadPnl} className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110">Run</button>
+                <button onClick={loadPnl} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110">Run</button>
               </div>
             </div>
             {pnlBusy && <div className="p-8 text-xs text-ink-tertiary text-center">Calculating…</div>}
             {!pnlBusy && pnl && (
               <>
                 <div className={`rounded-2xl border shadow-clay-card p-5 ${pnl.net_profit >= 0 ? "bg-emerald-50/60 border-emerald-200" : "bg-rose-50/60 border-rose-200"}`}>
-                  <p className="text-[11px] font-bold uppercase tracking-wider text-ink-tertiary">Net profit {pnl.net_profit >= 0 ? "(you made money)" : "(you're in the red)"}</p>
-                  <p className={`text-3xl font-black font-mono ${pnl.net_profit >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{cur(pnl.net_profit)}</p>
+                  <p className="text-[11px] font-bold text-ink-tertiary">Net profit {pnl.net_profit >= 0 ? "(you made money)" : "(you're in the red)"}</p>
+                  <p className={`text-3xl font-bold tabular-nums ${pnl.net_profit >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{cur(pnl.net_profit)}</p>
                   <p className="text-[11px] text-ink-tertiary mt-1">Net margin {pnl.net_margin_pct}% · {pnl.invoice_count} invoices · {pnl.date_from} → {pnl.date_to}</p>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
@@ -181,19 +166,19 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
                     { l: "Tax collected", v: cur(pnl.tax_collected), icon: "receipt_long", tint: "bg-slate-100 text-ink-secondary" },
                   ].map((k: any) => (
                     <div key={k.l} className="bg-white rounded-xl p-3 border border-slate-200/80 shadow-clay-sm flex items-center justify-between">
-                      <div><span className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">{k.l}</span><p className="text-lg font-black font-mono text-ink-primary">{k.v}</p>{k.sub && <p className="text-[10px] text-ink-tertiary">{k.sub}</p>}</div>
+                      <div><span className="text-[11px] font-bold text-ink-tertiary">{k.l}</span><p className="text-lg font-bold tabular-nums text-ink-primary">{k.v}</p>{k.sub && <p className="text-[11px] text-ink-tertiary">{k.sub}</p>}</div>
                       <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${k.tint}`}><M n={k.icon} c="text-base" /></div>
                     </div>
                   ))}
                 </div>
                 <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 text-xs text-ink-secondary max-w-2xl">
-                  <div className="flex justify-between py-1.5 border-b border-slate-100"><span>Net revenue (ex-tax)</span><span className="font-mono font-semibold text-ink-primary">{cur(pnl.revenue)}</span></div>
-                  <div className="flex justify-between py-1.5 border-b border-slate-100"><span>− Cost of parts (COGS)</span><span className="font-mono text-rose-600">−{cur(pnl.cogs)}</span></div>
-                  <div className="flex justify-between py-1.5 border-b border-slate-100 font-bold text-ink-primary"><span>= Gross profit</span><span className="font-mono">{cur(pnl.gross_profit)} <span className="text-[10px] text-ink-tertiary">({pnl.gross_margin_pct}%)</span></span></div>
-                  <div className="flex justify-between py-1.5 border-b border-slate-100"><span>− Operating expenses</span><span className="font-mono text-rose-600">−{cur(pnl.opex)}</span></div>
-                  <div className="flex justify-between py-1.5 border-b border-slate-100"><span>− Processing fees (card/online)</span><span className="font-mono text-rose-600">−{cur(pnl.fees)}</span></div>
-                  <div className="flex justify-between py-2 font-black text-sm text-ink-primary"><span>= Net profit</span><span className={`font-mono ${pnl.net_profit >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{cur(pnl.net_profit)}</span></div>
-                  <p className="mt-2 text-[10px] text-ink-tertiary">Revenue is accrual (issued invoices, ex-tax); expenses are cash-basis for the period.{pack?.region ? ` Region: ${String(pack.region).toUpperCase()} · ${pack.currency_code}` : ""}</p>
+                  <div className="flex justify-between py-1.5 border-b border-slate-100"><span>Net revenue (ex-tax)</span><span className="tabular-nums font-semibold text-ink-primary">{cur(pnl.revenue)}</span></div>
+                  <div className="flex justify-between py-1.5 border-b border-slate-100"><span>− Cost of parts (COGS)</span><span className="tabular-nums text-rose-600">−{cur(pnl.cogs)}</span></div>
+                  <div className="flex justify-between py-1.5 border-b border-slate-100 font-bold text-ink-primary"><span>= Gross profit</span><span className="tabular-nums">{cur(pnl.gross_profit)} <span className="text-[11px] text-ink-tertiary">({pnl.gross_margin_pct}%)</span></span></div>
+                  <div className="flex justify-between py-1.5 border-b border-slate-100"><span>− Operating expenses</span><span className="tabular-nums text-rose-600">−{cur(pnl.opex)}</span></div>
+                  <div className="flex justify-between py-1.5 border-b border-slate-100"><span>− Processing fees (card/online)</span><span className="tabular-nums text-rose-600">−{cur(pnl.fees)}</span></div>
+                  <div className="flex justify-between py-2 font-bold text-sm text-ink-primary"><span>= Net profit</span><span className={`tabular-nums ${pnl.net_profit >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{cur(pnl.net_profit)}</span></div>
+                  <p className="mt-2 text-[11px] text-ink-tertiary">Revenue is accrual (issued invoices, ex-tax); expenses are cash-basis for the period.{pack?.region ? ` Region: ${String(pack.region).toUpperCase()} · ${pack.currency_code}` : ""}</p>
                 </div>
               </>
             )}
@@ -205,7 +190,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
           <div className="space-y-3">
             <div className="flex items-center gap-2">
               <h3 className="text-base font-bold text-ink-primary">Needs your eyes</h3>
-              {recon && <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${recon.count ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700"}`}>{recon.count} {recon.count === 1 ? "issue" : "issues"}</span>}
+              {recon && <span className={`text-[11px] px-2 py-0.5 rounded-full font-bold ${recon.count ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700"}`}>{recon.count} {recon.count === 1 ? "issue" : "issues"}</span>}
               <button onClick={recordPayout} className="ml-auto text-xs font-bold px-3 py-1.5 rounded-lg bg-slate-100 text-ink-secondary hover:bg-slate-200 flex items-center gap-1"><M n="account_balance" c="text-sm" />Record payout</button>
             </div>
             <p className="text-xs text-ink-tertiary max-w-2xl">We scan your books for money problems you'd otherwise miss — overpaid invoices, drawers that didn't balance, supplier balances that drifted from their ledger, and card deposits that don't match what your processor paid out. Review each one instead of reconciling by hand.</p>
@@ -224,7 +209,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2"><h4 className="text-sm font-bold text-ink-primary">{it.title}</h4>
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${it.severity === "high" ? "bg-rose-100 text-rose-700" : "bg-amber-100 text-amber-700"}`}>{it.severity}</span></div>
+                    <span className={`text-[11px] px-1.5 py-0.5 rounded font-bold  ${it.severity === "high" ? "bg-rose-100 text-rose-700" : "bg-amber-100 text-amber-700"}`}>{it.severity}</span></div>
                   <p className="text-xs text-ink-secondary mt-0.5">{it.detail}</p>
                 </div>
               </div>
@@ -241,7 +226,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
             </div>
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
               <table className="w-full text-left border-collapse text-xs">
-                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[10px] font-bold uppercase tracking-wider">
+                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
                   <th className="py-3 px-4">Employee</th><th className="py-3 px-4">Position</th><th className="py-3 px-4">Wage type</th>
                   <th className="py-3 px-4 text-right">Base</th><th className="py-3 px-4 text-right">Hourly</th><th className="py-3 px-4 text-right">Commission</th>
                   <th className="py-3 px-4 text-right">Bonus</th><th className="py-3 px-4 text-right">Penalty</th><th className="py-3 px-4 text-right">Total</th><th className="py-3 px-4"></th>
@@ -254,12 +239,12 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
                       <td className="py-2.5 px-4 font-bold text-ink-primary">{p.name || "—"}</td>
                       <td className="py-2.5 px-4">{p.position || "—"}</td>
                       <td className="py-2.5 px-4 capitalize">{p.wage_type || "—"}</td>
-                      <td className="py-2.5 px-4 text-right font-mono">{money(p.base_salary)}</td>
-                      <td className="py-2.5 px-4 text-right font-mono">{money(p.hourly_total)}</td>
-                      <td className="py-2.5 px-4 text-right font-mono text-emerald-600">{money(p.commissions_total)}</td>
-                      <td className="py-2.5 px-4 text-right font-mono text-emerald-600">{money(p.bonuses_total)}</td>
-                      <td className="py-2.5 px-4 text-right font-mono text-rose-600">{money(p.penalties_total)}</td>
-                      <td className="py-2.5 px-4 text-right font-mono font-bold text-ink-primary">{money(p.computed_total ?? p.gross_total)}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums">{money(p.base_salary)}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums">{money(p.hourly_total)}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums text-emerald-600">{money(p.commissions_total)}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums text-emerald-600">{money(p.bonuses_total)}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums text-rose-600">{money(p.penalties_total)}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums font-bold text-ink-primary">{money(p.computed_total ?? p.gross_total)}</td>
                       <td className="py-2.5 px-4 text-right"><button aria-label="Print payslip" onClick={() => openAuthedDoc(`/print/payroll-statement/${p.employee_id}`).catch(() => alertDialog("Could not open payslip"))} title="Print payslip" className="p-1.5 rounded-lg text-ink-tertiary hover:text-primary hover:bg-slate-100"><M n="print" c="text-base" /></button></td>
                     </tr>
                   ))}
@@ -268,9 +253,9 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
             </div>
 
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-              <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary uppercase tracking-wider">Payroll runs</div>
+              <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary ">Payroll runs</div>
               <table className="w-full text-left border-collapse text-xs">
-                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[10px] font-bold uppercase tracking-wider">
+                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
                   <th className="py-3 px-4">Period</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Gross</th><th className="py-3 px-4">Accrued</th><th className="py-3 px-4 text-right">Action</th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
@@ -281,8 +266,8 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
                     return (
                       <tr key={r.id} className="hover:bg-blue-50/30">
                         <td className="py-2.5 px-4 font-semibold text-ink-primary">{r.period_start} → {r.period_end}</td>
-                        <td className="py-2.5 px-4"><span className={`px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ${paid ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>{r.status || "draft"}</span></td>
-                        <td className="py-2.5 px-4 text-right font-mono font-bold text-ink-primary">{money(r.totals?.gross_total ?? r.gross_total)}</td>
+                        <td className="py-2.5 px-4"><span className={`px-2 py-0.5 rounded-full text-[11px] font-bold capitalize ${paid ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>{r.status || "draft"}</span></td>
+                        <td className="py-2.5 px-4 text-right tabular-nums font-bold text-ink-primary">{money(r.totals?.gross_total ?? r.gross_total)}</td>
                         <td className="py-2.5 px-4 text-ink-tertiary">{r.accrued_at ? new Date(r.accrued_at).toLocaleDateString() : "—"}</td>
                         <td className="py-2.5 px-4 text-right">{!paid && <button onClick={() => markPaid(r.id)} className="text-primary font-semibold hover:underline">Mark paid</button>}</td>
                       </tr>
@@ -297,7 +282,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
         {tab === "balances" && (
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
             <table className="w-full text-left border-collapse text-xs">
-              <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[10px] font-bold uppercase tracking-wider">
+              <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
                 <th className="py-3 px-4">Client</th><th className="py-3 px-4">Phone</th><th className="py-3 px-4 text-right">Balance</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
@@ -306,8 +291,8 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
                 {pageBal.map((b) => (
                   <tr key={b.id} className="hover:bg-blue-50/30">
                     <td className="py-2.5 px-4 font-bold text-ink-primary">{b.name}</td>
-                    <td className="py-2.5 px-4 font-mono">{b.phone || "—"}</td>
-                    <td className={`py-2.5 px-4 text-right font-mono font-bold ${(b.balance || 0) < 0 ? "text-rose-600" : "text-emerald-600"}`}>{(b.balance || 0) < 0 ? "Owes " : "Credit "}{money(Math.abs(b.balance || 0))}</td>
+                    <td className="py-2.5 px-4 tabular-nums">{b.phone || "—"}</td>
+                    <td className={`py-2.5 px-4 text-right tabular-nums font-bold ${(b.balance || 0) < 0 ? "text-rose-600" : "text-emerald-600"}`}>{(b.balance || 0) < 0 ? "Owes " : "Credit "}{money(Math.abs(b.balance || 0))}</td>
                   </tr>
                 ))}
               </tbody>

@@ -43,7 +43,7 @@ export default function JobCardFields({ orderId, typeId, value, onSaved, onFlash
   return (
     <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200 space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-[11px] font-bold text-ink-tertiary uppercase">Details</span>
+        <span className="text-[11px] font-bold text-ink-tertiary ">Details</span>
         {dirty && <button type="button" disabled={busy} onClick={save} className="px-3 py-1 rounded-lg bg-primary text-white text-[11px] font-bold disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>}
       </div>
       <CustomFields typeId={typeId} only={shown} bare closeIds={closeIds} value={draft} onChange={setDraft} creating={false} />

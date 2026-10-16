@@ -78,7 +78,7 @@ export default function MyWorkHub() {
         {/* live timer + totals */}
         <div className="grid grid-cols-3 gap-3">
           <div className={`${card} p-4`}>
-            <div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">On the clock</div>
+            <div className="text-[11px] font-bold text-ink-tertiary">On the clock</div>
             {w?.active ? (
               <div className="mt-1 flex items-center justify-between">
                 <span className="flex items-center gap-1.5 text-sm font-bold text-emerald-700"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />{w.active.order_number || "running"}</span>
@@ -86,13 +86,13 @@ export default function MyWorkHub() {
               </div>
             ) : <div className="mt-1 text-sm text-ink-tertiary">Not clocked in</div>}
           </div>
-          <div className={`${card} p-4`}><div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">Today</div><div className="mt-1 text-xl font-bold font-mono text-ink-primary">{hm(w?.today_seconds || 0)}</div></div>
-          <div className={`${card} p-4`}><div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">This week</div><div className="mt-1 text-xl font-bold font-mono text-ink-primary">{hm(w?.week_seconds || 0)}</div></div>
+          <div className={`${card} p-4`}><div className="text-[11px] font-bold text-ink-tertiary">Today</div><div className="mt-1 text-xl font-bold tabular-nums text-ink-primary">{hm(w?.today_seconds || 0)}</div></div>
+          <div className={`${card} p-4`}><div className="text-[11px] font-bold text-ink-tertiary">This week</div><div className="mt-1 text-xl font-bold tabular-nums text-ink-primary">{hm(w?.week_seconds || 0)}</div></div>
         </div>
 
         {/* my bay — one card per job: status + one-tap advance + checklist + clock-in */}
         <div className={card}>
-          <div className="px-4 py-2.5 border-b border-slate-200 flex items-center gap-2"><M n="engineering" c="text-primary text-sm" /><h3 className="text-xs font-bold uppercase tracking-wide text-ink-primary">My bay</h3><span className="ml-auto text-[11px] text-ink-tertiary font-semibold">{(w?.orders || []).length} job{(w?.orders || []).length === 1 ? "" : "s"}</span></div>
+          <div className="px-4 py-2.5 border-b border-slate-200 flex items-center gap-2"><M n="engineering" c="text-primary text-sm" /><h3 className="text-xs font-bold text-ink-primary">My bay</h3><span className="ml-auto text-[11px] text-ink-tertiary font-semibold">{(w?.orders || []).length} job{(w?.orders || []).length === 1 ? "" : "s"}</span></div>
           {(w?.orders || []).length === 0 ? (
             <p className="p-4 text-xs text-ink-tertiary">Nothing assigned to you on open work orders.</p>
           ) : (
@@ -105,13 +105,13 @@ export default function MyWorkHub() {
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-bold text-ink-primary font-mono">{o.order_number}</span>
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold text-white" style={{ backgroundColor: o.status_color || "#64748b" }}>{o.status_label}</span>
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-bold text-white" style={{ backgroundColor: o.status_color || "#64748b" }}>{o.status_label}</span>
                         </div>
                         <div className="text-[11px] text-ink-tertiary truncate">{[o.client, o.device].filter(Boolean).join(" · ") || "—"}</div>
                       </div>
                       {o.next_status
                         ? <button onClick={() => advance(o)} className="flex-none flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold text-white bg-primary hover:opacity-90 shadow-clay-sm"><M n="arrow_forward" c="text-[13px]" />{o.next_label}</button>
-                        : <span className="flex-none text-[10px] font-semibold text-ink-tertiary uppercase tracking-wide">Final</span>}
+                        : <span className="flex-none text-[11px] font-semibold text-ink-tertiary ">Final</span>}
                     </div>
 
                     {o.checklist_total > 0 && (
@@ -119,7 +119,7 @@ export default function MyWorkHub() {
                         <button onClick={() => setOpenChecklist(openChecklist === o.order_id ? null : o.order_id)}
                           className="w-full flex items-center gap-2 group" aria-expanded={openChecklist === o.order_id}>
                           <div className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden"><div className="h-full rounded-full bg-emerald-500" style={{ width: `${pct}%` }} /></div>
-                          <span className="text-[10px] font-semibold text-ink-tertiary font-mono flex-none group-hover:text-primary">{o.checklist_done}/{o.checklist_total} checks</span>
+                          <span className="text-[11px] font-semibold text-ink-tertiary tabular-nums flex-none group-hover:text-primary">{o.checklist_done}/{o.checklist_total} checks</span>
                           <M n={openChecklist === o.order_id ? "expand_less" : "expand_more"} c="text-[14px] text-ink-tertiary group-hover:text-primary" />
                         </button>
                         {openChecklist === o.order_id && (
@@ -137,11 +137,11 @@ export default function MyWorkHub() {
                           <div key={l.line_id} className="flex items-center justify-between gap-2 rounded-lg bg-slate-50/60 px-2.5 py-1.5">
                             <div className="min-w-0">
                               <div className="text-[11px] font-semibold text-ink-primary truncate">{l.description || "Service"}</div>
-                              <div className="text-[10px] text-ink-tertiary font-mono">booked {l.booked_hours || 0}h · actual {l.actual_hours || 0}h{eff !== null ? ` · ${eff}%` : ""}</div>
+                              <div className="text-[11px] text-ink-tertiary tabular-nums">booked {l.booked_hours || 0}h · actual {l.actual_hours || 0}h{eff !== null ? ` · ${eff}%` : ""}</div>
                             </div>
                             {l.running
-                              ? <span className="flex-none flex items-center gap-1 text-[10px] font-semibold text-emerald-700"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />running</span>
-                              : <button onClick={() => clockIn(l)} className="flex-none flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold text-emerald-700 border border-emerald-200 hover:bg-emerald-50"><M n="play_arrow" c="text-[12px]" />clock in</button>}
+                              ? <span className="flex-none flex items-center gap-1 text-[11px] font-semibold text-emerald-700"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />running</span>
+                              : <button onClick={() => clockIn(l)} className="flex-none flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold text-emerald-700 border border-emerald-200 hover:bg-emerald-50"><M n="play_arrow" c="text-[12px]" />clock in</button>}
                           </div>
                         );
                       })}
@@ -155,7 +155,7 @@ export default function MyWorkHub() {
 
         {/* my recent entries + dispute */}
         <div className={card}>
-          <div className="px-4 py-2.5 border-b border-slate-200 flex items-center gap-2"><M n="history" c="text-primary text-sm" /><h3 className="text-xs font-bold uppercase tracking-wide text-ink-primary">My recent time</h3></div>
+          <div className="px-4 py-2.5 border-b border-slate-200 flex items-center gap-2"><M n="history" c="text-primary text-sm" /><h3 className="text-xs font-bold text-ink-primary">My recent time</h3></div>
           {entries.length === 0 ? <p className="p-4 text-xs text-ink-tertiary">No time logged yet.</p> : (
             <div className="divide-y divide-slate-100">
               {entries.map((e) => (
@@ -163,7 +163,7 @@ export default function MyWorkHub() {
                   <div className="flex items-center justify-between">
                     <div className="min-w-0">
                       <div className="text-xs font-semibold text-ink-primary truncate">{e.order_number || e.category || "time"}{e.line_description ? ` · ${e.line_description}` : ""}</div>
-                      <div className="text-[11px] text-ink-tertiary font-mono">{hmMin(e.duration_min)} · {humanize(e.state)}{e.disputed ? " · Disputed" : ""}</div>
+                      <div className="text-[11px] text-ink-tertiary tabular-nums">{hmMin(e.duration_min)} · {humanize(e.state)}{e.disputed ? " · Disputed" : ""}</div>
                     </div>
                     <div className="flex items-center gap-2 flex-none">
                       <button onClick={() => showAudit(e.id)} className="text-[11px] font-semibold text-ink-secondary hover:text-primary">History</button>
@@ -173,7 +173,7 @@ export default function MyWorkHub() {
                   {auditFor === e.id && (
                     <div className="mt-2 ml-1 border-l-2 border-slate-200 pl-3 space-y-1">
                       {audit.length === 0 ? <div className="text-[11px] text-ink-tertiary">No history.</div> : audit.map((a, i) => (
-                        <div key={i} className="text-[11px] text-ink-tertiary font-mono">
+                        <div key={i} className="text-[11px] text-ink-tertiary tabular-nums">
                           <b className="text-ink-secondary">{a.action}</b>{a.field ? ` ${a.field}` : ""}{a.old != null || a.new != null ? `: ${a.old ?? "—"} → ${a.new ?? "—"}` : ""} · {a.actor} · {(a.at || "").slice(0, 16).replace("T", " ")}
                         </div>
                       ))}

@@ -43,7 +43,7 @@ export default function NewClientDrawer({ prefillName, onClose, onCreated }: { p
       <div className="relative h-full w-full max-w-[480px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
-          <div><span className="text-[10px] font-bold uppercase tracking-wider text-primary block">Contacts › New</span><h3 className="text-base font-bold text-ink-primary">New client</h3></div>
+          <div><span className="text-[11px] font-bold text-primary block">Contacts › New</span><h3 className="text-base font-bold text-ink-primary">New client</h3></div>
           <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-base" /></button>
         </div>
 
@@ -56,13 +56,13 @@ export default function NewClientDrawer({ prefillName, onClose, onCreated }: { p
           <div><label className={lbl}>Name <span className="text-rose-500">*</span></label><input autoFocus value={f.name} onChange={(e) => set("name", e.target.value)} className={field} placeholder={f.client_type === "company" ? "Company name" : "Full name"} /></div>
           {/* Built-in and custom fields in the order set in Settings → Forms → Customize. */}
           <LayoutFields layout={layout} blocks={{
-            phone: { half: true, el: <div><label className={lbl}>Phone{star("phone")}</label><input value={f.phone || ""} onChange={(e) => set("phone", e.target.value)} className={`${field} font-mono`} placeholder="(555) 555-0123" /></div> },
+            phone: { half: true, el: <div><label className={lbl}>Phone{star("phone")}</label><input value={f.phone || ""} onChange={(e) => set("phone", e.target.value)} className={`${field} tabular-nums`} placeholder="(555) 555-0123" /></div> },
             email: { half: true, el: <div><label className={lbl}>Email{star("email")}</label><input value={f.email || ""} onChange={(e) => set("email", e.target.value)} className={field} placeholder="name@email.com" /></div> },
             address: { el: <div><label className={lbl}>Address{star("address")}</label><input value={f.address || ""} onChange={(e) => set("address", e.target.value)} className={field} placeholder="Billing / home address" /></div> },
             source: { half: true, el: <div><label className={lbl}>Lead source{star("source")}</label><DirectorySelect dirKey="lead_source" value={f.source || ""} onChange={(v) => set("source", v)} className={field} /></div> },
             loyalty_tier: { half: true, el: <div><label className={lbl}>Loyalty tier</label>
               <select value={f.loyalty_tier} onChange={(e) => set("loyalty_tier", e.target.value)} className={`${field} appearance-none`}><option value="standard">Standard</option><option value="silver">Silver</option><option value="gold">Gold</option><option value="vip">VIP</option></select></div> },
-            discount_card: { half: true, el: <div><label className={lbl}>Discount card / Member ID{star("discount_card")}</label><input value={f.discount_card || ""} onChange={(e) => set("discount_card", e.target.value)} className={`${field} font-mono`} /></div> },
+            discount_card: { half: true, el: <div><label className={lbl}>Discount card / Member ID{star("discount_card")}</label><input value={f.discount_card || ""} onChange={(e) => set("discount_card", e.target.value)} className={`${field} tabular-nums`} /></div> },
             notes: { el: <div><label className={lbl}>Notes{star("notes")}</label><textarea value={f.notes || ""} onChange={(e) => set("notes", e.target.value)} className={`${field} h-16 resize-none`} placeholder="Optional internal notes…" /></div> },
           }} custom={(ids) => <CustomFields entity="client" only={ids} bare={!!ids} value={f.custom_data || {}} onChange={(cd) => set("custom_data", cd)} creating />} />
           {multiCurrency && (
@@ -76,7 +76,7 @@ export default function NewClientDrawer({ prefillName, onClose, onCreated }: { p
 
         <div className="p-4 border-t border-slate-100 flex items-center justify-between bg-slate-50/70">
           <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-50">{busy ? "Creating…" : "Create client"}</button>
+          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-50">{busy ? "Creating…" : "Create client"}</button>
         </div>
       </div>
     </div>

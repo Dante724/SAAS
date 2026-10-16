@@ -223,11 +223,11 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
                       ))}
                     </div>
                     {cfg.book_show_employee_step && (
-                      <div className="flex gap-1.5">{["Any", "Priya", "Amit"].map((p, i) => <span key={p} className="px-2.5 py-1 rounded-full border text-[10px]" style={i === 0 ? { borderColor: accent, color: accent } : { borderColor: "#e2e8f0" }}>{p}</span>)}</div>
+                      <div className="flex gap-1.5">{["Any", "Priya", "Amit"].map((p, i) => <span key={p} className="px-2.5 py-1 rounded-full border text-[11px]" style={i === 0 ? { borderColor: accent, color: accent } : { borderColor: "#e2e8f0" }}>{p}</span>)}</div>
                     )}
                     <div className="grid grid-cols-4 gap-1.5">
                       {["9:00", "9:30", "10:00", "10:30", "11:00", "1:00", "1:30", "2:00"].map((t, i) => (
-                        <span key={t} className="text-center rounded-lg py-1.5 border text-[10px]" style={i === 2 ? { background: accent, color: "#fff", borderColor: accent } : { borderColor: "#e2e8f0" }}>{t}</span>
+                        <span key={t} className="text-center rounded-lg py-1.5 border text-[11px]" style={i === 2 ? { background: accent, color: "#fff", borderColor: accent } : { borderColor: "#e2e8f0" }}>{t}</span>
                       ))}
                     </div>
                     <div className="rounded-xl py-2.5 text-center text-white font-semibold" style={{ background: accent }}>Book 10:00</div>
@@ -237,7 +237,7 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
 
               {page === "tracking" && (
                 <div className="p-3 space-y-3 flex-1">
-                  <div><div className="text-[10px] text-ink-tertiary">iPhone 14 · WO-1042</div><div className="text-sm font-semibold text-ink-primary">In repair</div></div>
+                  <div><div className="text-[11px] text-ink-tertiary">iPhone 14 · WO-1042</div><div className="text-sm font-semibold text-ink-primary">In repair</div></div>
                   <div className="flex items-center gap-1">{[0, 1, 2, 3].map((i) => <div key={i} className="flex-1 h-1.5 rounded-full" style={{ background: i <= 1 ? accent : "#e2e8f0" }} />)}</div>
                   {cfg.oe_show_scheduled && <div className="text-ink-secondary">Ready by Fri, Oct 18</div>}
                   {cfg.oe_allow_recommend && (
@@ -272,7 +272,7 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
               )}
             </div>
           </div>
-          <p className="text-[10px] text-ink-tertiary text-center mt-2">Sample job and customer.</p>
+          <p className="text-[11px] text-ink-tertiary text-center mt-2">Sample job and customer.</p>
         </aside>
       </div>
     </div>

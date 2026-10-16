@@ -28,14 +28,14 @@ function Shell({ title, sub, children }: { title: string; sub?: string; children
       <div className="mx-auto grid min-h-screen max-w-md place-items-center px-5">
         <div className="w-full">
           <div className="mb-6 flex items-center gap-3">
-            <div className="grid h-12 w-12 place-items-center rounded-2xl text-lg font-extrabold text-white" style={{ background: GRAD }}>R</div>
+            <div className="grid h-12 w-12 place-items-center rounded-2xl text-lg font-bold text-white" style={{ background: GRAD }}>R</div>
             <div>
-              <div className="text-xl font-extrabold tracking-[-.3px]">RepairOS</div>
+              <div className="text-xl font-bold tracking-[-.3px]">RepairOS</div>
               <div className="text-xs font-semibold text-ink-tertiary">{sub || "Workshop management"}</div>
             </div>
           </div>
           <div className="rounded-2xl border border-slate-200 bg-white p-6 sm:p-7">
-            <h1 className="text-lg font-extrabold text-ink-primary">{title}</h1>
+            <h1 className="text-lg font-bold text-ink-primary">{title}</h1>
             {children}
           </div>
           <div className="mt-6 text-center text-[11.5px] text-ink-tertiary">RepairOS · secure</div>

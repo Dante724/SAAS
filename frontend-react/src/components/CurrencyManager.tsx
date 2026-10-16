@@ -9,7 +9,7 @@ import { M } from "./Shell";
 type Cur = { id: string; code: string; symbol: string; position: string; rate: number; updated_at?: string | null; in_use?: boolean };
 type Base = { code: string; symbol: string; position: string };
 
-const lbl = "block text-[11px] font-bold text-ink-tertiary uppercase mb-1";
+const lbl = "block text-[11px] font-bold text-ink-tertiary  mb-1";
 const field = "glass-input w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg";
 
 export default function CurrencyManager() {
@@ -94,13 +94,13 @@ export default function CurrencyManager() {
       {items.length === 0 && !adding && <div className="text-xs text-ink-tertiary py-2">No additional currencies yet.</div>}
       {items.length > 0 && (
         <div className="divide-y divide-slate-100">
-          <div className="grid grid-cols-12 gap-2 pb-1.5 text-[10px] font-bold text-ink-tertiary uppercase">
+          <div className="grid grid-cols-12 gap-2 pb-1.5 text-[11px] font-bold text-ink-tertiary ">
             <div className="col-span-2">Code</div><div className="col-span-2">Symbol</div><div className="col-span-2">Position</div>
             <div className="col-span-3">Rate (1 = {base?.code})</div><div className="col-span-3 text-right">Actions</div>
           </div>
           {items.map((c) => (
             <div key={c.id} className="grid grid-cols-12 gap-2 items-center py-2">
-              <div className="col-span-2 font-mono text-xs font-bold text-ink-primary flex items-center gap-1">{c.code}{c.in_use && <span className="text-[9px] px-1 py-0.5 rounded bg-emerald-50 text-emerald-700 font-bold">in use</span>}</div>
+              <div className="col-span-2 font-mono text-xs font-bold text-ink-primary flex items-center gap-1">{c.code}{c.in_use && <span className="text-[11px] px-1 py-0.5 rounded bg-emerald-50 text-emerald-700 font-bold">in use</span>}</div>
               <div className="col-span-2"><input defaultValue={c.symbol} onBlur={(e) => { if (e.target.value !== c.symbol) saveField(c, { symbol: e.target.value }); }} className={field} /></div>
               <div className="col-span-2">
                 <select value={c.position} onChange={(e) => saveField(c, { position: e.target.value })} className={field}>
@@ -108,7 +108,7 @@ export default function CurrencyManager() {
                 </select></div>
               <div className="col-span-3">
                 <input type="number" step="0.000001" defaultValue={c.rate} onBlur={(e) => { const v = parseFloat(e.target.value); if (v && v !== c.rate) saveRate(c, v); }} className={`${field} font-mono`} />
-                {c.updated_at && <div className="text-[10px] text-ink-placeholder mt-0.5">as of {new Date(c.updated_at).toLocaleDateString()}</div>}
+                {c.updated_at && <div className="text-[11px] text-ink-placeholder mt-0.5">as of {new Date(c.updated_at).toLocaleDateString()}</div>}
               </div>
               <div className="col-span-3 flex items-center justify-end gap-1">
                 <button aria-label="Rate history" onClick={() => setHistFor(c)} title="Rate history" className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:bg-slate-100"><M n="history" c="text-base" /></button>
@@ -140,7 +140,7 @@ function RateHistory({ currency, onClose }: { currency: Cur; onClose: () => void
           <div className="divide-y divide-slate-100 max-h-72 overflow-auto">
             {rows.map((r, i) => (
               <div key={i} className="flex items-center justify-between py-2 text-xs">
-                <span className="font-mono font-bold text-ink-primary">1 = {r.rate}</span>
+                <span className="tabular-nums font-bold text-ink-primary">1 = {r.rate}</span>
                 <span className="text-ink-tertiary">{r.changed_at ? new Date(r.changed_at).toLocaleString() : ""}</span>
               </div>
             ))}

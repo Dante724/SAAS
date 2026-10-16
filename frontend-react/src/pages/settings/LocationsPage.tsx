@@ -228,7 +228,7 @@ function LocationDetail({ loc, companyTz, resources, onSaved, onResChanged, onCa
         </div>
         <div className="grid grid-cols-[40px_minmax(0,1fr)] gap-x-3 gap-y-1.5 items-center">
           <span />
-          <div className="relative h-4 text-[10px] text-ink-tertiary">
+          <div className="relative h-4 text-[11px] text-ink-tertiary">
             {Array.from({ length: Math.floor((hi - lo) / 180) + 1 }, (_, i) => lo + i * 180).map((m) => (
               <span key={m} className="absolute -translate-x-1/2" style={{ left: pct(m) }}>{to12(`${Math.floor(m / 60)}:00`)}</span>
             ))}

@@ -48,11 +48,11 @@ export default function InvoicesHub() {
             {invSel.size > 0 && (
               <button onClick={() => setInvPrint(true)} className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-ink-secondary text-xs font-semibold hover:bg-slate-50 flex items-center gap-1.5"><M n="print" c="text-sm" />Print {invSel.size} selected</button>
             )}
-            <button onClick={() => setNewInv(true)} className="px-4 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New invoice</button>
+            <button onClick={() => setNewInv(true)} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New invoice</button>
           </div>
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden mt-3">
             <table className="w-full text-left border-collapse text-xs">
-              <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[10px] font-bold uppercase tracking-wider">
+              <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
                 <th className="py-3 pl-4 pr-2 w-10"><input type="checkbox" checked={!!invoices?.length && invoices.every((i) => invSel.has(i.id))} onChange={(e) => setInvSel(e.target.checked ? new Set((invoices || []).map((i) => i.id)) : new Set())} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
                 <th className="py-3 px-4">Invoice #</th><th className="py-3 px-4">Customer</th><th className="py-3 px-4">Date</th><th className="py-3 px-4">Job</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Total</th><th className="py-3 px-4 text-right">Paid</th><th className="py-3 px-4 text-right">Balance</th>{einv && <th className="py-3 px-4">E-invoice</th>}<th className="py-3 px-4"></th>
               </tr></thead>
@@ -68,16 +68,16 @@ export default function InvoicesHub() {
                       <td className="py-2.5 px-4 font-semibold text-ink-primary">{i.client_name || <span className="font-normal text-ink-tertiary">Walk-in</span>}</td>
                       <td className="py-2.5 px-4 text-ink-secondary whitespace-nowrap">{(i.issued_at || i.created_at) ? new Date((i.issued_at || i.created_at)!).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) : "—"}</td>
                       <td className="py-2.5 px-4 font-mono">{i.order_number || "—"}</td>
-                      <td className="py-2.5 px-4"><span className={`px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ${paid ? "bg-emerald-100 text-emerald-800" : /partial/i.test(i.status || "") ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"}`}>{humanize(i.status)}</span></td>
-                      <td className="py-2.5 px-4 text-right font-mono font-bold text-ink-primary">{money(i.total)}</td>
-                      <td className="py-2.5 px-4 text-right font-mono text-emerald-600">{money(i.amount_paid)}</td>
-                      <td className={`py-2.5 px-4 text-right font-mono font-bold ${(i.balance_due || 0) > 0 ? "text-rose-600" : "text-ink-tertiary"}`}>{money(i.balance_due)}</td>
+                      <td className="py-2.5 px-4"><span className={`px-2 py-0.5 rounded-full text-[11px] font-bold capitalize ${paid ? "bg-emerald-100 text-emerald-800" : /partial/i.test(i.status || "") ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"}`}>{humanize(i.status)}</span></td>
+                      <td className="py-2.5 px-4 text-right tabular-nums font-bold text-ink-primary">{money(i.total)}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums text-emerald-600">{money(i.amount_paid)}</td>
+                      <td className={`py-2.5 px-4 text-right tabular-nums font-bold ${(i.balance_due || 0) > 0 ? "text-rose-600" : "text-ink-tertiary"}`}>{money(i.balance_due)}</td>
                       {einv && <td className="py-2.5 px-4">
                         {(!i.einvoice_status || i.einvoice_status === "none") ? (
                           <button onClick={() => issueEinvoice(i.id)} className="px-2 py-1 rounded-lg border border-slate-200 bg-white text-ink-secondary text-[11px] font-semibold hover:bg-slate-50">Issue e-invoice</button>
                         ) : (
                           <div className="flex items-center gap-1.5">
-                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ${i.einvoice_status === "cleared" ? "bg-emerald-100 text-emerald-800" : i.einvoice_status === "rejected" ? "bg-rose-100 text-rose-800" : "bg-sky-100 text-sky-800"}`}>{humanize(i.einvoice_status)}</span>
+                            <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold capitalize ${i.einvoice_status === "cleared" ? "bg-emerald-100 text-emerald-800" : i.einvoice_status === "rejected" ? "bg-rose-100 text-rose-800" : "bg-sky-100 text-sky-800"}`}>{humanize(i.einvoice_status)}</span>
                             <button aria-label="Download XML" onClick={() => openAuthedDoc(`/finance/invoices/${i.id}/einvoice.xml`).catch(() => alertDialog("Could not open e-invoice"))} title="Download XML" className="p-1 rounded-lg text-ink-tertiary hover:text-primary hover:bg-slate-100"><M n="download" c="text-sm" /></button>
                             {i.einvoice_status === "issued" && <button aria-label="Mark cleared" onClick={() => markEinvoiceCleared(i.id)} title="Mark cleared" className="p-1 rounded-lg text-ink-tertiary hover:text-emerald-600 hover:bg-slate-100"><M n="check" c="text-sm" /></button>}
                           </div>
@@ -134,14 +134,14 @@ function NewInvoiceDrawer({ onClose, onCreated }: { onClose: () => void; onCreat
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
           <div className="grid grid-cols-2 gap-3">
-            <div><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Client</label>
+            <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Client</label>
               <select value={clientId} onChange={(e) => setClientId(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2"><option value="">Walk-in / none</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-            <div><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Due date</label>
+            <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Due date</label>
               <DateField mode="date" value={due} onChange={setDue} /></div>
           </div>
           <div>
             <div className="mb-2"><CatalogPicker placeholder="Add from catalog (service / product)…" onPick={(i) => setLines((ls) => [...ls.filter((l) => l.description.trim() || l.unit_price), { kind: i.kind, description: i.name, qty: 1, unit_price: i.price || 0 }])} /></div>
-            <div className="flex items-center justify-between mb-1"><label className="text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide">Lines</label><button onClick={() => setLines([...lines, { kind: "custom", description: "", qty: 1, unit_price: 0 }])} className="text-primary text-xs font-semibold flex items-center gap-1"><M n="add" c="text-sm" />Add line</button></div>
+            <div className="flex items-center justify-between mb-1"><label className="text-[11px] font-semibold text-ink-tertiary ">Lines</label><button onClick={() => setLines([...lines, { kind: "custom", description: "", qty: 1, unit_price: 0 }])} className="text-primary text-xs font-semibold flex items-center gap-1"><M n="add" c="text-sm" />Add line</button></div>
             <div className="space-y-2">
               {lines.map((l, i) => (
                 <div key={i} className="flex items-center gap-2">
@@ -154,17 +154,17 @@ function NewInvoiceDrawer({ onClose, onCreated }: { onClose: () => void; onCreat
               ))}
             </div>
             <div className="grid grid-cols-2 gap-3 mt-3">
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Discount %</label><input type="number" min={0} max={100} value={discount} onChange={(e) => setDiscount(Number(e.target.value))} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 text-right" /></div>
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Tax %</label><input type="number" min={0} value={tax} onChange={(e) => setTax(Number(e.target.value))} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 text-right" /></div>
+              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Discount %</label><input type="number" min={0} max={100} value={discount} onChange={(e) => setDiscount(Number(e.target.value))} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 text-right" /></div>
+              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Tax %</label><input type="number" min={0} value={tax} onChange={(e) => setTax(Number(e.target.value))} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 text-right" /></div>
             </div>
             <div className="mt-3 rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-1.5 text-sm">
-              <div className="flex justify-between text-ink-secondary"><span>Subtotal</span><span className="font-mono font-semibold text-ink-primary">{money(subtotal)}</span></div>
-              {discountAmt > 0 && <div className="flex justify-between text-ink-secondary"><span>Discount ({discount}%)</span><span className="font-mono text-rose-600">−{money(discountAmt)}</span></div>}
-              {taxAmt > 0 && <div className="flex justify-between text-ink-secondary"><span>Tax ({tax}%)</span><span className="font-mono text-ink-primary">{money(taxAmt)}</span></div>}
-              <div className="pt-1.5 border-t border-slate-200 flex justify-between items-baseline"><span className="font-bold text-ink-primary">Total</span><span className="font-mono font-extrabold text-primary">{money(total)}</span></div>
+              <div className="flex justify-between text-ink-secondary"><span>Subtotal</span><span className="tabular-nums font-semibold text-ink-primary">{money(subtotal)}</span></div>
+              {discountAmt > 0 && <div className="flex justify-between text-ink-secondary"><span>Discount ({discount}%)</span><span className="tabular-nums text-rose-600">−{money(discountAmt)}</span></div>}
+              {taxAmt > 0 && <div className="flex justify-between text-ink-secondary"><span>Tax ({tax}%)</span><span className="tabular-nums text-ink-primary">{money(taxAmt)}</span></div>}
+              <div className="pt-1.5 border-t border-slate-200 flex justify-between items-baseline"><span className="font-bold text-ink-primary">Total</span><span className="tabular-nums font-bold text-primary">{money(total)}</span></div>
             </div>
           </div>
-          <div><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Comment</label><textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2" /></div>
+          <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Comment</label><textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2" /></div>
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2"><button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : "Create invoice"}</button></div>
       </div>

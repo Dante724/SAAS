@@ -97,7 +97,7 @@ export default function FinanceNumbering({ currency, shop }: { currency: string;
         {([["sec-numbers", "tag", "Next invoice", invNo, true], ["sec-tax", "percent", "Tax on jobs", taxSummary, !jobTaxes.length], ["sec-biz", "badge", "Invoices are from", bizName, false]] as [string, string, string, string, boolean][]).map(([id, icon, label, value, mono]) => (
           <button key={id} onClick={() => go(id)} className="text-left bg-white rounded-2xl border border-slate-200/90 shadow-clay-card px-4 py-3.5 hover:border-slate-300 transition-colors">
             <div className="flex items-center gap-1.5 text-[11px] text-ink-tertiary"><M n={icon} c="text-[13px]" />{label}</div>
-            <div className={`mt-1 text-base font-semibold truncate ${id === "sec-tax" && !jobTaxes.length ? "text-amber-700" : "text-ink-primary"} ${mono && id === "sec-numbers" ? "font-mono" : ""}`}>{value}</div>
+            <div className={`mt-1 text-base font-semibold truncate ${id === "sec-tax" && !jobTaxes.length ? "text-amber-700" : "text-ink-primary"} ${mono && id === "sec-numbers" ? "tabular-nums" : ""}`}>{value}</div>
           </button>
         ))}
       </div>
@@ -124,8 +124,8 @@ export default function FinanceNumbering({ currency, shop }: { currency: string;
                   {ent?.tax_id && <div className="text-ink-tertiary">Tax ID {ent.tax_id}</div>}
                 </div>
                 <div className="text-right flex-shrink-0">
-                  <div className="text-[9px] font-semibold tracking-wider text-ink-tertiary">INVOICE</div>
-                  <div className="font-mono text-xs font-semibold text-ink-primary">{invNo}</div>
+                  <div className="text-[11px] font-semibold text-ink-tertiary">INVOICE</div>
+                  <div className="tabular-nums text-xs font-semibold text-ink-primary">{invNo}</div>
                 </div>
               </div>
               <div className="mt-4 space-y-1.5">
@@ -139,10 +139,10 @@ export default function FinanceNumbering({ currency, shop }: { currency: string;
                 {!taxLines.length && <div className="flex justify-between text-amber-700"><span>No tax</span><span>{money(0)}</span></div>}
                 <div className="flex justify-between text-xs font-semibold text-ink-primary pt-1.5"><span>Total</span><span>{money(net + added)}</span></div>
               </div>
-              {ent?.bank_name && <div className="mt-3 text-[10px] text-ink-tertiary">Pay to {ent.bank_name}{ent.bank_account ? ` · ${ent.bank_account}` : ""}</div>}
+              {ent?.bank_name && <div className="mt-3 text-[11px] text-ink-tertiary">Pay to {ent.bank_name}{ent.bank_account ? ` · ${ent.bank_account}` : ""}</div>}
             </div>
           </div>
-          <p className="text-[10px] text-ink-tertiary text-center mt-2">Sample lines. Tax and totals follow your settings.</p>
+          <p className="text-[11px] text-ink-tertiary text-center mt-2">Sample lines. Tax and totals follow your settings.</p>
         </aside>
       </div>
     </div>
@@ -164,7 +164,7 @@ function Numbering({ rows, onSaved }: { rows: any[] | null; onSaved: (m: string)
               <div className="flex items-center gap-1.5 text-[11px] text-ink-tertiary">
                 <M n={DOC_ICON[r.doc_type] || "description"} c="text-[13px]" />{docLabel(r.doc_type)}{r.scope_key !== "org" ? " · one location" : ""}
               </div>
-              <div className="mt-1.5 font-mono text-[15px] font-semibold text-ink-primary truncate">{renderNumber(r.template, Number(r.next_value) || 1)}</div>
+              <div className="mt-1.5 tabular-nums text-[15px] font-semibold text-ink-primary truncate">{renderNumber(r.template, Number(r.next_value) || 1)}</div>
             </button>
           );
         })}
@@ -197,7 +197,7 @@ function NumberEditor({ row, onClose, onSaved }: { row: any; onClose: () => void
       <div className="flex items-center gap-3">
         <span className="text-sm font-medium text-ink-primary">{docLabel(row.doc_type)}</span>
         <span className="ml-auto text-[11px] text-ink-tertiary">Next one will be</span>
-        <span className="font-mono text-base font-semibold text-primary">{valid ? renderNumber(template, counter) : "—"}</span>
+        <span className="tabular-nums text-base font-semibold text-primary">{valid ? renderNumber(template, counter) : "—"}</span>
       </div>
       {custom ? (
         <Field label="Pattern" hint="{C:5} counter with 5 digits · {Y} year · {M} month · {D} day">
@@ -205,7 +205,7 @@ function NumberEditor({ row, onClose, onSaved }: { row: any; onClose: () => void
         </Field>
       ) : (
         <div className="grid sm:grid-cols-3 gap-3">
-          <Field label="Starts with"><input value={p.prefix} onChange={(e) => setP({ ...p, prefix: e.target.value })} placeholder="INV-" className={`${inp} font-mono`} /></Field>
+          <Field label="Starts with"><input value={p.prefix} onChange={(e) => setP({ ...p, prefix: e.target.value })} placeholder="INV-" className={`${inp} tabular-nums`} /></Field>
           <Field label="Digits">
             <select value={p.digits} onChange={(e) => setP({ ...p, digits: Number(e.target.value) })} className={inp}>
               {[0, 3, 4, 5, 6, 7].map((d) => <option key={d} value={d}>{d === 0 ? "No padding (1, 2, 3)" : `${d} (${"0".repeat(d - 1)}1)`}</option>)}
@@ -294,7 +294,7 @@ function Taxes({ taxes, stacks, exc, locations, currency, onChanged }: {
                   <span className="block text-sm text-ink-primary truncate group-hover:text-primary">{t.name}</span>
                   <span className="block text-[11px] text-ink-tertiary">{t.mode === "included" ? "Already included in prices" : "Added on top of prices"}{t.location_scope === "selected" ? ` · ${(t.location_ids || []).length} location${(t.location_ids || []).length === 1 ? "" : "s"}` : ""}{sel && on.length > 1 ? ` · applied ${pos + 1}${["st", "nd", "rd"][pos] || "th"}` : ""}</span>
                 </button>
-                <span className={`px-2.5 py-1 rounded-lg font-mono text-sm font-semibold ${sel ? "bg-primary/10 text-primary" : "bg-slate-100 text-ink-secondary"}`}>{Number(t.rate)}%</span>
+                <span className={`px-2.5 py-1 rounded-lg tabular-nums text-sm font-semibold ${sel ? "bg-primary/10 text-primary" : "bg-slate-100 text-ink-secondary"}`}>{Number(t.rate)}%</span>
               </div>
             );
           })}
@@ -403,7 +403,7 @@ function Entities({ ents, shopName, onChanged }: { ents: any[] | null; shopName?
               <button key={e.id} onClick={() => setEdit({ ...e })} className="group text-left rounded-xl border border-slate-200 p-3.5 hover:border-slate-300 hover:bg-slate-50/60">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium text-ink-primary truncate">{e.name}</span>
-                  {e.is_default ? <span className="ml-auto text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700">Default</span>
+                  {e.is_default ? <span className="ml-auto text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700">Default</span>
                     : <span role="button" tabIndex={0} onClick={(ev) => { ev.stopPropagation(); makeDefault(e); }} onKeyDown={(ev) => { if (ev.key === "Enter") { ev.stopPropagation(); makeDefault(e); } }} className="ml-auto text-[11px] font-semibold text-primary opacity-0 group-hover:opacity-100">Make default</span>}
                 </div>
                 <div className="text-[11px] text-ink-tertiary mt-1 truncate">{e.tax_id ? `Tax ID ${e.tax_id}` : "No tax ID yet"}</div>

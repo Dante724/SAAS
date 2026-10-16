@@ -104,13 +104,13 @@ export default function CustomFields({ entity, typeId, value, onChange, creating
 
   return (
     <div className={bare ? "space-y-3.5 text-xs" : "p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-3 text-xs"}>
-      {!bare && <div className="text-[11px] font-bold text-ink-primary uppercase tracking-wider">Custom fields</div>}
+      {!bare && <div className="text-[11px] font-bold text-ink-primary ">Custom fields</div>}
       {shown.filter((f) => isVisible(f, value)).map((f) => {
         const v = (value || {})[f.field_key] ?? "";
         const locked = f.lock_after_create && !creating;
-        const closeTag = closeIds?.includes(f.id) && <span className="ml-1.5 px-1.5 py-px rounded bg-amber-50 text-[10px] font-semibold text-amber-700">Needed to close</span>;
-        const label = <label className={lbl}>{f.field_label}{f.required && <span className="text-rose-500"> *</span>}{closeTag}{locked && <span className="ml-1 text-[10px] text-ink-tertiary">(locked)</span>}</label>;
-        if (f.field_type === "header") return <div key={f.id} className="text-[11px] font-bold text-ink-primary uppercase tracking-wider pt-1">{f.field_label}</div>;
+        const closeTag = closeIds?.includes(f.id) && <span className="ml-1.5 px-1.5 py-px rounded bg-amber-50 text-[11px] font-semibold text-amber-700">Needed to close</span>;
+        const label = <label className={lbl}>{f.field_label}{f.required && <span className="text-rose-500"> *</span>}{closeTag}{locked && <span className="ml-1 text-[11px] text-ink-tertiary">(locked)</span>}</label>;
+        if (f.field_type === "header") return <div key={f.id} className="text-[11px] font-bold text-ink-primary pt-1">{f.field_label}</div>;
         if (f.field_type === "bool") return <label key={f.id} className="flex items-center justify-between cursor-pointer"><span className="text-xs text-ink-secondary font-semibold">{f.field_label}{closeTag}</span><input type="checkbox" disabled={locked} checked={!!v} onChange={(e) => set(f.field_key, e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>;
         return (
           <div key={f.id}>
@@ -121,7 +121,7 @@ export default function CustomFields({ entity, typeId, value, onChange, creating
               : f.field_type === "link" ? <input disabled={locked} type="url" value={v} onChange={(e) => set(f.field_key, e.target.value)} placeholder={f.placeholder || "https://"} className={`${field} disabled:opacity-60`} />
               : <input disabled={locked} type={f.field_type === "number" ? "number" : f.field_type === "date" ? "date" : f.field_type === "datetime" ? "datetime-local" : "text"} value={v} onChange={(e) => set(f.field_key, e.target.value)} placeholder={f.placeholder || ""} className={`${field} disabled:opacity-60`} />}
             {f.directory_key && !locked && (f.field_type === "select" || f.field_type === "multiselect") &&
-              <button type="button" onClick={() => addToDir(f)} className="mt-1 text-[10px] font-semibold text-primary hover:underline">+ Add {f.field_label.toLowerCase()}</button>}
+              <button type="button" onClick={() => addToDir(f)} className="mt-1 text-[11px] font-semibold text-primary hover:underline">+ Add {f.field_label.toLowerCase()}</button>}
           </div>
         );
       })}

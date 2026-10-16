@@ -31,12 +31,12 @@ export function confirmDialog(message: string, opts: ConfirmOpts = {}): Promise<
         <div className={overlay}>
           <div className={scrim} onClick={() => done(false)} />
           <div className={card}>
-            {opts.title && <h3 className="text-sm font-black text-ink-primary">{opts.title}</h3>}
+            {opts.title && <h3 className="text-sm font-bold text-ink-primary">{opts.title}</h3>}
             <p className="text-xs text-ink-secondary whitespace-pre-line">{message}</p>
             <div className="flex justify-end gap-2">
               <button className={btnGhost} onClick={() => done(false)}>{opts.cancelLabel || "Cancel"}</button>
               <button autoFocus onClick={() => done(true)}
-                className={`px-4 py-2 rounded-xl text-xs font-bold text-white shadow-clay-sm hover:brightness-110 ${opts.danger ? "bg-rose-600 hover:bg-rose-700" : "bg-gradient-to-r from-primary to-primary-container"}`}>
+                className={`px-4 py-2 rounded-xl text-xs font-bold text-white shadow-clay-sm hover:brightness-110 ${opts.danger ? "bg-rose-600 hover:bg-rose-700" : "bg-primary"}`}>
                 {opts.confirmLabel || "Confirm"}</button>
             </div>
           </div>
@@ -54,9 +54,9 @@ export function alertDialog(message: string, title?: string): Promise<void> {
         <div className={overlay}>
           <div className={scrim} onClick={done} />
           <div className={card}>
-            {title && <h3 className="text-sm font-black text-ink-primary">{title}</h3>}
+            {title && <h3 className="text-sm font-bold text-ink-primary">{title}</h3>}
             <p className="text-xs text-ink-secondary whitespace-pre-line">{message}</p>
-            <div className="flex justify-end"><button autoFocus className="px-4 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110" onClick={done}>OK</button></div>
+            <div className="flex justify-end"><button autoFocus className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110" onClick={done}>OK</button></div>
           </div>
         </div>
       );
@@ -73,7 +73,7 @@ export function promptDialog(message: string, opts: PromptOpts = {}): Promise<st
         <div className={overlay}>
           <div className={scrim} onClick={() => done(null)} />
           <div className={card}>
-            {opts.title && <h3 className="text-sm font-black text-ink-primary">{opts.title}</h3>}
+            {opts.title && <h3 className="text-sm font-bold text-ink-primary">{opts.title}</h3>}
             <p className="text-xs text-ink-secondary whitespace-pre-line">{message}</p>
             <input autoFocus defaultValue={val} placeholder={opts.placeholder}
               onChange={(e) => { val = e.target.value; }}
@@ -81,7 +81,7 @@ export function promptDialog(message: string, opts: PromptOpts = {}): Promise<st
               className="glass-input w-full rounded-xl px-3 py-2 text-sm" />
             <div className="flex justify-end gap-2">
               <button className={btnGhost} onClick={() => done(null)}>Cancel</button>
-              <button onClick={() => done(val)} className="px-4 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110">{opts.confirmLabel || "OK"}</button>
+              <button onClick={() => done(val)} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110">{opts.confirmLabel || "OK"}</button>
             </div>
           </div>
         </div>
@@ -104,7 +104,7 @@ export function selectDialog(message: string, options: string[], opts: SelectOpt
         <div className={overlay}>
           <div className={scrim} onClick={() => done(null)} />
           <div className={card}>
-            {opts.title && <h3 className="text-sm font-black text-ink-primary">{opts.title}</h3>}
+            {opts.title && <h3 className="text-sm font-bold text-ink-primary">{opts.title}</h3>}
             <p className="text-xs text-ink-secondary whitespace-pre-line">{message}</p>
             <div className="max-h-64 overflow-y-auto space-y-1">
               {options.map((o) => (
@@ -123,7 +123,7 @@ export function selectDialog(message: string, options: string[], opts: SelectOpt
             <div className="flex justify-end gap-2">
               <button className={btnGhost} onClick={() => done(null)}>Back</button>
               <button onClick={() => done(val === "__other__" ? other.trim() : val)}
-                className={`px-4 py-2 rounded-xl text-xs font-bold text-white shadow-clay-sm hover:brightness-110 ${opts.danger ? "bg-rose-600 hover:bg-rose-700" : "bg-gradient-to-r from-primary to-primary-container"}`}>
+                className={`px-4 py-2 rounded-xl text-xs font-bold text-white shadow-clay-sm hover:brightness-110 ${opts.danger ? "bg-rose-600 hover:bg-rose-700" : "bg-primary"}`}>
                 {opts.confirmLabel || "OK"}</button>
             </div>
           </div>

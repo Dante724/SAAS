@@ -1,4 +1,5 @@
 import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
+import PageSummary, { type SummaryStat } from "../../components/PageSummary";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
@@ -178,12 +179,12 @@ export default function WorkOrdersHub() {
   const closedKeys = new Set(statuses.filter((st) => ["closed", "dropped"].includes(st.status_group || "")).map((st) => norm(st.key || st.name)));
   const incomplete = all.filter((o) => !o.is_estimate && !closedKeys.has(norm(o.status))).length;
   const dash = (n?: number) => (kpis && n != null ? String(n) : "—");
-  const kpiCards = [
-    { l: "Incomplete", v: orders ? String(incomplete) : "—", icon: "pending_actions", tint: "bg-blue-50 text-primary", vc: "text-ink-primary" },
-    { l: "New", v: dash(kpis?.new), icon: "fiber_new", tint: "bg-indigo-50 text-indigo-600", vc: "text-primary" },
-    { l: "Urgent Priority", v: dash(kpis?.urgent), icon: "priority_high", tint: "bg-amber-50 text-amber-600", vc: "text-ink-primary" },
-    { l: "Overdue", v: dash(kpis?.overdue), icon: "warning", tint: "bg-rose-50 text-rose-600", vc: "text-status-overdue-ink" },
-    { l: "Receivables", v: kpis?.receivables != null ? money(kpis.receivables) : "—", icon: "attach_money", tint: "bg-emerald-50 text-emerald-600", vc: "text-ink-primary" },
+  const kpiStats: SummaryStat[] = [
+    { label: "Open jobs", value: orders ? String(incomplete) : "—", onClick: () => { setFilter(null); setFPriority(""); }, active: !filter && !fPriority },
+    { label: "Waiting to start", value: dash(kpis?.new), onClick: () => setFilter(filter === "new" ? null : "new"), active: filter === "new" },
+    { label: "Urgent", value: dash(kpis?.urgent), onClick: () => setFPriority(fPriority === "urgent" ? "" : "urgent"), active: fPriority === "urgent" },
+    { label: "Late", value: dash(kpis?.overdue), tone: "bad", zero: !kpis?.overdue },
+    { label: "To collect", value: kpis?.receivables != null ? money(kpis.receivables) : "—" },
   ];
   const assignees = [...new Set(all.map((o) => o.assigned_to?.name).filter(Boolean) as string[])].sort();
   const activeFacets = (fAssignee ? 1 : 0) + (fPriority ? 1 : 0) + (fScheduled ? 1 : 0);
@@ -231,28 +232,20 @@ export default function WorkOrdersHub() {
   return (
     <Shell title="Work orders">
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
-        {/* KPIs */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-          {kpiCards.map((k) => (
-            <div key={k.l} className="bg-white rounded-2xl px-4 py-3.5 border border-slate-200/80 shadow-clay-card flex items-center justify-between hover:border-slate-300 transition-colors">
-              <div><span className="text-[10px] font-semibold uppercase tracking-wider text-ink-tertiary">{k.l}</span><p className={`mt-0.5 text-2xl font-bold tracking-tight tabular-nums ${k.vc}`}>{k.v}</p></div>
-              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ring-1 ring-inset ring-black/5 ${k.tint}`}><M n={k.icon} c="text-lg" /></div>
-            </div>
-          ))}
-        </div>
+        <PageSummary stats={kpiStats} />
 
         {/* Toolbar */}
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 space-y-3.5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <Gate perm="can_create_tickets"><button onClick={() => setCreate("order")} className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-sm font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="add" c="text-sm font-bold" />Order</button></Gate>
+              <Gate perm="can_create_tickets"><button onClick={() => setCreate("order")} className="px-4 py-2.5 rounded-xl bg-primary text-white text-sm font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="add" c="text-sm font-bold" />Order</button></Gate>
               <Gate perm="can_create_estimates"><button onClick={() => setCreate("estimate")} className="px-3.5 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-ink-secondary hover:text-ink-primary text-sm font-semibold border border-slate-200 transition-all flex items-center gap-1.5"><M n="request_quote" c="text-sm" />+ Estimate</button></Gate>
               <div className="h-5 w-[1px] bg-slate-200 mx-1" />
               <div className="relative">
-                <button onClick={() => { setFltOpen((o) => !o); setColsOpen(false); setViewsOpen(false); }} className={`px-3 py-2 rounded-xl text-xs font-medium flex items-center gap-1 border ${activeFacets ? "bg-primary/10 text-primary border-primary/30" : "text-ink-secondary hover:bg-slate-100 border-slate-200"}`}><M n="filter_list" c="text-xs" />Filter{activeFacets ? <span className="ml-0.5 px-1.5 rounded-full bg-primary text-white text-[10px] font-bold">{activeFacets}</span> : null}</button>
+                <button onClick={() => { setFltOpen((o) => !o); setColsOpen(false); setViewsOpen(false); }} className={`px-3 py-2 rounded-xl text-xs font-medium flex items-center gap-1 border ${activeFacets ? "bg-primary/10 text-primary border-primary/30" : "text-ink-secondary hover:bg-slate-100 border-slate-200"}`}><M n="filter_list" c="text-xs" />Filter{activeFacets ? <span className="ml-0.5 px-1.5 rounded-full bg-primary text-white text-[11px] font-bold">{activeFacets}</span> : null}</button>
                 {fltOpen && (
                   <div className="absolute left-0 top-9 z-30 w-64 bg-white border border-slate-200 rounded-xl shadow-drawer p-3 space-y-3" onMouseLeave={() => setFltOpen(false)}>
-                    <div className="flex items-center justify-between"><span className="text-[10px] font-bold text-ink-tertiary uppercase tracking-wider">Filter work orders</span>{activeFacets ? <button onClick={() => { setFAssignee(""); setFPriority(""); setFScheduled(""); }} className="text-[11px] font-semibold text-primary">Clear</button> : null}</div>
+                    <div className="flex items-center justify-between"><span className="text-[11px] font-bold text-ink-tertiary ">Filter work orders</span>{activeFacets ? <button onClick={() => { setFAssignee(""); setFPriority(""); setFScheduled(""); }} className="text-[11px] font-semibold text-primary">Clear</button> : null}</div>
                     <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Assignee</span>
                       <select value={fAssignee} onChange={(e) => setFAssignee(e.target.value)} className="w-full text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-medium"><option value="">Any</option><option value="__none">Unassigned</option>{assignees.map((a) => <option key={a} value={a}>{a}</option>)}</select></label>
                     <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Priority</span>
@@ -275,7 +268,7 @@ export default function WorkOrdersHub() {
                 <button onClick={() => { setColsOpen((o) => !o); setViewsOpen(false); }} className="px-3 py-2 rounded-xl text-xs font-medium text-ink-secondary hover:bg-slate-100 border border-slate-200 flex items-center gap-1"><M n="view_column" c="text-xs" />Columns</button>
                 {colsOpen && (
                   <div className="absolute right-0 top-9 z-30 w-52 bg-white border border-slate-200 rounded-xl shadow-drawer p-2" onMouseLeave={() => setColsOpen(false)}>
-                    <div className="px-2 py-1 text-[10px] font-bold text-ink-tertiary uppercase tracking-wider">Visible columns</div>
+                    <div className="px-2 py-1 text-[11px] font-bold text-ink-tertiary ">Visible columns</div>
                     {COLS.map((c) => (
                       <label key={c.key} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer text-xs font-medium text-ink-primary">
                         <input type="checkbox" checked={showCol(c.key)} onChange={() => toggleCol(c.key)} className="accent-primary" />{c.label}
@@ -331,7 +324,7 @@ export default function WorkOrdersHub() {
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="bg-slate-50/60 border-b border-slate-200/80 text-ink-tertiary text-[10px] font-semibold uppercase tracking-wider">
+              <tr className="bg-slate-50/60 border-b border-slate-200/80 text-ink-tertiary text-[11px] font-semibold ">
                 <th className="py-3 px-4 w-10"><input className="rounded text-primary border-slate-300" type="checkbox" checked={rows.length > 0 && sel.size === rows.length} onChange={toggleAll} /></th>
                 {showCol("order_id") && <th className="py-3 px-4">Order ID</th>}
                 {showCol("client") && <th className="py-3 px-4">Client</th>}
@@ -350,15 +343,15 @@ export default function WorkOrdersHub() {
               {pageRows.map((o) => (
                 <tr key={o.id} onClick={() => setOpen(o)} className={`hover:bg-slate-50/80 cursor-pointer transition-colors group ${sel.has(o.id) ? "bg-primary/5" : ""}`}>
                   <td className="py-3.5 px-4" onClick={(e) => e.stopPropagation()}><input className="rounded text-primary border-slate-300" type="checkbox" checked={sel.has(o.id)} onChange={() => toggle(o.id)} /></td>
-                  {showCol("order_id") && <td className="py-3.5 px-4 font-mono font-bold text-primary"><span className="inline-flex items-center gap-1.5">{o.order_number || o.id}{!!(o.client_msg_unread && o.client_msg_unread > 0) && <span title={`${o.client_msg_unread} unread customer message(s)`} className="inline-flex items-center gap-0.5 text-[9px] font-bold bg-primary text-white px-1.5 py-0.5 rounded-full"><M n="forum" c="text-[10px]" />{o.client_msg_unread}</span>}{(o as any).checklists_pending && <span role="img" aria-label="Checklist incomplete" title="Checklist incomplete" className="w-2 h-2 rounded-full bg-amber-500" />}</span></td>}
+                  {showCol("order_id") && <td className="py-3.5 px-4 font-mono font-bold text-primary"><span className="inline-flex items-center gap-1.5">{o.order_number || o.id}{!!(o.client_msg_unread && o.client_msg_unread > 0) && <span title={`${o.client_msg_unread} unread customer message(s)`} className="inline-flex items-center gap-0.5 text-[11px] font-bold bg-primary text-white px-1.5 py-0.5 rounded-full"><M n="forum" c="text-[11px]" />{o.client_msg_unread}</span>}{(o as any).checklists_pending && <span role="img" aria-label="Checklist incomplete" title="Checklist incomplete" className="w-2 h-2 rounded-full bg-amber-500" />}</span></td>}
                   {showCol("client") && <td className="py-3.5 px-4"><span className="font-semibold text-[13px] text-ink-primary">{o.client?.name || "Walk-in"}</span><span className="text-[11px] font-normal text-ink-tertiary block">{o.client?.phone || ""}</span></td>}
                   {showCol("device") && <td className="py-3.5 px-4 text-ink-primary font-semibold">{deviceName(o.device)}</td>}
                   {showCol("status") && <td className="py-3.5 px-4"><div className="flex items-center gap-1.5">{pill(o.status, stOf(o))}{flags[o.id]?.stalled && (
-                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-rose-100 text-rose-700 border border-rose-200" title={flags[o.id]?.over_by_min ? `~${Math.round(flags[o.id]!.over_by_min!)} min over typical` : "Running long"}><M n="schedule" c="text-[11px]" />Stalled</span>
+                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-700 border border-rose-200" title={flags[o.id]?.over_by_min ? `~${Math.round(flags[o.id]!.over_by_min!)} min over typical` : "Running long"}><M n="schedule" c="text-[11px]" />Stalled</span>
                   )}</div></td>}
                   {showCol("assignee") && <td className="py-3.5 px-4">{o.assigned_to?.name || "—"}</td>}
                   {showCol("scheduled") && <td className="py-3.5 px-4">{o.scheduled_for ? new Date(o.scheduled_for).toLocaleDateString() : "—"}</td>}
-                  {showCol("estimate") && <td className="py-3.5 px-4 text-right font-mono font-bold text-ink-primary">{money(o.total)}</td>}
+                  {showCol("estimate") && <td className="py-3.5 px-4 text-right tabular-nums font-bold text-ink-primary">{money(o.total)}</td>}
                   <td className="py-3.5 px-4 text-center"><button aria-label="Next" className="p-1.5 rounded-lg text-ink-tertiary group-hover:text-primary group-hover:bg-primary/10 transition-colors"><M n="chevron_right" c="text-sm" /></button></td>
                 </tr>
               ))}
@@ -391,13 +384,13 @@ export default function WorkOrdersHub() {
                         className={`bg-white rounded-xl border border-slate-200/80 shadow-clay-sm p-3 cursor-grab active:cursor-grabbing hover:border-primary/40 transition-colors ${drag === o.id ? "opacity-50" : ""}`}>
                         <div className="flex items-center justify-between mb-1">
                           <span className="font-mono font-bold text-primary text-xs">{o.order_number || o.id}</span>
-                          <span className="text-[10px] text-ink-tertiary">{o.scheduled_for ? new Date(o.scheduled_for).toLocaleDateString() : ""}</span>
+                          <span className="text-[11px] text-ink-tertiary">{o.scheduled_for ? new Date(o.scheduled_for).toLocaleDateString() : ""}</span>
                         </div>
                         <div className="text-xs font-bold text-ink-primary truncate">{o.client?.name || "Walk-in"}</div>
                         <div className="text-[11px] text-ink-secondary truncate">{deviceName(o.device)}</div>
                         <div className="mt-1.5 flex items-center justify-between">
-                          <span className="text-[10px] text-ink-tertiary">{o.assigned_to?.name || "Unassigned"}</span>
-                          <span className="font-mono font-bold text-ink-primary text-xs">{money(o.total)}</span>
+                          <span className="text-[11px] text-ink-tertiary">{o.assigned_to?.name || "Unassigned"}</span>
+                          <span className="tabular-nums font-bold text-ink-primary text-xs">{money(o.total)}</span>
                         </div>
                       </div>
                     ))}
@@ -423,12 +416,12 @@ export default function WorkOrdersHub() {
               <button key={o.id} onClick={() => openCard(o)} className="w-full text-left bg-white rounded-lg border border-slate-200/80 shadow-clay-sm p-2 hover:border-primary/40 transition-colors">
                 <div className="flex items-center justify-between gap-1">
                   <span className="font-mono font-bold text-primary text-[11px] truncate">{o.order_number || o.id?.slice(0, 6)}</span>
-                  {showTime && <span className="text-[10px] font-semibold text-ink-tertiary flex-shrink-0">{hhmm(o.scheduled_for)}</span>}
+                  {showTime && <span className="text-[11px] font-semibold text-ink-tertiary flex-shrink-0">{hhmm(o.scheduled_for)}</span>}
                 </div>
                 <div className="text-[11px] font-bold text-ink-primary truncate">{o.client_name || "Walk-in"}</div>
                 <div className="mt-1 flex items-center justify-between gap-1">
-                  <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-semibold inline-flex items-center gap-1 ${cls}`}><span className={`w-1 h-1 rounded-full ${dot}`} />{stOf(o)?.name || (o.status || "").replace(/_/g, " ")}</span>
-                  {o.assigned_to_name && <span className="text-[9px] text-ink-tertiary truncate">{o.assigned_to_name}</span>}
+                  <span className={`px-1.5 py-0.5 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 ${cls}`}><span className={`w-1 h-1 rounded-full ${dot}`} />{stOf(o)?.name || (o.status || "").replace(/_/g, " ")}</span>
+                  {o.assigned_to_name && <span className="text-[11px] text-ink-tertiary truncate">{o.assigned_to_name}</span>}
                 </div>
               </button>
             );
@@ -459,7 +452,7 @@ export default function WorkOrdersHub() {
                   {dayItems(anchor).length === 0 && <div className="text-xs text-ink-tertiary py-8 text-center">Nothing scheduled this day.</div>}
                   {dayItems(anchor).map((o) => (
                     <div key={o.id} className="flex items-stretch gap-2">
-                      <div className="w-16 flex-shrink-0 text-right text-[11px] font-mono font-semibold text-ink-tertiary pt-2">{hhmm(o.scheduled_for)}</div>
+                      <div className="w-16 flex-shrink-0 text-right text-[11px] tabular-nums font-semibold text-ink-tertiary pt-2">{hhmm(o.scheduled_for)}</div>
                       <div className="flex-1">{Card(o, false)}</div>
                     </div>
                   ))}
@@ -474,11 +467,11 @@ export default function WorkOrdersHub() {
                     return (
                       <div key={d.toISOString()} className={`rounded-2xl border flex flex-col min-h-[200px] max-h-[calc(100vh-340px)] ${isToday ? "border-primary/40 bg-primary/5" : "border-slate-200/70 bg-slate-50/60"}`}>
                         <div className={`px-2.5 py-2 border-b text-center ${isToday ? "border-primary/30" : "border-slate-200/70"}`}>
-                          <div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">{d.toLocaleDateString([], { weekday: "short" })}</div>
-                          <div className={`text-sm font-black ${isToday ? "text-primary" : "text-ink-primary"}`}>{d.getDate()}</div>
+                          <div className="text-[11px] font-bold text-ink-tertiary">{d.toLocaleDateString([], { weekday: "short" })}</div>
+                          <div className={`text-sm font-bold ${isToday ? "text-primary" : "text-ink-primary"}`}>{d.getDate()}</div>
                         </div>
                         <div className="p-1.5 space-y-1.5 overflow-y-auto">
-                          {items.length === 0 && <div className="text-[10px] text-ink-tertiary text-center py-3">—</div>}
+                          {items.length === 0 && <div className="text-[11px] text-ink-tertiary text-center py-3">—</div>}
                           {items.map((o) => Card(o))}
                         </div>
                       </div>
@@ -491,20 +484,20 @@ export default function WorkOrdersHub() {
               {schedMode === "month" && (
                 <div>
                   <div className="grid grid-cols-7 gap-1 mb-1">
-                    {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((w) => <div key={w} className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary text-center py-1">{w}</div>)}
+                    {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((w) => <div key={w} className="text-[11px] font-bold text-ink-tertiary text-center py-1">{w}</div>)}
                   </div>
                   <div className="grid grid-cols-7 gap-1">
                     {Array.from({ length: 42 }, (_, i) => { const d = new Date(rFrom); d.setDate(d.getDate() + i); return d; }).map((d) => {
                       const items = dayItems(d); const inMonth = d.getMonth() === anchor.getMonth(); const isToday = d.getTime() === today.getTime();
                       return (
                         <div key={d.toISOString()} className={`rounded-lg border p-1 min-h-[92px] ${isToday ? "border-primary/40 bg-primary/5" : inMonth ? "border-slate-200/70 bg-white" : "border-slate-100 bg-slate-50/40"}`}>
-                          <div className={`text-[10px] font-bold mb-1 ${isToday ? "text-primary" : inMonth ? "text-ink-secondary" : "text-ink-tertiary"}`}>{d.getDate()}</div>
+                          <div className={`text-[11px] font-bold mb-1 ${isToday ? "text-primary" : inMonth ? "text-ink-secondary" : "text-ink-tertiary"}`}>{d.getDate()}</div>
                           <div className="space-y-0.5">
                             {items.slice(0, 3).map((o) => {
                               const key = norm(o.status); const [cls] = PILL[key] || ["bg-slate-100 text-slate-700"];
-                              return <button key={o.id} onClick={() => openCard(o)} className={`w-full text-left truncate rounded px-1 py-0.5 text-[9px] font-semibold ${cls}`}>{hhmm(o.scheduled_for)} {o.order_number || o.client_name || ""}</button>;
+                              return <button key={o.id} onClick={() => openCard(o)} className={`w-full text-left truncate rounded px-1 py-0.5 text-[11px] font-semibold ${cls}`}>{hhmm(o.scheduled_for)} {o.order_number || o.client_name || ""}</button>;
                             })}
-                            {items.length > 3 && <div className="text-[9px] text-ink-tertiary px-1">+{items.length - 3} more</div>}
+                            {items.length > 3 && <div className="text-[11px] text-ink-tertiary px-1">+{items.length - 3} more</div>}
                           </div>
                         </div>
                       );
@@ -523,12 +516,12 @@ export default function WorkOrdersHub() {
                   <div className="overflow-x-auto">
                     <div className="min-w-[900px]">
                       <div className="grid" style={{ gridTemplateColumns: `160px repeat(7, 1fr)` }}>
-                        <div className="px-2 py-2 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">Technician</div>
-                        {weekDays.map((d) => { const isToday = d.getTime() === today.getTime(); return <div key={d.toISOString()} className={`px-2 py-2 text-center border-l border-slate-200/60 ${isToday ? "bg-primary/5" : ""}`}><div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">{d.toLocaleDateString([], { weekday: "short" })}</div><div className={`text-xs font-black ${isToday ? "text-primary" : "text-ink-primary"}`}>{d.getDate()}</div></div>; })}
+                        <div className="px-2 py-2 text-[11px] font-bold text-ink-tertiary">Technician</div>
+                        {weekDays.map((d) => { const isToday = d.getTime() === today.getTime(); return <div key={d.toISOString()} className={`px-2 py-2 text-center border-l border-slate-200/60 ${isToday ? "bg-primary/5" : ""}`}><div className="text-[11px] font-bold text-ink-tertiary">{d.toLocaleDateString([], { weekday: "short" })}</div><div className={`text-xs font-bold ${isToday ? "text-primary" : "text-ink-primary"}`}>{d.getDate()}</div></div>; })}
                       </div>
                       {techs.map(([tid, tname]) => (
                         <div key={tid} className="grid border-t border-slate-200/60" style={{ gridTemplateColumns: `160px repeat(7, 1fr)` }}>
-                          <div className="px-2 py-2 text-xs font-bold text-ink-primary flex items-center gap-1.5"><span className="w-6 h-6 rounded-full bg-gradient-to-tr from-primary to-indigo-600 grid place-items-center text-white text-[9px] font-extrabold flex-shrink-0">{(tname || "?").slice(0, 2).toUpperCase()}</span><span className="truncate">{tname}</span></div>
+                          <div className="px-2 py-2 text-xs font-bold text-ink-primary flex items-center gap-1.5"><span className="w-6 h-6 rounded-full bg-primary grid place-items-center text-white text-[11px] font-bold flex-shrink-0">{(tname || "?").slice(0, 2).toUpperCase()}</span><span className="truncate">{tname}</span></div>
                           {weekDays.map((d) => {
                             const items = dayItems(d).filter((o) => (o.assigned_to_id || "__un") === tid);
                             const isToday = d.getTime() === today.getTime();

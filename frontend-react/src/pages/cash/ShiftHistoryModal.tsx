@@ -38,7 +38,7 @@ export default function ShiftHistoryModal({ sym, onClose }: { sym?: string; onCl
         {rows && !!rows.length && (
           <div className="overflow-y-auto max-h-96 -mx-1">
             <table className="w-full text-xs">
-              <thead><tr className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary text-left border-b border-slate-200">
+              <thead><tr className="text-[11px] font-bold text-ink-tertiary text-left border-b border-slate-200">
                 <th className="py-2 px-2">Opened</th><th className="px-2">By</th><th className="px-2 text-right">Opening</th>
                 <th className="px-2 text-right">Expected</th><th className="px-2 text-right">Counted</th>
                 <th className="px-2 text-right">Diff</th><th className="px-2 text-right">Status</th></tr></thead>
@@ -49,11 +49,11 @@ export default function ShiftHistoryModal({ sym, onClose }: { sym?: string; onCl
                     <tr key={s.id} className="border-b border-slate-100">
                       <td className="py-2 px-2 text-ink-secondary">{s.opened_at ? new Date(s.opened_at).toLocaleString() : "—"}</td>
                       <td className="px-2 text-ink-secondary">{s.opened_by || "—"}</td>
-                      <td className="px-2 text-right font-mono">{money(s.opening_float, sym)}</td>
-                      <td className="px-2 text-right font-mono">{s.expected_cash != null ? money(s.expected_cash, sym) : "—"}</td>
-                      <td className="px-2 text-right font-mono">{s.closing_float != null ? money(s.closing_float, sym) : "—"}</td>
-                      <td className={`px-2 text-right font-mono font-bold ${s.discrepancy == null ? "text-ink-tertiary" : Math.abs(s.discrepancy) < 0.01 ? "text-emerald-600" : "text-rose-600"}`}>{s.discrepancy != null ? (s.discrepancy > 0 ? "+" : "") + money(s.discrepancy, sym) : "—"}</td>
-                      <td className="px-2 text-right"><span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${st.cls}`}>{st.label}</span></td>
+                      <td className="px-2 text-right tabular-nums">{money(s.opening_float, sym)}</td>
+                      <td className="px-2 text-right tabular-nums">{s.expected_cash != null ? money(s.expected_cash, sym) : "—"}</td>
+                      <td className="px-2 text-right tabular-nums">{s.closing_float != null ? money(s.closing_float, sym) : "—"}</td>
+                      <td className={`px-2 text-right tabular-nums font-bold ${s.discrepancy == null ? "text-ink-tertiary" : Math.abs(s.discrepancy) < 0.01 ? "text-emerald-600" : "text-rose-600"}`}>{s.discrepancy != null ? (s.discrepancy > 0 ? "+" : "") + money(s.discrepancy, sym) : "—"}</td>
+                      <td className="px-2 text-right"><span className={`text-[11px] px-1.5 py-0.5 rounded font-bold ${st.cls}`}>{st.label}</span></td>
                     </tr>
                   );
                 })}

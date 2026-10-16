@@ -239,7 +239,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
                   <div className="text-sm font-semibold text-ink-primary truncate">{first}</div>
                   {co.company_address && <div className="text-[11px] text-ink-tertiary leading-snug">{co.company_address}</div>}
                 </div>
-                <span className="ml-auto text-[10px] font-semibold text-ink-tertiary tracking-wide">INVOICE</span>
+                <span className="ml-auto text-[11px] font-semibold text-ink-tertiary ">INVOICE</span>
               </div>
               {contact.length > 0 && <div className="mt-2 text-[11px] text-ink-secondary leading-relaxed break-words">{contact.join(" · ")}</div>}
               {co.company_details && <div className="text-[11px] text-ink-tertiary">{co.company_details}</div>}
@@ -248,7 +248,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
                 <div className="flex justify-between text-ink-secondary"><span>Labour</span><span>{co.currency || "$"}40.00</span></div>
                 <div className="flex justify-between font-semibold text-ink-primary pt-1"><span>Total</span><span>{co.currency || "$"}229.00</span></div>
               </div>
-              {co.company_note && <div className="mt-3 text-[10px] text-ink-tertiary italic leading-snug">{co.company_note}</div>}
+              {co.company_note && <div className="mt-3 text-[11px] text-ink-tertiary italic leading-snug">{co.company_note}</div>}
             </div>
           </div>
           <div className="flex items-end gap-2">

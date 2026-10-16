@@ -162,7 +162,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
     } catch (e: any) { setErr(e.message || "Failed to create"); } finally { setBusy(false); }
   }
 
-  const lbl = "block text-[11px] font-bold uppercase tracking-wider text-ink-tertiary";
+  const lbl = "block text-[11px] font-bold   text-ink-tertiary";
   const inp = "glass-input block w-full py-2.5 px-3.5 rounded-xl text-sm font-semibold text-ink-primary";
 
   // Identifier fields are template-driven: a phone shows IMEI/Serial, a vehicle VIN,
@@ -177,7 +177,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
   const reqKeys = new Set((layout || []).filter((i) => i.kind === "system" && i.visible && i.required).map((i) => i.key));
   const closeKeys = new Set((layout || []).filter((i) => i.kind === "system" && i.visible && i.require === "close").map((i) => i.key));
   const star = (k: string) => (reqKeys.has(k) ? <span className="text-rose-500"> *</span>
-    : closeKeys.has(k) ? <span className="ml-1.5 px-1.5 py-px rounded bg-amber-50 text-[10px] font-semibold normal-case tracking-normal text-amber-700">Needed to close</span> : null);
+    : closeKeys.has(k) ? <span className="ml-1.5 px-1.5 py-px rounded bg-amber-50 text-[11px] font-semibold normal-case tracking-normal text-amber-700">Needed to close</span> : null);
   function missingRequired(): string | null {
     const filled: Record<string, boolean> = {
       client: !!client, complaint: !!complaint.trim(), manager: !!managerId, assignee: !!assigneeId,
@@ -199,7 +199,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                 {client ? (
                   <div className="glass-input flex items-center gap-2 pl-10 pr-3 py-2.5 rounded-xl relative">
                     <M n="person" c="absolute left-3.5 text-base text-ink-tertiary" />
-                    <span className="font-semibold text-sm text-ink-primary">{client.name}</span><span className="text-xs text-ink-tertiary font-mono">{client.phone}</span>
+                    <span className="font-semibold text-sm text-ink-primary">{client.name}</span><span className="text-xs text-ink-tertiary tabular-nums">{client.phone}</span>
                     <button className="ml-auto text-xs text-primary font-semibold" onClick={() => { setClient(null); setQ(""); }}>Change</button>
                   </div>
                 ) : (
@@ -249,22 +249,22 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
     ),
     asset: (
 <><div className="pt-3 border-t border-slate-200/80 space-y-3.5">
-                <div className="flex items-center gap-2"><span className="text-xs font-bold uppercase tracking-wider text-ink-primary">{term.asset}{star("asset")}</span><span className="text-xs text-ink-tertiary font-normal">— auto-added to the client's warehouse</span></div>
+                <div className="flex items-center gap-2"><span className="text-xs font-bold text-ink-primary">{term.asset}{star("asset")}</span><span className="text-xs text-ink-tertiary font-normal">— auto-added to the client's warehouse</span></div>
                 <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-start">
                   <div className="sm:col-span-4 space-y-2">
                     <label className="bg-slate-50/80 border-2 border-dashed border-slate-200/90 rounded-2xl p-4 flex flex-col items-center justify-center text-center group hover:border-primary/60 transition-colors cursor-pointer min-h-[140px]">
                       <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => { addIntakePhotos(e.target.files); e.currentTarget.value = ""; }} />
                       <div className="w-10 h-10 rounded-full bg-blue-50 text-primary flex items-center justify-center mb-1.5 group-hover:scale-105 transition-transform"><M n="photo_camera" c="text-xl" /></div>
                       <p className="text-xs font-bold text-ink-primary">{upBusy ? "Uploading…" : <>Condition photos <span className="text-primary underline">browse</span></>}</p>
-                      <p className="text-[10px] text-ink-tertiary mt-0.5">How it arrived · JPG / PNG · up to 5 MB</p>
+                      <p className="text-[11px] text-ink-tertiary mt-0.5">How it arrived · JPG / PNG · up to 5 MB</p>
                     </label>
                     {intakePhotos.length > 0 && (
                       <div className="flex flex-wrap gap-1.5">
                         {intakePhotos.map((p) => (
                           <span key={p.id} className="relative group">
                             <AuthedImage src={p.url} alt="intake" onClick={() => setAnnoPhoto(p)} className="w-12 h-12 rounded-lg object-cover border border-slate-200 bg-slate-100 cursor-pointer" />
-                            <button type="button" onClick={() => setAnnoPhoto(p)} className="absolute bottom-0.5 left-0.5 w-4 h-4 rounded bg-ink-primary/85 text-white flex items-center justify-center opacity-0 group-hover:opacity-100" title="Mark up"><M n="edit" c="text-[10px]" /></button>
-                            <button type="button" onClick={() => setIntakePhotos((cur) => cur.filter((x) => x.id !== p.id))} className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-ink-primary text-white text-[10px] leading-none opacity-0 group-hover:opacity-100" title="Remove">×</button>
+                            <button type="button" onClick={() => setAnnoPhoto(p)} className="absolute bottom-0.5 left-0.5 w-4 h-4 rounded bg-ink-primary/85 text-white flex items-center justify-center opacity-0 group-hover:opacity-100" title="Mark up"><M n="edit" c="text-[11px]" /></button>
+                            <button type="button" onClick={() => setIntakePhotos((cur) => cur.filter((x) => x.id !== p.id))} className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-ink-primary text-white text-[11px] leading-none opacity-0 group-hover:opacity-100" title="Remove">×</button>
                           </span>
                         ))}
                       </div>
@@ -273,13 +273,13 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                   </div>
                   <div className="sm:col-span-8 space-y-3">
                     <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1"><label className="block text-[10px] font-bold uppercase text-ink-tertiary">Group</label>
+                      <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Group</label>
                         <div className="relative"><select value={group} onChange={(e) => setGroup(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg appearance-none">{(term.groups.length ? term.groups.map((g) => g.label) : ["Device", "Vehicle", "Equipment"]).map((g) => <option key={g}>{g}</option>)}</select><M n="expand_more" c="absolute right-2 top-2 text-ink-tertiary pointer-events-none text-xs" /></div></div>
-                      <div className="space-y-1"><label className="block text-[10px] font-bold uppercase text-ink-tertiary">Brand</label><NameSuggestInput field="brand" value={brand} onChange={setBrand} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="Samsung" /></div>
+                      <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Brand</label><NameSuggestInput field="brand" value={brand} onChange={setBrand} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="Samsung" /></div>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1"><label className="block text-[10px] font-bold uppercase text-ink-tertiary">Model</label><NameSuggestInput field="model" brand={brand} value={model} onChange={setModel} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="Galaxy S24 Ultra" /></div>
-                      <div className="space-y-1"><label className="block text-[10px] font-bold uppercase text-ink-tertiary">{primaryId.label}</label>
+                      <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Model</label><NameSuggestInput field="model" brand={brand} value={model} onChange={setModel} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="Galaxy S24 Ultra" /></div>
+                      <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">{primaryId.label}</label>
                         <div className="flex items-center space-x-1.5"><input value={idState[primaryId.kind][0]} onChange={(e) => { idState[primaryId.kind][1](e.target.value); setDeviceId(null); }} className="glass-input font-mono block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder={primaryId.placeholder} /><ScanButton title={`Scan ${primaryId.label}`} onScan={(code) => { idState[primaryId.kind][1](code); setDeviceId(null); }} /></div></div>
                     </div>
                     <IdentifyHint value={idState[primaryId.kind][0]} kind={primaryId.kind} clientId={client?.id} usingId={deviceId}
@@ -294,18 +294,18 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                 ) : (
                   <div className="rounded-2xl bg-slate-50/70 border border-slate-200/80 p-3.5 space-y-3">
                     <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">More {term.asset.toLowerCase()} details</span>
+                      <span className="text-[11px] font-bold text-ink-tertiary">More {term.asset.toLowerCase()} details</span>
                       <button type="button" onClick={() => setMoreOpen(false)} className="text-[11px] font-semibold text-ink-tertiary hover:text-ink-primary">Hide</button>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1"><label className="block text-[10px] font-bold uppercase text-ink-tertiary">Condition</label>
+                      <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Condition</label>
                         <div className="relative"><select value={condition} onChange={(e) => setCondition(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg appearance-none"><option value="">—</option>{["New", "Good", "Fair", "Poor", "For parts"].map((c) => <option key={c} value={c}>{c}</option>)}</select><M n="expand_more" c="absolute right-2 top-2 text-ink-tertiary pointer-events-none text-xs" /></div></div>
-                      <div className="space-y-1"><label className="block text-[10px] font-bold uppercase text-ink-tertiary">Color</label><input value={color} onChange={(e) => setColor(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="Titanium Black" /></div>
+                      <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Color</label><input value={color} onChange={(e) => setColor(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="Titanium Black" /></div>
                     </div>
                     {moreIds.length > 0 && (
                       <div className="grid grid-cols-2 gap-3">
                         {moreIds.map((f) => (
-                          <div key={f.kind} className="space-y-1"><label className="block text-[10px] font-bold uppercase text-ink-tertiary">{f.label}</label><input value={idState[f.kind][0]} onChange={(e) => idState[f.kind][1](e.target.value)} className="glass-input font-mono block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder={f.placeholder} /></div>
+                          <div key={f.kind} className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">{f.label}</label><input value={idState[f.kind][0]} onChange={(e) => idState[f.kind][1](e.target.value)} className="glass-input tabular-nums block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder={f.placeholder} /></div>
                         ))}
                       </div>
                     )}
@@ -406,7 +406,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                 <button type="button" className="px-3.5 py-1 text-xs font-semibold text-ink-secondary hover:text-ink-primary">Products</button>
               </div>
               <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-ink-tertiary">Line items</span>
+                <span className="text-[11px] font-bold text-ink-tertiary">Line items</span>
                 <button type="button" onClick={async () => {
                   if (!complaint.trim()) { await alertDialog("Add a complaint/description first."); return; }
                   try {
@@ -419,7 +419,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
               <CatalogPicker placeholder="Search a service or product to add…" onPick={(i) => setLines((ls) => [...ls, { id: Math.random().toString(36).slice(2), description: i.name, kind: i.kind, price: i.price || 0 }])} />
 
               <div className="space-y-2.5">
-                <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-ink-tertiary px-1"><span>Configured items</span><span>Subtotal</span></div>
+                <div className="flex items-center justify-between text-[11px] font-bold text-ink-tertiary px-1"><span>Configured items</span><span>Subtotal</span></div>
                 {lines.length === 0 && <p className="text-xs text-ink-tertiary px-1">No items yet — add a custom line below or create and add later.</p>}
                 {lines.map((l) => (
                   <div key={l.id} className="flex items-center justify-between p-3.5 rounded-xl bg-white border border-slate-200 shadow-sm hover:border-primary/40 transition-all">
@@ -442,18 +442,18 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
               <div className="bg-slate-50/90 rounded-2xl p-4 border border-slate-200 space-y-2">
                 {multiCurrency && (
                   <div className="flex items-center justify-between pb-2 mb-1 border-b border-slate-200">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-ink-tertiary">Document currency</span>
+                    <span className="text-[11px] font-bold text-ink-tertiary">Document currency</span>
                     <select value={curCode} onChange={(e) => setCurCode(e.target.value)} className="glass-input py-1 px-2 text-xs font-semibold text-ink-primary rounded-lg">
                       <option value="">Client / base default</option>{curOpts.map(([c, l]) => <option key={c} value={c}>{l}</option>)}
                     </select>
                   </div>
                 )}
-                <div className="flex justify-between text-xs text-ink-secondary"><span>Subtotal</span><span className="font-mono font-semibold text-ink-primary">{money(subtotal)}</span></div>
-                <div className="pt-2 border-t border-slate-200 flex justify-between items-baseline"><span className="text-xs font-bold text-ink-primary">Items subtotal <span className="font-normal text-ink-tertiary">(before tax)</span></span><span className="text-base font-extrabold font-mono text-primary">{money(total)}</span></div>
+                <div className="flex justify-between text-xs text-ink-secondary"><span>Subtotal</span><span className="tabular-nums font-semibold text-ink-primary">{money(subtotal)}</span></div>
+                <div className="pt-2 border-t border-slate-200 flex justify-between items-baseline"><span className="text-xs font-bold text-ink-primary">Items subtotal <span className="font-normal text-ink-tertiary">(before tax)</span></span><span className="text-base font-bold tabular-nums text-primary">{money(total)}</span></div>
                 {showConv && docCur && (
                   <div className="pt-2 border-t border-dashed border-slate-200 flex justify-between items-baseline">
                     <span className="text-[11px] text-ink-tertiary">≈ in {docCur.code} <span className="font-mono">(1 {docCur.code} = {docCur.rate} {base?.code})</span></span>
-                    <span className="text-sm font-bold font-mono text-ink-secondary">{docCur.symbol}{conv(total).toFixed(2)}</span>
+                    <span className="text-sm font-bold tabular-nums text-ink-secondary">{docCur.symbol}{conv(total).toFixed(2)}</span>
                   </div>
                 )}
               </div>
@@ -467,14 +467,14 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
           {step === 1 ? (
             <div className="w-full flex items-center justify-between">
               <button type="button" onClick={onClose} className="px-4 py-2 text-xs font-bold text-ink-secondary hover:text-ink-primary transition-colors">Cancel</button>
-              <button type="button" onClick={next} className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><span>Next: Services &amp; products</span><M n="arrow_forward" c="text-xs" /></button>
+              <button type="button" onClick={next} className="px-5 py-2.5 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><span>Next: Services &amp; products</span><M n="arrow_forward" c="text-xs" /></button>
             </div>
           ) : (
             <div className="w-full flex items-center justify-between">
               <button type="button" onClick={() => setStep(1)} className="px-4 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 transition-colors flex items-center gap-1"><M n="arrow_back" c="text-xs" /><span>Back</span></button>
               <div className="flex items-center space-x-2">
                 <button type="button" disabled={busy} onClick={() => submit(true)} className="hidden sm:inline-flex px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 transition-colors">Save &amp; create another</button>
-                <button type="button" disabled={busy} onClick={() => submit(false)} className="px-5 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 transition-all">{busy ? "Creating…" : `Create ${estimate ? "estimate" : "work order"}`}</button>
+                <button type="button" disabled={busy} onClick={() => submit(false)} className="px-5 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 transition-all">{busy ? "Creating…" : `Create ${estimate ? "estimate" : "work order"}`}</button>
               </div>
             </div>
           )}

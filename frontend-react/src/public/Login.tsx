@@ -50,16 +50,16 @@ export default function Login() {
         <div className="w-full">
           {/* brand */}
           <div className="mb-6 flex items-center gap-3">
-            <div className="grid h-12 w-12 place-items-center rounded-2xl text-lg font-extrabold text-white"
+            <div className="grid h-12 w-12 place-items-center rounded-2xl text-lg font-bold text-white"
               style={{ background: "linear-gradient(135deg,#2c72d9,#6848be)" }}>R</div>
             <div>
-              <div className="text-xl font-extrabold tracking-[-.3px]">RepairOS</div>
+              <div className="text-xl font-bold tracking-[-.3px]">RepairOS</div>
               <div className="text-xs font-semibold text-ink-tertiary">Sign in to your workspace</div>
             </div>
           </div>
 
           <form onSubmit={submit} className="rounded-2xl border border-slate-200 bg-white p-6 sm:p-7">
-            <h1 className="text-lg font-extrabold text-ink-primary">Welcome back</h1>
+            <h1 className="text-lg font-bold text-ink-primary">Welcome back</h1>
             <p className="mt-1 text-[13px] text-ink-tertiary">Enter your details to continue.</p>
 
             <label className="mt-5 block text-[13px] font-bold text-ink-secondary">Email</label>
