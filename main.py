@@ -328,7 +328,9 @@ async def serve_offline():
 
 @app.get("/portal/{token}", include_in_schema=False)
 async def serve_portal(token: str):
-    return FileResponse(os.path.join(frontend_dir, "portal.html"))
+    # Customer portal (all of a customer's jobs) — React page (main.tsx detects "/portal/"
+    # and renders <PublicPortal/>).
+    return _serve_react()
 
 
 def _contained_file(base_dir: str, rel: str):

@@ -38,7 +38,7 @@ type Feedback = {
   clarify_question?: string; bands?: Record<string, string>;
   google_review_url?: string | null; submitted?: boolean; rating?: number | null;
 };
-type Track = {
+export type Track = {
   shop_name?: string; client_name?: string | null; order_number?: string; stage_label?: string; is_estimate?: boolean;
   stages?: { label: string }[]; stage_index?: number; stopped?: boolean; awaiting_approval?: boolean;
   device?: string; asset_label?: string; complaint?: string; total?: number;
@@ -62,10 +62,8 @@ function todayHours(h?: Track["shop_hours"]) {
   return null;
 }
 
-const token = location.pathname.split("/track/")[1]?.replace(/\/$/, "") || "";
-
 // One way to show money everywhere on the page: whole amounts without cents, otherwise two decimals.
-const money = (n: number, sym = "$") => {
+export const money = (n: number, sym = "$") => {
   const v = Number(n || 0);
   const whole = Math.abs(v - Math.round(v)) < 0.005;
   return sym + v.toLocaleString(undefined, { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: whole ? 0 : 2 });
@@ -74,51 +72,42 @@ const docTotal = (d: Track) => (d?.fx_rate && Number(d.fx_rate) !== 1
   ? (d.total_converted != null ? d.total_converted : (d.total || 0) * d.fx_rate) : (d?.total || 0));
 const fmtDoc = (d: Track) => money(docTotal(d), d?.currency_symbol || "$");
 // White or near-black text on the shop's colour, whichever reads better.
-function onColor(hex: string) {
+export function onColor(hex: string) {
   const h = hex.replace("#", ""); const n = parseInt(h.length === 3 ? h.split("").map((c) => c + c).join("") : h, 16);
   const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => { const x = c / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; });
   return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.45 ? "#111827" : "#ffffff";
 }
 // The server sends UTC without a zone marker; read it as UTC so times show in the customer's own clock.
 const asUtc = (s: string) => (/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : s + "Z");
-const fmtDate = (s?: string) =>
+export const fmtDate = (s?: string) =>
   s ? new Date(asUtc(s)).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
-const initials = (s?: string) =>
+export const initials = (s?: string) =>
   (s || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase() || "R";
 
 // 144ct — sender label for the two-way message items in the updates feed
 const UPD_SENDER: Record<string, string> = { shop_message: "Shop", client_message: "You" };
 
-export default function PublicTrack() {
+// Load one public document and keep it fresh: poll every 20s, pause while the tab is hidden.
+export function usePublicDoc(url: string) {
   const [d, setD] = useState<Track | null>(null);
   const [err, setErr] = useState(false);
-  const [signOpen, setSignOpen] = useState(false);
-  const [recSel, setRecSel] = useState<Record<string, boolean>>({});
-  const [review, setReview] = useState(false);
-  const [photo, setPhoto] = useState<string | null>(null);
-  const [msg, setMsg] = useState("");
-  const [reqSent, setReqSent] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number>(0);
-  // review capture
-  const [fbRating, setFbRating] = useState(0);
-  const [fbComment, setFbComment] = useState("");
-  const [fbBusy, setFbBusy] = useState(false);
-  const [fbResult, setFbResult] = useState<{ message: string; google_review_url?: string | null } | null>(null);
+  const urlRef = useRef(url);
+  urlRef.current = url;
 
   async function load(silent = false) {
+    const at = urlRef.current;
     try {
-      const r = await fetch("/api/public/track/" + token);
+      const r = await fetch(at);
       if (!r.ok) throw new Error();
       const data: Track = await r.json();
+      if (urlRef.current !== at) return;   // the visitor moved on to another job meanwhile
       setD(data);
+      setErr(false);
       setUpdatedAt(Date.now());
-      // Nothing is pre-ticked: the customer opts in, item by item.
-      if (!silent) setRecSel({});
-    } catch { if (!silent) setErr(true); }
+    } catch { if (!silent && urlRef.current === at) setErr(true); }
   }
-  useEffect(() => { load(); }, []);
-  // #2 — live auto-refresh: poll every 20s, pause while the tab is hidden.
+  useEffect(() => { setD(null); setErr(false); load(); }, [url]);
   useEffect(() => {
     let id: ReturnType<typeof setInterval> | null = null;
     const start = () => { if (!id) id = setInterval(() => load(true), 20000); };
@@ -128,70 +117,13 @@ export default function PublicTrack() {
     document.addEventListener("visibilitychange", onVis);
     return () => { stop(); document.removeEventListener("visibilitychange", onVis); };
   }, []);
-  function flash(m: string) { setToast(m); setTimeout(() => setToast(null), 3200); }
+  return { d, err, updatedAt, load };
+}
 
-  async function submitFeedback() {
-    if (!fbRating) { flash("Pick a rating first"); return; }
-    setFbBusy(true);
-    try {
-      const r = await fetch("/api/public/track/" + token + "/feedback", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rating: fbRating, comment: fbComment.trim() || null }),
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.detail || "Could not submit");
-      setFbResult({ message: j.message, google_review_url: j.google_review_url });
-    } catch (e: any) { flash(e.message || "Could not submit your rating"); }
-    finally { setFbBusy(false); }
-  }
-
-  async function respond(decision: string, signature: string | null = null) {
-    try {
-      const r = await fetch("/api/public/track/" + token + "/respond", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decision, signature }),
-      });
-      if (!r.ok) throw new Error();
-      flash(decision === "accept" ? "Estimate approved — thank you!" : "Estimate declined");
-      setTimeout(load, 800);
-    } catch { flash("Could not submit your response"); }
-  }
-
-  // The customer's choice: add what they ticked, or save items for later. Nothing they don't
-  // touch is declined behind their back.
-  async function decideRecs(body: { approve_ids?: string[]; later_ids?: string[]; name?: string }, done: string) {
-    try {
-      const r = await fetch("/api/public/track/" + token + "/recommendations/decide", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-      if (!r.ok) throw new Error();
-      setRecSel({}); setReview(false);
-      flash(done);
-      load(true);
-    } catch { flash("Couldn't save your choice. Please try again."); }
-  }
-
-  async function sendMessage() {
-    const body = msg.trim(); if (!body) return;
-    try {
-      const r = await fetch("/api/public/track/" + token + "/message", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body }),
-      });
-      if (!r.ok) throw new Error();
-      setMsg(""); flash("Message sent — the shop will see it");
-    } catch { flash("Could not send your message"); }
-  }
-
-  async function sendNewRequest() {
-    const body = msg.trim(); if (!body) return;
-    try {
-      const r = await fetch("/api/public/track/" + token + "/new-request", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body }),
-      });
-      if (!r.ok) throw new Error();
-      setMsg(""); setReqSent(true);
-    } catch { flash("Could not send your request"); }
-  }
+export default function PublicTrack() {
+  const token = location.pathname.split("/track/")[1]?.replace(/\/$/, "") || "";
+  const api = "/api/public/track/" + token;
+  const { d, err, updatedAt, load } = usePublicDoc(api);
 
   if (err)
     return (
@@ -204,6 +136,98 @@ export default function PublicTrack() {
       </div>
     );
   if (!d) return <div className="min-h-screen bg-surface" />;
+  return <TrackView d={d} updatedAt={updatedAt} api={api} extrasApi={api} reload={load} />;
+}
+
+// One job as the customer sees it: status, recommendations, estimate, updates, invoice,
+// messages, rating. Shared by the track page and the customer portal's job view.
+// `api` takes respond / message / recommendations; `extrasApi` (the job's track link) takes
+// the rating, new request, signed PDF and e-invoice, and those parts hide without it.
+export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, top }: {
+  d: Track; updatedAt: number; api: string; extrasApi: string | null;
+  reload: (silent?: boolean) => void;
+  onResponded?: (decision: string, result: { converted_order_id?: string | null }) => void;
+  top?: React.ReactNode;
+}) {
+  const [signOpen, setSignOpen] = useState(false);
+  // Nothing is pre-ticked: the customer opts in, item by item.
+  const [recSel, setRecSel] = useState<Record<string, boolean>>({});
+  const [review, setReview] = useState(false);
+  const [photo, setPhoto] = useState<string | null>(null);
+  const [msg, setMsg] = useState("");
+  const [reqSent, setReqSent] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  // review capture
+  const [fbRating, setFbRating] = useState(0);
+  const [fbComment, setFbComment] = useState("");
+  const [fbBusy, setFbBusy] = useState(false);
+  const [fbResult, setFbResult] = useState<{ message: string; google_review_url?: string | null } | null>(null);
+
+  function flash(m: string) { setToast(m); setTimeout(() => setToast(null), 3200); }
+
+  async function submitFeedback() {
+    if (!fbRating) { flash("Pick a rating first"); return; }
+    setFbBusy(true);
+    try {
+      const r = await fetch(extrasApi + "/feedback", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rating: fbRating, comment: fbComment.trim() || null }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || "Could not submit");
+      setFbResult({ message: j.message, google_review_url: j.google_review_url });
+    } catch (e: any) { flash(e.message || "Could not submit your rating"); }
+    finally { setFbBusy(false); }
+  }
+
+  async function respond(decision: string, signature: string | null = null) {
+    try {
+      const r = await fetch(api + "/respond", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision, signature }),
+      });
+      if (!r.ok) throw new Error();
+      const j = await r.json().catch(() => ({}));
+      flash(decision === "accept" ? "Estimate approved — thank you!" : "Estimate declined");
+      setTimeout(() => { setRecSel({}); reload(); onResponded?.(decision, j); }, 800);
+    } catch { flash("Could not submit your response"); }
+  }
+
+  // The customer's choice: add what they ticked, or save items for later. Nothing they don't
+  // touch is declined behind their back.
+  async function decideRecs(body: { approve_ids?: string[]; later_ids?: string[]; name?: string }, done: string) {
+    try {
+      const r = await fetch(api + "/recommendations/decide", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error();
+      setRecSel({}); setReview(false);
+      flash(done);
+      reload(true);
+    } catch { flash("Couldn't save your choice. Please try again."); }
+  }
+
+  async function sendMessage() {
+    const body = msg.trim(); if (!body) return;
+    try {
+      const r = await fetch(api + "/message", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body }),
+      });
+      if (!r.ok) throw new Error();
+      setMsg(""); flash("Message sent — the shop will see it");
+    } catch { flash("Could not send your message"); }
+  }
+
+  async function sendNewRequest() {
+    const body = msg.trim(); if (!body) return;
+    try {
+      const r = await fetch(extrasApi + "/new-request", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body }),
+      });
+      if (!r.ok) throw new Error();
+      setMsg(""); setReqSent(true);
+    } catch { flash("Could not send your request"); }
+  }
 
   const isEst = d.is_estimate === true;
   const sym = d.currency_symbol || "$";
@@ -242,6 +266,7 @@ export default function PublicTrack() {
     <div className="min-h-screen bg-canvas text-ink-primary font-sans pb-24 lg:pb-0">
       <div className="mx-auto grid max-w-[1040px] items-start gap-8 px-4 py-6 sm:py-10 lg:grid-cols-[minmax(0,1fr)_320px]">
         <main className="min-w-0">
+          {top}
           {/* shop bar */}
           <div className="flex items-center gap-3">
             {d.logo_data
@@ -459,9 +484,9 @@ export default function PublicTrack() {
                     : <div className="text-[13px] text-emerald-700">Paid</div>}
                 </div>
               </div>
-              {d.invoice.einvoice_available && (
+              {d.invoice.einvoice_available && extrasApi && (
                 <>
-                  <a href={`/api/public/track/${token}/einvoice.xml`} download className={`${btn} mt-3 border border-slate-300 text-ink-secondary hover:bg-slate-50`}><Receipt size={15} /> Download e-invoice (XML)</a>
+                  <a href={`${extrasApi}/einvoice.xml`} download className={`${btn} mt-3 border border-slate-300 text-ink-secondary hover:bg-slate-50`}><Receipt size={15} /> Download e-invoice (XML)</a>
                   <div className="mt-1.5 text-[13px] text-ink-tertiary">Standards-based UBL 2.1 electronic invoice{d.invoice.einvoice_number ? ` · ${d.invoice.einvoice_number}` : ""}</div>
                 </>
               )}
@@ -482,7 +507,7 @@ export default function PublicTrack() {
               </div>
             </section>
           )}
-          {d.allow_messages === false && d.can_new_request && (
+          {d.allow_messages === false && d.can_new_request && extrasApi && (
             <section className={sec}>
               <H2>Need something else?</H2>
               {reqSent ? (
@@ -499,7 +524,7 @@ export default function PublicTrack() {
           )}
 
           {/* review capture: only once the work is done */}
-          {d.feedback && (nearEnd || d.feedback.submitted || fbResult) && (
+          {d.feedback && extrasApi && (nearEnd || d.feedback.submitted || fbResult) && (
             <section className={sec}>
               <H2>{d.feedback.heading || "How did we do?"}</H2>
               {fbResult ? (
@@ -584,8 +609,8 @@ export default function PublicTrack() {
             </div>
           )}
 
-          {d.has_signature && (
-            <a href={`/api/public/track/${token}/certificate.pdf`} target="_blank" rel="noopener"
+          {d.has_signature && extrasApi && (
+            <a href={`${extrasApi}/certificate.pdf`} target="_blank" rel="noopener"
               className={`${btn} w-full border border-slate-300 bg-white text-ink-secondary hover:bg-slate-50`}><Download size={15} /> Signed approval (PDF)</a>
           )}
         </aside>

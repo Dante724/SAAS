@@ -229,7 +229,12 @@ async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
 @router.get("/track/{token}")
 async def track(token: str, db: AsyncSession = Depends(get_db)):
     order = await _load(db, token)
+    return await _track_payload(db, order)
 
+
+async def _track_payload(db: AsyncSession, order: "Order") -> dict:
+    """Everything the customer sees for one job. The track page and the customer portal's job
+    view both show this, so the two pages never drift apart."""
     client = (await db.execute(select(Client).where(Client.id == order.client_id))).scalar_one_or_none() if order.client_id else None
     device = (await db.execute(select(Device).where(Device.id == order.device_id))).scalar_one_or_none() if order.device_id else None
     org = (await db.execute(select(Organisation).where(Organisation.id == order.org_id))).scalar_one_or_none()
@@ -486,11 +491,51 @@ async def portal_home(token: str, db: AsyncSession = Depends(get_db)):
     orders = (await db.execute(
         select(Order).where(Order.client_id == client.id).order_by(desc(Order.created_at))
     )).scalars().all()
-    work_orders = [_order_card(o) for o in orders if not o.is_estimate]
-    estimates = [_order_card(o) for o in orders if o.is_estimate]
+
+    # What the job list shows beside each card: the item, the total in the customer's currency,
+    # and whether the customer has something to do (approve, or choose recommended work).
+    from backend.models import Recommendation as _R
+    from backend.services import currency as _cur
+    dev_ids = {o.device_id for o in orders if o.device_id}
+    devices = {d.id: d for d in (await db.execute(select(Device).where(Device.id.in_(dev_ids)))).scalars().all()} if dev_ids else {}
+    open_recs: dict = {}
+    if orders and getattr(org, "oe_allow_recommend", True):
+        for oid in (await db.execute(select(_R.order_id).where(
+                _R.order_id.in_([o.id for o in orders]), _R.status == "sent"))).scalars().all():
+            open_recs[oid] = open_recs.get(oid, 0) + 1
+    ci = await _cur.resolve_for_client(db, client.org_id, client.id, None)
+    # The shop's own status names, as the job page shows them.
+    from backend.models import OrderStatus as _OS
+    names = {(s.record_type, s.key): s.name for s in (await db.execute(
+        select(_OS).where(_OS.org_id == client.org_id))).scalars().all()}
+
+    async def card(o: "Order") -> dict:
+        c = _order_card(o)
+        c["stage_label"] = STAGE_LABEL.get(o.status) or names.get(
+            ("estimate" if o.is_estimate else "work_order", o.status)) or c["stage_label"]
+        d = devices.get(o.device_id)
+        # Same currency rule as the job page: the order's own currency wins over the client's.
+        oci = ci if not o.currency_code or o.currency_code == ci["code"] else \
+            await _cur.resolve_for_client(db, client.org_id, client.id, o.currency_code)
+        fx = o.fx_rate or oci["rate"] or 1
+        c.update({
+            "device": (" ".join(p for p in [d.brand, d.model] if p) or None) if d else None,
+            "total_converted": q2((o.total or 0) * fx),
+            "currency_symbol": oci["symbol"],
+            "awaiting_approval": await _can_sign(db, o),
+            "open_recommendations": open_recs.get(o.id, 0),
+        })
+        return c
+
+    work_orders = [await card(o) for o in orders if not o.is_estimate]
+    estimates = [await card(o) for o in orders if o.is_estimate]
+    _show_logo = getattr(org, "page_show_logo", True) or getattr(org, "oe_show_logo", True)
     return {
         "shop_name": org.name if org else "Repair shop",
         "client_name": client.name,
+        "logo_data": (org.logo_data if (org and _show_logo) else None),
+        "brand_color": (getattr(org, "page_color", None) or getattr(org, "brand_primary_color", None)) if org else None,
+        "currency_symbol": ci["symbol"],
         "work_orders": work_orders,
         "estimates": estimates,
         "counts": {
@@ -503,45 +548,24 @@ async def portal_home(token: str, db: AsyncSession = Depends(get_db)):
 
 @router.get("/portal/{token}/order/{order_id}")
 async def portal_order(token: str, order_id: str, db: AsyncSession = Depends(get_db)):
+    """One job in the portal: the same payload as the track page, plus the portal's own fields.
+    `public_token` lets the portal reach the per-job extras (rating, new request, signed PDF,
+    e-invoice) — the portal holder is the job's own customer, who already gets that link."""
     client = await _client_by_portal(db, token)
-    from backend.models import OrderLine
     order = (await db.execute(
         select(Order).where(Order.id == order_id, Order.client_id == client.id)
     )).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
-    lines = (await db.execute(
-        select(OrderLine).where(OrderLine.order_id == order.id).order_by(OrderLine.id)
-    )).scalars().all()
-    logs = (await db.execute(
-        select(OrderStatusLog).where(OrderStatusLog.order_id == order.id).order_by(OrderStatusLog.changed_at)
-    )).scalars().all()
-    feed = (await db.execute(
-        select(EventFeedItem).where(
-            EventFeedItem.entity_type == "order", EventFeedItem.entity_id == order.id,
-            EventFeedItem.visibility == "client").order_by(desc(EventFeedItem.created_at))
-    )).scalars().all()
-    card = _order_card(order)
-    from backend.routers.forms import shown_values
-    _dev = (await db.execute(select(Device).where(Device.id == order.device_id))).scalar_one_or_none() if order.device_id else None
-    card.update({
-        "custom_fields": await shown_values(db, client.org_id, "show_in_portal", order=order, device=_dev, client=client),
+    payload = await _track_payload(db, order)
+    payload.update({
+        "id": order.id,
+        "public_token": order.public_token,
         "diagnosis": order.diagnosis,
-        "lines": [{"description": ln.description, "qty": ln.qty,
-                   "unit_price": ln.unit_price, "line_type": ln.line_type} for ln in lines],
-        "can_approve": bool(order.is_estimate) and await _approval_enabled(db, client.org_id),
-        **(await _message_fields(db, order, await _org(db, client.org_id))),
-        "allow_recommend": await _recommend_enabled(db, client.org_id),
-        "recommendations": await _public_recommendations(db, order),
-        "timeline": [{"to": lg.to_status,
-                      "label": STAGE_LABEL.get(lg.to_status, lg.to_status.replace("_", " ").title()),
-                      "at": lg.changed_at.isoformat() if lg.changed_at else None} for lg in logs],
-        "updates": [{"type": f.item_type, "body": f.body,
-                     "media_data": f.media_data if f.item_type in ("photo", "signature", "file") else None,
-                     "media_name": f.media_name, "media_mime": getattr(f, "media_mime", None),
-                     "at": f.created_at.isoformat() if f.created_at else None} for f in feed],
+        "warranty_until": order.warranty_until.isoformat() if order.warranty_until else None,
+        "can_approve": payload["awaiting_approval"],
     })
-    return card
+    return payload
 
 
 @router.post("/portal/{token}/order/{order_id}/respond")
@@ -567,12 +591,6 @@ async def portal_respond(token: str, order_id: str, data: AcceptIn, request: Req
 class MessageIn(BaseModel):
     body: str
     name: Optional[str] = None
-
-
-async def _approval_enabled(db: AsyncSession, org_id: str) -> bool:
-    from backend.models import Organisation as _O
-    org = (await db.execute(select(_O).where(_O.id == org_id))).scalar_one_or_none()
-    return getattr(org, "oe_allow_approval", True) if org else True
 
 
 async def _can_sign(db: AsyncSession, order: "Order") -> bool:
