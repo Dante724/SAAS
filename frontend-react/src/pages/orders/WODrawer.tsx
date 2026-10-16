@@ -24,7 +24,7 @@ import JobCardFields from "../../components/JobCardFields";
 
 type Emp = { id: string; name: string };
 type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean; order_item_id?: string | null };
-type Rec = { id: string; title?: string; name?: string; description?: string; price?: number; amount?: number; unit_price?: number; status?: string; published?: boolean; source?: string; note?: string; order_item_id?: string | null };
+type Rec = { id: string; title?: string; name?: string; description?: string; price?: number; amount?: number; unit_price?: number; status?: string; published?: boolean; source?: string; note?: string; order_item_id?: string | null; urgency?: string | null };
 type Detail = Order & {
   complaint?: string; tech_notes?: string; diagnosis?: string; conclusion?: string;
   warranty_until?: string | null; due_at?: string | null;
@@ -990,6 +990,11 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
     try { await api.post(`/orders/${orderId}/recommendations/${rec.id}/${approve ? "publish" : "unpublish"}`); setRecs((rs) => rs.filter((x) => x.id !== rec.id)); onFlash(approve ? "Recommendation approved" : "Recommendation rejected"); }
     catch (e: any) { onFlash(`Failed: ${e.message}`); }
   };
+  // How urgent it is, shown to the customer in plain words ("Needs attention now" / "Can wait").
+  async function setUrgency(rec: Rec, urgency: string) {
+    try { await api.patch(`/orders/${orderId}/recommendations/${rec.id}`, { urgency: urgency || null }); setRecs((rs) => rs.map((x) => (x.id === rec.id ? { ...x, urgency: urgency || null } : x))); }
+    catch (e: any) { onFlash(e.message || "Couldn't change the urgency"); }
+  }
   // Several items per job: the customer approves recommendations item by item on the tracking page.
   async function tagRec(rec: Rec, itemId: string) {
     try { const r = await api.patch<Rec>(`/orders/${orderId}/recommendations/${rec.id}`, { order_item_id: itemId || null }); setRecs((rs) => rs.map((x) => (x.id === rec.id ? { ...x, order_item_id: r.order_item_id } : x))); }
@@ -1170,8 +1175,8 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
       {recs.length > 0 && (
         <div className="rounded-2xl border-2 border-dashed border-purple-300 bg-purple-50/40 p-4 space-y-3">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2"><M n="auto_awesome" c="text-purple-600 text-sm" /><h5 className="text-xs font-bold text-purple-900">Suggested add-ons &amp; Recommendations</h5></div>
-            <span className="text-[11px] bg-purple-100 text-purple-700 font-bold px-2 py-0.5 rounded-full">Automated Upsell</span>
+            <div className="flex items-center gap-2"><M n="auto_awesome" c="text-purple-600 text-sm" /><h5 className="text-xs font-bold text-purple-900">Recommended to the customer</h5></div>
+            <span className="text-[11px] text-purple-700">They choose what to add on their tracking page</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {recs.map((r) => (
@@ -1182,6 +1187,10 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                     {r.source === "checklist" && <span className="inline-flex items-center gap-0.5 text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-200 px-1.5 py-0.5 rounded-full" title={r.note || "Auto-drafted from a checklist finding"}><M n="fact_check" c="text-[11px]" />From checklist</span>}
                   </div>
                   <p className="text-[11px] tabular-nums text-purple-700 font-bold">{money(r.price ?? r.unit_price ?? r.amount)}</p>
+                  <select value={r.urgency || ""} onChange={(e) => setUrgency(r, e.target.value)} aria-label={`How urgent ${r.title || "this recommendation"} is`}
+                    className="mt-1 mr-1 max-w-[200px] text-[11px] font-medium text-ink-secondary bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5">
+                    <option value="">No urgency</option><option value="now">Needs attention now</option><option value="soon">Can wait until next visit</option>
+                  </select>
                   {tagging && (
                     <select value={r.order_item_id || ""} onChange={(e) => tagRec(r, e.target.value)} aria-label={`Which item ${r.title || "this recommendation"} is for`}
                       className="mt-1 max-w-[200px] text-[11px] font-medium text-ink-secondary bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5">

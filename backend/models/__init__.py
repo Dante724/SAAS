@@ -1531,6 +1531,7 @@ class Recommendation(Base):
     kind:    service | product | custom   (drives the created OrderLine's type)
     """
     __tablename__ = "recommendations"
+    __table_args__ = (Index("ix_recommendations_org_remind_after", "org_id", "remind_after"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"), index=True)
@@ -1545,6 +1546,10 @@ class Recommendation(Base):
     order_line_id: Mapped[Optional[str]] = mapped_column(String)  # set once approved
     # Several items per job: which of the job's items this is for (null = the whole job).
     order_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("order_items.id"), index=True)
+    urgency: Mapped[Optional[str]] = mapped_column(String(10))          # now | soon | None (plain words on the page)
+    decline_reason: Mapped[Optional[str]] = mapped_column(String(20))   # not_now (deferred, raise again later) | not_needed
+    remind_after: Mapped[Optional[date]] = mapped_column(Date)          # set when the customer says "not now"
+    decided_by_name: Mapped[Optional[str]] = mapped_column(String(200)) # name typed when confirming
     source: Mapped[str] = mapped_column(String(20), default="manual")  # manual | checklist
     source_ref_id: Mapped[Optional[str]] = mapped_column(String)  # e.g. order_checklist_item id (idempotency + attribution)
     author_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))

@@ -24,6 +24,7 @@ router = APIRouter(prefix="/api/orders", tags=["recommendations"],
 
 MAX_MEDIA_CHARS = 8_000_000
 VALID_KIND = {"service", "product", "custom"}
+VALID_URGENCY = {"now", "soon"}     # None = no urgency label
 
 
 class RecIn(BaseModel):
@@ -35,6 +36,7 @@ class RecIn(BaseModel):
     unit_price: float = 0.0
     media_data: Optional[str] = None
     order_item_id: Optional[str] = None     # several items per job: which item (null = whole job)
+    urgency: Optional[str] = None           # now | soon | None
 
 
 class RecPatch(BaseModel):
@@ -46,6 +48,7 @@ class RecPatch(BaseModel):
     unit_price: Optional[float] = None
     media_data: Optional[str] = None
     order_item_id: Optional[str] = None     # "" / null = whole job
+    urgency: Optional[str] = None           # now | soon | "" / None = no label
 
 
 async def _check_item(db: AsyncSession, org_id: str, order_id: str, item_id: Optional[str]) -> Optional[str]:
@@ -71,6 +74,10 @@ def serialize_rec(r: Recommendation) -> dict:
         "line_total": q2((r.qty or 0) * (r.unit_price or 0)),
         "media_data": r.media_data,
         "status": r.status,
+        "urgency": r.urgency,
+        "decline_reason": r.decline_reason,
+        "remind_after": r.remind_after.isoformat() if r.remind_after else None,
+        "decided_by_name": r.decided_by_name,
         "source": r.source,
         "source_ref_id": r.source_ref_id,
         "order_item_id": r.order_item_id,
@@ -125,11 +132,13 @@ async def add_recommendation(
         raise HTTPException(422, "kind must be service|product|custom")
     if data.media_data and len(data.media_data) > MAX_MEDIA_CHARS:
         raise HTTPException(413, "Photo too large")
+    if data.urgency and data.urgency not in VALID_URGENCY:
+        raise HTTPException(422, "urgency must be now|soon")
     r = Recommendation(
         org_id=current.org_id, order_id=order_id, title=data.title.strip(),
         note=data.note, kind=data.kind, ref_id=data.ref_id,
         qty=data.qty or 1.0, unit_price=data.unit_price or 0.0,
-        media_data=data.media_data, status="draft",
+        media_data=data.media_data, status="draft", urgency=data.urgency or None,
         order_item_id=await _check_item(db, current.org_id, order_id, data.order_item_id),
         author_id=current.id, author_name=current.name)
     db.add(r)
@@ -154,6 +163,10 @@ async def update_recommendation(
         raise HTTPException(422, "kind must be service|product|custom")
     if fields.get("media_data") and len(fields["media_data"]) > MAX_MEDIA_CHARS:
         raise HTTPException(413, "Photo too large")
+    if "urgency" in fields:
+        fields["urgency"] = fields["urgency"] or None
+        if fields["urgency"] and fields["urgency"] not in VALID_URGENCY:
+            raise HTTPException(422, "urgency must be now|soon")
     if "order_item_id" in fields:
         fields["order_item_id"] = await _check_item(db, current.org_id, order_id, fields["order_item_id"])
     for k, v in fields.items():

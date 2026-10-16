@@ -131,7 +131,7 @@ async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
     verb = "accepted" if decision == "accept" else "declined"
     db.add(EventFeedItem(
         org_id=order.org_id, entity_type="order", entity_id=order.id,
-        item_type="comment", body=f"Customer {verb} the estimate of \u20b9{int(order.total or 0)}",
+        item_type="comment", body=f"Customer {verb} the estimate",
         visibility="client", author_name=who,
     ))
     if signature:
@@ -635,6 +635,9 @@ async def _public_recommendations(db: AsyncSession, order: "Order") -> list[dict
         "qty": r.qty, "unit_price": r.unit_price,
         "line_total": q2((r.qty or 0) * (r.unit_price or 0)),
         "media_data": r.media_data, "status": r.status,
+        "kind": r.kind, "urgency": r.urgency, "decline_reason": r.decline_reason,
+        "decided_by_name": r.decided_by_name,
+        "decided_at": r.decided_at.isoformat() if r.decided_at else None,
         "item": (names[r.order_item_id][0] if r.order_item_id in names else None),
         "item_order": (names[r.order_item_id][1] if r.order_item_id in names else None),
     } for r in rows]
@@ -642,38 +645,84 @@ async def _public_recommendations(db: AsyncSession, order: "Order") -> list[dict
 
 class RecDecideIn(BaseModel):
     approve_ids: list[str] = []
-    decline_ids: list[str] = []
+    decline_ids: list[str] = []          # older pages: "Decline all"
+    later_ids: list[str] = []            # "Not now": saved for later, the shop can raise it again
+    name: Optional[str] = None           # the name the customer typed when confirming
 
 
-async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDecideIn") -> dict:
-    """Customer approves and/or declines recommended items. Approved items become
-    order lines (via the shared money seam); every decision bumps the staff dot."""
+REMIND_AFTER_DAYS = 90
+
+
+async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDecideIn",
+                                  request: Optional[Request] = None) -> dict:
+    """The customer chooses which recommended items to add. Only what they tick is approved;
+    anything they don't touch stays open (nothing is declined silently). "Not now" saves an
+    item for later (declined + not_now + a reminder date). An item saved for later can still be
+    added while the job is open. Approved items become order lines through the shared money
+    seam; the rows are locked so a double tap can't add the same work twice."""
     if not await _recommend_enabled(db, order.org_id):
         raise HTTPException(403, "Recommendations are turned off for this shop")
+    from datetime import date as _date
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+
     from backend.models import Recommendation as _R
     from backend.routers.recommendations import approve_recommendation
-    ids = list(dict.fromkeys((data.approve_ids or []) + (data.decline_ids or [])))
+    approve = list(dict.fromkeys(data.approve_ids or []))
+    later = list(dict.fromkeys((data.later_ids or []) + (data.decline_ids or [])))
+    if set(approve) & set(later):
+        raise HTTPException(400, "An item can't be both added and saved for later")
+    ids = approve + later
     if not ids:
         raise HTTPException(400, "Nothing selected")
+    name = (data.name or "").strip()[:200] or None
     rows = {r.id: r for r in (await db.execute(select(_R).where(
-        _R.order_id == order.id, _R.id.in_(ids), _R.status == "sent"))).scalars().all()}
-    approved = declined = 0
-    for rid in (data.approve_ids or []):
+        _R.order_id == order.id, _R.org_id == order.org_id, _R.id.in_(ids))
+        .with_for_update())).scalars().all()}
+    approved = later_n = 0
+    added = 0.0
+    skipped: list[str] = []
+    for rid in approve:
         r = rows.get(rid)
-        if r:
-            await approve_recommendation(db, r)
-            approved += 1
-    for rid in (data.decline_ids or []):
+        # Open items, and items saved for later (the customer changed their mind) can be added.
+        if not r or r.status not in ("sent", "declined"):
+            skipped.append(rid)
+            continue
+        line = await approve_recommendation(db, r)
+        r.decline_reason = None
+        r.remind_after = None
+        r.decided_by_name = name
+        added += float(line.total or 0)
+        approved += 1
+    for rid in later:
         r = rows.get(rid)
-        if r and r.status == "sent":
-            from datetime import datetime as _dtnow
-            r.status = "declined"
-            r.decided_at = _dtnow.utcnow()
-            declined += 1
-    decided = approved + declined
+        if not r or r.status != "sent":
+            skipped.append(rid)
+            continue
+        r.status = "declined"
+        r.decline_reason = "not_now"
+        r.decided_at = _dt.utcnow()
+        r.remind_after = _date.today() + _td(days=REMIND_AFTER_DAYS)
+        r.decided_by_name = name
+        later_n += 1
+    decided = approved + later_n
     if decided:
         order.rec_unread = (order.rec_unread or 0) + decided
-    return {"approved": approved, "declined": declined}
+        # Add the chosen work to the job's total (a job priced at check-in may have no lines
+        # yet, so recomputing from lines would wipe its quoted price).
+        order.total = q2(float(order.total or 0) + added)
+        parts = []
+        if approved:
+            parts.append(f"added {approved} recommended item{'s' if approved != 1 else ''}")
+        if later_n:
+            parts.append(f"saved {later_n} for later")
+        db.add(EventFeedItem(org_id=order.org_id, entity_type="order", entity_id=order.id,
+                             item_type="status", visibility="internal",
+                             body=f"{name or 'The customer'} {' and '.join(parts)}."))
+        # Who confirmed and when is kept on each item (decided_by_name / decided_at); the signed
+        # estimate/work-order record is left alone, so adding an extra never reads as "signed".
+    return {"approved": approved, "saved_for_later": later_n, "declined": later_n, "skipped": skipped,
+            "total": q2(float(order.total or 0))}
 
 
 async def _org(db: AsyncSession, org_id: str):
@@ -807,31 +856,23 @@ async def portal_message(token: str, order_id: str, data: MessageIn, db: AsyncSe
     return {"ok": True}
 
 
-async def _recompute_order_total(db: AsyncSession, order: "Order"):
-    from backend.models import OrderLine as _OL
-    lines = (await db.execute(select(_OL).where(_OL.order_id == order.id))).scalars().all()
-    order.total = q2(sum(ln.total or 0 for ln in lines))
-
-
 @router.post("/track/{token}/recommendations/decide")
-async def track_decide_recs(token: str, data: RecDecideIn, db: AsyncSession = Depends(get_db)):
+async def track_decide_recs(token: str, data: RecDecideIn, request: Request, db: AsyncSession = Depends(get_db)):
     order = await _load(db, token)
-    result = await _decide_recommendations(db, order, data)
-    await _recompute_order_total(db, order)
+    result = await _decide_recommendations(db, order, data, request)
     await db.commit()
     return {"ok": True, **result}
 
 
 @router.post("/portal/{token}/order/{order_id}/recommendations/decide")
-async def portal_decide_recs(token: str, order_id: str, data: RecDecideIn,
+async def portal_decide_recs(token: str, order_id: str, data: RecDecideIn, request: Request,
                              db: AsyncSession = Depends(get_db)):
     client = await _client_by_portal(db, token)
     order = (await db.execute(select(Order).where(
         Order.id == order_id, Order.client_id == client.id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
-    result = await _decide_recommendations(db, order, data)
-    await _recompute_order_total(db, order)
+    result = await _decide_recommendations(db, order, data, request)
     await db.commit()
     return {"ok": True, **result}
 
