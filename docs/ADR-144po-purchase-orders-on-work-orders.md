@@ -21,6 +21,8 @@ A job that needs parts the shop doesn't have gets a supplier purchase order from
    - add a line to the job's activity feed;
    - send an in-app notification to the job's assignee and manager (kind `inventory.po_update`, which they can mute).
 
+4. **The shop chooses.** Settings → Inventory & warehouses → "Parts that arrive for a job" is either **Write off automatically** (the default) or **Staff write it off**. In manual mode, arriving parts land in stock. The notification then says they're ready to write off, and the panel lists what the job still owes, each with a **Write off** button.
+
 ## Options considered
 
 ### A. Auto write-off on receipt (chosen)
@@ -60,4 +62,5 @@ Cons: pending stock gets forgotten, so on-hand drifts from reality. This is the 
 2. [x] Hook it into PO receive, send, cancel, status, workflow and edit (expected date).
 3. [x] `GET /orders/{id}/purchase-orders` returns all linked POs with line detail. `incoming-po` stays for the chip.
 4. [x] WO drawer: ⋯ menu item, panel, and the header chip. Remove the band and the Services-tab card.
-5. [x] Tests: write-off on receipt, other location untouched, estimate untouched, notification sent.
+5. [x] Tests: write-off on receipt, estimate untouched, notification sent, manual mode.
+6. [x] `organisations.inv_po_to_job` (migration `pj144p9`) and the settings choice.

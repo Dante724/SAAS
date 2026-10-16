@@ -42,12 +42,19 @@ async def _live_order(db, org_id, order_id, closed):
     return o
 
 
+async def writes_off_automatically(db: AsyncSession, org_id: str) -> bool:
+    """Settings → Inventory → "Parts that arrive for a job": automatic (default) or manual."""
+    from backend.models import Organisation
+    mode = (await db.execute(select(Organisation.inv_po_to_job).where(Organisation.id == org_id))).scalar_one_or_none()
+    return (mode or "auto") != "manual"
+
+
 async def apply_receipt_to_orders(db: AsyncSession, org_id: str, po: PurchaseOrder, pl: POLine,
                                   received: float) -> float:
     """Write off the job's pending stock for this part from goods just received. Returns the
     units used, so the caller only reserves / frees what's left. The line's own job goes first,
     then the job the PO was raised from."""
-    if received <= 0:
+    if received <= 0 or not await writes_off_automatically(db, org_id):
         return 0.0
     targets = [oid for oid in (pl.reserved_order_id, po.source_order_id) if oid]
     targets = list(dict.fromkeys(targets))

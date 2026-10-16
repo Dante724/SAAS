@@ -60,6 +60,7 @@ class Organisation(Base):
     inv_enable_bins: Mapped[Optional[bool]] = mapped_column(Boolean)
     inv_unique_identifier: Mapped[Optional[str]] = mapped_column(String(10))   # name|sku|barcode|code
     inv_enable_reservations: Mapped[Optional[bool]] = mapped_column(Boolean)
+    inv_po_to_job: Mapped[Optional[str]] = mapped_column(String(10))   # ADR-144po: "auto" (default) | "manual" — parts arriving on a job's PO
     inv_reservation_max_days: Mapped[Optional[int]] = mapped_column(Integer)
     inv_product_serial_template: Mapped[Optional[str]] = mapped_column(String(40))
     inv_asset_serial_template: Mapped[Optional[str]] = mapped_column(String(40))

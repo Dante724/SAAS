@@ -219,7 +219,8 @@ export function InventoryPage({ warehouses, currency, onAdd, onEdit, onDelete }:
     const body = { enable_bins: !!c.enable_bins, enable_reservations: !!c.enable_reservations, reservation_max_days: Number(c.reservation_max_days) || 0,
       unique_identifier: c.unique_identifier || "sku", default_product_type: c.default_product_type || "default",
       product_serial_template: c.product_serial_template || null, default_vehicle_type: c.default_vehicle_type || "Car",
-      asset_serial_template: c.asset_serial_template || null, po_approval_threshold: Number(c.po_approval_threshold) || 0 };
+      asset_serial_template: c.asset_serial_template || null, po_approval_threshold: Number(c.po_approval_threshold) || 0,
+      po_to_job: c.po_to_job === "manual" ? "manual" : "auto" };
     try { await api.put("/staff/inventory-settings", body); setOrig(JSON.stringify(c)); setMsg("Saved"); setTimeout(() => setMsg(null), 1800); }
     catch (e: any) { setMsg(e?.message || "Couldn't save"); } finally { setBusy(false); }
   }
@@ -279,6 +280,23 @@ export function InventoryPage({ warehouses, currency, onAdd, onEdit, onDelete }:
               <span className="text-xs text-ink-secondary">days</span>
             </div>
           )}
+          <div className="py-3 border-t border-slate-100">
+            <div className="text-sm text-ink-primary">Parts that arrive for a job</div>
+            <div className="text-[11px] text-ink-tertiary mb-2">When a purchase order raised from a job is received.</div>
+            <div className="grid sm:grid-cols-2 gap-2">
+              {([["auto", "Write off automatically", "bolt", "Stock goes straight to the job the moment it's received."],
+                 ["manual", "Staff write it off", "back_hand", "Parts land in stock; someone writes them off on the job."]] as const).map(([v, l, icon, hint]) => {
+                const on = (c.po_to_job || "auto") === v;
+                return (
+                  <button key={v} type="button" onClick={() => set("po_to_job", v)} aria-pressed={on}
+                    className={`text-left rounded-xl border p-3 transition-colors ${on ? "border-primary bg-primary/5 ring-2 ring-primary/15" : "border-slate-200 hover:border-slate-300"}`}>
+                    <span className="flex items-center gap-2 text-xs font-semibold text-ink-primary"><M n={icon} c={`text-sm ${on ? "text-primary" : "text-ink-tertiary"}`} />{l}</span>
+                    <span className="block text-[11px] text-ink-tertiary mt-0.5">{hint}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </Card>
 
         <Card icon="qr_code_2" title="Product codes" hint="How products are identified and how new serial numbers are made.">

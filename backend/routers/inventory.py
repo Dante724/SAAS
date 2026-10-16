@@ -1702,8 +1702,11 @@ async def receive_po(
         fully = all((pl.qty_received or 0) >= pl.qty_ordered for pl in po_lines)
         po.status = "received" if fully else "partial"
         from backend.services.po_links import notify_po_change
-        await notify_po_change(db, current.org_id, po, "all parts arrived" if fully else "some parts arrived",
-                               actor_id=current.id)
+        from backend.services.po_links import writes_off_automatically
+        arrived = "all parts arrived" if fully else "some parts arrived"
+        if not await writes_off_automatically(db, current.org_id):
+            arrived += ", ready to write off on the job"
+        await notify_po_change(db, current.org_id, po, arrived, actor_id=current.id)
         po.received_at = datetime.utcnow()
         po.received_cost = (po.received_cost or 0) + received_cost_now
         po.freight_capitalised = q2((po.freight_capitalised or 0) + freight_added_now)

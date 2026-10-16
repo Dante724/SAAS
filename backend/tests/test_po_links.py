@@ -63,3 +63,17 @@ async def test_assignee_hears_about_po_changes(client, tenant, db):
     await client.post(f"/api/inventory/po/{po['po_id']}/cancel", headers=tenant)
     notes = (await db.execute(select(StaffNotification).where(StaffNotification.employee_id == tech["id"]))).scalars().all()
     assert any(po["po_number"] in n.title and "cancelled" in n.title for n in notes)
+
+
+@pytest.mark.asyncio
+async def test_manual_mode_leaves_it_to_staff(client, tenant, db):
+    r = await client.put("/api/staff/inventory-settings", json={"po_to_job": "manual"}, headers=tenant)
+    assert r.status_code == 200, r.text
+    assert (await client.get("/api/staff/inventory-settings", headers=tenant)).json()["po_to_job"] == "manual"
+    oid, po, loc = await _setup(client, tenant)
+    await client.post(f"/api/inventory/po/{po['po_id']}/receive", headers=tenant, json={})
+    line = (await db.execute(select(OrderLine).where(OrderLine.order_id == oid))).scalar_one()
+    assert line.pending_stock == 2                    # still owed: staff write it off
+    r = await client.post(f"/api/orders/{oid}/lines/{line.id}/receive-stock", headers=tenant)
+    assert r.status_code == 200 and r.json()["pending"] == 0
+    assert (await client.put("/api/staff/inventory-settings", json={"po_to_job": "sometimes"}, headers=tenant)).status_code == 422

@@ -775,6 +775,7 @@ async def get_inventory_settings(
         "default_product_type": org.inv_default_product_type or "default",
         "default_vehicle_type": org.inv_default_vehicle_type or "Car",
         "po_approval_threshold": org.po_approval_threshold or 0,
+        "po_to_job": org.inv_po_to_job or "auto",
     }
 
 
@@ -788,6 +789,7 @@ class InventorySettingsIn(BaseModel):
     default_product_type: Optional[str] = None
     default_vehicle_type: Optional[str] = None
     po_approval_threshold: Optional[float] = None
+    po_to_job: Optional[str] = None      # auto | manual — parts arriving on a job's PO
 
 
 @router.put("/inventory-settings")
@@ -803,7 +805,10 @@ async def update_inventory_settings(
     p = data.model_dump(exclude_unset=True)
     if "unique_identifier" in p and p["unique_identifier"] not in ("name", "sku", "barcode", "code"):
         raise HTTPException(422, "unique_identifier must be name|sku|barcode|code")
+    if "po_to_job" in p and p["po_to_job"] not in ("auto", "manual"):
+        raise HTTPException(422, "po_to_job must be auto or manual")
     mapping = {
+        "po_to_job": "inv_po_to_job",
         "enable_bins": "inv_enable_bins", "unique_identifier": "inv_unique_identifier",
         "enable_reservations": "inv_enable_reservations", "reservation_max_days": "inv_reservation_max_days",
         "product_serial_template": "inv_product_serial_template", "asset_serial_template": "inv_asset_serial_template",

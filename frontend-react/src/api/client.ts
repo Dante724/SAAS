@@ -64,11 +64,26 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return (await res.json()) as T;
 }
 
+// The server answers errors as {"detail": "..."} (or a list of field problems). Show the
+// sentence, not the JSON; the raw body stays on `.body` for anything that needs it.
+export function readableError(raw: string): string {
+  try {
+    const j = JSON.parse(raw);
+    const d = j?.detail ?? j?.message ?? j?.error;
+    if (typeof d === "string") return d;
+    if (Array.isArray(d)) return d.map((x: any) => x?.msg || String(x)).join("; ");
+    if (d && typeof d === "object" && typeof d.message === "string") return d.message;
+  } catch { /* not JSON */ }
+  return raw;
+}
+
 export class ApiError extends Error {
   status: number;
+  body: string;
   constructor(status: number, message: string) {
-    super(message);
+    super(readableError(message));
     this.status = status;
+    this.body = message;
   }
 }
 

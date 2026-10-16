@@ -258,7 +258,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100 transition-colors" title="Close"><M n="close" c="text-lg" /></button>
           </div>
         </header>
-        {partsOpen && <PartsPOPanel orderId={order.id} canBuy={canBuy} isEstimate={!!(order as any).is_estimate}
+        {partsOpen && <PartsPOPanel orderId={order.id} lines={(d.lines || []) as any[]} canBuy={canBuy} isEstimate={!!(order as any).is_estimate}
           onClose={() => setPartsOpen(false)} onChanged={() => { loadIncomingPo(); reload(); }} />}
 
         <div className="px-6 py-2 border-b border-slate-200/70 bg-white/95 flex-shrink-0">
