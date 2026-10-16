@@ -45,8 +45,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     body: body != null ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
-    // Guarded cutover: an expired/invalid session bounces back to the legacy
-    // login page (the redesign has no login screen of its own).
+    // An expired or invalid session goes back to the sign-in page.
     if (res.status === 401) {
       try {
         localStorage.removeItem("ros_tok");

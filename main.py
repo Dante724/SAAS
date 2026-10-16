@@ -204,11 +204,12 @@ frontend_dir = os.path.join(os.path.dirname(__file__), "frontend")
 app.mount("/static", StaticFiles(directory=os.path.join(frontend_dir, "static")), name="static")
 
 # ── React redesign (guarded root cutover) ──
-# The Liquid Clay redesign IS the app now and is served at "/". It has no login
-# screen of its own, so the (unchanged) legacy login lives at "/login" and the
-# other auth deep-links (reset / verify / invite). The React bundle shares this
-# origin and reuses the existing bearer session — same data, same endpoints, same
-# flow, new UI. Assets are served from the built dist folder at /assets/*.
+# The React app is served at "/" and at every page route below, sign-in included
+# (/login, /signup, /reset-password, /verify-email, /accept-invite). Assets are served
+# from the built dist folder at /assets/*. What still comes from the vanilla-JS
+# frontend/ folder: the technician phone app (/tech, sw.js, offline.html), the platform
+# operator console (/admin), the customer portal (/portal/<token>) and the test
+# payment page (/pay/<id>).
 react_dir = os.path.join(os.path.dirname(__file__), "frontend-react", "dist")
 _react_index = os.path.join(react_dir, "index.html")
 _have_react = os.path.isfile(_react_index)

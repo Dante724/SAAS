@@ -1,4 +1,5 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
+import { toAppPath } from "../lib/deepLink";
 import { NavLink, useNavigate } from "react-router-dom";
 import { api, getLocationScope, setLocationScope } from "../api/client";
 import { alertDialog } from "../lib/dialog";
@@ -495,7 +496,7 @@ function NotificationsPanel({ onClose, onChanged }: { onClose: () => void; onCha
   async function open(n: any) {
     if (!n.read) { try { await api.post(`/tech/notifications/${n.id}/read`, {}); } catch { /* ignore */ } }
     onClose();
-    if (n.deep_link) { const path = n.deep_link.replace(/^https?:\/\/[^/]+/, ""); nav(path.startsWith("/") ? path : "/" + path); }
+    if (n.deep_link) nav(toAppPath(n.deep_link));
   }
 
   async function enablePush() {
@@ -503,6 +504,10 @@ function NotificationsPanel({ onClose, onChanged }: { onClose: () => void; onCha
       const cfg = await api.get<any>("/push/vapid-public-key");
       if (!cfg.enabled || !cfg.public_key) { await alertDialog("Push isn't configured on this server."); return; }
       if (Notification.permission !== "granted") { const p = await Notification.requestPermission(); if (p !== "granted") { await alertDialog("Notifications were blocked."); return; } }
+      // The site's service worker only handles push here (it leaves the main app's pages and API
+      // alone); register it if this browser never has, or `ready` would wait forever.
+      if (!("serviceWorker" in navigator)) { await alertDialog("This browser can't receive push notifications."); return; }
+      if (!(await navigator.serviceWorker.getRegistration("/"))) await navigator.serviceWorker.register("/sw.js");
       const reg = await navigator.serviceWorker.ready;
       const b64 = (s: string) => { const pad = "=".repeat((4 - (s.length % 4)) % 4); const r = (s + pad).replace(/-/g, "+").replace(/_/g, "/"); const raw = atob(r); return Uint8Array.from([...raw].map((c) => c.charCodeAt(0))); };
       const sub: any = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(cfg.public_key) });
