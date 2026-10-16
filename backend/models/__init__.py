@@ -281,6 +281,7 @@ class Employee(Base):
     public_name: Mapped[Optional[str]] = mapped_column(String(200))  # name shown on public documents
     note: Mapped[Optional[str]] = mapped_column(Text)              # internal note
     token_version: Mapped[int] = mapped_column(Integer, default=0)
+    must_reset_password: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))  # H1: still on the old default password
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     mfa_secret: Mapped[Optional[str]] = mapped_column(String(64))          # base32 TOTP secret
     mfa_recovery_codes: Mapped[Optional[str]] = mapped_column(Text)        # JSON list of hashed single-use codes
@@ -2286,6 +2287,7 @@ class PaymentIntent(Base):
     currency: Mapped[str] = mapped_column(String(8), default="usd")
     status: Mapped[str] = mapped_column(String(16), default="created")  # created|pending|succeeded|failed|canceled
     checkout_url: Mapped[Optional[str]] = mapped_column(String(600))
+    provider_link_id: Mapped[Optional[str]] = mapped_column(String(120))   # the link itself (Square needs it to delete one)
     payment_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("payments.id"))
     error: Mapped[Optional[str]] = mapped_column(Text)
     viewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)  # A2: first time the client opened the link

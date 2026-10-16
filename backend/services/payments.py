@@ -112,6 +112,7 @@ class SquareGateway(PaymentGateway):
             raise RuntimeError(f"Square {resp.status_code}: {resp.text[:200]}")
         link = resp.json().get("payment_link") or {}
         return {"provider_ref": link.get("order_id") or link.get("id"),
+                "provider_link_id": link.get("id"),     # needed to delete the link later
                 "checkout_url": link.get("url"), "status": "pending"}
 
 
@@ -233,6 +234,7 @@ async def create_intent(db: AsyncSession, *, org_id: str, order_id: Optional[str
     await db.flush()
     res = await gw.create_checkout(intent=intent, description=description)
     intent.provider_ref = res["provider_ref"]
+    intent.provider_link_id = res.get("provider_link_id")
     intent.checkout_url = res["checkout_url"]
     intent.status = res["status"]
     await db.commit()

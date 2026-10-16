@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Employee, Role, Task
 from backend.services import multi_asset as _ma
-from backend.services.auth import get_current_employee, hash_password, require_perm
+from backend.services.auth import get_current_employee, hash_password, is_old_default_password, require_perm
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
 
@@ -169,6 +169,8 @@ async def create_employee(
         raise HTTPException(400, "Email already in use")
     if data.password is not None and len(data.password) < MIN_PASSWORD_LEN:
         raise HTTPException(400, f"Password must be at least {MIN_PASSWORD_LEN} characters")
+    if is_old_default_password(data.password):
+        raise HTTPException(400, "Choose a different password")
     await _assert_can_assign_role(db, current, data.role_id)
     from backend.services.auth import has_perm
     if not await has_perm(db, current, "can_view_payroll"):
@@ -268,8 +270,11 @@ async def reset_password(
     await _assert_can_manage(db, current, emp)
     if len(data.password) < MIN_PASSWORD_LEN:
         raise HTTPException(400, f"Password must be at least {MIN_PASSWORD_LEN} characters")
+    if is_old_default_password(data.password):
+        raise HTTPException(400, "Choose a different password")
     emp.password_hash = await asyncio.to_thread(hash_password, data.password)
     emp.token_version = (emp.token_version or 0) + 1   # sign out existing sessions
+    emp.must_reset_password = False
     await db.commit()
     return {"ok": True}
 

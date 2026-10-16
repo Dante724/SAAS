@@ -11,7 +11,8 @@ from backend.config import settings
 from backend.db.database import get_db
 from backend.models import Employee, Location, Organisation, Role
 from backend.services import tokens as _tok
-from backend.services.auth import create_access_token, get_current_employee, hash_password, verify_password
+from backend.services.auth import (create_access_token, get_current_employee, hash_password,
+                                   is_old_default_password, verify_password)
 from backend.services.notifications import send_direct_email
 from backend.services.ratelimit import client_ip as _ip
 from backend.services.ratelimit import enforce as _rate
@@ -298,6 +299,18 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
         raise HTTPException(status_code=401, detail="Incorrect email or password")
     if not employee.active:
         raise HTTPException(status_code=403, detail="Account disabled")
+    # H1: an account still on the old default password (flagged by migration dp144q1, or simply
+    # signing in with it) gets no session: the password is public, so whoever typed it may not be
+    # the owner. A reset link goes to the account's own email instead.
+    if employee.must_reset_password or is_old_default_password(form.password):
+        if not employee.must_reset_password:
+            employee.must_reset_password = True
+            employee.token_version = (employee.token_version or 0) + 1
+        await _email_reset_link(db, employee, quiet_limit=True)
+        await db.commit()
+        raise HTTPException(status_code=403, detail=(
+            "For your security this password has to be changed. We've emailed you a link to set "
+            "a new one."), headers={"X-Password-Reset-Required": "1"})
 
     # Build 144ce: account-level lifecycle gate. A suspended org or one past its
     # term end date can't sign in — the platform admin controls these dates.
@@ -409,15 +422,27 @@ async def password_forgot(data: ForgotRequest, request: Request, db: AsyncSessio
     _rate("forgot_acct", (data.email or "").strip().lower(), limit=10, window_sec=3600)
     emp = (await db.execute(select(Employee).where(Employee.email == data.email))).scalar_one_or_none()
     if emp and emp.active:
-        await _tok.invalidate_all(db, employee_id=emp.id, kind="reset")
-        raw = await _tok.issue(db, employee_id=emp.id, kind="reset")
-        await db.commit()
-        url = _link(f"/reset-password?token={raw}")
-        await send_direct_email(
-            emp.email, "Reset your RepairOS password",
-            f"Someone asked to reset your password. If it was you, open this link:\n\n{url}\n\n"
-            f"It expires in 1 hour and can be used once. If it wasn't you, ignore this email.")
+        await _email_reset_link(db, emp)
     return {"ok": True, "message": "If that email is registered, a reset link is on its way."}
+
+
+async def _email_reset_link(db, emp, *, quiet_limit: bool = False) -> None:
+    """Issue a fresh one-hour reset token and email it. With quiet_limit (the sign-in path),
+    at most a few emails per hour per account are sent and going over is silent, so repeated
+    sign-in attempts can't be used to flood someone's inbox."""
+    if quiet_limit:
+        try:
+            _rate("reset_mail", emp.id, limit=3, window_sec=3600)
+        except HTTPException:
+            return
+    await _tok.invalidate_all(db, employee_id=emp.id, kind="reset")
+    raw = await _tok.issue(db, employee_id=emp.id, kind="reset")
+    await db.commit()
+    url = _link(f"/reset-password?token={raw}")
+    await send_direct_email(
+        emp.email, "Reset your RepairOS password",
+        f"Someone asked to reset your password. If it was you, open this link:\n\n{url}\n\n"
+        f"It expires in 1 hour and can be used once. If it wasn't you, ignore this email.")
 
 
 @router.post("/password/reset")
@@ -426,12 +451,15 @@ async def password_reset(data: ResetRequest, db: AsyncSession = Depends(get_db))
     existing sessions so a stolen token can't leave a live session behind."""
     if not data.new_password or len(data.new_password) < 8:
         raise HTTPException(400, "Password must be at least 8 characters")
+    if is_old_default_password(data.new_password):
+        raise HTTPException(400, "Choose a different password")
     emp = await _tok.redeem(db, raw=data.token, kind="reset")
     if not emp:
         raise HTTPException(400, "This reset link is invalid or has expired")
     emp.password_hash = await asyncio.to_thread(hash_password, data.new_password)
     emp.token_version = (emp.token_version or 0) + 1   # log out everywhere
     emp.email_verified = True                           # proving email access verifies it
+    emp.must_reset_password = False
     await db.commit()
     return {"ok": True}
 
@@ -496,6 +524,8 @@ async def invite_accept(data: InviteAccept, db: AsyncSession = Depends(get_db)):
     from datetime import datetime as _dt
 
     from backend.models import Invite
+    if is_old_default_password(data.password):
+        raise HTTPException(400, "Choose a different password")
     if not data.password or len(data.password) < 8:
         raise HTTPException(400, "Password must be at least 8 characters")
     inv = (await db.execute(select(Invite).where(

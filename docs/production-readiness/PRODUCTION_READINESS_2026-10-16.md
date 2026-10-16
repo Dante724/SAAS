@@ -40,7 +40,7 @@ Fixed with regression tests (`backend/tests/test_launch_batch1.py`, `test_launch
 | Item | What changed |
 |---|---|
 | B12 coupon → cash | A coupon is capped at what's still owed; a paid order refuses it. "Unlimited" (0) coupons now work at the POS. |
-| B3 pay links | Links the customer already opened are cancelled too, and the Stripe checkout is expired at Stripe. **Square links are not closed yet** (only Square's order id is stored); a late payment is still recorded, as an overpayment. |
+| B3 pay links | Links the customer already opened are cancelled too; the Stripe checkout is expired and the Square payment link deleted at the provider (batch 3 stores Square's link id; links made before that can't be closed). A late payment is still recorded, as an overpayment. |
 | M3 own-jobs limit | Bulk assign / priority / invoice / group invoice skip jobs the person can't see; bulk archive/restore and the job-items routes check it too. |
 | M9 custom reports | Locked to "view reports" (Phase 1). |
 | B10 till close | Cash taken against an invoice joins the open drawer shift; refunds from archiving come out of the drawer count. A shift id from another shop is refused. |
@@ -50,8 +50,9 @@ Fixed with regression tests (`backend/tests/test_launch_batch1.py`, `test_launch
 | P9 GDPR | Erase now destroys intake photos/markups, e-signature images and signer details, photos/files on the subject's jobs and feed, recommendation photos and asset pictures (bytes deleted, shared files kept). Export adds calls and inquiries. PDFs are never stored, so there is nothing to erase there. |
 | M4/M5 webhooks | Unsigned provider webhooks are accepted only when ENVIRONMENT is explicitly development/test; a server that never set it now fails closed. |
 | Test messages | "Send me a sample" needs settings rights (it fills a real customer's job into the message). |
+| H1 old default password (batch 3) | Migration `dp144q1` flags every active account still on `changeme123` and signs it out everywhere. Sign-in with that password, or on a flagged account, gives no session and emails a reset link (at most 3 an hour); the old default can't be set again by reset, invite or an admin. |
 
-Still open from the list below: H3 (permission codes per route, a product decision per code), P6 (make the Postgres CI job required), P3 backups automation, P2/P4 notification outbox, F1/F2/F4 list limits, H1 forced reset for old default passwords, and Square pay-link expiry.
+Still open from the list below: H3 (permission codes per route, a product decision per code), P6 (make the Postgres CI job required), P3 backups automation, P2/P4 notification outbox, F1/F2/F4 list limits. CI can't run at all until GitHub billing is fixed (jobs are refused before they start).
 
 ## Must fix before real customers (no-go items)
 
