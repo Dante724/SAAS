@@ -148,9 +148,9 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
                 asset_type: { half: true, el: E({ l: "Type", k: "asset_type" }) },
                 condition: { half: true, el: E({ l: "Condition", k: "condition", req: "condition" }) },
                 brand: { half: true, el: <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Brand{reqStar(layout, "brand")}</label>
-                  <NameSuggestInput field="brand" value={(a.brand as string) || ""} onChange={(v) => set("brand", v)} className="glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full" /></div> },
+                  <NameSuggestInput field="brand" group={(a.asset_type as string) || undefined} template={(a.template_key as string) || undefined} value={(a.brand as string) || ""} onChange={(v) => set("brand", v)} className="glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full" /></div> },
                 model: { half: true, el: <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Model{reqStar(layout, "model")}</label>
-                  <NameSuggestInput field="model" brand={(a.brand as string) || ""} value={(a.model as string) || ""} onChange={(v) => set("model", v)} className="glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full" /></div> },
+                  <NameSuggestInput field="model" brand={(a.brand as string) || ""} group={(a.asset_type as string) || undefined} template={(a.template_key as string) || undefined} value={(a.model as string) || ""} onChange={(v) => set("model", v)} className="glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full" /></div> },
                 identifiers: { el: <div className="grid grid-cols-2 gap-3">{identifierFields(term.identifier?.allowed, term.identifier?.primary).map((f) =>
                   <div key={f.kind}>{E({ l: f.label, k: f.kind as keyof Asset, mono: true, scan: true, req: "identifiers" })}</div>)}</div> },
                 color: { half: true, el: E({ l: "Color", k: "color", req: "color" }) },

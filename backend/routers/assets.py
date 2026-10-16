@@ -183,14 +183,21 @@ async def create_asset(
 @router.get("/suggest")
 async def suggest_names(
     field: str = "brand", q: str = "", brand: Optional[str] = None,
+    group: Optional[str] = None, template_key: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
     """Brand / model picker options: the shop's own usage first, then its catalog, then the
-    built-in US/CA list (phones, tablets, computers, consoles)."""
+    built-in US/CA list. ``group`` (the asset group, e.g. "Power Tool") and the shop's industry
+    (``template_key``, defaulting to the org's) put the names that fit that group first."""
     if field not in ("brand", "model"):
         raise HTTPException(422, "field must be brand or model")
-    return {"items": await _cat.suggest(db, current.org_id, field, q, brand)}
+    if not template_key:
+        from backend.models import Organisation
+        template_key = (await db.execute(select(Organisation.industry_template).where(
+            Organisation.id == current.org_id))).scalar_one_or_none()
+    return {"items": await _cat.suggest(db, current.org_id, field, q, brand,
+                                        group=group, template_key=template_key)}
 
 
 class IdentifyIn(BaseModel):

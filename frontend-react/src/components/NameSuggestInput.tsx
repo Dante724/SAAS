@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 
 // Brand / model text box with suggestions: what this shop already uses, then the built-in
-// US/CA list (phones, tablets, computers, consoles…). Anything typed is fine — the server snaps
+// US/CA list (phones, tablets, computers, consoles…), the brands that fit the asset `group` first
+// (a Power Tool gets DeWalt / Makita, not Apple). Anything typed is fine — the server snaps
 // it to the canonical spelling ("samsung" → "Samsung") and remembers new names for next time.
 // The list opens on tap (a <datalist> only opens on a second click in Chrome and barely in Safari).
-export default function NameSuggestInput({ field, brand, value, onChange, className, placeholder }: {
-  field: "brand" | "model"; brand?: string; value: string; onChange: (v: string) => void;
+export default function NameSuggestInput({ field, brand, group, template, value, onChange, className, placeholder }: {
+  field: "brand" | "model"; brand?: string; group?: string; template?: string; value: string; onChange: (v: string) => void;
   className?: string; placeholder?: string;
 }) {
   const [items, setItems] = useState<string[]>([]);
@@ -18,10 +19,12 @@ export default function NameSuggestInput({ field, brand, value, onChange, classN
     const t = setTimeout(() => {
       const p = new URLSearchParams({ field, q: value.trim() });
       if (brand) p.set("brand", brand.trim());
+      if (group) p.set("group", group);
+      if (template) p.set("template_key", template);
       api.get<{ items: string[] }>(`/assets/suggest?${p}`).then((r) => { setItems(r.items || []); setHi(-1); }).catch(() => setItems([]));
     }, value.trim() ? 180 : 0);
     return () => clearTimeout(t);
-  }, [field, brand, value, open, needsBrand]);
+  }, [field, brand, group, template, value, open, needsBrand]);
   const shown = items.filter((i) => i.toLowerCase() !== value.trim().toLowerCase()).slice(0, 12);
   const pick = (v: string) => { onChange(v); setOpen(false); };
   return (
