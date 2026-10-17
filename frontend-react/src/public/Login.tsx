@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
-import { ArrowLeft, Eye, EyeOff, Loader2, Wrench } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { ArrowLeft, Eye, EyeOff } from "lucide-react";
+import { AuthShell, Field, FootLink, Notice, Submit, inputCls as input } from "./authUi";
 
 // React sign-in page — replaces the legacy vanilla-JS auth shell.
 // Contract: POST /api/auth/token (form) → { access_token }. With 2-step verification on,
@@ -12,23 +13,6 @@ import { ArrowLeft, Eye, EyeOff, Loader2, Wrench } from "lucide-react";
 // token, so the page is wholly light or wholly dark with the device.
 
 type Step = "email" | "password" | "code";
-
-// Apple-style field: the label sits inside the box and floats up once you type.
-function Field({ id, label, children, right }: { id: string; label: string; children: ReactNode; right?: ReactNode }) {
-  return (
-    <div className="relative">
-      {children}
-      <label htmlFor={id}
-        className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[15px] text-ink-tertiary transition-all duration-150
-          peer-focus:top-[13px] peer-focus:text-[11px] peer-focus:font-medium
-          peer-[:not(:placeholder-shown)]:top-[13px] peer-[:not(:placeholder-shown)]:text-[11px] peer-[:not(:placeholder-shown)]:font-medium">
-        {label}
-      </label>
-      {right}
-    </div>
-  );
-}
-const input = "peer h-[58px] w-full rounded-xl border border-slate-300 bg-white px-4 pb-2 pt-6 text-[16px] text-ink-primary outline-none transition focus:border-primary focus:ring-[3px] focus:ring-primary/20";
 
 export default function Login() {
   const [step, setStep] = useState<Step>("email");
@@ -43,14 +27,8 @@ export default function Login() {
   const codeRef = useRef<HTMLInputElement>(null);
   useEffect(() => { if (step === "password") passRef.current?.focus(); if (step === "code" && !busy) codeRef.current?.focus(); }, [step, busy]);
 
-  // Follow the visitor's device theme, like the rest of the app's two themes.
+  // If already signed in, skip the form. (AuthShell follows the device theme.)
   useEffect(() => {
-    try {
-      const mq = window.matchMedia("(prefers-color-scheme: dark)");
-      const set = () => document.documentElement.classList.toggle("dark", mq.matches);
-      set(); mq.addEventListener("change", set);
-    } catch { /* ignore */ }
-    // if already signed in, skip the form
     try {
       if (localStorage.getItem("ros_tok")) window.location.replace("/");
     } catch { /* ignore */ }
@@ -94,24 +72,12 @@ export default function Login() {
   const title = step === "code" ? "2-step verification" : "Sign in to RepairOS";
   const sub = step === "code" ? "Enter the 6-digit code from your authenticator app, or a recovery code."
     : step === "password" ? "Enter your password to continue." : "Use the email you use for your shop.";
-  const cta = busy ? (step === "code" ? "Checking…" : "Signing in…") : step === "email" ? "Continue" : step === "code" ? "Verify" : "Sign in";
+  const cta = step === "email" ? "Continue" : step === "code" ? "Verify" : "Sign in";
 
   return (
-    <div className="flex min-h-screen flex-col bg-white font-sans text-ink-primary">
-      <header className="flex h-16 items-center px-6 sm:px-10">
-        <a href="/" className="flex items-center gap-2.5" aria-label="RepairOS">
-          <span className="grid h-8 w-8 place-items-center rounded-[10px] bg-primary text-white"><Wrench size={17} strokeWidth={2.2} /></span>
-          <span className="text-[17px] font-semibold tracking-[-.2px]">RepairOS</span>
-        </a>
-      </header>
-
-      <main className="flex flex-1 items-start justify-center px-6 pt-[9vh] sm:pt-[12vh]">
-        <form onSubmit={submit} noValidate className="w-full max-w-[380px]">
-          <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-primary text-white"><Wrench size={28} strokeWidth={2} /></span>
-          <h1 className="mt-6 text-center text-[30px] font-semibold leading-tight tracking-[-.6px]">{title}</h1>
-          <p className="mt-2 text-center text-[15px] text-ink-secondary">{sub}</p>
-
-          <div className="mt-9 space-y-3">
+    <AuthShell title={title} sub={sub}>
+        <form onSubmit={submit} noValidate>
+          <div className="space-y-3">
             {step === "email" && (
               <Field id="login-email" label="Email">
                 <input id="login-email" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)}
@@ -150,12 +116,9 @@ export default function Login() {
             )}
           </div>
 
-          {err && <p role="alert" className="mt-3 px-1 text-[14px] text-rose-600">{err}</p>}
+          <Notice err={err} />
 
-          <button type="submit" disabled={busy}
-            className="mt-6 flex h-[52px] w-full items-center justify-center gap-2 rounded-xl bg-primary text-[16px] font-semibold text-white transition hover:bg-primary-container active:scale-[.995] disabled:opacity-60">
-            {busy && <Loader2 size={18} className="animate-spin" />}{cta}
-          </button>
+          <Submit busy={busy} busyText={step === "code" ? "Checking…" : "Signing in…"}>{cta}</Submit>
 
           {step === "password" && (
             <p className="mt-5 text-center"><a href="/reset-password" className="text-[14px] font-medium text-primary hover:underline">Forgot password?</a></p>
@@ -167,14 +130,9 @@ export default function Login() {
             </button>
           )}
           {step === "email" && (
-            <div className="mt-8 border-t border-slate-200 pt-6 text-center text-[14px] text-ink-secondary">
-              New to RepairOS? <a href="/signup" className="font-medium text-primary hover:underline">Create your shop</a>
-            </div>
+            <FootLink>New to RepairOS? <a href="/signup" className="font-medium text-primary hover:underline">Create your shop</a></FootLink>
           )}
         </form>
-      </main>
-
-      <footer className="px-6 py-6 text-center text-[12px] text-ink-tertiary">© {new Date().getFullYear()} RepairOS</footer>
-    </div>
+    </AuthShell>
   );
 }
