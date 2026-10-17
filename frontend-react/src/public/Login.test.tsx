@@ -35,7 +35,8 @@ describe("Login", () => {
     const u = userEvent.setup();
     render(<Login />);
     await u.type(screen.getByLabelText("Email"), "owner@shop.com");
-    await u.type(screen.getByLabelText("Password"), "pw-12345678");
+    await u.click(screen.getByRole("button", { name: "Continue" }));
+    await u.type(await screen.findByLabelText("Password"), "pw-12345678");
     await u.click(screen.getByRole("button", { name: "Sign in" }));
 
     // Second step: a code box, no error shown for simply needing the code.
@@ -59,15 +60,28 @@ describe("Login", () => {
     expect(window.location.replace).toHaveBeenCalledWith("/");
   });
 
-  it("can go back to the email and password step", async () => {
+  it("can go back to the email step", async () => {
     const u = userEvent.setup();
     render(<Login />);
     await u.type(screen.getByLabelText("Email"), "owner@shop.com");
-    await u.type(screen.getByLabelText("Password"), "pw-12345678");
+    await u.click(screen.getByRole("button", { name: "Continue" }));
+    await u.type(await screen.findByLabelText("Password"), "pw-12345678");
     await u.click(screen.getByRole("button", { name: "Sign in" }));
     await screen.findByLabelText("Code");
     await u.click(screen.getByRole("button", { name: "Use a different account" }));
-    expect(screen.getByLabelText("Password")).toHaveProperty("value", "");
+    expect(screen.getByLabelText("Email")).toHaveProperty("value", "owner@shop.com");
     expect(screen.queryByLabelText("Code")).toBeNull();
+    await u.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByLabelText("Password")).toHaveProperty("value", "");
+  });
+
+  it("asks for a real email before the password step", async () => {
+    const u = userEvent.setup();
+    render(<Login />);
+    await u.type(screen.getByLabelText("Email"), "owner");
+    await u.click(screen.getByRole("button", { name: "Continue" }));
+    expect(screen.getByRole("alert").textContent).toMatch(/email/);
+    expect(screen.queryByLabelText("Password")).toBeNull();
+    expect(sent).toHaveLength(0);
   });
 });

@@ -1,35 +1,47 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { ArrowLeft, Eye, EyeOff, KeyRound, Loader2, Lock, Mail, PackageCheck, ShieldCheck, Smartphone, Wrench } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { ArrowLeft, Eye, EyeOff, Loader2, Wrench } from "lucide-react";
 
 // React sign-in page — replaces the legacy vanilla-JS auth shell.
 // Contract: POST /api/auth/token (form) → { access_token }. With 2-step verification on,
 // the server answers 401 + `X-MFA-Required: 1` until the form also carries the 6-digit code
-// (or a recovery code) in `client_secret`, so we ask for it as a second step.
+// (or a recovery code) in `client_secret`, so we ask for it as a third step.
 // Token is stored as `ros_tok` (same key the app + api client read), then we
 // hand off to the redesign at "/".
-// Theme: every colour on the form side is a theme token (bg-canvas / bg-white / ink / slate), so
-// the page is wholly light or wholly dark with the device. The brand panel is deliberately dark
-// in both themes.
+// Design: email first, then password, then the code (the Apple / Tesla pattern) — one field
+// and one solid button per step, the real app mark, nothing to sell. Every colour is a theme
+// token, so the page is wholly light or wholly dark with the device.
 
-const BRAND = "linear-gradient(135deg,#2c72d9,#6848be)";
-const FEATURES = [
-  { icon: Wrench, title: "Every job in one place", text: "Work orders, estimates and invoices, from intake to pickup." },
-  { icon: PackageCheck, title: "Parts that update the job", text: "When a purchase order arrives, the part goes straight to the job." },
-  { icon: Smartphone, title: "Customers stay in the loop", text: "They approve extras and track repairs from their phone." },
-];
+type Step = "email" | "password" | "code";
+
+// Apple-style field: the label sits inside the box and floats up once you type.
+function Field({ id, label, children, right }: { id: string; label: string; children: ReactNode; right?: ReactNode }) {
+  return (
+    <div className="relative">
+      {children}
+      <label htmlFor={id}
+        className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[15px] text-ink-tertiary transition-all duration-150
+          peer-focus:top-[13px] peer-focus:text-[11px] peer-focus:font-medium
+          peer-[:not(:placeholder-shown)]:top-[13px] peer-[:not(:placeholder-shown)]:text-[11px] peer-[:not(:placeholder-shown)]:font-medium">
+        {label}
+      </label>
+      {right}
+    </div>
+  );
+}
+const input = "peer h-[58px] w-full rounded-xl border border-slate-300 bg-white px-4 pb-2 pt-6 text-[16px] text-ink-primary outline-none transition focus:border-primary focus:ring-[3px] focus:ring-primary/20";
 
 export default function Login() {
+  const [step, setStep] = useState<Step>("email");
   const [email, setEmail] = useState("");
   const [pass, setPass] = useState("");
   const [show, setShow] = useState(false);
   const [caps, setCaps] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [needCode, setNeedCode] = useState(false);
   const [code, setCode] = useState("");
+  const passRef = useRef<HTMLInputElement>(null);
   const codeRef = useRef<HTMLInputElement>(null);
-  // Put the cursor in the code box whenever step two opens (or a code is refused).
-  useEffect(() => { if (needCode && !busy) codeRef.current?.focus(); }, [needCode, busy]);
+  useEffect(() => { if (step === "password") passRef.current?.focus(); if (step === "code" && !busy) codeRef.current?.focus(); }, [step, busy]);
 
   // Follow the visitor's device theme, like the rest of the app's two themes.
   useEffect(() => {
@@ -46,19 +58,23 @@ export default function Login() {
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (!email.trim() || !pass) { setErr("Enter your email and password"); return; }
-    if (needCode && !code.trim()) { setErr("Enter the code from your authenticator app"); return; }
+    if (step === "email") {
+      if (!/^\S+@\S+\.\S+$/.test(email.trim())) { setErr("Enter the email you use for your shop"); return; }
+      setErr(null); setStep("password"); return;
+    }
+    if (!pass) { setErr("Enter your password"); return; }
+    if (step === "code" && !code.trim()) { setErr("Enter the code from your authenticator app"); return; }
     setBusy(true); setErr(null);
     try {
       const fd = new FormData();
       fd.append("username", email.trim());
       fd.append("password", pass);
-      if (needCode) fd.append("client_secret", code.replace(/\s+/g, ""));
+      if (step === "code") fd.append("client_secret", code.replace(/\s+/g, ""));
       const r = await fetch("/api/auth/token", { method: "POST", body: fd });
       const j = await r.json().catch(() => ({}));
       if (r.status === 401 && r.headers.get("X-MFA-Required") === "1") {
-        const retry = needCode;
-        setNeedCode(true); setCode(""); setBusy(false);
+        const retry = step === "code";
+        setStep("code"); setCode(""); setBusy(false);
         setErr(retry ? "That code didn't work. Try the newest code, or a recovery code." : null);
         return;
       }
@@ -72,111 +88,93 @@ export default function Login() {
     }
   }
 
-  function startOver() {
-    setNeedCode(false); setCode(""); setPass(""); setErr(null);
-  }
+  function startOver() { setStep("email"); setCode(""); setPass(""); setErr(null); }
   const capsCheck = (e: KeyboardEvent<HTMLInputElement>) => setCaps(e.getModifierState?.("CapsLock") ?? false);
 
-  const field = "w-full rounded-xl border border-slate-300 bg-white py-3 pl-11 pr-3 text-[15px] text-ink-primary outline-none transition placeholder:text-ink-tertiary focus:border-primary focus:ring-4 focus:ring-primary/15";
+  const title = step === "code" ? "2-step verification" : "Sign in to RepairOS";
+  const sub = step === "code" ? "Enter the 6-digit code from your authenticator app, or a recovery code."
+    : step === "password" ? "Enter your password to continue." : "Use the email you use for your shop.";
+  const cta = busy ? (step === "code" ? "Checking…" : "Signing in…") : step === "email" ? "Continue" : step === "code" ? "Verify" : "Sign in";
 
   return (
-    <div className="min-h-screen bg-canvas font-sans text-ink-primary lg:grid lg:grid-cols-[1.05fr_1fr]">
-      {/* Brand panel (desktop) — dark in both themes on purpose */}
-      <aside className="relative hidden overflow-hidden lg:flex lg:flex-col lg:justify-between p-12 text-white"
-        style={{ background: "radial-gradient(900px 600px at 15% 10%, rgba(44,114,217,.55), transparent 60%), radial-gradient(800px 600px at 90% 90%, rgba(104,72,190,.55), transparent 60%), #0b1020" }}>
-        <div className="pointer-events-none absolute inset-0 opacity-[.07]"
-          style={{ backgroundImage: "linear-gradient(rgba(255,255,255,.6) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.6) 1px, transparent 1px)", backgroundSize: "44px 44px" }} />
-        <div className="relative flex items-center gap-3">
-          <div className="grid h-11 w-11 place-items-center rounded-2xl text-lg font-bold shadow-lg" style={{ background: BRAND }}>R</div>
-          <span className="text-xl font-bold tracking-[-.3px]">RepairOS</span>
-        </div>
-        <div className="relative max-w-md">
-          <h2 className="text-[44px] font-bold leading-[1.05] tracking-[-1.5px]">Run the whole repair.<br /><span className="text-white/60">From one place.</span></h2>
-          <ul className="mt-10 space-y-6">
-            {FEATURES.map(({ icon: Icon, title, text }) => (
-              <li key={title} className="flex gap-4">
-                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[rgba(255,255,255,.1)] ring-1 ring-[rgba(255,255,255,.15)]"><Icon size={19} /></span>
-                <span><span className="block text-[15px] font-semibold">{title}</span><span className="block text-sm text-white/65">{text}</span></span>
-              </li>
-            ))}
-          </ul>
-        </div>
-        <p className="relative text-[13px] text-white/50">For phone, computer, tools, small engine, auto, marine and fleet repair shops.</p>
-      </aside>
+    <div className="flex min-h-screen flex-col bg-white font-sans text-ink-primary">
+      <header className="flex h-16 items-center px-6 sm:px-10">
+        <a href="/" className="flex items-center gap-2.5" aria-label="RepairOS">
+          <span className="grid h-8 w-8 place-items-center rounded-[10px] bg-primary text-white"><Wrench size={17} strokeWidth={2.2} /></span>
+          <span className="text-[17px] font-semibold tracking-[-.2px]">RepairOS</span>
+        </a>
+      </header>
 
-      {/* Form side — follows the device theme */}
-      <main className="grid min-h-screen place-items-center px-5 py-10">
-        <div className="w-full max-w-[420px]">
-          {/* brand header (phones and tablets) */}
-          <div className="mb-8 flex items-center gap-3 lg:hidden">
-            <div className="grid h-11 w-11 place-items-center rounded-2xl text-lg font-bold text-white" style={{ background: BRAND }}>R</div>
-            <div>
-              <div className="text-xl font-bold tracking-[-.3px] text-ink-primary">RepairOS</div>
-              <div className="text-[13px] text-ink-tertiary">Run the whole repair, from one place.</div>
-            </div>
-          </div>
+      <main className="flex flex-1 items-start justify-center px-6 pt-[9vh] sm:pt-[12vh]">
+        <form onSubmit={submit} noValidate className="w-full max-w-[380px]">
+          <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-primary text-white"><Wrench size={28} strokeWidth={2} /></span>
+          <h1 className="mt-6 text-center text-[30px] font-semibold leading-tight tracking-[-.6px]">{title}</h1>
+          <p className="mt-2 text-center text-[15px] text-ink-secondary">{sub}</p>
 
-          <form onSubmit={submit} className="rounded-3xl border border-slate-200 bg-white p-7 shadow-clay-card sm:p-8">
-            {needCode ? (<>
-              <span className="grid h-12 w-12 place-items-center rounded-2xl bg-primary/10 text-primary"><ShieldCheck size={22} /></span>
-              <h1 className="mt-4 text-[22px] font-bold tracking-[-.4px] text-ink-primary">2-step verification</h1>
-              <p className="mt-1.5 text-sm text-ink-secondary">Enter the 6-digit code from your authenticator app, or one of your recovery codes.</p>
-
-              <label htmlFor="login-code" className="mt-6 block text-[13px] font-semibold text-ink-secondary">Code</label>
-              <div className="relative mt-1.5">
-                <KeyRound size={18} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-ink-tertiary" />
-                <input id="login-code" ref={codeRef} inputMode="numeric" autoComplete="one-time-code" value={code}
-                  onChange={(e) => setCode(e.target.value)} maxLength={32}
-                  className={`${field} text-center text-xl font-semibold tracking-[.35em]`} placeholder="123456" />
-              </div>
-            </>) : (<>
-              <h1 className="text-[26px] font-bold tracking-[-.6px] text-ink-primary">Welcome back</h1>
-              <p className="mt-1.5 text-sm text-ink-secondary">Sign in to your shop.</p>
-
-              <label htmlFor="login-email" className="mt-7 block text-[13px] font-semibold text-ink-secondary">Email</label>
-              <div className="relative mt-1.5">
-                <Mail size={18} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-ink-tertiary" />
+          <div className="mt-9 space-y-3">
+            {step === "email" && (
+              <Field id="login-email" label="Email">
                 <input id="login-email" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)}
-                  className={field} placeholder="you@shop.com" autoFocus />
-              </div>
+                  className={input} placeholder=" " autoFocus />
+              </Field>
+            )}
 
-              <div className="mt-4 flex items-baseline justify-between">
-                <label htmlFor="login-password" className="block text-[13px] font-semibold text-ink-secondary">Password</label>
-                <a href="/reset-password" className="text-[13px] font-semibold text-primary hover:underline">Forgot password?</a>
-              </div>
-              <div className="relative mt-1.5">
-                <Lock size={18} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-ink-tertiary" />
-                <input id="login-password" type={show ? "text" : "password"} autoComplete="current-password" value={pass}
-                  onChange={(e) => setPass(e.target.value)} onKeyUp={capsCheck} onKeyDown={capsCheck}
-                  className={`${field} pr-12`} placeholder="Your password" />
-                <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? "Hide password" : "Show password"}
-                  className="absolute right-2 top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-lg text-ink-tertiary hover:bg-slate-100 hover:text-ink-primary">
-                  {show ? <EyeOff size={18} /> : <Eye size={18} />}
+            {step !== "email" && (
+              <div className="flex h-[52px] items-center gap-3 rounded-xl border border-slate-200 px-3">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-slate-100 text-[13px] font-semibold uppercase text-ink-secondary">{email.trim()[0]}</span>
+                <span className="min-w-0 flex-1 truncate text-[15px]">{email.trim()}</span>
+                <button type="button" onClick={startOver} className="text-[14px] font-medium text-primary hover:underline">
+                  {step === "code" ? "Use a different account" : "Change"}
                 </button>
               </div>
-              {caps && <p className="mt-1.5 text-[12px] font-semibold text-amber-600">Caps Lock is on</p>}
+            )}
+
+            {step === "password" && (<>
+              <Field id="login-password" label="Password"
+                right={<button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? "Hide password" : "Show password"}
+                  className="absolute right-2 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-lg text-ink-tertiary hover:text-ink-primary">
+                  {show ? <EyeOff size={19} /> : <Eye size={19} />}</button>}>
+                <input id="login-password" ref={passRef} type={show ? "text" : "password"} autoComplete="current-password" value={pass}
+                  onChange={(e) => setPass(e.target.value)} onKeyUp={capsCheck} onKeyDown={capsCheck}
+                  className={`${input} pr-14`} placeholder=" " />
+              </Field>
+              {caps && <p className="px-1 text-[13px] text-amber-600">Caps Lock is on</p>}
             </>)}
 
-            {err && <div role="alert" className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-[13px] font-semibold text-rose-700">{err}</div>}
-
-            <button type="submit" disabled={busy}
-              className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl py-3 text-[15px] font-semibold text-white shadow-[0_10px_24px_-10px_rgba(60,90,220,.7)] transition hover:brightness-110 active:scale-[.99] disabled:opacity-60"
-              style={{ background: BRAND }}>
-              {busy && <Loader2 size={17} className="animate-spin" />}{busy ? (needCode ? "Checking…" : "Signing in…") : (needCode ? "Verify" : "Sign in")}
-            </button>
-
-            {needCode ? (
-              <button type="button" onClick={startOver} className="mt-5 flex items-center gap-1.5 text-[13px] font-semibold text-ink-secondary hover:text-ink-primary">
-                <ArrowLeft size={15} />Use a different account
-              </button>
-            ) : (
-              <p className="mt-6 text-center text-[13px] text-ink-secondary">New to RepairOS? <a href="/signup" className="font-semibold text-primary hover:underline">Create your shop</a></p>
+            {step === "code" && (
+              <Field id="login-code" label="Code">
+                <input id="login-code" ref={codeRef} inputMode="numeric" autoComplete="one-time-code" value={code}
+                  onChange={(e) => setCode(e.target.value)} maxLength={32}
+                  className={`${input} text-[20px] font-medium tracking-[.3em]`} placeholder=" " />
+              </Field>
             )}
-          </form>
+          </div>
 
-          <p className="mt-6 flex items-center justify-center gap-1.5 text-[12px] text-ink-tertiary"><Lock size={12} />Secure sign-in · 2-step verification supported</p>
-        </div>
+          {err && <p role="alert" className="mt-3 px-1 text-[14px] text-rose-600">{err}</p>}
+
+          <button type="submit" disabled={busy}
+            className="mt-6 flex h-[52px] w-full items-center justify-center gap-2 rounded-xl bg-primary text-[16px] font-semibold text-white transition hover:bg-primary-container active:scale-[.995] disabled:opacity-60">
+            {busy && <Loader2 size={18} className="animate-spin" />}{cta}
+          </button>
+
+          {step === "password" && (
+            <p className="mt-5 text-center"><a href="/reset-password" className="text-[14px] font-medium text-primary hover:underline">Forgot password?</a></p>
+          )}
+          {step === "code" && (
+            <button type="button" onClick={() => { setStep("password"); setErr(null); setCode(""); }}
+              className="mx-auto mt-5 flex items-center gap-1.5 text-[14px] font-medium text-ink-secondary hover:text-ink-primary">
+              <ArrowLeft size={15} />Back
+            </button>
+          )}
+          {step === "email" && (
+            <div className="mt-8 border-t border-slate-200 pt-6 text-center text-[14px] text-ink-secondary">
+              New to RepairOS? <a href="/signup" className="font-medium text-primary hover:underline">Create your shop</a>
+            </div>
+          )}
+        </form>
       </main>
+
+      <footer className="px-6 py-6 text-center text-[12px] text-ink-tertiary">© {new Date().getFullYear()} RepairOS</footer>
     </div>
   );
 }
