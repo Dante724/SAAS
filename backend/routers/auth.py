@@ -11,6 +11,7 @@ from backend.config import settings
 from backend.db.database import get_db
 from backend.models import Employee, Location, Organisation, Role
 from backend.services import tokens as _tok
+from backend.services.audit import record as _audit
 from backend.services.auth import (create_access_token, get_current_employee, hash_password,
                                    is_old_default_password, verify_password)
 from backend.services.notifications import send_direct_email
@@ -296,8 +297,11 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
     if not employee:
         await asyncio.to_thread(verify_password, form.password, _DUMMY_HASH)
     if not employee or not await asyncio.to_thread(verify_password, form.password, employee.password_hash):
+        if employee:   # unknown emails have no org to file the event under
+            await _login_failed(db, employee, "password")
         raise HTTPException(status_code=401, detail="Incorrect email or password")
     if not employee.active:
+        await _login_failed(db, employee, "disabled")
         raise HTTPException(status_code=403, detail="Account disabled")
     # H1: an account still on the old default password (flagged by migration dp144q1, or simply
     # signing in with it) gets no session: the password is public, so whoever typed it may not be
@@ -349,6 +353,7 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
                 ok = True
         if not ok:
             if code:   # a wrong second factor after a correct password: cap guesses per account
+                await _login_failed(db, employee, "mfa_code")
                 _rate("mfa_fail", employee.id, limit=5, window_sec=900)
             raise HTTPException(status_code=401, detail="MFA code required or invalid",
                                 headers={"X-MFA-Required": "1"})
@@ -362,6 +367,11 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
         Organisation.id == employee.org_id))).scalar_one_or_none()
     enroll_needed = bool(org and org.require_mfa) and not employee.mfa_enabled
 
+    await _audit(db, org_id=employee.org_id, actor_id=employee.id, action="auth.login",
+                 entity_type="employee", entity_id=employee.id,
+                 diff={"ip": _ip(request), "mfa": bool(employee.mfa_enabled)})
+    await db.commit()
+
     token = create_access_token({"sub": employee.id, "org_id": employee.org_id, "tv": employee.token_version or 0})
     return TokenResponse(
         access_token=token,
@@ -371,6 +381,26 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
         role=role.name if role else "staff",
         mfa_enrollment_required=enroll_needed,
     )
+
+async def _login_failed(db: AsyncSession, employee: Employee, reason: str) -> None:
+    await _audit(db, org_id=employee.org_id, actor_id=employee.id, action="auth.login_failed",
+                 entity_type="employee", entity_id=employee.id, diff={"reason": reason})
+    await db.commit()
+
+
+@router.post("/logout", status_code=204)
+async def logout(
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Sign out of this device. Tokens are stateless JWTs, so nothing server-side is
+    revoked here: the client drops its token, and we only record the event. Bumping
+    token_version would sign the user out everywhere (that is /logout-all-devices);
+    per-session revoke needs a session table and is left for later."""
+    await _audit(db, org_id=current.org_id, actor_id=current.id, action="auth.logout",
+                 entity_type="employee", entity_id=current.id)
+    await db.commit()
+
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(
@@ -422,6 +452,8 @@ async def password_forgot(data: ForgotRequest, request: Request, db: AsyncSessio
     _rate("forgot_acct", (data.email or "").strip().lower(), limit=10, window_sec=3600)
     emp = (await db.execute(select(Employee).where(Employee.email == data.email))).scalar_one_or_none()
     if emp and emp.active:
+        await _audit(db, org_id=emp.org_id, actor_id=emp.id, action="auth.password_reset_requested",
+                     entity_type="employee", entity_id=emp.id)
         await _email_reset_link(db, emp)
     return {"ok": True, "message": "If that email is registered, a reset link is on its way."}
 
@@ -460,6 +492,8 @@ async def password_reset(data: ResetRequest, db: AsyncSession = Depends(get_db))
     emp.token_version = (emp.token_version or 0) + 1   # log out everywhere
     emp.email_verified = True                           # proving email access verifies it
     emp.must_reset_password = False
+    await _audit(db, org_id=emp.org_id, actor_id=emp.id, action="auth.password_reset",
+                 entity_type="employee", entity_id=emp.id)
     await db.commit()
     return {"ok": True}
 

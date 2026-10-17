@@ -12,7 +12,7 @@
    for the /tech app only: requests from the main app's pages go straight to the network, so
    its data (clients, prices, costs) never lands in a cache that outlives sign-out.
 */
-const VERSION = 'ros-tech-v4';   // v4: caching limited to /tech (activating clears v3's caches)
+const VERSION = 'ros-tech-v5';   // v5: sign-in gains the 2-step code box, demo credentials gone (clears v4's caches)
 const SHELL_CACHE = `shell-${VERSION}`;
 const STATIC_CACHE = `static-${VERSION}`;
 const API_CACHE = `api-${VERSION}`;

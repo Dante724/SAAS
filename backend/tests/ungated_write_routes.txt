@@ -72,6 +72,7 @@ POST /api/assets/scan-resolve [staff]
 POST /api/assets/{asset_id}/transfer [staff]
 # auth
 POST /api/auth/email/resend [staff]
+POST /api/auth/logout [staff]
 POST /api/auth/logout-all-devices [staff]
 POST /api/auth/refresh [staff]
 # bins

@@ -340,7 +340,13 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
     catch (e: any) { setErr(e.message || "Could not disable"); } finally { setBusy(false); }
   }
   const inp = "glass-input w-full px-3 py-2 rounded-lg text-sm font-semibold text-ink-primary";
-  function signOut() {
+  async function signOut() {
+    // Tell the server first (it records the sign-out), then drop the token whatever it answers.
+    let tok = ""; try { tok = localStorage.getItem("ros_tok") || ""; } catch { /* ignore */ }
+    if (tok) {
+      try { await fetch("/api/auth/logout", { method: "POST", headers: { Authorization: `Bearer ${tok}` } }); }
+      catch { /* offline: still sign out here */ }
+    }
     try { localStorage.removeItem("ros_tok"); } catch { /* ignore */ }
     window.location.replace("/login");
   }
