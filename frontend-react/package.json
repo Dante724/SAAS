@@ -15,6 +15,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@zxing/library": "0.21.3",
     "fflate": "0.8.3",
     "lucide-react": "^0.400.0",
     "react": "^18.3.1",

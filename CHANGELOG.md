@@ -1,5 +1,32 @@
 # Changelog
 
+## Tekly Go phase 1a — the phone app at /go
+
+- **New page of the React build, served at `/go/`** (`frontend-react/go/index.html` → `src/go/`). It
+  reuses the web app's theme tokens, Tailwind config, Geist, API client and Me context. Its own
+  `manifest.webmanifest` (shortcuts: Scan, Today, Clock; midnight-sapphire icon) and a service worker
+  scoped to `/go/` (`public/go/sw.js`), served by FastAPI with `Service-Worker-Allowed: /go/`.
+- **Bottom tab bar** Today · Scan (raised) · Clock · More; safe-area insets, ≥44pt targets, dark mode
+  (follows the phone, or pick in More), lucide icons only.
+- **Today is role-aware:** technicians see `/api/tech/dashboard`; front desk and owner see the board
+  (ready for pickup first; owner gets stage counts). The role is inferred and can be overridden in More.
+- **Scan:** camera with native `BarcodeDetector`, else a lazy-loaded pure-JS zxing decoder for iOS
+  (WASM is ruled out by the CSP), plus typed/keyboard-wedge entry → `/api/scan/resolve` → job, part
+  or device screen.
+- **Job screen + status sheet:** the change shows at once and rolls back if refused; 409 gates are
+  explained in plain words. Offline it is queued.
+- **Encrypted offline queue ported to TypeScript** (`src/go/lib/offlineQueue.ts`, same rules as
+  `pwa.js`), except a 403 `network_not_allowed` is **kept** and retried on the next network change,
+  never dropped. Sign-out clears the queue so the next person can't replay it.
+- **iPad:** list on the left, job on the right.
+- **Backend:** the technician dashboard's "today" and "overdue" use the shop's timezone (branch zone,
+  else company zone), not UTC, and an open job scheduled on an earlier day now carries over into Today
+  instead of vanishing. `/api/scan/resolve` also accepts a ticket's tracking-link QR (`…/track/<token>`).
+- **Sign-in** honours a same-site `?next=` (open redirects refused) so Go returns to itself.
+- **/tech fix:** its scan called only the catalogue search, so a work-order label never opened the
+  job. It now uses `/api/scan/resolve` (catalogue search stays as the no-exact-match fallback),
+  escapes scanned text before rendering it, and the worker cache version is bumped so phones get it.
+
 ## phase 4 — Customer status messages: the notification rules are the one source of truth
 
 - **Problem:** two settings disagreed. The status editor's "Text the customer" switch

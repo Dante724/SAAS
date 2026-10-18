@@ -246,21 +246,39 @@
     window.addEventListener('hashchange', stop, { once: true });
     tick();
   }
+  // Scanned text is untrusted (anyone can print a QR), so it is escaped before it goes into HTML.
+  const escHtml = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
   async function lookup(code) {
+    code = (code || '').replace(/[\r\n\t]+/g, '').trim();
     if (!code) return;
     const box = document.getElementById('sc-result');
-    box.innerHTML = `<div class="empty">Looking up “${code}”…</div>`;
-    // QR work orders encode the order public token or number.
+    box.innerHTML = `<div class="empty">Looking up “${escHtml(code)}”…</div>`;
+    // One lookup for every label the shop prints: work-order barcode/number, a ticket's tracking QR,
+    // a part's SKU/barcode, or a device serial/IMEI/VIN (POST /api/scan/resolve). This used to search
+    // the catalogue only, so scanning a work-order label never opened the job.
+    let r = null;
+    try { r = await post('/api/scan/resolve', { code }); } catch (e) {}
+    if (r && r.matched && r.type === 'order') { location.hash = '#/order/' + encodeURIComponent(r.id); return; }
+    if (r && r.matched && r.type === 'asset') { location.hash = '#/device/' + encodeURIComponent(r.id); return; }
+    if (r && r.matched && r.type === 'product') {
+      let p = null;
+      try { p = (await get('/api/catalog/products/' + encodeURIComponent(r.id))).product; } catch (e) {}
+      box.innerHTML = `<div class="sec-h">Inventory match</div><div class="job"><div class="row"><span class="num">${escHtml((p && p.name) || r.label || code)}</span>
+        <span class="st">${p && p.qty_available != null ? escHtml(p.qty_available) + ' in stock' : escHtml((p && (p.sku || p.code)) || '')}</span></div></div>`;
+      return;
+    }
+    // No exact match: offer close catalogue matches (a partial SKU or name).
     let res = null;
     try { res = await get('/api/catalog/products?search=' + encodeURIComponent(code)); } catch (e) {}
     const items = (res && (res.items || res.products)) || [];
     if (items.length) {
-      box.innerHTML = `<div class="sec-h">Inventory match</div>` + items.slice(0, 5).map((p) =>
-        `<div class="job"><div class="row"><span class="num">${p.name || p.code || code}</span>
-          <span class="st">${p.stock != null ? p.stock + ' in stock' : (p.code || '')}</span></div></div>`).join('');
+      box.innerHTML = `<div class="sec-h">Close inventory matches</div>` + items.slice(0, 5).map((p) =>
+        `<div class="job"><div class="row"><span class="num">${escHtml(p.name || p.code || code)}</span>
+          <span class="st">${p.qty_available != null ? escHtml(p.qty_available) + ' in stock' : escHtml(p.code || '')}</span></div></div>`).join('');
     } else {
-      box.innerHTML = `<div class="job"><div class="row"><span class="num">${code}</span><span class="st">No match</span></div>
-        <div class="meta">Scanned. No inventory item found for this code.</div></div>`;
+      box.innerHTML = `<div class="job"><div class="row"><span class="num">${escHtml(code)}</span><span class="st">No match</span></div>
+        <div class="meta">${r ? 'Nothing in this shop uses this code.' : (navigator.onLine ? 'Lookup failed. Try again.' : "You're offline. Scanning needs a connection.")}</div></div>`;
     }
   }
 
