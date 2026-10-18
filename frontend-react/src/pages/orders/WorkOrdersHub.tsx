@@ -15,6 +15,17 @@ import { Gate } from "../../context/Me";
 type Kpis = { new?: number; urgent?: number; overdue?: number; receivables?: number };
 type Status = { id: string; name?: string; key?: string; status_group?: string; color?: string };
 type SavedView = { id: string; name: string; params: any; is_shared?: boolean; mine?: boolean };
+type Facets = { status_counts: Record<string, number>; assignees: { id: string; name: string }[]; open_jobs: number };
+type BoardCard = { id: string; order_number?: string; status?: string; priority?: number; total?: number; client_id?: string | null; client_name?: string | null; device?: string | null; assigned_to_id?: string | null; assigned_to_name?: string | null; scheduled_for?: string | null };
+// Board cards are a slimmer shape than list rows; map them onto Order so one card renderer serves both.
+const cardToOrder = (c: BoardCard): Order => ({
+  id: c.id, order_number: c.order_number, status: c.status, priority: c.priority, total: c.total, is_estimate: false,
+  client: c.client_name ? { id: c.client_id || undefined, name: c.client_name } : null,
+  device: c.device ? { brand: c.device } : null,
+  assigned_to: c.assigned_to_name ? { name: c.assigned_to_name } : null,
+  scheduled_for: c.scheduled_for,
+});
+const WO_PAGE_SIZE = 50;
 
 // Toggleable table columns (checkbox + action columns are always shown)
 const COLS: { key: string; label: string }[] = [
@@ -57,7 +68,11 @@ function pill(status?: string, st?: Status) {
 }
 
 export default function WorkOrdersHub() {
-  const [orders, setOrders] = useState<Order[] | null>(null);
+  const [orders, setOrders] = useState<Order[] | null>(null);   // the current table page, or the board's cards
+  const [total, setTotal] = useState(0);                         // rows matching the filters (server count)
+  const [facets, setFacets] = useState<Facets | null>(null);
+  const [boardCounts, setBoardCounts] = useState<Record<string, number>>({});
+  const [tick, setTick] = useState(0);
   const [flags, setFlags] = useState<Record<string, { stalled: boolean; predicted_ready_at: string | null; over_by_min: number | null }>>({});
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<Order | null>(null);
@@ -65,14 +80,16 @@ export default function WorkOrdersHub() {
   const [statuses, setStatuses] = useState<Status[]>([]);
   const [estStatuses, setEstStatuses] = useState<Status[]>([]);
   const [filter, setFilter] = useState<string | null>(null);   // status key
-  // Multi-facet filter panel (client-side over the loaded set, same as status + text).
+  // Multi-facet filter panel — sent to the server with status + text, so paging stays exact.
   const [fltOpen, setFltOpen] = useState(false);
-  const [fAssignee, setFAssignee] = useState("");              // "" any · "__none" unassigned · else name
+  const [fAssignee, setFAssignee] = useState("");              // "" any · "__none" unassigned · else employee id
   const [fPriority, setFPriority] = useState("");              // "" any · "0"|"1"|"2" · "urgent" = 1 or 2
   const [kpis, setKpis] = useState<Kpis | null>(null);
   const [fScheduled, setFScheduled] = useState<"" | "yes" | "no">("");
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [q, setQ] = useState("");
+  const [dq, setDq] = useState("");   // debounced search text sent to the server
+  useEffect(() => { const t = setTimeout(() => setDq(q.trim()), 300); return () => clearTimeout(t); }, [q]);
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState<"table" | "board" | "scheduler">("table");
   const [woPage, setWoPage] = useState(1);   // table-view pagination
@@ -122,7 +139,9 @@ export default function WorkOrdersHub() {
   function applyView(v: SavedView) {
     const p = v.params || {};
     if (p.q != null) setQ(p.q); setFilter(p.filter ?? null);
-    setFAssignee(p.fAssignee ?? ""); setFPriority(p.fPriority ?? ""); setFScheduled(p.fScheduled ?? "");
+    // Views saved before server paging stored the assignee's name; map it to the id.
+    const a = p.fAssignee ?? "";
+    setFAssignee(a && a !== "__none" ? (facets?.assignees.find((x) => x.id === a || x.name === a)?.id ?? a) : a); setFPriority(p.fPriority ?? ""); setFScheduled(p.fScheduled ?? "");
     if (p.view) setView(p.view);
     if (Array.isArray(p.cols)) { const n = new Set<string>(p.cols); setCols(n); try { localStorage.setItem(COLS_KEY, JSON.stringify([...n])); } catch { /* ignore */ } }
     setViewsOpen(false);
@@ -140,10 +159,48 @@ export default function WorkOrdersHub() {
     try { await api.patch(`/orders/${id}/status`, { status: key, reason: reason || undefined }); } catch { refetch(); }
   }
 
-  function refetch() {
-    api.get<{ items: Order[] }>("/orders?limit=1000").then((r) => setOrders(r.items || [])).catch((e) => setErr(String(e.message || e)));
-    api.get<{ items: Record<string, { stalled: boolean; predicted_ready_at: string | null; over_by_min: number | null }> }>("/orders/timing/flags")
+  // Filters go to the server: the table fetches one page plus facet counts; the board fetches
+  // capped open-order columns. Neither loads the whole shop any more.
+  function filterParams() {
+    const p = new URLSearchParams();
+    if (dq) p.set("search", dq);
+    if (fAssignee) p.set("assigned_to_id", fAssignee);
+    if (fPriority === "urgent") p.set("priority_min", "1"); else if (fPriority) p.set("priority", fPriority);
+    if (fScheduled) p.set("scheduled", fScheduled);
+    return p;
+  }
+  useEffect(() => {
+    if (view === "scheduler") return;
+    let live = true;
+    const p = filterParams();
+    if (view === "board") {
+      p.set("per_column", "50");
+      api.get<{ columns: { cards: BoardCard[] }[]; status_counts?: Record<string, number> }>(`/orders/board?${p}`)
+        .then((r) => { if (!live) return; setOrders(r.columns.flatMap((c) => c.cards || []).map(cardToOrder)); setBoardCounts(r.status_counts || {}); setErr(null); })
+        .catch((e) => live && setErr(String(e.message || e)));
+    } else {
+      if (filter) p.set("status", filter);
+      p.set("skip", String((woPage - 1) * WO_PAGE_SIZE)); p.set("limit", String(WO_PAGE_SIZE)); p.set("facets", "true");
+      api.get<{ items: Order[]; total: number } & Partial<Facets>>(`/orders?${p}`)
+        .then((r) => {
+          if (!live) return;
+          setOrders(r.items || []); setTotal(r.total || 0); setErr(null);
+          setFacets({ status_counts: r.status_counts || {}, assignees: r.assignees || [], open_jobs: r.open_jobs ?? 0 });
+        })
+        .catch((e) => live && setErr(String(e.message || e)));
+    }
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, woPage, dq, filter, fAssignee, fPriority, fScheduled, tick]);
+  // Stall badges only for the rows on screen (the endpoint otherwise walks every open order).
+  const flagIds = view === "table" ? (orders || []).map((o) => o.id).join(",") : "";
+  useEffect(() => {
+    if (!flagIds) { setFlags({}); return; }
+    api.get<{ items: Record<string, { stalled: boolean; predicted_ready_at: string | null; over_by_min: number | null }> }>(`/orders/timing/flags?ids=${encodeURIComponent(flagIds)}`)
       .then((r) => setFlags(r.items || {})).catch(() => setFlags({}));
+  }, [flagIds]);
+  function refetch() {
+    setTick((t) => t + 1);
     // Same numbers as the Home dashboard (one server-side definition of urgent/overdue).
     api.get<{ kpis?: Kpis }>("/reports/company-dashboard").then((r) => setKpis(r.kpis || {})).catch(() => setKpis(null));
   }
@@ -172,28 +229,24 @@ export default function WorkOrdersHub() {
 
   const norm = (s?: string) => (s || "").toLowerCase().replace(/\s+/g, "_");
   const all = orders || [];
-  const rows = all.filter((o) => (!filter || norm(o.status) === filter) &&
-    (!q || [o.order_number, o.client?.name, deviceName(o.device)].some((v) => (v || "").toLowerCase().includes(q.toLowerCase()))) &&
-    (!fAssignee || (fAssignee === "__none" ? !o.assigned_to?.name : o.assigned_to?.name === fAssignee)) &&
-    (!fPriority || (fPriority === "urgent" ? (o.priority ?? 0) >= 1 : String(o.priority ?? 0) === fPriority)) &&
-    (!fScheduled || (fScheduled === "yes" ? !!o.scheduled_for : !o.scheduled_for)));
-  const closedKeys = new Set(statuses.filter((st) => ["closed", "dropped"].includes(st.status_group || "")).map((st) => norm(st.key || st.name)));
-  const incomplete = all.filter((o) => !o.is_estimate && !closedKeys.has(norm(o.status))).length;
+  // Rows are already filtered by the server; the board's status chip narrows its cards locally.
+  const rows = view === "board" && filter ? all.filter((o) => norm(o.status) === filter) : all;
   const dash = (n?: number) => (kpis && n != null ? String(n) : "—");
   const kpiStats: SummaryStat[] = [
-    { label: "Open jobs", value: orders ? String(incomplete) : "—", onClick: () => { setFilter(null); setFPriority(""); }, active: !filter && !fPriority },
+    { label: "Open jobs", value: facets ? String(facets.open_jobs) : "—", onClick: () => { setFilter(null); setFPriority(""); }, active: !filter && !fPriority },
     { label: "Waiting to start", value: dash(kpis?.new), onClick: () => setFilter(filter === "new" ? null : "new"), active: filter === "new" },
     { label: "Urgent", value: dash(kpis?.urgent), onClick: () => setFPriority(fPriority === "urgent" ? "" : "urgent"), active: fPriority === "urgent" },
     { label: "Late", value: dash(kpis?.overdue), tone: "bad", zero: !kpis?.overdue },
     { label: "To collect", value: kpis?.receivables != null ? money(kpis.receivables) : "—" },
   ];
-  const assignees = [...new Set(all.map((o) => o.assigned_to?.name).filter(Boolean) as string[])].sort();
+  const assignees = facets?.assignees || [];
   const activeFacets = (fAssignee ? 1 : 0) + (fPriority ? 1 : 0) + (fScheduled ? 1 : 0);
-  const countFor = (key: string) => all.filter((o) => norm(o.status) === key).length;
+  const statusCounts = view === "board" ? boardCounts : (facets?.status_counts || {});
+  const countFor = (key: string) => Object.entries(statusCounts).reduce((n, [k, v]) => n + (norm(k) === key ? v : 0), 0);
+  const countAll = Object.values(statusCounts).reduce((n, v) => n + v, 0);
   // Numbered pagination — table view only (board = kanban columns, scheduler = calendar).
-  const WO_PAGE_SIZE = 50;
-  const woPages = Math.max(1, Math.ceil(rows.length / WO_PAGE_SIZE));
-  const pageRows = rows.slice((Math.min(woPage, woPages) - 1) * WO_PAGE_SIZE, Math.min(woPage, woPages) * WO_PAGE_SIZE);
+  const woPages = Math.max(1, Math.ceil(total / WO_PAGE_SIZE));
+  const pageRows = rows;
   useEffect(() => { setWoPage(1); }, [q, filter, view, fAssignee, fPriority, fScheduled]);  // reset to page 1 when the filtered set or view changes
 
   function toggle(id: string) { setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); }
@@ -248,7 +301,7 @@ export default function WorkOrdersHub() {
                   <div className="absolute left-0 top-9 z-30 w-64 bg-white border border-slate-200 rounded-xl shadow-drawer p-3 space-y-3" onMouseLeave={() => setFltOpen(false)}>
                     <div className="flex items-center justify-between"><span className="text-[11px] font-bold text-ink-tertiary ">Filter work orders</span>{activeFacets ? <button onClick={() => { setFAssignee(""); setFPriority(""); setFScheduled(""); }} className="text-[11px] font-semibold text-primary">Clear</button> : null}</div>
                     <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Assignee</span>
-                      <select value={fAssignee} onChange={(e) => setFAssignee(e.target.value)} className="w-full text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-medium"><option value="">Any</option><option value="__none">Unassigned</option>{assignees.map((a) => <option key={a} value={a}>{a}</option>)}</select></label>
+                      <select value={fAssignee} onChange={(e) => setFAssignee(e.target.value)} className="w-full text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-medium"><option value="">Any</option><option value="__none">Unassigned</option>{assignees.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
                     <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Priority</span>
                       <select value={fPriority} onChange={(e) => setFPriority(e.target.value)} className="w-full text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-medium"><option value="">Any</option><option value="0">Normal</option><option value="1">High</option><option value="2">Urgent</option><option value="urgent">High or urgent</option></select></label>
                     <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Scheduling</span>
@@ -297,7 +350,7 @@ export default function WorkOrdersHub() {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 pt-3.5 text-xs border-t border-slate-100">
-            <button onClick={() => setFilter(null)} className={!filter ? "px-3.5 py-1.5 rounded-full font-semibold bg-primary text-white text-xs shadow-clay-sm" : "px-3.5 py-1.5 rounded-full font-medium bg-slate-50 text-ink-secondary ring-1 ring-inset ring-slate-200 hover:bg-white hover:text-ink-primary hover:ring-slate-300 text-xs transition-colors"}>All ({all.length})</button>
+            <button onClick={() => setFilter(null)} className={!filter ? "px-3.5 py-1.5 rounded-full font-semibold bg-primary text-white text-xs shadow-clay-sm" : "px-3.5 py-1.5 rounded-full font-medium bg-slate-50 text-ink-secondary ring-1 ring-inset ring-slate-200 hover:bg-white hover:text-ink-primary hover:ring-slate-300 text-xs transition-colors"}>All ({countAll})</button>
             {statuses.map((s) => { const k = s.key || norm(s.name); const n = countFor(k); return (
               <button key={s.id} onClick={() => setFilter(k)} className={filter === k ? "px-3.5 py-1.5 rounded-full font-semibold bg-primary text-white text-xs shadow-clay-sm" : "px-3.5 py-1.5 rounded-full font-medium bg-slate-50 text-ink-secondary ring-1 ring-inset ring-slate-200 hover:bg-white hover:text-ink-primary hover:ring-slate-300 text-xs transition-colors"}>{s.name} ({n})</button>
             ); })}
@@ -358,7 +411,7 @@ export default function WorkOrdersHub() {
               ))}
             </tbody>
           </table>
-          {orders && rows.length > 0 && <Pager total={rows.length} page={Math.min(woPage, woPages)} pageSize={WO_PAGE_SIZE} onPage={setWoPage} noun="work orders" />}
+          {orders && rows.length > 0 && <Pager total={total} page={Math.min(woPage, woPages)} pageSize={WO_PAGE_SIZE} onPage={setWoPage} noun="work orders" />}
         </div>
         )}
 
@@ -368,6 +421,7 @@ export default function WorkOrdersHub() {
             {statuses.map((s) => {
               const key = s.key || norm(s.name);
               const cards = rows.filter((o) => norm(o.status) === key);
+              const n = countFor(key);   // true count; the board only carries the newest open cards
               const [cls, dot] = PILL[key] || ["bg-slate-100 text-slate-700", "bg-slate-500"];
               return (
                 <div key={s.id}
@@ -376,7 +430,7 @@ export default function WorkOrdersHub() {
                   className="w-64 flex-shrink-0 bg-slate-50/70 rounded-2xl border border-slate-200/70 flex flex-col max-h-[calc(100vh-320px)]">
                   <div className="px-3 py-2.5 flex items-center justify-between border-b border-slate-200/70">
                     <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 ${cls}`}><span className={`w-1.5 h-1.5 rounded-full ${dot}`} />{s.name}</span>
-                    <span className="text-[11px] font-bold text-ink-tertiary">{cards.length}</span>
+                    <span className="text-[11px] font-bold text-ink-tertiary">{n}</span>
                   </div>
                   <div className="p-2 space-y-2 overflow-y-auto">
                     {cards.length === 0 && <div className="text-[11px] text-ink-tertiary px-2 py-4 text-center">Drop here</div>}
@@ -395,6 +449,7 @@ export default function WorkOrdersHub() {
                         </div>
                       </div>
                     ))}
+                    {cards.length > 0 && cards.length < n && <div className="text-[11px] text-ink-tertiary px-2 py-1 text-center">Newest {cards.length} of {n}. The table shows them all.</div>}
                   </div>
                 </div>
               );

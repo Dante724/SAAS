@@ -302,6 +302,35 @@ class AssetUpdate(BaseModel):
     watch_out: Optional[str] = None    # Build 144ag: prominent per-asset warning
 
 
+@router.get("/{asset_id}/image")
+async def get_asset_image(
+    asset_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """The asset photo as an image, so lists and the board can reference it by URL instead
+    of inlining base64 on every row."""
+    import base64
+    import binascii
+
+    from fastapi import Response
+
+    from backend.routers.media import safe_media_response
+    data = (await db.execute(select(Device.image_data).where(
+        Device.id == asset_id, Device.org_id == current.org_id))).scalar_one_or_none()
+    if not data or not data.startswith("data:") or "," not in data:
+        raise HTTPException(404, "No photo")
+    head, b64 = data[5:].split(",", 1)
+    mime = head.split(";", 1)[0] or "application/octet-stream"
+    try:
+        raw = base64.b64decode(b64, validate=False) if ";base64" in head else b64.encode()
+    except (binascii.Error, ValueError):
+        raise HTTPException(404, "No photo")
+    kw = safe_media_response(raw, mime, "asset")
+    kw["headers"]["Cache-Control"] = "private, max-age=300"
+    return Response(content=raw, **kw)
+
+
 @router.put("/{asset_id}")
 async def update_asset(
     asset_id: str,
