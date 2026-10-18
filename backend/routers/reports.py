@@ -11,12 +11,42 @@ from backend.services.auth import get_current_employee, require_perm
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
+# Short per-org cache for the dashboard tiles: every reports visit (and every tab) used to
+# re-run all of these aggregates. Shop-wide numbers, the same for everyone allowed to see
+# them, so a few seconds of staleness is harmless. In-process; bounded.
+_DASH_TTL_S = 30
+_dash_cache: dict = {}   # org_id -> (expires_at, payload)
+
+
+def low_stock_count_query(org_id: str):
+    """Parts at or under their minimum, counted in the database: one aggregate instead of
+    loading every part and every stock row into Python."""
+    on_hand = (select(StockLevel.part_id, func.sum(StockLevel.qty_available).label("qty"))
+               .join(Part, Part.id == StockLevel.part_id).where(Part.org_id == org_id)
+               .group_by(StockLevel.part_id).subquery())
+    return (select(func.count()).select_from(Part)
+            .outerjoin(on_hand, on_hand.c.part_id == Part.id)
+            .where(Part.org_id == org_id, func.coalesce(on_hand.c.qty, 0) <= Part.min_stock))
+
+
 @router.get("/dashboard")
 async def dashboard(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_reports")),
 ):
-    oid = current.org_id
+    import time
+    now = time.monotonic()
+    hit = _dash_cache.get(current.org_id)
+    if hit and hit[0] > now:
+        return hit[1]
+    out = await _dashboard(db, current.org_id)
+    if len(_dash_cache) > 5000:
+        _dash_cache.clear()
+    _dash_cache[current.org_id] = (now + _DASH_TTL_S, out)
+    return out
+
+
+async def _dashboard(db, oid: str) -> dict:
 
     total_orders = (await db.execute(
         select(func.count()).select_from(Order).where(Order.org_id == oid)
@@ -61,16 +91,7 @@ async def dashboard(
     )
     by_status = {row[0]: row[1] for row in status_result.all()}
 
-    # Low stock count
-    all_parts = (await db.execute(select(Part).where(Part.org_id == oid))).scalars().all()
-    all_stock = (await db.execute(
-        select(StockLevel).where(StockLevel.part_id.in_([p.id for p in all_parts]))
-    )).scalars().all()
-    stock_by_part = {}
-    for s in all_stock:
-        stock_by_part.setdefault(s.part_id, 0)
-        stock_by_part[s.part_id] += s.qty_available
-    low_stock_count = sum(1 for p in all_parts if stock_by_part.get(p.id, 0) <= p.min_stock)
+    low_stock_count = (await db.execute(low_stock_count_query(oid))).scalar() or 0
 
     return {
         "stats": {
