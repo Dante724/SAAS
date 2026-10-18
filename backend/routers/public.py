@@ -800,8 +800,8 @@ async def track_new_request(token: str, data: NewRequestIn, request: Request, db
     from backend.routers.feed import log_system_event
     from backend.services.messaging_rule import messaging_state
     from backend.services.ratelimit import client_ip as _ip
-    from backend.services.ratelimit import enforce as _rate
-    _rate("track_new_req", f"{_ip(request)}:{token}", limit=3, window_sec=3600)
+    from backend.services.ratelimit import aenforce as _rate
+    await _rate("track_new_req", f"{_ip(request)}:{token}", limit=3, window_sec=3600)
     order = await _load(db, token)
     st = await messaging_state(db, order, await _org(db, order.org_id))
     if st["reason"] not in ("status", "expired"):
@@ -1212,8 +1212,8 @@ class PublicAppointmentIn(BaseModel):
 @router.post("/appointment/{slug}", status_code=201)
 async def create_public_appointment(slug: str, data: PublicAppointmentIn, request: Request,
                                 db: AsyncSession = Depends(get_db)):
-    from backend.services.ratelimit import enforce as _rate, client_ip as _ip
-    _rate("book", f"{_ip(request)}:{slug}", limit=8, window_sec=300)   # Build 144bz: anti-spam
+    from backend.services.ratelimit import aenforce as _rate, client_ip as _ip
+    await _rate("book", f"{_ip(request)}:{slug}", limit=8, window_sec=300)   # Build 144bz: anti-spam
     org = await _org_by_slug(db, slug)
     if not org.appointment_enabled:
         raise HTTPException(404, "Online appointment is disabled")
@@ -1334,8 +1334,8 @@ class AppointmentRequestIn(BaseModel):
 @router.post("/appointment/{slug}/request", status_code=201)
 async def appointment_request(slug: str, data: AppointmentRequestIn, request: Request,
                           db: AsyncSession = Depends(get_db)):
-    from backend.services.ratelimit import enforce as _rate, client_ip as _ip
-    _rate("book_req", f"{_ip(request)}:{slug}", limit=6, window_sec=300)
+    from backend.services.ratelimit import aenforce as _rate, client_ip as _ip
+    await _rate("book_req", f"{_ip(request)}:{slug}", limit=6, window_sec=300)
     org = await _org_by_slug(db, slug)
     if not org.appointment_enabled:
         raise HTTPException(404, "Online appointment is disabled")

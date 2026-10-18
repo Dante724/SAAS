@@ -16,7 +16,7 @@ from backend.services.auth import (create_access_token, get_current_employee, ha
                                    is_old_default_password, verify_password)
 from backend.services.notifications import send_direct_email
 from backend.services.ratelimit import client_ip as _ip
-from backend.services.ratelimit import enforce as _rate
+from backend.services.ratelimit import aenforce as _rate
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -290,8 +290,8 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
     # Build 144bz: throttle brute-force — 10 attempts / 5 min per IP+username, plus a per-account
     # ceiling that no choice of source IP can reset (distributed guessing).
     _user = (form.username or "").strip().lower()
-    _rate("login", f"{_ip(request)}:{_user}", limit=10, window_sec=300)
-    _rate("login_acct", _user, limit=30, window_sec=900)
+    await _rate("login", f"{_ip(request)}:{_user}", limit=10, window_sec=300)
+    await _rate("login_acct", _user, limit=30, window_sec=900)
     result = await db.execute(select(Employee).where(Employee.email == form.username))
     employee = result.scalar_one_or_none()
     # Unknown emails pay the same bcrypt cost as wrong passwords, so response time doesn't
@@ -356,7 +356,7 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
         if not ok:
             if code:   # a wrong second factor after a correct password: cap guesses per account
                 await _login_failed(db, employee, "mfa_code")
-                _rate("mfa_fail", employee.id, limit=5, window_sec=900)
+                await _rate("mfa_fail", employee.id, limit=5, window_sec=900)
             raise HTTPException(status_code=401, detail="MFA code required or invalid",
                                 headers={"X-MFA-Required": "1"})
 
@@ -450,8 +450,8 @@ async def logout_all_devices(
 async def password_forgot(data: ForgotRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """Start a reset. Always returns 200 with the same message whether or not the
     email exists — never leak which addresses are registered. Rate-limited."""
-    _rate("forgot", f"{_ip(request)}:{(data.email or '').lower()}", limit=5, window_sec=900)
-    _rate("forgot_acct", (data.email or "").strip().lower(), limit=10, window_sec=3600)
+    await _rate("forgot", f"{_ip(request)}:{(data.email or '').lower()}", limit=5, window_sec=900)
+    await _rate("forgot_acct", (data.email or "").strip().lower(), limit=10, window_sec=3600)
     emp = (await db.execute(select(Employee).where(Employee.email == data.email))).scalar_one_or_none()
     if emp and emp.active:
         await _audit(db, org_id=emp.org_id, actor_id=emp.id, action="auth.password_reset_requested",
@@ -466,7 +466,7 @@ async def _email_reset_link(db, emp, *, quiet_limit: bool = False) -> None:
     sign-in attempts can't be used to flood someone's inbox."""
     if quiet_limit:
         try:
-            _rate("reset_mail", emp.id, limit=3, window_sec=3600)
+            await _rate("reset_mail", emp.id, limit=3, window_sec=3600)
         except HTTPException:
             return
     await _tok.invalidate_all(db, employee_id=emp.id, kind="reset")

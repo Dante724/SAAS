@@ -22,7 +22,7 @@ from backend.services.platform_auth import (
     get_current_platform_admin,
 )
 from backend.services.ratelimit import client_ip as _ip
-from backend.services.ratelimit import enforce as _rate
+from backend.services.ratelimit import aenforce as _rate
 
 router = APIRouter(prefix="/api/admin", tags=["platform-admin"])
 
@@ -63,8 +63,8 @@ class AdminLogin(BaseModel):
 
 @router.post("/login")
 async def admin_login(data: AdminLogin, request: Request, db: AsyncSession = Depends(get_db)):
-    _rate("admin_login", f"{_ip(request)}:{(data.email or '').lower()}", limit=10, window_sec=300)
-    _rate("admin_login_acct", (data.email or "").strip().lower(), limit=20, window_sec=900)
+    await _rate("admin_login", f"{_ip(request)}:{(data.email or '').lower()}", limit=10, window_sec=300)
+    await _rate("admin_login_acct", (data.email or "").strip().lower(), limit=20, window_sec=900)
     admin = (await db.execute(select(PlatformAdmin).where(
         PlatformAdmin.email == (data.email or "").lower()))).scalar_one_or_none()
     if not admin or not admin.active or not await asyncio.to_thread(verify_password, data.password, admin.password_hash):
