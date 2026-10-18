@@ -28,6 +28,7 @@ import {
   CircleDollarSign, Percent, ShieldAlert, Globe, Gift, RotateCcw, SearchCheck, VideoOff,
   ShieldCheck, Target, EyeOff, Car, Sailboat, Bike, Laptop, Cog, Upload,
   ShoppingBag, Split,
+  LogOut,
 } from "lucide-react";
 
 // Map the old Material-Symbols ligature names to bundled Lucide icons (no web font,
@@ -71,7 +72,7 @@ const ICONS: Record<string, any> = {
   print: Printer, save: Save, send: Send, campaign: Send, smartphone: Smartphone,
   photo_camera: Camera, add_a_photo: Camera, image: ImageIcon,
   barcode: Barcode, qr_code_scanner: QrCode, scan: ScanLine,
-  dashboard: LayoutDashboard, light_mode: Sun, dark_mode: Moon, language: Languages,
+  dashboard: LayoutDashboard, light_mode: Sun, dark_mode: Moon, language: Languages, logout: LogOut,
   // 144hx — document editor icons (were falling back to Circle)
   edit: Pencil, visibility: Eye, directions_car: Car, sailing: Sailboat, pedal_bike: Bike, laptop: Laptop, settings_suggest: Cog, upload: Upload, visibility_off: EyeOff, data_object: Braces, expand_less: ChevronUp,
   format_bold: Bold, format_italic: Italic, format_underlined: Underline,
@@ -233,15 +234,6 @@ export default function Shell({ title, children }: { title: string; children: Re
               {!railCollapsed && <span>{t("Collapse")}</span>}
             </button>
           </div>
-          <div className="p-3 border-t border-slate-200/80 bg-slate-50/50">
-            <div className={`flex items-center gap-2 px-1 ${railCollapsed ? "justify-center" : ""}`} title={railCollapsed ? (me?.name || "") : undefined}>
-              <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center text-xs ring-2 ring-white shadow-sm shrink-0">{initials}</div>
-              {!railCollapsed && <>
-                <div className="flex-1 min-w-0"><p className="text-xs font-bold text-ink-primary truncate">{me?.name || "—"}</p><p className="text-[11px] text-ink-tertiary truncate">{me?.role || me?.email || ""}</p></div>
-                <M n="more_vert" c="text-ink-tertiary text-sm cursor-pointer hover:text-ink-primary" />
-              </>}
-            </div>
-          </div>
         </aside>
 
         {/* MAIN */}
@@ -281,6 +273,10 @@ export default function Shell({ title, children }: { title: string; children: Re
                         <span className="flex items-center gap-2.5"><M n="lock" c="text-base" />{t("Security & two-factor")}</span>
                         {me?.mfa_required && !me?.mfa_enabled && <span className="w-2 h-2 rounded-full bg-amber-400" />}
                       </button>
+                      <div className="my-1 border-t border-slate-100" />
+                      <button onClick={() => { setAvatarOpen(false); signOut(); }} className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-ink-secondary hover:bg-slate-100 hover:text-ink-primary">
+                        <M n="logout" c="text-base" />{t("Sign out")}
+                      </button>
                     </div>
                   </>
                 )}
@@ -314,6 +310,17 @@ function QrSvg({ data }: { data: string }) {
   return <div className="w-44 h-44 bg-white rounded-xl border border-slate-200 p-2 flex items-center justify-center [&>svg]:w-full [&>svg]:h-full" dangerouslySetInnerHTML={{ __html: svg || "" }} />;
 }
 
+// Sign out: tell the server first (it records the sign-out), then drop the token whatever it answers.
+async function signOut() {
+  let tok = ""; try { tok = localStorage.getItem("ros_tok") || ""; } catch { /* ignore */ }
+  if (tok) {
+    try { await fetch("/api/auth/logout", { method: "POST", headers: { Authorization: `Bearer ${tok}` } }); }
+    catch { /* offline: still sign out here */ }
+  }
+  try { localStorage.removeItem("ros_tok"); } catch { /* ignore */ }
+  window.location.replace("/login");
+}
+
 // Two-factor enrollment / management. Reached from the top-bar avatar and the org-required banner.
 function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; onClose: () => void; onChanged: () => void; forced?: boolean }) {
   const [enabled, setEnabled] = useState<boolean>(!!me?.mfa_enabled);
@@ -341,16 +348,6 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
     catch (e: any) { setErr(e.message || "Could not disable"); } finally { setBusy(false); }
   }
   const inp = "glass-input w-full px-3 py-2 rounded-lg text-sm font-semibold text-ink-primary";
-  async function signOut() {
-    // Tell the server first (it records the sign-out), then drop the token whatever it answers.
-    let tok = ""; try { tok = localStorage.getItem("ros_tok") || ""; } catch { /* ignore */ }
-    if (tok) {
-      try { await fetch("/api/auth/logout", { method: "POST", headers: { Authorization: `Bearer ${tok}` } }); }
-      catch { /* offline: still sign out here */ }
-    }
-    try { localStorage.removeItem("ros_tok"); } catch { /* ignore */ }
-    window.location.replace("/login");
-  }
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={forced ? undefined : onClose} />
