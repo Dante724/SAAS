@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from backend.core.jobs import job_runner
 
-log = logging.getLogger("repairos.jobs")
+log = logging.getLogger("tekly.jobs")
 
 _MAX_ATTEMPTS = 5
 

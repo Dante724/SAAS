@@ -317,7 +317,7 @@ async def _query(conn: QboConnection, sql: str) -> list[dict]:
 
 async def pull(db: AsyncSession, org_id: str, entity_type: str) -> dict:
     """Build 144ag — two-way: import existing QBO customers/items and link them to
-    RepairOS records by name/email, so future pushes *update* rather than duplicate.
+    Tekly records by name/email, so future pushes *update* rather than duplicate.
     Never creates local records; only fills the mapping table. Gated + best-effort.
     """
     from backend.models import Client, Part

@@ -1070,7 +1070,7 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
   const ecomN = data.ecom?.length || 0;
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const copyWidget = async () => {
-    const snip = `<div id="repairos-status"></div>\n<script src="${origin}/api/public/widget.js" data-api="${origin}"></script>`;
+    const snip = `<div id="tekly-status"></div>\n<script src="${origin}/api/public/widget.js" data-api="${origin}"></script>`;
     try { navigator.clipboard.writeText(snip); alertDialog("Website status-widget embed snippet copied to clipboard."); }
     catch { await promptDialog("Copy the embed snippet:", { defaultValue: snip }); }
   };
@@ -1109,7 +1109,7 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
         badge: ecomN ? { text: `${ecomN} store(s)`, tone: "on" } : { text: "Not connected", tone: "off" },
         action: { label: "Manage stores", onClick: () => goSection("ecommerce") } } ] },
     { group: "Automation & developer", cards: [
-      { name: "Zapier / Make / n8n", desc: "Trigger thousands of apps from RepairOS events — no code.",
+      { name: "Zapier / Make / n8n", desc: "Trigger thousands of apps from Tekly events — no code.",
         badge: { text: "Available", tone: "on" }, hint: "Point them at your Webhooks (below)" },
       { name: "Public REST API", desc: "Build custom integrations against orders, contacts, inventory & more.",
         badge: { text: "Available", tone: "on" }, hint: "Create an API key (below)" },
@@ -1123,7 +1123,7 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
       <div className="px-5 pt-4 pb-1">
         <h3 className="text-sm font-bold text-ink-primary">Integrations</h3>
-        <p className="text-[12px] text-ink-tertiary mt-0.5">Connect RepairOS to the tools you already use. Credential-gated connectors go live the moment their keys are set on the server.</p>
+        <p className="text-[12px] text-ink-tertiary mt-0.5">Connect Tekly to the tools you already use. Credential-gated connectors go live the moment their keys are set on the server.</p>
       </div>
       <div className="p-4 space-y-5">
         {groups.map((g) => (

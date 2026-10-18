@@ -137,13 +137,17 @@ async def _attempt(delivery, url: str, secret: str, body: str) -> None:
         delivery.status = "failed"
         delivery.error = "Blocked: URL does not resolve to a public address"
         return
+    event_name = json.loads(body).get("event", "")
     try:
         # follow_redirects=False: a public endpoint must not bounce us to an internal one.
         async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
             resp = await client.post(target, content=body, extensions=extensions, headers={
                 **host_header,
                 "Content-Type": "application/json",
-                "X-RepairOS-Event": json.loads(body).get("event", ""),
+                "X-Tekly-Event": event_name,
+                "X-Tekly-Signature": f"sha256={signature}",
+                # Legacy names, kept so receivers built before the rename keep verifying.
+                "X-RepairOS-Event": event_name,
                 "X-RepairOS-Signature": f"sha256={signature}",
             })
         delivery.response_code = resp.status_code

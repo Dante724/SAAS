@@ -1,4 +1,4 @@
-# RepairOS: go/no-go, 16 Oct 2026
+# Tekly: go/no-go, 16 Oct 2026
 
 Branch `security/phase-4`: 104+ commits ahead of `main`, none of it pushed. Everything here
 was checked locally for free; no paid CI was used.

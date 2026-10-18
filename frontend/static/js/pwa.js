@@ -1,4 +1,4 @@
-/* RepairOS PWA runtime: SW registration + update handling, install prompt,
+/* Tekly PWA runtime: SW registration + update handling, install prompt,
    connectivity, and an encrypted offline mutation queue with auto-sync.
    Exposes window.RosPWA. Depends on nothing; core.js reads Auth.token. */
 (function () {

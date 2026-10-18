@@ -69,7 +69,7 @@ export default function Login() {
   function startOver() { setStep("email"); setCode(""); setPass(""); setErr(null); }
   const capsCheck = (e: KeyboardEvent<HTMLInputElement>) => setCaps(e.getModifierState?.("CapsLock") ?? false);
 
-  const title = step === "code" ? "2-step verification" : "Sign in to RepairOS";
+  const title = step === "code" ? "2-step verification" : "Sign in to Tekly";
   const sub = step === "code" ? "Enter the 6-digit code from your authenticator app, or a recovery code."
     : step === "password" ? "Enter your password to continue." : "Use the email you use for your shop.";
   const cta = step === "email" ? "Continue" : step === "code" ? "Verify" : "Sign in";
@@ -130,7 +130,7 @@ export default function Login() {
             </button>
           )}
           {step === "email" && (
-            <FootLink>New to RepairOS? <a href="/signup" className="font-medium text-primary hover:underline">Create your shop</a></FootLink>
+            <FootLink>New to Tekly? <a href="/signup" className="font-medium text-primary hover:underline">Create your shop</a></FootLink>
           )}
         </form>
     </AuthShell>

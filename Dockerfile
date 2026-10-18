@@ -1,4 +1,4 @@
-# RepairOS production image: builds the React app, then serves it and the API from one
+# Tekly production image: builds the React app, then serves it and the API from one
 # uvicorn process group. Build:  docker build -t repairos .
 # Run:    docker run -p 8000:8000 --env-file .env repairos
 # Schema is owned by Alembic in production — run `alembic -c backend/alembic.ini upgrade head`

@@ -114,7 +114,7 @@ async def init_db():
     import logging
 
     from backend.models import all_models  # noqa: F401 – import triggers registration
-    log = logging.getLogger("repairos.db")
+    log = logging.getLogger("tekly.db")
 
     if settings.is_deployed and not settings.RUN_MIGRATIONS_ON_STARTUP:
         log.info("Production mode: skipping runtime DDL; schema is managed by Alembic.")

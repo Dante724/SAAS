@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────
-# RepairOS — production .gitignore. Keep secrets, local databases,
+# Tekly — production .gitignore. Keep secrets, local databases,
 # virtualenvs, dependencies and caches OUT of version control.
 # ─────────────────────────────────────────────────────────────
 

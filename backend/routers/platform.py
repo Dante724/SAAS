@@ -14,7 +14,7 @@ from backend.models import AuditLog, Client, Employee, Organisation
 from backend.services.auth import get_current_employee, require_perm
 
 router = APIRouter(tags=["platform"])
-log = logging.getLogger("repairos.platform")
+log = logging.getLogger("tekly.platform")
 
 
 # ── B4: metrics + readiness ──────────────────────────────────────────────────

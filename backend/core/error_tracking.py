@@ -8,7 +8,7 @@ import logging
 
 from backend.config import settings
 
-log = logging.getLogger("repairos.errors")
+log = logging.getLogger("tekly.errors")
 
 _SENSITIVE_HEADERS = {"authorization", "cookie", "x-api-key", "stripe-signature",
                       "x-square-hmacsha256-signature", "x-hub-signature-256", "x-twilio-signature"}

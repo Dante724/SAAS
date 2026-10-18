@@ -1,4 +1,4 @@
-/* RepairOS Technician app controller. Hash-routed, offline-aware.
+/* Tekly Technician app controller. Hash-routed, offline-aware.
    Reuses core.js (Auth, apiLogin, get, Toast, icon) and RosPWA (offline queue). */
 (function () {
   const view = () => document.getElementById('view');

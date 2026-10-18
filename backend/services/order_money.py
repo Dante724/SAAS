@@ -89,7 +89,7 @@ async def _expire_stripe_checkout(db: AsyncSession, intent: PaymentIntent) -> bo
                                   auth=(key, ""))
         return r.status_code == 200
     except httpx.HTTPError:
-        logging.getLogger("repairos.payments").warning("could not expire Stripe checkout for intent %s", intent.id)
+        logging.getLogger("tekly.payments").warning("could not expire Stripe checkout for intent %s", intent.id)
         return False
 
 
@@ -115,5 +115,5 @@ async def _delete_square_link(db: AsyncSession, intent: PaymentIntent) -> bool:
                 headers={"Authorization": f"Bearer {token}", "Square-Version": "2024-06-04"})
         return r.status_code == 200
     except httpx.HTTPError:
-        logging.getLogger("repairos.payments").warning("could not delete Square link for intent %s", intent.id)
+        logging.getLogger("tekly.payments").warning("could not delete Square link for intent %s", intent.id)
         return False

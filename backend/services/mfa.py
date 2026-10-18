@@ -53,7 +53,7 @@ def verify_step(secret: str, code: str, *, window: int = 1) -> int | None:
     return None
 
 
-def provisioning_uri(secret: str, *, account: str, issuer: str = "RepairOS") -> str:
+def provisioning_uri(secret: str, *, account: str, issuer: str = "Tekly") -> str:
     """otpauth:// URI for authenticator-app QR enrollment."""
     from urllib.parse import quote
     label = quote(f"{issuer}:{account}")

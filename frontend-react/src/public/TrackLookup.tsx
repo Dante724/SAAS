@@ -65,7 +65,7 @@ export default function TrackLookup() {
               {busy ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}{busy ? "Searching…" : "Find my repair"}
             </button>
           </form>
-          <div className="mt-6 text-center text-[11.5px] text-ink-tertiary">RepairOS</div>
+          <div className="mt-6 text-center text-[11.5px] text-ink-tertiary">Tekly</div>
         </div>
       </div>
     </div>

@@ -181,7 +181,7 @@ function ForgotPassword() {
   if (sent)
     return (
       <AuthShell title="Check your email" icon={<span className="grid h-14 w-14 place-items-center rounded-2xl bg-primary/10 text-primary"><MailCheck size={28} /></span>}
-        sub={<>If <span className="font-medium text-ink-primary">{email.trim()}</span> has a RepairOS account, a link to reset your password is on its way. It works for 1 hour.</>}>
+        sub={<>If <span className="font-medium text-ink-primary">{email.trim()}</span> has a Tekly account, a link to reset your password is on its way. It works for 1 hour.</>}>
         <a href="/login" className="flex h-[52px] w-full items-center justify-center rounded-xl bg-primary text-[16px] font-semibold text-white hover:bg-primary-container">Back to sign in</a>
         <p className="mt-5 text-center text-[14px] text-ink-secondary">No email? Check spam, or <button type="button" onClick={() => setSent(false)} className={link}>try another address</button>.</p>
       </AuthShell>

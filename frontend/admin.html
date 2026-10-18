@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RepairOS · Operator Portal</title>
+<title>Tekly · Operator Portal</title>
+<link rel="icon" type="image/svg+xml" href="/static/icons/tekly-mark.svg">
 <style>
   :root{
     --bg:#0b0e14;--bg2:#0f131c;--panel:rgba(255,255,255,.045);--panel2:rgba(255,255,255,.08);
@@ -87,7 +88,7 @@
 <!-- LOGIN -->
 <div id="login" class="login-wrap">
   <div class="login-card">
-    <div class="brand"><span class="dot"></span> RepairOS <span class="muted" style="font-weight:600">Operator</span></div>
+    <div class="brand"><span class="dot"></span> Tekly <span class="muted" style="font-weight:600">Operator</span></div>
     <div class="muted" style="font-size:13px;margin-bottom:6px">Platform administration portal</div>
     <div class="field"><label>Email</label><input id="l-email" type="email" placeholder="ops@yourco.com"></div>
     <div class="field"><label>Password</label><input id="l-pass" type="password" placeholder="••••••••" onkeydown="if(event.key==='Enter')Admin.login()"></div>
@@ -99,7 +100,7 @@
 <!-- CONSOLE -->
 <div id="console" class="hide">
   <div class="top">
-    <div class="brand"><span class="dot"></span> RepairOS <span class="muted" style="font-weight:600">Operator</span></div>
+    <div class="brand"><span class="dot"></span> Tekly <span class="muted" style="font-weight:600">Operator</span></div>
     <div style="display:flex;gap:10px;align-items:center">
       <button class="btn sm" onclick="Admin.openCoupons()">Coupons</button>
       <span class="muted" id="who"></span>

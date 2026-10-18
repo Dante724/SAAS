@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════
-   RepairOS — Core utilities & API client
+   Tekly — Core utilities & API client
 ════════════════════════════════════════════════════ */
 
 const API = window.location.origin;

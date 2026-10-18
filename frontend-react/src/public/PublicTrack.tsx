@@ -616,7 +616,7 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
         </aside>
       </div>
 
-      <div className="py-8 text-center text-[12px] text-ink-tertiary">{d.shop_name} · Sent with RepairOS</div>
+      <div className="py-8 text-center text-[12px] text-ink-tertiary">{d.shop_name} · Sent with Tekly</div>
 
       {/* phone bottom bar: only while there's something to do */}
       {(chosen.length > 0 || d.awaiting_approval || (nearEnd && d.shop_phone)) && (

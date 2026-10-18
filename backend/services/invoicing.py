@@ -1,7 +1,7 @@
 """Build 144dr — the invoice loop.
 
 The differentiator over Orderry: instead of making staff hand-build an invoice
-after every job, RepairOS can auto-draft one the moment a work order closes
+after every job, Tekly can auto-draft one the moment a work order closes
 (org opt-in), pre-linked to the order and carrying its totals + the org's default
 display mode. Combined with the existing order payment-link + gateway webhook,
 a shop can go from "close job" to "client paid" with no document-building step.

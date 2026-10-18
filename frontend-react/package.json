@@ -1,9 +1,9 @@
 {
-  "name": "repairos-react",
+  "name": "tekly-web",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "RepairOS React frontend — Strangler Fig migration (Option B). Backend/schema/data unchanged; calls the existing FastAPI at /api.",
+  "description": "Tekly React frontend — Strangler Fig migration (Option B). Backend/schema/data unchanged; calls the existing FastAPI at /api.",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

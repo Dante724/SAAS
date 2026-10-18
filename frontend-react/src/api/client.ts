@@ -1,4 +1,4 @@
-// RepairOS API client — reuses the EXISTING session (same-origin cookie/token).
+// Tekly API client — reuses the EXISTING session (same-origin cookie/token).
 // No auth redesign, no CORS: the React bundle is served from the same origin as
 // the live app, so the browser sends the logged-in session automatically.
 // Endpoints are the existing FastAPI ones (see inventory/endpoints.txt).

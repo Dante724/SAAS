@@ -132,7 +132,7 @@ def render_template(body: str, ctx: dict) -> str:
 
 
 async def fire_notifications(db: AsyncSession, org_id: str, event: str,
-                             order: Order, *, shop_name: str = "RepairOS",
+                             order: Order, *, shop_name: str = "Tekly",
                              client_name: str = None, device: str = None,
                              technician: str = None, new_status: str = None):
     """Find matching active templates, render, and log each to the event feed."""
@@ -246,7 +246,7 @@ class RuleIn(BaseModel):
 
 class RulePatch(BaseModel):
     """Full-edit an existing rule. Every field optional — only supplied keys change.
-    (Orderry only lets you swap template/channel inline; RepairOS allows a full edit.)"""
+    (Orderry only lets you swap template/channel inline; Tekly allows a full edit.)"""
     module: Optional[str] = None
     event: Optional[str] = None
     scope: Optional[str] = None

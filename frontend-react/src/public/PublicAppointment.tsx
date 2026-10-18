@@ -54,7 +54,7 @@ function icsFor(shop: string, svc: string, date: string, time: string, durMin: n
   const start = (date + "T" + time).replace(/[-:]/g, "") + "00";
   const end = new Date(new Date(`${date}T${time}`).getTime() + durMin * 60000);
   const endS = `${end.getFullYear()}${pad(end.getMonth() + 1)}${pad(end.getDate())}T${pad(end.getHours())}${pad(end.getMinutes())}00`;
-  return ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//RepairOS//appointment//EN", "BEGIN:VEVENT",
+  return ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Tekly//appointment//EN", "BEGIN:VEVENT",
     `DTSTART:${start}`, `DTEND:${endS}`, `SUMMARY:${svc} — ${shop}`,
     address ? `LOCATION:${address.replace(/,/g, "\\,")}` : "", "END:VEVENT", "END:VCALENDAR"].filter(Boolean).join("\r\n");
 }
@@ -520,7 +520,7 @@ function Shell({ accent, cfg, steps, at, onBack, children }: {
           </div>
         )}
         <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6">{children}</div>
-        <div className="mt-6 text-center text-[11.5px] text-ink-tertiary">Powered by RepairOS</div>
+        <div className="mt-6 text-center text-[11.5px] text-ink-tertiary">Powered by Tekly</div>
       </div>
     </div>
   );

@@ -386,7 +386,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
         </div>
       )}
 
-      {/* Smart builder — RepairOS's own document intelligence (offline presets + describe) */}
+      {/* Smart builder — Tekly's own document intelligence (offline presets + describe) */}
       {mode === "edit" && showSmart && (
         <div className="px-4 py-2 bg-primary/5 border-b border-slate-200 flex items-center gap-2 flex-wrap shrink-0">
           <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary"><M n="bolt" c="text-[15px]" /> Smart builder</span>

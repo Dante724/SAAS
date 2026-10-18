@@ -22,7 +22,7 @@ from backend.models import Account, Invoice, Order, Payment, PaymentIntent
 from backend.services.numbering import next_number
 from backend.services.money import minor_units, q2
 
-log = logging.getLogger("repairos.payments")
+log = logging.getLogger("tekly.payments")
 
 
 # ── Gateways ─────────────────────────────────────────────────────────────────
@@ -215,7 +215,7 @@ async def create_intent(db: AsyncSession, *, org_id: str, order_id: Optional[str
         currency = ((org.currency_code if org else None) or "usd")
     currency = currency.lower()
     invoice_id = None
-    description = "RepairOS payment"
+    description = "Tekly payment"
     if order_id:
         o = (await db.execute(select(Order).where(
             Order.id == order_id, Order.org_id == org_id))).scalar_one_or_none()

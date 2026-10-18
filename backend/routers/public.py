@@ -1492,7 +1492,7 @@ async def status_widget_js():
     js = r"""(function(){
   var API = (document.currentScript && document.currentScript.dataset.api) || '';
   var SHOP = (document.currentScript && document.currentScript.dataset.shop) || '';
-  var mount = document.getElementById('repairos-status') ||
+  var mount = document.getElementById('tekly-status') || document.getElementById('repairos-status') ||
     (function(){var d=document.createElement('div');
       (document.currentScript||document.body).parentNode.insertBefore(d,document.currentScript);return d;})();
   mount.innerHTML =

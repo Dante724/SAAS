@@ -1,8 +1,9 @@
 import { useEffect, type ReactNode } from "react";
-import { Loader2, Wrench } from "lucide-react";
+import { Loader2 } from "lucide-react";
+import { TeklyLogo, TeklyMark } from "../components/brand/TeklyLogo";
 
 // Shared look for every signed-out page (sign in, sign up, reset password, verify email,
-// accept invite): the real app mark, one centred column, Apple-style floating labels, one solid
+// accept invite): the Tekly mark, one centred column, Apple-style floating labels, one solid
 // button, a quiet footer. Every colour is a theme token, so pages are wholly light or wholly dark
 // with the device — nothing here is fixed to one theme.
 
@@ -18,9 +19,7 @@ export function useDeviceTheme() {
 
 export function Mark({ size = 56 }: { size?: number }) {
   return (
-    <span className="grid place-items-center rounded-2xl bg-primary text-white" style={{ width: size, height: size }}>
-      <Wrench size={Math.round(size / 2)} strokeWidth={2} />
-    </span>
+    <TeklyMark size={size} />
   );
 }
 
@@ -31,10 +30,7 @@ export function AuthShell({ title, sub, icon, children, wide = false }: {
   return (
     <div className="flex min-h-screen flex-col bg-white font-sans text-ink-primary">
       <header className="flex h-16 items-center px-6 sm:px-10">
-        <a href="/login" className="flex items-center gap-2.5" aria-label="RepairOS">
-          <span className="grid h-8 w-8 place-items-center rounded-[10px] bg-primary text-white"><Wrench size={17} strokeWidth={2.2} /></span>
-          <span className="text-[17px] font-semibold tracking-[-.2px]">RepairOS</span>
-        </a>
+        <a href="/login" aria-label="Tekly"><TeklyLogo size={30} /></a>
       </header>
       <main className="flex flex-1 items-start justify-center px-6 pb-10 pt-[8vh] sm:pt-[11vh]">
         <div className={`w-full ${wide ? "max-w-[460px]" : "max-w-[380px]"}`}>
@@ -44,7 +40,7 @@ export function AuthShell({ title, sub, icon, children, wide = false }: {
           <div className="mt-9">{children}</div>
         </div>
       </main>
-      <footer className="px-6 py-6 text-center text-[12px] text-ink-tertiary">© {new Date().getFullYear()} RepairOS</footer>
+      <footer className="px-6 py-6 text-center text-[12px] text-ink-tertiary">© {new Date().getFullYear()} Tekly</footer>
     </div>
   );
 }

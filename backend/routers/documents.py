@@ -606,7 +606,7 @@ async def _resolve(db, org_id, order: Order, current=None):
         return f"{float(n or 0) * _fx:,.2f}"
 
     # resolve referenced catalog parts (for product-row attributes) & line techs
-    # RepairOS line types: "part" (product), "labour"/"fee" (service).
+    # Tekly line types: "part" (product), "labour"/"fee" (service).
     part_ids = [l.ref_id for l in lines if l.ref_id and (l.line_type or "") == "part"]
     parts = {}
     if part_ids:
@@ -766,7 +766,7 @@ async def _resolve(db, org_id, order: Order, current=None):
 
     doc = {
         # Company
-        "{Company Name}": org.name if org else "RepairOS",
+        "{Company Name}": org.name if org else "Tekly",
         "{Company Address}": g(org, "company_address"),
         "{Company Phone}": g(org, "company_phone"),
         "{Company Email}": g(org, "company_email"),
@@ -903,7 +903,7 @@ async def _resolve(db, org_id, order: Order, current=None):
     }
 
     # ── 144ho: Orderry-exact variable names ──────────────────────────────────
-    # Existing RepairOS names are kept; these resolve to the SAME values so a
+    # Existing Tekly names are kept; these resolve to the SAME values so a
     # template authored against Orderry's catalog prints without leftover tokens.
     _feedback = _track_url(order, suffix="#feedback")
     _disc_pct = (f"{(total_disc / base_no_disc_total * 100):g}%" if base_no_disc_total else "")
@@ -1108,7 +1108,7 @@ class AiGenIn(BaseModel):
 
 @router.get("/smart-presets")
 async def smart_presets(current: Employee = Depends(get_current_employee)):
-    """144ht — RepairOS's own document presets (offline, no third-party service)."""
+    """144ht — Tekly's own document presets (offline, no third-party service)."""
     from backend.services import ai as _ai
     return {"items": [{"key": k, "label": v["label"], "doc_type": v["doc_type"]}
                       for k, v in _ai.DOC_PRESETS.items()]}
@@ -1119,7 +1119,7 @@ async def ai_generate_template(
     data: AiGenIn,
     current: Employee = Depends(get_current_employee),
 ):
-    """144ht — RepairOS's built-in document builder. Fully in-house and deterministic:
+    """144ht — Tekly's built-in document builder. Fully in-house and deterministic:
     expands a named preset, or maps a plain-English description to the block library.
     No external API is ever called."""
     if not data.preset and not (data.prompt or "").strip():
@@ -1245,7 +1245,7 @@ async def _resolve_invoice(db, org_id, inv: Invoice):
     order = (await db.execute(select(Order).where(Order.id == inv.order_id))).scalar_one_or_none() if inv.order_id else None
     pay_url = _track_url(order) if order else ""
     doc = {
-        "{Company Name}": org.name if org else "RepairOS", "{Company Logo}": logo_html,
+        "{Company Name}": org.name if org else "Tekly", "{Company Logo}": logo_html,
         "{Company Address}": g(org, "company_address"), "{Company Phone}": g(org, "company_phone"),
         "{Company Email}": g(org, "company_email"), "{Company Website}": g(org, "website"),
         "{Brand Color}": (getattr(org, "brand_primary_color", None) if org else None) or "#2563eb",
@@ -1331,7 +1331,7 @@ async def _resolve_part(org, part: Part, price) -> dict:
         "{Product Price}": _money(price),
         "{Product Price Without Taxes}": _money(price),
         "{Currency}": cur,
-        "{Company Name}": org.name if org else "RepairOS",
+        "{Company Name}": org.name if org else "Tekly",
         "{Today Date}": _fmt_date(datetime.utcnow()),
         "{Current Date}": _fmt_date(datetime.utcnow()),
         "{Barcode}": _Html(code128_svg(code_val)),
@@ -1412,7 +1412,7 @@ async def _resolve_asset(db, org, asset: Device) -> dict:
         "{Asset Cost}": _money(getattr(asset, "purchase_price", 0)),
         "{Asset Description}": g(asset, "asset_type"), "{Asset Address}": g(client, "address"),
         "{Client Name}": g(client, "name"), "{Client Phone}": g(client, "phone"),
-        "{Company Name}": org.name if org else "RepairOS",
+        "{Company Name}": org.name if org else "Tekly",
         "{Today Date}": _fmt_date(datetime.utcnow()), "{Current Date}": _fmt_date(datetime.utcnow()),
         "{Barcode}": _Html(code128_svg(code_val)), "{QR Code}": _Html(qr_svg(code_val)),
     }
@@ -1464,7 +1464,7 @@ async def _resolve_client(db, org, client: Client) -> dict:
         "{Client Billing Address}": (getattr(client, "billing_address", None) or None) or g(client, "address"),
         "{Client Tax ID}": g(client, "tax_id"), "{Client Registration No}": g(client, "reg_no"),
         "{Client Tax Identification Number}": g(client, "tax_id"),
-        "{Company Name}": org.name if org else "RepairOS",
+        "{Company Name}": org.name if org else "Tekly",
         "{Today Date}": _fmt_date(datetime.utcnow()), "{Current Date}": _fmt_date(datetime.utcnow()),
         "{Barcode}": _Html(code128_svg(code_val)), "{QR Code}": _Html(qr_svg(code_val)),
     }

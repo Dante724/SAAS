@@ -3,7 +3,7 @@
 Orderry-style asset naming plus identifier-kind-aware forms. Verified behavior
 we mirror: Orderry renames the asset entity per business type ("Vehicle,
 Device, Appliance, Tool… depending on the type of business you choose") and
-uses one unified "Serial Number / IMEI / VIN" field. RepairOS goes further: the
+uses one unified "Serial Number / IMEI / VIN" field. Tekly goes further: the
 identifier *kind* switches with the asset type, with live lookups.
 
 ## Identifier kinds (asset type → identifier)

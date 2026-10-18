@@ -1,5 +1,6 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { toAppPath } from "../lib/deepLink";
+import { TeklyMark } from "./brand/TeklyLogo";
 import { NavLink, useNavigate } from "react-router-dom";
 import { api, getLocationScope, setLocationScope } from "../api/client";
 import { alertDialog } from "../lib/dialog";
@@ -184,10 +185,10 @@ export default function Shell({ title, children }: { title: string; children: Re
         <aside className={`${railCollapsed ? "w-[64px]" : "w-[200px]"} flex-shrink-0 bg-sidebar border-r border-slate-200/80 flex flex-col justify-between z-10 transition-[width] duration-200`}>
           <div className="p-3 space-y-0.5 overflow-y-auto">
             <div className={`flex items-center gap-2.5 px-2 pt-1 pb-3 ${railCollapsed ? "justify-center" : ""}`}>
-              <div className="w-8 h-8 rounded-xl bg-primary flex items-center justify-center text-white shadow-clay-sm shrink-0"><M n="build" c="text-lg" /></div>
+              <TeklyMark size={32} />
               {!railCollapsed && (
                 <div>
-                  <div className="font-bold text-sm tracking-tight text-ink-primary flex items-center gap-1">RepairOS <span className="text-[11px] px-1 rounded bg-blue-100 text-primary font-bold">PRO</span></div>
+                  <div className="font-semibold text-[17px] leading-none tracking-[-0.04em] text-ink-primary flex items-center gap-1.5" aria-label="Tekly">tekly <span className="text-[10px] tracking-normal px-1 py-px rounded bg-blue-100 text-primary font-bold">PRO</span></div>
                   <p className="text-[11px] text-ink-tertiary font-medium">{t("Workshop Central")}</p>
                 </div>
               )}

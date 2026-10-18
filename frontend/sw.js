@@ -1,4 +1,4 @@
-/* RepairOS Technician — Service Worker
+/* Tekly Technician — Service Worker
    Strategy:
    - App shell: precache, cache-first (instant launch, offline-capable).
    - Static assets (/static): stale-while-revalidate.
@@ -12,7 +12,7 @@
    for the /tech app only: requests from the main app's pages go straight to the network, so
    its data (clients, prices, costs) never lands in a cache that outlives sign-out.
 */
-const VERSION = 'ros-tech-v5';   // v5: sign-in gains the 2-step code box, demo credentials gone (clears v4's caches)
+const VERSION = 'ros-tech-v6';   // v6: Tekly name, icons and font (clears v5's caches)
 const SHELL_CACHE = `shell-${VERSION}`;
 const STATIC_CACHE = `static-${VERSION}`;
 const API_CACHE = `api-${VERSION}`;
@@ -136,8 +136,8 @@ self.addEventListener('sync', (e) => {
 // ── Push notifications ──
 self.addEventListener('push', (e) => {
   let data = {};
-  try { data = e.data ? e.data.json() : {}; } catch { data = { title: 'RepairOS', body: e.data && e.data.text() }; }
-  const title = data.title || 'RepairOS';
+  try { data = e.data ? e.data.json() : {}; } catch { data = { title: 'Tekly', body: e.data && e.data.text() }; }
+  const title = data.title || 'Tekly';
   const options = {
     body: data.body || '',
     icon: '/static/icons/icon-192.png',

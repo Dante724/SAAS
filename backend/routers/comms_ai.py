@@ -2,7 +2,7 @@
 
 These are the "new channel and governance" features. Where a real deployment would call
 an external service (a speech-to-text model, a Shopify API, an SMTP relay), the boundary
-is stubbed and clearly marked: the value modelled here is the RepairOS-side workflow —
+is stubbed and clearly marked: the value modelled here is the Tekly-side workflow —
 storing the transcript, mapping an external order to an internal one without duplication,
 gating a refund above a role's ceiling — not the third-party call itself.
 """
@@ -45,7 +45,7 @@ async def attach_ai(
     """Attach AI results (transcript, summary, sentiment) to a call.
 
     The transcription/summarisation model runs at the edge and posts back here; this
-    endpoint is the RepairOS-side record. Keeping sentiment as a small enum makes it
+    endpoint is the Tekly-side record. Keeping sentiment as a small enum makes it
     filterable — “show me this week's negative calls” is the report a manager actually
     wants — without committing to any one model's richer output.
     """
@@ -190,7 +190,7 @@ async def sync_order(
     current: Employee = Depends(get_current_employee),
 ):
     """Ingest (or update) one store order. Idempotent on external_order_id via the
-    order map, so a store that re-sends the same order updates the existing RepairOS
+    order map, so a store that re-sends the same order updates the existing Tekly
     order instead of creating a duplicate — the single most important property of any
     sync, and the one most integrations get wrong.
     """

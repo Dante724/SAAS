@@ -1,4 +1,4 @@
-/** RepairOS — "Liquid Clay Studio" theme, ported verbatim from the Stitch export. */
+/** Tekly — "Liquid Clay Studio" theme, ported verbatim from the Stitch export. */
 import plugin from "tailwindcss/plugin";
 import { cssVars, themeColors } from "./theme.tokens.js";
 
@@ -50,8 +50,8 @@ export default {
       textColor: T.text,
       ringColor: T.ring,
       fontFamily: {
-        sans: ["Inter", "system-ui", "sans-serif"],
-        mono: ["JetBrains Mono", "ui-monospace", "monospace"],
+        sans: ["Geist", "Inter", "system-ui", "sans-serif"],
+        mono: ["Geist Mono", "JetBrains Mono", "ui-monospace", "monospace"],
       },
       boxShadow: {
         // Shadows follow the theme (soft clay in light; quiet in dark, where surfaces carry depth).

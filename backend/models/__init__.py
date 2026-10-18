@@ -1,5 +1,5 @@
 """
-RepairOS — all database models.
+Tekly — all database models.
 31 tables covering the full Orderry feature set.
 """
 import secrets
@@ -1636,7 +1636,7 @@ class StockReservation(Base):
 class Warehouse(Base):
     """Build 84 — a warehouse is a first-class entity (Settings → Warehouses).
 
-    Orderry separates two parallel worlds and RepairOS now does the same:
+    Orderry separates two parallel worlds and Tekly now does the same:
       * `kind="product"` — shop inventory (parts, materials, goods for sale).
       * `kind="asset"`   — the physical items being serviced/tracked. Every client
         and employee gets one automatically; the company gets a global one plus
@@ -3164,7 +3164,7 @@ class EcommerceIntegration(Base):
 
 
 class EcommerceOrderMap(Base):
-    """Build 107 — maps an external store order to a RepairOS order, so re-syncing the
+    """Build 107 — maps an external store order to a Tekly order, so re-syncing the
     same store order updates rather than duplicates."""
     __tablename__ = "ecommerce_order_maps"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)

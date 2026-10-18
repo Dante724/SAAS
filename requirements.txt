@@ -1,4 +1,4 @@
-# ── RepairOS runtime dependencies (single source of truth) ──
+# ── Tekly runtime dependencies (single source of truth) ──
 # Version floors chosen so prebuilt wheels exist for CPython 3.11, 3.12 AND 3.13
 # (no Rust/C toolchain needed). Python 3.13 required newer pydantic-core / greenlet
 # than the old exact pins, which is why those are now `>=`.

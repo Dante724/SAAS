@@ -96,7 +96,7 @@ setup_logging()
 from backend.core.error_tracking import init_error_tracking  # noqa: E402
 
 init_error_tracking()
-log = logging.getLogger("repairos")
+log = logging.getLogger("tekly")
 
 ROUTERS = [
     auth, orders, clients, inventory, finance, staff, reports, feed, forms,
@@ -109,7 +109,7 @@ ROUTERS = [
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log.info("starting RepairOS (env=%s)", settings.ENVIRONMENT)
+    log.info("starting Tekly (env=%s)", settings.ENVIRONMENT)
     if settings.is_deployed and not _have_react:
         raise RuntimeError(f"React build missing ({_react_index}). Build frontend-react before starting "
                            "in production/staging (the Dockerfile does this).")
@@ -133,7 +133,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await job_runner.stop()
-        log.info("RepairOS shut down cleanly")
+        log.info("Tekly shut down cleanly")
 
 
 # Build 144cq: hide the interactive API docs / schema in production.
@@ -141,7 +141,7 @@ _docs_kwargs = {} if not settings.is_deployed else {
     "docs_url": None, "redoc_url": None, "openapi_url": None,
 }
 app = FastAPI(
-    title="RepairOS API",
+    title="Tekly API",
     description="Orderry-style repair shop management",
     version="0.1.0",
     lifespan=lifespan,
@@ -227,7 +227,7 @@ if os.path.isdir(os.path.join(react_dir, "assets")):
     app.mount("/assets", _HashedAssets(directory=os.path.join(react_dir, "assets")), name="react-assets")
 
 
-_NOT_BUILT = ("<!doctype html><meta charset=utf-8><title>RepairOS</title>"
+_NOT_BUILT = ("<!doctype html><meta charset=utf-8><title>Tekly</title>"
               "<body style='font-family:system-ui;padding:40px'><h2>The web app isn't built</h2>"
               "<p>Run <code>cd frontend-react &amp;&amp; npm ci &amp;&amp; npm run build</code>, then restart. "
               "Sign-in is still available at <a href='/login'>/login</a>.</p></body>")

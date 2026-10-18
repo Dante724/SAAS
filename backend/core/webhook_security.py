@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import settings
 from backend.models import Organisation
 
-log = logging.getLogger("repairos")
+log = logging.getLogger("tekly")
 
 
 async def verify_org_webhook(db: AsyncSession, org_id: str, request: Request) -> None:

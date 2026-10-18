@@ -1331,7 +1331,7 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         await _wh.on_order_status(db, current.org_id, order, data.status, is_closing=is_closing)
     except Exception:  # noqa: BLE001
         import logging
-        logging.getLogger("repairos").exception("asset auto-move failed for order %s", order.id)
+        logging.getLogger("tekly").exception("asset auto-move failed for order %s", order.id)
 
     # Build 124: unified contact ledger — the receivable tracks the order's closed state.
     # We reconcile the net 'charge' rows to the order total when it closes, and back to

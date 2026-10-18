@@ -1,4 +1,4 @@
-// End-to-end for the RepairOS technician PWA: install/manifest, service worker,
+// End-to-end for the Tekly technician PWA: install/manifest, service worker,
 // login, and the offline → queue → sync loop. Runs in CI (needs a browser).
 const { test, expect } = require('@playwright/test');
 

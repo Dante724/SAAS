@@ -1,4 +1,4 @@
-# RepairOS — production hardening checklist (build 144cu)
+# Tekly — production hardening checklist (build 144cu)
 
 Build, configure, migrate and back up: see `DEPLOY.md`.
 

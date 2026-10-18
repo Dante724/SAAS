@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # -- Core --
-    APP_NAME: str = "RepairOS"
+    APP_NAME: str = "Tekly"
     ENVIRONMENT: str = "development"          # development|staging|production|test
     SECRET_KEY: str = "dev-secret-key-change-in-production"
     ALGORITHM: str = "HS256"

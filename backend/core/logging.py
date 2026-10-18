@@ -75,5 +75,5 @@ def setup_logging() -> None:
     # Tame noisy libraries; let our namespace flow at the configured level.
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
-    logging.getLogger("repairos").info("logging configured (env=%s json=%s level=%s)",
+    logging.getLogger("tekly").info("logging configured (env=%s json=%s level=%s)",
                                         settings.ENVIRONMENT, settings.LOG_JSON, settings.LOG_LEVEL)

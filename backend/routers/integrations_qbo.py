@@ -80,7 +80,7 @@ async def pull(entity_type: str,
                db: AsyncSession = Depends(get_db),
                current: Employee = Depends(require_perm("can_manage_settings"))):
     """Build 144ag: two-way — import existing QuickBooks customers/items and link
-    them to matching RepairOS records so we update instead of duplicating."""
+    them to matching Tekly records so we update instead of duplicating."""
     from fastapi import HTTPException
     if entity_type not in ("contact", "item"):
         raise HTTPException(400, "entity_type must be contact|item")

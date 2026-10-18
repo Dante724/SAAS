@@ -220,7 +220,7 @@ async def _send_set_password_email(db: AsyncSession, emp: Employee, org_id: str)
     org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
     url = _link(f"/reset-password?token={raw}")
     await send_direct_email(
-        emp.email, f"You've been added to {org.name if org else 'your team'} on RepairOS",
+        emp.email, f"You've been added to {org.name if org else 'your team'} on Tekly",
         f"Hi {emp.name},\n\nAn account has been created for you. Choose your password here:\n\n{url}\n\n"
         f"The link expires in 7 days and can be used once.")
 
@@ -300,7 +300,7 @@ async def send_password_reset(
     await db.commit()
     url = _link(f"/reset-password?token={raw}")
     await send_direct_email(
-        emp.email, "Set your RepairOS password",
+        emp.email, "Set your Tekly password",
         f"An administrator asked us to help you set your password. Open this link:\n\n{url}\n\n"
         f"It expires in 1 hour and can be used once.")
     return {"ok": True}
@@ -392,8 +392,8 @@ async def create_invite(data: InviteIn, db: AsyncSession = Depends(get_db),
     org_name = org.name if org else "your team"
     url = _link(f"/accept-invite?token={raw}")
     await send_direct_email(
-        email, f"You're invited to {org_name} on RepairOS",
-        f"{current.name} invited you to join {org_name} on RepairOS.\n\n"
+        email, f"You're invited to {org_name} on Tekly",
+        f"{current.name} invited you to join {org_name} on Tekly.\n\n"
         f"Set your password and get started:\n\n{url}\n\n"
         f"This invitation expires in 7 days.")
     return {"ok": True, "invite_id": inv.id}

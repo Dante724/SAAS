@@ -1,4 +1,4 @@
-/* RepairOS colour tokens — one palette, two modes.
+/* Tekly colour tokens — one palette, two modes.
  *
  * Every neutral surface, border and text colour, the primary, and the soft accent tints
  * resolve through a CSS variable (an "r g b" triplet, so Tailwind's /alpha modifiers keep

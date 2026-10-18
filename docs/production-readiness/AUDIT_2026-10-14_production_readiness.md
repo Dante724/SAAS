@@ -1,4 +1,4 @@
-# RepairOS — Production-Readiness Audit (2026-10-14)
+# Tekly — Production-Readiness Audit (2026-10-14)
 
 Audited commit: `f499696` (branch `main`). Read-only audit: no source file, config, database,
 or infrastructure was changed. The only file created is this report (untracked).

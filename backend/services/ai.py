@@ -289,7 +289,7 @@ def _assemble(keys: list[str]) -> str:
 
 
 def generate_document_template(*, prompt: str = "", doc_type: str = "estimate", preset: str = "") -> dict:
-    """RepairOS's OWN document intelligence — fully in-house, no third-party API. Either
+    """Tekly's OWN document intelligence — fully in-house, no third-party API. Either
     expands a named preset, or reads the plain-English description and maps it to the
     block library by keyword. Deterministic and offline by design."""
     if preset and preset in DOC_PRESETS:

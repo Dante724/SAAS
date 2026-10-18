@@ -10,7 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-log = logging.getLogger("repairos.access")
+log = logging.getLogger("tekly.access")
 
 # A caller-supplied id is echoed into headers and every log line for the request, so it must
 # be short and inert (no newlines to forge log entries, no megabyte values).

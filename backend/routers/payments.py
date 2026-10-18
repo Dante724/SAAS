@@ -17,7 +17,7 @@ from backend.services import payments as pay
 from backend.services.auth import get_current_employee, require_perm
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
-log = logging.getLogger("repairos")
+log = logging.getLogger("tekly")
 
 
 # A2: map the raw intent status onto the client-facing pay-link lifecycle.
@@ -235,7 +235,7 @@ async def terminal_create_intent(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
-    """Create a card_present PaymentIntent on Stripe for an existing RepairOS
+    """Create a card_present PaymentIntent on Stripe for an existing Tekly
     intent, so a reader can collect it in person."""
     from backend.services import payments as pay
     intent = (await db.execute(select(PaymentIntent).where(

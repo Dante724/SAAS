@@ -1,6 +1,6 @@
-# Deploying RepairOS
+# Deploying Tekly
 
-The runbook for putting RepairOS on a server. Read it with `PROD-HARDENING.md` (one-time security
+The runbook for putting Tekly on a server. Read it with `PROD-HARDENING.md` (one-time security
 settings).
 
 ## 1. Build

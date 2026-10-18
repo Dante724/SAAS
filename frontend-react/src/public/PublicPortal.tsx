@@ -107,7 +107,7 @@ function PortalHome({ home, onOpen }: { home: Home; onOpen: (id: string) => void
         {rest(home.estimates).length > 0 && <JobList title="Estimates" cards={rest(home.estimates)} accent={accent} onOpen={onOpen} />}
         {rest(home.work_orders).length > 0 && <JobList title="Repairs" cards={rest(home.work_orders)} accent={accent} onOpen={onOpen} />}
       </div>
-      <div className="py-8 text-center text-[12px] text-ink-tertiary">{home.shop_name} · Sent with RepairOS</div>
+      <div className="py-8 text-center text-[12px] text-ink-tertiary">{home.shop_name} · Sent with Tekly</div>
     </div>
   );
 }

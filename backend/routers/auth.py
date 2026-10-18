@@ -33,8 +33,8 @@ async def _send_verification(db: AsyncSession, employee: "Employee") -> str:
     await db.commit()
     url = _link(f"/verify-email?token={raw}")
     await send_direct_email(
-        employee.email, "Verify your RepairOS email",
-        f"Welcome to RepairOS. Confirm this address to secure your account:\n\n{url}\n\n"
+        employee.email, "Verify your Tekly email",
+        f"Welcome to Tekly. Confirm this address to secure your account:\n\n{url}\n\n"
         f"This link expires in 48 hours. If you didn't sign up, ignore this email.")
     return raw
 
@@ -472,7 +472,7 @@ async def _email_reset_link(db, emp, *, quiet_limit: bool = False) -> None:
     await db.commit()
     url = _link(f"/reset-password?token={raw}")
     await send_direct_email(
-        emp.email, "Reset your RepairOS password",
+        emp.email, "Reset your Tekly password",
         f"Someone asked to reset your password. If it was you, open this link:\n\n{url}\n\n"
         f"It expires in 1 hour and can be used once. If it wasn't you, ignore this email.")
 

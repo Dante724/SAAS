@@ -14,7 +14,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
-log = logging.getLogger("repairos.jobs")
+log = logging.getLogger("tekly.jobs")
 
 
 @dataclass
