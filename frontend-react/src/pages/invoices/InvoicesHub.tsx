@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Shell, { M } from "../../components/Shell";
 import SkeletonRows from "../../components/SkeletonRows";
 import DateField from "../../components/DateField";
@@ -29,9 +29,14 @@ export default function InvoicesHub() {
     reloadInvoices();
     api.get<any>("/regions/pack").then((p) => setEinv(!!p?.einvoice?.standard && p.einvoice.standard !== "none")).catch(() => setEinv(false));
   }, []);
+  // Busy guard: the ref blocks a second click landing before React re-renders the disabled button.
+  const [issuingId, setIssuingId] = useState<string | null>(null); const issuingRef = useRef(false);
   async function issueEinvoice(id: string) {
-    try { await api.post(`/finance/invoices/${id}/einvoice`, {}); reloadInvoices(); }
+    if (issuingRef.current) return;
+    issuingRef.current = true; setIssuingId(id);
+    try { await api.post(`/finance/invoices/${id}/einvoice`, {}); await reloadInvoices(); }
     catch { await alertDialog("Could not issue e-invoice"); }
+    finally { issuingRef.current = false; setIssuingId(null); }
   }
   async function markEinvoiceCleared(id: string) {
     try { await api.patch(`/finance/invoices/${id}/einvoice`, { status: "cleared" }); reloadInvoices(); }
@@ -74,7 +79,7 @@ export default function InvoicesHub() {
                       <td className={`py-2.5 px-4 text-right tabular-nums font-bold ${(i.balance_due || 0) > 0 ? "text-rose-600" : "text-ink-tertiary"}`}>{money(i.balance_due)}</td>
                       {einv && <td className="py-2.5 px-4">
                         {(!i.einvoice_status || i.einvoice_status === "none") ? (
-                          <button onClick={() => issueEinvoice(i.id)} className="px-2 py-1 rounded-lg border border-slate-200 bg-white text-ink-secondary text-[11px] font-semibold hover:bg-slate-50">Issue e-invoice</button>
+                          <button onClick={() => issueEinvoice(i.id)} disabled={!!issuingId} className="px-2 py-1 rounded-lg border border-slate-200 bg-white text-ink-secondary text-[11px] font-semibold hover:bg-slate-50 disabled:opacity-50">{issuingId === i.id ? "Issuing…" : "Issue e-invoice"}</button>
                         ) : (
                           <div className="flex items-center gap-1.5">
                             <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold capitalize ${i.einvoice_status === "cleared" ? "bg-emerald-100 text-emerald-800" : i.einvoice_status === "rejected" ? "bg-rose-100 text-rose-800" : "bg-sky-100 text-sky-800"}`}>{humanize(i.einvoice_status)}</span>

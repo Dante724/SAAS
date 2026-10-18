@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import Employee, Role
+from backend.services import audit
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.permissions import (
     ALL_CODES,
@@ -165,6 +166,9 @@ async def create_role(data: RoleIn, db: AsyncSession = Depends(get_db),
              location_ids=json.dumps(data.location_ids) if data.location_ids else None)
     _apply_scope(r, data)
     db.add(r)
+    await db.flush()
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="role.create",
+                       entity_type="role", entity_id=r.id, diff={"name": r.name, "permissions": perms})
     await db.commit()
     await db.refresh(r)
     return _ser_role(r)
@@ -196,6 +200,8 @@ async def update_role(role_id: str, data: RoleIn, db: AsyncSession = Depends(get
     r.location_scope = data.location_scope
     r.location_ids = json.dumps(data.location_ids) if data.location_ids else None
     _apply_scope(r, data)
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="role.update",
+                       entity_type="role", entity_id=r.id, diff={"name": r.name, "permissions": merged})
     await db.commit()
     return _ser_role(r)
 
@@ -214,6 +220,8 @@ async def delete_role(role_id: str, db: AsyncSession = Depends(get_db),
     invited = (await db.execute(select(func.count()).select_from(_I).where(_I.role_id == r.id, _I.accepted_at.is_(None)))).scalar() or 0
     if used or invited:
         raise HTTPException(409, f"{used + invited} {'person uses' if used + invited == 1 else 'people use'} this role. Give them another role first.")
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="role.delete",
+                       entity_type="role", entity_id=r.id, diff={"name": r.name})
     await db.delete(r)
     await db.commit()
     return {"ok": True}

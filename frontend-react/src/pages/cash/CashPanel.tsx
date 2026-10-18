@@ -76,7 +76,8 @@ export default function CashPanel() {
     catch (e: any) { flash(`Failed: ${e.message}`); }
   }
   async function deleteTxn(t: Txn) {
-    const reason = (await promptDialog("Delete this transaction? Optional reason:", { defaultValue: "" })) ?? undefined;
+    // null = Cancel / Escape / backdrop → abort; "" = OK with no reason → still void.
+    const reason = await promptDialog("Delete this transaction? Optional reason:", { defaultValue: "" }); if (reason === null) return;
     try { await api.del(`/cash/transactions/${t.id}${reason ? `?reason=${encodeURIComponent(reason)}` : ""}`); flash("Transaction voided"); await reloadTxns(); }
     catch (e: any) { flash(`Failed: ${e.message}`); }
   }

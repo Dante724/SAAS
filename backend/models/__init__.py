@@ -47,6 +47,10 @@ class Organisation(Base):
     brand_email_from: Mapped[Optional[str]] = mapped_column(String(160))      # "Acme <no-reply@acme.com>"
     brand_hide_powered_by: Mapped[bool] = mapped_column(Boolean, default=False)
     subdomain: Mapped[Optional[str]] = mapped_column(String(100), unique=True)
+    # The employee who created the shop. Only they can change their own account (password,
+    # 2-step, email, role, access) — a teammate with equal permissions cannot. Not a foreign
+    # key: organisations <-> employees would otherwise reference each other.
+    owner_id: Mapped[Optional[str]] = mapped_column(String)
     # General / company profile (Settings > General > Company info)
     company_email: Mapped[Optional[str]] = mapped_column(String(150))
     company_phone: Mapped[Optional[str]] = mapped_column(String(50))

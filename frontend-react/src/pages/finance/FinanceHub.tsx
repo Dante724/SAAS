@@ -1,13 +1,13 @@
 import SkeletonRows from "../../components/SkeletonRows";
 import PageSummary, { type SummaryStat } from "../../components/PageSummary";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import { api, openAuthedDoc } from "../../api/client";
 import Pager from "../../components/Pager";
 import { currencySymbol, money } from "../orders/types";
-import { alertDialog, promptDialog } from "../../lib/dialog";
+import { alertDialog, confirmDialog, promptDialog } from "../../lib/dialog";
 import { isoMonth } from "../../lib/localDate";
 import { useMe } from "../../context/Me";
 import CashPanel from "../cash/CashPanel";
@@ -62,16 +62,28 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
     catch { setPnl(null); } finally { setPnlBusy(false); }
   }
   const loadRuns = () => api.get<{ items: any[] }>("/payroll/runs").then((r) => setRuns(r.items || [])).catch(() => setRuns([]));
+  // Refs block a second click that lands before React re-renders the disabled button.
+  const runBusyRef = useRef(false);
   async function runPayroll() {
-    setRunBusy(true);
+    if (runBusyRef.current) return;
+    runBusyRef.current = true; setRunBusy(true);
     try {
       const [y, m] = month.split("-").map(Number);
       const end = new Date(y, m, 0).getDate();
       await api.post("/payroll/run", { period_start: `${month}-01`, period_end: `${month}-${String(end).padStart(2, "0")}`, draft: true });
       loadRuns();
-    } catch (e) { /* surfaced by 401 handler / ignore */ } finally { setRunBusy(false); }
+    } catch (e: any) { await alertDialog(`Could not run payroll: ${e.message}`); } finally { runBusyRef.current = false; setRunBusy(false); }
   }
-  async function markPaid(id: string) { try { await api.post(`/payroll/runs/${id}/pay`, {}); loadRuns(); } catch { /* ignore */ } }
+  const [payingId, setPayingId] = useState<string | null>(null); const payingRef = useRef(false);
+  async function markPaid(id: string) {
+    if (payingRef.current) return;
+    payingRef.current = true;
+    try {
+      if (!(await confirmDialog("Mark this payroll run as paid? This posts the payout and can't be undone here.", { title: "Mark paid", confirmLabel: "Mark paid" }))) return;
+      setPayingId(id);
+      await api.post(`/payroll/runs/${id}/pay`, {}); loadRuns();
+    } catch (e: any) { await alertDialog(`Could not mark paid: ${e.message}`); } finally { payingRef.current = false; setPayingId(null); }
+  }
 
   useEffect(() => {
     api.get<any>("/finance/reports/summary").then(setFin).catch(() => setFin({}));
@@ -269,7 +281,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
                         <td className="py-2.5 px-4"><span className={`px-2 py-0.5 rounded-full text-[11px] font-bold capitalize ${paid ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>{r.status || "draft"}</span></td>
                         <td className="py-2.5 px-4 text-right tabular-nums font-bold text-ink-primary">{money(r.totals?.gross_total ?? r.gross_total)}</td>
                         <td className="py-2.5 px-4 text-ink-tertiary">{r.accrued_at ? new Date(r.accrued_at).toLocaleDateString() : "—"}</td>
-                        <td className="py-2.5 px-4 text-right">{!paid && <button onClick={() => markPaid(r.id)} className="text-primary font-semibold hover:underline">Mark paid</button>}</td>
+                        <td className="py-2.5 px-4 text-right">{!paid && <button onClick={() => markPaid(r.id)} disabled={!!payingId} className="text-primary font-semibold hover:underline disabled:opacity-50 disabled:no-underline">{payingId === r.id ? "Marking…" : "Mark paid"}</button>}</td>
                       </tr>
                     );
                   })}

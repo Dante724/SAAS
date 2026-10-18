@@ -11,12 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import Client, Employee, EventFeedItem, Order
+from backend.services import audit
 from backend.services.auth import get_current_employee
 
 router = APIRouter(prefix="/api/feed", tags=["event-feed"])
 
 VALID_ENTITIES = {"order", "client"}
 VALID_ITEMS = {"comment", "photo", "signature", "file"}
+PROTECTED_ITEMS = {"system", "status", "signature", "client_message"}
 MAX_MEDIA_CHARS = 8_000_000  # ~6 MB base64 ceiling for the demo
 
 
@@ -159,8 +161,18 @@ async def delete_feed_item(
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(404, "Item not found")
-    if item.item_type == "system":
-        raise HTTPException(403, "System events cannot be deleted")
+    # Evidence stays: system events, status history, customer signatures and anything the
+    # customer wrote. Staff may remove their own posts; removing someone else's needs
+    # delete rights on orders.
+    if item.item_type in PROTECTED_ITEMS or item.author_id is None:
+        raise HTTPException(403, "This entry is part of the record and can't be deleted")
+    if item.author_id != current.id:
+        from backend.services.auth import has_perm
+        if not await has_perm(db, current, "can_delete_orders"):
+            raise HTTPException(403, "You can only delete your own posts")
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="feed.delete",
+                       entity_type=item.entity_type, entity_id=item.entity_id,
+                       diff={"item_id": item.id, "item_type": item.item_type, "author_id": item.author_id})
     await db.delete(item)
     await db.commit()
     return {"ok": True}

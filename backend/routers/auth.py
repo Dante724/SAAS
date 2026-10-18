@@ -260,6 +260,8 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
         password_hash=await asyncio.to_thread(hash_password, data.password),
     )
     db.add(employee)
+    await db.flush()
+    org.owner_id = employee.id   # the shop's creator: only they can change their own account
 
     # Build 144ah: give the new org a starter set of client-facing order notifications
     # (received / status changed / completed) so customers hear something out of the box.

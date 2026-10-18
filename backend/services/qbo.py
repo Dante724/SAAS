@@ -270,7 +270,8 @@ async def _build_payload(db, org_id, entity_type, local_id) -> Optional[dict]:
 
     if entity_type == "payment":
         p = (await db.execute(select(Payment).where(Payment.id == local_id))).scalar_one_or_none()
-        if not p:
+        # payments carry no org_id: only push one whose invoice, order or client is this org's
+        if not p or not await _payment_in_org(db, org_id, p):
             return None
         payload = {"TotalAmt": p.amount, "PaymentRefNum": p.reference or p.id[:8]}
         cust = await _remote_id(db, org_id, "contact", p.client_id)
@@ -278,6 +279,14 @@ async def _build_payload(db, org_id, entity_type, local_id) -> Optional[dict]:
             payload["CustomerRef"] = {"value": cust}
         return payload
     return None
+
+
+async def _payment_in_org(db: AsyncSession, org_id: str, p: Payment) -> bool:
+    from backend.models import Order
+    for model, ref in ((Invoice, p.invoice_id), (Order, p.order_id), (Client, p.client_id)):
+        if ref:
+            return (await db.execute(select(model.org_id).where(model.id == ref))).scalar_one_or_none() == org_id
+    return False
 
 
 async def _push(conn: QboConnection, entity_type: str, payload: dict, remote_id: Optional[str]) -> str:

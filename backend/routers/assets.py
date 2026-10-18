@@ -360,6 +360,9 @@ async def asset_movements(
     ownership changes and zone moves — each with who, when and detail."""
     from backend.models import AssetMovement
     from backend.models import Employee as Emp
+    if not (await db.execute(select(Device.id).where(
+            Device.id == asset_id, Device.org_id == current.org_id))).scalar_one_or_none():
+        raise HTTPException(404, "Asset not found")
     rows = (await db.execute(
         select(AssetMovement).where(AssetMovement.asset_id == asset_id)
         .order_by(desc(AssetMovement.moved_at)))).scalars().all()

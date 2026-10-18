@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import Employee, Role, Task
+from backend.services import audit
 from backend.services import multi_asset as _ma
 from backend.services.auth import get_current_employee, hash_password, is_old_default_password, require_perm
 
@@ -142,11 +143,39 @@ async def _assert_can_assign_role(db: AsyncSession, current: Employee, role_id: 
     theirs = await _denied_for_role(db, current.org_id, role_id)
     if not mine <= theirs:
         raise HTTPException(403, "You can't assign a role with more access than your own")
+    # Permissions alone aren't the whole story: a role also limits which locations, orders,
+    # contacts and warehouses its holders see. Never hand out wider data scope than you have.
+    if current.role_id and role_id:
+        from backend.routers.rbac import _assert_scope_not_wider
+        editor = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
+        target = (await db.execute(select(Role).where(Role.id == role_id))).scalar_one_or_none()
+        if editor and target:
+            _assert_scope_not_wider(editor, _ScopeView(target))
+
+
+class _ScopeView:
+    """A role's data-scope fields in the shape rbac._assert_scope_not_wider reads."""
+    def __init__(self, role: Role):
+        import json
+        for f in ("order_scope", "contact_scope", "warehouse_scope", "location_scope"):
+            setattr(self, f, getattr(role, f, None) or "all")
+        self.location_ids = json.loads(role.location_ids or "[]") if isinstance(role.location_ids, str) else (role.location_ids or [])
+
+
+async def _is_owner(db: AsyncSession, emp: Employee) -> bool:
+    from backend.models import Organisation
+    owner_id = (await db.execute(select(Organisation.owner_id).where(
+        Organisation.id == emp.org_id))).scalar_one_or_none()
+    return owner_id == emp.id
 
 
 async def _assert_can_manage(db: AsyncSession, current: Employee, emp: Employee) -> None:
     if emp.id == current.id:
         return
+    # The shop owner's account (password, 2-step, email, role, access) is theirs alone:
+    # an equally-privileged teammate must not be able to take it over.
+    if await _is_owner(db, emp):
+        raise HTTPException(403, "Only the shop owner can change the owner's account")
     mine = await _denied_for_role(db, current.org_id, current.role_id)
     try:
         theirs = await _denied_for_role(db, current.org_id, emp.role_id)
@@ -195,6 +224,10 @@ async def create_employee(
         note=data.note, hired_at=_parse_date(data.hired_at),
     )
     db.add(emp)
+    await db.flush()
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="employee.create",
+                       entity_type="employee", entity_id=emp.id,
+                       diff={"email": emp.email, "role_id": emp.role_id})
     await db.commit()
     await db.refresh(emp)
     invite_sent = False
@@ -252,8 +285,13 @@ async def update_employee(
         payload["hourly_basis"] = "labour"
     if "hired_at" in payload:
         payload["hired_at"] = _parse_date(payload["hired_at"])
+    changes = {k: {"from": getattr(emp, k), "to": v} for k, v in payload.items()
+               if k in ("role_id", "email", "active", "location_id") and getattr(emp, k) != v}
     for k, v in payload.items():
         setattr(emp, k, v)
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="employee.update",
+                       entity_type="employee", entity_id=emp.id,
+                       diff={"fields": sorted(payload), **changes})
     await db.commit()
     return {"ok": True}
 
@@ -275,6 +313,8 @@ async def reset_password(
     emp.password_hash = await asyncio.to_thread(hash_password, data.password)
     emp.token_version = (emp.token_version or 0) + 1   # sign out existing sessions
     emp.must_reset_password = False
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="employee.password_set",
+                       entity_type="employee", entity_id=emp.id)
     await db.commit()
     return {"ok": True}
 
@@ -297,6 +337,8 @@ async def send_password_reset(
     from backend.services.notifications import send_direct_email
     await _tok.invalidate_all(db, employee_id=emp.id, kind="reset")
     raw = await _tok.issue(db, employee_id=emp.id, kind="reset")
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="employee.password_reset_sent",
+                       entity_type="employee", entity_id=emp.id)
     await db.commit()
     url = _link(f"/reset-password?token={raw}")
     await send_direct_email(
@@ -321,6 +363,8 @@ async def reset_employee_mfa(emp_id: str, db: AsyncSession = Depends(get_db),
     emp.mfa_secret = None
     emp.mfa_recovery_codes = None
     emp.token_version = (emp.token_version or 0) + 1   # force re-login
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="employee.mfa_reset",
+                       entity_type="employee", entity_id=emp.id)
     await db.commit()
     return {"ok": True}
 
@@ -383,6 +427,9 @@ async def create_invite(data: InviteIn, db: AsyncSession = Depends(get_db),
             token_hash=hashlib.sha256(raw.encode()).hexdigest(),
             expires_at=datetime.utcnow() + timedelta(days=7))
         db.add(inv)
+    await db.flush()
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="invite.create",
+                       entity_type="invite", entity_id=inv.id, diff={"email": email, "role_id": data.role_id})
     await db.commit()
     from backend.models import Organisation
     from backend.routers.auth import _link
@@ -407,6 +454,8 @@ async def revoke_invite(invite_id: str, db: AsyncSession = Depends(get_db),
         Invite.id == invite_id, Invite.org_id == current.org_id))).scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invite not found")
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="invite.revoke",
+                       entity_type="invite", entity_id=inv.id, diff={"email": inv.email})
     await db.delete(inv)
     await db.commit()
     return {"ok": True}
@@ -469,6 +518,8 @@ async def delete_role(
     in_use = (await db.execute(select(func.count()).select_from(Employee).where(Employee.role_id == role_id))).scalar() or 0
     if in_use:
         raise HTTPException(400, f"{in_use} employee(s) still use this role")
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="role.delete",
+                       entity_type="role", entity_id=r.id, diff={"name": r.name})
     await db.delete(r)
     await db.commit()
     return {"ok": True}
@@ -485,6 +536,8 @@ async def deactivate_employee(
         raise HTTPException(404, "Employee not found")
     await _assert_can_manage(db, current, emp)
     emp.active = False
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="employee.deactivate",
+                       entity_type="employee", entity_id=emp.id)
     await db.commit()
     return {"ok": True}
 

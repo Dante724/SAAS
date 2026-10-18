@@ -645,6 +645,9 @@ async def part_movements(
 ):
     """Full stock-movement history for the product's History tab — every posting, sale,
     transfer, write-off and adjustment with quantity, location and reference."""
+    # stock_movements carries no org_id: prove the part is this org's before reading its history
+    if not (await db.execute(select(Part.id).where(Part.id == part_id, Part.org_id == current.org_id))).scalar_one_or_none():
+        raise HTTPException(404, "Part not found")
     result = await db.execute(
         select(StockMovement)
         .where(StockMovement.part_id == part_id)
@@ -1768,7 +1771,9 @@ async def part_pos(
     """POs this part is on (excluding closed) — shown in the product dialog."""
     rows = (await db.execute(
         select(PurchaseOrder, POLine).join(POLine, POLine.po_id == PurchaseOrder.id)
-        .where(POLine.part_id == part_id, PurchaseOrder.status != "closed")
+        .join(Supplier, PurchaseOrder.supplier_id == Supplier.id)   # POs are scoped via their supplier
+        .where(POLine.part_id == part_id, Supplier.org_id == current.org_id,
+               PurchaseOrder.status != "closed")
     )).all()
     return {"items": [{"id": po.id, "po_number": po.po_number, "status": po.status,
                        "qty_ordered": pl.qty_ordered, "qty_received": pl.qty_received,

@@ -196,12 +196,14 @@ async def _load_device(db: AsyncSession, org_id: str, device_id: str) -> Device:
     device = (await db.execute(select(Device).where(Device.id == device_id))).scalar_one_or_none()
     if not device:
         raise HTTPException(404, "Asset not found")
-    # tenant check: company-owned assets carry no client, so verify via the client
-    if device.client_id:
+    # tenant check: assets carry org_id; rows not yet backfilled fall back to the owning
+    # client's org. A row with neither can't be proven ours, so it is not found.
+    owner_org = device.org_id
+    if not owner_org and device.client_id:
         owner_org = (await db.execute(select(Client.org_id).where(
             Client.id == device.client_id))).scalar_one_or_none()
-        if owner_org != org_id:
-            raise HTTPException(404, "Asset not found")
+    if owner_org != org_id:
+        raise HTTPException(404, "Asset not found")
     return device
 
 

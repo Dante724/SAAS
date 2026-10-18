@@ -2,7 +2,7 @@ import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
 import RecommendationsPanel from "./RecommendationsPanel";
 import PartsPOPanel from "./PartsPOPanel";
 import { humanize } from "../../lib/humanize";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ConversationPanel from "./ConversationPanel";
 import PhotoAnnotator from "./PhotoAnnotator";
@@ -1227,7 +1227,7 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
 
 /* ---- Invoices tab ---- */
 type PayCtx = { order_total: number; already_paid: number; prepaid: number; remaining: number; accounts_by_method: Record<string, { id: string; name: string }[]> };
-function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash }: { orderId: string; total?: number; deposit?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: (m: string) => void }) {
+export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash }: { orderId: string; total?: number; deposit?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: (m: string) => void }) {
   const { base, opts: curOpts, multi: multiCurrency } = useCurrencies();
   const changeCurrency = async (code: string) => {
     try {
@@ -1290,13 +1290,18 @@ function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySy
       setAccount(firstAcc?.id || ""); setAmount(String(kind === "pay" ? c.remaining : "")); setModal(kind);
     } catch (e: any) { onFlash(`Cannot open payment: ${e.message}`); }
   };
+  // Busy guard: the ref blocks a second click landing before React re-renders the disabled button,
+  // so a double-click can never post the same payment twice.
+  const [payBusy, setPayBusy] = useState(false); const payBusyRef = useRef(false);
   const submit = async () => {
+    if (payBusyRef.current) return;
+    payBusyRef.current = true; setPayBusy(true);
     const amt = parseFloat(amount);
     try {
       if (modal === "prepay") await api.post(`/cash/orders/${orderId}/prepay`, { amount: amt, account_id: account });
       else await api.post(`/cash/orders/${orderId}/pay`, { amount: amt, account_id: account, method });
       setModal(null); onFlash("Payment recorded"); load();
-    } catch (e: any) { onFlash(`Failed: ${e.message}`); }
+    } catch (e: any) { onFlash(`Failed: ${e.message}`); } finally { payBusyRef.current = false; setPayBusy(false); }
   };
 
   const paid = (data?.payments || []).filter((p) => p.kind !== "refund").reduce((s, p) => s + (p.amount || 0), 0);
@@ -1425,7 +1430,7 @@ function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySy
               <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Account</label>
                 <select value={account} onChange={(e) => setAccount(e.target.value)} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl">{accts.length === 0 && <option value="">No account</option>}{accts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
             </div>
-            <div className="flex justify-end gap-2 pt-1"><button onClick={() => setModal(null)} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button><button onClick={submit} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110">Record {modal === "prepay" ? "prepayment" : "payment"}</button></div>
+            <div className="flex justify-end gap-2 pt-1"><button onClick={() => setModal(null)} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button><button onClick={submit} disabled={payBusy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{payBusy ? "Recording…" : `Record ${modal === "prepay" ? "prepayment" : "payment"}`}</button></div>
           </div>
         </div>
       )}
