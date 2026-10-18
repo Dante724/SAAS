@@ -8,6 +8,7 @@ import { api } from "../../api/client";
 import { Product, Service, Bundle, money } from "../inventory/types";
 import CategoryManager from "../../components/CategoryManager";
 import Pager from "../../components/Pager";
+import { useServerPage } from "../../hooks/useServerPage";
 
 const CO_PAGE = 50;
 
@@ -202,16 +203,15 @@ function Metric({ l, v, mono }: { l: string; v: string; mono?: boolean }) {
 /* ── Employee hours tab ────────────────────────────────────────── */
 export function EmployeeHours() {
   const [roster, setRoster] = useState<RosterRow[] | null>(null);
-  const [entries, setEntries] = useState<Entry[] | null>(null);
-  const [page, setPage] = useState(1);
+  // Time entries page on the server (the API serves at most 200 rows per request).
+  const ep = useServerPage<Entry>("/timeclock/entries", {}, { pageSize: CO_PAGE });
+  const entries = ep.err ? [] : ep.rows;
   useEffect(() => {
     api.get<{ items: RosterRow[] }>("/timeclock/roster").then((r) => setRoster(r.items || [])).catch(() => setRoster([]));
-    api.get<{ items: Entry[] }>("/timeclock/entries?limit=1000").then((r) => setEntries(r.items || [])).catch(() => setEntries([]));
   }, []);
   const onClock = (roster ?? []).filter((r) => r.on_shift);
-  const entTotal = entries?.length ?? 0;
-  const entPages = Math.max(1, Math.ceil(entTotal / CO_PAGE));
-  const pageEntries = (entries || []).slice((Math.min(page, entPages) - 1) * CO_PAGE, Math.min(page, entPages) * CO_PAGE);
+  const entTotal = ep.total;
+  const pageEntries = entries || [];
   return (
     <div className="space-y-6">
       <div>
@@ -255,7 +255,7 @@ export function EmployeeHours() {
             ))}
           </tbody>
         </table>
-        {entries && entTotal > 0 && <Pager total={entTotal} page={Math.min(page, entPages)} pageSize={CO_PAGE} onPage={setPage} noun="time entries" />}
+        {entries && entTotal > 0 && <Pager total={entTotal} page={ep.page} pageSize={CO_PAGE} onPage={ep.setPage} noun="time entries" />}
       </div>
     </div>
   );

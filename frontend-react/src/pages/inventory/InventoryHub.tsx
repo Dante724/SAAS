@@ -17,6 +17,7 @@ import { useTerminology, assetNoun } from "../../lib/useTerminology";
 import { assetStatusTone } from "./statusTone";
 import { cachedPref, loadPref, savePref } from "../../lib/userPref";
 import Pager from "../../components/Pager";
+import { useServerPage } from "../../hooks/useServerPage";
 import { alertDialog, confirmDialog, promptDialog } from "../../lib/dialog";
 import { printHtmlInFrame } from "../../lib/safeHtml";
 
@@ -57,7 +58,9 @@ export default function InventoryHub() {
   const term = useTerminology();
   const [tab, setTab] = useState<Tab>("stock");
   const [products, setProducts] = useState<Product[] | null>(null);
-  const [assets, setAssets] = useState<Asset[] | null>(null);
+  // Devices tab pages on the server (the API serves at most 200 rows per request).
+  const ap = useServerPage<Asset>("/assets", {}, { pageSize: 50, enabled: tab === "devices" });
+  const assets = ap.rows;
   const [services, setServices] = useState<Service[] | null>(null);
   const [bundles, setBundles] = useState<Bundle[] | null>(null);
   const [pos, setPos] = useState<PO[] | null>(null);
@@ -73,7 +76,6 @@ export default function InventoryHub() {
   const [asel, setAsel] = useState<Set<string>>(new Set());   // asset selection
   const PAGE_SIZE = 50;                 // numbered pagination — 50 rows/page (Stock + Devices)
   const [pPage, setPPage] = useState(1);   // Stock page
-  const [aPage, setAPage] = useState(1);   // Devices page
   const [secPage, setSecPage] = useState(1);  // shared page for the other tabs (PO + audit) — one visible at a time
   const aToggle = (id: string) => setAsel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const [labelDlg, setLabelDlg] = useState(false);
@@ -175,7 +177,6 @@ export default function InventoryHub() {
   }, []);
   useEffect(() => {
     setSecPage(1);   // leaving a tab resets the shared (PO/audit) pager to page 1
-    if (tab === "devices" && !assets) api.get<{ items: Asset[] }>("/assets?limit=1000").then((r) => setAssets(r.items || [])).catch(() => setAssets([]));
     if (tab === "services" && !services) loadServices();
     if (tab === "bundles" && !bundles) api.get<{ items: Bundle[] }>("/bundles").then((r) => setBundles(r.items || [])).catch(() => setBundles([]));
     if (tab === "purchase-orders" && !pos) { api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(() => setPos([])); api.get<{ items: Supplier[] }>("/suppliers").then((r) => setSuppliers(r.items || [])).catch(() => {}); }
@@ -275,8 +276,7 @@ export default function InventoryHub() {
   useEffect(() => { setPPage(1); }, [pq, avail, cat, wh]);
   const pPages = Math.max(1, Math.ceil(shownProducts.length / PAGE_SIZE));
   const pageProducts = shownProducts.slice((Math.min(pPage, pPages) - 1) * PAGE_SIZE, Math.min(pPage, pPages) * PAGE_SIZE);
-  const aPages = Math.max(1, Math.ceil((assets?.length ?? 0) / PAGE_SIZE));
-  const pageAssets = (assets || []).slice((Math.min(aPage, aPages) - 1) * PAGE_SIZE, Math.min(aPage, aPages) * PAGE_SIZE);
+  const pageAssets = assets || [];
   // PO + audit tables share secPage (only one of these tabs renders at a time).
   const poPages = Math.max(1, Math.ceil((pos?.length ?? 0) / PAGE_SIZE));
   const pagePos = (pos || []).slice((Math.min(secPage, poPages) - 1) * PAGE_SIZE, Math.min(secPage, poPages) * PAGE_SIZE);
@@ -483,7 +483,7 @@ export default function InventoryHub() {
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
             <table className="w-full text-left border-collapse">
               <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary "><tr>
-                <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" checked={!!assets?.length && assets.every((a) => asel.has(a.id))} onChange={(e) => setAsel(e.target.checked ? new Set((assets || []).map((a) => a.id)) : new Set())} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
+                <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" checked={!!assets?.length && assets.every((a) => asel.has(a.id))} onChange={(e) => setAsel((s) => { const n = new Set(s); (assets || []).forEach((a) => (e.target.checked ? n.add(a.id) : n.delete(a.id))); return n; })} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
                 <th className="py-3.5 px-3">Device / Model</th><th className="py-3.5 px-3">Serial / IMEI</th><th className="py-3.5 px-3">Ownership</th><th className="py-3.5 px-3">Status</th><th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-xs">
@@ -501,7 +501,7 @@ export default function InventoryHub() {
                 ))}
               </tbody>
             </table>
-            <Pager total={assets?.length ?? 0} page={Math.min(aPage, aPages)} pageSize={PAGE_SIZE} onPage={setAPage} noun="devices & assets" />
+            <Pager total={ap.total} page={ap.page} pageSize={ap.pageSize} onPage={ap.setPage} noun="devices & assets" />
           </div>
         </>)}
 
@@ -596,8 +596,8 @@ export default function InventoryHub() {
       {newPo && <NewPODrawer products={products || []} onClose={() => setNewPo(false)} onCreated={() => { setNewPo(false); api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(() => {}); }} />}
       {poOpen && <PODrawer poId={poOpen} onClose={() => setPoOpen(null)} onChanged={() => { api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(() => {}); loadProducts(); }} />}
       {drawer && <InventoryDrawer kind={drawer.kind} id={drawer.id} initial={drawer.initial} onClose={() => setDrawer(null)} onSaved={() => { if (drawer.kind === "product") loadProducts(); if (drawer.kind === "service") loadServices(); }} />}
-      {assetOpen && <AssetDrawer assetId={assetOpen} onClose={() => { setAssetOpen(null); api.get<{ items: Asset[] }>("/assets?limit=1000").then((r) => setAssets(r.items || [])).catch(() => {}); }} />}
-      {assetCreate && <AssetDrawer onClose={() => setAssetCreate(false)} onSaved={() => api.get<{ items: Asset[] }>("/assets?limit=1000").then((r) => setAssets(r.items || [])).catch(() => {})} />}
+      {assetOpen && <AssetDrawer assetId={assetOpen} onClose={() => { setAssetOpen(null); ap.reload(); }} />}
+      {assetCreate && <AssetDrawer onClose={() => setAssetCreate(false)} onSaved={() => ap.reload()} />}
       {action && <ActionModal kind={action.kind} products={products || []} preselected={[...psel]}
         onClose={() => setAction(null)}
         onDone={() => { setAction(null); pClear(); setAuditRows((s) => ({ ...s, transfers: undefined as any, "write-offs": undefined as any, returns: undefined as any })); loadProducts(); setTab(action.kind === "transfer" ? "transfers" : action.kind === "return" ? "returns" : "write-offs"); }} />}

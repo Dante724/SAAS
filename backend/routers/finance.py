@@ -8,6 +8,7 @@ from datetime import datetime, date
 from backend.db.database import get_db
 from backend.models import Invoice, Payment, CashShift, CashDrawerMovement, Expense, Order, Employee, Location
 from backend.services.auth import get_current_employee, require_perm, record_scope
+from backend.core import paging as _paging
 from backend.services.money import q2, q4, msum  # noqa: F401 — money quantizers used module-wide
 from backend.core.spreadsheet import safe_row
 
@@ -109,11 +110,14 @@ async def _invoice_detail(db, inv) -> dict:
 
 @router.get("/invoices")
 async def list_invoices(
-    status: Optional[str] = None, location_id: Optional[str] = None, skip: int = 0, limit: int = 50,
+    status: Optional[str] = None, location_id: Optional[str] = None,
+    search: Optional[str] = None,     # invoice number, order number or customer name
+    skip: int = _paging.skip_query(), limit: int = _paging.limit_query(50),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
     from backend.models import Order
+    limit = _paging.clamp(limit)
     q = (select(Invoice).where(Invoice.org_id == current.org_id)
          .options(selectinload(Invoice.payments))
          .order_by(Invoice.created_at.desc()))
@@ -126,6 +130,17 @@ async def list_invoices(
         _oids = select(Order.id).where(Order.org_id == current.org_id, Order.location_id == location_id)
         q = q.where(Invoice.order_id.in_(_oids))
         cq = cq.where(Invoice.order_id.in_(_oids))
+    if (search or "").strip():
+        from sqlalchemy import or_
+
+        from backend.models import Client as _C
+        s = search.strip()
+        cond = or_(Invoice.invoice_number.icontains(s),
+                   Invoice.order_id.in_(select(Order.id).where(Order.org_id == current.org_id,
+                                                               Order.order_number.icontains(s))),
+                   Invoice.client_id.in_(select(_C.id).where(_C.org_id == current.org_id,
+                                                             _C.name.icontains(s))))
+        q, cq = q.where(cond), cq.where(cond)
     result = await db.execute(q.offset(skip).limit(limit))
     invs = result.scalars().all()
     total = (await db.execute(cq)).scalar()
@@ -149,7 +164,7 @@ async def list_invoices(
         d["client_name"] = names.get(i.client_id)
         d["created_at"] = i.created_at.isoformat() if getattr(i, "created_at", None) else None
         items.append(d)
-    return {"total": total, "items": items}
+    return {"total": total, "items": items, "skip": skip, "limit": limit}
 
 @router.get("/invoices/{invoice_id}")
 async def get_invoice(

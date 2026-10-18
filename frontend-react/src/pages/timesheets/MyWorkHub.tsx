@@ -36,7 +36,7 @@ export default function MyWorkHub() {
     try {
       const [mw, es] = await Promise.all([
         api.get<Work>("/timeclock/my-work"),
-        api.get<any>("/timeclock/entries"),
+        api.get<any>("/timeclock/entries?limit=20"),
       ]);
       setW(mw); setEntries((es.items || es || []).slice(0, 20));
     } catch (e: any) { setFlash(e.message || "Could not load"); }

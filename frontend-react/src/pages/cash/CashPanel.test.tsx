@@ -16,7 +16,8 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     calls.push({ method: init?.method || "GET", url });
     if (url.startsWith("/api/cash/accounts")) return reply({ items: [{ id: "acc1", name: "Till", payment_option: "cash", balance: 100 }] });
-    if (url.startsWith("/api/cash/transactions?")) return reply({ items: [{ id: "t1", txn_type: "income", amount: 50, comment: "Screen repair", status: "posted" }] });
+    if (url.startsWith("/api/cash/transactions?")) return reply({ items: [{ id: "t1", txn_type: "income", amount: 50, comment: "Screen repair", status: "posted" }], total: 240,
+      summary: { count: 237, income: 9000, expense: 10, today_in: 50, today_out: 0, today_net: 50 } });
     return reply({ items: [] });
   }));
 });
@@ -61,5 +62,17 @@ describe("CashPanel delete transaction", () => {
     await u.click(screen.getByRole("button", { name: "OK" }));
     await vi.waitFor(() => expect(deletes()).toHaveLength(1));
     expect(deletes()[0].url).toBe("/api/cash/transactions/t1?reason=duplicate");
+  });
+});
+
+describe("CashPanel ledger paging", () => {
+  it("asks the server for one page plus full-set totals", async () => {
+    render(<CashPanel />);
+    expect(await screen.findByText(/237 transactions/)).toBeTruthy();
+    const u = new URL(calls.find((c) => c.url.startsWith("/api/cash/transactions?"))!.url, "http://x");
+    expect(u.searchParams.get("account_id")).toBe("acc1");
+    expect(u.searchParams.get("limit")).toBe("50");
+    expect(u.searchParams.get("summary")).toBe("true");
+    expect(calls.every((c) => !c.url.includes("limit=1000"))).toBe(true);
   });
 });

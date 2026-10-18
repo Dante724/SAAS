@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 from backend.db.database import get_db
 from backend.models import Employee, Part, Service
 from backend.services.auth import get_current_employee, require_perm
+from backend.core import paging as _paging
 from backend.services.redact import can_see_costs
 
 router = APIRouter(prefix="/api/catalog", tags=["catalog"])
@@ -88,10 +89,12 @@ async def list_services(
     search: Optional[str] = None,
     category: Optional[str] = None,
     category_id: Optional[str] = None,
-    limit: int = 200,
+    skip: int = _paging.skip_query(),
+    limit: int = _paging.limit_query(200),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    limit = _paging.clamp(limit)
     q = select(Service).where(Service.org_id == current.org_id, Service.active == True)  # noqa: E712
     if search:
         q = q.where(Service.name.ilike(f"%{search}%"))
@@ -99,13 +102,10 @@ async def list_services(
         q = q.where(Service.category == category)
     if category_id:
         q = q.where(Service.category_id == category_id)
-    q = q.order_by(Service.name).limit(limit)
-    rows = (await db.execute(q)).scalars().all()
-    total = (await db.execute(
-        select(func.count()).select_from(Service).where(Service.org_id == current.org_id, Service.active == True)  # noqa: E712
-    )).scalar() or 0
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
+    rows = (await db.execute(q.order_by(Service.name, Service.id).offset(skip).limit(limit))).scalars().all()
     names = await _service_cat_names(db, current.org_id)
-    return {"total": total, "items": [_ser(s, names) for s in rows]}
+    return {"total": total, "items": [_ser(s, names) for s in rows], "skip": skip, "limit": limit}
 
 
 @router.post("/services", status_code=201)

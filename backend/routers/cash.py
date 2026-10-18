@@ -28,6 +28,7 @@ from backend.models import (
     Transaction,
 )
 from backend.services.auth import require_perm, record_scope
+from backend.core import paging as _paging
 from backend.services.numbering import next_number
 from backend.services.money import q2
 
@@ -813,14 +814,20 @@ async def list_order_invoices(
 @router.get("/transactions")
 async def list_transactions(
     account_id: Optional[str] = None,
-    limit: int = 100,
+    skip: int = _paging.skip_query(),
+    limit: int = _paging.limit_query(100),
+    summary: bool = False,          # also return totals over every matching row (not just this page)
+    day: Optional[str] = None,      # YYYY-MM-DD for the summary's "today" in/out
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
+    limit = _paging.clamp(limit)
     q = select(Transaction).where(Transaction.org_id == current.org_id)
     if account_id:
         q = q.where(Transaction.account_id == account_id)
-    q = q.order_by(desc(Transaction.actual_date)).limit(limit)
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
+    extra = {"summary": await _txn_summary(db, q, day)} if summary else {}
+    q = q.order_by(desc(Transaction.actual_date), desc(Transaction.id)).offset(skip).limit(limit)
     rows = (await db.execute(q)).scalars().all()
 
     # name lookups
@@ -838,7 +845,35 @@ async def list_transactions(
         # A1: append-only ledger fields
         "status": t.status, "balance_after": t.balance_after,
         "reverses_txn_id": t.reverses_txn_id, "void_reason": t.void_reason,
-    } for t in rows]}
+    } for t in rows], "total": total, "skip": skip, "limit": limit, **extra}
+
+
+async def _txn_summary(db, q, day: Optional[str]) -> dict:
+    """Totals the cash panel shows under a paged ledger, computed in SQL over all matching
+    rows: live (not deleted) count, money in, money out, and in/out on `day`."""
+    from datetime import date as _date
+    from datetime import timedelta
+
+    from sqlalchemy import case
+    sub = q.where(func.coalesce(Transaction.status, "") != "deleted").subquery()
+    absamt = func.abs(sub.c.amount)
+    cols = [func.count(),
+            func.coalesce(func.sum(case((sub.c.txn_type == "income", sub.c.amount), else_=0)), 0),
+            func.coalesce(func.sum(case((sub.c.txn_type == "expense", absamt), else_=0)), 0)]
+    if day:
+        try:
+            d0 = datetime.combine(_date.fromisoformat(day), datetime.min.time())
+        except ValueError:
+            raise HTTPException(422, "day must be YYYY-MM-DD")
+        on_day = (sub.c.actual_date >= d0) & (sub.c.actual_date < d0 + timedelta(days=1))
+        cols += [func.coalesce(func.sum(case((on_day & (sub.c.txn_type == "income"), absamt), else_=0)), 0),
+                 func.coalesce(func.sum(case((on_day & (sub.c.txn_type == "expense"), absamt), else_=0)), 0)]
+    r = (await db.execute(select(*cols).select_from(sub))).one()
+    out = {"count": r[0], "income": float(r[1] or 0), "expense": float(r[2] or 0)}
+    if day:
+        out["today_in"], out["today_out"] = float(r[3] or 0), float(r[4] or 0)
+        out["today_net"] = out["today_in"] - out["today_out"]
+    return out
 
 
 @router.get("/balances")

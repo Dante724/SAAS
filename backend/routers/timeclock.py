@@ -12,7 +12,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -36,6 +36,7 @@ def _audit(db, e, action, actor_id, *, field=None, old=None, new=None):
                           old_value=None if old is None else str(old),
                           new_value=None if new is None else str(new), actor_id=actor_id))
 from backend.services.auth import get_current_employee, require_perm, record_scope
+from backend.core import paging as _paging
 from backend.services.money import q2, q4
 
 router = APIRouter(prefix="/api/timeclock", tags=["timeclock"],
@@ -482,10 +483,12 @@ async def list_entries(
     state: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    limit: int = 500,
+    skip: int = _paging.skip_query(),
+    limit: int = _paging.limit_query(_paging.PAGE_MAX),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    limit = _paging.clamp(limit)
     q = select(TimeEntry).where(TimeEntry.org_id == current.org_id)
     # non-managers can only see their own time
     if not await _can_manage(db, current):
@@ -500,13 +503,15 @@ async def list_entries(
         q = q.where(TimeEntry.started_at >= _udt(date_from, "date_from"))
     if date_to:
         q = q.where(TimeEntry.started_at < _udt(date_to, "date_to") + timedelta(days=1))
-    rows = (await db.execute(q.order_by(TimeEntry.started_at.desc()).limit(limit))).scalars().all()
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
+    rows = (await db.execute(q.order_by(TimeEntry.started_at.desc(), TimeEntry.id.desc())
+                             .offset(skip).limit(limit))).scalars().all()
     names = await _emp_map(db, current.org_id)
-    nos = {}
-    for e in rows:
-        if e.order_id and e.order_id not in nos:
-            nos[e.order_id] = await _order_no(db, e.order_id)
-    return {"items": [_ser(e, nos.get(e.order_id), names.get(e.employee_id)) for e in rows]}
+    oids = {e.order_id for e in rows if e.order_id}
+    nos = dict((await db.execute(select(Order.id, Order.order_number).where(
+        Order.org_id == current.org_id, Order.id.in_(oids)))).all()) if oids else {}
+    return {"items": [_ser(e, nos.get(e.order_id), names.get(e.employee_id)) for e in rows],
+            "total": total, "skip": skip, "limit": limit}
 
 
 async def _can_manage(db: AsyncSession, emp: Employee) -> bool:
