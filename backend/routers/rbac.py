@@ -203,6 +203,8 @@ async def update_role(role_id: str, data: RoleIn, db: AsyncSession = Depends(get
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="role.update",
                        entity_type="role", entity_id=r.id, diff={"name": r.name, "permissions": merged})
     await db.commit()
+    from backend.core.cost_redaction import invalidate_role
+    invalidate_role(r.id)
     return _ser_role(r)
 
 

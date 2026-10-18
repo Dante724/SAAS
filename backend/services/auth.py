@@ -102,13 +102,21 @@ async def get_current_employee(
             raise credentials_exception
     except JWTError:
         raise credentials_exception
-    result = await db.execute(select(Employee).where(Employee.id == employee_id))
-    employee = result.scalar_one_or_none()
+    # The role rides along in the same query so the cost-redaction decision is made here, once,
+    # instead of by the middleware opening a second session after the endpoint.
+    from backend.models import Role
+    row = (await db.execute(select(Employee, Role).outerjoin(Role, Role.id == Employee.role_id)
+                            .where(Employee.id == employee_id))).first()
+    employee, role = (row[0], row[1]) if row else (None, None)
     if employee is None or not employee.active:
         raise credentials_exception
     # Remembered for response-level rules (cost redaction in main.py) without re-reading the token.
     request.state.employee_id = employee.id
     request.state.employee_role_id = employee.role_id
+    if employee.role_id:
+        from backend.services.permissions import role_allows
+        from backend.services.redact import COST_PERM
+        request.state.can_see_costs = role is not None and role_allows(role, COST_PERM)
     # Lost-device logout: a token carrying a stale version is rejected. Tokens
     # minted before this feature have no "tv" claim and stay valid until expiry.
     tv = payload.get("tv")
