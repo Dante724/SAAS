@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     DATABASE_URL: str = "sqlite+aiosqlite:///./repairos.db"
+    # Postgres pool + guards (per worker process: pool_size + max_overflow connections at most,
+    # so workers x that must stay under the server's max_connections).
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_TIMEOUT_S: int = 10                # wait this long for a free connection, then error (not hang)
+    DB_POOL_RECYCLE_S: int = 1800
+    DB_STATEMENT_TIMEOUT_MS: int = 15000       # Postgres cancels any single statement running longer; 0 = off
+    DB_IDLE_IN_TX_TIMEOUT_MS: int = 60000      # ends a session left idle inside a transaction; 0 = off
 
     # -- Operational toggles --
     SEED_DEMO: bool = False                    # seed demo data on startup (dev only)
