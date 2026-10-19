@@ -19,7 +19,7 @@ from backend.models import (
     OrderLine,
     OrderStatus,
 )
-from backend.services.auth import get_current_employee, record_scope, require_perm
+from backend.services.auth import record_scope, require_perm
 from backend.services.money import q2
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"],
