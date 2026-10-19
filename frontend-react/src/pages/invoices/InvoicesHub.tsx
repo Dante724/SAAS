@@ -5,6 +5,7 @@ import DateField from "../../components/DateField";
 import CatalogPicker from "../../components/CatalogPicker";
 import BulkPrintDialog from "../../components/BulkPrintDialog";
 import Pager from "../../components/Pager";
+import { useServerPage } from "../../hooks/useServerPage";
 import { api, openAuthedDoc } from "../../api/client";
 import { humanize } from "../../lib/humanize";
 import { alertDialog } from "../../lib/dialog";
@@ -17,16 +18,16 @@ type Invoice = { id: string; invoice_number?: string; status?: string; total?: n
 const INV_PAGE_SIZE = 50;
 
 export default function InvoicesHub() {
-  const [invoices, setInvoices] = useState<Invoice[] | null>(null);
+  // One server page at a time (the API serves at most 200 rows per request).
+  const ip = useServerPage<Invoice>("/finance/invoices", {}, { pageSize: INV_PAGE_SIZE });
+  const invoices = ip.rows;
   const [newInv, setNewInv] = useState(false);
   const [invSel, setInvSel] = useState<Set<string>>(new Set());
   const [invPrint, setInvPrint] = useState(false);
-  const [invPage, setInvPage] = useState(1);
   // E-invoicing (Peppol, ZATCA, …) only where the shop's region has a standard; US/CA have none.
   const [einv, setEinv] = useState(false);
-  const reloadInvoices = () => api.get<{ items: Invoice[] }>("/finance/invoices?limit=1000").then((r) => setInvoices(r.items || [])).catch(() => setInvoices([]));
+  const reloadInvoices = () => ip.reload();
   useEffect(() => {
-    reloadInvoices();
     api.get<any>("/regions/pack").then((p) => setEinv(!!p?.einvoice?.standard && p.einvoice.standard !== "none")).catch(() => setEinv(false));
   }, []);
   // Busy guard: the ref blocks a second click landing before React re-renders the disabled button.
@@ -43,8 +44,7 @@ export default function InvoicesHub() {
     catch { await alertDialog("Could not update status"); }
   }
   const cols = einv ? 11 : 10;
-  const invPages = Math.max(1, Math.ceil((invoices?.length ?? 0) / INV_PAGE_SIZE));
-  const pageInv = (invoices || []).slice((Math.min(invPage, invPages) - 1) * INV_PAGE_SIZE, Math.min(invPage, invPages) * INV_PAGE_SIZE);
+  const pageInv = invoices || [];
 
   return (
     <Shell title="Invoices">
@@ -58,11 +58,12 @@ export default function InvoicesHub() {
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden mt-3">
             <table className="w-full text-left border-collapse text-xs">
               <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
-                <th className="py-3 pl-4 pr-2 w-10"><input type="checkbox" checked={!!invoices?.length && invoices.every((i) => invSel.has(i.id))} onChange={(e) => setInvSel(e.target.checked ? new Set((invoices || []).map((i) => i.id)) : new Set())} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
+                <th className="py-3 pl-4 pr-2 w-10"><input type="checkbox" checked={!!invoices?.length && invoices.every((i) => invSel.has(i.id))} onChange={(e) => setInvSel((s) => { const n = new Set(s); (invoices || []).forEach((i) => (e.target.checked ? n.add(i.id) : n.delete(i.id))); return n; })} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
                 <th className="py-3 px-4">Invoice #</th><th className="py-3 px-4">Customer</th><th className="py-3 px-4">Date</th><th className="py-3 px-4">Job</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Total</th><th className="py-3 px-4 text-right">Paid</th><th className="py-3 px-4 text-right">Balance</th>{einv && <th className="py-3 px-4">E-invoice</th>}<th className="py-3 px-4"></th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
-                {!invoices && <SkeletonRows cols={cols} />}
+                {!invoices && !ip.err && <SkeletonRows cols={cols} />}
+                {ip.err && <tr><td colSpan={cols} className="py-6 px-4 text-rose-600">{ip.err}</td></tr>}
                 {invoices?.length === 0 && <tr><td colSpan={cols} className="py-6 px-4 text-ink-tertiary">No invoices.</td></tr>}
                 {pageInv.map((i) => {
                   const paid = /paid/i.test(i.status || "");
@@ -94,7 +95,7 @@ export default function InvoicesHub() {
                 })}
               </tbody>
             </table>
-            {invoices && invoices.length > 0 && <Pager total={invoices.length} page={Math.min(invPage, invPages)} pageSize={INV_PAGE_SIZE} onPage={setInvPage} noun="invoices" />}
+            {invoices && invoices.length > 0 && <Pager total={ip.total} page={ip.page} pageSize={ip.pageSize} onPage={ip.setPage} noun="invoices" />}
           </div>
       </div>
       {newInv && <NewInvoiceDrawer onClose={() => setNewInv(false)} onCreated={() => { setNewInv(false); reloadInvoices(); }} />}

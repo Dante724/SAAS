@@ -2,7 +2,7 @@ import SkeletonRows from "../../components/SkeletonRows";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
-import { api } from "../../api/client";
+import { useDebounced, useServerPage } from "../../hooks/useServerPage";
 import AssetDrawer from "../orders/AssetDrawer";
 import { useTerminology, assetNoun } from "../../lib/useTerminology";
 import Pager from "../../components/Pager";
@@ -11,27 +11,27 @@ type Asset = { id: string; asset_type?: string; asset_label?: string; template_k
 
 export default function AssetsHub() {
   const term = useTerminology();
-  const [rows, setRows] = useState<Asset[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [page, setPage] = useState(1);
   const [q, setQ] = useState("");
   const PAGE_SIZE = 50;
 
-  const reload = () => api.get<{ items: Asset[] }>("/assets?limit=1000").then((r) => setRows(r.items || [])).catch((e) => setErr(String(e.message || e)));
-  useEffect(() => { reload(); }, []);
+  // Searched and paged on the server (the API serves at most 200 rows per request).
+  const dq = useDebounced(q.trim());
+  const sp_ = useServerPage<Asset>("/assets", { search: dq || undefined }, { pageSize: PAGE_SIZE });
+  const rows = sp_.rows;
+  useEffect(() => { setErr(sp_.err); }, [sp_.err]);
+  const reload = () => sp_.reload();
   // deep-open from a scan (?open=<asset id>): open the drawer, then clear the param
   const [sp, setSp] = useSearchParams();
   useEffect(() => {
     const id = sp.get("open");
     if (id) { setOpen(id); setSp((p) => { p.delete("open"); return p; }, { replace: true }); }
   }, []); // eslint-disable-line
-  const shown = (rows || []).filter((a) => !q || [a.brand, a.model, a.serial, a.imei, a.owner_name, a.asset_type].some((v) => (v || "").toLowerCase().includes(q.toLowerCase())));
-  useEffect(() => { setPage(1); }, [q]);
-  const total = shown.length;
-  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const pageRows = shown.slice((Math.min(page, pages) - 1) * PAGE_SIZE, Math.min(page, pages) * PAGE_SIZE);
+  const total = sp_.total;
+  const page = sp_.page, setPage = sp_.setPage;
+  const pageRows = rows || [];
 
   return (
     <Shell title={term.assets}>
@@ -62,7 +62,7 @@ export default function AssetsHub() {
               ))}
             </tbody>
           </table>
-          {rows && total > 0 && <Pager total={total} page={Math.min(page, pages)} pageSize={PAGE_SIZE} onPage={setPage} noun={term.assets.toLowerCase()} />}
+          {rows && total > 0 && <Pager total={total} page={page} pageSize={PAGE_SIZE} onPage={setPage} noun={term.assets.toLowerCase()} />}
         </div>
       </div>
       {open && <AssetDrawer assetId={open} onClose={() => setOpen(null)} onSaved={reload} />}

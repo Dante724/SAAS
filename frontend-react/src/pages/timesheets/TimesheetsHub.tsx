@@ -1,6 +1,7 @@
 import SkeletonRows from "../../components/SkeletonRows";
 import PageSummary from "../../components/PageSummary";
 import { useEffect, useState } from "react";
+import { useVisibleInterval } from "../../hooks/useVisibleInterval";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
@@ -38,7 +39,7 @@ export default function TimesheetsHub() {
   const load = () => { if (empId) api.get<Sheet>(`/timeclock/timesheet?employee_id=${empId}&date_from=${from}&date_to=${to}`).then(setSheet).catch(() => setSheet(null)); };
   const loadRoster = () => api.get<any>("/timeclock/roster").then((r) => setRoster(r.on_shift || [])).catch(() => setRoster([]));
   useEffect(() => { load(); }, [empId, from, to]);
-  useEffect(() => { loadRoster(); const id = setInterval(loadRoster, 30000); return () => clearInterval(id); }, []);
+  useVisibleInterval(loadRoster, 30000);
   const loadSched = () => {
     if (!empId) return;
     api.get<any>(`/schedules?employee_id=${empId}&date_from=${from}&date_to=${to}`).then((r) => setSched(r.items || [])).catch(() => setSched([]));

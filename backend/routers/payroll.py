@@ -16,7 +16,7 @@ from backend.models import (
     EmployeeBalanceLedger,
     PayrollRun,
 )
-from backend.services.auth import require_perm
+from backend.services.auth import assert_not_self, require_perm
 from backend.services.payroll import CommissionEngine, _money
 from backend.services.money import q2
 
@@ -187,9 +187,9 @@ async def create_payroll_run(
         dupe = (await db.execute(select(PayrollRun).where(
             PayrollRun.org_id == current.org_id, PayrollRun.employee_id == data.employee_id,
             PayrollRun.status != "draft",
-            PayrollRun.period_start == ps, PayrollRun.period_end == pe))).scalars().first()
+            PayrollRun.period_start <= pe, PayrollRun.period_end >= ps))).scalars().first()   # any overlap
         if dupe:
-            raise HTTPException(409, "An accrual already exists for this employee and period")
+            raise HTTPException(409, "An accrual already covers part of this period for this employee")
     # sum commissions already accrued in the window
     commissions = (await db.execute(select(func.coalesce(func.sum(EmployeeBalanceLedger.amount), 0)).where(
         EmployeeBalanceLedger.org_id == current.org_id,
@@ -299,10 +299,10 @@ async def create_payroll_runs_bulk(
             dupe = (await db.execute(select(PayrollRun).where(
                 PayrollRun.org_id == current.org_id, PayrollRun.employee_id == emp.id,
                 PayrollRun.status != "draft",
-                PayrollRun.period_start == ps, PayrollRun.period_end == pe))).scalars().first()
+                PayrollRun.period_start <= pe, PayrollRun.period_end >= ps))).scalars().first()   # any overlap
             if dupe:
                 skipped += 1
-                results.append({"employee_id": emp.id, "status": "skipped", "reason": "already accrued"})
+                results.append({"employee_id": emp.id, "status": "skipped", "reason": "already accrued for part of this period"})
                 continue
         try:
             # base salary applies only to fixed-wage staff, matching /calculation
@@ -508,6 +508,7 @@ async def add_adjustment(
         Employee.id == data.employee_id, Employee.org_id == current.org_id))).scalar_one_or_none()
     if not emp:
         raise HTTPException(404, "Employee not found")
+    await assert_not_self(db, current, emp.id, "add a bonus or penalty for yourself")
     amt = _money(data.amount)
     signed = amt if data.kind == "bonus" else -amt
     # date the entry inside the chosen month so it lands in that period's calculation
@@ -622,9 +623,9 @@ async def accrue_calculation(
     dupe = (await db.execute(select(PayrollRun).where(
         PayrollRun.org_id == current.org_id, PayrollRun.employee_id == data.employee_id,
         PayrollRun.status != "draft",
-        PayrollRun.period_start == ps, PayrollRun.period_end == pe))).scalars().first()
+        PayrollRun.period_start <= pe, PayrollRun.period_end >= ps))).scalars().first()   # any overlap
     if dupe:
-        raise HTTPException(409, "An accrual already exists for this employee and period")
+        raise HTTPException(409, "An accrual already covers part of this period for this employee")
 
     commissions = (await db.execute(select(func.coalesce(func.sum(EmployeeBalanceLedger.amount), 0)).where(
         EmployeeBalanceLedger.org_id == current.org_id, EmployeeBalanceLedger.employee_id == data.employee_id,
@@ -743,6 +744,9 @@ async def mark_run_paid(
         raise HTTPException(404, "Run not found")
     if run.status == "draft":
         raise HTTPException(400, "Accrue the draft before marking it paid")
+    if run.status == "paid":
+        raise HTTPException(409, "This run is already paid")
+    await assert_not_self(db, current, run.employee_id, "mark your own pay as paid")
     eng = CommissionEngine(db, current.org_id)
     await eng._post(employee_id=run.employee_id, entry_type="payout", amount=-_money(run.gross_total),
                     event=None, rule_id=None, ref_type="payroll_run", ref_id=run.id,

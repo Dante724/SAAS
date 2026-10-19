@@ -8,7 +8,10 @@ import Pager from "../../components/Pager";
 import { currencySymbol, money } from "../orders/types";
 import { promptDialog } from "../../lib/dialog";
 import { todayTotals } from "../../lib/cashStats";
+import { isoDate } from "../../lib/localDate";
+import { useServerPage } from "../../hooks/useServerPage";
 
+type TxnSummary = { count: number; income: number; expense: number; today_in?: number; today_out?: number; today_net?: number };
 type Txn = { id: string; txn_type?: string; amount?: number; account?: string; account_id?: string; cash_flow_item?: string; comment?: string; actual_date?: string; status?: string; balance_after?: number; reverses_txn_id?: string; void_reason?: string };
 type FlowItem = { id: string; name?: string; direction?: string };
 
@@ -18,7 +21,6 @@ const iconFor = (a: Account) => a.icon || (a.payment_option === "cash" ? "paymen
 export default function CashPanel() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [sel, setSel] = useState<Account | null>(null);
-  const [txns, setTxns] = useState<Txn[] | null>(null);
   const [flow, setFlow] = useState<FlowItem[]>([]);
   const [menu, setMenu] = useState<string | null>(null);
   const [drawer, setDrawer] = useState<null | { edit: Account | null }>(null);
@@ -35,7 +37,11 @@ export default function CashPanel() {
     }).catch(() => setAccounts([]));
   }
   useEffect(() => { loadAccounts(false); api.get<{ items: FlowItem[] }>("/cash/flow-items").then((r) => setFlow(r.items || [])).catch(() => {}); }, []);
-  useEffect(() => { if (sel) api.get<{ items: Txn[] }>(`/cash/transactions?account_id=${sel.id}&limit=1000`).then((r) => setTxns(r.items || [])).catch(() => setTxns([])); }, [sel]);
+  // The ledger pages on the server; its totals come from the same request (SQL over every row),
+  // so they stay full-set however many pages there are.
+  const tp = useServerPage<Txn, { summary?: TxnSummary }>("/cash/transactions",
+    { account_id: sel?.id, summary: "true", day: isoDate() }, { pageSize: 50, enabled: !!sel });
+  const txns = sel ? tp.rows : null;
 
   function openTxn(kind: "income" | "expense") { setForm({ amount: "", cash_flow_item_id: "", comment: "" }); setMenu(null); setModal(kind); }
   function openTransfer() { setForm({ to_account_id: accounts.find((a) => a.id !== sel?.id)?.id || "", amount: "", comment: "" }); setMenu(null); setModal("transfer"); }
@@ -48,25 +54,22 @@ export default function CashPanel() {
         await api.post("/cash/transactions", { account_id: sel!.id, txn_type: modal, amount: parseFloat(form.amount), cash_flow_item_id: form.cash_flow_item_id || null, comment: form.comment || null });
       }
       flash(modal === "transfer" ? "Transfer recorded" : `${modal} recorded`); setModal(null);
-      const items = await loadAccounts(); const cur = (items as Account[]).find((a) => a.id === sel!.id); if (cur) setSel(cur);
+      const items = await loadAccounts(); const cur = (items as Account[]).find((a) => a.id === sel!.id); if (cur) setSel(cur); tp.reload();
     } catch (e: any) { flash(`Failed: ${e.message}`); }
   }
 
   const sym = sel?.currency_code ? (CCY[sel.currency_code] || "") : currencySymbol();
-  // Pagination — 50/page, reset when the selected account changes. Totals below stay full-set.
-  const PAGE_SIZE = 50;
-  const [txnPage, setTxnPage] = useState(1);
-  useEffect(() => { setTxnPage(1); }, [sel]);
-  const txnTotal = txns?.length ?? 0;
-  const txnPages = Math.max(1, Math.ceil(txnTotal / PAGE_SIZE));
-  const pageTxns = (txns || []).slice((Math.min(txnPage, txnPages) - 1) * PAGE_SIZE, Math.min(txnPage, txnPages) * PAGE_SIZE);
-  const live = (txns || []).filter((t) => t.status !== "deleted");
-  const income = live.filter((t) => t.txn_type === "income").reduce((s, t) => s + (t.amount || 0), 0);
-  const expense = live.filter((t) => t.txn_type === "expense").reduce((s, t) => s + Math.abs(t.amount || 0), 0);
+  // Pagination — 50/page on the server, back to page 1 when the selected account changes.
+  const txnTotal = tp.total;
+  const pageTxns = txns || [];
+  const sm = tp.extra?.summary;
+  const live = { length: sm?.count ?? 0 };
+  const income = sm?.income ?? 0;
+  const expense = sm?.expense ?? 0;
 
   async function reloadTxns() {
     const items = await loadAccounts(); const cur = (items as Account[]).find((a) => a.id === sel!.id); if (cur) setSel({ ...cur });
-    if (sel) api.get<{ items: Txn[] }>(`/cash/transactions?account_id=${sel.id}&limit=1000`).then((r) => setTxns(r.items || [])).catch(() => {});
+    tp.reload();
   }
   async function correctTxn(t: Txn) {
     const raw = await promptDialog("Correction amount (signed: +increase, −reduce):", { defaultValue: "" }); if (raw === null) return;
@@ -86,7 +89,7 @@ export default function CashPanel() {
     catch (e: any) { flash(`Failed: ${e.message}`); }
   }
 
-  const tt = todayTotals(txns || []);
+  const tt = sm ? { in: sm.today_in ?? 0, out: sm.today_out ?? 0, net: sm.today_net ?? 0 } : todayTotals([]);
 
   return (
     <>
@@ -203,7 +206,7 @@ export default function CashPanel() {
               )}
             </table>
             </div>
-            {txns && txnTotal > 0 && <Pager total={txnTotal} page={Math.min(txnPage, txnPages)} pageSize={PAGE_SIZE} onPage={setTxnPage} noun="transactions" />}
+            {txns && txnTotal > 0 && <Pager total={txnTotal} page={tp.page} pageSize={tp.pageSize} onPage={tp.setPage} noun="transactions" />}
           </div>
           </>
           )}

@@ -18,6 +18,7 @@ from backend.models import Client, Device, Employee, Order
 from backend.services import asset_catalog as _cat
 from backend.services import identifiers as _ids
 from backend.services import industry as _ind
+from backend.core import paging as _paging
 from backend.services.auth import get_current_employee, require_perm
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
@@ -51,7 +52,7 @@ def _gen_serial(asset_type: str = "Device") -> str:
     return f"{prefix}-{body}"
 
 
-def _ser(d: Device, order_count: int = 0, owner_name: str = None) -> dict:
+def _ser(d: Device, order_count: int = 0, owner_name: str = None, inline_image: bool = True) -> dict:
     return {
         "id": d.id, "owner_type": d.owner_type, "client_id": d.client_id,
         "owner_name": owner_name,
@@ -65,7 +66,7 @@ def _ser(d: Device, order_count: int = 0, owner_name: str = None) -> dict:
         "asset_group_id": getattr(d, "asset_group_id", None),
         "is_generated_serial": d.is_generated_serial,
         "color": d.color, "condition": d.condition,
-        "image_data": getattr(d, "image_data", None),
+        **({"image_data": getattr(d, "image_data", None)} if inline_image else {}),
         "watch_out": getattr(d, "watch_out", None),
         "location_id": d.location_id,
         "asset_status": getattr(d, "asset_status", "in_use"),
@@ -92,16 +93,18 @@ async def list_assets(
     owner_type: Optional[str] = None,
     asset_type: Optional[str] = None,
     search: Optional[str] = None,
-    limit: int = 200,
+    skip: int = _paging.skip_query(),
+    limit: int = _paging.limit_query(200),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
     # Build 144do (security): scope strictly to this org. Previously company-owned
     # assets from ALL orgs leaked into every org's list via `owner_type == "company"`.
-    client_ids = (await db.execute(
-        select(Client.id).where(Client.org_id == current.org_id)
-    )).scalars().all()
-
+    # Batch 2: one page at a time with the real total; owner names and order counts are
+    # batched for the page (it used to load every client of the shop and count per row),
+    # and the photo is a URL, not inline base64.
+    from sqlalchemy.orm import defer
+    limit = _paging.clamp(limit)
     q = select(Device).where(Device.org_id == current.org_id)
     if owner_type:
         q = q.where(Device.owner_type == owner_type)
@@ -113,24 +116,30 @@ async def list_assets(
             Device.imei.ilike(f"%{search}%"),
             Device.brand.ilike(f"%{search}%"),
             Device.model.ilike(f"%{search}%"),
+            Device.asset_type.ilike(f"%{search}%"),
+            Device.client_id.in_(select(Client.id).where(Client.org_id == current.org_id,
+                                                         Client.name.ilike(f"%{search}%"))),
         ))
-    q = q.order_by(desc(Device.created_at)).limit(limit)
-    devices = (await db.execute(q)).scalars().all()
-
-    # owner names + order counts
-    client_map = {}
-    if client_ids:
-        rows = (await db.execute(select(Client).where(Client.id.in_(client_ids)))).scalars().all()
-        client_map = {c.id: c.name for c in rows}
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
+    devices = (await db.execute(q.options(defer(Device.image_data))
+                                .order_by(desc(Device.created_at), desc(Device.id))
+                                .offset(skip).limit(limit))).scalars().all()
+    ids = [d.id for d in devices]
+    cids = {d.client_id for d in devices if d.client_id and d.owner_type == "client"}
+    client_map = dict((await db.execute(select(Client.id, Client.name).where(
+        Client.org_id == current.org_id, Client.id.in_(cids)))).all()) if cids else {}
+    counts = dict((await db.execute(select(Order.device_id, func.count(Order.id)).where(
+        Order.org_id == current.org_id, Order.device_id.in_(ids)).group_by(Order.device_id))).all()) if ids else {}
+    with_img = set((await db.execute(select(Device.id).where(
+        Device.id.in_(ids), Device.image_data.is_not(None), Device.image_data != ""))).scalars().all()) if ids else set()
 
     out = []
     for d in devices:
-        cnt = (await db.execute(
-            select(func.count()).select_from(Order).where(Order.device_id == d.id)
-        )).scalar() or 0
         owner = client_map.get(d.client_id) if d.owner_type == "client" else "Company"
-        out.append(_ser(d, cnt, owner))
-    return {"total": len(out), "items": out}
+        row = _ser(d, counts.get(d.id, 0), owner, inline_image=False)
+        row["image_url"] = f"/api/assets/{d.id}/image" if d.id in with_img else None
+        out.append(row)
+    return {"total": total, "items": out, "skip": skip, "limit": limit}
 
 
 @router.post("", status_code=201)
@@ -300,6 +309,35 @@ class AssetUpdate(BaseModel):
     owner_type: Optional[str] = None
     image_data: Optional[str] = None   # Build 144ai: asset photo (data URL)
     watch_out: Optional[str] = None    # Build 144ag: prominent per-asset warning
+
+
+@router.get("/{asset_id}/image")
+async def get_asset_image(
+    asset_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """The asset photo as an image, so lists and the board can reference it by URL instead
+    of inlining base64 on every row."""
+    import base64
+    import binascii
+
+    from fastapi import Response
+
+    from backend.routers.media import safe_media_response
+    data = (await db.execute(select(Device.image_data).where(
+        Device.id == asset_id, Device.org_id == current.org_id))).scalar_one_or_none()
+    if not data or not data.startswith("data:") or "," not in data:
+        raise HTTPException(404, "No photo")
+    head, b64 = data[5:].split(",", 1)
+    mime = head.split(";", 1)[0] or "application/octet-stream"
+    try:
+        raw = base64.b64decode(b64, validate=False) if ";base64" in head else b64.encode()
+    except (binascii.Error, ValueError):
+        raise HTTPException(404, "No photo")
+    kw = safe_media_response(raw, mime, "asset")
+    kw["headers"]["Cache-Control"] = "private, max-age=300"
+    return Response(content=raw, **kw)
 
 
 @router.put("/{asset_id}")

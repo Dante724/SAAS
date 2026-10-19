@@ -41,6 +41,8 @@ async def permission_catalog(current: Employee = Depends(get_current_employee)):
 
 def _ser_role(r: Role) -> dict:
     return {"id": r.id, "name": r.name, "permissions": r.permissions or {},
+            # explicit roles are allow-lists: a code they don't list is OFF (see role_allows)
+            "perms_explicit": bool(getattr(r, "perms_explicit", False)),
             "location_scope": getattr(r, "location_scope", "all"),
             "location_ids": json.loads(getattr(r, "location_ids", None) or "[]"),
             "contact_scope": getattr(r, "contact_scope", "all"),
@@ -112,8 +114,9 @@ _NARROW = {"own", "selected"}
 
 
 async def _editor_role(db: AsyncSession, current: Employee) -> Optional[Role]:
-    if not current.role_id:
-        return None                 # the owner
+    from backend.services.auth import is_shop_owner
+    if not current.role_id or await is_shop_owner(db, current):
+        return None                 # the owner: no limits to stay within
     role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
     if role is None:
         raise HTTPException(403, "Your role is missing; ask the owner")
@@ -203,6 +206,8 @@ async def update_role(role_id: str, data: RoleIn, db: AsyncSession = Depends(get
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="role.update",
                        entity_type="role", entity_id=r.id, diff={"name": r.name, "permissions": merged})
     await db.commit()
+    from backend.core.cost_redaction import invalidate_role
+    invalidate_role(r.id)
     return _ser_role(r)
 
 

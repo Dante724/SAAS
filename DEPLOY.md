@@ -33,6 +33,8 @@ uv pip compile requirements-dev.txt --universal --python-version 3.11 --generate
 | `FORWARDED_ALLOW_IPS` | yes behind a proxy | Your load balancer's IP/CIDR. Uvicorn then takes the client IP from `X-Forwarded-For` only from it. Leave `TRUSTED_PROXY_HOPS` at 0. |
 | `WEB_CONCURRENCY` | no | Worker processes (default 2). Background sweeps run once across all workers (Postgres advisory locks). |
 | `REDIS_URL` | multi-instance | Shared rate-limit store. |
+| `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | no | Postgres connections per worker (default 10 + 10). Keep `WEB_CONCURRENCY` × their sum under the server's `max_connections`. `DB_POOL_TIMEOUT_S` (default 10) is how long a request waits for a free connection before failing. |
+| `DB_STATEMENT_TIMEOUT_MS` | no | Postgres cancels any single statement that runs longer (default 15000). `DB_IDLE_IN_TX_TIMEOUT_MS` (default 60000) ends sessions left idle inside a transaction. Set to 0 behind a PgBouncer that rejects startup parameters, and set them on the database role instead. |
 | `MEDIA_BACKEND` | recommended | `s3` in production (see §5). |
 | `SENTRY_DSN` | recommended | Sends unhandled errors to Sentry/GlitchTip (headers, cookies, bodies and query strings are scrubbed). Optional `SENTRY_TRACES_SAMPLE_RATE` (default 0) and `RELEASE` (git SHA). |
 | `METRICS_TOKEN` | to scrape `/metrics` | Prometheus bearer token. Without it a deployed instance returns 404 at `/metrics`. |

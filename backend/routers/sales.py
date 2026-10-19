@@ -169,7 +169,7 @@ async def _pos_redemptions(db, org_id, sale, client_id, gross, data):
 async def list_sales(
     location_id: Optional[str] = None,        # build 138: scope sales to a branch
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_sales")),
 ):
     _q = select(Sale).where(Sale.org_id == current.org_id)
     if location_id:

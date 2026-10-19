@@ -24,7 +24,7 @@ from backend.models import (
     StockMovement,
 )
 from backend.services import industry as _ind
-from backend.services.auth import get_current_employee, require_perm, record_scope
+from backend.services.auth import assert_perm, get_current_employee, require_perm, record_scope
 from backend.services.numbering import next_number
 
 router = APIRouter(prefix="/api/orders", tags=["orders"],
@@ -267,7 +267,8 @@ def _intake_photos_payload(o: Order) -> list:
     return out
 
 
-def _serialize_order(o: Order) -> dict:
+def _serialize_order_scalars(o: Order) -> dict:
+    """Every field of a work order except its lines, comments and status history."""
     return {
         "id": o.id,
         "order_number": o.order_number,
@@ -310,11 +311,18 @@ def _serialize_order(o: Order) -> dict:
         "client": {"id": o.client.id, "name": o.client.name, "phone": o.client.phone,
                    "balance": float(getattr(o.client, "balance", 0) or 0),
                    "watch_out": getattr(o.client, "watch_out", None)} if o.client else None,
-        "device": {"id": o.device.id, "brand": o.device.brand, "model": o.device.model, "serial": o.device.serial, "imei": o.device.imei, "vin": o.device.vin, "hin": o.device.hin, "asset_type": o.device.asset_type, "asset_label": _ind.asset_label(getattr(o.device, "template_key", None)), "image_data": getattr(o.device, "image_data", None), "watch_out": getattr(o.device, "watch_out", None), "custom_data": o.device.custom_data or {}} if o.device else None,
         "assigned_to": {"id": o.assigned_to.id, "name": o.assigned_to.name} if o.assigned_to else None,
         "assigned_to_id": o.assigned_to_id,
         "manager": {"id": o.manager.id, "name": o.manager.name} if getattr(o, "manager", None) else None,
         "manager_id": getattr(o, "manager_id", None),
+        "device": None,
+    }
+
+
+def _serialize_order(o: Order) -> dict:
+    row = _serialize_order_scalars(o)
+    row.update({
+        "device": {"id": o.device.id, "brand": o.device.brand, "model": o.device.model, "serial": o.device.serial, "imei": o.device.imei, "vin": o.device.vin, "hin": o.device.hin, "asset_type": o.device.asset_type, "asset_label": _ind.asset_label(getattr(o.device, "template_key", None)), "image_data": getattr(o.device, "image_data", None), "watch_out": getattr(o.device, "watch_out", None), "custom_data": o.device.custom_data or {}} if o.device else None,
         "lines": [{"id": l.id, "line_type": l.line_type, "kind": l.kind, "description": l.description,
                    "qty": l.qty, "unit_price": l.unit_price, "cost_price": l.cost_price,
                    "discount": l.discount, "discount_type": l.discount_type, "discount_paid_by": l.discount_paid_by,
@@ -327,50 +335,33 @@ def _serialize_order(o: Order) -> dict:
                       "created_at": c.created_at.isoformat()} for c in o.comments],
         "status_logs": [{"from": s.from_status, "to": s.to_status, "at": s.changed_at.isoformat(),
                          "note": s.note} for s in o.status_logs],
-    }
+    })
+    return row
 
 # ── Routes ───────────────────────────────────
 
-@router.get("")
-async def list_orders(
-    status: Optional[str] = None,
-    location_id: Optional[str] = None,
-    search: Optional[str] = None,
-    type_id: Optional[str] = None,
-    assigned_to_id: Optional[str] = None,
-    priority: Optional[int] = None,
-    client_id: Optional[str] = None,
-    brand: Optional[str] = None,
-    model: Optional[str] = None,
-    is_estimate: Optional[bool] = None,   # Build 144di: None = unified list (both)
-    created_from: Optional[str] = None,
-    created_to: Optional[str] = None,
-    include_archived: bool = False,
-    skip: int = 0,
-    limit: int = Query(50, ge=1, le=1000),   # WorkOrdersHub bulk-loads up to 1000 then paginates
-                                             # client-side; a lower cap 422s the whole page.
-    db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
-):
-    q = (select(Order)
-         .where(Order.org_id == current.org_id)
-         .options(
-             selectinload(Order.client),
-             selectinload(Order.device),
-             selectinload(Order.assigned_to),
-             selectinload(Order.lines),
-             selectinload(Order.comments),
-             selectinload(Order.status_logs),
-         )
-         .order_by(Order.created_at.desc()))
-    # estimates and work orders share this table; filter by the flag only when the
-    # caller asks for a specific type (None => unified list of both).
+# Work-order list paging. Old clients asked for limit=1000 and paginated in the browser; a
+# request above the page ceiling is clamped (not 422'd) so a cached bundle keeps working, and
+# `total` tells it there is more. The validation bound still rejects absurd values.
+ORDER_PAGE_MAX = 200
+BOARD_COLUMN_MAX = 200
+
+
+def _apply_order_filters(q, org_id: str, *, status=None, location_id=None, search=None,
+                         type_id=None, assigned_to_id=None, priority=None, priority_min=None,
+                         client_id=None, brand=None, model=None, is_estimate=None,
+                         created_from=None, created_to=None, include_archived=False,
+                         scheduled=None):
+    """The work-order list filters, shared by the list, its facet counts and the board, so a
+    total always counts exactly the rows the filters select. Device/client filters use
+    subqueries (not joins) so rows never duplicate and the count stays a plain count."""
+    from sqlalchemy import or_
+
+    from backend.models import Device
     if is_estimate is not None:
         q = q.where(Order.is_estimate == is_estimate)
-    # archived (soft-deleted) orders are hidden unless explicitly requested
     if not include_archived:
         q = q.where(Order.archived == False)  # noqa: E712
-    # status may be a single value or a comma-separated list (status group)
     if status:
         statuses = [s for s in status.split(",") if s]
         if len(statuses) == 1:
@@ -381,34 +372,125 @@ async def list_orders(
         q = q.where(Order.location_id == location_id)
     if type_id:
         q = q.where(Order.type_id == type_id)
-    if assigned_to_id:
+    if assigned_to_id == "__none":
+        q = q.where(Order.assigned_to_id.is_(None))
+    elif assigned_to_id:
         q = q.where(Order.assigned_to_id == assigned_to_id)
     if priority is not None:
         q = q.where(Order.priority == priority)
+    if priority_min is not None:
+        q = q.where(Order.priority >= priority_min)
     if client_id:
         q = q.where(Order.client_id == client_id)
+    if scheduled == "yes":
+        q = q.where(Order.scheduled_for.is_not(None))
+    elif scheduled == "no":
+        q = q.where(Order.scheduled_for.is_(None))
     if brand or model:
-        from backend.models import Device
-        q = q.join(Device, Order.device_id == Device.id)
+        dq = select(Device.id).where(Device.org_id == org_id)
         if brand:
-            q = q.where(Device.brand.icontains(brand))
+            dq = dq.where(Device.brand.icontains(brand))
         if model:
-            q = q.where(Device.model.icontains(model))
+            dq = dq.where(Device.model.icontains(model))
+        q = q.where(Order.device_id.in_(dq))
     if created_from:
         q = q.where(Order.created_at >= parse_dt(created_from, "created_from"))
     if created_to:
         q = q.where(Order.created_at <= parse_dt(created_to, "created_to"))
-    if search:
-        q = q.where(Order.order_number.contains(search))
-    # Build 83: record-level scope ("my work orders" / selected locations)
+    s = (search or "").strip()
+    if s:
+        # order number, client name/phone, or the device (brand, model, serial, IMEI)
+        cq = select(Client.id).where(Client.org_id == org_id, or_(
+            Client.name.icontains(s), Client.phone.contains(s)))
+        dq = select(Device.id).where(Device.org_id == org_id, or_(
+            Device.brand.icontains(s), Device.model.icontains(s),
+            Device.serial.icontains(s), Device.imei.contains(s)))
+        q = q.where(or_(Order.order_number.icontains(s),
+                        Order.client_id.in_(cq), Order.device_id.in_(dq)))
+    return q
+
+
+def _device_image_url(device_id: Optional[str], has_image: bool) -> Optional[str]:
+    return f"/api/assets/{device_id}/image" if (device_id and has_image) else None
+
+
+def _serialize_order_row(o: Order, has_image: bool) -> dict:
+    """List-row shape: every scalar field of the detail serializer, but no lines, comments or
+    status history, and the asset photo as a URL instead of inline base64. The drawer loads
+    GET /orders/{id} for the full record."""
+    row = _serialize_order_scalars(o)
+    if o.device:
+        d = o.device
+        row["device"] = {"id": d.id, "brand": d.brand, "model": d.model, "serial": d.serial,
+                         "imei": d.imei, "vin": d.vin, "hin": d.hin, "asset_type": d.asset_type,
+                         "asset_label": _ind.asset_label(getattr(d, "template_key", None)),
+                         "image_url": _device_image_url(d.id, has_image),
+                         "watch_out": getattr(d, "watch_out", None),
+                         "custom_data": d.custom_data or {}}
+    return row
+
+
+async def _devices_with_images(db, device_ids) -> set:
+    """Which of these devices carry a photo — one query, without reading the photo bytes."""
+    from backend.models import Device
+    ids = [i for i in set(device_ids) if i]
+    if not ids:
+        return set()
+    return set((await db.execute(select(Device.id).where(
+        Device.id.in_(ids), Device.image_data.is_not(None), Device.image_data != ""))).scalars().all())
+
+
+def _order_list_options():
+    from sqlalchemy.orm import defer
+
+    from backend.models import Device
+    return (selectinload(Order.client), selectinload(Order.device).options(defer(Device.image_data)),
+            selectinload(Order.assigned_to), selectinload(Order.manager))
+
+
+@router.get("")
+async def list_orders(
+    status: Optional[str] = None,
+    location_id: Optional[str] = None,
+    search: Optional[str] = None,
+    q: Optional[str] = None,                  # alias of search (global search box sends q=)
+    type_id: Optional[str] = None,
+    assigned_to_id: Optional[str] = None,     # "__none" = unassigned
+    priority: Optional[int] = None,
+    priority_min: Optional[int] = None,       # 1 = urgent or VIP
+    scheduled: Optional[str] = Query(None, pattern="^(yes|no)$"),
+    client_id: Optional[str] = None,
+    brand: Optional[str] = None,
+    model: Optional[str] = None,
+    is_estimate: Optional[bool] = None,   # Build 144di: None = unified list (both)
+    created_from: Optional[str] = None,
+    created_to: Optional[str] = None,
+    include_archived: bool = False,
+    facets: bool = False,                     # also return status counts + assignees for the toolbar
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    limit = min(limit, ORDER_PAGE_MAX)
     from backend.services import scoping
     role = await scoping.role_for(db, current)
-    q = scoping.scope_orders(q, role, current)
-    result = await db.execute(q.offset(skip).limit(limit))
-    orders = result.scalars().all()
-    count_q = select(func.count()).select_from(Order).where(Order.org_id == current.org_id)
-    count_q = scoping.scope_orders(count_q, role, current)   # count respects the same scope
-    total = (await db.execute(count_q)).scalar()
+    flt = dict(location_id=location_id, search=search or q, type_id=type_id,
+               assigned_to_id=assigned_to_id, priority=priority, priority_min=priority_min,
+               client_id=client_id, brand=brand, model=model, is_estimate=is_estimate,
+               created_from=created_from, created_to=created_to,
+               include_archived=include_archived, scheduled=scheduled)
+
+    def scoped(base):
+        return scoping.scope_orders(base.where(Order.org_id == current.org_id), role, current)
+
+    base = _apply_order_filters(scoped(select(Order)), current.org_id, status=status, **flt)
+    orders = (await db.execute(base.options(*_order_list_options())
+                               .order_by(Order.created_at.desc(), Order.id.desc())
+                               .offset(skip).limit(limit))).scalars().all()
+    # total = rows matching the same filters + record scope (it used to count the whole org)
+    total = (await db.execute(_apply_order_filters(
+        scoped(select(func.count(Order.id))), current.org_id, status=status, **flt))).scalar() or 0
     # Build 144ds — invoice status per order for the list column (batched, no N+1).
     from backend.models import Invoice as _Inv
     oids = [o.id for o in orders]
@@ -430,13 +512,43 @@ async def list_orders(
         for (oid,) in (await db.execute(select(_OCI.order_id).where(
                 _OCI.order_id.in_(oids), _OCI.required == True, _OCI.done == False))).all():  # noqa: E712
             pending_cl.add(oid)
+    with_img = await _devices_with_images(db, [o.device_id for o in orders])
     items = []
     for o in orders:
-        row = _serialize_order(o)
+        row = _serialize_order_row(o, o.device_id in with_img)
         row["invoice_status"] = inv_status.get(o.id)  # None = not invoiced
         row["checklists_pending"] = o.id in pending_cl
         items.append(row)
-    return {"total": total, "items": items}
+    out = {"total": total, "items": items, "skip": skip, "limit": limit}
+    if facets:
+        out.update(await _order_facets(db, current, role, status, flt))
+    return out
+
+
+async def _order_facets(db, current, role, status, flt) -> dict:
+    """Toolbar numbers for the paged list: per-status counts under every filter except status,
+    the assignees present, and open work orders — all aggregates, no rows loaded."""
+    from backend.services import scoping
+
+    def scoped(base):
+        return scoping.scope_orders(base.where(Order.org_id == current.org_id), role, current)
+
+    counts = dict((await db.execute(_apply_order_filters(
+        scoped(select(Order.status, func.count(Order.id))), current.org_id, **flt)
+        .group_by(Order.status))).all())
+    people = (await db.execute(
+        scoped(select(Employee.id, Employee.name).select_from(Order)
+               .join(Employee, Order.assigned_to_id == Employee.id))
+        .where(Order.archived == False).distinct())).all()  # noqa: E712
+    closed_keys = select(OrderStatus.key).where(
+        OrderStatus.org_id == current.org_id, OrderStatus.record_type == "work_order",
+        OrderStatus.status_group.in_(("closed", "dropped")))
+    open_jobs = (await db.execute(scoped(select(func.count(Order.id))).where(
+        Order.archived == False, Order.is_estimate == False,  # noqa: E712
+        Order.status.not_in(closed_keys)))).scalar() or 0
+    return {"status_counts": counts,
+            "assignees": sorted(({"id": i, "name": n} for i, n in people), key=lambda a: (a["name"] or "").lower()),
+            "open_jobs": open_jobs}
 
 
 class BulkActionIn(BaseModel):
@@ -455,6 +567,11 @@ async def bulk_action(
 ):
     if not data.order_ids:
         raise HTTPException(400, "No orders selected")
+    # Bulk actions need the same permission as doing it to one order.
+    _bulk_perm = {"assign": "can_assign_staff", "create_invoice": "can_create_invoices",
+                  "group_invoice": "can_create_invoices"}.get(data.action)
+    if _bulk_perm:
+        await assert_perm(db, current, _bulk_perm)
 
     # 144-G: archive / restore are destructive — gate them (default-allow, like require_perm)
     # and run each through the single-order helper so refunds, commission reversal and audit
@@ -922,12 +1039,23 @@ async def create_order(
 async def board(
     is_estimate: bool = False,
     location_id: Optional[str] = None,        # build 138: scope the board to a branch
+    search: Optional[str] = None,
+    assigned_to_id: Optional[str] = None,     # "__none" = unassigned
+    priority_min: Optional[int] = None,
+    scheduled: Optional[str] = Query(None, pattern="^(yes|no)$"),
+    per_column: int = Query(50, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
     """Kanban board: open orders grouped by status GROUP (Orderry board view).
     Columns follow status groups in canonical order; each card carries enough
-    to render + drag. Drag → PATCH /status applies transfer rules + triggers."""
+    to render + drag. Drag → PATCH /status applies transfer rules + triggers.
+
+    Load-bounded: only open (non-archived, not closed/dropped) orders become cards, at most
+    `per_column` per column (newest first); every column and status still gets its full
+    count from one aggregate, and `truncated` says a column has more than it shows. Cards
+    carry the asset photo as a URL, never inline."""
+    per_column = min(per_column, BOARD_COLUMN_MAX)
     # Make sure the org has its default statuses, so the board is never blank on
     # first visit (the statuses list endpoint does the same on-demand seeding).
     from backend.routers.statuses import ensure_seeded
@@ -946,51 +1074,77 @@ async def board(
         statuses_by_group.setdefault(s.status_group, []).append(
             {"key": s.key, "name": s.name, "color": s.color})
 
-    _bq = select(Order).where(Order.org_id == current.org_id, Order.is_estimate == is_estimate)  # noqa: E712
-    if location_id:
-        _bq = _bq.where(Order.location_id == location_id)
     # record-level scoping: a role scoped to "own" only sees its own board cards
     # (same rule as the list — the board must never leak others' work).
     from backend.services import scoping
     _brole = await scoping.role_for(db, current)
-    _bq = scoping.scope_orders(_bq, _brole, current)
-    orders = (await db.execute(_bq
-        .options(selectinload(Order.client), selectinload(Order.device), selectinload(Order.assigned_to))
-        .order_by(Order.created_at.desc()))).scalars().all()
+
+    def _scoped(base):
+        base = scoping.scope_orders(base.where(Order.org_id == current.org_id), _brole, current)
+        return _apply_order_filters(base, current.org_id, is_estimate=is_estimate,
+                                    location_id=location_id, search=search,
+                                    assigned_to_id=assigned_to_id, priority_min=priority_min,
+                                    scheduled=scheduled)
+
+    status_counts = dict((await db.execute(_scoped(select(Order.status, func.count(Order.id)))
+                                           .group_by(Order.status))).all())
+    group_counts: dict = {}
+    for st, n in status_counts.items():
+        g = grp_of.get(st, "new")
+        group_counts[g] = group_counts.get(g, 0) + n
 
     now = datetime.utcnow()
+    known = list(grp_of)
     cards_by_group = {g: [] for g in group_order}
-    for o in orders:
-        g = grp_of.get(o.status, "new")
-        if g not in cards_by_group:
-            cards_by_group[g] = []
-        cards_by_group[g].append({
-            "id": o.id, "order_number": o.order_number, "status": o.status,
-            "priority": o.priority, "total": o.total,
-            "client_name": o.client.name if o.client else None,
-            # A device may have a serial but no brand/model (checked in by serial only),
-            # so guard against None — concatenating None here 500'd the whole board.
-            "device": (f"{o.device.brand or ''} {o.device.model or ''}".strip() or None)
-                      if o.device else None,
-            "device_image": getattr(o.device, "image_data", None) if o.device else None,
-            "assigned_to_name": o.assigned_to.name if o.assigned_to else None,
-            "scheduled_for": o.scheduled_for.isoformat() if o.scheduled_for else None,
-            # flag: scheduled but still in New group → needs attention (Orderry)
-            "needs_attention": bool(o.scheduled_for and g == "new"),
-            "overdue": bool(o.due_at and o.due_at < now and g not in ("closed", "dropped")),
-            "client_msg_unread": getattr(o, "client_msg_unread", 0) or 0,
-        "rec_unread": getattr(o, "rec_unread", 0) or 0,
-        })
+    for g in group_order:
+        if g in ("closed", "dropped") or not group_counts.get(g):
+            continue
+        keys = [k for k, gg in grp_of.items() if gg == g]
+        cond = Order.status.in_(keys) if keys else None
+        if g == "new":   # an unknown status lands in New, as before
+            from sqlalchemy import or_, true
+            unknown = Order.status.not_in(known) if known else true()
+            cond = or_(cond, unknown) if cond is not None else unknown
+        if cond is None:
+            continue
+        rows = (await db.execute(_scoped(select(Order)).where(cond)
+                                 .options(*_order_list_options())
+                                 .order_by(Order.created_at.desc(), Order.id.desc())
+                                 .limit(per_column))).scalars().all()
+        with_img = await _devices_with_images(db, [o.device_id for o in rows])
+        for o in rows:
+            cards_by_group[g].append({
+                "id": o.id, "order_number": o.order_number, "status": o.status,
+                "priority": o.priority, "total": o.total,
+                "client_name": o.client.name if o.client else None,
+                "client_id": o.client_id,
+                # A device may have a serial but no brand/model (checked in by serial only),
+                # so guard against None — concatenating None here 500'd the whole board.
+                "device": (f"{o.device.brand or ''} {o.device.model or ''}".strip() or None)
+                          if o.device else None,
+                "device_image_url": _device_image_url(o.device_id, o.device_id in with_img),
+                "assigned_to_id": o.assigned_to_id,
+                "assigned_to_name": o.assigned_to.name if o.assigned_to else None,
+                "scheduled_for": o.scheduled_for.isoformat() if o.scheduled_for else None,
+                # flag: scheduled but still in New group → needs attention (Orderry)
+                "needs_attention": bool(o.scheduled_for and g == "new"),
+                "overdue": bool(o.due_at and o.due_at < now),
+                "client_msg_unread": getattr(o, "client_msg_unread", 0) or 0,
+                "rec_unread": getattr(o, "rec_unread", 0) or 0,
+            })
 
     columns = []
     for g in group_order:
         if g in statuses_by_group:  # only show groups that have statuses
+            cards = cards_by_group.get(g, [])
             columns.append({
                 "group": g, "label": group_label.get(g, g),
                 "statuses": statuses_by_group[g],
-                "cards": cards_by_group.get(g, []),
+                "cards": cards,
+                "count": group_counts.get(g, 0),
+                "truncated": group_counts.get(g, 0) > len(cards),
             })
-    return {"columns": columns}
+    return {"columns": columns, "status_counts": status_counts, "per_column": per_column}
 
 
 @router.get("/archived")
@@ -1089,6 +1243,7 @@ async def get_order(
 
 @router.get("/timing/flags")
 async def timing_flags(
+    ids: Optional[str] = None,   # comma-separated order ids (the visible page); omitted = every open order
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
@@ -1103,6 +1258,8 @@ async def timing_flags(
         Order.org_id == current.org_id, Order.is_estimate == False,  # noqa: E712
         Order.status.notin_(terminal_keys or {"__none__"}))
     _fq = scoping.scope_orders(_fq, await scoping.role_for(db, current), current)  # flags only for orders I can see
+    if ids:
+        _fq = _fq.where(Order.id.in_([i for i in ids.split(",") if i][:ORDER_PAGE_MAX]))
     orders = (await db.execute(_fq)).scalars().all()
     flags = {}
     for o in orders:
@@ -3150,6 +3307,8 @@ async def add_line(
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_editable(db, order, current)
+    if (data.discount or 0) > 0:
+        await assert_perm(db, current, "can_set_discount")
     await _validate_line_assignment(db, current.org_id, technician_id=data.technician_id, co_technicians=data.co_technicians)
     if data.order_item_id:
         from backend.services import multi_asset as _ma
@@ -3513,6 +3672,11 @@ async def update_line(
     payload = data.model_dump(exclude_unset=True)
     if current.role_id and not (await _order_perms(db, current)).get("can_view_purchase_price"):
         payload.pop("cost_price", None)
+    # Changing what the customer pays needs the matching right (a technician can't zero a job).
+    if "discount" in payload and (payload["discount"] or 0) != (line.discount or 0):
+        await assert_perm(db, current, "can_set_discount")
+    if "unit_price" in payload and payload["unit_price"] is not None and float(payload["unit_price"]) != float(line.unit_price or 0):
+        await assert_perm(db, current, "can_edit_sale_price")
     if "order_item_id" in payload:
         payload["order_item_id"] = payload["order_item_id"] or None
         if payload["order_item_id"]:

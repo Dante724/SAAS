@@ -6,13 +6,14 @@ timer auto-stops the previous (a 'switch'). Stopped entries roll up onto the ord
 (scheduled vs tracked vs billed) and, once a timesheet is approved, post hourly
 wages into the payroll ledger so the existing payroll run picks them up.
 """
+import hashlib
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -35,7 +36,8 @@ def _audit(db, e, action, actor_id, *, field=None, old=None, new=None):
     db.add(TimeEntryAudit(org_id=e.org_id, time_entry_id=e.id, action=action, field=field,
                           old_value=None if old is None else str(old),
                           new_value=None if new is None else str(new), actor_id=actor_id))
-from backend.services.auth import get_current_employee, require_perm, record_scope
+from backend.services.auth import assert_not_self, get_current_employee, require_perm, record_scope
+from backend.core import paging as _paging
 from backend.services.money import q2, q4
 
 router = APIRouter(prefix="/api/timeclock", tags=["timeclock"],
@@ -482,10 +484,12 @@ async def list_entries(
     state: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    limit: int = 500,
+    skip: int = _paging.skip_query(),
+    limit: int = _paging.limit_query(_paging.PAGE_MAX),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    limit = _paging.clamp(limit)
     q = select(TimeEntry).where(TimeEntry.org_id == current.org_id)
     # non-managers can only see their own time
     if not await _can_manage(db, current):
@@ -500,13 +504,15 @@ async def list_entries(
         q = q.where(TimeEntry.started_at >= _udt(date_from, "date_from"))
     if date_to:
         q = q.where(TimeEntry.started_at < _udt(date_to, "date_to") + timedelta(days=1))
-    rows = (await db.execute(q.order_by(TimeEntry.started_at.desc()).limit(limit))).scalars().all()
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
+    rows = (await db.execute(q.order_by(TimeEntry.started_at.desc(), TimeEntry.id.desc())
+                             .offset(skip).limit(limit))).scalars().all()
     names = await _emp_map(db, current.org_id)
-    nos = {}
-    for e in rows:
-        if e.order_id and e.order_id not in nos:
-            nos[e.order_id] = await _order_no(db, e.order_id)
-    return {"items": [_ser(e, nos.get(e.order_id), names.get(e.employee_id)) for e in rows]}
+    oids = {e.order_id for e in rows if e.order_id}
+    nos = dict((await db.execute(select(Order.id, Order.order_number).where(
+        Order.org_id == current.org_id, Order.id.in_(oids)))).all()) if oids else {}
+    return {"items": [_ser(e, nos.get(e.order_id), names.get(e.employee_id)) for e in rows],
+            "total": total, "skip": skip, "limit": limit}
 
 
 async def _can_manage(db: AsyncSession, emp: Employee) -> bool:
@@ -875,6 +881,22 @@ def _overtime_split(entries: list[TimeEntry]) -> tuple[float, float]:
     return q4(straight), q4(overtime)
 
 
+def _day_wage(entries: list[TimeEntry]) -> Decimal:
+    """One day's pay: each entry at its own snapshotted rate, in time order; hours past the
+    daily threshold at the overtime multiplier."""
+    hours_so_far = 0.0
+    pay = 0.0
+    for e in sorted(entries, key=lambda x: x.started_at):
+        if e.state == "void" or not e.duration_sec:
+            continue
+        h = e.duration_sec / 3600
+        straight = max(0.0, min(h, OT_DAILY_THRESHOLD_H - hours_so_far))
+        rate = e.cost_rate or 0
+        pay += straight * rate + (h - straight) * rate * OT_MULTIPLIER
+        hours_so_far += h
+    return Decimal(str(q2(pay)))
+
+
 @router.get("/timesheet")
 async def timesheet(
     employee_id: Optional[str] = None,
@@ -938,26 +960,41 @@ async def approve_timesheet(
         TimeEntry.started_at < end))).scalars().all()
     if not rows:
         raise HTTPException(404, "No stopped entries to approve in that window")
-    for e in rows:
-        e.state = "approved"
-        e.approved_by_id = current.id
-    # compute wages with daily overtime
-    all_in_window = (await db.execute(select(TimeEntry).where(
+    await assert_not_self(db, current, data.employee_id, "approve your own timesheet")
+    # Price only the entries approved now, one ledger row per day worked. Re-pricing every
+    # approved entry in the window paid hours again whenever a wider window was approved
+    # later, and a window spanning two months was counted in both months' runs.
+    days = sorted({e.started_at.date() for e in rows})
+    already = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == current.org_id, TimeEntry.employee_id == data.employee_id,
         TimeEntry.state == "approved", TimeEntry.started_at >= start,
         TimeEntry.started_at < end))).scalars().all()
-    straight_h, ot_h = _overtime_split(all_in_window)
-    rate = (all_in_window[0].cost_rate if all_in_window else 0) or 0
-    wage = Decimal(str(q2(straight_h * rate + ot_h * rate * OT_MULTIPLIER)))
+    for e in rows:
+        e.state = "approved"
+        e.approved_by_id = current.id
+    from backend.services.payroll import CommissionEngine
+    eng = CommissionEngine(db, current.org_id)
+    batch = hashlib.sha256(",".join(sorted(e.id for e in rows)).encode()).hexdigest()[:16]
+    straight_h = ot_h = 0.0
+    total = Decimal("0")
     posted = False
-    if wage > 0:
-        from backend.services.payroll import CommissionEngine
-        eng = CommissionEngine(db, current.org_id)
+    for day in days:
+        before = [e for e in already if e.started_at.date() == day]
+        after = before + [e for e in rows if e.started_at.date() == day]
+        s_before, o_before = _overtime_split(before)
+        s_after, o_after = _overtime_split(after)
+        straight_h += s_after - s_before
+        ot_h += o_after - o_before
+        wage = _day_wage(after) - _day_wage(before)
+        if wage <= 0:
+            continue
+        total += wage
         posted = await eng._post(
             employee_id=data.employee_id, entry_type="hourly_wage", amount=wage, event=None,
-            rule_id=None, ref_type="timesheet", ref_id=f"{data.employee_id}:{data.date_from}:{data.date_to}",
-            idempotency_key=f"hourly:{data.employee_id}:{data.date_from}:{data.date_to}",
-            note=f"Hourly wages {data.date_from}–{data.date_to} ({straight_h}h + {ot_h}h OT)")
+            rule_id=None, ref_type="timesheet", ref_id=f"{data.employee_id}:{day}:{day}",
+            idempotency_key=f"hourly:{data.employee_id}:{day}:{batch}",
+            note=f"Hourly wages {day} ({q4(s_after - s_before)}h + {q4(o_after - o_before)}h OT)") or posted
+    straight_h, ot_h, wage = q4(straight_h), q4(ot_h), total
     await db.commit()
     return {"ok": True, "approved": len(rows), "straight_hours": straight_h,
             "overtime_hours": ot_h, "wage_posted": float(wage), "ledger_posted": posted}

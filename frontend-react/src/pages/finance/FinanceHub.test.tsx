@@ -54,6 +54,6 @@ describe("FinanceHub payroll", () => {
     renderPayroll();
     await u.click(await screen.findByRole("button", { name: "Run payroll (draft)" }));
     expect(await screen.findByText(/Could not run payroll/)).toBeTruthy();
-    expect(posts).toEqual(["/api/payroll/run"]);
+    expect(posts).toEqual(["/api/payroll/run-all"]);
   });
 });

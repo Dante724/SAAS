@@ -102,13 +102,21 @@ async def get_current_employee(
             raise credentials_exception
     except JWTError:
         raise credentials_exception
-    result = await db.execute(select(Employee).where(Employee.id == employee_id))
-    employee = result.scalar_one_or_none()
+    # The role rides along in the same query so the cost-redaction decision is made here, once,
+    # instead of by the middleware opening a second session after the endpoint.
+    from backend.models import Role
+    row = (await db.execute(select(Employee, Role).outerjoin(Role, Role.id == Employee.role_id)
+                            .where(Employee.id == employee_id))).first()
+    employee, role = (row[0], row[1]) if row else (None, None)
     if employee is None or not employee.active:
         raise credentials_exception
     # Remembered for response-level rules (cost redaction in main.py) without re-reading the token.
     request.state.employee_id = employee.id
     request.state.employee_role_id = employee.role_id
+    if employee.role_id:
+        from backend.services.permissions import role_allows
+        from backend.services.redact import COST_PERM
+        request.state.can_see_costs = role is not None and role_allows(role, COST_PERM)
     # Lost-device logout: a token carrying a stale version is rejected. Tokens
     # minted before this feature have no "tv" claim and stay valid until expiry.
     tv = payload.get("tv")
@@ -138,10 +146,26 @@ async def get_current_employee(
     return employee
 
 
+async def is_shop_owner(db: AsyncSession, employee: Employee) -> bool:
+    """The shop's creator (organisations.owner_id). Their sign-up role is an explicit
+    allow-list, so without this a permission added later would lock the owner out of it."""
+    from backend.models import Organisation
+    owner_id = (await db.execute(select(Organisation.owner_id).where(
+        Organisation.id == employee.org_id))).scalar_one_or_none()
+    return bool(owner_id) and owner_id == employee.id
+
+
+async def assert_not_self(db: AsyncSession, current: Employee, employee_id: str, what: str) -> None:
+    """Separation of duties for pay: nobody approves, rewards or pays themself — except the
+    owner, who answers to no one in their own shop."""
+    if employee_id == current.id and current.role_id and not await is_shop_owner(db, current):
+        raise HTTPException(403, f"You can't {what}. Ask the owner or another manager.")
+
+
 async def has_perm(db: AsyncSession, employee: Employee, perm_key: str) -> bool:
     """Does this person's role grant the permission? (services/permissions.role_allows.)
     Employees with no role (org owners) have every permission."""
-    if not employee.role_id:
+    if not employee.role_id or await is_shop_owner(db, employee):
         return True
     from backend.models import Role
     from backend.services.permissions import role_allows

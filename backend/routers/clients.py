@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 from backend.db.database import get_db
 from backend.models import Client, Device, Employee
 from backend.services.auth import get_current_employee, require_perm, record_scope
+from backend.core import paging as _paging
 from backend.services.money import q2
 from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
 
@@ -89,7 +90,7 @@ def _ser_client(c: Client, supplier=None, order_count=None) -> dict:
 async def list_clients(
     search: Optional[str] = None,
     role: str = "all",                 # Build 114: all | client | supplier
-    skip: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=1000),
+    skip: int = _paging.skip_query(), limit: int = _paging.limit_query(50),
     q: Optional[str] = Query(None, alias="q"),   # the pickers send ?q=; same as ?search=
     sort: str = "name",                # name | recent (pickers list the newest clients before you type)
     db: AsyncSession = Depends(get_db),
@@ -98,11 +99,12 @@ async def list_clients(
     from backend.services import scoping
     scope_role = await scoping.role_for(db, current)
     search = (search or q or "").strip() or None
+    limit = _paging.clamp(limit)
 
     q = (select(Client)
          .where(Client.org_id == current.org_id)
          .options(selectinload(Client.devices))   # order counts come from one grouped query below
-         .order_by(Client.created_at.desc() if sort == "recent" else Client.name))
+         .order_by(Client.created_at.desc() if sort == "recent" else Client.name, Client.id))
     q = scoping.scope_clients(q, scope_role, current)
     if role == "supplier":
         q = q.where(Client.is_supplier == True)  # noqa: E712
@@ -119,12 +121,16 @@ async def list_clients(
         count_q = count_q.where(Client.is_supplier == True)  # noqa: E712
     elif role == "client":
         count_q = count_q.where(Client.is_supplier == False)  # noqa: E712
+    if search:   # the total counts the searched rows, not the whole shop
+        count_q = count_q.where(or_(Client.name.icontains(search), Client.phone.icontains(search),
+                                    Client.email.icontains(search), Client.discount_card.icontains(search)))
     total = (await db.execute(count_q)).scalar()
     from backend.models import Order
     ids = [c.id for c in clients]
     counts = dict((await db.execute(select(Order.client_id, func.count()).where(
         Order.client_id.in_(ids)).group_by(Order.client_id))).all()) if ids else {}
-    return {"total": total, "items": [_ser_client(c, order_count=counts.get(c.id, 0)) for c in clients]}
+    return {"total": total, "items": [_ser_client(c, order_count=counts.get(c.id, 0)) for c in clients],
+            "skip": skip, "limit": limit}
 
 @router.post("", status_code=201)
 async def create_client(
@@ -504,7 +510,7 @@ IMPORTABLE = {"name", "phone", "email", "address", "notes", "source", "discount_
 async def import_clients(
     data: ImportIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     """Import contacts from a CSV/sheet with an explicit column mapping.
 

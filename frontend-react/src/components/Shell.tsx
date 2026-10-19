@@ -1,4 +1,5 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
+import { useVisibleInterval } from "../hooks/useVisibleInterval";
 import { toAppPath } from "../lib/deepLink";
 import { TeklyMark } from "./brand/TeklyLogo";
 import { NavLink, useNavigate } from "react-router-dom";
@@ -170,14 +171,12 @@ export default function Shell({ title, children }: { title: string; children: Re
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  useEffect(() => {
-    let live = true;
-    const poll = () => api.get<{ items: any[] }>("/tech/notifications?only_unread=true")
-      .then((r) => { if (live) setUnread((r.items || []).length); }).catch(() => {});
-    poll();
-    const id = setInterval(poll, 60000);
-    return () => { live = false; clearInterval(id); };
-  }, []);
+  const liveRef = useRef(true);
+  useEffect(() => { liveRef.current = true; return () => { liveRef.current = false; }; }, []);
+  useVisibleInterval(() => {
+    api.get<{ items: any[] }>("/tech/notifications?only_unread=true")
+      .then((r) => { if (liveRef.current) setUnread((r.items || []).length); }).catch(() => {});
+  }, 60000);
 
   return (
     <div className="bg-surface text-ink-primary antialiased h-screen w-screen overflow-hidden select-none flex flex-col font-sans">
@@ -611,7 +610,7 @@ function TimeClockChip({ me }: { me: any }) {
     if (attendance) api.get<any>("/timeclock/shift/active").then((r) => setShift(r.shift || null)).catch(() => {});
     if (woClock) api.get<any>("/timeclock/active").then((r) => setJob(r.active || null)).catch(() => {});
   };
-  useEffect(() => { load(); const id = setInterval(load, 30000); return () => clearInterval(id); }, []);
+  useVisibleInterval(load, 30000);
   useEffect(() => { const id = setInterval(() => setTick((t) => t + 1), 1000); return () => clearInterval(id); }, []);
   // base elapsed + local ticks since last fetch (approx live display)
   const shiftSec = shift?.open ? (shift.elapsed_sec || 0) + tick : 0;

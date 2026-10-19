@@ -12,7 +12,7 @@ from backend.models import (
     ClientReturn, ClientReturnLine, Refund, Order, StockLevel, StockMovement,
     Account, Employee, Payment,
 )
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import assert_perm, get_current_employee, require_perm
 
 router = APIRouter(prefix="/api/returns", tags=["returns"])
 
@@ -81,6 +81,7 @@ async def create_refund(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
+    await assert_perm(db, current, "can_create_returns")   # paying money back, not just seeing it
     if data.amount <= 0:
         raise HTTPException(400, "Refund amount must be positive")
     acct = (await db.execute(select(Account).where(

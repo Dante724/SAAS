@@ -12,6 +12,7 @@ import { Supplier } from "../inventory/types";
 import SupplierDrawer from "./SupplierDrawer";
 import { useTerminology } from "../../lib/useTerminology";
 import Pager from "../../components/Pager";
+import { useDebounced, useServerPage } from "../../hooks/useServerPage";
 import { confirmDialog, alertDialog } from "../../lib/dialog";
 
 type Client = { id: string; name?: string; phone?: string; email?: string; loyalty_tier?: string; balance?: number; devices?: any[]; order_count?: number };
@@ -20,7 +21,6 @@ type Tab = "clients" | "suppliers";
 export default function ClientsHub() {
   const term = useTerminology();
   const [tab, setTab] = useState<Tab>("clients");
-  const [rows, setRows] = useState<Client[] | null>(null);
   const [suppliers, setSuppliers] = useState<Supplier[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState("");
@@ -34,29 +34,30 @@ export default function ClientsHub() {
   const [mergePrev, setMergePrev] = useState<any>(null);
   const [merged, setMerged] = useState<{ logId: string; targetName: string; count: number } | null>(null);
 
-  function loadClients() {
-    api.get<{ items: Client[] }>("/clients?limit=1000").then((r) => setRows(r.items || [])).catch((e) => setErr(String(e.message || e)));
-  }
+  // Clients page on the server (search included); suppliers are few and stay client-side.
+  const dq = useDebounced(q.trim());
+  const cp = useServerPage<Client>("/clients", { search: dq || undefined }, { pageSize: 50 });
+  const rows = cp.rows;
+  useEffect(() => { if (cp.err) setErr(cp.err); }, [cp.err]);
+  function loadClients() { cp.reload(); }
   function loadSuppliers() {
     api.get<{ items: Supplier[] }>("/suppliers").then((r) => setSuppliers(r.items || [])).catch(() => setSuppliers([]));
   }
-  useEffect(() => { loadClients(); }, []);
   useEffect(() => { if (tab === "suppliers" && !suppliers) loadSuppliers(); }, [tab]);
 
-  const cRows = (rows ?? []).filter((c) => !q || [c.name, c.phone, c.email].some((v) => (v || "").toLowerCase().includes(q.toLowerCase())));
+  const cRows = rows ?? [];
   const sRows = (suppliers ?? []).filter((s) => !q || [s.name, s.contact_name, s.phone, s.email].some((v) => (v || "").toLowerCase().includes(q.toLowerCase())));
   // Numbered pagination — one shared page (Clients and Suppliers tabs never show at once).
   const PAGE_SIZE = 50;
   const [listPage, setListPage] = useState(1);
   useEffect(() => { setListPage(1); }, [tab, q]);
-  const cPages = Math.max(1, Math.ceil(cRows.length / PAGE_SIZE));
-  const pageC = cRows.slice((Math.min(listPage, cPages) - 1) * PAGE_SIZE, Math.min(listPage, cPages) * PAGE_SIZE);
+  const pageC = cRows;
   const sPages = Math.max(1, Math.ceil(sRows.length / PAGE_SIZE));
   const pageS = sRows.slice((Math.min(listPage, sPages) - 1) * PAGE_SIZE, Math.min(listPage, sPages) * PAGE_SIZE);
 
   const allSel = cRows.length > 0 && cRows.every((c) => sel.has(c.id));
   function toggle(id: string) { const n = new Set(sel); n.has(id) ? n.delete(id) : n.add(id); setSel(n); }
-  function toggleAll() { setSel(allSel ? new Set() : new Set(cRows.map((c) => c.id))); }
+  function toggleAll() { const n = new Set(sel); cRows.forEach((c) => (allSel ? n.delete(c.id) : n.add(c.id))); setSel(n); }
   function clearSel() { setSel(new Set()); }
 
   async function bulkDelete() {
@@ -111,7 +112,7 @@ export default function ClientsHub() {
     finally { setBulkBusy(false); }
   }
   function bulkExport() {
-    const chosen = cRows.filter((c) => sel.has(c.id));
+    const chosen = [...sel].map((id) => cp.seen.get(id)).filter(Boolean) as Client[];
     const head = ["Name", "Phone", "Email", "Tier", "Balance", "Orders"];
     const esc = (v: any) => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const body = chosen.map((c) => [c.name, c.phone, c.email, c.loyalty_tier || "Standard", c.balance ?? 0, c.order_count ?? 0].map(esc).join(","));
@@ -193,7 +194,7 @@ export default function ClientsHub() {
                   ))}
                 </tbody>
               </table>
-              {rows && cRows.length > 0 && <Pager total={cRows.length} page={Math.min(listPage, cPages)} pageSize={PAGE_SIZE} onPage={setListPage} noun="clients" />}
+              {rows && cRows.length > 0 && <Pager total={cp.total} page={cp.page} pageSize={cp.pageSize} onPage={cp.setPage} noun="clients" />}
             </div>
           )}
 

@@ -46,13 +46,22 @@ def _serialize(it: EventFeedItem) -> dict:
     }
 
 
-async def _verify_entity(db: AsyncSession, org_id: str, entity_type: str, entity_id: str):
+async def _verify_entity(db: AsyncSession, org_id: str, entity_type: str, entity_id: str,
+                         current: Optional[Employee] = None):
     if entity_type == "order":
         row = await db.execute(select(Order).where(Order.id == entity_id, Order.org_id == org_id))
     else:
         row = await db.execute(select(Client).where(Client.id == entity_id, Client.org_id == org_id))
-    if not row.scalar_one_or_none():
+    rec = row.scalar_one_or_none()
+    if not rec:
         raise HTTPException(404, f"{entity_type} not found")
+    # The path names {entity_id}, so the router-level scope guard never sees it: apply the
+    # caller's role scope (own orders/contacts, locations, hidden statuses) here.
+    if current is not None:
+        from backend.services.scoping import can_view_client, can_view_order
+        ok = await (can_view_order(db, current, rec) if entity_type == "order" else can_view_client(db, current, rec))
+        if not ok:
+            raise HTTPException(403, f"You can only see {entity_type}s within your access")
 
 
 async def log_system_event(db: AsyncSession, org_id: str, entity_type: str,
@@ -73,7 +82,7 @@ async def list_feed(
 ):
     if entity_type not in VALID_ENTITIES:
         raise HTTPException(400, "Invalid entity type")
-    await _verify_entity(db, current.org_id, entity_type, entity_id)
+    await _verify_entity(db, current.org_id, entity_type, entity_id, current)
     result = await db.execute(
         select(EventFeedItem)
         .where(
@@ -112,7 +121,7 @@ async def create_feed_item(
     if data.media_data and len(data.media_data) > MAX_MEDIA_CHARS:
         raise HTTPException(413, "Attachment too large (max ~6 MB)")
 
-    await _verify_entity(db, current.org_id, entity_type, entity_id)
+    await _verify_entity(db, current.org_id, entity_type, entity_id, current)
 
     # B3: offload media to the configured backend (local/s3). When backend=db,
     # store() keeps it inline, so behaviour is identical to before.

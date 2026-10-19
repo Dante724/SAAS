@@ -297,7 +297,7 @@ async def print_purchase_order(
 async def print_invoice(
     invoice_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_invoices")),
 ):
     """Build 144dv — a printable/PDF invoice whose line items honour the invoice's
     Order-display mode (detailed / simplified / one_line) across every work order it

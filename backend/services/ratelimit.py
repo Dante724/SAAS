@@ -2,7 +2,10 @@
 
 Single instance uses an in-memory deque. Set ``REDIS_URL`` and every app
 instance shares one counter, so horizontal scaling actually enforces the limit.
-Same ``enforce()`` signature either way; callers don't change.
+
+``aenforce()`` is what request handlers and middleware use: redis.asyncio, one pipelined
+round trip, never blocks the event loop. ``enforce()`` is the same rule for sync callers
+(sync redis client). Same signature and same in-process fallback either way.
 """
 import time
 from collections import defaultdict, deque
@@ -15,6 +18,8 @@ _HITS: dict = defaultdict(deque)
 _redis = None          # None = untried / retry due, False = unavailable, else a client
 _redis_retry_at = 0.0  # after a failure, try Redis again at this time (was: never again)
 _REDIS_RETRY_S = 30
+_aredis = None         # async client: same states as _redis
+_aredis_retry_at = 0.0
 _calls = 0
 _PRUNE_EVERY = 1000
 
@@ -70,6 +75,52 @@ def _too_many(retry: int) -> HTTPException:
                          headers={"Retry-After": str(max(1, retry))})
 
 
+async def _get_aredis():
+    """Async twin of _get_redis (redis.asyncio): lazily connected, retried after a failure."""
+    global _aredis, _aredis_retry_at
+    if _aredis:
+        return _aredis
+    if not getattr(settings, "REDIS_URL", ""):
+        return None
+    if _aredis is False and time.time() < _aredis_retry_at:
+        return None
+    try:
+        import redis.asyncio as aioredis
+        c = aioredis.Redis.from_url(settings.REDIS_URL, socket_timeout=0.5,
+                                    socket_connect_timeout=0.5)
+        await c.ping()
+        _aredis = c
+        return c
+    except Exception:   # noqa: BLE001 — any failure => in-process fallback
+        _aredis, _aredis_retry_at = False, time.time() + _REDIS_RETRY_S
+        return None
+
+
+async def aenforce(bucket: str, key: str, limit: int, window_sec: int) -> None:
+    """Async enforce(): allow `limit` events per `window_sec` for (bucket, key); else 429.
+    Redis: SET NX EX (start the window) + INCR + TTL in one pipeline — one round trip, and the
+    expiry is set atomically with the key, so a crash between calls can't leave a key that
+    never expires."""
+    global _aredis, _aredis_retry_at
+    r = await _get_aredis()
+    if r is not None:
+        try:
+            rk = f"rl:{bucket}:{key}"
+            async with r.pipeline(transaction=True) as p:
+                p.set(rk, 0, ex=window_sec, nx=True)
+                p.incr(rk)
+                p.ttl(rk)
+                _, n, ttl = await p.execute()
+            if n > limit:
+                raise _too_many(ttl if ttl and ttl > 0 else window_sec)
+            return
+        except HTTPException:
+            raise
+        except Exception:   # noqa: BLE001 — Redis hiccup => fall back to in-process
+            _aredis, _aredis_retry_at = False, time.time() + _REDIS_RETRY_S
+    _local_enforce(bucket, key, limit, window_sec)
+
+
 def enforce(bucket: str, key: str, limit: int, window_sec: int) -> None:
     """Allow `limit` events per `window_sec` for (bucket, key); else raise 429."""
     r = _get_redis()
@@ -86,7 +137,11 @@ def enforce(bucket: str, key: str, limit: int, window_sec: int) -> None:
             raise
         except Exception:   # noqa: BLE001 — Redis hiccup => fall back to in-process
             _redis_failed()
-    # in-process sliding window (single instance)
+    _local_enforce(bucket, key, limit, window_sec)
+
+
+def _local_enforce(bucket: str, key: str, limit: int, window_sec: int) -> None:
+    """In-process sliding window (single instance)."""
     global _calls
     now = time.time()
     _calls += 1

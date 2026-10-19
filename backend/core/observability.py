@@ -108,7 +108,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if any(path.startswith(p) for p in self.exempt):
             return await call_next(request)
         try:
-            ratelimit.enforce("global", ratelimit.client_ip(request), self.limit, self.window)
+            await ratelimit.aenforce("global", ratelimit.client_ip(request), self.limit, self.window)
         except HTTPException as e:
             return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"},
                                 headers=e.headers or {})

@@ -139,13 +139,13 @@ async def _denied_for_role(db: AsyncSession, org_id: str, role_id: Optional[str]
 
 
 async def _assert_can_assign_role(db: AsyncSession, current: Employee, role_id: Optional[str]) -> None:
-    mine = await _denied_for_role(db, current.org_id, current.role_id)
+    mine = set() if await _is_owner(db, current) else await _denied_for_role(db, current.org_id, current.role_id)
     theirs = await _denied_for_role(db, current.org_id, role_id)
     if not mine <= theirs:
         raise HTTPException(403, "You can't assign a role with more access than your own")
     # Permissions alone aren't the whole story: a role also limits which locations, orders,
     # contacts and warehouses its holders see. Never hand out wider data scope than you have.
-    if current.role_id and role_id:
+    if current.role_id and role_id and not await _is_owner(db, current):
         from backend.routers.rbac import _assert_scope_not_wider
         editor = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
         target = (await db.execute(select(Role).where(Role.id == role_id))).scalar_one_or_none()
@@ -163,10 +163,8 @@ class _ScopeView:
 
 
 async def _is_owner(db: AsyncSession, emp: Employee) -> bool:
-    from backend.models import Organisation
-    owner_id = (await db.execute(select(Organisation.owner_id).where(
-        Organisation.id == emp.org_id))).scalar_one_or_none()
-    return owner_id == emp.id
+    from backend.services.auth import is_shop_owner
+    return await is_shop_owner(db, emp)
 
 
 async def _assert_can_manage(db: AsyncSession, current: Employee, emp: Employee) -> None:
@@ -176,7 +174,7 @@ async def _assert_can_manage(db: AsyncSession, current: Employee, emp: Employee)
     # an equally-privileged teammate must not be able to take it over.
     if await _is_owner(db, emp):
         raise HTTPException(403, "Only the shop owner can change the owner's account")
-    mine = await _denied_for_role(db, current.org_id, current.role_id)
+    mine = set() if await _is_owner(db, current) else await _denied_for_role(db, current.org_id, current.role_id)
     try:
         theirs = await _denied_for_role(db, current.org_id, emp.role_id)
     except HTTPException:

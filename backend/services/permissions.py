@@ -141,25 +141,41 @@ NOT_YET_ENFORCED = {
     "can_see_asset_cost", "can_view_own_compensation", "can_create_estimates", "can_delete_tickets",
     "can_view_asset_info", "can_view_item_prices", "can_view_invoices_tab",
     "can_edit_closed_ticket", "can_manage_shared_filters", "can_add_custom_service",
-    "can_add_custom_product", "can_create_payment_links", "can_create_purchase_orders",
+    "can_add_custom_product", "can_create_payment_links",
     "can_view_labors", "can_delete_products", "can_track_serials", "can_manage_bundles",
-    "can_delete_sales", "can_sell_services", "can_edit_sale_price", "can_export_sales",
-    "can_view_invoices", "can_delete_invoices", "can_edit_issued_invoices", "can_create_incomes",
-    "can_retroactive_cash", "can_view_cashflow_any_period", "can_manage_accounts",
-    "can_create_returns", "can_delete_refunds", "can_accrue_payroll", "can_create_penalties",
+    "can_delete_sales", "can_sell_services", "can_export_sales",
+    "can_delete_invoices", "can_edit_issued_invoices", "can_create_incomes",
+    "can_retroactive_cash", "can_view_cashflow_any_period",
+    "can_delete_refunds", "can_accrue_payroll", "can_create_penalties",
     "can_create_bonuses", "can_export_payroll",
 }
 
 # Seed templates (deny-lists per template; anything not listed = allowed).
+# Money, payroll, exports and destructive deletes are off for anyone who isn't running the
+# shop: a technician or outside partner must not pay themselves, move money or bulk-export
+# customers just because a newer code defaulted to "on".
+_NOT_FOR_STAFF = {
+    "can_view_finance": False, "can_view_cashflow": False, "can_view_cashflow_any_period": False,
+    "can_transfer_money": False, "can_delete_transactions": False, "can_correct_transactions": False,
+    "can_retroactive_cash": False, "can_manage_accounts": False,
+    "can_view_payroll": False, "can_manage_payroll": False, "can_accrue_payroll": False,
+    "can_export_payroll": False, "can_create_bonuses": False, "can_create_penalties": False,
+    "can_config_exceptional_commissions": False,
+    "can_view_reports": False, "can_export_accountant": False, "can_export_clients": False,
+    "can_export_sales": False,
+    "can_delete_clients": False, "can_delete_orders": False, "can_delete_sales": False,
+    "can_delete_refunds": False, "can_delete_products": False, "can_delete_invoices": False,
+    "can_delete_tickets": False,
+    "can_view_purchase_price": False, "can_see_profit": False, "can_set_cost_price": False,
+    "can_see_asset_cost": False,
+}
 TEMPLATES = {
     "Full access": {},                       # nothing denied
     "Manager": {"can_delete_transactions": False, "can_manage_roles": False},
     "Partner": {"can_manage_settings": False, "can_manage_roles": False,
-                "can_manage_employees": False},
+                "can_manage_employees": False, **_NOT_FOR_STAFF},
     "Specialist": {"can_manage_settings": False, "can_manage_roles": False,
-                   "can_manage_employees": False, "can_view_purchase_price": False,
-                   "can_see_profit": False, "can_delete_tickets": False,
-                   "can_delete_invoices": False, "can_view_cashflow": False},
+                   "can_manage_employees": False, **_NOT_FOR_STAFF},
 }
 
 
