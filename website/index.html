@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Tekly — Repair shop software, from first complaint to final payment</title>
-  <meta name="description" content="Tekly runs the whole repair: intake, AI-drafted estimates customers approve on their phone, parts that attach to the right job, POS, inventory and payroll. Templates for phone, computer, auto, marine, bike, powersports, small engine, tool and fleet shops.">
+  <meta name="description" content="Tekly runs the whole repair: intake, AI-drafted estimates customers approve on their phone, parts that attach to the right job, POS, inventory and payroll. Templates for electronics, vehicle, tool and small-engine, and marine repair.">
   <meta name="theme-color" content="#003dff">
   <meta property="og:title" content="Tekly — Repair shop software">
   <meta property="og:description" content="From the customer's first complaint to the final payment, in one system.">
@@ -56,7 +56,7 @@
 <section class="hero" id="top">
   <div class="wrap hero-in">
     <div class="hero-copy">
-    <p class="mono eyebrow rv">Repair shop software · 10 trade templates</p>
+    <p class="mono eyebrow rv">Repair shop software · electronics · vehicles · tools · marine</p>
     <h1 class="h-display rv">Diagnose.<br>Approve.<br>Get paid.</h1>
     <p class="hero-sub rv">Repair shop software that drafts the estimate, gets the customer's yes on their phone, books the parts to the job and posts the payout — for every bench from phones to fleets.</p>
     <div class="hero-ctas rv">
@@ -95,10 +95,14 @@
 </section>
 
 <!-- trades -->
-<section class="trades" aria-label="Trades Tekly is built for">
-  <div class="wrap">
-    <ul class="trade-row mono">
-      <li>Phone &amp; tablet</li><li>Computer</li><li>Power tools</li><li>Small engine</li><li>Powersports</li><li>Auto</li><li>Bicycle &amp; e-bike</li><li>Motorcycle</li><li>Marine</li><li>Fleet &amp; truck</li><li>General repair</li>
+<section class="trades" aria-label="Works with the tools you already use">
+  <div class="wrap works">
+    <p class="works-k">Works with the tools you already use</p>
+    <ul class="works-list">
+      <li><span class="wl-k">Payments</span>Stripe · Square</li>
+      <li><span class="wl-k">Accounting</span>QuickBooks · Xero</li>
+      <li><span class="wl-k">Messaging</span>SMS · WhatsApp</li>
+      <li><span class="wl-k">Email</span>Gmail · Outlook</li>
     </ul>
   </div>
 </section>
@@ -196,7 +200,7 @@
       </div>
     </div>
     <div class="metrics rv">
-      <div><b>10</b><span>trade templates with their own intake fields</span></div>
+      <div><b>4</b><span>templates: electronics, vehicles, tools &amp; small engine, marine</span></div>
       <div><b>5</b><span>handoffs kept in one flow, intake to payout</span></div>
       <div><b>$0</b><span>setup fees, contracts or data-migration charges</span></div>
       <div><b>14</b><span>days free, every Pro feature, no card</span></div>
@@ -239,8 +243,19 @@
 
     <article class="feat flip rv">
       <div class="feat-media">
-        <figure class="photo"><img data-photo="parts" alt="Scanning a delivered part in the stockroom" loading="lazy"></figure>
-        <p class="mono media-cap">PO-2208 · display assembly · booked to WO-1042</p>
+        <div class="ui" aria-label="Purchase order preview">
+          <div class="ui-top"><span class="ui-t">Purchase order PO-2208</span><span class="pill ok">Received</span></div>
+          <table class="ui-tbl">
+            <thead><tr><th>Part</th><th class="r">Qty</th><th class="r">Cost</th><th>Booked to</th></tr></thead>
+            <tbody>
+              <tr><td>Display assembly · iPhone 14 Pro</td><td class="r">1</td><td class="r">$118.40</td><td><span class="tag-b">WO-1042</span></td></tr>
+              <tr><td>Charging port flex · iPhone 14 Pro</td><td class="r">2</td><td class="r">$31.20</td><td><span class="tag-b">WO-1042</span> <span class="tag-g">+1 stock</span></td></tr>
+              <tr><td>Front pads · CR-V 2019</td><td class="r">1</td><td class="r">$64.00</td><td><span class="tag-b">WO-1046</span></td></tr>
+            </tbody>
+          </table>
+          <div class="ui-alert"><span class="dot-warn" aria-hidden="true"></span><span><b>6 parts below reorder point</b> — a draft purchase order is ready for review.</span><span class="ui-link">Review</span></div>
+        </div>
+        <p class="mono media-cap">Sample data</p>
       </div>
       <div class="feat-copy">
         <p class="mono eyebrow">Inventory</p>
@@ -256,8 +271,24 @@
 
     <article class="feat rv">
       <div class="feat-media">
-        <figure class="photo"><img data-photo="owner" alt="A shop owner reviewing the day on a tablet" loading="lazy"></figure>
-        <p class="mono media-cap">Payroll · commission per closed job · pay runs that can't pay twice</p>
+        <div class="ui" aria-label="Pay run preview">
+          <div class="ui-top"><span class="ui-t">Pay run · Oct 16–31</span><span class="pill">Draft</span></div>
+          <div class="ui-kpis">
+            <div><span class="k">Revenue</span><b class="tnum">$48,210</b><span class="d up">+12%</span></div>
+            <div><span class="k">Gross margin</span><b class="tnum">44%</b><span class="d up">+3 pts</span></div>
+            <div><span class="k">Jobs closed</span><b class="tnum">212</b><span class="d">this period</span></div>
+          </div>
+          <svg class="ui-chart" viewBox="0 0 320 72" preserveAspectRatio="none" aria-hidden="true"><path d="M0 60 L32 54 L64 57 L96 44 L128 47 L160 34 L192 38 L224 26 L256 29 L288 16 L320 10" fill="none" stroke="#003dff" stroke-width="2"/><path d="M0 60 L32 54 L64 57 L96 44 L128 47 L160 34 L192 38 L224 26 L256 29 L288 16 L320 10 L320 72 L0 72Z" fill="#003dff" opacity=".07"/></svg>
+          <table class="ui-tbl">
+            <thead><tr><th>Technician</th><th class="r">Jobs</th><th class="r">Commission</th></tr></thead>
+            <tbody>
+              <tr><td>Priya S.</td><td class="r">74</td><td class="r">$1,104.60</td></tr>
+              <tr><td>Marcus L.</td><td class="r">61</td><td class="r">$862.15</td></tr>
+              <tr><td>Ana R.</td><td class="r">48</td><td class="r">$671.40</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="mono media-cap">Sample data</p>
       </div>
       <div class="feat-copy">
         <p class="mono eyebrow">Money &amp; people</p>
@@ -298,7 +329,7 @@
     <div class="sec-head">
       <p class="mono eyebrow rv">Industries</p>
       <h2 class="h-section rv">Built for your bench, whatever is on it.</h2>
-      <p class="lede rv">Choose your trade and Tekly sets up the intake fields, asset types and services. Fix more than one kind of thing? Use several templates in one account.</p>
+      <p class="lede rv">Four templates cover every bench. Each one asks for the right details at intake — and if you fix more than one kind of thing, use several in one account.</p>
     </div>
     <div class="trades-grid" id="tradesGrid"></div>
   </div>
@@ -318,7 +349,7 @@
           <tr><th scope="row">Parts booked to the job on arrival</th><td><svg class="yes"><use href="#check"/></svg>Automatic</td><td class="dim">Manual</td></tr>
           <tr><th scope="row">Payroll and commissions from closed jobs</th><td><svg class="yes"><use href="#check"/></svg>Built in</td><td class="dim">Separate tool</td></tr>
           <tr><th scope="row">AI estimate drafting</th><td><svg class="yes"><use href="#check"/></svg>Pro</td><td class="dim">Often a paid add-on</td></tr>
-          <tr><th scope="row">Phones, cars, boats, bikes and fleets</th><td><svg class="yes"><use href="#check"/></svg>10 templates</td><td class="dim">Usually one trade</td></tr>
+          <tr><th scope="row">Phones, cars, boats, bikes and fleets</th><td><svg class="yes"><use href="#check"/></svg>4 templates</td><td class="dim">Usually one trade</td></tr>
         </tbody>
       </table>
     </div>
@@ -351,6 +382,12 @@
     </div>
     <div class="plans" id="plans"></div>
     <div class="ent rv" id="ent"></div>
+    <ul class="promises rv" aria-label="Our promises">
+      <li><b>No contracts</b><span>Month to month. Cancel in two clicks.</span></li>
+      <li><b>Your data, always</b><span>Export everything to CSV or Excel, even after you leave.</span></li>
+      <li><b>We move you in</b><span>Free data migration and onboarding on both plans.</span></li>
+      <li><b>AI never sends alone</b><span>It drafts. A person on your team presses send.</span></li>
+    </ul>
   </div>
 </section>
 
@@ -358,7 +395,19 @@
 <section class="sec" id="start">
   <div class="wrap start">
     <div class="start-media rv">
-      <figure class="photo tall"><img data-photo="pickup" alt="A customer collecting a repaired phone at the counter" loading="lazy"></figure>
+      <div class="ui track" aria-label="Customer tracking page preview">
+        <div class="ui-top"><span class="ui-t">Your repair · WO-1042</span><span class="pill ok">Ready</span></div>
+        <p class="track-h">Your iPhone 14 Pro is ready for pickup.</p>
+        <ol class="tl">
+          <li class="is-done"><b>Checked in</b><span>Mon 9:12 am · 3 photos</span></li>
+          <li class="is-done"><b>Diagnosed</b><span>Mon 11:40 am</span></li>
+          <li class="is-done"><b>You approved $497</b><span>Mon 12:05 pm · signed</span></li>
+          <li class="is-done"><b>Parts arrived</b><span>Tue 2:14 pm</span></li>
+          <li class="is-now"><b>Ready for pickup</b><span>Open until 6:00 pm today</span></li>
+        </ol>
+        <div class="track-pay"><span>Balance due</span><b class="tnum">$497.00</b><span class="btn btn-brand">Pay now</span></div>
+      </div>
+      <p class="mono media-cap">What your customer sees · sample data</p>
       <ol class="agenda mono">
         <li><span>00:00</span>Your trade and workflow, set up live</li>
         <li><span>10:00</span>One job from intake to paid, with AI</li>
@@ -443,12 +492,11 @@
       <div><h2 class="foot-h mono">Company</h2><ul><li><a href="#start" data-pane="demo">Book a demo</a></li><li><a data-mail href="#start">Contact</a></li><li><a href="#faq">FAQ</a></li></ul></div>
       <div><h2 class="foot-h mono">Account</h2><ul><li><a data-app="signin" href="#start">Sign in</a></li><li><a data-app="signup" href="#start">Start free trial</a></li></ul></div>
     </div>
-    <div class="legal mono"><span>© <span id="yr">2026</span> Tekly</span><details><summary>Photo credits</summary><p id="credits"></p></details></div>
+    <div class="legal mono"><span>© <span id="yr">2026</span> Tekly</span><span>Product screens show sample data.</span></div>
   </div>
 </footer>
 
 <script defer src="site.config.js"></script>
-<script defer src="photos.js"></script>
 <script defer src="main.js"></script>
 </body>
 </html>

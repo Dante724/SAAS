@@ -1,6 +1,5 @@
 (() => {
   const C = window.TEKLY_SITE || {};
-  const P = window.TEKLY_PHOTOS || {};
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
   const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -15,28 +14,6 @@
   $$("[data-trial]").forEach(el => { el.textContent = C.trialDays ?? 14; });
   $$("[data-save]").forEach(el => { el.textContent = `−${Math.round((C.annualDiscount ?? .2) * 100)}%`; });
   $("#yr").textContent = new Date().getFullYear();
-
-  /* ── Photos (WebP with srcset; credits collected for the footer) ── */
-  const credits = new Map();
-  function setPhoto(img, slot, sizes) {
-    const p = P[slot]; if (!p) return;
-    let i = 0;
-    const next = () => {
-      if (i >= p.src.length) return;
-      const u = p.src[i++];
-      if (/-1400\.webp$/.test(u)) { img.sizes = sizes || "(max-width: 767px) 100vw, 50vw"; img.srcset = `${u.replace("-1400", "-720")} 720w, ${u} 1400w`; }
-      else img.removeAttribute("srcset");
-      img.src = u;
-    };
-    img.onerror = next;
-    img.onload = () => { if (p.credit) { credits.set(slot.replace(/2$/, ""), p.credit); renderCredits(); } };
-    next();
-  }
-  function renderCredits() {
-    const list = [...credits.values()];
-    $("#credits").innerHTML = (list.length ? list.map(c => `<a href="${c.url}" target="_blank" rel="noopener">${c.text}</a> (<a href="${c.licenseUrl}" target="_blank" rel="noopener">${c.license}</a>${c.adapted ? ", cropped and colour-graded" : ""})`).join(" · ") + ". " : "") + "Other photography is illustrative.";
-  }
-  $$("img[data-photo]").forEach(img => setPhoto(img, img.dataset.photo));
 
   /* ── Nav ── */
   const nav = $("#nav"), burger = $(".burger"), heroCtas = $(".hero-ctas");
@@ -170,24 +147,60 @@
     cap.textContent = `The shop sees it instantly: WO-1042 → In repair · ${money(totalApproved(), 2)}`;
   });
 
-  /* ── Industries ── */
-  const TRADES = [
-    ["phone", "Phone & tablet", "Screens, batteries, boards and water damage, with IMEI checks.", "IMEI · storage · passcode"],
-    ["computer", "Computer & laptop", "Diagnostics, upgrades and board-level work.", "Serial · CPU · RAM · OS"],
-    ["tools", "Power tools", "Warranty and non-warranty jobs side by side.", "Brand · voltage · warranty"],
-    ["small-engine", "Small engine", "Mowers, saws and generators, booked ahead of the season.", "Engine model · hours · fuel"],
-    ["powersports", "Powersports", "ATVs, side-by-sides, jet skis and sleds.", "VIN · year · hours"],
-    ["auto", "Auto", "Bays, inspections and approvals at the speed of your lifts.", "VIN · plate · mileage"],
-    ["bike", "Bicycle & e-bike", "Tune-ups, builds and e-bike batteries.", "Frame size · battery serial"],
-    ["motorcycle", "Motorcycle", "Services, tyres and track prep with full history.", "VIN · mileage · plate"],
-    ["marine", "Marine", "Outboards, inboards and hulls, winterising to repower.", "HIN · engine serial · length"],
-    ["fleet", "Fleet & truck", "Preventive maintenance across a whole fleet.", "Unit # · DOT # · odometer"],
-    ["general", "General repair", "Audio, appliances, consoles and coffee machines.", "Brand · model · serial"],
+  /* ── Industries: line icons + the intake fields each template adds ── */
+  const I = {
+    phone: '<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M10.5 18.5h3"/>',
+    computer: '<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/>',
+    tools: '<path d="M3 8h11l3 2v2l-3 2H8z"/><path d="M8 14l-2 6h4l1-6M17 11h4"/>',
+    "small-engine": '<path d="M3 15h14l2-5h-5l-2 2H5z"/><circle cx="7" cy="18" r="2"/><circle cx="16" cy="18" r="2"/><path d="M19 10l2-6"/>',
+    powersports: '<circle cx="6" cy="17" r="3"/><circle cx="18" cy="17" r="3"/><path d="M4 13l3-4h8l3 4M10 9V6h3"/>',
+    auto: '<path d="M3 15l2-5a2 2 0 0 1 2-1.5h10a2 2 0 0 1 2 1.5l2 5v2H3z"/><circle cx="7.5" cy="18" r="1.8"/><circle cx="16.5" cy="18" r="1.8"/>',
+    bike: '<circle cx="6" cy="16" r="3.5"/><circle cx="18" cy="16" r="3.5"/><path d="M6 16l4-7h5l3 7M10 9l3 7M14 6h3"/>',
+    motorcycle: '<circle cx="5.5" cy="16.5" r="3"/><circle cx="18.5" cy="16.5" r="3"/><path d="M5.5 16.5l4-6h4l2 3h3M13.5 10.5l-2-3h-2"/>',
+    marine: '<path d="M3 15h18l-2.5 4.5h-13z"/><path d="M12 15V4l6 9h-6"/>',
+    fleet: '<rect x="2" y="7" width="12" height="9" rx="1"/><path d="M14 10h4l3 3v3h-7"/><circle cx="6" cy="18" r="2"/><circle cx="17" cy="18" r="2"/>',
+    general: '<path d="M14.5 6.5a4 4 0 0 0-5.2 5.1L4 17l3 3 5.3-5.3a4 4 0 0 0 5.2-5.2l-2.4 2.4-2.6-.5-.5-2.6z"/>',
+  };
+  const TEMPLATES = [
+    { name: "Electronics", icons: ["phone", "computer"], covers: ["Phones", "Tablets", "Laptops", "Desktops"],
+      desc: "One template for every device on the bench.",
+      smart: "Asks for the IMEI on phones and tablets, and the serial number on computers.",
+      fields: [["Device", "iPhone 14 Pro"], ["IMEI", "35 291811 402177 3"], ["Passcode", "•••••• encrypted"], ["Storage", "256 GB"]],
+      alt: { tabs: ["Phone", "Computer"], fields: [["Device", "MacBook Air M2"], ["Serial number", "C02FK3XYQ6L4"], ["Password", "•••••• encrypted"], ["Charger", "Received"]] } },
+    { name: "Vehicles", icons: ["auto", "fleet", "motorcycle"], covers: ["Cars", "Trucks", "RVs", "Bikes"],
+      desc: "From a family hatchback to a fleet truck or an RV.",
+      smart: "Every visit stays on the vehicle's history, found by VIN or plate.",
+      fields: [["Vehicle", "2019 Honda CR-V"], ["VIN", "2HKRW2H5…KH604117"], ["Plate", "8KXM 214"], ["Mileage", "61,240 mi"]] },
+    { name: "Tools & small engine", icons: ["tools", "small-engine"], covers: ["Power tools", "Mowers", "Saws", "Generators"],
+      desc: "Workshop gear and outdoor power equipment in one template.",
+      smart: "Captures voltage for tools and engine hours for small engines.",
+      fields: [["Item", "21-inch push mower"], ["Serial", "2214 0938 7712"], ["Engine", "OHV 163 cc"], ["Hours", "212"]] },
+    { name: "Marine", icons: ["marine"], covers: ["Outboards", "Inboards", "Hulls", "Trailers"],
+      desc: "Built for boatyards, from winterising to a full repower.",
+      smart: "Tracks the hull ID and each engine's serial separately.",
+      fields: [["Vessel", "19 ft centre console"], ["HIN", "ABC12345D707"], ["Engine serial", "1B3L-401229"], ["Length", "19 ft"]] },
   ];
-  $("#tradesGrid").innerHTML = TRADES.map(([id, name, d, f]) => `<article class="trade"><div class="im"><img data-trade="${id}" alt="${name} repair" loading="lazy"></div><div class="tx"><h3>${name}</h3><p>${d}</p><p class="fields mono">${f}</p></div></article>`).join("")
-    + `<article class="trade note"><h3>More than one trade?</h3><p>Use several templates in one account — each job gets the right fields.</p></article>`;
-  $$("img[data-trade]").forEach(img => setPhoto(img, img.dataset.trade, "(max-width: 767px) 50vw, 25vw"));
-  $("#d-ind").insertAdjacentHTML("beforeend", TRADES.map(t => `<option>${t[1]}</option>`).join("") + "<option>Several of these</option>");
+  const dl = f => f.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("");
+  const ico = id => `<svg class="ti" viewBox="0 0 24 24" aria-hidden="true">${I[id]}</svg>`;
+  $("#tradesGrid").innerHTML = TEMPLATES.map(t => `<article class="tpl">
+      <div class="tpl-icons">${t.icons.map(ico).join("")}</div>
+      <h3>${t.name}</h3>
+      <p class="tpl-desc">${t.desc}</p>
+      <ul class="tpl-covers" aria-label="Covers">${t.covers.map(c => `<li>${c}</li>`).join("")}</ul>
+      <div class="tpl-form" aria-label="Example intake">
+        <div class="tpl-form-h"><span>New job · intake</span>${t.alt ? `<span class="mini-seg" role="group" aria-label="Device type">${t.alt.tabs.map((x, k) => `<button type="button" class="${k ? "" : "on"}" aria-pressed="${!k}" data-k="${k}">${x}</button>`).join("")}</span>` : ""}</div>
+        <dl>${dl(t.fields)}</dl>
+      </div>
+      <p class="tpl-smart">${t.smart}</p>
+    </article>`).join("");
+  $$(".mini-seg").forEach(seg => seg.addEventListener("click", e => {
+    const btn = e.target.closest("button"); if (!btn) return;
+    const t = TEMPLATES[0], k = +btn.dataset.k;
+    $$("button", seg).forEach(x => { x.classList.toggle("on", x === btn); x.setAttribute("aria-pressed", String(x === btn)); });
+    const box = seg.closest(".tpl-form").querySelector("dl");
+    box.classList.add("swap"); setTimeout(() => { box.innerHTML = dl(k ? t.alt.fields : t.fields); box.classList.remove("swap"); }, 140);
+  }));
+  $("#d-ind").insertAdjacentHTML("beforeend", TEMPLATES.map(t => `<option>${t.name}</option>`).join("") + "<option>More than one of these</option>");
 
   /* ── Pricing ── */
   let billing = "monthly";

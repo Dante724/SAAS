@@ -13,7 +13,6 @@ python3 -m http.server 4321 --directory website
 | Prices ($49 Starter / $99 Pro), plan features, yearly discount, trial length | `site.config.js` → `plans`, `annualDiscount`, `trialDays` |
 | App sign-in / sign-up URLs | `site.config.js` → `appUrl`, `signInPath`, `signUpPath` |
 | Where demo requests go | `site.config.js` → `demoEndpoint` (POST JSON) or `demoEmail` (mailto fallback) |
-| Photos per slot + credits | `photos.js` |
 | Copy and sections | `index.html` |
 
 ## Design system
@@ -31,20 +30,13 @@ navy band, the phone approval demo, the pricing toggle and the demo / sign-up / 
 Measured (headless Chrome): scroll 60 fps, no horizontal overflow from 320px to 1440px;
 Lighthouse performance 94 mobile / 98 desktop, accessibility, best practices and SEO 100.
 
-## Photography
-Two council rounds (art director, shop owner, conversion marketer; majority vote) picked the
-photos. Round 2 judged 224 commercially-licensed Wikimedia Commons photos against each current image.
+## Visuals
+No photography. Every visual is a product screen built in HTML/CSS with sample data (labelled as
+such): the AI estimate card, the five job-stage previews, the phone approval demo, a purchase
+order, a pay run with revenue chart, and the customer's tracking page. Trades are shown as the
+four real templates — Electronics (IMEI or serial, with a Phone/Computer toggle), Vehicles
+(cars, trucks, RVs, bikes), Tools & small engine, and Marine — with line icons and example intake.
 
-- **Real photos (credited automatically, `*-cc.jpg`):** phone, computer, small engine, auto,
-  bike, motorcycle, general repair.
-- **Still illustrative (AI-generated):** tools, powersports, marine, fleet, pickup, owner, parts.
-  No real candidate was on-topic for these, or the council's pick was vetoed: the fleet pick was
-  a government-branded fire truck, the marine picks were US Navy photos (they can read as an
-  endorsement) and the parts pick showed walls of third-party brand packaging.
-
-Served images are WebP in `assets/web/` (1400w + 720w). Real photos are reframed and graded to
-a house look (credited as adapted); illustrative ones get a daylight grade so the set matches.
-To replace a slot, add the file to `assets/photos/` and put its path first in `photos.js`
-(add a `credit` entry if the licence requires attribution). Realistic daylight versions of
-the remaining slots also sit in the Figma file "Tekly website photography" (frames 15:2–28:2)
-if you export them.
+Trust content is factual: a "works with" strip lists integrations that exist in the codebase
+(Stripe, Square, QuickBooks, Xero, SMS via Twilio, WhatsApp, Gmail, Outlook) and a promises row
+(no contracts, export anytime, free migration, AI never sends on its own).
