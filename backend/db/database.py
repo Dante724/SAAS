@@ -70,6 +70,19 @@ from backend.db import tenancy  # noqa: E402,F401 — registers the cross-tenant
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=_NAMING_CONVENTION)
 
+async def insert_ignore(db: AsyncSession, model, **values) -> bool:
+    """INSERT … ON CONFLICT DO NOTHING, for seeds that several requests can run at once (a new
+    shop's first page load, Settings › Industry & assets). Two seeds can both see "row missing"
+    and race to insert it; the loser must quietly skip rather than 500 on the unique constraint.
+    Returns True if this call inserted."""
+    if db.bind.dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert
+    res = await db.execute(insert(model).values(**values).on_conflict_do_nothing())
+    return res.rowcount == 1
+
+
 async def get_db() -> AsyncSession:
     async with AsyncSessionLocal() as session:
         try:

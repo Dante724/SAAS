@@ -302,7 +302,7 @@ class CommissionEngine:
                 from backend.models import OrderStatus as _OS
                 grp = (await self.db.execute(select(_OS.status_group).where(
                     _OS.org_id == order.org_id, _OS.key == order.status,
-                    _OS.is_estimate == bool(order.is_estimate)))).scalar_one_or_none()
+                    _OS.is_estimate == bool(order.is_estimate)))).scalars().first()
                 if grp == "closed":
                     outcome_event = "order_closed_success"
                 elif grp == "dropped":

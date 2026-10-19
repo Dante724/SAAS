@@ -107,11 +107,13 @@ async def next_number(
         # Lazily create an org-scope sequence from the built-in default. Seed the
         # counter *past any existing documents* of this type so a fresh sequence
         # never collides with legacy count-based numbers already in the table.
+        # Insert-or-ignore: a shop's first two documents created at once both found no sequence,
+        # and the second insert hit uq_numseq_scope (a 500). The loser just uses the winner's row.
+        from backend.db.database import insert_ignore
         template = DEFAULT_TEMPLATES.get(doc_type, doc_type.upper() + "-{C:5}")
-        seq = NumberSequence(org_id=org_id, doc_type=doc_type, scope_key="org",
-                             template=template, next_value=await _existing_count(db, org_id, doc_type) + 1)
-        db.add(seq)
-        await db.flush()
+        await insert_ignore(db, NumberSequence, org_id=org_id, doc_type=doc_type, scope_key="org",
+                            template=template, next_value=await _existing_count(db, org_id, doc_type) + 1)
+        seq = await _find_sequence(db, org_id, doc_type, location_id, entity_id)
     # Claim counters with an atomic UPDATE (row-locked on Postgres): reading next_value and writing
     # +1 in Python let two concurrent documents take the same number.
     from sqlalchemy import update
@@ -128,11 +130,13 @@ async def next_number(
 
 
 async def _number_taken(db: AsyncSession, org_id: str, doc_type: str, number: str) -> bool:
-    if doc_type != "invoice":
+    from backend.models import Invoice, PurchaseOrder
+    col = {"invoice": (Invoice, Invoice.invoice_number), "po": (PurchaseOrder, PurchaseOrder.po_number)}.get(doc_type)
+    if col is None:
         return False
-    from backend.models import Invoice
-    return (await db.execute(select(Invoice.id).where(
-        Invoice.org_id == org_id, Invoice.invoice_number == number).limit(1))).scalar_one_or_none() is not None
+    model, number_col = col
+    return (await db.execute(select(model.id).where(
+        model.org_id == org_id, number_col == number).limit(1))).scalar_one_or_none() is not None
 
 
 async def peek_example(template: str, begins_from: int | None = None) -> str:

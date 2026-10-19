@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete, update
 from pydantic import BaseModel
 from typing import Optional
-from backend.db.database import get_db
+from backend.db.database import get_db, insert_ignore
 from backend.models import OrderStatus, Employee, NotificationRule
 from backend.services.auth import get_current_employee, require_perm, record_scope
 
@@ -116,7 +116,9 @@ def _ser(s: OrderStatus) -> dict:
 
 
 async def ensure_seeded(db: AsyncSession, org_id: str):
-    """Create the default status set for an org if it has none."""
+    """Create the default status set for an org if it has none. Safe to run concurrently: a
+    new shop's first page load calls this from several requests at once, so every insert is
+    insert-or-ignore against uq_order_statuses_org_rt_key and the loser skips quietly."""
     # 144in self-heal: earlier builds could leave estimate statuses mis-typed as
     # record_type='work_order' (startup auto-add defaulted the new column) AND a
     # correct estimate-typed copy, producing duplicate keys that crash bare-key
@@ -132,12 +134,13 @@ async def ensure_seeded(db: AsyncSession, org_id: str):
     )).scalar() or 0
     if not existing:
         for i, (key, name, grp, color, dflt, t_inv, t_not, t_pay, term) in enumerate(DEFAULT_STATUSES):
-            db.add(OrderStatus(
+            await insert_ignore(
+                db, OrderStatus,
                 org_id=org_id, key=key, name=name, status_group=grp, color=color,
                 sort_order=i, is_default=dflt, triggers_invoice=t_inv,
                 triggers_notification=False, triggers_payment=t_pay, is_terminal=term,
                 record_type="work_order",
-            ))
+            )
         await db.commit()
     # seed estimate statuses if missing (separate set)
     est_existing = (await db.execute(
@@ -146,12 +149,13 @@ async def ensure_seeded(db: AsyncSession, org_id: str):
     )).scalar() or 0
     if not est_existing:
         for i, (key, name, grp, color, accept, conv) in enumerate(ESTIMATE_STATUSES):
-            db.add(OrderStatus(
+            await insert_ignore(
+                db, OrderStatus,
                 org_id=org_id, key=key, name=name, status_group=grp, color=color,
                 sort_order=i, is_estimate=True, record_type="estimate",
                 shows_accept=accept, converts_to_order=conv,
                 is_terminal=grp in ("closed", "dropped"),
-            ))
+            )
         await db.commit()
     # 144ij — seed the three newer Orderry pipelines, each independently.
     for rt, rows in RECORD_TYPE_DEFAULTS.items():
@@ -161,10 +165,11 @@ async def ensure_seeded(db: AsyncSession, org_id: str):
         )).scalar() or 0
         if not rt_existing:
             for i, (key, name, grp, color, dflt, term) in enumerate(rows):
-                db.add(OrderStatus(
+                await insert_ignore(
+                    db, OrderStatus,
                     org_id=org_id, key=key, name=name, status_group=grp, color=color,
                     sort_order=i, is_default=dflt, is_terminal=term, record_type=rt,
-                ))
+                )
             await db.commit()
 
 
@@ -256,11 +261,12 @@ async def create_status(
         raise HTTPException(400, f"Group must be one of {GROUPS}")
     rt = _resolve_rt(data)
     key = data.key or _slugify(data.name)
-    # ensure unique key within org (keys are org-global; suffix on collision)
-    dupe = (await db.execute(select(OrderStatus).where(
-        OrderStatus.org_id == current.org_id, OrderStatus.key == key, OrderStatus.active == True))).scalar_one_or_none()  # noqa: E712
-    if dupe:
-        key = f"{key}_{(await db.execute(select(func.count()).select_from(OrderStatus).where(OrderStatus.org_id == current.org_id))).scalar()}"
+    # ensure unique key within org (keys are org-global; suffix on collision). Inactive statuses
+    # still hold their key (uq_order_statuses_org_rt_key), so they count as taken too.
+    taken = set((await db.execute(select(OrderStatus.key).where(OrderStatus.org_id == current.org_id))).scalars().all())
+    base, n = key, 2
+    while key in taken:
+        key, n = f"{base}_{n}", n + 1
     if data.is_default:
         for s in (await db.execute(select(OrderStatus).where(OrderStatus.org_id == current.org_id, OrderStatus.is_default == True, OrderStatus.record_type == rt))).scalars().all():  # noqa: E712
             s.is_default = False
