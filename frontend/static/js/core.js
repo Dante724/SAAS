@@ -109,7 +109,8 @@ const Toast = {
     const t = document.createElement('div');
     t.className = `toast toast-${type}`;
     const icons = { success:icon('check',15), error:icon('alert',15), info:icon('message',15) };
-    t.innerHTML = `<span class="toast-icon">${customIcon || icons[type] || icons.info}</span><span>${msg}</span>`;
+    t.innerHTML = `<span class="toast-icon">${customIcon || icons[type] || icons.info}</span><span></span>`;
+    t.lastChild.textContent = msg;   // messages carry server text (names, error details): never HTML
     stack.appendChild(t);
     setTimeout(() => t.remove(), 3800);
   },

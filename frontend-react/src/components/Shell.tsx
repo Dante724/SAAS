@@ -8,7 +8,7 @@ import { alertDialog } from "../lib/dialog";
 import { t, getLang, setLang, applyDir } from "../i18n";
 import { useMe, NAV_PERM } from "../context/Me";
 import {
-  Wrench, Mail, MessageSquare, MessageCircle, Calendar, CalendarRange, Users, User,
+  Menu, Wrench, Mail, MessageSquare, MessageCircle, Calendar, CalendarRange, Users, User,
   UserPlus, ShoppingCart, Package, Boxes, Landmark, Wallet, BarChart3, Settings as SettingsIcon,
   MoreVertical, MoreHorizontal, Search, Rows3, Columns3, KanbanSquare, Pause, Play, Bell,
   ClipboardList, ClipboardCheck, Banknote, IndianRupee, AlertTriangle, AlertCircle, Plus, Minus,
@@ -68,7 +68,7 @@ const ICONS: Record<string, any> = {
   verified: BadgeCheck, verified_user: ShieldCheck, videocam_off: VideoOff, web: Globe,
   qr_code_2: QrCode, sticky_note_2: StickyNote, receipt: Receipt,
   open_in_new: ExternalLink, link: LinkIcon,
-  search: Search, table_rows: Rows3, view_kanban: KanbanSquare,
+  search: Search, menu: Menu, table_rows: Rows3, view_kanban: KanbanSquare,
   notifications: Bell, pause: Pause, play_arrow: Play, more_vert: MoreVertical, more_horiz: MoreHorizontal,
   print: Printer, save: Save, send: Send, campaign: Send, smartphone: Smartphone,
   photo_camera: Camera, add_a_photo: Camera, image: ImageIcon,
@@ -139,6 +139,20 @@ const NAV_GROUPS: { name: string; items: NavItem[] }[] = [
 ];
 const NAV: NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 
+// True at desktop widths (≥1024px), where the sidebar is a fixed column.
+function useWide() {
+  const q = "(min-width: 1024px)";
+  const [wide, setWide] = useState(() => (typeof window === "undefined" || !window.matchMedia) ? true : window.matchMedia(q).matches);
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const m = window.matchMedia(q);
+    const on = () => setWide(m.matches);
+    m.addEventListener?.("change", on);
+    return () => m.removeEventListener?.("change", on);
+  }, []);
+  return wide;
+}
+
 export default function Shell({ title, children }: { title: string; children: ReactNode }) {
   const { can, me, refresh } = useMe();
   const initials = ((me?.name || "").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("") || "?").toUpperCase();
@@ -155,6 +169,11 @@ export default function Shell({ title, children }: { title: string; children: Re
   const [dark, setDark] = useState(() => { try { return localStorage.getItem("ros_theme") === "dark"; } catch { return false; } });
   const [railCollapsed, setRailCollapsed] = useState(() => { try { return localStorage.getItem("ros_nav_rail") === "1"; } catch { return false; } });
   const toggleRail = () => setRailCollapsed((c) => { const n = !c; try { localStorage.setItem("ros_nav_rail", n ? "1" : "0"); } catch { /* ignore */ } return n; });
+  // Below 1024px (phones, iPad portrait) the sidebar is a slide-in drawer: as a fixed column it
+  // took ~60% of a phone screen and squeezed every page into one word per line.
+  const wide = useWide();
+  const [navOpen, setNavOpen] = useState(false);
+  const rail = railCollapsed && wide;   // the icon-only rail is a desktop preference
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
     try { localStorage.setItem("ros_theme", dark ? "dark" : "light"); } catch { /* ignore */ }
@@ -165,7 +184,7 @@ export default function Shell({ title, children }: { title: string; children: Re
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPalette((p) => !p); }
-      if (e.key === "Escape") { setPalette(false); setNotifOpen(false); }
+      if (e.key === "Escape") { setPalette(false); setNotifOpen(false); setNavOpen(false); }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -182,34 +201,49 @@ export default function Shell({ title, children }: { title: string; children: Re
     <div className="bg-surface text-ink-primary antialiased h-screen w-screen overflow-hidden select-none flex flex-col font-sans">
       <div className="flex flex-1 overflow-hidden relative">
         {/* SIDEBAR */}
-        <aside className={`${railCollapsed ? "w-[64px]" : "w-[200px]"} flex-shrink-0 bg-sidebar border-r border-slate-200/80 flex flex-col justify-between z-10 transition-[width] duration-200`}>
+        {navOpen && !wide && <div className="fixed inset-0 z-30 bg-slate-900/40" onClick={() => setNavOpen(false)} aria-hidden="true" />}
+        <aside id="app-nav" aria-label={t("Main menu")}
+          className={`${wide ? (rail ? "w-[64px]" : "w-[200px]") : `fixed inset-y-0 left-0 z-40 w-[260px] max-w-[85vw] shadow-drawer transition-transform duration-200 ${navOpen ? "translate-x-0" : "-translate-x-full"}`} flex-shrink-0 bg-sidebar border-r border-slate-200/80 flex flex-col justify-between ${wide ? "z-10 transition-[width] duration-200" : ""}`}
+          {...(!wide && !navOpen ? { inert: "" } : {})}>
           <div className="p-3 space-y-0.5 overflow-y-auto">
-            <div className={`flex items-center gap-2.5 px-2 pt-1 pb-3 ${railCollapsed ? "justify-center" : ""}`}>
+            <div className={`flex items-center gap-2.5 px-2 pt-1 pb-3 ${rail ? "justify-center" : ""}`}>
               <TeklyMark size={32} />
-              {!railCollapsed && (
-                <div>
+              {!rail && (
+                <div className="min-w-0">
                   <div className="font-bold text-[17px] leading-none tracking-[-0.05em] text-ink-primary flex items-center gap-1.5" aria-label="Tekly">tekly <span className="text-[10px] tracking-normal px-1 py-px rounded bg-blue-100 text-primary font-bold">PRO</span></div>
-                  <p className="text-[11px] text-ink-tertiary font-medium">{t("Workshop Central")}</p>
+                  {me?.org_name && <p className="text-[11px] text-ink-tertiary font-medium truncate">{me.org_name}</p>}
                 </div>
               )}
+              {!wide && (
+                <button onClick={() => setNavOpen(false)} aria-label={t("Close menu")} className="ml-auto w-9 h-9 rounded-lg flex items-center justify-center text-ink-tertiary hover:bg-slate-100">
+                  <M n="close" c="text-lg" />
+                </button>
+              )}
             </div>
+            {!wide && (
+              <div className="flex flex-wrap items-center gap-2 px-1 pb-3 md:hidden">
+                <LocationSwitcher />
+                <ScanBox />
+              </div>
+            )}
             {NAV_GROUPS.map((group) => {
               const visible = group.items.filter((it) => can(NAV_PERM[it.to]));
               if (visible.length === 0) return null;
               return (
                 <div key={group.name || "home"} className="pb-1">
-                  {group.name && !railCollapsed && (
+                  {group.name && !rail && (
                     <div className="px-2.5 pt-2.5 pb-1 text-[11px] font-bold text-ink-tertiary/80">{t(group.name)}</div>
                   )}
-                  {group.name && railCollapsed && <div className="my-1.5 mx-2 border-t border-slate-200/70" />}
+                  {group.name && rail && <div className="my-1.5 mx-2 border-t border-slate-200/70" />}
                   {visible.map((it) => (
                     <NavLink
                       key={it.to}
                       to={it.to}
                       end={it.end}
-                      title={railCollapsed ? t(it.l) : undefined}
+                      title={rail ? t(it.l) : undefined}
+                      onClick={() => setNavOpen(false)}
                       className={({ isActive }) =>
-                        `flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs transition-colors ${railCollapsed ? "justify-center" : ""} ${
+                        `flex items-center gap-2 px-2.5 ${wide ? "py-1.5 text-xs" : "py-2.5 text-sm"} rounded-lg transition-colors ${rail ? "justify-center" : ""} ${
                           isActive
                             ? "font-bold text-primary bg-blue-50/80 shadow-sm"
                             : "font-medium text-ink-secondary hover:bg-slate-100 hover:text-ink-primary"
@@ -219,7 +253,7 @@ export default function Shell({ title, children }: { title: string; children: Re
                       {({ isActive }) => (
                         <>
                           <M n={it.i} c={`text-[17px] ${isActive ? "text-primary" : "text-ink-tertiary"}`} />
-                          {!railCollapsed && <span>{t(it.l)}</span>}
+                          {!rail && <span>{t(it.l)}</span>}
                         </>
                       )}
                     </NavLink>
@@ -227,28 +261,41 @@ export default function Shell({ title, children }: { title: string; children: Re
                 </div>
               );
             })}
-            <button onClick={toggleRail} title={railCollapsed ? t("Expand menu") : t("Collapse menu")} aria-label={railCollapsed ? t("Expand menu") : t("Collapse menu")}
-              className={`mt-1.5 w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium text-ink-tertiary hover:bg-slate-100 hover:text-ink-primary transition-colors ${railCollapsed ? "justify-center" : ""}`}>
-              <M n={railCollapsed ? "chevron_right" : "chevron_left"} c="text-[17px]" />
-              {!railCollapsed && <span>{t("Collapse")}</span>}
-            </button>
+            {wide && (
+              <button onClick={toggleRail} title={rail ? t("Expand menu") : t("Collapse menu")} aria-label={rail ? t("Expand menu") : t("Collapse menu")}
+                className={`mt-1.5 w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium text-ink-tertiary hover:bg-slate-100 hover:text-ink-primary transition-colors ${rail ? "justify-center" : ""}`}>
+                <M n={rail ? "chevron_right" : "chevron_left"} c="text-[17px]" />
+                {!rail && <span>{t("Collapse")}</span>}
+              </button>
+            )}
           </div>
         </aside>
 
         {/* MAIN */}
         <main className="flex-1 flex flex-col min-w-0 bg-canvas overflow-hidden">
-          <header className="h-[52px] bg-white/80 backdrop-blur-md border-b border-slate-200/80 px-6 flex items-center justify-between flex-shrink-0 z-10">
-            <div className="flex items-center gap-4">
-              <h1 className="text-base font-bold text-ink-primary tracking-tight whitespace-nowrap">{t(title)}</h1>
-              <button onClick={() => setPalette(true)} className="relative w-64 flex-shrink-0 text-left group">
+          <header className="h-[52px] bg-white/80 backdrop-blur-md border-b border-slate-200/80 px-3 lg:px-6 flex items-center justify-between gap-2 flex-shrink-0 z-10">
+            <div className="flex items-center gap-2 lg:gap-4 min-w-0">
+              {!wide && (
+                <button onClick={() => setNavOpen(true)} aria-label={t("Open menu")} aria-controls="app-nav" aria-expanded={navOpen}
+                  className="w-9 h-9 -ml-1 rounded-lg flex items-center justify-center text-ink-secondary hover:bg-slate-100 flex-shrink-0">
+                  <M n="menu" c="text-xl" />
+                </button>
+              )}
+              <h1 className="text-base font-bold text-ink-primary tracking-tight whitespace-nowrap truncate">{t(title)}</h1>
+              <button onClick={() => setPalette(true)} aria-label={t("Search")} className="sm:hidden w-9 h-9 rounded-lg flex items-center justify-center text-ink-secondary hover:bg-slate-100 flex-shrink-0">
+                <M n="search" c="text-lg" />
+              </button>
+              <button onClick={() => setPalette(true)} className="relative hidden sm:block w-44 lg:w-64 flex-shrink-0 text-left group">
                 <M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" />
                 <div className="w-full bg-slate-100/80 group-hover:bg-white text-xs pl-8 pr-12 py-1.5 rounded-lg border border-slate-200/70 font-medium text-ink-placeholder whitespace-nowrap overflow-hidden text-ellipsis">{t("Search jobs, customers…")}</div>
                 <span className="absolute right-2 top-1.5 text-[11px] bg-white border border-slate-200 text-ink-tertiary font-mono px-1 rounded shadow-2xs">⌘K</span>
               </button>
             </div>
-            <div className="flex items-center gap-3">
-              <LocationSwitcher />
-              <ScanBox />
+            <div className="flex items-center gap-2 lg:gap-3 flex-shrink-0">
+              <div className="hidden md:contents">
+                <LocationSwitcher />
+                <ScanBox />
+              </div>
               {(me?.clock_attendance_enabled || me?.clock_wo_enabled) && <TimeClockChip me={me} />}
               <button onClick={() => setNotifOpen((o) => !o)} aria-label="Notifications" className="w-8 h-8 rounded-full border border-slate-200 bg-white flex items-center justify-center text-ink-secondary hover:text-ink-primary shadow-xs relative"><M n="notifications" c="text-sm" />{unread > 0 && <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-primary text-white text-[11px] font-bold flex items-center justify-center border-2 border-white">{unread > 9 ? "9+" : unread}</span>}</button>
               <div className="relative">
@@ -283,7 +330,7 @@ export default function Shell({ title, children }: { title: string; children: Re
             </div>
           </header>
           {me?.mfa_required && !me?.mfa_enabled && (
-            <button onClick={() => setSecOpen(true)} className="w-full text-left bg-amber-50 border-b border-amber-200 text-amber-800 text-xs font-semibold px-6 py-2 flex items-center gap-2 hover:bg-amber-100">
+            <button onClick={() => setSecOpen(true)} className="w-full text-left bg-amber-50 border-b border-amber-200 text-amber-800 text-xs font-semibold px-3 lg:px-6 py-2 flex items-center gap-2 hover:bg-amber-100">
               <M n="lock" c="text-sm" />Your organization requires two-factor authentication. <span className="underline">Set it up now</span> to keep access.
             </button>
           )}

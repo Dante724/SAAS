@@ -21,7 +21,7 @@ import NameSuggestInput from "../../components/NameSuggestInput";
 
 type ClientLite = { id: string; name?: string; phone?: string; email?: string };
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
-type LineDraft = { id: string; description: string; kind: string; price: number };
+type LineDraft = { id: string; description: string; kind: string; price: number; ref_id?: string };
 type WOType = { id: string; name: string; color?: string | null };
 
 // Fallback chips when the org has no configured WO types (no type_id sent then).
@@ -126,6 +126,13 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
   const conv = (amt: number) => (docCur && docCur.rate ? amt / docCur.rate : amt);
   const showConv = !!(docCur && base && curCode !== base.code);
 
+  // A drawer line as the API wants it: products are parts, everything else labour; catalog picks
+  // keep their ref_id so stock, cost and the catalog price stay linked.
+  const lineBody = (l: LineDraft) => ({
+    description: l.description, kind: l.kind, line_type: l.kind === "product" ? "part" : "labour",
+    ref_id: l.ref_id || null, qty: 1, unit_price: l.price,
+  });
+
   function addCustomLine() {
     setLines((ls) => [...ls, { id: Math.random().toString(36).slice(2), description: "Custom line", kind: "service", price: 0 }]);
   }
@@ -151,8 +158,10 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
         intake_photos: intakePhotos.map((p) => p.id),
         is_estimate: estimate,
         currency_code: curCode || null,
-        lines: lines.map((l) => ({ description: l.description, kind: l.kind, qty: 1, unit_price: l.price })),
+        // Bundles expand into their components only through the add-line endpoint (below).
+        lines: lines.filter((l) => l.kind !== "bundle").map(lineBody),
       });
+      for (const b of lines.filter((l) => l.kind === "bundle")) await api.post(`/orders/${created.id}/lines`, lineBody(b));
       onCreated();
       if (!reopen) onClose();
       else { setClient(null); setQ(""); setComplaint(""); setBrand(""); setModel(""); setSerial(""); setImei(""); setVin(""); setHin(""); setColor(""); setCondition(""); setMoreOpen(false); setDeviceId(null); setLines([]); setWoCustom({}); setAssetCustom({}); setStep(1); }
@@ -419,7 +428,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                   } catch (e: any) { await alertDialog(e.message || "AI draft failed"); }
                 }} className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[11px] font-bold shadow-clay-sm flex items-center gap-1"><M n="auto_awesome" c="text-xs" />AI draft from complaint</button>
               </div>
-              <CatalogPicker placeholder="Search a service or product to add…" onPick={(i) => setLines((ls) => [...ls, { id: Math.random().toString(36).slice(2), description: i.name, kind: i.kind, price: i.price || 0 }])} />
+              <CatalogPicker placeholder="Search a service or product to add…" onPick={(i) => setLines((ls) => [...ls, { id: Math.random().toString(36).slice(2), description: i.name, kind: i.kind, price: i.price || 0, ref_id: i.ref_id }])} />
 
               <div className="space-y-2.5">
                 <div className="flex items-center justify-between text-[11px] font-bold text-ink-tertiary px-1"><span>Configured items</span><span>Subtotal</span></div>

@@ -50,10 +50,15 @@ function Select({ id, label, value, onChange, options }: {
 
 // ── Sign up: two short steps (your shop, then you) ─────────────────────────
 type Opts = { templates: { key: string; label: string }[]; regions: { key: string; label: string }[]; region_defaults: Record<string, { currency_code?: string }>; employee_brackets: string[] };
+// The marketing site hosts the legal pages; bump TERMS_VERSION when they change.
+const SITE_URL = "https://tekly.app";
+const TERMS_VERSION = "2026-10-19";
+
 export function Signup() {
   const [o, setO] = useState<Opts | null>(null);
   const [step, setStep] = useState<1 | 2>(1);
   const [f, setF] = useState({ org: "", name: "", email: "", pass: "", region: "", currency: "", template: "", employees: "", phone: "", country: "" });
+  const [agree, setAgree] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -90,6 +95,7 @@ export function Signup() {
     }
     if (!f.name.trim() || !f.email.trim()) { setErr("Enter your name and email"); return; }
     if (!f.pass || f.pass.length < 8) { setErr("Password must be at least 8 characters"); return; }
+    if (!agree) { setErr("Please accept the Terms of service and Privacy policy"); return; }
     setBusy(true); setErr(null);
     let tz: string | null = null;
     try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch { /* ignore */ }
@@ -100,6 +106,7 @@ export function Signup() {
         country: f.country || null, timezone: tz,
         currency_code: f.currency || null, currency: f.currency || null,
         employee_count: f.employees || null, company_phone: f.phone || null,
+        accept_terms: true, terms_version: TERMS_VERSION,
       });
       localStorage.setItem("ros_tok", d.access_token);
       window.location.replace("/");
@@ -140,6 +147,10 @@ export function Signup() {
               <input id="su-email" type="email" className={inputCls} value={f.email} onChange={(e) => set("email", e.target.value)} placeholder=" " autoComplete="username" />
             </Field>
             <Password id="su-pass" label="Password (8+ characters)" value={f.pass} onChange={(v) => set("pass", v)} />
+            <label htmlFor="su-agree" className="flex items-start gap-2.5 pt-1 text-[14px] text-ink-secondary">
+              <input id="su-agree" type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>I agree to the <a href={`${SITE_URL}/terms/`} target="_blank" rel="noopener" className={link}>Terms of service</a> and <a href={`${SITE_URL}/privacy/`} target="_blank" rel="noopener" className={link}>Privacy policy</a>.</span>
+            </label>
           </div>
         )}
         <Notice err={err} />

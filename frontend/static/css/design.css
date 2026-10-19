@@ -3,7 +3,11 @@
    Every token, every primitive, every animation.
 ════════════════════════════════════════════════════════ */
 
-@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400..800&family=Geist+Mono:wght@400..600&display=swap');
+/* Geist (OFL-1.1), self-hosted: no request to Google from staff or customer browsers. */
+@font-face { font-family: 'Geist'; font-style: normal; font-display: swap; font-weight: 100 900;
+  src: url(/static/fonts/geist-latin-wght-normal.woff2) format('woff2-variations'); }
+@font-face { font-family: 'Geist Mono'; font-style: normal; font-display: swap; font-weight: 100 900;
+  src: url(/static/fonts/geist-mono-latin-wght-normal.woff2) format('woff2-variations'); }
 
 /* ── TOKENS ─────────────────────────────────────────── */
 :root {

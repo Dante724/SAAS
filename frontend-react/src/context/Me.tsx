@@ -16,7 +16,7 @@ export type Me = {
   clock_wo_enabled?: boolean; clock_attendance_enabled?: boolean;
   track_job_hours?: boolean; track_attendance?: boolean;
   mfa_enabled?: boolean; mfa_required?: boolean; email_verified?: boolean;
-  location_id?: string | null;
+  location_id?: string | null; org_name?: string | null;
 };
 
 type Ctx = {

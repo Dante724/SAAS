@@ -3,6 +3,11 @@
 (function () {
   const view = () => document.getElementById('view');
   const banners = () => document.getElementById('banners');
+  // Everything below builds HTML from server data (customer names, complaints, notes) and from
+  // scanned codes, so every interpolated value goes through esc().
+  const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  // Only in-app links; a stored deep link can't become javascript: or an off-site URL.
+  const safeHref = (u, fallback) => (/^#\/|^\/(?!\/)/.test(u || '') ? u : fallback);
 
   // ── Auth / boot ──
   document.getElementById('t-login').addEventListener('click', doLogin);
@@ -100,12 +105,12 @@
   async function reviewConflicts() {
     const list = await RosPWA.getConflicts();
     if (!list.length) return;
-    const rows = list.map((c) => `<div class="job" data-cid="${c.id}">
-      <div class="row"><span class="num" style="font-size:14px">${labelFor(c)}</span></div>
-      <div class="meta">${c.detail || ''} · ${new Date(c.at).toLocaleString()}</div>
+    const rows = list.map((c) => `<div class="job" data-cid="${esc(c.id)}">
+      <div class="row"><span class="num" style="font-size:14px">${esc(labelFor(c))}</span></div>
+      <div class="meta">${esc(c.detail)} · ${new Date(c.at).toLocaleString()}</div>
       <div style="display:flex;gap:8px;margin-top:8px">
-        <button class="ghost-btn cf-discard" data-cid="${c.id}" style="margin-top:0;padding:10px 14px;width:auto">Discard mine</button>
-        <button class="big-btn cf-retry" data-cid="${c.id}" style="margin-top:0;padding:10px 14px;width:auto">Re-apply</button>
+        <button class="ghost-btn cf-discard" data-cid="${esc(c.id)}" style="margin-top:0;padding:10px 14px;width:auto">Discard mine</button>
+        <button class="big-btn cf-retry" data-cid="${esc(c.id)}" style="margin-top:0;padding:10px 14px;width:auto">Re-apply</button>
       </div></div>`).join('');
     const html = `<h3 style="margin:0 0 12px">Resolve conflicts</h3>
       <p class="meta" style="margin:0 0 12px">These changes were made offline but the server has since moved on. Re-apply to run yours against the latest, or discard.</p>${rows}`;
@@ -185,7 +190,7 @@
     const cat = on ? a.active.category : null;
     v.innerHTML = `
       <div class="stat" style="margin:8px 0 16px"><div class="n" style="font-size:20px">${on ? 'Clocked in' : 'Clocked out'}</div>
-        <div class="l">${on ? (cat + (a.active.order_no ? ' · ' + a.active.order_no : '')) : 'Tap below to start your shift'}</div></div>
+        <div class="l">${on ? esc(cat + (a.active.order_no ? ' · ' + a.active.order_no : '')) : 'Tap below to start your shift'}</div></div>
       ${on ? '' : `<button class="big-btn" id="c-in">Clock in</button>`}
       ${on && cat === 'job' ? `<button class="ghost-btn" id="c-break">Start break</button>` : ''}
       ${on && cat === 'break' ? `<button class="big-btn" id="c-resume">Resume work</button>` : ''}
@@ -249,17 +254,17 @@
   async function lookup(code) {
     if (!code) return;
     const box = document.getElementById('sc-result');
-    box.innerHTML = `<div class="empty">Looking up “${code}”…</div>`;
+    box.innerHTML = `<div class="empty">Looking up “${esc(code)}”…</div>`;
     // QR work orders encode the order public token or number.
     let res = null;
     try { res = await get('/api/catalog/products?search=' + encodeURIComponent(code)); } catch (e) {}
     const items = (res && (res.items || res.products)) || [];
     if (items.length) {
       box.innerHTML = `<div class="sec-h">Inventory match</div>` + items.slice(0, 5).map((p) =>
-        `<div class="job"><div class="row"><span class="num">${p.name || p.code || code}</span>
-          <span class="st">${p.stock != null ? p.stock + ' in stock' : (p.code || '')}</span></div></div>`).join('');
+        `<div class="job"><div class="row"><span class="num">${esc(p.name || p.code || code)}</span>
+          <span class="st">${esc(p.stock != null ? p.stock + ' in stock' : (p.code || ''))}</span></div></div>`).join('');
     } else {
-      box.innerHTML = `<div class="job"><div class="row"><span class="num">${code}</span><span class="st">No match</span></div>
+      box.innerHTML = `<div class="job"><div class="row"><span class="num">${esc(code)}</span><span class="st">No match</span></div>
         <div class="meta">Scanned. No inventory item found for this code.</div></div>`;
     }
   }
@@ -274,9 +279,9 @@
     v.innerHTML =
       `<a href="#/preferences" class="meta" style="display:inline-block;float:right;margin:4px 0 10px;color:#a5b4fc">Settings ›</a>` +
       (items.length ? `<button class="ghost-btn" id="n-all" style="margin:6px 0 12px">Mark all read</button>` : '') +
-      (items.length ? items.map((n) => `<a class="job ${n.read ? '' : 'ov'}" href="${(n.deep_link || '#/dashboard').replace('/tech', '')}" data-id="${n.id}">
-        <div class="row"><span class="num">${n.title}</span><span class="st">${n.read ? '' : 'new'}</span></div>
-        <div class="meta">${n.body || ''} · ${new Date(n.created_at).toLocaleString()}</div></a>`).join('')
+      (items.length ? items.map((n) => `<a class="job ${n.read ? '' : 'ov'}" href="${esc(safeHref((n.deep_link || '').replace('/tech', ''), '#/dashboard'))}" data-id="${esc(n.id)}">
+        <div class="row"><span class="num">${esc(n.title)}</span><span class="st">${n.read ? '' : 'new'}</span></div>
+        <div class="meta">${esc(n.body)} · ${new Date(n.created_at).toLocaleString()}</div></a>`).join('')
         : `<div class="empty">No alerts.</div>`);
     const all = v.querySelector('#n-all');
     if (all) all.addEventListener('click', async () => { await post('/api/tech/notifications/read-all', {}); refreshUnread(); renderNotifications(); });
@@ -305,11 +310,11 @@
     v.innerHTML = `
       <a href="#/dashboard" class="meta" style="display:inline-block;margin:4px 0 10px">← All jobs</a>
       <div class="stat" style="margin-bottom:14px">
-        <div class="n" style="font-size:18px">${o.order_number} <span class="st">${o.status}</span></div>
+        <div class="n" style="font-size:18px">${esc(o.order_number)} <span class="st">${esc(o.status)}</span></div>
         <div class="l" style="text-transform:none;font-size:14px;color:#cfcfe0;margin-top:8px">
-          ${o.client && o.client.id ? `<a href="#/client/${o.client.id}" style="color:#a5b4fc;text-decoration:none">${o.client.name || 'Customer'} ›</a>` : ((o.client && o.client.name) || 'Walk-in')}${o.client && o.client.phone ? ' · ' + o.client.phone : ''}<br>
-          ${dev ? (o.device && o.device.id ? `<a href="#/device/${o.device.id}" style="color:#a5b4fc;text-decoration:none">${dev} ›</a>` : dev) + '<br>' : ''}${o.complaint || ''}</div>
-        ${o.status_sla_overdue ? `<div class="l" style="color:#fb923c;margin-top:8px">SLA overdue — ${o.minutes_in_status}m in status</div>` : ''}
+          ${o.client && o.client.id ? `<a href="#/client/${encodeURIComponent(o.client.id)}" style="color:#a5b4fc;text-decoration:none">${esc(o.client.name || 'Customer')} ›</a>` : esc((o.client && o.client.name) || 'Walk-in')}${o.client && o.client.phone ? ' · ' + esc(o.client.phone) : ''}<br>
+          ${dev ? (o.device && o.device.id ? `<a href="#/device/${encodeURIComponent(o.device.id)}" style="color:#a5b4fc;text-decoration:none">${esc(dev)} ›</a>` : esc(dev)) + '<br>' : ''}${esc(o.complaint)}</div>
+        ${o.status_sla_overdue ? `<div class="l" style="color:#fb923c;margin-top:8px">SLA overdue — ${esc(o.minutes_in_status)}m in status</div>` : ''}
       </div>
 
       <div class="sec-h">Labor timer</div>
@@ -331,7 +336,7 @@
 
       <div class="sec-h">Change status</div>
       <select id="o-status" style="width:100%;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:14px;color:#fff;font-size:16px;min-height:52px">
-        ${(allowed.length ? allowed : [o.status]).map((s) => `<option ${s === o.status ? 'selected' : ''}>${s}</option>`).join('')}
+        ${(allowed.length ? allowed : [o.status]).map((s) => `<option ${s === o.status ? 'selected' : ''}>${esc(s)}</option>`).join('')}
       </select>
       <button class="big-btn" id="o-save-status" style="margin-top:10px">Update status</button>
 
@@ -432,14 +437,14 @@
       try {
         const d = await post('/api/orders/' + id + '/payment-link', {});
         out.innerHTML = `<div class="job" style="text-align:center">
-          <img src="${d.qr_svg}" alt="QR" style="width:160px;height:160px;background:#fff;border-radius:12px;padding:8px">
-          <div class="meta" style="margin-top:10px;word-break:break-all">${d.url}</div>
+          <img src="${esc(d.qr_svg)}" alt="QR" style="width:160px;height:160px;background:#fff;border-radius:12px;padding:8px">
+          <div class="meta" style="margin-top:10px;word-break:break-all">${esc(d.url)}</div>
           <button class="ghost-btn" id="o-pay-copy">Copy link</button></div>`;
         out.querySelector('#o-pay-copy').addEventListener('click', () => {
           navigator.clipboard && navigator.clipboard.writeText(d.url);
           Toast && Toast.success && Toast.success('Link copied');
         });
-      } catch (e) { out.innerHTML = `<div class="empty">${(e && e.message) || 'Could not create a payment link.'}</div>`; }
+      } catch (e) { out.innerHTML = `<div class="empty">${esc((e && e.message) || 'Could not create a payment link.')}</div>`; }
     });
 
     // Complete (runs the server completion gate)
@@ -448,15 +453,15 @@
       const r = await RosPWA.mutate('POST', '/api/orders/' + id + '/complete', {});
       if (r.ok && r.queued) { out.innerHTML = `<div class="empty">Queued — will complete on sync.</div>`; return; }
       if (r.ok) { out.innerHTML = `<div class="empty" style="color:#34d399">✓ Completed.</div>`; setTimeout(() => renderOrder(id), 600); }
-      else out.innerHTML = `<div class="empty" style="color:#fb7185">${(r.data && r.data.detail) || 'Could not complete (status ' + (r.status || '') + ').'}</div>`;
+      else out.innerHTML = `<div class="empty" style="color:#fb7185">${esc((r.data && r.data.detail) || 'Could not complete (status ' + (r.status || '') + ').')}</div>`;
     });
   }
 
   function renderChecklist(el, id, items) {
     if (!items.length) { el.innerHTML = `<div class="empty">No checklist yet.</div>`; return; }
     el.innerHTML = items.map((c) => `<label class="job" style="display:flex;gap:10px;align-items:center">
-      <input type="checkbox" data-cid="${c.id}" ${c.done ? 'checked' : ''} style="width:22px;height:22px">
-      <span class="num" style="font-weight:600;font-size:14px${c.done ? ';text-decoration:line-through;color:#7a7a95' : ''}">${c.label}${c.required ? '' : ' (optional)'}</span></label>`).join('');
+      <input type="checkbox" data-cid="${esc(c.id)}" ${c.done ? 'checked' : ''} style="width:22px;height:22px">
+      <span class="num" style="font-weight:600;font-size:14px${c.done ? ';text-decoration:line-through;color:#7a7a95' : ''}">${esc(c.label)}${c.required ? '' : ' (optional)'}</span></label>`).join('');
     el.querySelectorAll('input[data-cid]').forEach((cb) => cb.addEventListener('change', async () => {
       const r = await RosPWA.mutate('PATCH', '/api/orders/' + id + '/checklist/' + cb.dataset.cid, { done: cb.checked });
       if (r.ok && r.queued) Toast && Toast.success && Toast.success('Saved offline — will sync');
@@ -472,8 +477,8 @@
     const priceOf = (p) => (p.sell_price != null ? p.sell_price : (p.price != null ? p.price : (p.unit_price || 0)));
     box.innerHTML = items.slice(0, 6).map((p, i) => {
       const stock = p.qty != null ? `${p.qty} in stock` : '';
-      return `<div class="job" data-i="${i}"><div class="row"><span class="num">${p.name || p.code}</span>
-        <span class="st">add</span></div><div class="meta">${priceOf(p) ? '$' + priceOf(p) : ''}${stock ? ' · ' + stock : ''}${p.sku ? ' · ' + p.sku : ''}</div></div>`;
+      return `<div class="job" data-i="${i}"><div class="row"><span class="num">${esc(p.name || p.code)}</span>
+        <span class="st">add</span></div><div class="meta">${priceOf(p) ? '$' + esc(priceOf(p)) : ''}${stock ? ' · ' + esc(stock) : ''}${p.sku ? ' · ' + esc(p.sku) : ''}</div></div>`;
     }).join('');
     box.querySelectorAll('[data-i]').forEach((row) => row.addEventListener('click', async () => {
       const p = items[+row.dataset.i];
@@ -481,8 +486,8 @@
       // close-time pending-stock guard applies.
       const r = await RosPWA.mutate('POST', '/api/orders/' + id + '/lines',
         { line_type: 'part', kind: 'product', ref_id: p.id, description: p.name || p.code, qty: 1, unit_price: priceOf(p) });
-      if (r.ok) { queuedToast(r); box.innerHTML = `<div class="empty" style="color:#34d399">Added ${p.name || p.code}.</div>`; }
-      else box.innerHTML = `<div class="empty" style="color:#fb7185">${(r.data && r.data.detail) || 'Could not add part (stock?).'}</div>`;
+      if (r.ok) { queuedToast(r); box.innerHTML = `<div class="empty" style="color:#34d399">Added ${esc(p.name || p.code)}.</div>`; }
+      else box.innerHTML = `<div class="empty" style="color:#fb7185">${esc((r.data && r.data.detail) || 'Could not add part (stock?).')}</div>`;
     }));
   }
 
@@ -513,9 +518,9 @@
   function moneyTxt(n) { return '$' + (Number(n || 0)).toFixed(2); }
   function orderRow(c) {
     const when = c.created_at ? new Date(c.created_at).toLocaleDateString() : '';
-    return `<a class="job" href="#/order/${c.id}"><div class="row"><span class="num">${c.order_number}</span>
-      <span class="st">${c.status}</span></div>
-      <div class="meta">${when}${c.balance > 0 ? ' · ' + moneyTxt(c.balance) + ' due' : ''}${c.warranty_until ? ' · warranty to ' + c.warranty_until.slice(0, 10) : ''}</div></a>`;
+    return `<a class="job" href="#/order/${encodeURIComponent(c.id)}"><div class="row"><span class="num">${esc(c.order_number)}</span>
+      <span class="st">${esc(c.status)}</span></div>
+      <div class="meta">${when}${c.balance > 0 ? ' · ' + moneyTxt(c.balance) + ' due' : ''}${c.warranty_until ? ' · warranty to ' + esc(c.warranty_until.slice(0, 10)) : ''}</div></a>`;
   }
 
   async function renderClientHistory(cid) {
@@ -527,17 +532,17 @@
     const s = h.stats;
     v.innerHTML = `
       <a href="javascript:history.back()" class="meta" style="display:inline-block;margin:4px 0 10px">← Back</a>
-      <div class="stat" style="margin-bottom:8px"><div class="n" style="font-size:18px">${h.client.name}</div>
-        <div class="l" style="text-transform:none;color:#cfcfe0;margin-top:6px">${h.client.phone || ''}${h.client.email ? ' · ' + h.client.email : ''}</div></div>
+      <div class="stat" style="margin-bottom:8px"><div class="n" style="font-size:18px">${esc(h.client.name)}</div>
+        <div class="l" style="text-transform:none;color:#cfcfe0;margin-top:6px">${esc(h.client.phone)}${h.client.email ? ' · ' + esc(h.client.email) : ''}</div></div>
       <div class="stat-grid">
-        <div class="stat"><div class="n">${s.orders}</div><div class="l">Repairs</div></div>
+        <div class="stat"><div class="n">${esc(s.orders)}</div><div class="l">Repairs</div></div>
         <div class="stat ${s.outstanding_balance > 0 ? 'alert' : ''}"><div class="n" style="font-size:20px">${moneyTxt(s.outstanding_balance)}</div><div class="l">Outstanding</div></div>
       </div>
-      ${h.recommendations.length ? `<div class="sec-h">Previous recommendations</div>` + h.recommendations.map((r) => `<div class="job"><div class="meta" style="color:#e9e9f2">${r.body}</div></div>`).join('') : ''}
-      ${h.devices.length ? `<div class="sec-h">Devices</div>` + h.devices.map((d) => `<a class="job" href="#/device/${d.id}"><div class="row"><span class="num" style="font-size:14px">${d.label}</span><span class="st">${d.serial || d.imei || ''}</span></div></a>`).join('') : ''}
+      ${h.recommendations.length ? `<div class="sec-h">Previous recommendations</div>` + h.recommendations.map((r) => `<div class="job"><div class="meta" style="color:#e9e9f2">${esc(r.body)}</div></div>`).join('') : ''}
+      ${h.devices.length ? `<div class="sec-h">Devices</div>` + h.devices.map((d) => `<a class="job" href="#/device/${encodeURIComponent(d.id)}"><div class="row"><span class="num" style="font-size:14px">${esc(d.label)}</span><span class="st">${esc(d.serial || d.imei)}</span></div></a>`).join('') : ''}
       <div class="sec-h">Repairs</div>${h.orders.length ? h.orders.map(orderRow).join('') : `<div class="empty">No repairs.</div>`}
-      ${h.invoices.length ? `<div class="sec-h">Invoices</div>` + h.invoices.map((i) => `<div class="job"><div class="row"><span class="num" style="font-size:14px">${i.invoice_number}</span><span class="st">${i.status}</span></div><div class="meta">${moneyTxt(i.total)}${i.balance > 0 ? ' · ' + moneyTxt(i.balance) + ' due' : ' · paid'}</div></div>`).join('') : ''}
-      ${h.recent_activity.length ? `<div class="sec-h">Recent activity</div>` + h.recent_activity.slice(0, 8).map((f) => `<div class="job"><div class="meta">${f.item_type}${f.body ? ' · ' + f.body.slice(0, 80) : ''}</div></div>`).join('') : ''}
+      ${h.invoices.length ? `<div class="sec-h">Invoices</div>` + h.invoices.map((i) => `<div class="job"><div class="row"><span class="num" style="font-size:14px">${esc(i.invoice_number)}</span><span class="st">${esc(i.status)}</span></div><div class="meta">${moneyTxt(i.total)}${i.balance > 0 ? ' · ' + moneyTxt(i.balance) + ' due' : ' · paid'}</div></div>`).join('') : ''}
+      ${h.recent_activity.length ? `<div class="sec-h">Recent activity</div>` + h.recent_activity.slice(0, 8).map((f) => `<div class="job"><div class="meta">${esc(f.item_type)}${f.body ? ' · ' + esc(f.body.slice(0, 80)) : ''}</div></div>`).join('') : ''}
       <div style="height:24px"></div>`;
   }
 
@@ -549,10 +554,10 @@
     catch (e) { v.innerHTML = `<div class="empty">Couldn't load device history${navigator.onLine ? '' : ' (offline)'}.</div>`; return; }
     v.innerHTML = `
       <a href="javascript:history.back()" class="meta" style="display:inline-block;margin:4px 0 10px">← Back</a>
-      <div class="stat" style="margin-bottom:8px"><div class="n" style="font-size:18px">${h.device.label}</div>
-        <div class="l" style="text-transform:none;color:#cfcfe0;margin-top:6px">${h.device.serial ? 'SN ' + h.device.serial : ''}${h.device.imei ? ' · IMEI ' + h.device.imei : ''}${h.device.condition ? ' · ' + h.device.condition : ''}</div></div>
+      <div class="stat" style="margin-bottom:8px"><div class="n" style="font-size:18px">${esc(h.device.label)}</div>
+        <div class="l" style="text-transform:none;color:#cfcfe0;margin-top:6px">${h.device.serial ? 'SN ' + esc(h.device.serial) : ''}${h.device.imei ? ' · IMEI ' + esc(h.device.imei) : ''}${h.device.condition ? ' · ' + esc(h.device.condition) : ''}</div></div>
       <div class="stat-grid">
-        <div class="stat"><div class="n">${h.stats.repairs}</div><div class="l">Repairs</div></div>
+        <div class="stat"><div class="n">${esc(h.stats.repairs)}</div><div class="l">Repairs</div></div>
         <div class="stat ${h.stats.outstanding_balance > 0 ? 'alert' : ''}"><div class="n" style="font-size:20px">${moneyTxt(h.stats.outstanding_balance)}</div><div class="l">Outstanding</div></div>
       </div>
       <div class="sec-h">Repair history</div>${h.orders.length ? h.orders.map(orderRow).join('') : `<div class="empty">No repairs.</div>`}
@@ -573,8 +578,8 @@
     v.innerHTML = `<a href="#/notifications" class="meta" style="display:inline-block;margin:4px 0 10px">← Alerts</a>
       <div class="sec-h">Push notifications</div>
       ${prefs.preferences.map((p) => `<label class="job" style="display:flex;align-items:center;gap:10px">
-        <span class="num" style="font-size:14px;flex:1">${PREF_LABELS[p.kind] || p.kind}</span>
-        <input type="checkbox" data-kind="${p.kind}" ${p.enabled ? 'checked' : ''} style="width:44px;height:26px"></label>`).join('')}
+        <span class="num" style="font-size:14px;flex:1">${esc(PREF_LABELS[p.kind] || p.kind)}</span>
+        <input type="checkbox" data-kind="${esc(p.kind)}" ${p.enabled ? 'checked' : ''} style="width:44px;height:26px"></label>`).join('')}
       <p class="empty">Turn a type off to stop both push and in-app alerts for it.</p>`;
     v.querySelectorAll('input[data-kind]').forEach((cb) => cb.addEventListener('change', async () => {
       try { await put('/api/tech/preferences', { kind: cb.dataset.kind, enabled: cb.checked }); Toast && Toast.success && Toast.success('Saved'); }
