@@ -1786,6 +1786,10 @@ class EmployeeBalanceLedger(Base):
     ref_type: Mapped[Optional[str]] = mapped_column(String(40))  # order|order_line|refund|payroll_run
     ref_id: Mapped[Optional[str]] = mapped_column(String, index=True)
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(120), unique=True, index=True)
+    # Groups a commission with its reversals across close/reopen cycles: every accrual of the
+    # same (event, line/order, rule, employee) and every claw-back of it share this key, so the
+    # engine can see what is still open (the group's net) instead of trusting one fixed key.
+    accrual_key: Mapped[Optional[str]] = mapped_column(String(120), index=True)
     note: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
@@ -1802,7 +1806,7 @@ class EmployeeBalanceLedger(Base):
         import hashlib
         return f"{raw[:60]}#sha256:{hashlib.sha256(raw.encode()).hexdigest()}"[:EmployeeBalanceLedger.KEY_MAX]
 
-    @validates("idempotency_key")
+    @validates("idempotency_key", "accrual_key")
     def _fit_key(self, _key, value):
         return EmployeeBalanceLedger.normalize_key(value)
 
@@ -1822,9 +1826,15 @@ class PayrollRun(Base):
     bonuses_total: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)
     penalties_total: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)
     gross_total: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)
-    status: Mapped[str] = mapped_column(String(20), default="draft")  # draft|accrued|paid
+    status: Mapped[str] = mapped_column(String(20), default="draft")  # draft|accrued|paid|void
     accrued_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # The cashbox the pay came out of and the expense transaction posted there (P&L opex).
+    account_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("accounts.id"))
+    cash_txn_id: Mapped[Optional[str]] = mapped_column(String)
+    voided_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    voided_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    void_reason: Mapped[Optional[str]] = mapped_column(String(300))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 

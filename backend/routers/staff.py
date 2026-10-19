@@ -120,6 +120,9 @@ async def list_employees(
              "location_id": e.location_id, "role_id": e.role_id, "active": e.active} for e in employees]
 
 PAY_FIELDS = ("wage_type", "wage_value", "commission_labour", "commission_parts", "tax_id")
+# Compensation edits are audited with their old and new values.
+WAGE_AUDIT_FIELDS = ("wage_type", "wage_value", "hourly_basis", "weekly_hours",
+                     "commission_labour", "commission_parts")
 
 
 # ── Privilege guards ──────────────────────────────────────────────
@@ -225,7 +228,8 @@ async def create_employee(
     await db.flush()
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="employee.create",
                        entity_type="employee", entity_id=emp.id,
-                       diff={"email": emp.email, "role_id": emp.role_id})
+                       diff={"email": emp.email, "role_id": emp.role_id,
+                             **{k: getattr(emp, k) for k in WAGE_AUDIT_FIELDS}})
     await db.commit()
     await db.refresh(emp)
     invite_sent = False
@@ -284,7 +288,10 @@ async def update_employee(
     if "hired_at" in payload:
         payload["hired_at"] = _parse_date(payload["hired_at"])
     changes = {k: {"from": getattr(emp, k), "to": v} for k, v in payload.items()
-               if k in ("role_id", "email", "active", "location_id") and getattr(emp, k) != v}
+               if k in ("role_id", "email", "active", "location_id", *WAGE_AUDIT_FIELDS)
+               and getattr(emp, k) != v}
+    if "tax_id" in payload and payload["tax_id"] != emp.tax_id:
+        changes["tax_id"] = {"changed": True}   # an identifier: record the change, not the value
     for k, v in payload.items():
         setattr(emp, k, v)
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="employee.update",

@@ -7,7 +7,7 @@ import DateField from "../../components/DateField";
 import { api, openAuthedDoc } from "../../api/client";
 import Pager from "../../components/Pager";
 import { currencySymbol, money } from "../orders/types";
-import { alertDialog, confirmDialog, promptDialog } from "../../lib/dialog";
+import { alertDialog, confirmDialog, promptDialog, selectDialog } from "../../lib/dialog";
 import { isoMonth } from "../../lib/localDate";
 import { useMe } from "../../context/Me";
 import CashPanel from "../cash/CashPanel";
@@ -80,10 +80,31 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
     if (payingRef.current) return;
     payingRef.current = true;
     try {
-      if (!(await confirmDialog("Mark this payroll run as paid? This posts the payout and can't be undone here.", { title: "Mark paid", confirmLabel: "Mark paid" }))) return;
+      // The pay leaves a real cashbox: it's posted there as a Payroll expense (and shows in the P&L).
+      const tills = accounts.filter((a) => !a.is_virtual);
+      if (!tills.length) { await alertDialog("Add a cashbox or bank account first. The pay is taken out of it."); return; }
+      const labels = tills.map((a, i) => `${a.name || "Account"}${tills.findIndex((b) => b.name === a.name) !== i ? ` (${i + 1})` : ""}`);
+      const picked = tills.length === 1 ? labels[0] : await selectDialog("Which account is the pay coming out of?", labels, { title: "Mark paid", confirmLabel: "Next" });
+      if (!picked) return;
+      const acct = tills[labels.indexOf(picked)];
+      if (!(await confirmDialog(`Mark this payroll run as paid from ${picked}? This posts the payout and takes the money out of that account.`, { title: "Mark paid", confirmLabel: "Mark paid" }))) return;
       setPayingId(id);
-      await api.post(`/payroll/runs/${id}/pay`, {}); loadRuns();
+      await api.post(`/payroll/runs/${id}/pay`, { account_id: acct.id });
+      loadRuns();
+      api.get<any>("/cash/summary").then(setCash).catch(() => {});
     } catch (e: any) { await alertDialog(`Could not mark paid: ${e.message}`); } finally { payingRef.current = false; setPayingId(null); }
+  }
+  async function voidRun(id: string) {
+    if (payingRef.current) return;
+    payingRef.current = true;
+    try {
+      const reason = await promptDialog("Why are you voiding this run? Its pay comes back off the employee's balance, and a payout goes back into its account.", { title: "Void payroll run", confirmLabel: "Void run" });
+      if (!reason?.trim()) return;
+      setPayingId(id);
+      await api.post(`/payroll/runs/${id}/void`, { reason: reason.trim() });
+      loadRuns();
+      api.get<any>("/cash/summary").then(setCash).catch(() => {});
+    } catch (e: any) { await alertDialog(`Could not void the run: ${e.message}`); } finally { payingRef.current = false; setPayingId(null); }
   }
 
   useEffect(() => {
@@ -275,14 +296,18 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
                   {!runs && <SkeletonRows cols={5} />}
                   {runs?.length === 0 && <tr><td colSpan={5} className="py-6 px-4 text-ink-tertiary">No payroll runs yet — use “Run payroll (draft)”.</td></tr>}
                   {runs?.map((r) => {
-                    const paid = /paid/i.test(r.status || "");
+                    const paid = r.status === "paid";
+                    const voided = r.status === "void";
                     return (
                       <tr key={r.id} className="hover:bg-blue-50/30">
                         <td className="py-2.5 px-4 font-semibold text-ink-primary">{r.period_start} → {r.period_end}</td>
-                        <td className="py-2.5 px-4"><span className={`px-2 py-0.5 rounded-full text-[11px] font-bold capitalize ${paid ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>{r.status || "draft"}</span></td>
+                        <td className="py-2.5 px-4"><span className={`px-2 py-0.5 rounded-full text-[11px] font-bold capitalize ${paid ? "bg-emerald-100 text-emerald-800" : voided ? "bg-slate-100 text-ink-tertiary" : "bg-amber-100 text-amber-800"}`} title={voided ? r.void_reason || undefined : undefined}>{voided ? "voided" : r.status || "draft"}</span></td>
                         <td className="py-2.5 px-4 text-right tabular-nums font-bold text-ink-primary">{money(r.totals?.gross_total ?? r.gross_total)}</td>
                         <td className="py-2.5 px-4 text-ink-tertiary">{r.accrued_at ? new Date(r.accrued_at).toLocaleDateString() : "—"}</td>
-                        <td className="py-2.5 px-4 text-right">{!paid && <button onClick={() => markPaid(r.id)} disabled={!!payingId} className="text-primary font-semibold hover:underline disabled:opacity-50 disabled:no-underline">{payingId === r.id ? "Marking…" : "Mark paid"}</button>}</td>
+                        <td className="py-2.5 px-4 text-right space-x-3">
+                          {!paid && !voided && <button onClick={() => markPaid(r.id)} disabled={!!payingId} className="text-primary font-semibold hover:underline disabled:opacity-50 disabled:no-underline">{payingId === r.id ? "Marking…" : "Mark paid"}</button>}
+                          {!voided && r.status !== "draft" && <button onClick={() => voidRun(r.id)} disabled={!!payingId} className="text-rose-600 font-semibold hover:underline disabled:opacity-50 disabled:no-underline">Void</button>}
+                        </td>
                       </tr>
                     );
                   })}

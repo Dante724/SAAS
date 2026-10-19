@@ -1,6 +1,6 @@
 """Client Returns (goods back to stock) and Refunds (money back) — separate
-documents, per Orderry's Feb-2026 split. A refund claws back the order's
-commissions via the payroll engine (idempotent negative mirrors)."""
+documents, per Orderry's Feb-2026 split. A refund claws back the refunded share of
+the order's commissions via the payroll engine."""
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -123,14 +123,14 @@ async def create_refund(
     await post_transaction(db, current.org_id, data.account_id, "refund", -data.amount,
                            comment=f"Refund{(' for order' if data.order_id else '')}: {data.reason or ''}".strip(),
                            ref_type="refund", ref_id=refund.id, employee_id=current.id)
-    # Refund on an order claws back its commissions (idempotent mirrors)
+    # Refund on an order claws back the refunded share of its commissions
     if data.order_id:
         order = (await db.execute(select(Order).where(
             Order.id == data.order_id, Order.org_id == current.org_id)
             .options(selectinload(Order.lines)))).scalar_one_or_none()
         if order:
             from backend.services.payroll import CommissionEngine
-            await CommissionEngine(db, current.org_id).clawback_for_order_reopen(order)
+            await CommissionEngine(db, current.org_id).clawback_for_refund(order, refund.id, data.amount)
             # Reflect the refund on the customer's balance (cash went back to them), so the
             # Balance tab / Client.balance stays in sync — was previously silent.
             if order.client_id:

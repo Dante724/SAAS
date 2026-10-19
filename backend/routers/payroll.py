@@ -28,6 +28,13 @@ EVENTS = ["order_created", "order_closed", "order_closed_success", "order_closed
 TIMINGS = ["on_close", "immediately", "on_status"]
 TERMS = ["any", "on_time", "overdue", "urgent"]
 LEVELS = ["generic", "product", "category", "service", "profile"]
+_NOT_ACCRUED = ("draft", "void")   # runs that don't hold a period (overlap guards skip them)
+
+
+async def _audit(db, current, action: str, entity_type: str, entity_id, diff: Optional[dict] = None):
+    from backend.services import audit
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action=action,
+                       entity_type=entity_type, entity_id=entity_id, diff=diff)
 
 
 def _ser_rule(r: CommissionRule) -> dict:
@@ -104,6 +111,8 @@ async def create_rule(
     r = CommissionRule(org_id=current.org_id)
     _apply_rule(r, data)
     db.add(r)
+    await db.flush()
+    await _audit(db, current, "payroll.rule_create", "commission_rule", r.id, _ser_rule(r))
     await db.commit()
     await db.refresh(r)
     return _ser_rule(r)
@@ -119,7 +128,12 @@ async def update_rule(
         CommissionRule.id == rule_id, CommissionRule.org_id == current.org_id))).scalar_one_or_none()
     if not r:
         raise HTTPException(404, "Rule not found")
+    before = _ser_rule(r)
     _apply_rule(r, data)
+    after = _ser_rule(r)
+    from backend.services.audit import diff_fields
+    await _audit(db, current, "payroll.rule_update", "commission_rule", r.id,
+                 diff_fields(before, after, list(after)))
     await db.commit()
     return _ser_rule(r)
 
@@ -134,6 +148,7 @@ async def delete_rule(
         CommissionRule.id == rule_id, CommissionRule.org_id == current.org_id))).scalar_one_or_none()
     if r:
         r.active = False
+        await _audit(db, current, "payroll.rule_delete", "commission_rule", r.id, {"name": r.name})
         await db.commit()
     return {"ok": True}
 
@@ -186,7 +201,7 @@ async def create_payroll_run(
     if not data.draft:
         dupe = (await db.execute(select(PayrollRun).where(
             PayrollRun.org_id == current.org_id, PayrollRun.employee_id == data.employee_id,
-            PayrollRun.status != "draft",
+            PayrollRun.status.notin_(_NOT_ACCRUED),
             PayrollRun.period_start <= pe, PayrollRun.period_end >= ps))).scalars().first()   # any overlap
         if dupe:
             raise HTTPException(409, "An accrual already covers part of this period for this employee")
@@ -247,6 +262,7 @@ async def create_payroll_run(
             await eng._post(employee_id=data.employee_id, entry_type="penalty", amount=-penalty, event=None,
                             rule_id=None, ref_type="payroll_run", ref_id=run.id,
                             idempotency_key=f"penalty:{run.id}", note="Penalty")
+    await _audit(db, current, "payroll.run_create", "payroll_run", run.id, _run_audit(run))
     await db.commit()
     await db.refresh(run)
     return {
@@ -298,7 +314,7 @@ async def create_payroll_runs_bulk(
         if not data.draft:
             dupe = (await db.execute(select(PayrollRun).where(
                 PayrollRun.org_id == current.org_id, PayrollRun.employee_id == emp.id,
-                PayrollRun.status != "draft",
+                PayrollRun.status.notin_(_NOT_ACCRUED),
                 PayrollRun.period_start <= pe, PayrollRun.period_end >= ps))).scalars().first()   # any overlap
             if dupe:
                 skipped += 1
@@ -310,6 +326,7 @@ async def create_payroll_runs_bulk(
             run = await _accrue_one(db, current.org_id, emp.id, ps, pe,
                                     base_salary=base, draft=data.draft)
             accrued += 1
+            await _audit(db, current, "payroll.run_create", "payroll_run", run.id, _run_audit(run))
             results.append({"employee_id": emp.id, "status": run.status,
                             "gross_total": float(run.gross_total)})
         except Exception as exc:                       # one bad employee must not sink the batch
@@ -317,6 +334,11 @@ async def create_payroll_runs_bulk(
     await db.commit()
     return {"period": [data.period_start, data.period_end], "accrued": accrued,
             "skipped": skipped, "total": len(emps), "results": results}
+
+
+def _run_audit(run: PayrollRun) -> dict:
+    return {"employee_id": run.employee_id, "period": [run.period_start.isoformat(), run.period_end.isoformat()],
+            "status": run.status, "gross_total": float(run.gross_total or 0)}
 
 
 async def _accrue_one(db: AsyncSession, org_id: str, employee_id: str, ps, pe,
@@ -445,7 +467,8 @@ async def payroll_calculation(
     runs = (await db.execute(select(PayrollRun).where(
         PayrollRun.org_id == current.org_id,
         PayrollRun.period_start == ps, PayrollRun.period_end == pe))).scalars().all()
-    run_by_emp = {r.employee_id: r for r in runs}
+    # a voided run doesn't hide the live one for the same month
+    run_by_emp = {r.employee_id: r for r in sorted(runs, key=lambda r: r.status != "void")}
     roles = await _role_names(db, current.org_id)
     items = []
     for e in emps:
@@ -525,6 +548,9 @@ async def add_adjustment(
         amount=signed, ref_type="manual", ref_id=f"manual:{current.id}",
         note=data.note or data.kind.capitalize(), created_at=when)
     db.add(entry)
+    await db.flush()
+    await _audit(db, current, f"payroll.{data.kind}_add", "employee", data.employee_id,
+                 {"entry_id": entry.id, "amount": float(signed), "note": entry.note})
     await db.commit()
     await db.refresh(entry)
     return {"id": entry.id, "entry_type": entry.entry_type, "amount": float(entry.amount),
@@ -544,6 +570,8 @@ async def remove_adjustment(
         raise HTTPException(404, "Adjustment not found")
     if e.ref_type != "manual" or e.entry_type not in ("penalty", "bonus"):
         raise HTTPException(400, "Only manual penalties/bonuses can be removed here")
+    await _audit(db, current, f"payroll.{e.entry_type}_remove", "employee", e.employee_id,
+                 {"entry_id": e.id, "amount": float(e.amount or 0), "note": e.note})
     await db.delete(e)
     await db.commit()
     return {"ok": True}
@@ -622,7 +650,7 @@ async def accrue_calculation(
         raise HTTPException(404, "Employee not found")
     dupe = (await db.execute(select(PayrollRun).where(
         PayrollRun.org_id == current.org_id, PayrollRun.employee_id == data.employee_id,
-        PayrollRun.status != "draft",
+        PayrollRun.status.notin_(_NOT_ACCRUED),
         PayrollRun.period_start <= pe, PayrollRun.period_end >= ps))).scalars().first()   # any overlap
     if dupe:
         raise HTTPException(409, "An accrual already covers part of this period for this employee")
@@ -649,6 +677,7 @@ async def accrue_calculation(
         await eng._post(employee_id=data.employee_id, entry_type="base", amount=base, event=None,
                         rule_id=None, ref_type="payroll_run", ref_id=run.id,
                         idempotency_key=f"base:{run.id}", note=f"Base salary {ps}–{pe}")
+    await _audit(db, current, "payroll.run_create", "payroll_run", run.id, _run_audit(run))
     await db.commit()
     await db.refresh(run)
     return {"id": run.id, "status": run.status, "gross_total": float(run.gross_total),
@@ -681,6 +710,12 @@ async def post_attendance_wages(
         Employee.id == data.employee_id, Employee.org_id == current.org_id))).scalar_one_or_none()
     if not emp:
         raise HTTPException(404, "Employee not found")
+    if (emp.hourly_basis or "labour") != "attendance":
+        # One clock pays: labour-hours staff are paid by timesheet approval, so paying their
+        # shifts too would pay the same hours twice.
+        raise HTTPException(409, f"{emp.name} is paid from labour hours (timesheet approval). "
+                                 "Switch their hourly pay to shop attendance to pay from shifts.")
+    await assert_not_self(db, current, emp.id, "post your own attendance wages")
     shifts = (await db.execute(select(Shift).where(
         Shift.employee_id == data.employee_id, Shift.ended_at.isnot(None),
         func.date(Shift.started_at) >= start,
@@ -702,6 +737,8 @@ async def post_attendance_wages(
             idempotency_key=idem, created_at=when,
             note=f"Shop attendance wages {data.date_from}–{data.date_to} ({hours}h)"))
         posted = True
+        await _audit(db, current, "payroll.attendance_wages", "employee", emp.id,
+                     {"window": [data.date_from, data.date_to], "hours": float(hours), "amount": float(wage)})
     await db.commit()
     return {"ok": True, "hours": hours, "rate": float(rate),
             "wage_posted": float(wage), "ledger_posted": posted}
@@ -725,36 +762,153 @@ async def list_runs(
         "status": r.status,
         "accrued_at": r.accrued_at.isoformat() if r.accrued_at else None,
         "paid_at": r.paid_at.isoformat() if r.paid_at else None,
+        "account_id": r.account_id,
+        "voided_at": r.voided_at.isoformat() if r.voided_at else None,
+        "void_reason": r.void_reason,
     } for r in rows]
-    totals = {k: float(_money(sum(i[k] for i in items))) for k in
+    live = [i for i in items if i["status"] != "void"]
+    totals = {k: float(_money(sum(i[k] for i in live))) for k in
               ("base_salary", "commissions_total", "hourly_total", "bonuses_total",
                "penalties_total", "gross_total")}
     return {"items": items, "totals": totals}
 
 
+class PayIn(BaseModel):
+    account_id: Optional[str] = None    # the cashbox the pay comes out of
+    comment: Optional[str] = None
+
+
+async def _payroll_flow_item(db: AsyncSession, org_id: str) -> str:
+    """The org's "Payroll" expense tag, created on first use, so payouts group in cash reports."""
+    from backend.models import CashFlowItem
+    item = (await db.execute(select(CashFlowItem).where(
+        CashFlowItem.org_id == org_id, CashFlowItem.name == "Payroll",
+        CashFlowItem.direction == "expense"))).scalars().first()
+    if not item:
+        item = CashFlowItem(org_id=org_id, name="Payroll", direction="expense", is_system=True)
+        db.add(item)
+        await db.flush()
+    return item.id
+
+
+async def _get_run(db, org_id, run_id) -> PayrollRun:
+    run = (await db.execute(select(PayrollRun).where(
+        PayrollRun.id == run_id, PayrollRun.org_id == org_id).with_for_update())).scalar_one_or_none()
+    if not run:
+        raise HTTPException(404, "Run not found")
+    return run
+
+
 @router.post("/runs/{run_id}/pay")
 async def mark_run_paid(
     run_id: str,
+    data: Optional[PayIn] = None,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_payroll")),
 ):
-    run = (await db.execute(select(PayrollRun).where(
-        PayrollRun.id == run_id, PayrollRun.org_id == current.org_id))).scalar_one_or_none()
-    if not run:
-        raise HTTPException(404, "Run not found")
+    """Pay an accrued run: draw the employee's balance down (payout ledger entry) and take the
+    money out of the chosen cashbox as a Payroll expense, which is what the P&L counts."""
+    from backend.models import Account
+    from backend.routers.cash import post_transaction
+    from backend.services import scoping
+    run = await _get_run(db, current.org_id, run_id)
     if run.status == "draft":
         raise HTTPException(400, "Accrue the draft before marking it paid")
     if run.status == "paid":
         raise HTTPException(409, "This run is already paid")
+    if run.status == "void":
+        raise HTTPException(409, "This run was voided")
     await assert_not_self(db, current, run.employee_id, "mark your own pay as paid")
+    if not data or not data.account_id:
+        raise HTTPException(400, "Choose the account the pay comes out of")
+    acct = (await db.execute(select(Account).where(
+        Account.id == data.account_id, Account.org_id == current.org_id,
+        Account.active == True))).scalar_one_or_none()  # noqa: E712
+    if not acct:
+        raise HTTPException(404, "Account not found")
+    allowed = scoping.allowed_accounts(await scoping.role_for(db, current))
+    if allowed is not None and acct.id not in allowed:
+        raise HTTPException(403, "You can't pay out of this account")
+    gross = _money(run.gross_total)
     eng = CommissionEngine(db, current.org_id)
-    await eng._post(employee_id=run.employee_id, entry_type="payout", amount=-_money(run.gross_total),
+    await eng._post(employee_id=run.employee_id, entry_type="payout", amount=-gross,
                     event=None, rule_id=None, ref_type="payroll_run", ref_id=run.id,
                     idempotency_key=f"payout:{run.id}", note="Payroll payout")
+    txn_id = None
+    if gross > 0:
+        emp_name = (await db.execute(select(Employee.name).where(Employee.id == run.employee_id))).scalar()
+        txn = await post_transaction(
+            db, current.org_id, acct.id, "expense", -float(q2(gross)),
+            cash_flow_item_id=await _payroll_flow_item(db, current.org_id),
+            comment=(data.comment or f"Payroll {emp_name or ''} {run.period_start}–{run.period_end}").strip()[:500],
+            ref_type="payroll_run", ref_id=run.id, employee_id=run.employee_id)
+        await db.flush()
+        txn_id = txn.id
     run.status = "paid"
     run.paid_at = datetime.utcnow()
+    run.account_id = acct.id
+    run.cash_txn_id = txn_id
+    await _audit(db, current, "payroll.run_pay", "payroll_run", run.id,
+                 {**_run_audit(run), "account_id": acct.id, "cash_txn_id": txn_id})
     await db.commit()
-    return {"ok": True, "status": "paid"}
+    return {"ok": True, "status": "paid", "cash_txn_id": txn_id}
+
+
+class VoidIn(BaseModel):
+    reason: str
+
+
+@router.post("/runs/{run_id}/void")
+async def void_run(
+    run_id: str,
+    data: VoidIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_manage_payroll")),
+):
+    """Void an accrued or paid run. Everything it posted is reversed by new entries (the ledger
+    stays append-only): the base/bonus/penalty accruals and the payout come back off the
+    employee's balance, and the cash expense is voided so the money returns to the cashbox and
+    leaves the P&L. The period is free to accrue again."""
+    from backend.models import Account, Transaction
+    from backend.services.money import add_to_column
+    reason = (data.reason or "").strip()
+    if not reason:
+        raise HTTPException(400, "Give a reason for voiding this run")
+    run = await _get_run(db, current.org_id, run_id)
+    if run.status == "void":
+        raise HTTPException(409, "This run is already voided")
+    if run.status == "draft":
+        raise HTTPException(400, "A draft posts nothing, so there is nothing to void")
+    await assert_not_self(db, current, run.employee_id, "void your own pay run")
+    posted = (await db.execute(select(EmployeeBalanceLedger).where(
+        EmployeeBalanceLedger.org_id == current.org_id,
+        EmployeeBalanceLedger.ref_type == "payroll_run",
+        EmployeeBalanceLedger.ref_id == run.id))).scalars().all()
+    eng = CommissionEngine(db, current.org_id)
+    for e in posted:
+        await eng._post(employee_id=e.employee_id, entry_type=e.entry_type, amount=-_money(e.amount),
+                        event=None, rule_id=None, ref_type="payroll_run_void", ref_id=run.id,
+                        idempotency_key=f"void:{e.id}", note=f"Void of {e.note or e.entry_type}: {reason}"[:500])
+    if run.cash_txn_id:
+        t = (await db.execute(select(Transaction).where(
+            Transaction.id == run.cash_txn_id, Transaction.org_id == current.org_id))).scalar_one_or_none()
+        if t and t.status != "deleted":
+            acc = (await db.execute(select(Account).where(
+                Account.id == t.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
+            if acc:
+                await add_to_column(db, acc, "balance", -t.amount)   # the money is back in the cashbox
+            t.status = "deleted"
+            t.void_reason = f"Payroll run voided: {reason}"[:300]
+            t.voided_by_id = current.id
+    was = run.status
+    run.status = "void"
+    run.voided_at = datetime.utcnow()
+    run.voided_by_id = current.id
+    run.void_reason = reason[:300]
+    await _audit(db, current, "payroll.run_void", "payroll_run", run.id,
+                 {**_run_audit(run), "was": was, "reason": reason[:300]})
+    await db.commit()
+    return {"ok": True, "status": "void"}
 
 
 # ── Build 72: per-employee coefficients ──────────────────────────────────────
@@ -801,13 +955,21 @@ async def upsert_coefficient(
         EmployeeCoefficient.scope_type == data.scope_type, EmployeeCoefficient.scope_ref == data.scope_ref,
         EmployeeCoefficient.context == data.context))).scalar_one_or_none()
     if existing:
+        old = float(existing.coefficient or 1)
         existing.coefficient = Decimal(str(data.coefficient))
+        await _audit(db, current, "payroll.coefficient_update", "employee", data.employee_id,
+                     {"id": existing.id, "scope": [data.scope_type, data.scope_ref, data.context],
+                      "coefficient": [old, float(data.coefficient)]})
         await db.commit()
         return _ser_coeff(existing)
     c = EmployeeCoefficient(
         org_id=current.org_id, employee_id=data.employee_id, scope_type=data.scope_type,
         scope_ref=data.scope_ref, context=data.context, coefficient=Decimal(str(data.coefficient)))
     db.add(c)
+    await db.flush()
+    await _audit(db, current, "payroll.coefficient_create", "employee", data.employee_id,
+                 {"id": c.id, "scope": [data.scope_type, data.scope_ref, data.context],
+                  "coefficient": float(data.coefficient)})
     await db.commit()
     await db.refresh(c)
     return _ser_coeff(c)
@@ -823,6 +985,9 @@ async def delete_coefficient(
     c = (await db.execute(select(EmployeeCoefficient).where(
         EmployeeCoefficient.id == coeff_id, EmployeeCoefficient.org_id == current.org_id))).scalar_one_or_none()
     if c:
+        await _audit(db, current, "payroll.coefficient_delete", "employee", c.employee_id,
+                     {"id": c.id, "scope": [c.scope_type, c.scope_ref, c.context],
+                      "coefficient": float(c.coefficient or 1)})
         await db.delete(c)
         await db.commit()
     return {"ok": True}

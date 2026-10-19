@@ -972,6 +972,19 @@ async def approve_timesheet(
     for e in rows:
         e.state = "approved"
         e.approved_by_id = current.id
+    emp = (await db.execute(select(Employee).where(
+        Employee.id == data.employee_id, Employee.org_id == current.org_id))).scalar_one_or_none()
+    from backend.services import audit
+    if emp and emp.hourly_basis == "attendance":
+        # One clock pays. This employee's hours are paid from shop attendance, so approving
+        # the labour timesheet locks it for job costing but posts no wage (else both pay).
+        await audit.record(db, org_id=current.org_id, actor_id=current.id, action="payroll.timesheet_approve",
+                           entity_type="employee", entity_id=data.employee_id,
+                           diff={"window": [data.date_from, data.date_to], "entries": len(rows),
+                                 "amount": 0, "paid_from": "attendance"})
+        await db.commit()
+        return {"ok": True, "approved": len(rows), "straight_hours": 0.0, "overtime_hours": 0.0,
+                "wage_posted": 0.0, "ledger_posted": False, "paid_from": "attendance"}
     from backend.services.payroll import CommissionEngine
     eng = CommissionEngine(db, current.org_id)
     batch = hashlib.sha256(",".join(sorted(e.id for e in rows)).encode()).hexdigest()[:16]
@@ -995,6 +1008,10 @@ async def approve_timesheet(
             idempotency_key=f"hourly:{data.employee_id}:{day}:{batch}",
             note=f"Hourly wages {day} ({q4(s_after - s_before)}h + {q4(o_after - o_before)}h OT)") or posted
     straight_h, ot_h, wage = q4(straight_h), q4(ot_h), total
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="payroll.timesheet_approve",
+                       entity_type="employee", entity_id=data.employee_id,
+                       diff={"window": [data.date_from, data.date_to], "entries": len(rows),
+                             "amount": float(wage), "paid_from": "labour"})
     await db.commit()
     return {"ok": True, "approved": len(rows), "straight_hours": straight_h,
             "overtime_hours": ot_h, "wage_posted": float(wage), "ledger_posted": posted}
