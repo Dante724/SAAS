@@ -3,6 +3,12 @@
    Sora for display, headings and big numerals; Inter for everything you read. Two voices only.
    Electric blue #003dff is held for pill CTAs and inline links. Hairline #e5e7eb does the elevation. */
 
+/* Sora and Inter (OFL-1.1, see assets/fonts), self-hosted so visitors' browsers never call Google. */
+@font-face { font-family: "Sora"; font-style: normal; font-display: swap; font-weight: 100 900;
+  src: url(/assets/fonts/sora-latin-wght-normal.woff2) format("woff2-variations"); }
+@font-face { font-family: "Inter"; font-style: normal; font-display: swap; font-weight: 100 900;
+  src: url(/assets/fonts/inter-latin-wght-normal.woff2) format("woff2-variations"); }
+
 :root {
   --blue: #003dff;
   --cobalt: #1e59ff;
@@ -728,3 +734,14 @@ select.in { appearance: none; background: var(--canvas) url("data:image/svg+xml,
   .sc-menu { margin: 0; min-width: 150px; }
 }
 .sc-icon span { background: #fff; padding: 2px 8px; border-radius: 6px; box-shadow: 0 1px 3px rgba(35,38,59,.15); color: var(--ink); }
+
+/* Legal pages (privacy, terms): a readable single column. */
+.doc { max-width: 760px; }
+.doc h2 { font-family: var(--display); font-weight: 600; font-size: 22px; line-height: 1.3; color: var(--ink); margin: 36px 0 10px; }
+.doc p, .doc li { font-size: 16px; line-height: 1.65; color: var(--ink-soft, #374151); }
+.doc ul { padding-left: 20px; }
+.doc li { margin: 6px 0; }
+.doc .doc-date { margin: 10px 0 28px; color: var(--ink-muted); }
+.legal-links { display: inline-flex; gap: 16px; }
+.legal-links a { color: inherit; }
+.form-note { margin: 4px 0 0; font-size: 13px; color: var(--ink-muted); }

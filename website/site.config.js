@@ -4,7 +4,8 @@
    ───────────────────────────────────────────────────────────────────────────── */
 window.TEKLY_SITE = {
   // Where the Tekly app lives. Sign in / Start free buttons point here.
-  appUrl: "http://localhost:8000",
+  // Local preview of the app: "http://localhost:8000".
+  appUrl: "https://app.tekly.app",
   signInPath: "/login",
   signUpPath: "/signup",
 

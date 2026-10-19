@@ -107,6 +107,27 @@ PAGES = [
 
 ICON = '<path fill-rule="evenodd" d="M59.50 27.67Q62.00 32.00 59.50 36.33L49.50 53.65Q47.00 57.98 42.00 57.98L22.00 57.98Q17.00 57.98 14.50 53.65L4.50 36.33Q2.00 32.00 4.50 27.67L14.50 10.35Q17.00 6.02 22.00 6.02L42.00 6.02Q47.00 6.02 49.50 10.35ZM24.5 19.5L34.5 15V25.5H42V33H34.5V40C34.5 41.8 35.4 42.5 37.2 42.5H42V49.8H35.8C28.6 49.8 24.5 46 24.5 39.5V33H20.5V25.5H24.5Z"/>'
 
+# Fonts are self-hosted (assets/fonts, OFL-1.1): no visitor IP goes to Google.
+FONT_PRELOADS = (
+    '  <link rel="preload" href="/assets/fonts/sora-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>\n'
+    '  <link rel="preload" href="/assets/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>')
+
+LEGAL_LINKS = '<a href="/privacy/">Privacy</a><a href="/terms/">Terms</a>'
+
+
+def footer(current=""):
+    return f'''<footer class="foot">
+  <div class="wrap">
+    <div class="foot-grid">
+      <div><a href="/" class="logo"><svg aria-hidden="true"><use href="#mark"/></svg>tekly</a><p class="foot-about">Repair shop software, from the first complaint to the final payment.</p></div>
+      <div><h2 class="foot-h">Software for</h2><ul>{nav_links(current)}</ul></div>
+      <div><h2 class="foot-h">Company</h2><ul><li><a href="/#start">Book a demo</a></li><li><a data-mail href="/#start">Contact</a></li><li><a href="/#faq">FAQ</a></li></ul></div>
+      <div><h2 class="foot-h">Account</h2><ul><li><a data-app="signin" href="/#start">Sign in</a></li><li><a data-app="signup" href="/#start">Start free trial</a></li></ul></div>
+    </div>
+    <div class="legal"><span>© <span id="yr">{date.today().year}</span> Tekly</span><span class="legal-links">{LEGAL_LINKS}</span><span>Product screens show sample data.</span></div>
+  </div>
+</footer>'''
+
 
 def nav_links(current):
     items = "".join(
@@ -130,57 +151,7 @@ def page(p):
     feats = "".join(f'<article class="card rv"><h3>{e(t)}</h3><p>{e(d)}</p></article>' for t, d in p["features"])
     faq = "".join(f'<details><summary>{e(q)}<svg aria-hidden="true"><use href="#plus"/></svg></summary><p>{e(a)}</p></details>' for q, a in p["faq"])
     others = "".join(f'<li><a class="link" href="/{o["slug"]}/">{e(o["h1"])}</a></li>' for o in PAGES if o is not p)
-    return f'''<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>{e(p["title"])}</title>
-  <meta name="description" content="{html.escape(p["desc"])}">
-  <link rel="canonical" href="{url}">
-  <meta name="robots" content="index, follow, max-image-preview:large">
-  <meta name="theme-color" content="#003dff">
-  <meta property="og:type" content="website">
-  <meta property="og:site_name" content="Tekly">
-  <meta property="og:url" content="{url}">
-  <meta property="og:title" content="{html.escape(p["title"])}">
-  <meta property="og:description" content="{html.escape(p["desc"])}">
-  <meta property="og:image" content="{DOMAIN}/assets/og.png">
-  <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:image" content="{DOMAIN}/assets/og.png">
-  <link rel="icon" type="image/svg+xml" href="/assets/tekly-mark.svg">
-  <link rel="icon" type="image/png" sizes="32x32" href="/assets/icon-32.png">
-  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
-  <link rel="manifest" href="/site.webmanifest">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700;900&family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css">
-  <script>document.documentElement.classList.add("js")</script>
-  <script type="application/ld+json">{json.dumps(ld, ensure_ascii=False)}</script>
-</head>
-<body class="sub">
-<a class="skip" href="#main">Skip to content</a>
-<svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <symbol id="mark" viewBox="0 0 64 64">{ICON}</symbol>
-  <symbol id="plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
-</svg>
-<header class="nav" id="nav">
-  <div class="wrap nav-in">
-    <a href="/" class="logo" aria-label="Tekly home"><svg aria-hidden="true"><use href="#mark"/></svg>tekly</a>
-    <nav class="nav-links" aria-label="Primary"><a href="/#product">Product</a><a href="/#industries">Industries</a><a href="/#ai">AI</a><a href="/#pricing">Pricing</a><a href="/#faq">FAQ</a></nav>
-    <div class="nav-right">
-      <a class="nav-signin" data-app="signin" data-cta="nav_signin" href="/#start">Sign in</a>
-      <a class="btn btn-quiet" href="/#start" data-cta="nav_demo">Book a demo</a>
-      <a class="btn btn-brand nav-cta" data-app="signup" data-cta="nav_trial" href="/#start">Start free trial</a>
-      <button class="burger" aria-label="Menu" aria-expanded="false" aria-controls="mmenu"><span></span><span></span></button>
-    </div>
-  </div>
-  <div class="mmenu" id="mmenu"><a href="/#product">Product</a><a href="/#industries">Industries</a><a href="/#ai">AI</a><a href="/#pricing">Pricing</a><a href="/#faq">FAQ</a>
-    <div class="mmenu-ctas"><a class="btn btn-quiet" data-app="signin" href="/#start">Sign in</a><a class="btn btn-brand" data-app="signup" href="/#start">Start free trial</a></div></div>
-</header>
-
-<main id="main">
+    main = f'''
 <section class="hero sub-hero">
   <div class="wrap">
     <nav class="crumbs" aria-label="Breadcrumb"><a href="/">Tekly</a><span aria-hidden="true">/</span><span>{e(p["template"])} template</span></nav>
@@ -226,19 +197,63 @@ def page(p):
 <section class="sec sec-tight sec-cream">
   <div class="wrap"><p class="eyebrow">Other templates</p><ul class="others">{others}</ul></div>
 </section>
-</main>
+'''
+    return shell(p, url, main, ld)
 
-<footer class="foot">
-  <div class="wrap">
-    <div class="foot-grid">
-      <div><a href="/" class="logo"><svg aria-hidden="true"><use href="#mark"/></svg>tekly</a><p class="foot-about">Repair shop software, from the first complaint to the final payment.</p></div>
-      <div><h2 class="foot-h">Software for</h2><ul>{nav_links(p["slug"])}</ul></div>
-      <div><h2 class="foot-h">Company</h2><ul><li><a href="/#start">Book a demo</a></li><li><a data-mail href="/#start">Contact</a></li><li><a href="/#faq">FAQ</a></li></ul></div>
-      <div><h2 class="foot-h">Account</h2><ul><li><a data-app="signin" href="/#start">Sign in</a></li><li><a data-app="signup" href="/#start">Start free trial</a></li></ul></div>
+
+def shell(p, url, main, ld):
+    """Head, header and footer shared by every generated page; `main` is the page body."""
+    return f'''<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>{e(p["title"])}</title>
+  <meta name="description" content="{html.escape(p["desc"])}">
+  <link rel="canonical" href="{url}">
+  <meta name="robots" content="index, follow, max-image-preview:large">
+  <meta name="theme-color" content="#003dff">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Tekly">
+  <meta property="og:url" content="{url}">
+  <meta property="og:title" content="{html.escape(p["title"])}">
+  <meta property="og:description" content="{html.escape(p["desc"])}">
+  <meta property="og:image" content="{DOMAIN}/assets/og.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="{DOMAIN}/assets/og.png">
+  <link rel="icon" type="image/svg+xml" href="/assets/tekly-mark.svg">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/icon-32.png">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
+{FONT_PRELOADS}
+  <link rel="stylesheet" href="/styles.css">
+  <script>document.documentElement.classList.add("js")</script>
+  <script type="application/ld+json">{json.dumps(ld, ensure_ascii=False)}</script>
+</head>
+<body class="sub">
+<a class="skip" href="#main">Skip to content</a>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 0 64 64">{ICON}</symbol>
+  <symbol id="plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
+</svg>
+<header class="nav" id="nav">
+  <div class="wrap nav-in">
+    <a href="/" class="logo" aria-label="Tekly home"><svg aria-hidden="true"><use href="#mark"/></svg>tekly</a>
+    <nav class="nav-links" aria-label="Primary"><a href="/#product">Product</a><a href="/#industries">Industries</a><a href="/#ai">AI</a><a href="/#pricing">Pricing</a><a href="/#faq">FAQ</a></nav>
+    <div class="nav-right">
+      <a class="nav-signin" data-app="signin" data-cta="nav_signin" href="/#start">Sign in</a>
+      <a class="btn btn-quiet" href="/#start" data-cta="nav_demo">Book a demo</a>
+      <a class="btn btn-brand nav-cta" data-app="signup" data-cta="nav_trial" href="/#start">Start free trial</a>
+      <button class="burger" aria-label="Menu" aria-expanded="false" aria-controls="mmenu"><span></span><span></span></button>
     </div>
-    <div class="legal"><span>© <span id="yr">{date.today().year}</span> Tekly</span><span>Product screens show sample data.</span></div>
   </div>
-</footer>
+  <div class="mmenu" id="mmenu"><a href="/#product">Product</a><a href="/#industries">Industries</a><a href="/#ai">AI</a><a href="/#pricing">Pricing</a><a href="/#faq">FAQ</a>
+    <div class="mmenu-ctas"><a class="btn btn-quiet" data-app="signin" href="/#start">Sign in</a><a class="btn btn-brand" data-app="signup" href="/#start">Start free trial</a></div></div>
+</header>
+
+<main id="main">{main}</main>
+
+{footer(p["slug"])}
 <script defer src="/site.config.js"></script>
 <script defer src="/page.js"></script>
 <script defer src="/marketing.js"></script>
@@ -248,12 +263,42 @@ def page(p):
 '''
 
 
+def legal_page(doc):
+    """Privacy / Terms: the landing pages' head, header and footer around a plain text body."""
+    url = f"{DOMAIN}/{doc['slug']}/"
+    body = (ROOT / "tools" / "legal" / f"{doc['slug']}.html").read_text(encoding="utf-8")
+    ld = [{"@context": "https://schema.org", "@type": "WebPage", "name": doc["title"], "url": url,
+           "description": doc["desc"], "isPartOf": {"@id": DOMAIN + "/#website"}}]
+    main = (f'<section class="sec"><div class="wrap doc"><p class="eyebrow">Legal</p>'
+            f'<h1 class="h-section">{e(doc["h1"])}</h1><p class="mono doc-date">Last updated {e(doc["updated"])}</p>'
+            f'{body}</div></section>')
+    return shell(doc, url, main, ld)
+
+LEGAL = [
+    {"slug": "privacy", "title": "Privacy Policy | Tekly", "h1": "Privacy policy", "updated": "19 October 2026",
+     "desc": "What Tekly collects on this website and in the app, why, who processes it for us, and your rights."},
+    {"slug": "terms", "title": "Terms of Service | Tekly", "h1": "Terms of service", "updated": "19 October 2026",
+     "desc": "The terms for using Tekly: accounts, trials, billing, cancellation and refunds, your data, and acceptable use."},
+]
+
+
 def main():
     for p in PAGES:
         d = ROOT / p["slug"]
         d.mkdir(exist_ok=True)
         (d / "index.html").write_text(page(p), encoding="utf-8")
-    urls = [("/", "1.0")] + [(f"/{p['slug']}/", "0.8") for p in PAGES]
+    placeholders = []
+    for doc in LEGAL:
+        d = ROOT / doc["slug"]
+        d.mkdir(exist_ok=True)
+        out = legal_page(doc)
+        (d / "index.html").write_text(out, encoding="utf-8")
+        if "[[" in out:
+            placeholders.append(doc["slug"])
+    if placeholders:
+        print("WARNING: fill in the [[…]] placeholders in tools/legal/ before launch:", ", ".join(placeholders))
+    urls = ([("/", "1.0")] + [(f"/{p['slug']}/", "0.8") for p in PAGES]
+            + [(f"/{d['slug']}/", "0.3") for d in LEGAL])
     (ROOT / "sitemap.xml").write_text(
         '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
         + "".join(f"  <url><loc>{DOMAIN}{u}</loc><lastmod>{TODAY}</lastmod><priority>{pr}</priority></url>\n" for u, pr in urls)

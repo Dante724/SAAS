@@ -25,9 +25,8 @@
   <link rel="icon" type="image/png" sizes="32x32" href="assets/icon-32.png">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
   <link rel="manifest" href="site.webmanifest">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700;900&family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="preload" href="/assets/fonts/sora-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/assets/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="styles.css">
   <script>document.documentElement.classList.add("js")</script>
   <script type="application/ld+json">
@@ -618,6 +617,7 @@
           <div><label for="d-loc">Locations</label><select class="in" id="d-loc" name="locations"><option>1</option><option>2–3</option><option>4–10</option><option>10+</option></select></div>
           <div class="full"><label for="d-now">Using today <span class="opt">optional</span></label><input class="in" id="d-now" name="current" placeholder="Spreadsheets, RepairDesk, Shopmonkey…"></div>
           <div class="full"><button class="btn btn-brand btn-lg wide" type="submit">Request a demo</button></div>
+          <p class="full form-note">We use these details only to arrange your demo. See our <a class="link" href="/privacy/">privacy policy</a>.</p>
         </form>
         <p class="fine" id="demoFine">We'll only use your details to arrange the demo.</p>
         <div class="done" id="demoDone" role="status" aria-live="polite">
@@ -682,7 +682,7 @@
       <div><h2 class="foot-h mono">Company</h2><ul><li><a href="#start" data-pane="demo">Book a demo</a></li><li><a data-mail href="#start">Contact</a></li><li><a href="#faq">FAQ</a></li></ul></div>
       <div><h2 class="foot-h mono">Account</h2><ul><li><a data-app="signin" href="#start">Sign in</a></li><li><a data-app="signup" href="#start">Start free trial</a></li></ul></div>
     </div>
-    <div class="legal mono"><span>© <span id="yr">2026</span> Tekly</span><span>Product screens show sample data.</span></div>
+    <div class="legal mono"><span>© <span id="yr">2026</span> Tekly</span><span class="legal-links"><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a></span><span>Product screens show sample data.</span></div>
   </div>
 </footer>
 
