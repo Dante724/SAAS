@@ -61,16 +61,12 @@ async def test_notification_sweep_commits_each_send_and_never_resends(client, te
 
 @pytest.fixture
 def capture_posts(monkeypatch):
-    # Fake DNS for the webhook host only (it must pass the SSRF check as a public address). Faking
-    # every lookup also sent the test database's own host to that address, so on Postgres, where
-    # each session opens a new connection, the test hung until the connect timeout.
-    real_getaddrinfo = socket.getaddrinfo
-
-    def fake_getaddrinfo(h, p, *a, **k):
-        if h == "hooks.example.com":
-            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", p))]
-        return real_getaddrinfo(h, p, *a, **k)
-    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    # Fake DNS for the webhook host only: faking every lookup also sent the worker's new
+    # Postgres connection ("localhost") to a public address, so it timed out on Postgres.
+    real_lookup = socket.getaddrinfo
+    monkeypatch.setattr(socket, "getaddrinfo",
+                        lambda h, p, *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", p))]
+                        if h == "hooks.example.com" else real_lookup(h, p, *a, **k))
     posts = []
     real = httpx.AsyncClient
 
