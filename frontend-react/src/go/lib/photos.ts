@@ -37,10 +37,23 @@ export async function uploadPhoto(dataUrl: string, name = "photo.jpg"): Promise<
   return r.id;
 }
 
-export type IntakePhoto = { id: string; url: string; marked_url?: string | null };
+/** What a job photo shows. Unlabelled photos are just "photos". */
+export type PhotoLabel = "intake" | "before" | "after" | "damage";
+export const PHOTO_LABELS: { key: PhotoLabel; name: string }[] = [
+  { key: "intake", name: "Check-in" }, { key: "before", name: "Before" },
+  { key: "after", name: "After" }, { key: "damage", name: "Damage" },
+];
+export const labelName = (l?: PhotoLabel | null) => PHOTO_LABELS.find((x) => x.key === l)?.name ?? "";
 
-export async function addPhotosToJob(orderId: string, ids: string[]): Promise<IntakePhoto[]> {
-  const r = await api.post<{ intake_photos: IntakePhoto[] }>(`/orders/${encodeURIComponent(orderId)}/intake-photos/add`, { photos: ids });
+export type IntakePhoto = { id: string; url: string; marked_url?: string | null; label?: PhotoLabel | null };
+
+export async function addPhotosToJob(orderId: string, ids: string[], label?: PhotoLabel | null): Promise<IntakePhoto[]> {
+  const r = await api.post<{ intake_photos: IntakePhoto[] }>(`/orders/${encodeURIComponent(orderId)}/intake-photos/add`, { photos: ids, ...(label ? { label } : {}) });
+  return r.intake_photos;
+}
+
+export async function setPhotoLabel(orderId: string, photoId: string, label: PhotoLabel | null): Promise<IntakePhoto[]> {
+  const r = await api.patch<{ intake_photos: IntakePhoto[] }>(`/orders/${encodeURIComponent(orderId)}/intake-photos/${encodeURIComponent(photoId)}/label`, { label });
   return r.intake_photos;
 }
 

@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -116,6 +116,48 @@ async def create_task(
         return claim.replay
     try:
         result = await _create_task(data, ids, primary, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+class PartRequestIn(BaseModel):
+    order_id: str
+    description: str = Field(min_length=1, max_length=200)
+    qty: float = Field(default=1, gt=0, le=999)
+    note: Optional[str] = Field(default=None, max_length=1000)
+
+
+@router.post("/part-request", status_code=201)
+async def request_part(
+    data: PartRequestIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Tekly Go: a technician says a job needs a part ordered. Becomes an urgent task on the job
+    for the job's manager (or for the whole shop when the job has none), so the person who orders
+    stock sees it. Anyone working on the job may ask, which is why this doesn't need
+    can_assign_staff the way handing someone a normal task does."""
+    from backend.routers.orders import _guard_order_access
+    order = (await db.execute(select(Order).where(
+        Order.id == data.order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "tasks.part_request")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        qty = f"{data.qty:g}"
+        who = order.manager_id if order.manager_id and order.manager_id != current.id else None
+        task = TaskIn(
+            title=f"Order part: {data.description.strip()}{'' if qty == '1' else f' ×{qty}'} for {order.order_number}",
+            description=(data.note or "").strip() or None, priority=1, order_id=order.id, client_id=order.client_id)
+        result = await _create_task(task, [who] if who else [], who, db, current)
     except BaseException:
         await claim.release(db)
         raise

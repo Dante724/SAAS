@@ -22,12 +22,31 @@ from backend.db.database import get_db
 from backend.models import (
     Client, ConsentLog, Employee, MessageHandoff, MessageTemplate, Order, OrderComment, Organisation,
 )
-from backend.services.auth import record_scope, require_perm
+from backend.services.auth import get_current_employee, record_scope, require_perm
 from backend.services.phones import to_e164
 
 router = APIRouter(prefix="/api/mobile", tags=["mobile-messages"], dependencies=[Depends(record_scope)])
 
 CHANNELS = ("sms", "whatsapp")
+
+# What a customer agrees to when they sign at drop-off, unless the shop wrote its own wording
+# (Settings → Customer pages → Drop-off terms).
+DEFAULT_DROPOFF_TERMS = (
+    "I'm leaving this item for diagnosis and repair. I've removed or backed up my data; the shop "
+    "isn't responsible for data loss. Repairs beyond the agreed estimate need my approval first. "
+    "Items not collected within 90 days of the repair being ready may be disposed of."
+)
+
+
+@router.get("/dropoff-terms")
+async def dropoff_terms(
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """The drop-off terms the customer reads and signs on the tablet at intake."""
+    org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
+    custom = ((org.dropoff_terms if org else None) or "").strip()
+    return {"terms": custom or DEFAULT_DROPOFF_TERMS, "custom": bool(custom), "shop": org.name if org else ""}
 
 
 async def _order(db, current, order_id) -> Order:
