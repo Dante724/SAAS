@@ -118,7 +118,7 @@ export function GhostButton({ children, onClick, className = "" }: { children: R
 }
 
 /** Bottom sheet (a centred card on iPad). Slides up 220ms ease-out; reduced motion is honoured by index.css. */
-export function Sheet({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
+export function Sheet({ open, onClose, title, children, wide }: { open: boolean; onClose: () => void; title: string; children: ReactNode; /** tablet: a wider dialog (signing, pickers) */ wide?: boolean }) {
   const [shown, setShown] = useState(open);
   const [entered, setEntered] = useState(false);
   useEffect(() => {
@@ -137,7 +137,7 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
       <button aria-label="Close" onClick={onClose}
         className={`absolute inset-0 bg-[rgb(var(--scrim)/.45)] transition-opacity duration-200 ${entered ? "opacity-100" : "opacity-0"}`} />
       <div
-        className={`relative w-full md:max-w-md max-h-[85vh] flex flex-col bg-raised rounded-t-[1.75rem] md:rounded-[1.75rem] shadow-clay-drawer border border-slate-100 pb-[env(safe-area-inset-bottom)] md:pb-0 transition-all duration-[220ms] ease-[cubic-bezier(.2,.9,.3,1.15)] ${entered ? "translate-y-0 opacity-100" : "translate-y-full md:translate-y-6 opacity-0"}`}
+        className={`relative w-full ${wide ? "md:max-w-2xl" : "md:max-w-md"} max-h-[85vh] flex flex-col bg-raised rounded-t-[1.75rem] md:rounded-[1.75rem] shadow-clay-drawer border border-slate-100 pb-[env(safe-area-inset-bottom)] md:pb-0 transition-all duration-[220ms] ease-[cubic-bezier(.2,.9,.3,1.15)] ${entered ? "translate-y-0 opacity-100" : "translate-y-full md:translate-y-6 opacity-0"}`}
       >
         <div className="mx-auto mt-2 h-1.5 w-10 rounded-full bg-slate-200 md:hidden" aria-hidden />
         <div className="flex items-center justify-between px-5 pt-3 pb-2">

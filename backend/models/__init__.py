@@ -170,6 +170,9 @@ class Organisation(Base):
     # 144ii — Orderry-exact accept/decline transitions + require-signature, per doc type.
     oe_estimate_require_signature: Mapped[bool] = mapped_column(Boolean, default=False)
     oe_wo_require_signature: Mapped[bool] = mapped_column(Boolean, default=False)
+    # gc144g3 — what a customer agrees to when they sign at drop-off (Tekly Go intake). Empty =
+    # the built-in wording (DEFAULT_DROPOFF_TERMS in routers/mobile_messages.py).
+    dropoff_terms: Mapped[Optional[str]] = mapped_column(Text)
     oe_estimate_accept_status: Mapped[Optional[str]] = mapped_column(String(50))
     oe_estimate_decline_status: Mapped[Optional[str]] = mapped_column(String(50))
     oe_wo_accept_status: Mapped[Optional[str]] = mapped_column(String(50))
@@ -537,6 +540,9 @@ class Order(Base):
     # 144dg — {original_blob_id: marked_blob_id}: a marked-up copy of an intake photo. The ORIGINAL
     # (in intake_photos) is never mutated, so the untouched check-in shot survives for disputes.
     intake_markups: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
+    # gc144g3 — {blob_id: "intake"|"before"|"after"|"damage"}: what a job photo shows, so a
+    # before/after pair or a damage shot can be found again (unlabelled photos are just "photos").
+    intake_photo_labels: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
     public_token: Mapped[Optional[str]] = mapped_column(String(40), unique=True, index=True, default=lambda: secrets.token_urlsafe(16))  # 144cu — unique track link, never repeated
     client_msg_unread: Mapped[int] = mapped_column(Integer, default=0)  # 144ba: unread customer messages
     rec_unread: Mapped[int] = mapped_column(Integer, default=0)  # 144bd: unread recommendation decisions (approve/decline)

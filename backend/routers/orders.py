@@ -1,6 +1,6 @@
 import secrets
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, field_validator, model_validator
@@ -124,6 +124,7 @@ class OrderIn(BaseModel):
     manager_id: Optional[str] = None   # 144cp: WO manager/owner (Orderry parity)
     scheduled_for: Optional[str] = None
     scheduled_to: Optional[str] = None
+    due_at: Optional[str] = None   # gc144g3 — promised-by date/time set at intake (drives "overdue")
     duration_min: int = 60
     resource_id: Optional[str] = None
     type_id: Optional[str] = None
@@ -256,9 +257,10 @@ def _intake_photos_payload(o: Order) -> list:
     """144dg — intake photos with their marked-up copy (if any). The original id/url is always the
     check-in shot; marked_id/url is the annotated derivative. Original is never replaced."""
     mk = getattr(o, "intake_markups", None) or {}
+    labels = getattr(o, "intake_photo_labels", None) or {}
     out = []
     for b in (getattr(o, "intake_photos", None) or []):
-        row = {"id": b, "url": f"/api/media/{b}"}
+        row = {"id": b, "url": f"/api/media/{b}", "label": labels.get(b)}
         m = mk.get(b)
         if m:
             row["marked_id"] = m
@@ -908,6 +910,7 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
         manager_id=manager_id,
         scheduled_for=parse_dt(data.scheduled_for, "scheduled_for") if data.scheduled_for else None,
         scheduled_to=parse_dt(data.scheduled_to, "scheduled_to") if data.scheduled_to else None,
+        due_at=parse_dt(data.due_at, "due_at") if data.due_at else None,
         duration_min=data.duration_min or 60,
         resource_id=data.resource_id or None,
         type_id=data.type_id,
@@ -1734,6 +1737,11 @@ async def _clean_intake_photos(db, org_id: str, ids) -> list:
 
 class IntakePhotosIn(BaseModel):
     photos: List[str] = []   # the full desired list of media blob ids (replaces the current set)
+    label: Optional[Literal["intake", "before", "after", "damage"]] = None   # gc144g3 — /add only: tag the new photos
+
+
+class PhotoLabelIn(BaseModel):
+    label: Optional[Literal["intake", "before", "after", "damage"]] = None   # None clears it
 
 
 @router.patch("/{order_id}/intake-photos")
@@ -1753,6 +1761,7 @@ async def set_intake_photos(
     order.intake_photos = await _clean_intake_photos(db, current.org_id, data.photos)
     # 144dg — drop markups whose original photo is no longer on the order
     order.intake_markups = {k: v for k, v in (order.intake_markups or {}).items() if k in order.intake_photos}
+    order.intake_photo_labels = {k: v for k, v in (order.intake_photo_labels or {}).items() if k in order.intake_photos}
     await db.commit()
     return {"ok": True, "intake_photos": _intake_photos_payload(order)}
 
@@ -1777,6 +1786,38 @@ async def add_intake_photos(
     if len(current_ids) >= 40 and any(i not in current_ids for i in data.photos):
         raise HTTPException(409, "This job already has 40 photos, the most it can hold.")
     order.intake_photos = await _clean_intake_photos(db, current.org_id, current_ids + list(data.photos))
+    if data.label:
+        labels = dict(order.intake_photo_labels or {})
+        for b in data.photos:
+            if b in order.intake_photos and b not in current_ids:   # only the photos this call added
+                labels[b] = data.label
+        order.intake_photo_labels = labels
+    await db.commit()
+    return {"ok": True, "intake_photos": _intake_photos_payload(order)}
+
+
+@router.patch("/{order_id}/intake-photos/{blob_id}/label")
+async def set_intake_photo_label(
+    order_id: str,
+    blob_id: str,
+    data: PhotoLabelIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """gc144g3 — mark what a job photo shows (check-in, before, after, damage), or clear it."""
+    order = (await db.execute(select(Order).where(
+        Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
+    if blob_id not in (order.intake_photos or []):
+        raise HTTPException(404, "That photo isn't on this job.")
+    labels = dict(order.intake_photo_labels or {})
+    if data.label:
+        labels[blob_id] = data.label
+    else:
+        labels.pop(blob_id, None)
+    order.intake_photo_labels = labels
     await db.commit()
     return {"ok": True, "intake_photos": _intake_photos_payload(order)}
 

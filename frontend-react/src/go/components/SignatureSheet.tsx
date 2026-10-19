@@ -1,14 +1,21 @@
 // Customer signature: a near-full-height sheet in portrait (iOS web apps can't lock to landscape).
 // Smooth strokes with pointer events; the canvas uses touch-action:none so drawing never scrolls.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Eraser } from "lucide-react";
 import { api } from "../../api/client";
 import { PrimaryButton, Sheet } from "./ui";
 import { haptic } from "../lib/scanner";
 import { useToast } from "../lib/useGo";
 
-export default function SignatureSheet({ open, onClose, orderId, customer, onSaved }: {
+export default function SignatureSheet({ open, onClose, orderId, customer, onSaved, title = "Customer signature", intro, onSign, doneLabel = "Done", wide }: {
   open: boolean; onClose: () => void; orderId: string; customer?: string | null; onSaved: () => void;
+  title?: string;
+  /** Shown above the pad instead of "please sign below" (e.g. the drop-off terms). */
+  intro?: ReactNode;
+  /** Store the signature some other way than the job's pickup signature. */
+  onSign?: (png: string) => Promise<void>;
+  doneLabel?: string;
+  wide?: boolean;
 }) {
   const toast = useToast();
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -76,7 +83,8 @@ export default function SignatureSheet({ open, onClose, orderId, customer, onSav
     if (!inked || busy) return;
     setBusy(true);
     try {
-      await api.post(`/orders/${encodeURIComponent(orderId)}/signature`, { signature: exportPng(), note: "Signed on Tekly Go" });
+      if (onSign) await onSign(exportPng());
+      else await api.post(`/orders/${encodeURIComponent(orderId)}/signature`, { signature: exportPng(), note: "Signed on Tekly Go" });
       haptic();
       toast({ title: "Signature saved" });
       onSaved();
@@ -87,10 +95,10 @@ export default function SignatureSheet({ open, onClose, orderId, customer, onSav
   }
 
   return (
-    <Sheet open={open} onClose={onClose} title="Customer signature">
+    <Sheet open={open} onClose={onClose} title={title} wide={wide}>
       <div className="px-2">
-        <p className="mb-2 text-[0.9375rem] text-ink-secondary">{customer ? `${customer}, please` : "Please"} sign below to confirm.</p>
-        <div className="relative rounded-2xl border border-slate-200 bg-white" style={{ height: "min(46vh, 22rem)" }}>
+        {intro ?? <p className="mb-2 text-[0.9375rem] text-ink-secondary">{customer ? `${customer}, please` : "Please"} sign below to confirm.</p>}
+        <div className="relative rounded-2xl border border-slate-200 bg-white" style={{ height: intro ? "min(32vh, 20rem)" : "min(46vh, 22rem)" }}>
           <canvas ref={canvas} className="absolute inset-0 h-full w-full rounded-2xl" style={{ touchAction: "none", background: "#fff" }}
             onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onPointerLeave={up} aria-label="Signature pad" />
           {!inked && <p className="pointer-events-none absolute inset-x-0 bottom-10 text-center text-[0.875rem] text-slate-400">Sign here</p>}
@@ -98,7 +106,7 @@ export default function SignatureSheet({ open, onClose, orderId, customer, onSav
         </div>
         <div className="mt-3 flex gap-2">
           <button onClick={clear} className="min-h-[3.25rem] px-5 rounded-2xl border border-slate-200 bg-white font-semibold text-ink-primary inline-flex items-center gap-2"><Eraser size={18} />Clear</button>
-          <PrimaryButton onClick={save} disabled={!inked || busy} className="flex-1">{busy ? "Saving…" : "Done"}</PrimaryButton>
+          <PrimaryButton onClick={save} disabled={!inked || busy} className="flex-1">{busy ? "Saving…" : doneLabel}</PrimaryButton>
         </div>
       </div>
     </Sheet>

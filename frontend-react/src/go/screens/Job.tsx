@@ -4,7 +4,7 @@
 // payment are online only: pay first, then close, so a job is never closed on a payment that failed.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { AlertTriangle, Camera, Check, ChevronDown, ChevronLeft, CloudOff, Ellipsis, ExternalLink, ListTodo, Loader2, MessageCircle, Minus, PenLine, Phone, Plus, RefreshCw, Smartphone, Timer, Trash2, User, Wrench, X } from "lucide-react";
+import { AlertTriangle, Camera, Check, ChevronDown, ChevronLeft, CloudOff, Ellipsis, ExternalLink, ListTodo, Loader2, MessageCircle, Minus, Pause, PenLine, Phone, Plus, RefreshCw, PackageSearch, Smartphone, Tag, Timer, Trash2, User, Wrench, X } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import AuthedImage from "../../components/AuthedImage";
@@ -15,14 +15,18 @@ import PaySheet from "../components/PaySheet";
 import { useLock } from "../components/Lock";
 import TaskSheet from "../components/TaskSheet";
 import MessageSheet from "../components/MessageSheet";
-import { addPhotosToJob, shrinkPhoto, uploadPhoto, type IntakePhoto } from "../lib/photos";
+import { PHOTO_LABELS, addPhotosToJob, labelName, setPhotoLabel, shrinkPhoto, uploadPhoto, type IntakePhoto, type PhotoLabel } from "../lib/photos";
+import NotesCard from "../components/NotesCard";
+import ChecklistCard from "../components/ChecklistCard";
+import PartRequestSheet from "../components/PartRequestSheet";
+import { useJobTimer } from "../lib/useJobTimer";
 import { finishTarget, money } from "../lib/pay";
 import { refusal } from "../lib/statusChange";
 import { goQueue } from "../lib/offlineQueue";
 import { changeStatus } from "../lib/statusChange";
 import { haptic } from "../lib/scanner";
 import { announceChange, useQueueStatus, useStatuses, useToast, useWide, type StatusMeta } from "../lib/useGo";
-import { utc } from "../lib/time";
+import { hm, utc } from "../lib/time";
 
 type Order = {
   id: string; order_number: string; status: string; is_estimate?: boolean; complaint?: string | null; diagnosis?: string | null;
@@ -35,6 +39,7 @@ type Order = {
   intake_photos?: IntakePhoto[];
   signed?: boolean;
   client_msg_unread?: number;
+  tech_notes?: string | null; conclusion?: string | null; priority?: number;
 };
 type Line = NonNullable<Order["lines"]>[number];
 
@@ -67,7 +72,9 @@ export default function Job() {
   const [allowed, setAllowed] = useState<string[] | null>(null);
   const [sheet, setSheet] = useState(false);
   const [pending, setPending] = useState(false);   // a change is on screen but not confirmed yet
-  const [open, setOpen] = useState<null | "items" | "sign" | "pay" | "task" | "more" | "line" | "photo" | "msg">(null);
+  const [open, setOpen] = useState<null | "items" | "sign" | "pay" | "task" | "more" | "line" | "photo" | "msg" | "shoot">(null);
+  const shootLabel = useRef<PhotoLabel | null>(null);
+  const [partName, setPartName] = useState<string | null>(null);   // the "ask for a part" sheet
   const [line, setLine] = useState<Line | null>(null);
   const [photo, setPhoto] = useState<IntakePhoto | null>(null);
   const [uploading, setUploading] = useState(0);
@@ -78,6 +85,7 @@ export default function Job() {
   const mayClose = !!me && can("can_close_tickets");
   const mayPay = !!me && can("can_take_payments");
   const { list, byKey } = useStatuses(order?.is_estimate ? "estimate" : "work_order");
+  const timer = useJobTimer(id, me?.clock_wo_enabled !== false);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -104,7 +112,10 @@ export default function Job() {
     const pick = ordered.filter((s) => !ok || ok.has(s.key));
     const curIdx = ordered.findIndex((s) => s.key === order?.status);
     const next = ordered.slice(curIdx + 1).find((s) => !["closed", "dropped"].includes(s.status_group || "") && (!ok || ok.has(s.key)));
-    return { pick, next };
+    // a "waiting for parts" status this job may move to (prefer one that says "part")
+    const waiting = pick.filter((s) => s.status_group === "pending" && s.key !== order?.status);
+    const waitingParts = waiting.find((s) => /part/i.test(s.name)) || null;
+    return { pick, next, waitingParts };
   }, [list, allowed, order?.status]);
 
   async function pickStatus(s: StatusMeta) {
@@ -133,15 +144,6 @@ export default function Job() {
     }
   }
 
-  async function startTimer() {
-    if (!order) return;
-    try {
-      await api.post("/timeclock/start", { order_id: order.id, category: "job" });
-      haptic();
-      toast({ title: `Timer started on ${order.order_number}` });
-    } catch (e: any) { toast({ title: "Couldn't start the timer", body: e?.message, tone: "error" }); }
-  }
-
   async function onPhotos(files: FileList | null) {
     if (!order || !files?.length) return;
     if (!navigator.onLine) { toast({ title: "You're offline", body: "Photos need a connection to upload.", tone: "warn" }); return; }
@@ -155,10 +157,27 @@ export default function Job() {
     if (fileRef.current) fileRef.current.value = "";
     if (!ids.length) { toast({ title: "Photos didn't upload", tone: "error" }); return; }
     try {
-      const photos = await addPhotosToJob(order.id, ids);
+      const photos = await addPhotosToJob(order.id, ids, shootLabel.current);
       setOrder((o) => (o ? { ...o, intake_photos: photos } : o));
       haptic();
     } catch (e: any) { toast({ title: "Couldn't add the photos", body: e?.message, tone: "error" }); }
+  }
+
+  // Pick what the photo shows, then open the camera (the tap on the label is the user gesture iOS needs).
+  function shoot(label: PhotoLabel | null) {
+    shootLabel.current = label;
+    setOpen(null);
+    fileRef.current?.click();
+  }
+  async function relabel(p: IntakePhoto, label: PhotoLabel | null) {
+    if (!order) return;
+    if (!navigator.onLine) { toast({ title: "You're offline", body: "Labels need a connection.", tone: "warn" }); return; }
+    try {
+      const photos = await setPhotoLabel(order.id, p.id, label);
+      setOrder((o) => (o ? { ...o, intake_photos: photos } : o));
+      setPhoto({ ...p, label });
+      haptic();
+    } catch (e: any) { toast({ title: "Couldn't label the photo", body: e?.message, tone: "error" }); }
   }
 
   async function setLineQty(l: Line, qty: number) {
@@ -272,19 +291,34 @@ export default function Job() {
             <MessageCircle size={20} />Message
             {!!order.client_msg_unread && <span className="absolute right-1.5 top-1.5 min-w-[1.125rem] h-[1.125rem] px-1 rounded-full bg-rose-500 text-white text-[0.625rem] font-bold leading-[1.125rem] text-center">{order.client_msg_unread}</span>}
           </button>
-          <button onClick={() => fileRef.current?.click()} disabled={isClosed} className={action}>{uploading ? <Loader2 size={20} className="animate-spin" /> : <Camera size={20} />}Photo</button>
+          <button onClick={() => setOpen("shoot")} disabled={isClosed} className={action}>{uploading ? <Loader2 size={20} className="animate-spin" /> : <Camera size={20} />}Photo</button>
           <button onClick={() => setOpen("items")} disabled={!mayAddItems} className={action}><Plus size={20} />Item</button>
-          <button onClick={startTimer} disabled={me?.clock_wo_enabled === false || isClosed} className={action}><Timer size={20} />Timer</button>
+          {timer.onThis
+            ? <button onClick={timer.pause} disabled={timer.busy} className={`${action} !border-blue-200 !bg-blue-50 !text-blue-800`}><Pause size={20} />Pause</button>
+            : <button onClick={() => timer.start(order.order_number)} disabled={me?.clock_wo_enabled === false || isClosed || timer.busy} className={action}><Timer size={20} />{timer.otherJob ? "Switch" : "Start"}</button>}
         </div>
         <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple hidden onChange={(e) => onPhotos(e.target.files)} />
+        {me?.clock_wo_enabled !== false && (timer.onThis || timer.totalSec > 0 || timer.otherJob) && (
+          <div className={`mt-3 flex items-center gap-3 rounded-2xl border px-4 py-3 ${timer.onThis ? "border-blue-200 bg-blue-50" : "border-slate-200 bg-white"}`} role="status">
+            <Timer size={18} className={timer.onThis ? "text-blue-700" : "text-ink-tertiary"} />
+            <div className="min-w-0 flex-1 text-[0.9375rem]">
+              {timer.onThis
+                ? <><span className="font-semibold text-blue-900">Timer running</span> <span className="tabular-nums text-blue-900">{hm(timer.runningSec)}</span></>
+                : timer.otherJob ? <span className="text-ink-secondary">Your timer is on {timer.otherJob.order_number || timer.otherJob.task_title || "another job"}</span>
+                : <span className="text-ink-secondary">Not running</span>}
+              {timer.totalSec > 0 && <span className="block text-[0.8125rem] text-ink-secondary">Worked on this job: <span className="tabular-nums">{hm(timer.totalSec)}</span></span>}
+            </div>
+          </div>
+        )}
 
         {(photos.length > 0 || uploading > 0) && (
           <div className="mt-4">
             <h2 className="px-1 mb-2 text-[0.8125rem] font-semibold text-ink-tertiary">Photos <span className="tabular-nums">{photos.length}</span></h2>
             <div className="flex gap-2 overflow-x-auto pb-1">
               {photos.map((p) => (
-                <button key={p.id} onClick={() => { setPhoto(p); setOpen("photo"); }} className="h-20 w-20 shrink-0 overflow-hidden rounded-2xl" aria-label="Open photo">
-                  <AuthedImage src={p.marked_url || p.url} alt="Job photo" className="h-20 w-20 object-cover" />
+                <button key={p.id} onClick={() => { setPhoto(p); setOpen("photo"); }} className="relative h-20 w-20 shrink-0 overflow-hidden rounded-2xl" aria-label={p.label ? `Open ${labelName(p.label)} photo` : "Open photo"}>
+                  <AuthedImage src={p.marked_url || p.url} alt={p.label ? `${labelName(p.label)} photo` : "Job photo"} className="h-20 w-20 object-cover" />
+                  {p.label && <span className={`absolute left-1 bottom-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] font-semibold text-white ${p.label === "damage" ? "bg-rose-600" : p.label === "after" ? "bg-emerald-700" : "bg-ink-primary/80"}`}>{labelName(p.label)}</span>}
                 </button>
               ))}
               {Array.from({ length: uploading }).map((_, i) => <div key={`u${i}`} className="sk h-20 w-20 shrink-0 rounded-2xl" />)}
@@ -315,6 +349,10 @@ export default function Job() {
             )}
           </Card>
         </div>
+
+        <ChecklistCard orderId={order.id} readOnly={isClosed} />
+        <NotesCard orderId={order.id} techNotes={order.tech_notes} conclusion={order.conclusion} readOnly={isClosed}
+          onSaved={(n) => setOrder((o) => (o ? { ...o, ...n } : o))} />
 
         <button onClick={() => setOpen("sign")} className="mt-3 w-full min-h-[3.25rem] rounded-2xl border border-slate-200 bg-white px-4 flex items-center gap-3 text-left active:bg-slate-50">
           <PenLine size={20} className={order.signed ? "text-emerald-600" : "text-ink-tertiary"} />
@@ -348,13 +386,27 @@ export default function Job() {
         </div>
       </Page>
 
-      <ItemsSheet open={open === "items"} onClose={() => { setOpen(null); load(); }} orderId={order.id} deviceId={order.device?.id} onAdded={() => {}} />
+      <ItemsSheet open={open === "items"} onClose={() => { setOpen(null); load(); }} orderId={order.id} deviceId={order.device?.id} onAdded={() => {}}
+        onRequestPart={isClosed ? undefined : (name) => { setOpen(null); load(); setPartName(name); }} />
+      <PartRequestSheet open={partName !== null} onClose={() => setPartName(null)} orderId={order.id} initialName={partName || ""}
+        waitingStatus={choices.waitingParts} onWaiting={() => choices.waitingParts && pickStatus(choices.waitingParts)} />
       <SignatureSheet open={open === "sign"} onClose={() => setOpen(null)} orderId={order.id} customer={order.client?.name} onSaved={load} />
       <PaySheet open={open === "pay"} onClose={() => setOpen(null)} orderId={order.id} orderNumber={order.order_number} customer={order.client?.name}
         onPaid={(left) => { setBalance(left); if (left <= 0.009 && finishAfterPay.current && !isClosed) { finishAfterPay.current = false; closeJob(); } else load(); }} />
       <MessageSheet open={open === "msg"} onClose={() => setOpen(null)} orderId={order.id}
         onRead={() => setOrder((o) => (o ? { ...o, client_msg_unread: 0 } : o))} />
       <TaskSheet open={open === "task"} onClose={() => setOpen(null)} orderId={order.id} orderLabel={order.order_number} />
+
+      <Sheet open={open === "shoot"} onClose={() => setOpen(null)} title="What's in the photo?">
+        <div className="grid grid-cols-2 gap-2 px-2">
+          {PHOTO_LABELS.map((l) => (
+            <button key={l.key} onClick={() => shoot(l.key)} className="min-h-[4rem] rounded-2xl border border-slate-200 bg-white inline-flex items-center justify-center gap-2 text-[1rem] font-semibold text-ink-primary active:bg-slate-50">
+              <Tag size={18} className={l.key === "damage" ? "text-rose-600" : l.key === "after" ? "text-emerald-700" : "text-ink-tertiary"} />{l.name}
+            </button>
+          ))}
+          <button onClick={() => shoot(null)} className="col-span-2 min-h-[3.25rem] rounded-2xl text-[0.9375rem] font-semibold text-primary active:bg-slate-50 inline-flex items-center justify-center gap-2"><Camera size={18} />Just a photo</button>
+        </div>
+      </Sheet>
 
       <Sheet open={open === "line"} onClose={() => setOpen(null)} title={line?.description || "Item"}>
         {line && (
@@ -373,6 +425,7 @@ export default function Job() {
       <Sheet open={open === "more"} onClose={() => setOpen(null)} title={order.order_number}>
         <div className="space-y-1">
           <button onClick={() => setOpen("task")} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-left text-[1rem] text-ink-primary active:bg-slate-100"><ListTodo size={20} className="text-ink-tertiary" />Add a task for this job</button>
+          {!isClosed && <button onClick={() => { setOpen(null); setPartName(""); }} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-left text-[1rem] text-ink-primary active:bg-slate-100"><PackageSearch size={20} className="text-ink-tertiary" />Ask for a part to be ordered</button>}
           {mayPay && owes && <button onClick={() => openPay(false)} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-left text-[1rem] text-ink-primary active:bg-slate-100"><Plus size={20} className="text-ink-tertiary" />Take a payment ({fmt(balance)} owed)</button>}
           <button onClick={() => { setOpen(null); setSheet(true); }} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-left text-[1rem] text-ink-primary active:bg-slate-100"><Check size={20} className="text-ink-tertiary" />Change status</button>
           <a href={`/orders?open=${encodeURIComponent(order.id)}`} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-[1rem] text-ink-primary active:bg-slate-100"><ExternalLink size={20} className="text-ink-tertiary" />Open the full job in Tekly</a>
@@ -382,6 +435,14 @@ export default function Job() {
       {open === "photo" && photo && (
         <div className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center" role="dialog" aria-label="Photo" onClick={() => setOpen(null)}>
           <AuthedImage src={photo.marked_url || photo.url} alt="Job photo" className="max-h-full max-w-full object-contain" />
+          {!isClosed && (
+            <div className="absolute inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+1rem)] flex justify-center gap-1.5 px-3" onClick={(e) => e.stopPropagation()} role="group" aria-label="What this photo shows">
+              {PHOTO_LABELS.map((l) => (
+                <button key={l.key} onClick={() => relabel(photo, photo.label === l.key ? null : l.key)} aria-pressed={photo.label === l.key}
+                  className={`min-h-[2.75rem] rounded-full px-4 text-[0.875rem] font-semibold ${photo.label === l.key ? "bg-[#fff] text-[#14213f]" : "bg-[#fff]/15 text-[#fff]"}`}>{l.name}</button>
+              ))}
+            </div>
+          )}
           <button onClick={() => setOpen(null)} aria-label="Close" className="absolute right-4 top-[calc(env(safe-area-inset-top)+0.75rem)] h-11 w-11 rounded-full bg-white/15 text-white inline-flex items-center justify-center"><X size={22} /></button>
         </div>
       )}

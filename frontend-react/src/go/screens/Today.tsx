@@ -4,13 +4,17 @@
 //   Owner: the same board with counts per stage at the top.
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { AlertTriangle, CalendarCheck, ChevronRight, Clock3, RefreshCw } from "lucide-react";
+import { AlertTriangle, CalendarCheck, Clock3, Pause, RefreshCw, Timer } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import { Card, Empty, Page, Section, SkeletonRows, StatusBadge } from "../components/ui";
 import { useOnChange, useStatuses, type StatusMeta } from "../lib/useGo";
 import { inferRole, savedRole, type GoRole } from "../lib/role";
-import { utc } from "../lib/time";
+import { hm, utc } from "../lib/time";
+import { PRIORITY_LABEL, mergeBuckets, sortQueue } from "../lib/queue";
+import { useTick, type ActiveEntry } from "../lib/useJobTimer";
+import { haptic } from "../lib/scanner";
+import { announceChange, useToast } from "../lib/useGo";
 
 export type JobCard = {
   id: string; order_number: string; status: string; client?: string | null; device?: string | null;
@@ -25,12 +29,17 @@ const time = (iso?: string | null) => iso ? new Date(iso).toLocaleTimeString([],
 const day = (iso?: string | null) => iso ? new Date(iso).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" }) : "";
 
 export function JobRow({ job, meta, active, overdue }: { job: JobCard; meta?: StatusMeta; active?: boolean; overdue?: boolean }) {
-  const when = job.scheduled_for ? `${day(job.scheduled_for)} · ${time(job.scheduled_for)}` : "";
+  const when = job.scheduled_for ? `${day(job.scheduled_for)} · ${time(job.scheduled_for)}`
+    : job.due_at ? `Due ${day(job.due_at)} · ${time(job.due_at)}` : "";
+  const pri = job.priority ? PRIORITY_LABEL[job.priority] : "";
   return (
     <Link to={`/job/${encodeURIComponent(job.id)}`} aria-current={active ? "page" : undefined}
       className={`block rounded-2xl border p-4 shadow-clay-card transition-colors active:bg-slate-50 ${active ? "border-primary/60 bg-blue-50" : "border-slate-100 bg-white"}`}>
       <div className="flex items-center justify-between gap-3">
-        <span className="font-mono text-[0.9375rem] font-semibold text-ink-primary">{job.order_number}</span>
+        <span className="flex items-center gap-2 min-w-0">
+          <span className="font-mono text-[0.9375rem] font-semibold text-ink-primary">{job.order_number}</span>
+          {pri && <span className={`rounded-md px-1.5 py-0.5 text-[0.75rem] font-semibold ${job.priority! >= 2 ? "bg-violet-100 text-violet-800" : "bg-rose-100 text-rose-800"}`}>{pri}</span>}
+        </span>
         <StatusBadge meta={meta} statusKey={job.status} />
       </div>
       <p className="mt-2 text-[0.9375rem] font-medium text-ink-primary truncate">
@@ -60,11 +69,19 @@ export default function Today() {
   const [board, setBoard] = useState<Board | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // technician: today's job time and the running timer
+  const [work, setWork] = useState<{ today_seconds: number; active: ActiveEntry; at: number } | null>(null);
+  const [pausing, setPausing] = useState(false);
+  const toast = useToast();
 
   const load = useCallback(async () => {
     setBusy(true); setErr(null);
     try {
-      if (role === "tech") setDash(await api.get<Dash>("/tech/dashboard"));
+      if (role === "tech") {
+        api.get<{ today_seconds: number; active: ActiveEntry }>("/timeclock/my-work")
+          .then((w) => setWork({ ...w, at: Date.now() })).catch(() => setWork(null));
+        setDash(await api.get<Dash>("/tech/dashboard"));
+      }
       else setBoard(await api.get<Board>("/orders/board"));
     } catch (e: any) {
       setErr(navigator.onLine ? (e?.message || "Couldn't load today's jobs") : "You're offline. Showing nothing saved yet.");
@@ -77,6 +94,16 @@ export default function Today() {
     document.addEventListener("visibilitychange", on);
     return () => document.removeEventListener("visibilitychange", on);
   }, [load]);
+
+  useTick(!!work?.active);
+  const since = work?.active ? Math.max(0, (Date.now() - work.at) / 1000) : 0;
+  async function pause() {
+    if (!navigator.onLine) { toast({ title: "You're offline", body: "The timer needs a connection.", tone: "warn" }); return; }
+    setPausing(true);
+    try { await api.post("/timeclock/stop", {}); haptic(); toast({ title: "Timer paused" }); announceChange("jobs"); }
+    catch (e: any) { toast({ title: "Couldn't pause the timer", body: e?.message, tone: "error" }); }
+    finally { setPausing(false); }
+  }
 
   const first = me?.name?.split(" ")[0];
   const greeting = (() => { const h = new Date().getHours(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; })();
@@ -93,21 +120,34 @@ export default function Today() {
     if (!dash) body = <SkeletonRows />;
     else {
       const overdueIds = new Set(dash.overdue.map((j) => j.id));
-      const todayOnly = dash.today.filter((j) => !overdueIds.has(j.id));
+      // My queue: overdue and today's jobs in the order to pick them up (overdue, priority, due, booking)
+      const queue = sortQueue(mergeBuckets(dash.overdue, dash.today), overdueIds);
+      const running = work?.active;
       body = (
         <>
-          <Link to="/clock" className="mb-5 flex items-center gap-3 rounded-2xl border border-slate-100 bg-white p-3.5 shadow-clay-card active:bg-slate-50">
-            <span className={`flex h-10 w-10 items-center justify-center rounded-xl ${dash.clock.clocked_in ? "bg-emerald-50 text-emerald-700" : "bg-slate-50 text-ink-tertiary"}`}><Clock3 size={20} /></span>
-            <span className="flex-1">
-              <span className="block font-semibold text-ink-primary">{dash.clock.clocked_in ? "Timer running" : "Not on the clock"}</span>
-              <span className="block text-[0.875rem] text-ink-secondary">{dash.clock.clocked_in ? `Since ${utc(dash.clock.since)?.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) ?? ""}` : "Tap to clock in"}</span>
-            </span>
-            <ChevronRight size={18} className="text-ink-tertiary" />
-          </Link>
-          {dash.overdue.length > 0 && <Section title="Overdue" count={dash.overdue.length}><List jobs={dash.overdue} byKey={byKey} activeId={activeId} overdueIds={overdueIds} /></Section>}
-          <Section title="Today" count={todayOnly.length}>
-            {todayOnly.length ? <List jobs={todayOnly} byKey={byKey} activeId={activeId} />
-              : <Empty icon={<CalendarCheck size={22} />} title="Nothing else for today" body="Jobs assigned to you show up here." />}
+          <div className="mb-5 grid grid-cols-2 gap-2.5">
+            <Card className="p-4">
+              <p className="text-[1.5rem] font-bold leading-none tabular-nums text-ink-primary">{work ? hm((work.today_seconds || 0) + since) : "–"}</p>
+              <p className="mt-1.5 text-[0.875rem] text-ink-secondary">On jobs today</p>
+            </Card>
+            <Link to="/clock" className="rounded-2xl border border-slate-100 bg-white p-4 shadow-clay-card active:bg-slate-50">
+              <p className="flex items-center gap-1.5 font-semibold text-ink-primary"><Clock3 size={17} className={dash.clock.clocked_in ? "text-emerald-700" : "text-ink-tertiary"} />{dash.clock.clocked_in ? "On shift" : "Clocked out"}</p>
+              <p className="mt-1 text-[0.875rem] text-ink-secondary">{dash.clock.clocked_in ? `Since ${utc(dash.clock.since)?.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) ?? ""}` : "Tap to clock in"}</p>
+            </Link>
+          </div>
+          {running && (
+            <div className="mb-5 flex items-center gap-3 rounded-2xl border border-blue-200 bg-blue-50 p-3.5" role="status">
+              <Timer size={20} className="text-blue-700 shrink-0" />
+              <Link to={running.order_id ? `/job/${encodeURIComponent(running.order_id)}` : "/clock"} className="min-w-0 flex-1">
+                <span className="block font-semibold text-blue-900 truncate">Working on {running.order_number || running.task_title || "a job"}</span>
+                <span className="block text-[0.875rem] tabular-nums text-blue-900/80">{hm((running.duration_sec || 0) + since)}</span>
+              </Link>
+              <button onClick={async () => { await pause(); load(); }} disabled={pausing} className="min-h-[2.75rem] rounded-xl bg-white px-3.5 font-semibold text-blue-800 inline-flex items-center gap-1.5 border border-blue-200"><Pause size={16} />Pause</button>
+            </div>
+          )}
+          <Section title="My queue" count={queue.length}>
+            {queue.length ? <List jobs={queue} byKey={byKey} activeId={activeId} overdueIds={overdueIds} />
+              : <Empty icon={<CalendarCheck size={22} />} title="Nothing waiting" body="Jobs assigned to you show up here, most urgent first." />}
           </Section>
           {dash.upcoming.length > 0 && <Section title="Coming up" count={dash.upcoming.length}><List jobs={dash.upcoming.slice(0, 10)} byKey={byKey} activeId={activeId} /></Section>}
         </>

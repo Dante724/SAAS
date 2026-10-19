@@ -1,19 +1,21 @@
 // Add services and parts to a job. Tap a result to add it (qty 1, catalogue price); the sheet stays
 // open so several can go on in a row. Online only: a product line takes stock the moment it's added,
 // so a queued replay could take it twice.
-import { useEffect, useState } from "react";
-import { Check, Loader2, Package, Search, Wrench } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Check, Loader2, Package, PackageSearch, ScanBarcode, Search, Wrench, X } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import { Sheet } from "./ui";
-import { haptic } from "../lib/scanner";
+import { cameraSupported, haptic, startScanner, type Stop } from "../lib/scanner";
 import { useToast } from "../lib/useGo";
 import { money } from "../lib/pay";
 
 type Hit = { kind: "service" | "product" | "bundle"; ref_id: string; name: string; price?: number; available?: number | null; sku?: string | null; fits?: boolean };
 
-export default function ItemsSheet({ open, onClose, orderId, deviceId, onAdded }: {
+export default function ItemsSheet({ open, onClose, orderId, deviceId, onAdded, onRequestPart }: {
   open: boolean; onClose: () => void; orderId: string; deviceId?: string | null; onAdded: () => void;
+  /** "Part not here?" — ask the desk to order one (named from what was searched). */
+  onRequestPart?: (name: string) => void;
 }) {
   const { can, me } = useMe();
   const fmt = (n?: number | null) => money(me?.currency, n);
@@ -26,7 +28,29 @@ export default function ItemsSheet({ open, onClose, orderId, deviceId, onAdded }
   const [adding, setAdding] = useState<string | null>(null);
   const [added, setAdded] = useState<Record<string, number>>({});
 
-  useEffect(() => { if (open) { setQ(""); setAdded({}); } }, [open]);
+  const [scanning, setScanning] = useState(false);
+  const video = useRef<HTMLVideoElement>(null);
+  const stopRef = useRef<Stop | null>(null);
+  useEffect(() => { if (open) { setQ(""); setAdded({}); } else setScanning(false); }, [open]);
+  // Scan a part's barcode/SKU label and put it straight on the job.
+  useEffect(() => {
+    if (!scanning || !video.current) return;
+    let alive = true;
+    startScanner(video.current, async (code) => {
+      stopRef.current = null;
+      if (!alive) return;
+      setScanning(false);
+      try {
+        const r = await api.get<{ product: { id: string; name: string; sell_price?: number; repair_price?: number; qty_available?: number } }>(`/inventory/scan?code=${encodeURIComponent(code)}`);
+        const p = r.product;
+        await add({ kind: "product", ref_id: p.id, name: p.name, price: p.repair_price || p.sell_price || 0, available: p.qty_available ?? null });
+      } catch (e: any) {
+        toast(e?.status === 404 ? { title: "No part matches that code", body: code, tone: "warn" } : { title: "Couldn't look that up", body: e?.message, tone: "error" });
+      }
+    }).then((stop) => { if (alive) stopRef.current = stop; else stop(); })
+      .catch(() => { setScanning(false); toast({ title: "Camera unavailable", body: "Allow camera access, or type the SKU.", tone: "warn" }); });
+    return () => { alive = false; stopRef.current?.(); stopRef.current = null; };
+  }, [scanning]);
   useEffect(() => {
     if (!open) return;
     setHits(null);
@@ -48,6 +72,7 @@ export default function ItemsSheet({ open, onClose, orderId, deviceId, onAdded }
         ref_id: h.ref_id, qty: 1, unit_price: h.price ?? 0,
       });
       haptic();
+      if (h.kind === "product" && h.available != null && h.available <= 0) toast({ title: `${h.name} added`, body: "It's out of stock, so it shows as waiting for stock until it's ordered and received." });
       setAdded((a) => ({ ...a, [h.ref_id]: (a[h.ref_id] || 0) + 1 }));
       onAdded();
     } catch (e: any) {
@@ -69,11 +94,26 @@ export default function ItemsSheet({ open, onClose, orderId, deviceId, onAdded }
             ))}
           </div>
         )}
-        <div className="relative mb-2">
-          <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-tertiary" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={type === "service" ? "Search services" : "Search parts, SKU, barcode"} enterKeyHint="search"
-            className="w-full min-h-[3rem] rounded-2xl border border-slate-200 bg-white pl-11 pr-4 text-[1rem] text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary" />
+        <div className="mb-2 flex gap-2">
+          <div className="relative flex-1">
+            <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-tertiary" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={type === "service" ? "Search services" : "Search parts, SKU, barcode"} enterKeyHint="search" aria-label="Search the catalogue"
+              className="w-full min-h-[3rem] rounded-2xl border border-slate-200 bg-white pl-11 pr-4 text-[1rem] text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary" />
+          </div>
+          {type === "product" && cameraSupported() && (
+            <button onClick={() => setScanning((v) => !v)} aria-label={scanning ? "Stop scanning" : "Scan a part's barcode"} aria-pressed={scanning}
+              className={`h-12 w-12 shrink-0 rounded-2xl border inline-flex items-center justify-center ${scanning ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`}>
+              {scanning ? <X size={20} /> : <ScanBarcode size={22} />}
+            </button>
+          )}
         </div>
+        {scanning && (
+          <div className="relative mb-3 aspect-[4/3] w-full overflow-hidden rounded-2xl bg-[#0b1020]">
+            <video ref={video} className="h-full w-full object-cover" playsInline muted />
+            <div className="pointer-events-none absolute inset-x-8 top-1/2 h-0.5 -translate-y-1/2 bg-rose-500/80" />
+            <p className="absolute inset-x-0 bottom-2 text-center text-[0.8125rem] text-white/90">Point at the part's barcode</p>
+          </div>
+        )}
         {!mayService && !mayPart && <p className="px-2 py-4 text-ink-secondary">Your role can't add items to jobs.</p>}
         {hits === null ? <div className="py-6 flex justify-center text-ink-tertiary"><Loader2 className="animate-spin" /></div> : (
           <div className="divide-y divide-slate-100">
@@ -100,6 +140,11 @@ export default function ItemsSheet({ open, onClose, orderId, deviceId, onAdded }
             })}
             {!hits.length && <p className="px-2 py-6 text-center text-ink-secondary">{q ? "Nothing matches" : "Nothing in the catalogue yet"}</p>}
           </div>
+        )}
+        {type === "product" && onRequestPart && (
+          <button onClick={() => onRequestPart(q.trim())} className="mt-2 w-full min-h-[3.25rem] rounded-2xl border border-dashed border-slate-300 inline-flex items-center justify-center gap-2 font-semibold text-primary active:bg-slate-50">
+            <PackageSearch size={18} />Part not here? Ask for it to be ordered
+          </button>
         )}
       </div>
     </Sheet>

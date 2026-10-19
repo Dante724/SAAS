@@ -931,6 +931,7 @@ async def get_public_pages(
         "oe_wo_approval_statuses": getattr(org, "oe_wo_approval_statuses", None) or "",
         "oe_estimate_require_signature": getattr(org, "oe_estimate_require_signature", False),
         "oe_wo_require_signature": getattr(org, "oe_wo_require_signature", False),
+        "dropoff_terms": getattr(org, "dropoff_terms", None) or "",
         "oe_estimate_accept_status": getattr(org, "oe_estimate_accept_status", None) or "",
         "oe_estimate_decline_status": getattr(org, "oe_estimate_decline_status", None) or "",
         "oe_wo_accept_status": getattr(org, "oe_wo_accept_status", None) or "",
@@ -966,6 +967,7 @@ class PublicPagesIn(BaseModel):
     oe_wo_approval_statuses: Optional[str] = None       # 144ih
     oe_estimate_require_signature: Optional[bool] = None  # 144ii
     oe_wo_require_signature: Optional[bool] = None
+    dropoff_terms: Optional[str] = Field(default=None, max_length=4000)   # gc144g3 — signed at drop-off
     oe_estimate_accept_status: Optional[str] = None
     oe_estimate_decline_status: Optional[str] = None
     oe_wo_accept_status: Optional[str] = None
