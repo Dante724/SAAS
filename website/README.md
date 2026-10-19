@@ -17,17 +17,19 @@ python3 -m http.server 4321 --directory website
 | Copy and sections | `index.html` |
 
 ## Design system
-Follows `exa.design.md`: white canvas with a single near-black band (#181815) for the product,
-editorial serif display (Newsreader 300 as the open-source stand-in for Arizona Light), Hanken
-Grotesk body, IBM Plex Mono for labels and numbers. Electric blue `#1f40ed` is reserved for the
-main action and links; secondary actions are greige. Hairline borders, 2–4px corners, no gradients.
+Follows `algolia.design.md`: a near-black hero washed with a violet-to-cobalt gradient and a
+stacked three-word Sora headline ("Diagnose. Approve. Get paid."), then a white editorial body
+with hairline (#e5e7eb) cards at 12px corners, and a deep-navy (#000033) product band ending in
+large Sora 900 proof numerals (honest product facts, no invented stats). Two typefaces only:
+Sora for display, headings and numbers; Inter for everything you read. Electric blue #003dff is
+held for pill CTAs and inline links; pills are used for buttons only.
 
 No animation libraries: reveal-on-scroll and the demos are plain JS with IntersectionObserver.
-Interactive pieces: the complaint → AI estimate box in the hero, the five job-stage tabs in the
-dark band, the phone approval demo, the pricing toggle and the demo / sign-up / sign-in panels.
+Interactive pieces: the complaint → AI estimate card in the hero, the five job-stage tabs in the
+navy band, the phone approval demo, the pricing toggle and the demo / sign-up / sign-in panels.
 
-Measured (headless Chrome): scroll 60 fps; Lighthouse accessibility, best practices and SEO 100;
-performance 94 desktop / 86 mobile; page weight ~340 KB.
+Measured (headless Chrome): scroll 60 fps, no horizontal overflow from 320px to 1440px;
+Lighthouse performance 94 mobile / 98 desktop, accessibility, best practices and SEO 100.
 
 ## Photography
 Two council rounds (art director, shop owner, conversion marketer; majority vote) picked the
