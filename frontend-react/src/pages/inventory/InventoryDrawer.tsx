@@ -1,6 +1,7 @@
 import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
+import { useMe } from "../../context/Me";
 import { api } from "../../api/client";
 import { Product, currencySymbol, money } from "./types";
 import CustomFields from "../../components/CustomFields";
@@ -37,6 +38,7 @@ function CodeSvg({ data, type }: { data: string; type: "code128" | "qr" }) {
 }
 
 export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }: Props) {
+  const { can } = useMe();
   const [p, setP] = useState<any>(initial || {});
   const [compKind, setCompKind] = useState<"service" | "product">("service");  // 144cz — job-kit component picker tab
   const [toast, setToast] = useState<string | null>(null);
@@ -125,6 +127,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
           unit: p.unit || "pc", price: Number(p.price) || 0, cost_price: Number(p.cost_price) || 0, duration_min: Number(p.duration_min) || 0, flat_rate: !!p.flat_rate };
         if (editing) await api.put(`/catalog/services/${id}`, body); else await api.post("/catalog/services", body);
       } else if (kind === "bundle") {
+        if (!can("can_manage_bundles")) { flash("Your role can't change job kits"); return; }
         const components = (p.components || []).map((c: any) => ({ ref_type: c.ref_type, ref_id: c.ref_id, qty: Number(c.qty) || 1, device_variant: !!c.device_variant }));
         if (components.length === 0) { flash("Add at least one service or product"); return; }
         const body = { name: p.name, price_mode: p.price_mode || "sum", price: Number(p.price) || 0, category_id: p.category_id || null, components };
@@ -226,7 +229,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                 <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-3">
                   <div className="text-[11px] font-bold text-ink-primary ">Stock tracking & policies</div>
                   <label className="flex items-center justify-between cursor-pointer"><span className="text-ink-secondary font-medium">Expiration tracking</span><input type="checkbox" checked={!!p.expiry_tracking} onChange={(e) => set("expiry_tracking", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
-                  <label className="flex items-center justify-between cursor-pointer"><span className="text-ink-secondary font-medium">Enable serial-number tracking <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-800">one-way</span></span><input type="checkbox" checked={!!p.serialized} onChange={(e) => set("serialized", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
+                  <label className="flex items-center justify-between cursor-pointer"><span className="text-ink-secondary font-medium">Enable serial-number tracking <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-800">one-way</span></span><input type="checkbox" checked={!!p.serialized} disabled={!p.serialized && !can("can_track_serials")} onChange={(e) => set("serialized", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
                   <div className="flex items-center justify-between"><span className="text-ink-secondary font-medium">Min stock (reorder at)</span><input type="number" value={p.min_stock ?? 0} onChange={(e) => set("min_stock", Number(e.target.value))} className="glass-input w-20 px-2 py-1 rounded-lg text-xs text-right font-mono" /></div>
                 </div>
               </> },

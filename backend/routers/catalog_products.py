@@ -21,7 +21,7 @@ from backend.models import (
     Part, StockLevel, StockMovement, StockItemBatch, SerializedItem,
     Category, Employee,
 )
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import assert_perm, get_current_employee, require_perm
 from backend.routers.forms import resolve_custom_data
 from backend.services.money import q2
 from backend.services.redact import can_see_costs, drop_cost_fields
@@ -338,6 +338,8 @@ async def bulk_products(data: BulkProductsIn, db: AsyncSession = Depends(get_db)
     adjust price, or soft-delete (write-off keeps history)."""
     if not data.ids:
         raise HTTPException(422, "No products selected")
+    if data.action == "delete":
+        await assert_perm(db, current, "can_delete_products")
     parts = (await db.execute(select(Part).where(
         Part.id.in_(data.ids), Part.org_id == current.org_id))).scalars().all()
     n = 0
@@ -469,6 +471,8 @@ async def update_product(pid: str, data: ProductIn, db: AsyncSession = Depends(g
     # serialization is irreversible once enabled — cannot be turned off here
     if p.serialized and not payload.get("serialized"):
         raise HTTPException(409, "Serialization cannot be disabled once enabled (Orderry rule)")
+    if payload.get("serialized") and not p.serialized:
+        await assert_perm(db, current, "can_track_serials")
     # only touch custom_data when the caller explicitly sent it (avoid wiping on partial saves)
     if "custom_data" not in data.model_fields_set:
         payload.pop("custom_data", None)
@@ -527,6 +531,7 @@ async def enable_serialization(pid: str, db: AsyncSession = Depends(get_db),
         raise HTTPException(404, "Product not found")
     if p.serialized:
         raise HTTPException(409, "Product is already serialized")
+    await assert_perm(db, current, "can_track_serials")
     p.serialized = True
     await db.commit()
     return {"ok": True, "serialized": True,

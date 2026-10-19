@@ -16,7 +16,7 @@ from backend.models import (
     EmployeeBalanceLedger,
     PayrollRun,
 )
-from backend.services.auth import assert_not_self, require_perm
+from backend.services.auth import assert_not_self, assert_perm, get_current_employee, has_perm, require_perm
 from backend.services.payroll import CommissionEngine, _money
 from backend.services.money import q2
 
@@ -157,8 +157,13 @@ async def delete_rule(
 async def employee_balance(
     employee_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_manage_payroll")),
+    current: Employee = Depends(get_current_employee),
 ):
+    # Payroll managers see anyone's balance; everyone else only their own, if their role lets them.
+    if not await has_perm(db, current, "can_manage_payroll"):
+        if employee_id != current.id:
+            await assert_perm(db, current, "can_manage_payroll")
+        await assert_perm(db, current, "can_view_own_compensation")
     eng = CommissionEngine(db, current.org_id)
     bal = await eng.balance(employee_id)
     rows = (await db.execute(select(EmployeeBalanceLedger).where(
@@ -172,6 +177,14 @@ async def employee_balance(
                     "note": e.note, "created_at": e.created_at.isoformat() if e.created_at else None}
                    for e in rows],
     }
+
+
+async def _assert_reward_rights(db, current, bonus, penalty) -> None:
+    """A bonus or penalty folded into a pay run needs the same right as adding one on its own."""
+    if bonus and float(bonus) > 0:
+        await assert_perm(db, current, "can_create_bonuses")
+    if penalty and float(penalty) > 0:
+        await assert_perm(db, current, "can_create_penalties")
 
 
 class RunIn(BaseModel):
@@ -193,6 +206,8 @@ async def create_payroll_run(
     """Roll up base salary + ledger commissions/bonuses/penalties for a period into
     a PayrollRun, then post a single balance entry for the base/bonus/penalty parts.
     Commissions are already in the ledger from order events."""
+    await assert_perm(db, current, "can_accrue_payroll")
+    await _assert_reward_rights(db, current, data.bonus, data.penalty)
     ps = parse_date(data.period_start, "period_start")
     pe = parse_date(data.period_end, "period_end")
     today = date.today()
@@ -295,6 +310,7 @@ async def create_payroll_runs_bulk(
     is skipped rather than double-paid. Employees are processed independently: one failure
     does not abandon the rest, and the response reports what happened per person.
     """
+    await assert_perm(db, current, "can_accrue_payroll")
     ps = parse_date(data.period_start, "period_start")
     pe = parse_date(data.period_end, "period_end")
     today = date.today()
@@ -525,6 +541,7 @@ async def add_adjustment(
 ):
     if data.kind not in ("penalty", "bonus"):
         raise HTTPException(400, "kind must be penalty|bonus")
+    await assert_perm(db, current, "can_create_bonuses" if data.kind == "bonus" else "can_create_penalties")
     if data.amount is None or float(data.amount) <= 0:
         raise HTTPException(400, "amount must be a positive number")
     emp = (await db.execute(select(Employee).where(
@@ -637,6 +654,7 @@ async def accrue_calculation(
     wages and manual penalties/bonuses are already in the ledger; this records the
     per-employee PayrollRun and posts the base-salary entry (the only piece not yet
     on the ledger). Guards against the current/future month and double accrual."""
+    await assert_perm(db, current, "can_accrue_payroll")
     try:
         ps, pe = _month_bounds(data.month)
     except (ValueError, IndexError):
@@ -703,6 +721,7 @@ async def post_attendance_wages(
     for a period, as opposed to the **labour-hours** clock (time on work orders,
     posted by timesheet approval). Both post an `hourly_wage` ledger entry that the
     payroll calculation sums. Idempotent per employee + window."""
+    await assert_perm(db, current, "can_accrue_payroll")
     from backend.models import Shift
     start = parse_date(data.date_from, "date_from")
     end = parse_date(data.date_to, "date_to")

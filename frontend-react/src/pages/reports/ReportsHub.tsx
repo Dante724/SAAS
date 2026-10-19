@@ -10,6 +10,7 @@ import { alertDialog } from "../../lib/dialog";
 import Pager from "../../components/Pager";
 import { useTerminology } from "../../lib/useTerminology";
 import { getLocale } from "../../i18n";
+import { useMe } from "../../context/Me";
 import { useNavigate } from "react-router-dom";
 import { buildReportConfig, pickChartColumns } from "./reportConfig";
 
@@ -323,8 +324,15 @@ export function CustomView() {
   );
 }
 
+// Reports whose download needs its own right on top of seeing them (mirrors reports.EXPORT_PERMS).
+const EXPORT_PERMS: Record<string, string> = {
+  sold_products: "can_export_sales", provided_services: "can_export_sales",
+  payroll: "can_export_payroll", labor_cost: "can_export_payroll",
+};
+
 export default function ReportsHub() {
   const nav = useNavigate();
+  const { can } = useMe();
   const [dash, setDash] = useState<any>(null);
   const [cat, setCat] = useState<Catalog | null>(null);
   const [active, setActive] = useState<string | null>(null);
@@ -632,8 +640,10 @@ export default function ReportsHub() {
                 {result && (
                   <div className="ml-auto flex items-center gap-2">
                     <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search rows…" aria-label="Search report rows" className="glass-input px-2.5 py-1.5 rounded-lg text-xs w-40" />
+                    {can(EXPORT_PERMS[active || ""]) && <>
                     <button disabled={exporting} onClick={() => download("xlsx")} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 flex items-center gap-1 disabled:opacity-50"><M n="table_view" c="text-sm" />Excel</button>
                     <button disabled={exporting} onClick={() => download("csv")} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-ink-secondary bg-slate-100 hover:bg-slate-200 flex items-center gap-1 disabled:opacity-50"><M n="download" c="text-sm" />CSV</button>
+                    </>}
                   </div>
                 )}
               </div>

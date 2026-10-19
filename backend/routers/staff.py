@@ -107,9 +107,11 @@ async def list_employees(
     from backend.services.auth import has_perm
     # Pay and tax ids are payroll data: only roles allowed to view payroll see colleagues' values.
     see_pay = await has_perm(db, current, "can_view_payroll")
+    see_own = see_pay or await has_perm(db, current, "can_view_own_compensation")
+    listed = await _picker_lists(db, current.org_id, employees)
 
     def pay(e, v):
-        return v if (see_pay or e.id == current.id) else None
+        return v if (see_pay or (e.id == current.id and see_own)) else None
     return [{"id": e.id, "name": e.name, "email": e.email,
              "phone": e.phone, "wage_type": pay(e, e.wage_type), "wage_value": pay(e, e.wage_value),
              "commission_labour": pay(e, e.commission_labour), "commission_parts": pay(e, e.commission_parts),
@@ -117,7 +119,27 @@ async def list_employees(
              "track_job_hours": e.track_job_hours, "track_attendance": e.track_attendance,
              "position": e.position, "hired_at": e.hired_at.isoformat() if e.hired_at else None,
              "tax_id": pay(e, e.tax_id), "public_name": e.public_name, "note": e.note,
-             "location_id": e.location_id, "role_id": e.role_id, "active": e.active} for e in employees]
+             "location_id": e.location_id, "role_id": e.role_id, "active": e.active,
+             # whether their role shows them in the work order's Managers / Assignee pickers
+             "in_managers": listed[e.id][0], "in_assignees": listed[e.id][1]} for e in employees]
+
+
+async def _picker_lists(db, org_id, employees) -> dict:
+    """{employee_id: (in Managers list, in Assignee list)} from each person's role."""
+    from backend.models import Organisation, Role
+    from backend.services.permissions import role_allows
+    owner_id = (await db.execute(select(Organisation.owner_id).where(Organisation.id == org_id))).scalar_one_or_none()
+    role_ids = {e.role_id for e in employees if e.role_id}
+    roles = {r.id: r for r in (await db.execute(select(Role).where(Role.id.in_(role_ids)))).scalars().all()} if role_ids else {}
+    out = {}
+    for e in employees:
+        if not e.role_id or e.id == owner_id:
+            out[e.id] = (True, True)
+        else:
+            r = roles.get(e.role_id)
+            out[e.id] = (bool(r) and role_allows(r, "display_in_managers"),
+                         bool(r) and role_allows(r, "display_in_assignees"))
+    return out
 
 PAY_FIELDS = ("wage_type", "wage_value", "commission_labour", "commission_parts", "tax_id")
 # Compensation edits are audited with their old and new values.

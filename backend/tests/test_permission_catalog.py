@@ -1,10 +1,10 @@
 """The role editor tells the truth: every permission the backend checks is in the catalogue
-(so it can be switched off), and the "coming soon" list is exactly the catalogue codes that
-nothing checks yet. Wiring a permission up means removing it from NOT_YET_ENFORCED."""
+(so it can be switched off), and every catalogue code is checked somewhere — nothing in the
+role editor is a switch that does nothing."""
 import pathlib
 import re
 
-from backend.services.permissions import ALL_CODES, NOT_YET_ENFORCED
+from backend.services.permissions import ALL_CODES
 
 BACKEND = pathlib.Path(__file__).resolve().parents[1]
 
@@ -24,13 +24,10 @@ def _mentioned(code: str, src: dict[str, str]) -> bool:
     return any(pat.search(t) for t in src.values())
 
 
-def test_coming_soon_list_matches_what_nothing_checks():
+def test_every_catalogue_permission_is_checked():
     src = _sources()
     unchecked = {c for c in ALL_CODES if not _mentioned(c, src)}
-    assert NOT_YET_ENFORCED <= ALL_CODES
-    assert unchecked == NOT_YET_ENFORCED, (
-        f"newly wired (remove from NOT_YET_ENFORCED): {sorted(NOT_YET_ENFORCED - unchecked)}; "
-        f"unchecked but not listed: {sorted(unchecked - NOT_YET_ENFORCED)}")
+    assert not unchecked, f"in the role editor but nothing checks it: {sorted(unchecked)}"
 
 
 def test_every_checked_permission_is_in_the_catalogue():

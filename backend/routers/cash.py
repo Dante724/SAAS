@@ -27,7 +27,7 @@ from backend.models import (
     Payment,
     Transaction,
 )
-from backend.services.auth import assert_perm, require_perm, record_scope
+from backend.services.auth import assert_perm, has_perm, require_perm, record_scope
 from backend.core import paging as _paging
 from backend.services.numbering import next_number
 from backend.services.money import q2
@@ -283,12 +283,15 @@ async def create_transaction(
 ):
     if data.txn_type not in ("income", "expense"):
         raise HTTPException(400, "Use income or expense (transfer has its own endpoint)")
+    await assert_perm(db, current, "can_create_incomes" if data.txn_type == "income" else "can_create_expenses")
     amt = abs(data.amount) * (1 if data.txn_type == "income" else -1)
     retro = False
     actual = None
     if data.actual_date:
         actual = parse_dt(data.actual_date, "actual_date")
         retro = actual.date() < datetime.utcnow().date()
+        if retro:
+            await assert_perm(db, current, "can_retroactive_cash")
     await post_transaction(
         db, current.org_id, data.account_id, data.txn_type, amt,
         cash_flow_item_id=data.cash_flow_item_id, comment=data.comment,
@@ -802,6 +805,7 @@ async def list_order_invoices(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
+    await assert_perm(db, current, "can_view_invoices_tab")   # the work order's Invoices and payments tab
     invs = (await db.execute(select(Invoice).where(Invoice.order_id == order_id, Invoice.org_id == current.org_id))).scalars().all()
     pays = (await db.execute(select(Payment).where(Payment.order_id == order_id))).scalars().all()
     return {
@@ -813,6 +817,32 @@ async def list_order_invoices(
 
 
 # ── Account report / ledger ──────────────────────────
+
+async def void_document_legs(db, org_id, ref_type, ref_id, reason, actor_id) -> int:
+    """Soft-delete the cash legs a document posted (a sale's takings, a refund's payout) when
+    the document itself is voided: each leg's amount comes back out of its account balance and
+    the row stays, struck through. The document-side caller has already undone everything else."""
+    legs = (await db.execute(select(Transaction).where(
+        Transaction.org_id == org_id, Transaction.ref_type == ref_type, Transaction.ref_id == ref_id,
+        func.coalesce(Transaction.status, "active") != "deleted"))).scalars().all()
+    for leg in legs:
+        acc = (await db.execute(select(Account).where(
+            Account.id == leg.account_id, Account.org_id == org_id))).scalar_one_or_none()
+        if acc:
+            acc.balance = q2((acc.balance or 0) - leg.amount)
+        leg.status = "deleted"
+        leg.void_reason = reason
+        leg.voided_by_id = actor_id
+    return len(legs)
+
+
+async def cash_flow_floor(db, current) -> Optional[datetime]:
+    """Without "View the cash flow for any period" a role sees today's money movements only:
+    the start of today (UTC) to filter from, or None when every period is open to them."""
+    if await has_perm(db, current, "can_view_cashflow_any_period"):
+        return None
+    return datetime.combine(datetime.utcnow().date(), datetime.min.time())
+
 
 
 @router.get("/transactions")
@@ -829,6 +859,9 @@ async def list_transactions(
     q = select(Transaction).where(Transaction.org_id == current.org_id)
     if account_id:
         q = q.where(Transaction.account_id == account_id)
+    since = await cash_flow_floor(db, current)
+    if since:
+        q = q.where(Transaction.actual_date >= since)
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
     extra = {"summary": await _txn_summary(db, q, day)} if summary else {}
     q = q.order_by(desc(Transaction.actual_date), desc(Transaction.id)).offset(skip).limit(limit)

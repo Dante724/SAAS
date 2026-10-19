@@ -11,8 +11,9 @@ import { alertDialog, confirmDialog, promptDialog, selectDialog } from "../../li
 import { isoMonth } from "../../lib/localDate";
 import { useMe } from "../../context/Me";
 import CashPanel from "../cash/CashPanel";
+import VoidableList from "../../components/VoidableList";
 
-type Tab = "cashboxes" | "overview" | "pnl" | "reconcile" | "balances" | "payroll";
+type Tab = "cashboxes" | "overview" | "pnl" | "reconcile" | "balances" | "refunds" | "payroll";
 type PayrollRow = { employee_id: string; name?: string; position?: string; wage_type?: string; base_salary?: number; hourly_total?: number; commissions_total?: number; bonuses_total?: number; penalties_total?: number; gross_total?: number; computed_total?: number; status?: string };
 type Account = { id: string; name?: string; balance?: number; payment_option?: string; is_virtual?: boolean };
 type Balance = { id: string; name?: string; phone?: string; balance?: number };
@@ -135,7 +136,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
     <Shell title="Finance">
       <div className="px-6 pt-3 border-b border-slate-200/60 bg-white/40 flex-shrink-0">
         <nav className="flex space-x-6 -mb-px text-xs font-semibold">
-          {([...(can("can_view_cashbox") ? [["cashboxes", "Cashboxes"]] as [Tab, string][] : []), ["overview", "Overview"], ["pnl", "P&L"], ["reconcile", "Reconcile"], ["balances", "Client balances"], ["payroll", "Payroll"]] as [Tab, string][]).map(([id, label]) => (
+          {([...(can("can_view_cashbox") ? [["cashboxes", "Cashboxes"]] as [Tab, string][] : []), ["overview", "Overview"], ["pnl", "P&L"], ["reconcile", "Reconcile"], ["balances", "Client balances"], ["refunds", "Refunds"], ["payroll", "Payroll"]] as [Tab, string][]).map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)} className={`pb-3 border-b-2 transition-colors ${tab === id ? "text-primary font-bold border-primary" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>{label}</button>
           ))}
         </nav>
@@ -256,7 +257,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-bold text-ink-primary">Payroll calculation — {month}</h3>
-              <button onClick={runPayroll} disabled={runBusy} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-60 flex items-center gap-1"><M n="save" c="text-xs" />{runBusy ? "Running…" : "Run payroll (draft)"}</button>
+              {can("can_accrue_payroll") && <button onClick={runPayroll} disabled={runBusy} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-60 flex items-center gap-1"><M n="save" c="text-xs" />{runBusy ? "Running…" : "Run payroll (draft)"}</button>}
             </div>
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
               <table className="w-full text-left border-collapse text-xs">
@@ -314,6 +315,16 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {tab === "refunds" && (
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
+            <VoidableList perm="can_delete_refunds" noun="refund" empty="No refunds yet." onFlash={(m) => { alertDialog(m); }}
+              deletePath={(id) => `/returns/refunds/${id}`}
+              load={() => api.get<{ items: any[] }>("/returns/refunds").then((r) => (r.items || []).map((x) => ({
+                id: x.id, title: x.order_number ? `Order ${x.order_number}` : "Refund", sub: [x.account_name, x.reason].filter(Boolean).join(" · "),
+                amount: x.amount, created_at: x.created_at, voided_at: x.voided_at, void_reason: x.void_reason })))} />
           </div>
         )}
 

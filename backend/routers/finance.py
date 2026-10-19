@@ -7,7 +7,7 @@ from typing import Optional
 from datetime import datetime, date
 from backend.db.database import get_db
 from backend.models import Invoice, Payment, CashShift, CashDrawerMovement, Expense, Order, Employee, Location
-from backend.services.auth import get_current_employee, require_perm, record_scope
+from backend.services.auth import assert_perm, get_current_employee, require_perm, record_scope
 from backend.core import paging as _paging
 from backend.services.money import q2, q4, msum  # noqa: F401 — money quantizers used module-wide
 from backend.core.spreadsheet import safe_row
@@ -274,6 +274,37 @@ async def download_einvoice(
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
+async def _assert_invoice_editable(db, current, inv) -> None:
+    """A draft is anyone's to edit (with Edit invoices); once issued it needs "Edit issued invoices"."""
+    if (inv.status or "draft") != "draft":
+        await assert_perm(db, current, "can_edit_issued_invoices")
+
+
+@router.delete("/invoices/{invoice_id}")
+async def delete_invoice(
+    invoice_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_delete_invoices")),
+):
+    """Cancel an invoice nothing has been paid on. The row stays (numbering has no gaps, the
+    audit trail keeps it) but it no longer counts as owed anywhere."""
+    inv = (await db.execute(select(Invoice).where(
+        Invoice.id == invoice_id, Invoice.org_id == current.org_id))).scalar_one_or_none()
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    if inv.status in ("cancelled", "canceled"):
+        return {"ok": True, "status": inv.status}
+    if float(inv.amount_paid or 0) > 0:
+        raise HTTPException(409, "This invoice has payments on it. Refund them first, then delete it.")
+    await _assert_invoice_editable(db, current, inv)
+    inv.status = "cancelled"
+    from backend.services import audit
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="invoice.delete",
+                       entity_type="invoice", entity_id=inv.id, diff={"invoice_number": inv.invoice_number})
+    await db.commit()
+    return {"ok": True, "status": inv.status}
+
+
 @router.patch("/invoices/{invoice_id}")
 async def update_invoice(
     invoice_id: str, data: dict,
@@ -289,6 +320,7 @@ async def update_invoice(
     )).scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    await _assert_invoice_editable(db, current, inv)
     mode = data.get("display_mode")
     if mode in ("detailed", "simplified", "one_line"):
         inv.display_mode = mode
@@ -395,6 +427,7 @@ async def attach_order(
         Invoice.id == invoice_id, Invoice.org_id == current.org_id))).scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    await _assert_invoice_editable(db, current, inv)
     order_id = data.get("order_id")
     order = (await db.execute(select(Order).where(
         Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
@@ -426,6 +459,7 @@ async def detach_order(
         Invoice.id == invoice_id, Invoice.org_id == current.org_id))).scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    await _assert_invoice_editable(db, current, inv)
     link = (await db.execute(select(InvoiceOrder).where(
         InvoiceOrder.invoice_id == invoice_id, InvoiceOrder.order_id == order_id))).scalar_one_or_none()
     if link:
@@ -526,6 +560,8 @@ async def record_payment(
     inv = result.scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    if inv.status in ("cancelled", "canceled"):
+        raise HTTPException(409, "This invoice was deleted and can't take payments")
     # Negative amounts used to post +|amount| into the cashbox while reducing amount_paid; an
     # amount above the balance silently over-collected.
     if data.amount is None or data.amount <= 0:

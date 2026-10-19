@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from backend.db.database import get_db
 from backend.models import Employee, Part, Service
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import get_current_employee, has_perm, require_perm
 from backend.core import paging as _paging
 from backend.services.redact import can_see_costs
 
@@ -92,7 +92,7 @@ async def list_services(
     skip: int = _paging.skip_query(),
     limit: int = _paging.limit_query(200),
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_labors")),
 ):
     limit = _paging.clamp(limit)
     q = select(Service).where(Service.org_id == current.org_id, Service.active == True)  # noqa: E712
@@ -330,6 +330,10 @@ async def catalog_search(
                         "category": "Job Kit", "price": price, "cost_price": 0,
                         "available": None, "components": len(comps)})
 
+    if not await has_perm(db, current, "can_view_item_prices"):
+        for it in out:          # the line takes the catalog price server-side (orders.add_line)
+            for k in ("price", "repair_price"):
+                it.pop(k, None)
     return {"items": out}
 
 

@@ -14,7 +14,7 @@ from backend.core.webhook_security import provider_secrets, require_signature
 from backend.db.database import get_db
 from backend.models import Employee, PaymentIntent
 from backend.services import payments as pay
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import assert_perm, get_current_employee, require_perm
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
 log = logging.getLogger("tekly")
@@ -65,6 +65,7 @@ async def create_checkout(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
+    await assert_perm(db, current, "can_create_payment_links")
     if data.amount <= 0:
         raise HTTPException(400, "Amount must be positive")
     try:

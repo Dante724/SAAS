@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import Shell, { M } from "../../components/Shell";
 import { api } from "../../api/client";
+import { useMe } from "../../context/Me";
+import VoidableList from "../../components/VoidableList";
 import { useClientSearch } from "../../hooks/useClientSearch";
 import NewClientDrawer from "../../components/NewClientDrawer";
 import { currencySymbol, money } from "../orders/types";
@@ -30,6 +32,9 @@ export default function SalesPOS() {
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2600); };
+  const { can } = useMe();
+  const [recent, setRecent] = useState(false);
+  const [recentKey, setRecentKey] = useState(0);   // bumped after a charge so the list re-reads
 
   useEffect(() => { api.get<{ items: Product[] }>("/catalog/products").then((r) => setProducts(r.items || [])).catch(() => {}); }, []);
   useEffect(() => { api.get<{ items: Service[] }>("/catalog/services").then((r) => setServices(r.items || [])).catch(() => {}); }, []);
@@ -68,6 +73,7 @@ export default function SalesPOS() {
       const red = r.redeemed && Object.keys(r.redeemed).length
         ? " · redeemed " + Object.entries(r.redeemed).map(([k, v]) => `${k} ${money(v as number)}`).join(", ") : "";
       flash(`Sale ${r.sale_number} · ${money(r.total)} · profit ${money(r.profit)}${red}`);
+      setRecentKey((k) => k + 1);
       setCart([]); setDiscount(0); setCoupon(""); setGiftCard(""); setRedeemPts(0); setShowRewards(false); setClient(null); setClientQ("");
       api.get<{ items: Product[] }>("/catalog/products").then((res) => setProducts(res.items || [])).catch(() => {});
     } catch (e: any) { flash(`Failed: ${e.message}`); } finally { setBusy(false); }
@@ -81,10 +87,20 @@ export default function SalesPOS() {
           <div className="p-6 pb-3 flex items-center gap-3 flex-shrink-0">
             <div className="flex items-center bg-slate-100/90 p-0.5 rounded-lg border border-slate-200/60 text-xs">
               <button onClick={() => setMode("products")} className={`px-3 py-1.5 rounded-md font-semibold flex items-center gap-1.5 ${mode === "products" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="inventory_2" c="text-xs" />Products</button>
-              <button onClick={() => setMode("services")} className={`px-3 py-1.5 rounded-md font-semibold flex items-center gap-1.5 ${mode === "services" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="build" c="text-xs" />Services</button>
+              {can("can_sell_services") && <button onClick={() => setMode("services")} className={`px-3 py-1.5 rounded-md font-semibold flex items-center gap-1.5 ${mode === "services" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="build" c="text-xs" />Services</button>}
             </div>
             <div className="relative flex-1 max-w-md"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" /><input value={q} onChange={(e) => setQ(e.target.value)} className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg font-medium" placeholder={`Search ${mode}…`} /></div>
+            <button onClick={() => setRecent((v) => !v)} className="ml-auto px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex items-center gap-1.5"><M n="receipt_long" c="text-sm" />Recent sales</button>
           </div>
+          {recent && (
+            <div className="mx-6 mb-3 rounded-2xl border border-slate-200 bg-white max-h-72 overflow-y-auto flex-shrink-0">
+              <VoidableList key={recentKey} perm="can_delete_sales" noun="sale" empty="No sales yet." onFlash={flash}
+                deletePath={(id) => `/sales/${id}`}
+                load={() => api.get<{ items: any[] }>("/sales").then((r) => (r.items || []).map((s) => ({
+                  id: s.id, title: s.sale_number, sub: s.paid ? "Paid" : "Not paid", amount: s.total,
+                  created_at: s.created_at, voided_at: s.voided_at, void_reason: s.void_reason })))} />
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto px-6 pb-6">
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
               {mode === "products" && grid.map((p: any) => (

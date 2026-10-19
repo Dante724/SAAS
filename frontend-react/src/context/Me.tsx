@@ -74,6 +74,7 @@ export function MeProvider({ children }: { children: ReactNode }) {
 // Nav route → permission that grants access to that area (mirrors legacy App.NAV_PERM).
 export const NAV_PERM: Record<string, string> = {
   "/clients": "can_view_client_info",
+  "/assets": "can_view_asset_info",
   // Same codes the API checks, so a page is never shown when its data is refused (or hidden while open).
   "/finance": "can_view_finance",
   "/invoices": "can_view_invoices",

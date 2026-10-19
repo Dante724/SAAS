@@ -387,6 +387,7 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
 
 /* ── Bundles tab ───────────────────────────────────────────────── */
 export function Bundles({ onOpen, refresh }: { onOpen: (b?: Bundle) => void; refresh?: number }) {
+  const { can } = useMe();
   const [items, setItems] = useState<Bundle[] | null>(null);
   const [cat, setCat] = useState(false);
   const load = () => api.get<{ items: Bundle[] }>("/bundles").then((r) => setItems(r.items || [])).catch(() => setItems([]));
@@ -395,7 +396,7 @@ export function Bundles({ onOpen, refresh }: { onOpen: (b?: Bundle) => void; ref
     <div className="space-y-4">
       {cat && <CategoryManager entity="bundle" onClose={() => setCat(false)} onChanged={load} />}
       <div className="flex items-center gap-3">
-        <button onClick={() => onOpen()} className="bg-primary text-white text-sm font-semibold px-4 py-2 rounded-xl shadow-clay-sm hover:bg-primary-container flex items-center gap-1.5"><M n="add" c="text-sm" />New job kit</button>
+        {can("can_manage_bundles") && <button onClick={() => onOpen()} className="bg-primary text-white text-sm font-semibold px-4 py-2 rounded-xl shadow-clay-sm hover:bg-primary-container flex items-center gap-1.5"><M n="add" c="text-sm" />New job kit</button>}
         <button onClick={() => setCat(true)} className="bg-white border border-slate-200 text-ink-secondary text-sm font-semibold px-4 py-2 rounded-xl shadow-clay-sm hover:bg-slate-50 flex items-center gap-1.5"><M n="inventory" c="text-sm" />Categories</button>
       </div>
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-6 space-y-3">

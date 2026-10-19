@@ -19,7 +19,7 @@ from backend.services import asset_catalog as _cat
 from backend.services import identifiers as _ids
 from backend.services import industry as _ind
 from backend.core import paging as _paging
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import get_current_employee, has_perm, require_perm
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
 
@@ -44,6 +44,13 @@ class AssetIn(BaseModel):
     asset_group_id: Optional[str] = None
     image_data: Optional[str] = None     # 144da: asset photo (data URL) at create time
     custom_data: Optional[dict] = None   # 144da: system extras (number_plate, year, engine…) + custom fields
+
+
+async def _hide_cost(db, current, *rows) -> None:
+    """Without "See an asset cost" an asset's purchase price stays out of the response."""
+    if not await has_perm(db, current, "can_see_asset_cost"):
+        for r in rows:
+            r.pop("purchase_price", None)
 
 
 def _gen_serial(asset_type: str = "Device") -> str:
@@ -96,7 +103,7 @@ async def list_assets(
     skip: int = _paging.skip_query(),
     limit: int = _paging.limit_query(200),
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_asset_info")),
 ):
     # Build 144do (security): scope strictly to this org. Previously company-owned
     # assets from ALL orgs leaked into every org's list via `owner_type == "company"`.
@@ -139,6 +146,7 @@ async def list_assets(
         row = _ser(d, counts.get(d.id, 0), owner, inline_image=False)
         row["image_url"] = f"/api/assets/{d.id}/image" if d.id in with_img else None
         out.append(row)
+    await _hide_cost(db, current, *out)
     return {"total": total, "items": out, "skip": skip, "limit": limit}
 
 
@@ -150,6 +158,8 @@ async def create_asset(
 ):
     if data.owner_type == "client" and not data.client_id:
         raise HTTPException(400, "Client is required for a client-owned asset")
+    if not await has_perm(db, current, "can_see_asset_cost"):
+        data.purchase_price = 0.0
     from backend.routers.forms import check_entity_required
     await check_entity_required(db, current.org_id, "device", data)   # built-ins the device form requires
     serial = data.serial
@@ -186,7 +196,9 @@ async def create_asset(
                      note="Asset created", by=current.id)
     await db.commit()
     await db.refresh(d)
-    return _ser(d, 0)
+    res = _ser(d, 0)
+    await _hide_cost(db, current, res)
+    return res
 
 
 @router.get("/suggest")
@@ -267,7 +279,7 @@ async def identify(
 async def get_asset(
     asset_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_asset_info")),
 ):
     d = (await db.execute(select(Device).where(
         Device.id == asset_id, Device.org_id == current.org_id))).scalar_one_or_none()
@@ -287,6 +299,7 @@ async def get_asset(
     elif d.owner_type == "company":
         owner = "Company"
     res = _ser(d, len(orders), owner)
+    await _hide_cost(db, current, res)
     res["client_balance"] = client_balance      # build 126: show the owner's balance inline
     res["history"] = [{
         "id": o.id, "order_number": o.order_number, "status": o.status,
@@ -361,6 +374,8 @@ async def update_asset(
         if not owner:
             raise HTTPException(404, "Asset not found")
     payload = data.model_dump(exclude_unset=True)
+    if not await has_perm(db, current, "can_see_asset_cost"):
+        payload.pop("purchase_price", None)          # a cost they never saw stays as it was
     if payload.get("owner_type") == "client" and not (payload.get("client_id") or d.client_id):
         raise HTTPException(400, "Client is required for a client-owned asset")
     if "client_id" in payload and payload["client_id"]:
@@ -385,14 +400,16 @@ async def update_asset(
         owner_name = oc.name if oc else None
     elif d.owner_type == "company":
         owner_name = "Company"
-    return _ser(d, order_count, owner_name)
+    res = _ser(d, order_count, owner_name)
+    await _hide_cost(db, current, res)
+    return res
 
 
 @router.get("/{asset_id}/movements")
 async def asset_movements(
     asset_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_asset_info")),
 ):
     """Full lifecycle log for the asset's History tab: creation, transfers, write-offs,
     ownership changes and zone moves — each with who, when and detail."""

@@ -95,7 +95,7 @@ async def draw(db, *, org_id, part_id, location_id, order_id, own_qty=0.0, other
         t = _take(h, rem)
         if t > 0:
             drew_others += t
-            overrides.append({"order_id": from_order, "qty": q4(t)})
+            overrides.append({"order_id": from_order, "qty": q4(t), "hold_id": h.id})
             rem -= t
 
     if overrides:
