@@ -74,6 +74,8 @@ POST /api/assets/{asset_id}/transfer [staff]
 POST /api/auth/email/resend [staff]
 POST /api/auth/logout [staff]
 POST /api/auth/logout-all-devices [staff]
+POST /api/auth/pin [staff]
+POST /api/auth/pin/verify [staff]
 POST /api/auth/refresh [staff]
 # bins
 POST /api/bins/allocate-serial [staff]

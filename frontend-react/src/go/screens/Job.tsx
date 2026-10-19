@@ -12,6 +12,7 @@ import { Card, Empty, Page, PrimaryButton, Sheet, SkeletonRows, StatusBadge, hum
 import ItemsSheet from "../components/ItemsSheet";
 import SignatureSheet from "../components/SignatureSheet";
 import PaySheet from "../components/PaySheet";
+import { useLock } from "../components/Lock";
 import TaskSheet from "../components/TaskSheet";
 import MessageSheet from "../components/MessageSheet";
 import { addPhotosToJob, shrinkPhoto, uploadPhoto, type IntakePhoto } from "../lib/photos";
@@ -58,6 +59,7 @@ export default function Job() {
   const nav = useNavigate();
   const wide = useWide();
   const toast = useToast();
+  const { confirmMoney } = useLock();
   const { me, can } = useMe();
   const fmt = (n?: number | null) => money(me?.currency, n);
   const [order, setOrder] = useState<Order | null>(null);
@@ -187,8 +189,15 @@ export default function Job() {
       toast({ title: r.title, body: r.message, tone: "error" });
     } finally { setFinishing(false); }
   }
+  // Money on a phone that's been idle asks for the PIN before the payment sheet opens.
+  async function openPay(thenFinish: boolean) {
+    setOpen(null);
+    if (!(await confirmMoney(thenFinish ? "Finish and take payment" : "Take a payment"))) return;
+    finishAfterPay.current = thenFinish;
+    setOpen("pay");
+  }
   function finish() {
-    if (mayPay && (balance ?? 0) > 0.009) { finishAfterPay.current = true; setOpen("pay"); return; }
+    if (mayPay && (balance ?? 0) > 0.009) { openPay(true); return; }
     closeJob();
   }
 
@@ -222,7 +231,7 @@ export default function Job() {
   // The main button: the next step for where this job is.
   let primary: { label: string; run: () => void; note?: string };
   if (isClosed) {
-    primary = mayPay && owes ? { label: `Take payment · ${fmt(balance)}`, run: () => { finishAfterPay.current = false; setOpen("pay"); } }
+    primary = mayPay && owes ? { label: `Take payment · ${fmt(balance)}`, run: () => openPay(false) }
       : { label: "Change status", run: () => setSheet(true) };
   } else if (group === "ready" && !order.is_estimate) {
     primary = !target || !mayClose ? { label: "Change status", run: () => setSheet(true), note: mayClose ? undefined : "Ready. Front desk finishes the job and takes payment." }
@@ -364,7 +373,7 @@ export default function Job() {
       <Sheet open={open === "more"} onClose={() => setOpen(null)} title={order.order_number}>
         <div className="space-y-1">
           <button onClick={() => setOpen("task")} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-left text-[1rem] text-ink-primary active:bg-slate-100"><ListTodo size={20} className="text-ink-tertiary" />Add a task for this job</button>
-          {mayPay && owes && <button onClick={() => { finishAfterPay.current = false; setOpen("pay"); }} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-left text-[1rem] text-ink-primary active:bg-slate-100"><Plus size={20} className="text-ink-tertiary" />Take a payment ({fmt(balance)} owed)</button>}
+          {mayPay && owes && <button onClick={() => openPay(false)} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-left text-[1rem] text-ink-primary active:bg-slate-100"><Plus size={20} className="text-ink-tertiary" />Take a payment ({fmt(balance)} owed)</button>}
           <button onClick={() => { setOpen(null); setSheet(true); }} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-left text-[1rem] text-ink-primary active:bg-slate-100"><Check size={20} className="text-ink-tertiary" />Change status</button>
           <a href={`/orders?open=${encodeURIComponent(order.id)}`} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-[1rem] text-ink-primary active:bg-slate-100"><ExternalLink size={20} className="text-ink-tertiary" />Open the full job in Tekly</a>
         </div>
