@@ -11,6 +11,7 @@ import { changeDue, clampAmount, money, quickTender } from "../lib/pay";
 import { newKey } from "../lib/photos";
 import { haptic } from "../lib/scanner";
 import { useToast } from "../lib/useGo";
+import { useLock } from "./Lock";
 
 type Account = { id: string; name: string };
 type Ctx = { remaining: number; order_total: number; already_paid: number; accounts_by_method: Record<string, Account[]> };
@@ -23,6 +24,7 @@ export default function PaySheet({ open, onClose, orderId, orderNumber, customer
   const { me, can } = useMe();
   const fmt = (n?: number | null) => money(me?.currency, n);
   const toast = useToast();
+  const { confirmMoney } = useLock();
   const [ctx, setCtx] = useState<Ctx | null>(null);
   const [method, setMethod] = useState<Method | null>(null);
   const [amountRaw, setAmountRaw] = useState("");
@@ -69,6 +71,7 @@ export default function PaySheet({ open, onClose, orderId, orderNumber, customer
     if (!navigator.onLine) { toast({ title: "You're offline", body: "Payments need a connection.", tone: "warn" }); return; }
     if (!accountId) { toast({ title: "Pick where the money goes", tone: "warn" }); return; }
     if (!confirming) { setConfirming(true); return; }
+    if (!(await confirmMoney(`Take ${fmt(amount)}`))) return;
     setBusy(true);
     try {
       await api.postOnce(`/cash/orders/${encodeURIComponent(orderId)}/pay`, { method: method === "card" ? (ctx?.accounts_by_method.card?.some((a) => a.id === accountId) ? "card" : "cashless") : "cash", account_id: accountId, amount }, key.current);
@@ -87,6 +90,7 @@ export default function PaySheet({ open, onClose, orderId, orderNumber, customer
 
   async function makeLink() {
     if (busy) return;
+    if (!(await confirmMoney("Make a pay link"))) { setMethod(null); return; }
     setBusy(true);
     try {
       const r = await api.post<{ url: string; qr_svg: string }>(`/orders/${encodeURIComponent(orderId)}/payment-link`);

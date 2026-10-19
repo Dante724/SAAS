@@ -1,6 +1,6 @@
-// More: who's signed in, which Today to show, appearance, changes waiting to sync, sign out.
+// More: who's signed in, which Today to show, payment PIN / lock, appearance, changes waiting to sync, sign out.
 import { useEffect, useState } from "react";
-import { AlertTriangle, Bell, BellOff, Check, CloudOff, ExternalLink, LogOut, Monitor, Moon, RefreshCw, Sun } from "lucide-react";
+import { AlertTriangle, Bell, BellOff, Check, CloudOff, ExternalLink, KeyRound, Lock, LogOut, Monitor, Moon, RefreshCw, ScanFace, Sun } from "lucide-react";
 import { useMe } from "../../context/Me";
 import { Card, Page, Section } from "../components/ui";
 import { goQueue, type Conflict } from "../lib/offlineQueue";
@@ -9,6 +9,9 @@ import { useQueueStatus } from "../lib/useGo";
 import { getTheme, setTheme, type ThemePref } from "../theme";
 import { signOut } from "../session";
 import { disablePush, enablePush, pushState, type PushState } from "../lib/push";
+import { useLock } from "../components/Lock";
+import { passkeyEnroll, passkeyOff, passkeyOn, passkeySupported } from "../lib/passkey";
+import { useToast } from "../lib/useGo";
 
 function Choice<T extends string>({ value, current, onPick, children }: { value: T; current: T; onPick: (v: T) => void; children: React.ReactNode }) {
   const on = value === current;
@@ -43,6 +46,20 @@ export default function More() {
     "not-configured": "Your shop hasn't set up notifications yet.",
     denied: "Notifications are blocked. Allow them for Tekly in your phone's Settings.",
   };
+
+  const lock = useLock();
+  const toast = useToast();
+  const [faceOk, setFaceOk] = useState(false);
+  const [face, setFace] = useState(passkeyOn(me?.id));
+  useEffect(() => { passkeySupported().then(setFaceOk); }, []);
+  useEffect(() => { setFace(passkeyOn(me?.id)); }, [me?.id]);
+  async function toggleFace() {
+    if (face) { passkeyOff(me?.id); setFace(false); return; }
+    if (!(await lock.askPin("Turn on Face ID / Touch ID"))) return;
+    try {
+      if (me && await passkeyEnroll(me)) { setFace(true); toast({ title: "Face ID / Touch ID is on for this phone" }); }
+    } catch { toast({ title: "Couldn't turn it on", body: "Your phone said no. Your PIN still works.", tone: "warn" }); }
+  }
 
   const pickRole = (r: GoRole | "auto") => { setRole(r); saveRole(r === "auto" ? null : r); };
   const pickTheme = (t: ThemePref) => { setThemeState(t); setTheme(t); };
@@ -94,6 +111,33 @@ export default function More() {
           <Choice value="auto" current={role} onPick={pickRole}>Automatic <span className="text-ink-tertiary text-[0.875rem]">({ROLE_LABEL[inferRole(me)]})</span></Choice>
           {(["tech", "desk", "owner"] as GoRole[]).map((r) => <Choice key={r} value={r} current={role} onPick={pickRole}>{ROLE_LABEL[r]}</Choice>)}
         </Card>
+      </Section>
+
+      <Section title="Payment PIN">
+        <Card className="divide-y divide-slate-100">
+          <button onClick={() => lock.setupPin()} className="w-full min-h-[3rem] flex items-center gap-3 px-4 text-left text-[1rem] text-ink-primary active:bg-slate-50 first:rounded-t-2xl last:rounded-b-2xl">
+            <KeyRound size={18} className={lock.pinSet ? "text-primary" : "text-ink-tertiary"} />
+            <span className="flex-1">{lock.pinSet ? "PIN is set" : "Set up a PIN"}</span>
+            <span className="text-[0.875rem] font-semibold text-primary">{lock.pinSet ? "Change" : "Set up"}</span>
+          </button>
+          {lock.pinSet && faceOk && (
+            <button onClick={toggleFace} aria-pressed={face} className="w-full min-h-[3rem] flex items-center gap-3 px-4 text-left text-[1rem] text-ink-primary active:bg-slate-50 first:rounded-t-2xl last:rounded-b-2xl">
+              <ScanFace size={18} className={face ? "text-primary" : "text-ink-tertiary"} />
+              <span className="flex-1">Face ID / Touch ID on this phone</span>
+              <span className={`text-[0.875rem] font-semibold ${face ? "text-primary" : "text-ink-tertiary"}`}>{face ? "On" : "Turn on"}</span>
+            </button>
+          )}
+          {lock.pinSet && (
+            <button onClick={lock.lockNow} className="w-full min-h-[3rem] flex items-center gap-3 px-4 text-left text-[1rem] text-ink-primary active:bg-slate-50 first:rounded-t-2xl last:rounded-b-2xl">
+              <Lock size={18} className="text-ink-tertiary" /><span className="flex-1">Lock now</span>
+            </button>
+          )}
+        </Card>
+        <p className={`px-1 mt-2 text-[0.8125rem] ${lock.pinRequired && !lock.pinSet ? "text-amber-800" : "text-ink-secondary"}`}>
+          {lock.pinRequired && !lock.pinSet ? "You'll need a PIN to take payments or make pay links on this phone. " : ""}
+          After 5 idle minutes Tekly asks for it before taking money, and it locks the app after 10.
+          {lock.pinSet && faceOk ? " Only turn on Face ID / Touch ID if this phone is yours: anyone it recognises can use it." : ""}
+        </p>
       </Section>
 
       <Section title="Notifications">

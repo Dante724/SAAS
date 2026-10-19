@@ -1,5 +1,27 @@
 # Changelog
 
+## Tekly Go — PIN before money, and auto-lock (shared / unattended phones)
+
+- **Payment PIN** (4–6 digits, per person). After 5 minutes with no taps, or 5 minutes in the
+  background, Tekly Go asks for it before **Finish & take payment**, **Take a payment**, the
+  payment confirm, and **Pay link**. The first tap after a gap doesn't reset the clock.
+- **On by default** for anyone with `can_take_payments` or `can_create_payment_links`: the first
+  money action asks them to set a PIN (needs their Tekly password). Set or change it in More.
+- **Auto-lock** after 10 idle minutes (or **Lock now** in More): a lock screen with the signed-in
+  name, a PIN pad (works with an iPad keyboard), and "Not Sam? Sign out". Only for people with a
+  PIN. The idle clock survives an app restart, tied to that sign-in.
+- **Face ID / Touch ID** (optional, per phone, needs the PIN to turn on): a local check by the
+  phone's own authenticator; only the credential id is stored on the phone. The PIN stays the
+  fallback.
+- Server: the PIN is stored only as a hash (bcrypt of an HMAC with the server secret) in the
+  existing `employees.pin_hash` column, so no migration. Setting it needs the password and is
+  rate-limited. **Five wrong PINs in 15 minutes signs the person out everywhere**
+  (`token_version` bump).
+- API: `GET /api/auth/pin` (set / required), `POST /api/auth/pin {pin, password}`,
+  `POST /api/auth/pin/verify {pin}`. `/api/auth/me` adds `pin_set`.
+- The check runs on the phone; the payment endpoints don't require a PIN token. It guards a
+  phone left unlocked, not a stolen session token.
+
 ## Tekly Go — message the customer (phase 1b)
 
 - **Message** on every job, with a red badge when the customer has written.

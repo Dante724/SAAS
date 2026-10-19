@@ -14,6 +14,7 @@ import More from "./screens/More";
 import Tasks, { useTaskBadge } from "./screens/Tasks";
 import NewJob from "./screens/NewJob";
 import NewMenu from "./components/NewMenu";
+import { LockProvider } from "./components/Lock";
 import { AssetScreen, Part } from "./screens/PartAsset";
 
 function SplitView({ jobOpen }: { jobOpen: boolean }) {
@@ -56,6 +57,7 @@ export default function GoApp() {
 
   return (
     <ToastCtx.Provider value={setToast}>
+      <LockProvider>
       <div className="fixed inset-0 bg-canvas text-ink-primary pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
         <OfflineBar />
         <Routes>
@@ -76,6 +78,7 @@ export default function GoApp() {
         <TabBar moreBadge={q.conflicts || undefined} tasksBadge={tasksDue || undefined} />
         <Toast msg={toast} onDone={clear} />
       </div>
+      </LockProvider>
     </ToastCtx.Provider>
   );
 }
