@@ -11,7 +11,8 @@ from backend.db.database import get_db
 from backend.models import Employee, Role, Task
 from backend.services import audit
 from backend.services import multi_asset as _ma
-from backend.services.auth import get_current_employee, hash_password, is_old_default_password, require_perm
+from backend.services.auth import (get_current_employee, hash_password, is_old_default_password, norm_email,
+                                   require_perm, verify_password)
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
 
@@ -52,6 +53,7 @@ class EmployeeIn(BaseModel):
 class EmployeeUpdate(BaseModel):
     name: Optional[str] = None
     email: Optional[str] = None
+    current_password: Optional[str] = None   # required to change your OWN email
     phone: Optional[str] = None
     role_id: Optional[str] = None
     location_id: Optional[str] = None
@@ -72,6 +74,7 @@ class EmployeeUpdate(BaseModel):
 
 class PasswordReset(BaseModel):
     password: str
+    current_password: Optional[str] = None   # required to change your OWN password
 
 class RoleIn(BaseModel):
     name: str
@@ -192,6 +195,11 @@ async def _is_owner(db: AsyncSession, emp: Employee) -> bool:
     return await is_shop_owner(db, emp)
 
 
+async def _assert_current_password(current: Employee, password: Optional[str]) -> None:
+    if not password or not await asyncio.to_thread(verify_password, password, current.password_hash):
+        raise HTTPException(403, "Enter your current password to change this")
+
+
 async def _assert_can_manage(db: AsyncSession, current: Employee, emp: Employee) -> None:
     if emp.id == current.id:
         return
@@ -216,7 +224,8 @@ async def create_employee(
 ):
     import secrets
 
-    existing = await db.execute(select(Employee).where(Employee.email == data.email))
+    data.email = norm_email(data.email)
+    existing = await db.execute(select(Employee).where(func.lower(Employee.email) == data.email))
     if existing.scalar_one_or_none():
         raise HTTPException(400, "Email already in use")
     if data.password is not None and len(data.password) < MIN_PASSWORD_LEN:
@@ -301,10 +310,21 @@ async def update_employee(
             payload.pop(k, None)
     if "role_id" in payload and payload["role_id"] != emp.role_id:
         await _assert_can_assign_role(db, current, payload["role_id"])
-    if "email" in payload and payload["email"] != emp.email:
-        dupe = (await db.execute(select(Employee).where(Employee.email == payload["email"]))).scalar_one_or_none()
+    current_password = payload.pop("current_password", None)
+    if "email" in payload:
+        payload["email"] = norm_email(payload["email"])
+        if payload["email"] == norm_email(emp.email):
+            payload.pop("email")
+    if "email" in payload:
+        if emp.id == current.id:
+            # Changing your own sign-in email then resetting the password is an account takeover
+            # for anyone holding a session token, so it needs the password too.
+            await _assert_current_password(current, current_password)
+        dupe = (await db.execute(select(Employee).where(
+            func.lower(Employee.email) == payload["email"], Employee.id != emp.id))).scalar_one_or_none()
         if dupe:
             raise HTTPException(400, "Email already in use")
+        emp.email_verified = False   # the new address hasn't been proven yet
     if "hourly_basis" in payload and payload["hourly_basis"] not in ("labour", "attendance"):
         payload["hourly_basis"] = "labour"
     if "hired_at" in payload:
@@ -333,6 +353,8 @@ async def reset_password(
     if not emp:
         raise HTTPException(404, "Employee not found")
     await _assert_can_manage(db, current, emp)
+    if emp.id == current.id:
+        await _assert_current_password(current, data.current_password)
     if len(data.password) < MIN_PASSWORD_LEN:
         raise HTTPException(400, f"Password must be at least {MIN_PASSWORD_LEN} characters")
     if is_old_default_password(data.password):
@@ -434,10 +456,13 @@ async def create_invite(data: InviteIn, db: AsyncSession = Depends(get_db),
     if not email or "@" not in email:
         raise HTTPException(400, "A valid email is required")
     await _assert_can_assign_role(db, current, data.role_id)
-    dupe = (await db.execute(select(Employee).where(
-        Employee.email == email, Employee.org_id == current.org_id))).scalar_one_or_none()
-    if dupe:
+    dupe = (await db.execute(select(Employee).where(func.lower(Employee.email) == email))).scalar_one_or_none()
+    if dupe and dupe.org_id == current.org_id:
         raise HTTPException(400, "Someone with that email is already on the team")
+    if dupe:
+        # One email = one Tekly login today; accepting would fail on the unique email.
+        raise HTTPException(409, "That email already has a Tekly account at another shop. "
+                                 "Invite them with a different email address.")
     open_inv = (await db.execute(select(Invite).where(
         Invite.org_id == current.org_id, Invite.email == email,
         Invite.accepted_at.is_(None)))).scalar_one_or_none()

@@ -8,7 +8,8 @@ channel adapter, and writes a NotificationLog row for the communication history.
 Delivery goes through a channel adapter. When provider credentials are configured
 (SMTP for email, Twilio for SMS/WhatsApp) the matching real adapter sends for real
 and records the provider result; when they are absent it falls back to a simulated
-adapter that logs and marks the message sent. Either way a NotificationLog row
+adapter that prints and marks the message sent in development, and fails (without logging the
+body) when deployed. Either way a NotificationLog row
 captures recipient, body, status (queued|sent|failed|skipped) and any error.
 """
 from typing import Optional
@@ -41,7 +42,15 @@ class SimulatedAdapter(ChannelAdapter):
     async def send(self, *, recipient: str, subject: Optional[str], body: str) -> dict:
         if not recipient:
             return {"status": "failed", "error": "No recipient address/number on file"}
-        # No provider configured for this channel: log and mark sent (dev behaviour).
+        from backend.config import settings
+        if settings.is_deployed:
+            # A real deploy with no provider for this channel: nothing was delivered, so say so.
+            # Never write the body here: it holds reset / verification / invite links.
+            import logging
+            logging.getLogger(__name__).error("No %s provider configured; message to %s not sent",
+                                              self.name, recipient[:3] + "…")
+            return {"status": "failed", "error": f"No {self.name} provider is configured"}
+        # Development / tests: print it so a developer can follow the link locally.
         print(f"[notify:{self.name}:simulated] -> {recipient}: {(subject + ' | ') if subject else ''}{body[:120]}")
         return {"status": "sent", "error": None}
 

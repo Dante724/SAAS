@@ -61,12 +61,19 @@ async def cancel_open_pay_links(db: AsyncSession, order: Order) -> int:
         PaymentIntent.order_id == order.id,
         PaymentIntent.status.in_(["created", "viewed", "pending"])))).scalars().all()
     for i in open_:
-        i.status = "canceled"
-        if i.provider == "stripe" and i.provider_ref:
-            await _expire_stripe_checkout(db, i)
-        elif i.provider == "square" and i.provider_link_id:
-            await _delete_square_link(db, i)
+        await revoke_pay_link(db, i)
     return len(open_)
+
+
+async def revoke_pay_link(db: AsyncSession, intent: PaymentIntent) -> None:
+    """Cancel an unpaid link here AND close it at the provider. Cancelling only our row left the
+    Stripe/Square checkout payable, so a customer holding an old link could still pay it.
+    Caller commits."""
+    intent.status = "canceled"
+    if intent.provider == "stripe" and intent.provider_ref:
+        await _expire_stripe_checkout(db, intent)
+    elif intent.provider == "square" and intent.provider_link_id:
+        await _delete_square_link(db, intent)
 
 
 async def _expire_stripe_checkout(db: AsyncSession, intent: PaymentIntent) -> bool:

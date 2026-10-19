@@ -47,14 +47,24 @@ def verify_password(plain: str, hashed: str) -> bool:
     except (ValueError, TypeError):
         return False
 
+def norm_email(email: Optional[str]) -> str:
+    """Emails are matched case-insensitively and stored lowercase: A@x.com and a@x.com used to
+    be two different accounts."""
+    return (email or "").strip().lower()
+
+
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """`auth_time` is when the user actually signed in. /refresh carries it forward, so a
     session can slide for at most REFRESH_TOKEN_EXPIRE_MINUTES — before, refreshing every day
     kept one sign-in (or one stolen token) alive forever."""
     import time
+    import secrets as _secrets
     to_encode = data.copy()
     now = int(time.time())        # epoch seconds — JWT NumericDate, timezone-free
     auth_time = int(to_encode.setdefault("auth_time", now))
+    # One id per sign-in, carried through /refresh like auth_time: logout revokes exactly this
+    # session (revoked_sessions) without signing the user out on their other devices.
+    to_encode.setdefault("sid", _secrets.token_urlsafe(12))
     ttl = int((expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)).total_seconds())
     session_end = auth_time + settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60
     to_encode.update({"exp": min(now + ttl, session_end)})
@@ -122,6 +132,13 @@ async def get_current_employee(
     tv = payload.get("tv")
     if tv is not None and int(tv) != int(employee.token_version or 0):
         raise credentials_exception
+    # Signed out on this device (POST /logout): the token stays mathematically valid until it
+    # expires, so the session id is checked against the revocation list.
+    sid = payload.get("sid")
+    if sid:
+        from backend.models import RevokedSession
+        if (await db.execute(select(RevokedSession.sid).where(RevokedSession.sid == sid))).first():
+            raise credentials_exception
     # Build 144do (security): enforce org lifecycle + employee access window on
     # EVERY request, not just at login. Previously a suspended/expired org's
     # existing tokens stayed valid for up to the 24h token lifetime ("instant

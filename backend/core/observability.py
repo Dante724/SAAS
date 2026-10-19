@@ -60,19 +60,28 @@ _SECURITY_HEADERS = {
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "Permissions-Policy": "camera=(self), microphone=(), geolocation=()",
     "Cross-Origin-Opener-Policy": "same-origin",
-    # SPA + inline handlers need 'unsafe-inline'; images/media may be data: URLs.
+    # Nothing the app serves belongs in a search index: staff screens, and /track, /portal and
+    # /pay pages whose URL is the customer's key.
+    "X-Robots-Tag": "noindex, nofollow",
+    # No inline script anywhere except the platform-admin page, which sends ADMIN_CSP itself, so a
+    # markup injection can't run code. Styles stay inline-friendly; media may be data: URLs.
     "Content-Security-Policy": (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob:; "
-        "font-src 'self' data: https://fonts.gstatic.com; "
+        "font-src 'self' data:; "
         "connect-src 'self'; "
         "frame-ancestors 'self'; "
         "base-uri 'self'; "
         "object-src 'none'"
     ),
 }
+
+
+# /admin still has inline handlers (onclick=…); it renders escaped data only. Route-set headers win
+# over the defaults above (setdefault).
+ADMIN_CSP = _SECURITY_HEADERS["Content-Security-Policy"].replace("script-src 'self';", "script-src 'self' 'unsafe-inline';")
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -89,10 +98,33 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 # ── rate limiter ─────────────────────────────────────────────────────────────
+def _rate_key(request) -> str:
+    """Who a request counts against. Signed-in calls count per user (or API key): staff on one
+    shop Wi-Fi, or every client behind a proxy that hides their IP, used to share one bucket and
+    lock each other out. Anonymous calls count per IP."""
+    from backend.services import ratelimit
+    auth = request.headers.get("authorization", "")
+    if auth[:7].lower() == "bearer ":
+        tok = auth[7:].strip()
+        if tok.startswith("rok_"):
+            return "k:" + tok[:12]                       # API key prefix (rok_<8 hex>)
+        try:
+            import jwt
+
+            from backend.config import settings
+            sub = jwt.decode(tok, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]).get("sub")
+            if sub:
+                return "u:" + str(sub)
+        except Exception:
+            pass                                          # bad/expired token: counts by IP
+    return "ip:" + ratelimit.client_ip(request)
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Global per-IP ceiling. Counts through services.ratelimit, so with REDIS_URL set every
-    worker and instance shares one counter (it used to be a per-process dict: N workers
-    allowed N x limit, and every IP ever seen stayed in memory)."""
+    """Global ceiling on API calls, per user when signed in, per IP otherwise (_rate_key).
+    Only /api/ is counted: page loads pull dozens of assets, and counting those let one busy
+    screen use up a shop's whole budget. Counts through services.ratelimit, so with REDIS_URL
+    set every worker and instance shares one counter."""
     def __init__(self, app, *, limit: int = 300, window_s: int = 60,
                  exempt_prefixes=("/metrics", "/health", "/api/health")):
         super().__init__(app)
@@ -105,10 +137,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         from backend.services import ratelimit
         path = request.url.path
-        if any(path.startswith(p) for p in self.exempt):
+        if not path.startswith("/api/") or any(path.startswith(p) for p in self.exempt):
             return await call_next(request)
         try:
-            await ratelimit.aenforce("global", ratelimit.client_ip(request), self.limit, self.window)
+            await ratelimit.aenforce("global", _rate_key(request), self.limit, self.window)
         except HTTPException as e:
             return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"},
                                 headers=e.headers or {})
