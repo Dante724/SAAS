@@ -1,6 +1,7 @@
 """Client Returns (goods back to stock) and Refunds (money back) — separate
 documents, per Orderry's Feb-2026 split. A refund claws back the refunded share of
 the order's commissions via the payroll engine."""
+from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -114,10 +115,13 @@ async def create_refund(
     await db.flush()
     from backend.routers.cash import open_drawer_shift
     _shift = await open_drawer_shift(db, current.org_id, acct)
-    db.add(Payment(order_id=order_id, client_id=locked.client_id, method="cash" if _shift else "refund",
-                   kind="refund", amount=data.amount, account_id=data.account_id, received_by_id=current.id,
-                   shift_id=_shift,   # cash handed back from a drawer reduces that drawer's expected cash
-                   reference=f"Refund: {data.reason or ''}"[:200]))
+    pay = Payment(order_id=order_id, client_id=locked.client_id, method="cash" if _shift else "refund",
+                  kind="refund", amount=data.amount, account_id=data.account_id, received_by_id=current.id,
+                  shift_id=_shift,   # cash handed back from a drawer reduces that drawer's expected cash
+                  reference=f"Refund: {data.reason or ''}"[:200])
+    db.add(pay)
+    await db.flush()
+    refund.payment_id = pay.id
     # Money out of the cashbox (signed ledger)
     from backend.routers.cash import post_transaction
     await post_transaction(db, current.org_id, data.account_id, "refund", -data.amount,
@@ -189,8 +193,86 @@ async def list_refunds(
         out.append({"id": r.id, "amount": r.amount, "reason": r.reason,
                     "order_id": r.order_id, "order_number": order_no, "account_name": acct_name,
                     "return_id": r.return_id,
-                    "created_at": r.created_at.isoformat() if r.created_at else None})
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "voided_at": r.voided_at.isoformat() if r.voided_at else None,
+                    "void_reason": r.void_reason})
     return {"items": out}
+
+
+async def _refund_payment(db, refund):
+    """The Payment row a refund created: linked since refunds record it, matched for older ones."""
+    if refund.payment_id:
+        return (await db.execute(select(Payment).where(Payment.id == refund.payment_id))).scalar_one_or_none()
+    cands = (await db.execute(select(Payment).where(
+        Payment.order_id == refund.order_id, Payment.kind == "refund", Payment.amount == refund.amount,
+        Payment.account_id == refund.account_id))).scalars().all()
+    if not cands:
+        return None
+    at = refund.created_at or datetime.utcnow()
+    return min(cands, key=lambda p: abs(((p.paid_at or at) - at).total_seconds()))
+
+
+@router.delete("/refunds/{refund_id}")
+async def delete_refund(
+    refund_id: str,
+    reason: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_view_finance")),
+):
+    """Void a refund that shouldn't have happened. The refund stays on record (struck through)
+    and is undone: its payout leaves the cashbox ledger, its refund Payment goes (so the order
+    counts as paid again), the client's ledger entry is reversed and the commission it clawed
+    back is given back in the same accrual group."""
+    await assert_perm(db, current, "can_delete_refunds")
+    from backend.models import CashShift, ClientLedgerEntry
+    refund = (await db.execute(select(Refund).where(
+        Refund.id == refund_id, Refund.org_id == current.org_id).with_for_update())).scalar_one_or_none()
+    if not refund:
+        raise HTTPException(404, "Refund not found")
+    if refund.voided_at:
+        raise HTTPException(409, "This refund was already deleted")
+    order = (await db.execute(select(Order).where(
+        Order.id == refund.order_id, Order.org_id == current.org_id)
+        .options(selectinload(Order.lines)))).scalar_one_or_none() if refund.order_id else None
+    if order is not None and order.archived:
+        raise HTTPException(409, "This refund was made when the order was archived. Restore the order instead.")
+    pay = await _refund_payment(db, refund)
+    if pay is not None and pay.shift_id:
+        closed = (await db.execute(select(CashShift.closed_at).where(CashShift.id == pay.shift_id))).scalar_one_or_none()
+        if closed:
+            raise HTTPException(409, "The cash for this refund came out of a drawer shift that is already closed.")
+    reason = (reason or "Deleted").strip()[:300]
+
+    if pay is not None:
+        refund.payment_id = None             # the row goes; the audit entry below keeps its id
+        await db.flush()
+        await db.delete(pay)
+    from backend.routers.cash import void_document_legs
+    await void_document_legs(db, current.org_id, "refund", refund.id, reason, current.id)
+    entries = (await db.execute(select(ClientLedgerEntry).where(
+        ClientLedgerEntry.org_id == current.org_id, ClientLedgerEntry.ref_type == "refund",
+        ClientLedgerEntry.ref_id == refund.id))).scalars().all()
+    from backend.services.ledger import post_contact_ledger
+    for e in entries:
+        await post_contact_ledger(db, current.org_id, e.client_id, "refund_void", -float(e.amount or 0),
+                                  note=f"Refund deleted: {reason}", ref_type="refund_void", ref_id=refund.id,
+                                  created_by_id=current.id)
+    refund.voided_at = datetime.utcnow()
+    refund.voided_by_id = current.id
+    refund.void_reason = reason
+    await db.flush()
+    if order is not None:
+        from backend.services.payroll import CommissionEngine
+        await CommissionEngine(db, current.org_id).restore_refund_clawback(order, refund.id)
+    from backend.services import audit
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="refund.delete",
+                       entity_type="refund", entity_id=refund.id,
+                       diff={"amount": float(refund.amount or 0), "order_id": refund.order_id, "reason": reason,
+                             "payment_id": pay.id if pay is not None else None})
+    from backend.routers.feed import log_system_event
+    await log_system_event(db, current.org_id, "refund", refund.id, f"Refund {float(refund.amount or 0):g} deleted: {reason}")
+    await db.commit()
+    return {"ok": True, "id": refund.id, "voided_at": refund.voided_at.isoformat()}
 
 
 async def _atomic_add(db, obj, attr, delta, *, round_to=None):

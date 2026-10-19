@@ -50,7 +50,7 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
   const [showBlocked, setShowBlocked] = useState(false);
   const people = team || [];
   const roleName = (id?: string) => roles?.find((r) => r.id === id)?.name;
-  const liveCodes = catalog ? Object.values(catalog).flat().filter((c: any) => c.enforced !== false).map((c: any) => c.code as string) : [];
+  const liveCodes = catalog ? Object.values(catalog).flat().map((c: any) => c.code as string) : [];
   const totalPerms = liveCodes.length;
   const blocked = people.filter((p) => p.active === false).length;
   const ql = q.trim().toLowerCase();
@@ -205,7 +205,7 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
 }
 
 export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSaved }: {
-  role: any | null; catalog: Record<string, { code: string; label: string; enforced?: boolean }[]>; statuses: any[]; members?: number; onClose: () => void; onSaved: () => void;
+  role: any | null; catalog: Record<string, { code: string; label: string }[]>; statuses: any[]; members?: number; onClose: () => void; onSaved: () => void;
 }) {
   const isNew = !role?.id;
   const [name, setName] = useState<string>(role?.name || "");
@@ -243,9 +243,9 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
   const grantAll = (codes: { code: string }[], on: boolean) => setPerms((p) => { const n = { ...p }; codes.forEach((c) => { n[c.code] = on; }); return n; });
   const ql = q.trim().toLowerCase();
   const filtered = useMemo(() => Object.entries(catalog)
-    .map(([g, codes]) => [g, ql ? codes.filter((c) => c.label.toLowerCase().includes(ql) || g.toLowerCase().includes(ql)) : codes] as [string, { code: string; label: string; enforced?: boolean }[]])
+    .map(([g, codes]) => [g, ql ? codes.filter((c) => c.label.toLowerCase().includes(ql) || g.toLowerCase().includes(ql)) : codes] as [string, { code: string; label: string }[]])
     .filter(([, codes]) => codes.length > 0), [catalog, ql]);
-  const all = Object.values(catalog).flat().filter((c) => c.enforced !== false);   // "Coming soon" ones don't count
+  const all = Object.values(catalog).flat();
   const totalOn = all.filter((c) => allowed(c.code)).length;
 
   async function save() {
@@ -353,7 +353,7 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
             {filtered.length === 0 && <div className="text-xs text-ink-tertiary py-4 text-center">Nothing matches "{q}".</div>}
             {filtered.map(([group, codes]) => {
               const isOpen = (open[group] ?? false) || !!ql;
-              const live = codes.filter((c) => c.enforced !== false);
+              const live = codes;
               const onCount = live.filter((c) => allowed(c.code)).length;
               const allOn = live.length > 0 && onCount === live.length;
               return (
@@ -362,7 +362,7 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
                     <button type="button" onClick={() => setOpen((o) => ({ ...o, [group]: !isOpen }))} aria-expanded={isOpen} className="flex items-center gap-2 min-w-0 flex-1 text-left">
                       <M n={isOpen ? "expand_more" : "chevron_right"} c="text-base text-ink-tertiary" />
                       <span className="text-sm text-ink-primary capitalize truncate">{group.replace(/_/g, " ")}</span>
-                      {(live.length > 0 || !(catalog[group] || []).some((c) => c.enforced !== false)) && <span className={`text-[11px] px-1.5 py-0.5 rounded-md ${onCount === 0 ? "bg-slate-100 text-ink-tertiary" : allOn ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{live.length === 0 ? "Coming soon" : allOn ? "All" : onCount === 0 ? "None" : `${onCount} of ${live.length}`}</span>}
+                      {live.length > 0 && <span className={`text-[11px] px-1.5 py-0.5 rounded-md ${onCount === 0 ? "bg-slate-100 text-ink-tertiary" : allOn ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{allOn ? "All" : onCount === 0 ? "None" : `${onCount} of ${live.length}`}</span>}
                     </button>
                     {live.length > 0 && <Sw on={allOn} onClick={() => grantAll(live, !allOn)} label={`${allOn ? "Turn off" : "Turn on"} all ${group.replace(/_/g, " ")}`} />}
                   </div>
@@ -370,10 +370,8 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
                     <div className="border-t border-slate-100 bg-slate-50/50">
                       {codes.map((c) => (
                         <div key={c.code} className="flex items-center gap-3 pl-11 pr-4 py-2.5 border-t border-slate-100 first:border-0">
-                          <span className={`text-xs flex-1 ${c.enforced === false ? "text-ink-tertiary" : "text-ink-primary"}`}>{c.label}</span>
-                          {c.enforced === false
-                            ? <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-slate-100 text-ink-tertiary" title="Nothing in the app checks this yet, so it doesn't change what this role can do">Coming soon</span>
-                            : <Sw on={allowed(c.code)} onClick={() => toggle(c.code)} label={c.label} />}
+                          <span className="text-xs flex-1 text-ink-primary">{c.label}</span>
+                          <Sw on={allowed(c.code)} onClick={() => toggle(c.code)} label={c.label} />
                         </div>
                       ))}
                     </div>

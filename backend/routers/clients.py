@@ -445,7 +445,7 @@ async def client_purchases(
 
     # ── POS sales ──
     sales = (await db.execute(
-        select(Sale).where(Sale.client_id == client_id, Sale.org_id == current.org_id)
+        select(Sale).where(Sale.client_id == client_id, Sale.org_id == current.org_id, Sale.voided_at.is_(None))
         .order_by(Sale.created_at.desc()))).scalars().all()
     # Fetch every sale's lines in ONE query, then group — avoids an N+1 (a query per sale).
     sale_lines: dict[str, list] = {}

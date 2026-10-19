@@ -24,7 +24,7 @@ from backend.models import (
     StockMovement,
 )
 from backend.services import industry as _ind
-from backend.services.auth import assert_perm, get_current_employee, require_perm, record_scope
+from backend.services.auth import assert_perm, get_current_employee, has_perm, require_perm, record_scope
 from backend.services.numbering import next_number
 
 router = APIRouter(prefix="/api/orders", tags=["orders"],
@@ -583,6 +583,8 @@ async def bulk_action(
             from backend.services.permissions import role_allows as _ra
             if _role is None or not _ra(_role, "can_delete_orders"):
                 raise HTTPException(403, "Your role does not allow deleting orders")
+        if data.action == "archive":
+            await assert_perm(db, current, "can_delete_tickets")
         reason = (data.reason or "Bulk delete").strip()
         done, skipped = 0, []
         for oid in data.order_ids:
@@ -717,6 +719,10 @@ async def create_order(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_tickets")),
 ):
+    if data.is_estimate:
+        await assert_perm(db, current, "can_create_estimates")
+    await _assert_listed(db, current.org_id, data.manager_id, "display_in_managers", "Managers")
+    await _assert_listed(db, current.org_id, data.assigned_to_id, "display_in_assignees", "Assignee")
     # Build 144df: location is optional from the client — default to the org's
     # first active location, creating a "Main" one if the org has none yet, so a
     # fresh shop can raise its first work order without a setup dead-end.
@@ -756,8 +762,10 @@ async def create_order(
     from backend.routers.pricing import evaluate_line_margin
     _perms_create = await _order_perms(db, current)
     _hide_cost = bool(current.role_id) and not _perms_create.get("can_view_purchase_price")
+    _fixed_cost = not _hide_cost and not await has_perm(db, current, "can_set_cost_price")
     for li in data.lines:
-        if _hide_cost:
+        await _assert_line_rights(db, current, li)
+        if _hide_cost or _fixed_cost:
             li.cost_price = await _catalog_cost(db, current.org_id, li.kind, li.ref_id)
         await _apply_client_discount(db, current.org_id, data.client_id, li)
         await _guard_discount_approval(db, current.org_id, _perms_create, li.discount, li.discount_type, is_owner=not current.role_id,
@@ -1194,6 +1202,10 @@ async def get_order(
     if not await scoping.can_view_order(db, current, order):
         raise HTTPException(403, "You can only open work orders assigned to you")
     data = _serialize_order(order)
+    if not await has_perm(db, current, "can_view_item_prices"):
+        for ln in data["lines"]:
+            for k in LINE_PRICE_KEYS:
+                ln.pop(k, None)
     # 144dd — checklists_pending drives the amber Checklists-tab dot: True iff a REQUIRED checklist
     # item is still undone (same definition as the completion gate). No required-undone item → no dot.
     from backend.models import OrderChecklistItem as _OCI
@@ -1317,6 +1329,8 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     arguments so both callers share one code path."""
     data = StatusChange(status=new_status, note=note, reason=reason)
     await _guard_order_access(db, current, order)
+    if data.status != order.status and await _is_closed(db, current.org_id, order):
+        await assert_perm(db, current, "can_edit_closed_ticket")   # reopening counts as editing it
 
     # Resolve the target status from the configurable status table, scoped to this
     # record's pipeline. .first() (not scalar_one_or_none) so legacy duplicate keys
@@ -2068,6 +2082,7 @@ async def payment_link(
     A2: generate-once — if a live (non-paid, non-revoked) link already exists for
     this order, return it instead of minting a new URL. Pass regenerate=true to
     revoke the old one and issue a fresh link."""
+    await assert_perm(db, current, "can_create_payment_links")
     from backend.config import settings
     from backend.models import PaymentIntent
     from backend.services import payments as pay
@@ -2229,6 +2244,7 @@ async def duplicate_order(
         .options(selectinload(Order.lines)))).scalar_one_or_none()
     if not src:
         raise HTTPException(404, "Order not found")
+    await assert_perm(db, current, "can_create_estimates" if src.is_estimate else "can_create_tickets")
 
     number = await next_number(db, current.org_id, "order")
     if src.is_estimate:
@@ -2584,11 +2600,14 @@ async def _archive_order(db, current, order_id, reason, do_refund):
             db.add(refund)
             await db.flush()
             from backend.routers.cash import open_drawer_shift
-            db.add(Payment(order_id=order_id, client_id=order.client_id, method="refund",
-                           kind="refund", amount=net_paid, account_id=acct.id if acct else None,
-                           # cash handed back from a till comes out of that drawer's count (B10)
-                           shift_id=await open_drawer_shift(db, current.org_id, acct),
-                           received_by_id=current.id, reference=f"Archive refund: {reason}"[:200]))
+            _rp = Payment(order_id=order_id, client_id=order.client_id, method="refund",
+                          kind="refund", amount=net_paid, account_id=acct.id if acct else None,
+                          # cash handed back from a till comes out of that drawer's count (B10)
+                          shift_id=await open_drawer_shift(db, current.org_id, acct),
+                          received_by_id=current.id, reference=f"Archive refund: {reason}"[:200])
+            db.add(_rp)
+            await db.flush()
+            refund.payment_id = _rp.id
             if order.client_id:
                 # The cash goes back, so the client's ledger must show it — otherwise the reversed
                 # charge leaves them with phantom store credit equal to what they were refunded.
@@ -2713,6 +2732,7 @@ async def delete_order(
     """Deleting a work order archives it (soft-delete) rather than destroying it,
     so finance/audit history is preserved and the owner can see why it was removed.
     Refunds any payments by default."""
+    await assert_perm(db, current, "can_delete_tickets")
     return await _archive_order(db, current, order_id, (reason or "Deleted").strip(), refund)
 
 
@@ -3126,6 +3146,10 @@ async def assign_people(
     if not order:
         raise HTTPException(404, "Order not found")
     sent = data.model_fields_set
+    if "manager_id" in sent:
+        await _assert_listed(db, current.org_id, data.manager_id, "display_in_managers", "Managers")
+    if "assigned_to_id" in sent:
+        await _assert_listed(db, current.org_id, data.assigned_to_id, "display_in_assignees", "Assignee")
     notify_id = None
     if "assigned_to_id" in sent:
         new_assignee = data.assigned_to_id or None
@@ -3258,11 +3282,48 @@ async def _guard_discount_approval(db, org_id, perms, discount, discount_type, i
 
 
 async def _guard_editable(db, order, current):
-    """Block edits if the order's current status locks edits (e.g. closed)."""
+    """Block edits if the order's current status locks edits (e.g. closed). A closed order
+    that doesn't lock edits can still only be changed by roles with "Edit the closed ticket"."""
     st = (await db.execute(select(OrderStatus).where(
-        OrderStatus.org_id == current.org_id, OrderStatus.key == order.status))).scalar_one_or_none()
+        OrderStatus.org_id == current.org_id, OrderStatus.key == order.status))).scalars().first()
     if st and st.locks_edits:
         raise HTTPException(409, "This order is closed/locked and can't be edited. Reopen it to make changes.")
+    if await _is_closed(db, current.org_id, order):
+        await assert_perm(db, current, "can_edit_closed_ticket")
+
+
+async def _is_closed(db, org_id, order) -> bool:
+    """Is the order sitting in a closed (terminal) status right now?"""
+    st = (await db.execute(select(OrderStatus).where(
+        OrderStatus.org_id == org_id, OrderStatus.key == order.status,
+        OrderStatus.is_estimate == bool(order.is_estimate)))).scalars().first()
+    if st:
+        return st.status_group == "closed" or bool(st.is_terminal)
+    return bool(order.closed_at)
+
+
+async def _assert_listed(db, org_id, employee_id, code, list_name) -> None:
+    """Only people whose role shows them in the Managers / Assignee list can be picked there."""
+    if not employee_id:
+        return
+    emp = (await db.execute(select(Employee).where(
+        Employee.id == employee_id, Employee.org_id == org_id))).scalar_one_or_none()
+    if emp and not await has_perm(db, emp, code):
+        raise HTTPException(422, f"{emp.name} isn't in the {list_name} list.")
+
+
+async def _assert_line_rights(db, current, li) -> None:
+    """Rights a new line needs on top of adding it: an item from outside the catalog, and a
+    discount type other than the default percentage."""
+    if not li.ref_id and li.line_type != "fee" and li.kind != "bundle":
+        product = li.line_type == "part" or li.kind == "product" or li.catalog_kind == "product"
+        await assert_perm(db, current, "can_add_custom_product" if product else "can_add_custom_service")
+    if (li.discount or 0) > 0 and (li.discount_type or "pct") != "pct":
+        await assert_perm(db, current, "can_set_discount_type")
+
+
+# What "View prices of labors, services, products" hides on a work order's lines.
+LINE_PRICE_KEYS = ("unit_price", "total", "discount", "discount_type")
 
 
 async def _validate_line_assignment(db, org_id, *, technician_id=None, co_technicians=None):
@@ -3295,6 +3356,15 @@ async def _catalog_cost(db, org_id, kind, ref_id) -> float:
     row = (await db.execute(select(model.cost_price).where(model.id == ref_id, model.org_id == org_id))).scalar_one_or_none()
     return float(row or 0)
 
+async def _catalog_price(db, org_id, kind, ref_id) -> float:
+    """What the catalog charges for a service/product on a work order."""
+    from backend.models import Part, Service as _Svc
+    if kind == "service":
+        row = (await db.execute(select(_Svc.price).where(_Svc.id == ref_id, _Svc.org_id == org_id))).scalar_one_or_none()
+        return float(row or 0)
+    p = (await db.execute(select(Part).where(Part.id == ref_id, Part.org_id == org_id))).scalar_one_or_none()
+    return float(((p.repair_price or 0) or p.sell_price or 0) if p else 0)
+
 @router.post("/{order_id}/lines", status_code=201)
 async def add_line(
     order_id: str,
@@ -3309,6 +3379,7 @@ async def add_line(
     await _guard_editable(db, order, current)
     if (data.discount or 0) > 0:
         await assert_perm(db, current, "can_set_discount")
+    await _assert_line_rights(db, current, data)
     await _validate_line_assignment(db, current.org_id, technician_id=data.technician_id, co_technicians=data.co_technicians)
     if data.order_item_id:
         from backend.services import multi_asset as _ma
@@ -3334,6 +3405,11 @@ async def add_line(
     # and the line takes the catalog's cost (0 for a custom line).
     if current.role_id and not perms.get("can_view_purchase_price"):
         data.cost_price = await _catalog_cost(db, current.org_id, data.kind, data.ref_id)
+    elif not await has_perm(db, current, "can_set_cost_price"):
+        data.cost_price = await _catalog_cost(db, current.org_id, data.kind, data.ref_id)   # not theirs to set
+    # Someone who can't see item prices picked without one: a catalog item is billed at its price.
+    if data.ref_id and data.kind in ("service", "product") and not await has_perm(db, current, "can_view_item_prices"):
+        data.unit_price = await _catalog_price(db, current.org_id, data.kind, data.ref_id)
 
     # Build 126 (Orderry parity): a custom line can be saved to the catalog as a reusable
     # service or product, or kept as a one-off for this order only. When saving, we create
@@ -3672,6 +3748,10 @@ async def update_line(
     payload = data.model_dump(exclude_unset=True)
     if current.role_id and not (await _order_perms(db, current)).get("can_view_purchase_price"):
         payload.pop("cost_price", None)
+    if "cost_price" in payload and float(payload["cost_price"] or 0) != float(line.cost_price or 0):
+        await assert_perm(db, current, "can_set_cost_price")
+    if "discount_type" in payload and (payload["discount_type"] or "pct") != (line.discount_type or "pct"):
+        await assert_perm(db, current, "can_set_discount_type")
     # Changing what the customer pays needs the matching right (a technician can't zero a job).
     if "discount" in payload and (payload["discount"] or 0) != (line.discount or 0):
         await assert_perm(db, current, "can_set_discount")
@@ -3798,6 +3878,8 @@ async def create_saved_filter(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    if data.is_shared:
+        await assert_perm(db, current, "can_manage_shared_filters")
     f = SavedFilter(org_id=current.org_id, employee_id=current.id,
                     name=data.name, params=data.params, is_shared=data.is_shared)
     db.add(f)
@@ -3817,6 +3899,8 @@ async def delete_saved_filter(
         raise HTTPException(404, "Filter not found")
     if f.employee_id != current.id and not f.is_shared:
         raise HTTPException(403, "Not allowed")
+    if f.is_shared:
+        await assert_perm(db, current, "can_manage_shared_filters")
     await db.delete(f)
     await db.commit()
     return {"ok": True}

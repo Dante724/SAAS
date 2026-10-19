@@ -261,7 +261,7 @@ class CommissionEngine:
     async def refunded_fraction(self, order: Order, *, exclude_refund_id: Optional[str] = None) -> Decimal:
         """Share of the order's total that has been refunded (0–1)."""
         q = select(func.coalesce(func.sum(Refund.amount), 0)).where(
-            Refund.org_id == self.org_id, Refund.order_id == order.id)
+            Refund.org_id == self.org_id, Refund.order_id == order.id, Refund.voided_at.is_(None))
         if exclude_refund_id:
             q = q.where(Refund.id != exclude_refund_id)
         refunded = _money((await self.db.execute(q)).scalar())
@@ -403,6 +403,22 @@ class CommissionEngine:
         share = Decimal("1") if remaining <= 0 else min(Decimal("1"), _money(amount) / remaining)
         await self._reverse(order, tag="refund", key_prefix=f"refund:{refund_id}", share=share,
                             per_refund=True)
+
+    async def restore_refund_clawback(self, order: Order, refund_id: str):
+        """A deleted refund gives back what its claw-back took: a positive entry in the same
+        accrual group for every "refund:<refund_id>:<accrual_key>" row. The claw-back stays."""
+        L = EmployeeBalanceLedger
+        rows = (await self.db.execute(select(L).where(
+            L.org_id == self.org_id, L.entry_type == "clawback", L.ref_type == "refund",
+            L.ref_id == order.id, L.accrual_key.isnot(None)))).scalars().all()
+        for e in rows:
+            if e.idempotency_key != L.normalize_key(f"refund:{refund_id}:{e.accrual_key}"):
+                continue                      # another refund's claw-back on the same order
+            await self._post(
+                employee_id=e.employee_id, entry_type="clawback", amount=-_money(e.amount),
+                event=e.event, rule_id=e.rule_id, ref_type="refund_void", ref_id=order.id,
+                idempotency_key=f"refund-void:{refund_id}:{e.accrual_key}", accrual_key=e.accrual_key,
+                note=f"Refund deleted: {e.note or ''}".strip())
 
     async def reverse_for_deletion(self, order: Order):
         """Build 70 — order deleted/archived: reverse what is still open of commissions whose

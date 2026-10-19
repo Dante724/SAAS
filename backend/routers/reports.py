@@ -808,11 +808,29 @@ REPORT_PERMS = {
 }
 
 
-async def _assert_report_access(db, current, report_key: str) -> None:
+# Downloading these as a file needs its own right on top of seeing them.
+EXPORT_PERMS = {
+    "sold_products": "can_export_sales", "provided_services": "can_export_sales",
+    "payroll": "can_export_payroll", "labor_cost": "can_export_payroll",
+}
+
+
+async def _assert_report_access(db, current, report_key: str, export: bool = False) -> None:
     from backend.services.auth import assert_perm
     await assert_perm(db, current, "can_view_reports")
     if report_key in REPORT_PERMS:
         await assert_perm(db, current, REPORT_PERMS[report_key])
+    if export and report_key in EXPORT_PERMS:
+        await assert_perm(db, current, EXPORT_PERMS[report_key])
+
+
+async def _report_from(db, current, report_key: str, df):
+    """The cash flow starts no earlier than today for a role without "any period"."""
+    if report_key != "cash_flow":
+        return df
+    from backend.routers.cash import cash_flow_floor
+    since = await cash_flow_floor(db, current)
+    return max(df, since) if since else df
 
 
 REPORTS = {
@@ -868,6 +886,7 @@ async def run_report(
         raise HTTPException(404, "Unknown report")
     tab, title, builder = REPORTS[report_key]
     df, dt = _parse_range(date_from, date_to)
+    df = await _report_from(db, current, report_key, df)
     location_id = await _scoped_location(db, current, location_id)
     cols, rows = await builder(db, current.org_id, df, dt, location_id=location_id)
     # totals row for numeric columns
@@ -885,7 +904,7 @@ async def export_report(
     current: Employee = Depends(get_current_employee),
 ):
     """Stream the report as a styled .xlsx (Orderry: export carries the full data)."""
-    await _assert_report_access(db, current, report_key)
+    await _assert_report_access(db, current, report_key, export=True)
     if report_key not in REPORTS:
         from fastapi import HTTPException
         raise HTTPException(404, "Unknown report")
@@ -893,6 +912,7 @@ async def export_report(
     from openpyxl.styles import Font, PatternFill, Alignment
     tab, title, builder = REPORTS[report_key]
     df, dt = _parse_range(date_from, date_to)
+    df = await _report_from(db, current, report_key, df)
     location_id = await _scoped_location(db, current, location_id)
     cols, rows = await builder(db, current.org_id, df, dt, location_id=location_id)
 
@@ -934,13 +954,14 @@ async def export_report_csv(
     current: Employee = Depends(get_current_employee),
 ):
     """Stream any registered report as CSV (BI-friendly, opens anywhere)."""
-    await _assert_report_access(db, current, report_key)
+    await _assert_report_access(db, current, report_key, export=True)
     if report_key not in REPORTS:
         from fastapi import HTTPException
         raise HTTPException(404, "Unknown report")
     import csv
     _tab, _title, builder = REPORTS[report_key]
     df, dt = _parse_range(date_from, date_to)
+    df = await _report_from(db, current, report_key, df)
     location_id = await _scoped_location(db, current, location_id)
     cols, rows = await builder(db, current.org_id, df, dt, location_id=location_id)
     buf = io.StringIO()

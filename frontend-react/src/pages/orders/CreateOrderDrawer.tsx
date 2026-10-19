@@ -20,7 +20,7 @@ import IdentifyHint, { type IdMatch } from "../../components/IdentifyHint";
 import NameSuggestInput from "../../components/NameSuggestInput";
 
 type ClientLite = { id: string; name?: string; phone?: string; email?: string };
-type Emp = { id: string; name: string };
+type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
 type LineDraft = { id: string; description: string; kind: string; price: number };
 type WOType = { id: string; name: string; color?: string | null };
 
@@ -34,7 +34,8 @@ const TYPES: { t: string; dot: string }[] = [
 
 export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillClient, onClose, onCreated }: { isEstimate?: boolean; prefillClient?: ClientLite | null; onClose: () => void; onCreated: () => void }) {
   const term = useTerminology();
-  const canCustomize = useMe().can("can_manage_settings");
+  const { can } = useMe();
+  const canCustomize = can("can_manage_settings");
   const [estimate, setEstimate] = useState(!!initEstimate);
   const [step, setStep] = useState<1 | 2>(1);
   const [type, setType] = useState("Repair");
@@ -228,12 +229,12 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
     ),
     manager: (
 <div className="space-y-1.5"><label className={lbl}>Manager{star("manager")}</label>
-                  <div className="relative"><select value={managerId} onChange={(e) => setManagerId(e.target.value)} className={`${inp} pr-8 appearance-none`}><option value="">— Select —</option>{emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div>
+                  <div className="relative"><select value={managerId} onChange={(e) => setManagerId(e.target.value)} className={`${inp} pr-8 appearance-none`}><option value="">— Select —</option>{emps.filter((e) => e.in_managers !== false).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div>
                 </div>
     ),
     assignee: (
 <div className="space-y-1.5"><label className={lbl}>Specialist (assignee){star("assignee")}</label>
-                <div className="relative"><select value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)} className={`${inp} pr-8 appearance-none`}><option value="">— Unassigned —</option>{emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div>
+                <div className="relative"><select value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)} className={`${inp} pr-8 appearance-none`}><option value="">— Unassigned —</option>{emps.filter((e) => e.in_assignees !== false).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div>
               </div>
     ),
     scheduled_for: (
@@ -350,9 +351,9 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
         <header className="px-7 pt-5 pb-4 flex items-center justify-between border-b border-slate-100/90 bg-white/70">
           <div className="flex items-center gap-3">
             <h2 className="text-xl font-bold tracking-tight text-ink-primary">New {estimate ? "estimate" : "work order"}</h2>
-            <button type="button" onClick={() => setEstimate((v) => !v)} className="text-xs px-2.5 py-1 rounded-full font-medium bg-slate-100 hover:bg-slate-200/90 text-ink-secondary transition-colors border border-slate-200/70 flex items-center gap-1.5 shadow-2xs">
+            {(estimate || can("can_create_estimates")) && <button type="button" onClick={() => setEstimate((v) => !v)} className="text-xs px-2.5 py-1 rounded-full font-medium bg-slate-100 hover:bg-slate-200/90 text-ink-secondary transition-colors border border-slate-200/70 flex items-center gap-1.5 shadow-2xs">
               <span className="w-1.5 h-1.5 rounded-full bg-primary" /><span>Switch to {estimate ? "Work Order" : "Estimate"}</span>
-            </button>
+            </button>}
           </div>
           <div className="flex items-center gap-1">
             {canCustomize && typeId && (
@@ -435,10 +436,10 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                     </div>
                   </div>
                 ))}
-                <button type="button" onClick={addCustomLine} className="w-full flex items-center space-x-3 p-3 rounded-xl border border-dashed border-primary/40 bg-blue-50/40 hover:bg-blue-50 transition-colors text-left group">
+                {can("can_add_custom_service") && <button type="button" onClick={addCustomLine} className="w-full flex items-center space-x-3 p-3 rounded-xl border border-dashed border-primary/40 bg-blue-50/40 hover:bg-blue-50 transition-colors text-left group">
                   <div className="w-7 h-7 rounded-full bg-primary text-white flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform"><M n="add" c="text-sm font-bold" /></div>
                   <div><p className="text-xs font-bold text-primary">Add a custom line</p><p className="text-[11px] text-ink-tertiary">Free-text, set your own custom price</p></div>
-                </button>
+                </button>}
               </div>
 
               <div className="bg-slate-50/90 rounded-2xl p-4 border border-slate-200 space-y-2">

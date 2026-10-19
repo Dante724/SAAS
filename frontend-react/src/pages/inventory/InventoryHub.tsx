@@ -18,6 +18,7 @@ import { assetStatusTone } from "./statusTone";
 import { cachedPref, loadPref, savePref } from "../../lib/userPref";
 import Pager from "../../components/Pager";
 import { useServerPage } from "../../hooks/useServerPage";
+import { useMe } from "../../context/Me";
 import { alertDialog, confirmDialog, promptDialog } from "../../lib/dialog";
 import { printHtmlInFrame } from "../../lib/safeHtml";
 
@@ -56,6 +57,7 @@ function stockPill(p: Product): { cls: string; dot: string; label: string } | nu
 
 export default function InventoryHub() {
   const term = useTerminology();
+  const { can } = useMe();
   const [tab, setTab] = useState<Tab>("stock");
   const [products, setProducts] = useState<Product[] | null>(null);
   // Devices tab pages on the server (the API serves at most 200 rows per request).
@@ -150,6 +152,7 @@ export default function InventoryHub() {
   const [cfg, setCfg] = useState<{ enable_bins?: boolean; enable_reservations?: boolean }>({});
   useEffect(() => { api.get<any>("/staff/inventory-settings").then(setCfg).catch(() => setCfg({})); }, []);
   const visibleTabs = TABS.filter((t) =>
+    (t.id !== "devices" || can("can_view_asset_info")) &&
     (t.id !== "reservations" || cfg.enable_reservations) &&
     (t.id !== "bins" || cfg.enable_bins));
 
@@ -392,7 +395,7 @@ export default function InventoryHub() {
               <button onClick={pMarkup} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="percent" c="text-sm" />Adjust price</button>
               <button onClick={() => setBulkAdj(true)} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="tune" c="text-sm" />Adjust qty</button>
               <button onClick={() => setAction({ kind: "write-off" })} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="delete_sweep" c="text-sm" />Write off</button>
-              <button onClick={pDelete} disabled={pBusy} className="px-3 py-1.5 rounded-lg bg-rose-600 text-white hover:bg-rose-700 flex items-center gap-1"><M n="archive" c="text-sm" />Archive</button>
+              {can("can_delete_products") && <button onClick={pDelete} disabled={pBusy} className="px-3 py-1.5 rounded-lg bg-rose-600 text-white hover:bg-rose-700 flex items-center gap-1"><M n="archive" c="text-sm" />Archive</button>}
               <button aria-label="Close" onClick={pClear} className="px-2 py-1.5 rounded-lg hover:bg-slate-200/60 text-ink-tertiary"><M n="close" c="text-sm" /></button>
             </div>
           )}

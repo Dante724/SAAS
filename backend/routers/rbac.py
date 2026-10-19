@@ -18,7 +18,6 @@ from backend.services.auth import get_current_employee, require_perm
 from backend.services.permissions import (
     ALL_CODES,
     CATALOG,
-    NOT_YET_ENFORCED,
     TEMPLATES,
     make_explicit,
     new_role_permissions,
@@ -31,9 +30,7 @@ router = APIRouter(prefix="/api/settings/rbac", tags=["settings"])
 @router.get("/catalog")
 async def permission_catalog(current: Employee = Depends(get_current_employee)):
     """Grouped permission catalog for the role-editor UI (searchable matrix)."""
-    # `enforced: false` = listed for completeness but not wired to any screen yet; the role
-    # editor shows it as "coming soon" so switching it off isn't mistaken for protection.
-    return {"catalog": {group: [{"code": code, "label": label, "enforced": code not in NOT_YET_ENFORCED}
+    return {"catalog": {group: [{"code": code, "label": label}
                                 for code, label in perms]
                         for group, perms in CATALOG.items()},
             "templates": list(TEMPLATES.keys())}

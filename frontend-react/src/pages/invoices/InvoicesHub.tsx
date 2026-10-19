@@ -8,7 +8,8 @@ import Pager from "../../components/Pager";
 import { useServerPage } from "../../hooks/useServerPage";
 import { api, openAuthedDoc } from "../../api/client";
 import { humanize } from "../../lib/humanize";
-import { alertDialog } from "../../lib/dialog";
+import { alertDialog, confirmDialog } from "../../lib/dialog";
+import { useMe } from "../../context/Me";
 import { money } from "../orders/types";
 
 // Invoices are day-to-day front-desk work (issue, take payment, resend), so they get their own
@@ -27,6 +28,13 @@ export default function InvoicesHub() {
   // E-invoicing (Peppol, ZATCA, …) only where the shop's region has a standard; US/CA have none.
   const [einv, setEinv] = useState(false);
   const reloadInvoices = () => ip.reload();
+  const { can } = useMe();
+  // Deleting cancels an invoice nobody has paid on (the API refuses one with payments).
+  async function deleteInvoice(i: Invoice) {
+    if (!(await confirmDialog(`Delete invoice ${i.invoice_number}? It stays on record as cancelled and is no longer owed.`, { title: "Delete invoice", confirmLabel: "Delete", danger: true }))) return;
+    try { await api.del(`/finance/invoices/${i.id}`); reloadInvoices(); }
+    catch (e: any) { await alertDialog(e.message || "Could not delete the invoice"); }
+  }
   useEffect(() => {
     api.get<any>("/regions/pack").then((p) => setEinv(!!p?.einvoice?.standard && p.einvoice.standard !== "none")).catch(() => setEinv(false));
   }, []);
@@ -89,7 +97,8 @@ export default function InvoicesHub() {
                           </div>
                         )}
                       </td>}
-                      <td className="py-2.5 px-4 text-right"><button aria-label="Print / PDF" onClick={() => openAuthedDoc(`/print/invoices/${i.id}`).catch(() => alertDialog("Could not open invoice PDF"))} title="Print / PDF" className="p-1.5 rounded-lg text-ink-tertiary hover:text-primary hover:bg-slate-100"><M n="print" c="text-base" /></button></td>
+                      <td className="py-2.5 px-4 text-right"><button aria-label="Print / PDF" onClick={() => openAuthedDoc(`/print/invoices/${i.id}`).catch(() => alertDialog("Could not open invoice PDF"))} title="Print / PDF" className="p-1.5 rounded-lg text-ink-tertiary hover:text-primary hover:bg-slate-100"><M n="print" c="text-base" /></button>
+                        {can("can_delete_invoices") && !["cancelled", "canceled"].includes(i.status || "") && !(i.amount_paid || 0) && <button aria-label="Delete invoice" onClick={() => deleteInvoice(i)} title="Delete" className="p-1.5 rounded-lg text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-base" /></button>}</td>
                     </tr>
                   );
                 })}

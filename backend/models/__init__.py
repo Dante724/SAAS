@@ -2068,6 +2068,10 @@ class Sale(Base):
     discount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # whole-sale discount amount
     paid: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    coupon_id: Mapped[Optional[str]] = mapped_column(String)          # the coupon used, so a void can give the use back
+    voided_at: Mapped[Optional[datetime]] = mapped_column(DateTime)   # deleted ("Delete sales"): kept, but reversed
+    voided_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    void_reason: Mapped[Optional[str]] = mapped_column(String(300))
 
 
 class SaleLine(Base):
@@ -2082,6 +2086,9 @@ class SaleLine(Base):
     cost_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # exact FIFO COGS for products
     discount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)    # pct
     total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    # What the line drew, so a void puts it back exactly: {"layers": [{batch_id, qty}],
+    # "holds": [{hold_id, qty}]} — FIFO cost layers and other jobs' reservations (override).
+    stock_draws: Mapped[Optional[dict]] = mapped_column(JSON)
 
 
 class Stocktake(Base):
@@ -2148,6 +2155,10 @@ class Refund(Base):
     amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     reason: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    payment_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("payments.id"))  # the refund Payment
+    voided_at: Mapped[Optional[datetime]] = mapped_column(DateTime)   # deleted ("Delete refunds"): kept, but reversed
+    voided_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    void_reason: Mapped[Optional[str]] = mapped_column(String(300))
 
 
 class StockTransfer(Base):

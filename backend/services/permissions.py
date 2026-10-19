@@ -133,22 +133,7 @@ CATALOG = {
 # All valid codes (flat), for validation.
 ALL_CODES = {code for group in CATALOG.values() for code, _ in group}
 
-# Listed in the catalogue but not wired to any screen yet: switching them off does nothing
-# today, so the role editor shows them as "coming soon". tests/test_permission_catalog.py keeps
-# this list honest both ways (every code here is unchecked, every unchecked code is here).
-NOT_YET_ENFORCED = {
-    "can_set_discount_type", "can_set_cost_price", "display_in_managers", "display_in_assignees",
-    "can_see_asset_cost", "can_view_own_compensation", "can_create_estimates", "can_delete_tickets",
-    "can_view_asset_info", "can_view_item_prices", "can_view_invoices_tab",
-    "can_edit_closed_ticket", "can_manage_shared_filters", "can_add_custom_service",
-    "can_add_custom_product", "can_create_payment_links",
-    "can_view_labors", "can_delete_products", "can_track_serials", "can_manage_bundles",
-    "can_delete_sales", "can_sell_services", "can_export_sales",
-    "can_delete_invoices", "can_edit_issued_invoices", "can_create_incomes",
-    "can_retroactive_cash", "can_view_cashflow_any_period",
-    "can_delete_refunds", "can_accrue_payroll", "can_create_penalties",
-    "can_create_bonuses", "can_export_payroll",
-}
+# Every catalogue code is enforced somewhere; tests/test_permission_catalog.py keeps it that way.
 
 # Seed templates (deny-lists per template; anything not listed = allowed).
 # Money, payroll, exports and destructive deletes are off for anyone who isn't running the

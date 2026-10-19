@@ -2,6 +2,7 @@ import SkeletonRows from "../../components/SkeletonRows";
 import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
+import { useMe } from "../../context/Me";
 import NewAccountDrawer, { Account } from "./NewAccountDrawer";
 import CashDrawer from "./CashDrawer";
 import Pager from "../../components/Pager";
@@ -19,6 +20,7 @@ const CCY: Record<string, string> = { INR: "₹", EUR: "€", USD: "$", GBP: "£
 const iconFor = (a: Account) => a.icon || (a.payment_option === "cash" ? "payments" : a.payment_option === "card" ? "credit_card" : "account_balance");
 
 export default function CashPanel() {
+  const { can } = useMe();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [sel, setSel] = useState<Account | null>(null);
   const [flow, setFlow] = useState<FlowItem[]>([]);
@@ -109,8 +111,8 @@ export default function CashPanel() {
                 <button aria-label="More options" onClick={(e) => { e.stopPropagation(); setMenu(menu === a.id ? null : a.id); }} className="text-ink-tertiary hover:text-ink-primary p-0.5 shrink-0"><M n="more_vert" c="text-base" /></button>
                 {menu === a.id && (
                   <div className="absolute z-20 right-2 top-10 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 w-40 text-xs" onClick={(e) => e.stopPropagation()}>
-                    <button onClick={() => { setSel(a); openTxn("income"); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-emerald-50 text-emerald-700 font-semibold"><M n="add" c="text-sm" />Income</button>
-                    <button onClick={() => { setSel(a); openTxn("expense"); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-rose-50 text-rose-700 font-semibold"><M n="remove" c="text-sm" />Expense</button>
+                    {can("can_create_incomes") && <button onClick={() => { setSel(a); openTxn("income"); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-emerald-50 text-emerald-700 font-semibold"><M n="add" c="text-sm" />Income</button>}
+                    {can("can_create_expenses") && <button onClick={() => { setSel(a); openTxn("expense"); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-rose-50 text-rose-700 font-semibold"><M n="remove" c="text-sm" />Expense</button>}
                     <button onClick={() => { setSel(a); openTransfer(); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-50 text-ink-secondary font-semibold"><M n="swap_horiz" c="text-sm" />Transfer</button>
                     <div className="border-t border-slate-100 my-1" />
                     <button onClick={() => { setMenu(null); setDrawer({ edit: a }); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-50 text-ink-secondary font-semibold"><M n="settings" c="text-sm" />Configure / rename</button>
@@ -160,8 +162,8 @@ export default function CashPanel() {
               <span className="text-xs font-bold text-white">Activity</span>
               <span className="text-[11px] font-semibold text-white/60">· {sel?.name || "—"} · {live.length} transactions</span>
               <div className="ml-auto flex items-center gap-1.5">
-                <button onClick={() => sel && openTxn("income")} disabled={!sel} className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 border border-white/15 text-white text-[11px] font-bold flex items-center gap-1 disabled:opacity-40"><M n="add" c="text-sm" />Income</button>
-                <button onClick={() => sel && openTxn("expense")} disabled={!sel} className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 border border-white/15 text-white text-[11px] font-bold flex items-center gap-1 disabled:opacity-40"><M n="remove" c="text-sm" />Expense</button>
+                {can("can_create_incomes") && <button onClick={() => sel && openTxn("income")} disabled={!sel} className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 border border-white/15 text-white text-[11px] font-bold flex items-center gap-1 disabled:opacity-40"><M n="add" c="text-sm" />Income</button>}
+                {can("can_create_expenses") && <button onClick={() => sel && openTxn("expense")} disabled={!sel} className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 border border-white/15 text-white text-[11px] font-bold flex items-center gap-1 disabled:opacity-40"><M n="remove" c="text-sm" />Expense</button>}
                 <button onClick={() => sel && openTransfer()} disabled={!sel || accounts.length < 2} className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 border border-white/15 text-white text-[11px] font-bold flex items-center gap-1 disabled:opacity-40"><M n="swap_horiz" c="text-sm" />Transfer</button>
               </div>
             </div>

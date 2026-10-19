@@ -368,7 +368,7 @@ export default function WorkOrdersHub() {
               {statuses.map((s) => <option key={s.id} value={s.key || norm(s.name)} className="text-ink-primary">{s.name}</option>)}
             </select>
             <div className="h-4 w-px bg-white/30" />
-            <button disabled={busy} onClick={bulkArchive} className="px-2.5 py-1 rounded-lg bg-white/15 hover:bg-white/25 flex items-center gap-1"><M n="archive" c="text-[13px]" />Archive</button>
+            <Gate perm="can_delete_orders"><Gate perm="can_delete_tickets"><button disabled={busy} onClick={bulkArchive} className="px-2.5 py-1 rounded-lg bg-white/15 hover:bg-white/25 flex items-center gap-1"><M n="archive" c="text-[13px]" />Archive</button></Gate></Gate>
             <button onClick={() => setSel(new Set())} className="ml-auto px-2.5 py-1 rounded-lg bg-white/15 hover:bg-white/25">Clear</button>
           </div>
         )}

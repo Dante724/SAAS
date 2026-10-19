@@ -81,7 +81,7 @@ async def _records(db, org_id, subject, start, location_id):
     elif subject == "sales":
         sellers = {e.id: e.name for e in (await db.execute(select(Employee).where(Employee.org_id == org_id))).scalars().all()}
         locs = {l.id: l.name for l in (await db.execute(select(Location).where(Location.org_id == org_id))).scalars().all()}
-        q = select(Sale).where(Sale.org_id == org_id)
+        q = select(Sale).where(Sale.org_id == org_id, Sale.voided_at.is_(None))
         if location_id:
             q = q.where(Sale.location_id == location_id)
         for s in (await db.execute(q)).scalars().all():

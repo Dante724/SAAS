@@ -24,7 +24,7 @@ import StatusControl, { type FullStatus } from "../../components/StatusControl";
 import { escapeHtml } from "../../lib/safeHtml";
 import JobCardFields from "../../components/JobCardFields";
 
-type Emp = { id: string; name: string };
+type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
 type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean; order_item_id?: string | null };
 type Detail = Order & {
   complaint?: string; tech_notes?: string; diagnosis?: string; conclusion?: string;
@@ -387,8 +387,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Ro label="Job type"><Sel value={d.is_estimate ? "Estimate" : "Hardware Repair"} opts={["Hardware Repair", "Diagnostics", "Warranty", "Maintenance", "Estimate"]} /></Ro>
                   <Ro label="Priority"><Sel value={(d.priority ?? 0) >= 2 ? "Urgent, same day" : urgent ? "High" : "Normal"} opts={["Normal", "High", "Urgent, same day"]} red={urgent} /></Ro>
-                  <Ro label="Manager"><SelEmp value={d.manager?.id || ""} emps={emps} onChange={(id) => reassign("manager_id", id)} /></Ro>
-                  <Ro label="Technician"><SelEmp value={d.assigned_to?.id || ""} emps={emps} onChange={(id) => reassign("assigned_to_id", id)} /></Ro>
+                  <Ro label="Manager"><SelEmp value={d.manager?.id || ""} emps={emps.filter((e) => e.in_managers !== false || e.id === d.manager?.id)} onChange={(id) => reassign("manager_id", id)} /></Ro>
+                  <Ro label="Technician"><SelEmp value={d.assigned_to?.id || ""} emps={emps.filter((e) => e.in_assignees !== false || e.id === d.assigned_to?.id)} onChange={(id) => reassign("assigned_to_id", id)} /></Ro>
                   <Ro label="Time on this job">
                     {byEmp.length > 0 ? (
                       <div className="rounded-lg bg-slate-50 border border-slate-200/70 p-2 space-y-1">
@@ -447,7 +447,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
           {tab === "services" && (
             <div className="space-y-4">
               <ServicesTab orderId={order.id} deviceId={d.device?.id} lines={d.lines} total={d.total} onFlash={flash} onChanged={reload}
-                labor={labor} onClockIn={(lineId) => startTimer(lineId)} isEstimate={!!(order as any).is_estimate} emps={emps} />
+                labor={labor} onClockIn={(lineId) => startTimer(lineId)} isEstimate={!!(order as any).is_estimate} emps={emps}
+                locked={isClosed && !can("can_edit_closed_ticket")} />
             </div>
           )}
           {tab === "checklists" && <ChecklistsTab orderId={order.id} typeId={(d as any).type_id} />}
@@ -858,7 +859,9 @@ function IntakePhotos({ orderId, photos, onChanged, onFlash }: {
 }
 
 /* ---- Services tab ---- */
-function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labor, onClockIn, isEstimate, emps }: { orderId: string; deviceId?: string; lines?: Line[]; total?: number; onFlash: (m: string) => void; onChanged?: () => void; labor?: any; onClockIn?: (lineId: string) => void; isEstimate?: boolean; emps?: { id: string; name: string }[] }) {
+function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labor, onClockIn, isEstimate, emps, locked }: { orderId: string; deviceId?: string; lines?: Line[]; total?: number; onFlash: (m: string) => void; onChanged?: () => void; labor?: any; onClockIn?: (lineId: string) => void; isEstimate?: boolean; emps?: { id: string; name: string }[]; locked?: boolean }) {
+  const { can } = useMe();
+  const seePrices = can("can_view_item_prices");   // off: the API leaves line prices out
   const _secHM = (s: number) => { const h = Math.floor((s || 0) / 3600), m = Math.floor(((s || 0) % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m`; };
   const _byEmp = labor?.by_employee || [];
   const _timeTotal = _byEmp.reduce((n: number, b: any) => n + (b.total_seconds || 0), 0);
@@ -939,7 +942,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-none ${tagCls(k)}`}><M n={k.includes("serv") ? "build" : k.includes("lab") ? "search_check" : "inventory_2"} c="text-base" /></div>
             <div className="min-w-0">
               <div className="flex items-center gap-2"><h5 className="text-xs font-bold text-ink-primary truncate">{l.description || "Item"}</h5><span className={`text-[11px] px-1.5 py-0.5 rounded font-bold ${tagCls(k)}`}>{l.kind || l.line_type || "item"}</span></div>
-              <p className="text-[11px] text-ink-tertiary tabular-nums">Qty: {l.qty ?? 1} · Unit: {money(l.unit_price)}{l.discount ? ` · Disc ${l.discount}${l.discount_type === "pct" ? "%" : ""}` : ""}</p>
+              <p className="text-[11px] text-ink-tertiary tabular-nums">Qty: {l.qty ?? 1}{seePrices && <> · Unit: {money(l.unit_price)}{l.discount ? ` · Disc ${l.discount}${l.discount_type === "pct" ? "%" : ""}` : ""}</>}</p>
               {tagging && (
                 <select value={l.order_item_id || ""} onChange={(e) => patchLine(l.id, { order_item_id: e.target.value })} aria-label={`Which item ${l.description || "this line"} is for`}
                   className="mt-1 max-w-[220px] text-[11px] font-medium text-ink-secondary bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5">
@@ -955,7 +958,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                 : <button type="button" onClick={() => onClockIn(l.id)} title={`Clock into ${l.description || "this line"}`}
                     className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-emerald-700 border border-emerald-200 hover:bg-emerald-50"><M n="play_arrow" c="text-[13px]" />clock in</button>
             )}
-            <div className="text-right"><p className="tabular-nums font-bold text-xs text-ink-primary">{money(l.total)}</p></div>
+            {seePrices && <div className="text-right"><p className="tabular-nums font-bold text-xs text-ink-primary">{money(l.total)}</p></div>}
           </div>
         </div>
         {/* 144av — assignee + booked/actual on service & labour lines only */}
@@ -1064,6 +1067,8 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
               </div>
             )}
           </div>
+        ) : locked ? (
+          <p className="text-xs text-ink-tertiary">This job is closed. Your role can't change a closed job.</p>
         ) : (
           <CatalogPicker deviceId={deviceId} onPick={(i) => { setPick(i); setDisc(0); setQty(1); }} placeholder="Search catalog — service, product, or job kit…" />
         )}
@@ -1075,7 +1080,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
           {groupBy && (
             <div className="bg-slate-50/90 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
               <div className="flex items-center gap-2"><span className={`w-2 h-2 rounded-full ${dot[gi % dot.length]}`} /><span className="text-xs font-bold text-ink-primary">{tech === "Unassigned" || !tech ? "Unassigned" : empName(tech)}</span><span className="text-[11px] text-ink-tertiary">({ls.length} line items)</span></div>
-              <span className="tabular-nums text-xs font-bold text-ink-primary">Subtotal: {money(ls.reduce((s, l) => s + (l.total || 0), 0))}</span>
+              {seePrices && <span className="tabular-nums text-xs font-bold text-ink-primary">Subtotal: {money(ls.reduce((s, l) => s + (l.total || 0), 0))}</span>}
             </div>
           )}
           <div className="divide-y divide-slate-100">
@@ -1089,7 +1094,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
       <div className="bg-slate-50/90 rounded-2xl p-4 border border-slate-200 space-y-2">
         {/* Totals are for the whole job, whatever filter is on. No lines yet but a price on the job
             (agreed at check-in) reads as the quoted price, not a $0 subtotal next to a real total. */}
-        {(lines || []).length > 0 && <div className="flex justify-between text-xs text-ink-secondary"><span>Subtotal ({(lines || []).length} {(lines || []).length === 1 ? "line" : "lines"})</span><span className="tabular-nums font-semibold text-ink-primary">{money((lines || []).reduce((s, l) => s + (l.total || 0), 0))}</span></div>}
+        {seePrices && (lines || []).length > 0 && <div className="flex justify-between text-xs text-ink-secondary"><span>Subtotal ({(lines || []).length} {(lines || []).length === 1 ? "line" : "lines"})</span><span className="tabular-nums font-semibold text-ink-primary">{money((lines || []).reduce((s, l) => s + (l.total || 0), 0))}</span></div>}
         <div className={`${(lines || []).length ? "pt-2 border-t border-slate-200 " : ""}flex justify-between items-baseline`}><span className="text-xs font-bold text-ink-primary">{(lines || []).length ? "Grand total" : "Quoted price"}</span><span className="text-lg font-bold tabular-nums text-primary">{money(total)}</span></div>
         {!(lines || []).length && !!total && <div className="text-[11px] text-ink-tertiary">Agreed when the job came in. Add services and parts to build the invoice.</div>}
       </div>
@@ -1229,6 +1234,7 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
 type PayCtx = { order_total: number; already_paid: number; prepaid: number; remaining: number; accounts_by_method: Record<string, { id: string; name: string }[]> };
 export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash }: { orderId: string; total?: number; deposit?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: (m: string) => void }) {
   const { base, opts: curOpts, multi: multiCurrency } = useCurrencies();
+  const { can } = useMe();
   const changeCurrency = async (code: string) => {
     try {
       const r = await api.patch<any>(`/orders/${orderId}/currency`, { currency_code: code || (base?.code ?? "") });
@@ -1331,7 +1337,7 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
           <div className="flex flex-wrap items-center gap-2">
             <button onClick={() => openPay("prepay")} className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold border border-white/20 transition-all flex items-center gap-1.5"><M n="savings" c="text-xs" />Take Prepayment</button>
             <button onClick={() => openPay("pay")} className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold shadow-sm transition-all flex items-center gap-1.5"><M n="credit_card" c="text-xs" />Take Payment</button>
-            {!link ? (
+            {!link ? can("can_create_payment_links") && (
               <button onClick={() => createLink(false)} className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold border border-white/20 transition-all flex items-center gap-1.5"><M n="link" c="text-xs" />Payment link</button>
             ) : (
               <div className="flex items-center gap-1.5 px-2 py-1 rounded-xl bg-white/10 border border-white/20 text-[11px] font-bold">
