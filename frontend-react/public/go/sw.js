@@ -8,7 +8,7 @@
      untouched, and the cache is wiped on sign-out (CLEAR_DATA) so shop data doesn't outlive a session.
    - Writes are never cached: the page queues them (offlineQueue.ts) and replays them.
    - Background Sync: on 'tekly-go-sync', tell open pages to flush their queue. */
-const VERSION = 'tekly-go-v1';
+const VERSION = 'tekly-go-v2';   // v2: push notifications
 const SHELL_CACHE = `go-shell-${VERSION}`;
 const ASSET_CACHE = `go-assets-${VERSION}`;
 const API_CACHE = `go-api-${VERSION}`;
@@ -102,4 +102,38 @@ self.addEventListener('sync', (e) => {
       for (const c of await self.clients.matchAll({ includeUncontrolled: true })) c.postMessage({ type: 'FLUSH_QUEUE' });
     })());
   }
+});
+
+// ── Push notifications ──
+// Server links still use the /tech app's form ("/tech#/order/<id>"); open the same job in Go.
+// Keep in step with goPath() in src/go/lib/push.ts (tested there).
+function goPath(link) {
+  const p = (link || '').replace(/^https?:\/\/[^/]+/, '');
+  const order = p.match(/^\/tech\/?#\/order\/([^/?#]+)/) || p.match(/^\/orders\?(?:.*&)?open=([^&#]+)/);
+  if (order) return '/go/job/' + order[1];
+  if (!p || /^\/tech\/?(#.*)?$/.test(p)) return '/go/today';
+  return p.startsWith('/') ? p : '/go/today';
+}
+
+self.addEventListener('push', (e) => {
+  let data = {};
+  try { data = e.data ? e.data.json() : {}; } catch { data = { title: 'Tekly', body: e.data && e.data.text() }; }
+  e.waitUntil(self.registration.showNotification(data.title || 'Tekly', {
+    body: data.body || '',
+    icon: '/static/icons/icon-192.png',
+    badge: '/static/icons/icon-192.png',
+    tag: data.kind || 'tekly-go',
+    data: { to: goPath(data.deep_link) },
+  }));
+});
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const to = (e.notification.data && e.notification.data.to) || '/go/today';
+  e.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const go = wins.find((c) => new URL(c.url).pathname.startsWith('/go'));
+    if (go) { await go.focus(); return go.navigate(to); }
+    return self.clients.openWindow(to);
+  })());
 });

@@ -1,6 +1,6 @@
 // More: who's signed in, which Today to show, appearance, changes waiting to sync, sign out.
 import { useEffect, useState } from "react";
-import { AlertTriangle, Check, CloudOff, ExternalLink, LogOut, Monitor, Moon, RefreshCw, Sun } from "lucide-react";
+import { AlertTriangle, Bell, BellOff, Check, CloudOff, ExternalLink, LogOut, Monitor, Moon, RefreshCw, Sun } from "lucide-react";
 import { useMe } from "../../context/Me";
 import { Card, Page, Section } from "../components/ui";
 import { goQueue, type Conflict } from "../lib/offlineQueue";
@@ -8,6 +8,7 @@ import { inferRole, ROLE_LABEL, savedRole, saveRole, type GoRole } from "../lib/
 import { useQueueStatus } from "../lib/useGo";
 import { getTheme, setTheme, type ThemePref } from "../theme";
 import { signOut } from "../session";
+import { disablePush, enablePush, pushState, type PushState } from "../lib/push";
 
 function Choice<T extends string>({ value, current, onPick, children }: { value: T; current: T; onPick: (v: T) => void; children: React.ReactNode }) {
   const on = value === current;
@@ -29,6 +30,19 @@ export default function More() {
   const [theme, setThemeState] = useState<ThemePref>(getTheme());
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
   useEffect(() => { goQueue().conflicts().then(setConflicts).catch(() => {}); }, [q.conflicts]);
+  const [push, setPush] = useState<PushState | "busy" | null>(null);
+  useEffect(() => { pushState().then(setPush).catch(() => setPush("unsupported")); }, []);
+  async function togglePush() {
+    const was = push;
+    setPush("busy");
+    try { setPush(was === "on" ? await disablePush() : await enablePush()); }
+    catch { setPush(was); }
+  }
+  const pushNote: Record<string, string> = {
+    unsupported: "On iPhone, add Tekly Go to your Home Screen first (Share → Add to Home Screen), then open it from there.",
+    "not-configured": "Your shop hasn't set up notifications yet.",
+    denied: "Notifications are blocked. Allow them for Tekly in your phone's Settings.",
+  };
 
   const pickRole = (r: GoRole | "auto") => { setRole(r); saveRole(r === "auto" ? null : r); };
   const pickTheme = (t: ThemePref) => { setThemeState(t); setTheme(t); };
@@ -79,6 +93,20 @@ export default function More() {
         <Card className="divide-y divide-slate-100">
           <Choice value="auto" current={role} onPick={pickRole}>Automatic <span className="text-ink-tertiary text-[0.875rem]">({ROLE_LABEL[inferRole(me)]})</span></Choice>
           {(["tech", "desk", "owner"] as GoRole[]).map((r) => <Choice key={r} value={r} current={role} onPick={pickRole}>{ROLE_LABEL[r]}</Choice>)}
+        </Card>
+      </Section>
+
+      <Section title="Notifications">
+        <Card>
+          <button onClick={togglePush} disabled={push === "busy" || push === "unsupported" || push === "not-configured" || push === "denied" || push === null}
+            className="w-full min-h-[3rem] flex items-center gap-3 px-4 text-left text-[1rem] text-ink-primary active:bg-slate-50 rounded-2xl disabled:opacity-100">
+            {push === "on" ? <Bell size={18} className="text-primary" /> : <BellOff size={18} className="text-ink-tertiary" />}
+            <span className="flex-1">Job alerts on this phone</span>
+            <span className={`text-[0.875rem] font-semibold ${push === "on" ? "text-primary" : "text-ink-tertiary"}`}>
+              {push === "on" ? "On" : push === "busy" ? "…" : push === "off" ? "Turn on" : "Off"}
+            </span>
+          </button>
+          {push && pushNote[push] && <p className="px-4 pb-3 -mt-1 text-[0.8125rem] text-ink-secondary">{pushNote[push]}</p>}
         </Card>
       </Section>
 
