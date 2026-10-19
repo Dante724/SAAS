@@ -751,3 +751,80 @@ h1, h2, h3 { text-wrap: balance; }
 /* reserve hero text height on phones so the mock-up doesn't jump when fonts load */
 @media (max-width: 767px) { .hero-copy { min-height: 560px; } }
 @media (max-width: 380px) { .hero-copy { min-height: 600px; } }
+
+/* ══ Impeccable refinement pass ══════════════════════════════════════════
+   Distinctive type (Hanken Grotesk + IBM Plex Mono), no italic-serif accents,
+   hero copy on clean white, flat sections instead of nested cards, no icon tiles,
+   static trade row instead of a marquee, legible mock-up text. */
+:root {
+  --font: "Hanken Grotesk", "Helvetica Neue", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --green: #057a55;
+  --sh-3: 0 40px 80px -24px rgba(13,37,61,.20), 0 18px 36px -18px rgba(13,37,61,.18);
+}
+body { font-weight: 400; color: var(--ink); }
+.logo { font-family: "Geist", var(--font); }
+.d-hero { font-weight: 500; font-size: 68px; line-height: 1.02; letter-spacing: -2.6px; }
+.d-xl { font-weight: 500; font-size: 46px; line-height: 1.08; letter-spacing: -1.5px; }
+.d-lg { font-weight: 500; font-size: 32px; line-height: 1.15; letter-spacing: -.8px; }
+.lead { font-size: 19px; line-height: 1.6; max-width: 62ch; }
+.body, .pillar p, .sg p, .ai-card p, .ticks li { font-weight: 400; }
+.hero-copy .d-hero { mix-blend-mode: normal; }
+.kicker { font-size: 13px; font-weight: 600; letter-spacing: .2px; text-transform: none; }
+
+/* hero: gradient sits behind the product, text stays on white */
+.hero .mesh-band { -webkit-mask-image: linear-gradient(90deg, transparent 34%, #000 60%); mask-image: linear-gradient(90deg, transparent 34%, #000 60%); }
+.hero .guides { display: none; }
+
+/* trade row replaces the marquee */
+.trades .lbl { margin-bottom: 14px; }
+.trade-row { list-style: none; margin: 0 auto; padding: 0 var(--gut); max-width: var(--max); display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 0; }
+.trade-row li { font-size: 15px; color: var(--ink-2); padding: 0 14px; border-left: 1px solid var(--line); line-height: 1.2; }
+.trade-row li:first-child { border-left: 0; }
+
+/* no icon tiles above headings */
+.pillar .ic, .sg .ic { display: none; }
+.pillar { padding-top: 24px; border-top: 2px solid var(--ink); }
+.pillar + .pillar { border-top: 2px solid var(--line); }
+.pillar h3 { font-size: 19px; font-weight: 600; letter-spacing: -.3px; }
+.sg h3 { font-weight: 600; }
+.sg { padding-top: 26px; padding-bottom: 26px; }
+.sg:nth-child(3n+1) { padding-left: 0; }
+
+/* flat AI section: rules instead of boxed cards */
+.ai-card { background: none; border: 0; border-top: 1px solid rgba(255,255,255,.14); border-radius: 0; padding: 24px 0 0; min-height: 0; }
+.ai-card::before { display: none; }
+.ai-card h3 { font-weight: 500; }
+.ai-grid { gap: 48px 40px; }
+
+/* flow stage: no outer frame around the card */
+.stage { border: 0; background: var(--canvas); }
+
+/* legible mock-ups */
+.ai, .st, .senti, .tag { font-size: 11px; }
+.tbl { font-size: 12px; } .tbl th, .kpi-row .k, .side .grp { font-size: 11px; }
+.dash .h4 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.3px; }
+.call .who span, .p-row small, .p-note { font-size: 11px; }
+.mini-kpis .d, .mini-kpis .k, .kv .k { font-size: 11.5px; }
+
+/* calmer heads */
+.head { margin-bottom: 56px; }
+.head .lead { margin-top: 18px; }
+.cmp, .calc, .start { box-shadow: none; }
+
+@media (max-width: 1023px) {
+  .d-hero { font-size: 52px; letter-spacing: -1.8px; }
+  .d-xl { font-size: 38px; letter-spacing: -1.1px; }
+  .hero .mesh-band { -webkit-mask-image: linear-gradient(180deg, transparent 40%, #000 62%); mask-image: linear-gradient(180deg, transparent 40%, #000 62%); }
+}
+@media (max-width: 767px) {
+  .d-hero { font-size: 40px; letter-spacing: -1.3px; }
+  .d-xl { font-size: 31px; letter-spacing: -.8px; }
+  .d-lg { font-size: 26px; }
+  .trade-row li { font-size: 14px; padding: 0 10px; }
+  .hero .mesh-band { height: 1000px; -webkit-mask-image: linear-gradient(180deg, transparent 50%, #000 66%); mask-image: linear-gradient(180deg, transparent 50%, #000 66%); }
+  .ai-grid { gap: 36px; }
+}
+.trade-row li { padding: 0 12px; font-size: 14.5px; }
+@media (max-width: 767px) { .trade-row li { padding: 0 9px; font-size: 13.5px; } }
+.guides { display: none !important; }

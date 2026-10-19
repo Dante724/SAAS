@@ -19,14 +19,16 @@ python3 -m http.server 4321 --directory website
 
 ## Design system
 Follows `stripe.design.md`: white canvas, animated gradient mesh (`mesh.js`, WebGL with CSS fallback),
-indigo `#533afd` as the single filled CTA per band, Geist 300 display with negative tracking,
-Instrument Serif for editorial accents, Geist Mono for IDs, tabular figures on every number.
+indigo `#533afd` as the single filled CTA per band, Hanken Grotesk display/body with tight
+tracking, IBM Plex Mono for IDs, tabular figures on every number (Geist only for the wordmark).
+Refined with the Impeccable detector: no italic-serif accents, no marquee, no icon tiles, flat
+sections instead of nested cards, hero copy on white with the gradient behind the product.
 Scroll motion uses GSAP + ScrollTrigger reveals on native scrolling (smooth-scroll and scroll
 pinning were removed — they made the page drift and lag). The mesh renders at half resolution,
 capped at 30 fps, and pauses off-screen. Everything respects `prefers-reduced-motion` and still
 works if the CDNs fail.
 
-Measured (headless Chrome): scroll 60 fps with no long frames; Lighthouse mobile 90 / desktop 99
+Measured (headless Chrome): scroll 60 fps with no long frames; Lighthouse mobile 98
 performance, accessibility 97.
 
 ## Photography

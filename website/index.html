@@ -11,7 +11,7 @@
   <link rel="icon" type="image/svg+xml" href="assets/tekly-mark.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;700&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Geist:wght@700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
   <script>document.documentElement.classList.add("js")</script>
 </head>
@@ -79,7 +79,7 @@
   <div class="wrap">
     <div class="hero-grid">
       <div class="hero-copy">
-        <h1 class="d-hero split" data-split>The operating system for <span class="serif">repair shops</span></h1>
+        <h1 class="d-hero split" data-split>The operating system for repair shops</h1>
         <p class="lead rv">Work orders, estimates customers approve on their phone, parts, POS, payroll — and AI that writes the paperwork. One platform for phones, cars, boats, bikes and every bench in between.</p>
         <div class="hero-cta rv">
           <a class="btn btn-primary btn-lg" data-app="signup" href="#start">Start free trial <svg class="arr"><use href="#arr"/></svg></a>
@@ -108,7 +108,7 @@
               <div class="grp">Grow</div><a><i></i>Reports</a>
             </aside>
             <div class="main">
-              <div class="main-h"><h4>Work orders</h4><span class="mini-btn">+ New order</span></div>
+              <div class="main-h"><div class="h4">Work orders</div><span class="mini-btn">+ New order</span></div>
               <div class="kpi-row">
                 <div><div class="k">Open jobs</div><div class="v tnum">38</div></div>
                 <div><div class="k">Waiting on parts</div><div class="v tnum">6</div></div>
@@ -147,7 +147,6 @@
             <div class="p-foot"><button class="p-btn" id="approveBtn">Approve <span class="tnum" id="approveAmt">$368</span></button></div>
           </div>
         </div>
-        <div class="comp-hint" aria-hidden="true">try it <svg viewBox="0 0 48 26"><path d="M2 20 C 14 26, 30 22, 44 6 M36 5 l8 1 -1 8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></div>
         <div class="toast" id="toast" role="status" aria-live="polite"><span class="ic"><svg><use href="#check"/></svg></span><span><b>Neha approved <span class="tnum" id="toastAmt">$497</span></b><br><span style="color:var(--mute)">WO-1042 moved to In repair · just now</span></span></div>
       </div>
     </div>
@@ -156,10 +155,7 @@
 
 <div class="trades" aria-label="Trades Tekly is built for">
   <div class="lbl">Ready-made for every kind of repair</div>
-  <p class="sr">Templates for phone and tablet, computer, power tools, small engine, powersports, auto, bicycle and e-bike, motorcycle, marine, fleet and truck, and general repair.</p><div class="marq" aria-hidden="true"><div class="marq-t">
-    <span>Phone &amp; tablet</span><span><em>Computer</em></span><span>Power tools</span><span><em>Small engine</em></span><span>Powersports</span><span><em>Auto</em></span><span>Bicycle &amp; e-bike</span><span><em>Motorcycle</em></span><span>Marine</span><span><em>Fleet &amp; truck</em></span><span>General repair</span>
-    <span>Phone &amp; tablet</span><span><em>Computer</em></span><span>Power tools</span><span><em>Small engine</em></span><span>Powersports</span><span><em>Auto</em></span><span>Bicycle &amp; e-bike</span><span><em>Motorcycle</em></span><span>Marine</span><span><em>Fleet &amp; truck</em></span><span>General repair</span>
-  </div></div>
+  <ul class="trade-row"><li>Phone &amp; tablet</li><li>Computer</li><li>Power tools</li><li>Small engine</li><li>Powersports</li><li>Auto</li><li>Bicycle &amp; e-bike</li><li>Motorcycle</li><li>Marine</li><li>Fleet &amp; truck</li><li>General repair</li></ul>
 </div>
 
 <!-- ════════ PLATFORM ════════ -->
@@ -168,7 +164,7 @@
   <div class="wrap">
     <div class="head">
       <p class="kicker rv"><span class="k-n">01</span>The platform</p>
-      <h2 class="d-xl split" data-split>One system for the counter, the bench and the <span class="serif">books</span>.</h2>
+      <h2 class="d-xl split" data-split>One system for the front desk, the workshop and the books.</h2>
       <p class="lead rv">Most shops run on four apps and a notebook. Tekly replaces them with one — so a job never falls between the gaps.</p>
     </div>
     <div class="pillars">
@@ -185,7 +181,7 @@
   <div class="wrap">
     <div class="head">
       <p class="kicker rv"><span class="k-n">02</span>How a job moves</p>
-      <h2 class="d-xl split" data-split>Five handoffs. <span class="serif">Zero</span> dropped balls.</h2>
+      <h2 class="d-xl split" data-split>Every step of a job, in one place.</h2>
     </div>
     <div class="flow" id="flowEl">
       <div class="steps" aria-label="Job flow">
@@ -275,7 +271,7 @@
   <div class="wrap">
     <div class="head">
       <p class="kicker rv"><span class="k-n">03</span>Industries</p>
-      <h2 class="d-xl split" data-split>Built for your bench, <span class="serif">whatever's on it</span>.</h2>
+      <h2 class="d-xl split" data-split>Built for your bench, whatever's on it.</h2>
       <p class="lead rv">Pick your trade and Tekly sets up the right intake fields, asset types and services. Run more than one? Use several templates in one account.</p>
     </div>
     <div class="switch rv">
@@ -302,7 +298,7 @@
   <div class="wrap">
     <div class="head">
       <p class="kicker rv"><span class="k-n">04</span>Tekly AI</p>
-      <h2 class="d-xl split" data-split>AI that does the paperwork. <span class="serif">You do the repairs.</span></h2>
+      <h2 class="d-xl split" data-split>AI that drafts the paperwork, so your team can stay on the bench.</h2>
       <p class="lead rv">Built into the screens you already use — not a chatbot in a corner. It drafts; your team decides. Every plan includes AI — never a paid add-on.</p>
     </div>
     <div class="ai-grid">
@@ -418,7 +414,7 @@
   <div class="wrap">
     <div class="head">
       <p class="kicker rv"><span class="k-n">08</span>What it's worth</p>
-      <h2 class="d-xl split" data-split>See what Tekly gives back to <span class="serif">your</span> shop.</h2>
+      <h2 class="d-xl split" data-split>See what Tekly gives back to your shop.</h2>
       <p class="lead rv">Move the sliders. Figures update from your numbers and our assumptions, shown below — treat them as a starting point.</p>
     </div>
     <div class="calc rv">
@@ -472,7 +468,7 @@
     <div class="head">
       <p class="kicker rv"><span class="k-n">10</span>Security &amp; control</p>
       <h2 class="d-xl split" data-split>Serious about your shop's data.</h2>
-      <p class="lead rv">Customer passcodes, payments and payroll deserve more than a password. This is on by default.</p>
+      <p class="lead rv">Customer passcodes, payments and payroll are protected by default.</p>
     </div>
     <div class="sec-grid">
       <div class="sg rv"><div class="ic"><svg><use href="#lock"/></svg></div><h3>Encrypted where it matters</h3><p>Device passcodes and integration keys are encrypted at rest; everything travels over HTTPS.</p></div>
@@ -511,8 +507,8 @@
   <div class="wrap">
     <div class="head c">
       <p class="kicker rv"><span class="k-n">12</span>Pricing</p>
-      <h2 class="d-xl split" data-split>Simple plans. <span class="serif">AI on every plan.</span></h2>
-      <p class="lead rv">Every plan includes Tekly AI, the customer portal and free onboarding. No setup fees. No contracts.</p>
+      <h2 class="d-xl split" data-split>Simple plans. AI on every plan.</h2>
+      <p class="lead rv">Every plan includes Tekly AI, the customer portal and free onboarding, with no setup fee or contract.</p>
       <div class="bill rv" role="group" aria-label="Billing period"><span class="knob"></span><button class="on" data-bill="monthly" aria-pressed="true">Monthly</button><button data-bill="annual" aria-pressed="false">Yearly <span class="save" data-save>Save 20%</span></button></div>
     </div>
     <div class="plans" id="plans"></div>
@@ -619,8 +615,8 @@
   <div class="mesh-band" aria-hidden="true"><div class="mesh-css"></div><canvas id="mesh2"></canvas></div>
   <div class="wrap closing-grid">
     <div>
-      <h2 class="d-xl split" data-split>Run the shop you <span class="serif">always meant to.</span></h2>
-      <p class="lead rv">Start free today, or let us show you around. Either way, the bench gets quieter.</p>
+      <h2 class="d-xl split" data-split>Run the shop you always meant to.</h2>
+      <p class="lead rv">Try it free for two weeks, or book a 30-minute demo and we’ll set it up with you.</p>
       <div class="hero-cta rv"><a class="btn btn-primary btn-lg" data-app="signup" href="#start">Start free trial <svg class="arr"><use href="#arr"/></svg></a><a class="link" href="#start" data-pane="demo">Book a demo <svg class="arr"><use href="#arr"/></svg></a></div>
     </div>
     <div class="closing-links">

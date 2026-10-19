@@ -337,7 +337,6 @@
   }));
   addEventListener("resize", moveKnob); document.fonts?.ready.then(moveKnob);
   renderPlans(); moveKnob();
-  if (hasGSAP && !reduced) gsap.from("#plans .plan", { y: 40, opacity: 0, duration: .9, stagger: .1, ease: "power3.out", scrollTrigger: { trigger: "#plans", start: "top 85%" } });
 
   /* ── Get started tabs ── */
   const tabs = $$(".seg button");
