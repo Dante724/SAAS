@@ -276,7 +276,7 @@ export default function SettingsHub() {
     <Shell title="Settings">
       <div className="flex-1 overflow-hidden flex">
         {/* section nav */}
-        <aside className="w-60 flex-shrink-0 border-r border-slate-200/80 bg-white/50 p-3 overflow-y-auto">
+        <aside className="hidden md:block w-60 flex-shrink-0 border-r border-slate-200/80 bg-white/50 p-3 overflow-y-auto">
           <div className="relative mb-3">
             <M n="search" c="absolute left-2.5 top-2 text-base text-ink-tertiary pointer-events-none" />
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search settings…"
@@ -308,7 +308,11 @@ export default function SettingsHub() {
 
         {/* pb-80: scroll room below the last card so dropdowns near the bottom
             (e.g. the Public-pages status pickers) have space to open downward. */}
-        <div className="flex-1 overflow-y-auto p-6 pb-80">
+        <div className="flex-1 min-w-0 overflow-y-auto p-6 pb-80">
+          {/* Narrow screens hide the section list; the Overview's category cards are the menu. */}
+          {sec !== "overview" && (
+            <button onClick={() => setSec("overview")} className="md:hidden mb-3 -ml-1 flex items-center gap-1.5 px-1 py-2 text-xs font-semibold text-primary"><M n="arrow_back" c="text-sm" />All settings</button>
+          )}
           {sec === "overview" && (
             <div className="max-w-3xl space-y-5">
               <div>
@@ -982,7 +986,7 @@ function NotifTemplateDrawer({ tpl, module, onClose, onSaved }: {
           )}
           <div>
             <label className={lbl}>Content *</label>
-            <div className="grid grid-cols-[1fr_260px] gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-[1fr_260px] gap-3">
               {isEmail ? (
                 <RichTextEditor value={f.body_template} onChange={(html) => set("body_template", html)} registerInsert={(fn) => { richInsert.current = fn; }} />
               ) : (
@@ -1780,7 +1784,7 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
               ) : f.type === "textarea" ? (
                 f.vars ? (
                   <div>
-                    <div className="grid grid-cols-[1fr_260px] gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-[1fr_260px] gap-3">
                       <textarea ref={(el) => { areaRefs.current[f.k] = el; }} value={v[f.k]} onChange={set(f.k)} rows={12} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary font-mono" />
                       <VarPicker onInsert={(tok) => insertVar(f.k, tok)} module={varModule} />
                     </div>

@@ -60,6 +60,8 @@ export default function SalesPOS() {
 
   const subtotal = cart.reduce((s, l) => s + l.unit_price * l.qty * (1 - l.discount / 100), 0);
   const total = Math.max(subtotal - discount, 0);
+  // Phones: the cart is a full-screen sheet opened from the bottom bar instead of a side column.
+  const [cartOpen, setCartOpen] = useState(false);
 
   async function charge() {
     if (cart.length === 0) { flash("Cart is empty"); return; }
@@ -74,7 +76,7 @@ export default function SalesPOS() {
         ? " · redeemed " + Object.entries(r.redeemed).map(([k, v]) => `${k} ${money(v as number)}`).join(", ") : "";
       flash(`Sale ${r.sale_number} · ${money(r.total)} · profit ${money(r.profit)}${red}`);
       setRecentKey((k) => k + 1);
-      setCart([]); setDiscount(0); setCoupon(""); setGiftCard(""); setRedeemPts(0); setShowRewards(false); setClient(null); setClientQ("");
+      setCart([]); setCartOpen(false); setDiscount(0); setCoupon(""); setGiftCard(""); setRedeemPts(0); setShowRewards(false); setClient(null); setClientQ("");
       api.get<{ items: Product[] }>("/catalog/products").then((res) => setProducts(res.items || [])).catch(() => {});
     } catch (e: any) { flash(`Failed: ${e.message}`); } finally { setBusy(false); }
   }
@@ -84,12 +86,12 @@ export default function SalesPOS() {
       <div className="flex-1 flex overflow-hidden">
         {/* LEFT: catalog grid */}
         <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-          <div className="p-6 pb-3 flex items-center gap-3 flex-shrink-0">
+          <div className="p-6 pb-3 flex flex-wrap items-center gap-3 flex-shrink-0">
             <div className="flex items-center bg-slate-100/90 p-0.5 rounded-lg border border-slate-200/60 text-xs">
               <button onClick={() => setMode("products")} className={`px-3 py-1.5 rounded-md font-semibold flex items-center gap-1.5 ${mode === "products" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="inventory_2" c="text-xs" />Products</button>
               {can("can_sell_services") && <button onClick={() => setMode("services")} className={`px-3 py-1.5 rounded-md font-semibold flex items-center gap-1.5 ${mode === "services" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="build" c="text-xs" />Services</button>}
             </div>
-            <div className="relative flex-1 max-w-md"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" /><input value={q} onChange={(e) => setQ(e.target.value)} className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg font-medium" placeholder={`Search ${mode}…`} /></div>
+            <div className="relative flex-1 min-w-[160px] max-w-md"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" /><input value={q} onChange={(e) => setQ(e.target.value)} className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg font-medium" placeholder={`Search ${mode}…`} /></div>
             <button onClick={() => setRecent((v) => !v)} className="ml-auto px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex items-center gap-1.5"><M n="receipt_long" c="text-sm" />Recent sales</button>
           </div>
           {recent && (
@@ -123,13 +125,17 @@ export default function SalesPOS() {
               {grid.length === 0 && <div className="col-span-full text-xs text-ink-tertiary py-8 text-center">No {mode} found.</div>}
             </div>
           </div>
+          <button onClick={() => setCartOpen(true)} className="md:hidden m-3 mt-0 px-4 py-3 rounded-xl bg-primary text-white text-sm font-bold shadow-clay-sm flex items-center gap-2 flex-shrink-0">
+            <M n="shopping_cart" c="text-base" />Current sale{cart.length > 0 ? ` · ${cart.length}` : ""}<span className="ml-auto tabular-nums">{money(total)}</span>
+          </button>
         </div>
 
         {/* RIGHT: cart */}
-        <aside className="w-[380px] flex-shrink-0 bg-white border-l border-slate-200/80 flex flex-col shadow-clay-drawer">
-          <div className="px-5 py-4 border-b border-slate-200/80 flex items-center justify-between">
+        <aside className={`md:static md:w-[340px] lg:w-[380px] flex-shrink-0 bg-white md:border-l border-slate-200/80 flex-col shadow-clay-drawer ${cartOpen ? "fixed inset-0 z-[60] flex" : "hidden md:flex"}`}>
+          <div className="px-5 py-4 border-b border-slate-200/80 flex items-center justify-between gap-2">
             <h3 className="text-sm font-bold text-ink-primary flex items-center gap-2"><M n="shopping_cart" c="text-base text-primary" />Current sale</h3>
-            {cart.length > 0 && <button onClick={() => setCart([])} className="text-[11px] font-semibold text-rose-600 hover:underline">Clear</button>}
+            {cart.length > 0 && <button onClick={() => setCart([])} className="ml-auto px-2 py-1 text-[11px] font-semibold text-rose-600 hover:underline">Clear</button>}
+            <button onClick={() => setCartOpen(false)} aria-label="Back to items" className="md:hidden w-9 h-9 rounded-lg flex items-center justify-center text-ink-tertiary hover:bg-slate-100"><M n="close" c="text-base" /></button>
           </div>
 
           {/* client */}

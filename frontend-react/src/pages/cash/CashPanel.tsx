@@ -95,9 +95,9 @@ export default function CashPanel() {
 
   return (
     <>
-      <div className="flex-1 overflow-hidden flex">
-        {/* LEFT: cashbox rail */}
-        <aside className="w-56 flex-shrink-0 border-r border-slate-200/80 bg-white/40 overflow-y-auto p-3.5 space-y-2">
+      <div className="flex-1 flex flex-col md:flex-row overflow-y-auto md:overflow-hidden">
+        {/* LEFT: cashbox rail (stacks above the detail on narrow screens) */}
+        <aside className="md:w-56 flex-shrink-0 border-b md:border-b-0 md:border-r border-slate-200/80 bg-white/40 md:overflow-y-auto p-3.5 space-y-2">
           <div className="text-[11px] font-bold text-ink-tertiary px-1 pb-0.5">Cashboxes</div>
           {accounts.map((a) => {
             const active = sel?.id === a.id;
@@ -108,7 +108,7 @@ export default function CashPanel() {
                   <div className="text-xs font-bold text-ink-primary truncate">{a.name}</div>
                   <div className="font-mono text-xs font-bold text-ink-secondary">{money(a.balance, a.currency_code ? (CCY[a.currency_code] || "") : currencySymbol())}</div>
                 </div>
-                <button aria-label="More options" onClick={(e) => { e.stopPropagation(); setMenu(menu === a.id ? null : a.id); }} className="text-ink-tertiary hover:text-ink-primary p-0.5 shrink-0"><M n="more_vert" c="text-base" /></button>
+                <button aria-label="More options" onClick={(e) => { e.stopPropagation(); setMenu(menu === a.id ? null : a.id); }} className="text-ink-tertiary hover:text-ink-primary p-1 -m-0.5 rounded-md shrink-0"><M n="more_vert" c="text-base" /></button>
                 {menu === a.id && (
                   <div className="absolute z-20 right-2 top-10 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 w-40 text-xs" onClick={(e) => e.stopPropagation()}>
                     {can("can_create_incomes") && <button onClick={() => { setSel(a); openTxn("income"); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-emerald-50 text-emerald-700 font-semibold"><M n="add" c="text-sm" />Income</button>}
@@ -125,7 +125,7 @@ export default function CashPanel() {
         </aside>
 
         {/* RIGHT: hero + drawer controls + activity */}
-        <div className="flex-1 min-w-0 overflow-y-auto p-6 space-y-4">
+        <div className="flex-1 min-w-0 md:overflow-y-auto p-6 space-y-4">
           {!accounts.length ? (
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-12 flex flex-col items-center text-center">
               <div className="w-14 h-14 rounded-2xl bg-primary text-white flex items-center justify-center shadow-clay-sm mb-3"><M n="point_of_sale" c="text-3xl" /></div>

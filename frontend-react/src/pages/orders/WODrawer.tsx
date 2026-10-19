@@ -3,6 +3,7 @@ import RecommendationsPanel from "./RecommendationsPanel";
 import PartsPOPanel from "./PartsPOPanel";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import ConversationPanel from "./ConversationPanel";
 import PhotoAnnotator from "./PhotoAnnotator";
@@ -202,9 +203,9 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 
         {/* Header */}
-        <header className="relative z-20 px-6 py-4 border-b border-slate-200/90 bg-white/95 backdrop-blur flex items-center justify-between flex-shrink-0">
-          <div className="flex items-center gap-3">
-            <span className="tabular-nums text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-100 text-ink-secondary">{woNum}</span>
+        <header className="relative z-20 px-4 sm:px-6 py-3 sm:py-4 border-b border-slate-200/90 bg-white/95 backdrop-blur flex flex-wrap items-center justify-between gap-2 flex-shrink-0">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 min-w-0">
+            <span className="tabular-nums text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-100 text-ink-secondary whitespace-nowrap">{woNum}</span>
             <h3 className="text-base font-semibold text-ink-primary tracking-tight">{hasDevice ? devTitle : (c.name || "Work order")}</h3>
             <StatusControl statuses={statuses} currentKey={d.status} elapsedMin={timing?.elapsed_min}
               isEstimate={!!(order as any).is_estimate} onChange={changeStatus} />
@@ -214,7 +215,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 ml-auto">
             {/* 144au — job timer as a header pill: always reachable on every tab (Jobber pattern) */}
             {!(order as any).is_estimate && (timerRunning ? (
               <button onClick={stopAllTimers} title="Stop the job timer"
@@ -293,7 +294,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
         )}
 
         {/* Tabs */}
-        <nav className="px-6 border-b border-slate-200/80 flex space-x-6 text-xs font-medium bg-white flex-shrink-0">
+        <nav className="px-4 sm:px-6 border-b border-slate-200/80 flex space-x-6 text-xs font-medium bg-white flex-shrink-0 overflow-x-auto whitespace-nowrap">
           {TABS.map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)}
               className={`py-3 border-b-2 transition-colors flex items-center gap-1.5 ${tab === t.id ? "text-ink-primary border-primary font-semibold" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>
@@ -387,8 +388,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Ro label="Job type"><Sel value={d.is_estimate ? "Estimate" : "Hardware Repair"} opts={["Hardware Repair", "Diagnostics", "Warranty", "Maintenance", "Estimate"]} /></Ro>
                   <Ro label="Priority"><Sel value={(d.priority ?? 0) >= 2 ? "Urgent, same day" : urgent ? "High" : "Normal"} opts={["Normal", "High", "Urgent, same day"]} red={urgent} /></Ro>
-                  <Ro label="Manager"><SelEmp value={d.manager?.id || ""} emps={emps.filter((e) => e.in_managers !== false || e.id === d.manager?.id)} onChange={(id) => reassign("manager_id", id)} /></Ro>
-                  <Ro label="Technician"><SelEmp value={d.assigned_to?.id || ""} emps={emps.filter((e) => e.in_assignees !== false || e.id === d.assigned_to?.id)} onChange={(id) => reassign("assigned_to_id", id)} /></Ro>
+                  <Ro label="Manager"><SelEmp label="Manager" value={d.manager?.id || ""} emps={emps.filter((e) => e.in_managers !== false || e.id === d.manager?.id)} onChange={(id) => reassign("manager_id", id)} /></Ro>
+                  <Ro label="Technician"><SelEmp label="Technician" value={d.assigned_to?.id || ""} emps={emps.filter((e) => e.in_assignees !== false || e.id === d.assigned_to?.id)} onChange={(id) => reassign("assigned_to_id", id)} /></Ro>
                   <Ro label="Time on this job">
                     {byEmp.length > 0 ? (
                       <div className="rounded-lg bg-slate-50 border border-slate-200/70 p-2 space-y-1">
@@ -672,11 +673,11 @@ function Sel({ value, red }: { value: string; opts?: string[]; red?: boolean }) 
     <div className={`w-full py-2 px-3 text-xs rounded-xl border flex items-center gap-2 ${red ? "font-semibold text-rose-700 bg-rose-50/60 border-rose-200" : "font-medium text-ink-primary bg-slate-50 border-slate-200"}`}>{red && <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />}{value}</div>
   );
 }
-function SelEmp({ value, emps, onChange }: { value: string; emps: Emp[]; onChange: (id: string) => void }) {
+function SelEmp({ value, emps, onChange, label }: { value: string; emps: Emp[]; onChange: (id: string) => void; label?: string }) {
   return (
     <div className="relative">
       <span className="absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none"><Avatar name={emps.find((e) => e.id === value)?.name} size={22} /></span>
-      <select value={value} onChange={(e) => onChange(e.target.value)} className="glass-input w-full py-2 pl-9 pr-3 text-xs font-medium text-ink-primary rounded-xl appearance-none">
+      <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} className="glass-input w-full py-2 pl-9 pr-3 text-xs font-medium text-ink-primary rounded-xl appearance-none">
         <option value="">Unassigned</option>
         {emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
       </select>
@@ -698,8 +699,8 @@ function NotesEditor({ initTech, initConcl, diagnosis, onSave }: { initTech: str
       </div>
       <div className="space-y-1">
         <label className="text-[11px] font-bold text-ink-tertiary flex items-center gap-1"><M n="engineering" c="text-xs text-primary" />Technician bench notes</label>
-        <textarea value={tech} onChange={(e) => setTech(e.target.value)} rows={2} className="glass-input w-full p-2.5 text-xs text-ink-secondary rounded-xl resize-none" placeholder="Working notes…" />
-        <textarea value={concl} onChange={(e) => setConcl(e.target.value)} rows={2} className="glass-input w-full p-2.5 text-xs text-ink-secondary rounded-xl resize-none" placeholder="Conclusion the customer sees…" />
+        <textarea value={tech} onChange={(e) => setTech(e.target.value)} rows={2} aria-label="Technician working notes" className="glass-input w-full p-2.5 text-xs text-ink-secondary rounded-xl resize-none" placeholder="Working notes…" />
+        <textarea value={concl} onChange={(e) => setConcl(e.target.value)} rows={2} aria-label="Conclusion the customer sees" className="glass-input w-full p-2.5 text-xs text-ink-secondary rounded-xl resize-none" placeholder="Conclusion the customer sees…" />
         <div className="flex justify-end"><button onClick={() => onSave(tech, concl)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50">Save notes</button></div>
       </div>
     </div>
@@ -1420,7 +1421,8 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
         <div className="text-right"><span className="text-ink-tertiary">Net Balance Due</span><p className="text-base font-bold tabular-nums text-rose-600">{money(due)}</p></div>
       </div>
 
-      {modal && ctx && (
+      {/* Portaled to <body>: inside the drawer the header (z-20) painted over the scrim as a white strip. */}
+      {modal && ctx && createPortal(
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-ink-primary/40" onClick={() => setModal(null)} />
           <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-md p-5 space-y-4">
@@ -1439,7 +1441,7 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
             <div className="flex justify-end gap-2 pt-1"><button onClick={() => setModal(null)} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button><button onClick={submit} disabled={payBusy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{payBusy ? "Recording…" : `Record ${modal === "prepay" ? "prepayment" : "payment"}`}</button></div>
           </div>
         </div>
-      )}
+      , document.body)}
     </div>
   );
 }

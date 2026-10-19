@@ -60,7 +60,7 @@ export default function InquiriesHub() {
   return (
     <Shell title="Inquiries">
       <div className="flex-1 overflow-hidden flex flex-col">
-        <div className="px-6 pt-4 pb-2 flex items-center gap-2 flex-shrink-0">
+        <div className="px-6 pt-4 pb-2 flex flex-wrap items-center gap-2 flex-shrink-0">
           <button onClick={() => setCreate(true)} className="h-[38px] px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New inquiry</button>
           <div className="flex items-center bg-slate-100/90 p-0.5 rounded-lg border border-slate-200/60 text-xs ml-1">
             <button onClick={() => setView("board")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1.5 ${view === "board" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="view_kanban" c="text-xs" />Pipeline</button>
@@ -104,7 +104,7 @@ export default function InquiriesHub() {
           <div className="flex gap-4 h-full min-w-max">
             {!cols && <div className="text-xs text-ink-tertiary p-4">Loading…</div>}
             {cols?.map((c) => (
-              <div key={c.key} className="w-72 flex-shrink-0 flex flex-col">
+              <div key={c.key} className="w-[80vw] sm:w-72 flex-shrink-0 flex flex-col">
                 <div className="flex items-center gap-2 px-1 pb-2">
                   <span className={`w-2 h-2 rounded-full ${COL_ACCENT[c.key] || "bg-slate-400"}`} />
                   <span className="text-xs font-bold text-ink-primary ">{c.label}</span>

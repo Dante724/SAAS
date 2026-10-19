@@ -54,14 +54,14 @@ export function SetupChecklist({ goSection, load = loadSetupState, navigate = (t
   const R = 26, C = 2 * Math.PI * R;
   return (
     <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden" aria-label="Setup guide">
-      <div className="flex items-center gap-4 px-5 pt-5 pb-4">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-3 px-5 pt-5 pb-4">
         <svg width="64" height="64" viewBox="0 0 64 64" className="flex-shrink-0" aria-hidden>
           <circle cx="32" cy="32" r={R} fill="none" stroke="#e2e8f0" strokeWidth="6" />
           <circle cx="32" cy="32" r={R} fill="none" stroke="currentColor" strokeWidth="6" strokeLinecap="round" className="text-primary transition-all duration-700"
             strokeDasharray={C} strokeDashoffset={state ? C * (1 - pct / 100) : C} transform="rotate(-90 32 32)" />
           <text x="32" y="36" textAnchor="middle" className="fill-current text-ink-primary" fontSize="13" fontWeight="600">{state ? `${pct}%` : ""}</text>
         </svg>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1 basis-40">
           <h3 className="text-base font-semibold text-ink-primary">{!state ? "Checking your setup…" : left.length ? "Get ready for your first customers" : "You're all set"}</h3>
           <p className="text-xs text-ink-tertiary">{!state ? "" : left.length ? `${count} of ${SETUP.length} done · about ${minutes} minutes left` : "Everything's in place. You can change any of it below."}</p>
         </div>

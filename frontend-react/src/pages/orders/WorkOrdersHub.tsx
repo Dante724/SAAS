@@ -291,10 +291,10 @@ export default function WorkOrdersHub() {
         {/* Toolbar */}
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 space-y-3.5">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Gate perm="can_create_tickets"><button onClick={() => setCreate("order")} className="px-4 py-2.5 rounded-xl bg-primary text-white text-sm font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="add" c="text-sm font-bold" />Order</button></Gate>
-              <Gate perm="can_create_estimates"><button onClick={() => setCreate("estimate")} className="px-3.5 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-ink-secondary hover:text-ink-primary text-sm font-semibold border border-slate-200 transition-all flex items-center gap-1.5"><M n="request_quote" c="text-sm" />+ Estimate</button></Gate>
-              <div className="h-5 w-[1px] bg-slate-200 mx-1" />
+              <Gate perm="can_create_estimates"><button onClick={() => setCreate("estimate")} className="px-3.5 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-ink-secondary hover:text-ink-primary text-sm font-semibold border border-slate-200 transition-all flex items-center gap-1.5 whitespace-nowrap"><M n="request_quote" c="text-sm" />+ Estimate</button></Gate>
+              <div className="hidden sm:block h-5 w-[1px] bg-slate-200 mx-1" />
               <div className="relative">
                 <button onClick={() => { setFltOpen((o) => !o); setColsOpen(false); setViewsOpen(false); }} className={`px-3 py-2 rounded-xl text-xs font-medium flex items-center gap-1 border ${activeFacets ? "bg-primary/10 text-primary border-primary/30" : "text-ink-secondary hover:bg-slate-100 border-slate-200"}`}><M n="filter_list" c="text-xs" />Filter{activeFacets ? <span className="ml-0.5 px-1.5 rounded-full bg-primary text-white text-[11px] font-bold">{activeFacets}</span> : null}</button>
                 {fltOpen && (
@@ -311,13 +311,13 @@ export default function WorkOrdersHub() {
               </div>
               <button onClick={openArchived} className="px-3 py-2 rounded-xl text-xs font-medium text-ink-secondary hover:bg-slate-100 flex items-center gap-1 border border-slate-200"><M n="inventory" c="text-xs" />Archived</button>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200/70 text-xs">
                 <button onClick={() => setView("table")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1 ${view === "table" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="table_rows" c="text-xs" />Table</button>
                 <button onClick={() => setView("board")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1 ${view === "board" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="view_kanban" c="text-xs" />Board</button>
                 <button onClick={() => setView("scheduler")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1 ${view === "scheduler" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="calendar_month" c="text-xs" />Scheduler</button>
               </div>
-              <div className="relative"><M n="filter_alt" c="absolute left-2.5 top-1.5 text-ink-tertiary text-xs" /><input value={q} onChange={(e) => setQ(e.target.value)} className="text-xs pl-7 pr-3 py-1 rounded-lg border border-slate-200 bg-slate-50 font-medium focus:bg-white focus:outline-none" placeholder="Filter rows..." /></div>
+              <div className="relative"><M n="filter_alt" c="absolute left-2.5 top-1.5 text-ink-tertiary text-xs" /><input value={q} onChange={(e) => setQ(e.target.value)} className="text-xs pl-7 pr-3 py-1 rounded-lg border border-slate-200 bg-slate-50 font-medium focus:bg-white focus:outline-none" aria-label="Filter rows" placeholder="Filter rows..." /></div>
               <div className="relative">
                 <button onClick={() => { setColsOpen((o) => !o); setViewsOpen(false); }} className="px-3 py-2 rounded-xl text-xs font-medium text-ink-secondary hover:bg-slate-100 border border-slate-200 flex items-center gap-1"><M n="view_column" c="text-xs" />Columns</button>
                 {colsOpen && (
@@ -376,10 +376,32 @@ export default function WorkOrdersHub() {
         {/* Table */}
         {view === "table" && (
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-          <table className="w-full text-left border-collapse text-xs">
+          {/* Phones: one card per order instead of the wide table. */}
+          <ul className="sm:hidden divide-y divide-slate-100" aria-label="Work orders">
+            {err && <li className="p-4 text-xs text-status-overdue-ink">Error: {err}</li>}
+            {!orders && !err && <li className="p-4 text-xs text-ink-tertiary">Loading orders…</li>}
+            {orders && rows.length === 0 && <li className="p-4 text-xs text-ink-tertiary">No work orders match.</li>}
+            {pageRows.map((o) => (
+              <li key={o.id}>
+                <button onClick={() => setOpen(o)} className={`w-full text-left px-4 py-3 flex flex-col gap-1 hover:bg-slate-50/80 ${sel.has(o.id) ? "bg-primary/5" : ""}`}>
+                  <span className="flex items-center gap-2">
+                    <span className="font-mono font-bold text-primary text-xs whitespace-nowrap">{o.order_number || o.id}</span>
+                    {!!(o.client_msg_unread) && <span role="img" className="w-1.5 h-1.5 rounded-full bg-primary" aria-label="Unread client message" />}
+                    <span className="ml-auto">{pill(o.status, stOf(o))}</span>
+                  </span>
+                  <span className="flex items-baseline gap-2">
+                    <span className="text-[13px] font-semibold text-ink-primary truncate">{o.client?.name || "Walk-in"}</span>
+                    <span className="ml-auto tabular-nums font-bold text-ink-primary text-xs">{money(o.total)}</span>
+                  </span>
+                  <span className="text-[11px] text-ink-secondary truncate">{deviceName(o.device)}{o.assigned_to?.name ? ` · ${o.assigned_to.name}` : ""}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <table className="hidden sm:table w-full text-left border-collapse text-xs">
             <thead>
               <tr className="bg-slate-50/60 border-b border-slate-200/80 text-ink-tertiary text-[11px] font-semibold ">
-                <th className="py-3 px-4 w-10"><input className="rounded text-primary border-slate-300" type="checkbox" checked={rows.length > 0 && sel.size === rows.length} onChange={toggleAll} /></th>
+                <th className="py-3 px-4 w-10"><input className="rounded text-primary border-slate-300" type="checkbox" aria-label="Select all work orders" checked={rows.length > 0 && sel.size === rows.length} onChange={toggleAll} /></th>
                 {showCol("order_id") && <th className="py-3 px-4">Order ID</th>}
                 {showCol("client") && <th className="py-3 px-4">Client</th>}
                 {showCol("device") && <th className="py-3 px-4">Device / Asset</th>}
@@ -396,8 +418,8 @@ export default function WorkOrdersHub() {
               {orders && rows.length === 0 && <tr><td colSpan={colSpan} className="py-6 px-4 text-ink-tertiary">No work orders match.</td></tr>}
               {pageRows.map((o) => (
                 <tr key={o.id} onClick={() => setOpen(o)} className={`hover:bg-slate-50/80 cursor-pointer transition-colors group ${sel.has(o.id) ? "bg-primary/5" : ""}`}>
-                  <td className="py-3.5 px-4" onClick={(e) => e.stopPropagation()}><input className="rounded text-primary border-slate-300" type="checkbox" checked={sel.has(o.id)} onChange={() => toggle(o.id)} /></td>
-                  {showCol("order_id") && <td className="py-3.5 px-4 font-mono font-bold text-primary"><span className="inline-flex items-center gap-1.5">{o.order_number || o.id}{!!(o.client_msg_unread && o.client_msg_unread > 0) && <span title={`${o.client_msg_unread} unread customer message(s)`} className="inline-flex items-center gap-0.5 text-[11px] font-bold bg-primary text-white px-1.5 py-0.5 rounded-full"><M n="forum" c="text-[11px]" />{o.client_msg_unread}</span>}{(o as any).checklists_pending && <span role="img" aria-label="Checklist incomplete" title="Checklist incomplete" className="w-2 h-2 rounded-full bg-amber-500" />}</span></td>}
+                  <td className="py-3.5 px-4" onClick={(e) => e.stopPropagation()}><input className="rounded text-primary border-slate-300" type="checkbox" aria-label={`Select ${o.order_number || o.id}`} checked={sel.has(o.id)} onChange={() => toggle(o.id)} /></td>
+                  {showCol("order_id") && <td className="py-3.5 px-4 font-mono font-bold text-primary whitespace-nowrap"><span className="inline-flex items-center gap-1.5">{o.order_number || o.id}{!!(o.client_msg_unread && o.client_msg_unread > 0) && <span title={`${o.client_msg_unread} unread customer message(s)`} className="inline-flex items-center gap-0.5 text-[11px] font-bold bg-primary text-white px-1.5 py-0.5 rounded-full"><M n="forum" c="text-[11px]" />{o.client_msg_unread}</span>}{(o as any).checklists_pending && <span role="img" aria-label="Checklist incomplete" title="Checklist incomplete" className="w-2 h-2 rounded-full bg-amber-500" />}</span></td>}
                   {showCol("client") && <td className="py-3.5 px-4"><span className="font-semibold text-[13px] text-ink-primary">{o.client?.name || "Walk-in"}</span><span className="text-[11px] font-normal text-ink-tertiary block">{o.client?.phone || ""}</span></td>}
                   {showCol("device") && <td className="py-3.5 px-4 text-ink-primary font-semibold">{deviceName(o.device)}</td>}
                   {showCol("status") && <td className="py-3.5 px-4"><div className="flex items-center gap-1.5">{pill(o.status, stOf(o))}{flags[o.id]?.stalled && (

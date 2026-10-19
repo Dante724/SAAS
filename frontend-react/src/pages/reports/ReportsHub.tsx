@@ -162,9 +162,9 @@ export function CustomView() {
 
   return (
     <div className="flex-1 overflow-y-auto px-6 py-5">
-      <div className="flex gap-4">
+      <div className="flex flex-col md:flex-row gap-4">
         {/* saved reports */}
-        <aside className="w-52 flex-shrink-0 bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-2 h-fit">
+        <aside className="md:w-52 flex-shrink-0 bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-2 h-fit">
           <button onClick={() => pickSource("")} className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-bold text-primary hover:bg-blue-50 flex items-center gap-1.5"><M n="add" c="text-sm" />New report</button>
           <div className="text-[11px] font-bold text-ink-tertiary px-2 py-1.5 mt-1">Saved</div>
           {saved.length === 0 && <div className="px-2.5 py-1 text-xs text-ink-tertiary">None yet.</div>}
@@ -601,9 +601,9 @@ export default function ReportsHub() {
       <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
         <PageSummary stats={kpiStats} />
 
-        <div className="flex gap-4">
+        <div className="flex flex-col md:flex-row gap-4">
           {/* report catalog */}
-          <aside className="w-56 flex-shrink-0 bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-2 h-fit max-h-[70vh] overflow-y-auto">
+          <aside className="md:w-56 flex-shrink-0 bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-2 h-fit max-h-[40vh] md:max-h-[70vh] overflow-y-auto">
             {!cat && <div className="p-3 text-xs text-ink-tertiary">Loading…</div>}
             {cat?.tabs.map((t) => (
               <div key={t.name} className="mb-2">
@@ -620,7 +620,7 @@ export default function ReportsHub() {
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 space-y-2.5">
               <div className="flex items-center gap-3 flex-wrap">
                 <h3 className="text-sm font-bold text-ink-primary">{result?.title || "Select a report"}</h3>
-                <div className="ml-auto flex items-center gap-2 text-xs">
+                <div className="ml-auto flex items-center gap-2 flex-wrap text-xs">
                   {locs.length > 1 && (
                     <select value={locId} onChange={(e) => setLocId(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg">
                       <option value="">All locations</option>
@@ -658,7 +658,7 @@ export default function ReportsHub() {
                       {numericIdxs.map((i) => <option key={i} value={i}>{colLabel(cols[i])}</option>)}
                     </select>
                   )}
-                  <button onClick={() => setShowChart((v) => !v)} className="ml-auto text-[11px] font-semibold text-ink-secondary hover:text-primary">{showChart ? "Hide" : "Show"}</button>
+                  <button onClick={() => setShowChart((v) => !v)} className="ml-auto px-2 py-1 -my-1 text-[11px] font-semibold text-ink-secondary hover:text-primary">{showChart ? "Hide" : "Show"}</button>
                 </div>
                 {showChart && (chartRows.length
                   ? <><BarChart rows={chartRows} /><p className="mt-2 text-[11px] text-ink-tertiary">Top {chartRows.length} by {colLabel(cols[activeChartCol])}{q.trim() ? " (filtered)" : ""}.</p></>
