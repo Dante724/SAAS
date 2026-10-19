@@ -8,7 +8,7 @@ import { AlertTriangle, CalendarCheck, ChevronRight, Clock3, RefreshCw } from "l
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import { Card, Empty, Page, Section, SkeletonRows, StatusBadge } from "../components/ui";
-import { useStatuses, type StatusMeta } from "../lib/useGo";
+import { useOnChange, useStatuses, type StatusMeta } from "../lib/useGo";
 import { inferRole, savedRole, type GoRole } from "../lib/role";
 import { utc } from "../lib/time";
 
@@ -71,6 +71,7 @@ export default function Today() {
     } finally { setBusy(false); }
   }, [role]);
   useEffect(() => { load(); }, [load]);
+  useOnChange("jobs", load);
   useEffect(() => {
     const on = () => { if (document.visibilityState === "visible") load(); };
     document.addEventListener("visibilitychange", on);

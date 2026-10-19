@@ -63,3 +63,30 @@ export const useWide = () => useMedia("(min-width: 768px)");
 
 export const ToastCtx = createContext<(m: ToastMsg) => void>(() => {});
 export const useToast = () => useContext(ToastCtx);
+
+export type Staff = { id: string; name: string };
+let staffCache: Promise<Staff[]> | null = null;
+/** Active staff for "assign to" pickers (fetched once per app session). */
+export function useStaff() {
+  const [list, setList] = useState<Staff[]>([]);
+  useEffect(() => {
+    let live = true;
+    staffCache ??= api.get<Staff[]>("/staff/employees").then((r) => (Array.isArray(r) ? r : [])).catch((e) => { staffCache = null; throw e; });
+    staffCache.then((l) => { if (live) setList(l); }).catch(() => {});
+    return () => { live = false; };
+  }, []);
+  return list;
+}
+
+/** Tell open screens that tasks or jobs changed (a create from the "+" sheet, say). */
+export const GO_CHANGED = "go:changed";
+export function announceChange(kind: "tasks" | "jobs") {
+  window.dispatchEvent(new CustomEvent(GO_CHANGED, { detail: kind }));
+}
+export function useOnChange(kind: "tasks" | "jobs", fn: () => void) {
+  useEffect(() => {
+    const h = (e: Event) => { if ((e as CustomEvent).detail === kind) fn(); };
+    window.addEventListener(GO_CHANGED, h);
+    return () => window.removeEventListener(GO_CHANGED, h);
+  }, [kind, fn]);
+}

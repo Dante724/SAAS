@@ -306,6 +306,7 @@ def _serialize_order_scalars(o: Order) -> dict:
         "client_msg_unread": getattr(o, "client_msg_unread", 0) or 0,
         "rec_unread": getattr(o, "rec_unread", 0) or 0,
         "public_token": o.public_token,
+        "signed": bool(getattr(o, "signature", None)),   # customer signature captured (Go shows it)
         "created_at": o.created_at.isoformat(),
         "closed_at": o.closed_at.isoformat() if o.closed_at else None,
         "client": {"id": o.client.id, "name": o.client.name, "phone": o.client.phone,
