@@ -396,7 +396,6 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
               </div>
 
               {renderLayout()}
-              {err && <div className="text-status-overdue-ink text-xs font-semibold">{err}</div>}
             </section>
           )}
 
@@ -460,10 +459,17 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                   </div>
                 )}
               </div>
-              {err && <div className="text-status-overdue-ink text-xs font-semibold">{err}</div>}
             </section>
           )}
         </div>
+
+        {/* Errors sit just above the buttons, where the user is looking, not at the end of a long form. */}
+        {err && (
+          <div role="alert" className="mx-7 mb-0 mt-2 flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-status-overdue-ink">
+            <M n="error" c="text-sm" /><span className="min-w-0 flex-1">{err}</span>
+            <button type="button" aria-label="Dismiss" onClick={() => setErr(null)} className="text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-sm" /></button>
+          </div>
+        )}
 
         {/* Footer */}
         <footer className="px-7 py-4 border-t border-slate-100 bg-white/95 backdrop-blur-md flex items-center justify-between">

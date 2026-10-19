@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
+import { money } from "../pages/orders/types";
 
 // Shared catalog search (legacy /catalog/search) — type to find a service or
 // product and pick it. Used by WO create, WO S&P, POS, invoice builder so lines
@@ -40,10 +41,10 @@ export default function CatalogPicker({ type = "all", placeholder = "Search serv
             {items.map((i) => (
               <button key={i.kind + i.ref_id} onClick={() => { onPick(i); setQ(""); setItems([]); setBrowse(false); setOpen(false); }}
                 className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-sm">
-                <span className={`text-[11px]  font-bold px-1.5 py-0.5 rounded ${i.kind === "service" ? "bg-emerald-100 text-emerald-700" : (i.kind as string) === "bundle" ? "bg-violet-100 text-violet-700" : "bg-blue-100 text-primary"}`}>{i.kind === "service" ? "svc" : (i.kind as string) === "bundle" ? "kit" : "prod"}</span>
+                <span className={`text-[11px]  font-bold px-1.5 py-0.5 rounded ${i.kind === "service" ? "bg-emerald-100 text-emerald-700" : (i.kind as string) === "bundle" ? "bg-violet-100 text-violet-700" : "bg-blue-100 text-primary"}`}>{i.kind === "service" ? "Service" : (i.kind as string) === "bundle" ? "Job kit" : "Product"}</span>
                 <span className="font-semibold text-ink-primary flex-1 truncate">{i.name}</span>
                 {i.fits && <span className="text-[11px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700" title="Fits this device">Fits</span>}
-                <span className="tabular-nums text-ink-tertiary text-xs">{(i.price ?? 0).toLocaleString()}</span>
+                <span className="tabular-nums text-ink-tertiary text-xs">{money(i.price ?? 0)}</span>
               </button>
             ))}
           </div>

@@ -37,7 +37,7 @@ export default function TrackLookup() {
   }
 
   return (
-    <div className="min-h-screen bg-surface font-sans text-ink-primary">
+    <div className="min-h-screen bg-canvas font-sans text-ink-primary">
       <div className="mx-auto grid min-h-screen max-w-md place-items-center px-5">
         <div className="w-full">
           <div className="mb-6 flex items-center gap-3">

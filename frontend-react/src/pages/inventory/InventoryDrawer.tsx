@@ -449,7 +449,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                 {comps.map((c: any, idx: number) => (
                   <div key={c.ref_id + idx} className="bg-white rounded-lg border border-slate-200/80 px-2.5 py-1.5 space-y-1">
                     <div className="flex items-center gap-2">
-                      <span className={`text-[11px]  font-bold px-1.5 py-0.5 rounded ${c.ref_type === "service" ? "bg-emerald-100 text-emerald-700" : "bg-blue-100 text-primary"}`}>{c.ref_type === "service" ? "svc" : "prod"}</span>
+                      <span className={`text-[11px]  font-bold px-1.5 py-0.5 rounded ${c.ref_type === "service" ? "bg-emerald-100 text-emerald-700" : "bg-blue-100 text-primary"}`}>{c.ref_type === "service" ? "Service" : "Product"}</span>
                       <span className="flex-1 text-xs font-semibold text-ink-primary truncate">{c.name || c.ref_id}{c.missing && <span className="ml-1 text-[11px] font-bold text-amber-700">missing</span>}</span>
                       <input type="number" min={1} value={c.qty} onChange={(e) => setQty(idx, Number(e.target.value))} className="w-14 glass-input px-2 py-1 text-xs rounded-lg text-center" aria-label="Quantity" />
                       <span className="w-16 text-right tabular-nums text-[11px] text-ink-tertiary">{money((c.std_price || 0) * (c.qty || 1))}</span>
