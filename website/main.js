@@ -61,6 +61,7 @@
       input.value = ""; input.classList.add("caret");
       for (const ch of ex.q) { if (id !== run) return; input.value += ch; await wait(18); }
     }
+    else input.value = ex.q;
     input.classList.remove("caret");
     asset.textContent = ex.asset; stat.textContent = "Drafting…"; lines.innerHTML = ""; total.textContent = "—";
     await wait(350);

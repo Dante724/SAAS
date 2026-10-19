@@ -242,6 +242,7 @@ def page(p):
 <script defer src="/site.config.js"></script>
 <script defer src="/page.js"></script>
 <script defer src="/marketing.js"></script>
+<script defer src="/assistant.js"></script>
 </body>
 </html>
 '''

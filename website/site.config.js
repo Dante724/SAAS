@@ -17,6 +17,17 @@ window.TEKLY_SITE = {
   // third-party loads; CTA clicks and demo requests still go to window.dataLayer.
   analytics: { gtmId: "" },
 
+  // On-page assistant (no AI service; runs in the browser). To book real demo times, create a
+  // "Tekly Demos" shop in Tekly, turn on online appointments, and put its booking slug here.
+  // Add this website's domain to the backend's CORS_ORIGINS. Empty slug = it collects a
+  // preferred day/time and sends a demo request instead.
+  assistant: {
+    enabled: true,
+    name: "Tekly Assistant",
+    nudgeAfterSec: 25,
+    booking: { slug: "", apiBase: "", timezoneLabel: "" },
+  },
+
   currency: "$",
   annualDiscount: 0.2,   // 20% off when billed yearly
   trialDays: 14,

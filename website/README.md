@@ -65,3 +65,23 @@ grep -rl "https://tekly.app" website | xargs sed -i '' 's#https://tekly.app#http
 ```
 
 Then submit `https://YOUR-DOMAIN/sitemap.xml` in Google Search Console and Bing Webmaster Tools.
+
+## Tekly Assistant (on-page chat)
+
+`assistant.js` adds an "Ask Tekly" chat to every page. It runs entirely in the browser — no AI
+service is called and no API key is needed. It answers from a built-in knowledge base of facts
+that appear on the site (plans, templates, AI features, integrations, switching, data), with
+typo-tolerant matching; recommends Starter or Pro from three questions; and books demos.
+Off-topic questions get an honest "I'm not sure" and an offer to book a person.
+
+**Booking real times:** create a "Tekly Demos" shop in Tekly, turn on online appointments and
+set its working hours, then put its booking slug in `site.config.js → assistant.booking.slug`
+(and `timezoneLabel`, e.g. "ET"). The assistant then shows live open days and times from
+Tekly's own booking API and books straight into that calendar (double-booking is handled by
+the API). Add the website's domain to the backend's `CORS_ORIGINS`.
+Without a slug, it collects a preferred day and morning/afternoon and sends a demo request
+(to `demoEndpoint`, or the visitor's email app).
+
+Events pushed to `dataLayer`: `assistant_open`, `assistant_message` (matched intent),
+`assistant_booking_start`, `assistant_recommend`, `generate_lead`. To edit answers, change the
+`KB` and `TRADES` lists at the top of `assistant.js` — keep them to facts that are true.
