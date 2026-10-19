@@ -1,0 +1,655 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Tekly — The operating system for repair shops</title>
+  <meta name="description" content="Tekly runs the whole repair: work orders, AI-drafted estimates customers approve on their phone, parts that attach to the right job, POS, inventory and payroll. Built for phone, computer, auto, marine, bike, powersports, small engine, tool and fleet shops.">
+  <meta name="theme-color" content="#ffffff">
+  <meta property="og:title" content="Tekly — The operating system for repair shops">
+  <meta property="og:description" content="From the customer's complaint to a paid invoice, in one calm flow.">
+  <link rel="icon" type="image/svg+xml" href="assets/tekly-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;700&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script>document.documentElement.classList.add("js")</script>
+</head>
+<body>
+<a class="skip" href="#platform">Skip to content</a>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="nut" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7a73ff"/><stop offset=".55" stop-color="#533afd"/><stop offset="1" stop-color="#2e2b8c"/></linearGradient>
+    <linearGradient id="sparkfill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#533afd" stop-opacity=".18"/><stop offset="1" stop-color="#533afd" stop-opacity="0"/></linearGradient>
+  </defs>
+  <symbol id="mark" viewBox="0 0 64 64"><path fill-rule="evenodd" d="M59.50 27.67Q62.00 32.00 59.50 36.33L49.50 53.65Q47.00 57.98 42.00 57.98L22.00 57.98Q17.00 57.98 14.50 53.65L4.50 36.33Q2.00 32.00 4.50 27.67L14.50 10.35Q17.00 6.02 22.00 6.02L42.00 6.02Q47.00 6.02 49.50 10.35ZM24.5 19.5L34.5 15V25.5H42V33H34.5V40C34.5 41.8 35.4 42.5 37.2 42.5H42V49.8H35.8C28.6 49.8 24.5 46 24.5 39.5V33H20.5V25.5H24.5Z"/></symbol>
+  <symbol id="arr" viewBox="0 0 10 10"><path class="stem" d="M0 5h7" stroke="currentColor" stroke-width="1.5" fill="none"/><path class="head" d="M1 1l4 4-4 4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="check" viewBox="0 0 24 24"><path d="M5 12.5l4.2 4.2L19 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="checkc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.2" fill="currentColor" opacity=".12"/><path d="M8 12.3l2.7 2.7L16.2 9.5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="x" viewBox="0 0 24 24"><path d="M8 8l8 8M16 8l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="half" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 3.5a8.5 8.5 0 010 17z" fill="currentColor" opacity=".6"/></symbol>
+  <symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="desk" viewBox="0 0 24 24"><path d="M4 6.5h16v9H4zM9 19.5h6M12 15.5v4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></symbol>
+  <symbol id="wrench" viewBox="0 0 24 24"><path d="M14.5 6.5a4 4 0 00-5.2 5.1L4 17l3 3 5.4-5.3a4 4 0 005.1-5.2l-2.4 2.4-2.6-.5-.5-2.6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+  <symbol id="bag" viewBox="0 0 24 24"><path d="M5 8h14l-1 12H6zM9 8V6.5a3 3 0 016 0V8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+  <symbol id="chart" viewBox="0 0 24 24"><path d="M4 19.5h16M7 16v-4M11.5 16V8M16 16v-6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="9.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8.5 10.5V8a3.5 3.5 0 017 0v2.5" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
+  <symbol id="key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M11 12l8-8M16 7l2.5 2.5M14 9l2 2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="users" viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3.3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3 19.5c.6-3.3 3.1-5 6-5s5.4 1.7 6 5M16 5.4a3.2 3.2 0 010 6.2M18 14.6c1.8.7 2.8 2.2 3.2 4.9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="log" viewBox="0 0 24 24"><rect x="5" y="3.5" width="14" height="17" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8.5 8h7M8.5 12h7M8.5 16h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="down" viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="wifi" viewBox="0 0 24 24"><path d="M3 9a13 13 0 0118 0M6 12.5a8.5 8.5 0 0112 0M9 16a4 4 0 016 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="19" r="1.2" fill="currentColor"/></symbol>
+  <symbol id="box" viewBox="0 0 24 24"><path d="M4 7.5L12 3.5l8 4v9l-8 4-8-4zM4 7.5l8 4 8-4M12 11.5v9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+  <symbol id="phone" viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="2.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.5 18h3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="swap" viewBox="0 0 24 24"><path d="M7 4L4 7l3 3M4 7h13M17 20l3-3-3-3M20 17H7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="shield" viewBox="0 0 24 24"><path d="M12 3l7.5 3v5.5c0 4.6-3.1 8.3-7.5 9.5-4.4-1.2-7.5-4.9-7.5-9.5V6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+  <symbol id="card" viewBox="0 0 24 24"><rect x="3" y="5.5" width="18" height="13" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3 10h18" stroke="currentColor" stroke-width="1.6"/></symbol>
+</svg>
+
+<header class="nav" id="nav">
+  <div class="wrap">
+    <a href="#top" class="logo" aria-label="Tekly home"><svg fill="url(#nut)"><use href="#mark"/></svg>tekly</a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="#platform">Platform</a>
+      <a href="#trades">Industries</a>
+      <a href="#ai">AI</a>
+      <a href="#security">Security</a>
+      <a href="#pricing">Pricing</a>
+    </nav>
+    <div class="nav-right">
+      <a class="signin" data-app="signin" href="#start">Sign in <svg class="arr"><use href="#arr"/></svg></a>
+      <a class="btn btn-primary" data-app="signup" href="#start">Start free trial <svg class="arr"><use href="#arr"/></svg></a>
+      <button class="burger" aria-label="Menu" aria-expanded="false" aria-controls="mmenu"><span></span><span></span><span></span></button>
+    </div>
+    <div class="mmenu" id="mmenu">
+      <a href="#platform">Platform</a><a href="#trades">Industries</a><a href="#ai">AI</a><a href="#security">Security</a><a href="#pricing">Pricing</a><a href="#start" data-pane="demo">Book a demo</a>
+      <div class="row"><a class="btn btn-secondary" data-app="signin" href="#start">Sign in</a><a class="btn btn-primary" data-app="signup" href="#start">Start free trial</a></div>
+    </div>
+  </div>
+  <div class="progress" id="progress"></div>
+</header>
+
+<main id="top">
+
+<!-- ════════ HERO ════════ -->
+<section class="hero">
+  <div class="mesh-band" aria-hidden="true"><div class="mesh-css"></div><canvas id="mesh"></canvas></div>
+  <div class="guides" aria-hidden="true"><div class="wrap"><span></span><span></span><span></span><span></span></div></div>
+  <div class="wrap">
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <h1 class="d-hero split" data-split>The operating system for <span class="serif">repair shops</span></h1>
+        <p class="lead rv">Work orders, estimates customers approve on their phone, parts, POS, payroll — and AI that writes the paperwork. One platform for phones, cars, boats, bikes and every bench in between.</p>
+        <div class="hero-cta rv">
+          <a class="btn btn-primary btn-lg" data-app="signup" href="#start">Start free trial <svg class="arr"><use href="#arr"/></svg></a>
+          <a class="link" href="#start" data-pane="demo">Book a live demo <svg class="arr"><use href="#arr"/></svg></a>
+        </div>
+        <div class="hero-meta rv">
+          <span><svg><use href="#check"/></svg><span><span data-trial>14</span>-day free trial</span></span>
+          <span><svg><use href="#check"/></svg>No credit card</span>
+          <span><svg><use href="#check"/></svg>Free data migration</span>
+        </div>
+      </div>
+
+      <div class="comp" id="comp">
+        <div class="dash" id="dash" aria-hidden="true">
+          <div class="dash-top">
+            <span class="loc"><i></i>Northside Repair Co.</span><span class="sample">Sample data</span>
+            <span class="search">Search jobs, customers… <kbd>⌘K</kbd></span>
+            <span class="who">Clocked in 08:02 <span class="avatar">PS</span></span>
+          </div>
+          <div class="dash-body">
+            <aside class="side">
+              <a><i></i>Home</a>
+              <div class="grp">Front desk</div><a><i></i>Inquiries</a><a><i></i>Appointments</a><a><i></i>Chats</a>
+              <div class="grp">Workshop</div><a class="on"><i></i>Work orders</a><a><i></i>My work</a><a><i></i>Tasks</a>
+              <div class="grp">Commerce</div><a><i></i>Sales</a><a><i></i>Invoices</a><a><i></i>Inventory</a>
+              <div class="grp">Grow</div><a><i></i>Reports</a>
+            </aside>
+            <div class="main">
+              <div class="main-h"><h4>Work orders</h4><span class="mini-btn">+ New order</span></div>
+              <div class="kpi-row">
+                <div><div class="k">Open jobs</div><div class="v tnum">38</div></div>
+                <div><div class="k">Waiting on parts</div><div class="v tnum">6</div></div>
+                <div><div class="k">Ready today</div><div class="v tnum">11</div></div>
+                <div><div class="k">To collect</div><div class="v tnum">$7,482</div></div>
+              </div>
+              <div class="chips"><span class="on">All</span><span>Diagnosed</span><span>Waiting parts</span><span>In repair</span><span>Ready</span></div>
+              <table class="tbl">
+                <thead><tr><th>Order</th><th>Customer</th><th>Device</th><th>Status</th><th class="r">Estimate</th></tr></thead>
+                <tbody>
+                  <tr id="row1042"><td class="wo">WO-1042</td><td>Neha Kapoor</td><td>iPhone 14 Pro</td><td><span class="st wait" id="st1042">Awaiting approval</span></td><td class="r tnum" id="amt1042">$368.00</td></tr>
+                  <tr><td class="wo">WO-1041</td><td>Marcus Bell</td><td>MacBook Air M2</td><td><span class="st prog">In repair</span></td><td class="r tnum">$219.00</td></tr>
+                  <tr><td class="wo">WO-1040</td><td>Ana Ruiz</td><td>Galaxy S23</td><td><span class="st ok">Ready</span></td><td class="r tnum">$149.00</td></tr>
+                  <tr><td class="wo">WO-1039</td><td>Fleetline Ltd</td><td>Unit 214 · Day cab</td><td><span class="st wait">Waiting parts</span></td><td class="r tnum">$1,860.00</td></tr>
+                  <tr><td class="wo">WO-1038</td><td>Tom Becker</td><td>Commuter e-bike</td><td><span class="st prog">In repair</span></td><td class="r tnum">$96.00</td></tr>
+                  <tr><td class="wo">WO-1037</td><td>Joy Okafor</td><td>150 hp outboard</td><td><span class="st new">Diagnosed</span></td><td class="r tnum">$640.00</td></tr>
+                  <tr><td class="wo">WO-1036</td><td>Liam Chen</td><td>iPad Air 5</td><td><span class="st ok">Ready</span></td><td class="r tnum">$189.00</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="phone" id="heroPhone">
+          <div class="scr">
+            <div class="island"></div>
+            <div class="p-head"><div class="shop"><b></b>Northside Repair Co.</div><div class="t">Your technician found 2 more things</div></div>
+            <div class="p-body">
+              <div class="p-row on locked" data-amt="89"><span class="cb"><svg><use href="#check"/></svg></span><span>Charging port<small>Approved earlier</small></span><span class="amt tnum">$89</span></div>
+              <div class="p-row on locked" data-amt="279"><span class="cb"><svg><use href="#check"/></svg></span><span>Display assembly<small>Approved earlier</small></span><span class="amt tnum">$279</span></div>
+              <div class="p-row" data-amt="129" role="checkbox" aria-checked="false" tabindex="0"><span class="cb"><svg><use href="#check"/></svg></span><span>Back glass<small>Cracked, noted at intake</small></span><span class="amt tnum">$129</span></div>
+              <div class="p-row" data-amt="69" role="checkbox" aria-checked="false" tabindex="0"><span class="cb"><svg><use href="#check"/></svg></span><span>Battery<small>Health 81%</small></span><span class="amt tnum">$69</span></div>
+              <div class="p-note">Nothing is added unless you choose it.</div>
+              <div class="p-sig" id="sig"><svg viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M5 30 C 20 5, 30 5, 35 25 S 50 35, 60 15 S 80 5, 85 28 S 105 30, 115 12 C 125 2, 135 30, 150 22 S 180 10, 195 18"/></svg></div>
+            </div>
+            <div class="p-foot"><button class="p-btn" id="approveBtn">Approve <span class="tnum" id="approveAmt">$368</span></button></div>
+          </div>
+        </div>
+        <div class="comp-hint" aria-hidden="true">try it <svg viewBox="0 0 48 26"><path d="M2 20 C 14 26, 30 22, 44 6 M36 5 l8 1 -1 8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></div>
+        <div class="toast" id="toast" role="status" aria-live="polite"><span class="ic"><svg><use href="#check"/></svg></span><span><b>Neha approved <span class="tnum" id="toastAmt">$497</span></b><br><span style="color:var(--mute)">WO-1042 moved to In repair · just now</span></span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="trades" aria-label="Trades Tekly is built for">
+  <div class="lbl">Ready-made for every kind of repair</div>
+  <p class="sr">Templates for phone and tablet, computer, power tools, small engine, powersports, auto, bicycle and e-bike, motorcycle, marine, fleet and truck, and general repair.</p><div class="marq" aria-hidden="true"><div class="marq-t">
+    <span>Phone &amp; tablet</span><span><em>Computer</em></span><span>Power tools</span><span><em>Small engine</em></span><span>Powersports</span><span><em>Auto</em></span><span>Bicycle &amp; e-bike</span><span><em>Motorcycle</em></span><span>Marine</span><span><em>Fleet &amp; truck</em></span><span>General repair</span>
+    <span>Phone &amp; tablet</span><span><em>Computer</em></span><span>Power tools</span><span><em>Small engine</em></span><span>Powersports</span><span><em>Auto</em></span><span>Bicycle &amp; e-bike</span><span><em>Motorcycle</em></span><span>Marine</span><span><em>Fleet &amp; truck</em></span><span>General repair</span>
+  </div></div>
+</div>
+
+<!-- ════════ PLATFORM ════════ -->
+<section class="sec" id="platform">
+  <div class="guides" aria-hidden="true"><div class="wrap"><span></span><span></span><span></span><span></span></div></div>
+  <div class="wrap">
+    <div class="head">
+      <p class="kicker rv"><span class="k-n">01</span>The platform</p>
+      <h2 class="d-xl split" data-split>One system for the counter, the bench and the <span class="serif">books</span>.</h2>
+      <p class="lead rv">Most shops run on four apps and a notebook. Tekly replaces them with one — so a job never falls between the gaps.</p>
+    </div>
+    <div class="pillars">
+      <div class="pillar rv"><div class="ic"><svg><use href="#desk"/></svg></div><h3>Front desk</h3><p>Check jobs in properly and keep every customer in the loop without picking up the phone.</p><ul><li>Industry-specific intake</li><li>Online booking &amp; reminders</li><li>SMS, email &amp; chat inbox</li><li>Customer portal &amp; tracking link</li></ul><a class="link" href="#flow">See the flow <svg class="arr"><use href="#arr"/></svg></a></div>
+      <div class="pillar rv"><div class="ic"><svg><use href="#wrench"/></svg></div><h3>Workshop</h3><p>Every technician knows what's next, what's waiting and when it's promised.</p><ul><li>Job board &amp; scheduler</li><li>Checklists &amp; photos</li><li>Time in status &amp; ETAs</li><li>Technician app, works offline</li></ul><a class="link" href="#trades">By industry <svg class="arr"><use href="#arr"/></svg></a></div>
+      <div class="pillar rv"><div class="ic"><svg><use href="#bag"/></svg></div><h3>Commerce</h3><p>Sell, invoice and get paid — at the counter or by link — with stock that stays right.</p><ul><li>Quick POS &amp; cash drawers</li><li>Invoices &amp; payment links</li><li>Inventory, POs &amp; transfers</li><li>Barcode &amp; QR labels</li></ul><a class="link" href="#stories">Inventory <svg class="arr"><use href="#arr"/></svg></a></div>
+      <div class="pillar rv"><div class="ic"><svg><use href="#chart"/></svg></div><h3>Back office</h3><p>Payroll, commissions and reports that are already done when you sit down.</p><ul><li>Payroll &amp; commissions</li><li>Job profitability &amp; P&amp;L</li><li>QuickBooks &amp; Xero sync</li><li>Roles, approvals &amp; audit log</li></ul><a class="link" href="#calc">What it's worth <svg class="arr"><use href="#arr"/></svg></a></div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════ FLOW (pinned on desktop) ════════ -->
+<section class="sec soft" id="flow">
+  <div class="wrap">
+    <div class="head">
+      <p class="kicker rv"><span class="k-n">02</span>How a job moves</p>
+      <h2 class="d-xl split" data-split>Five handoffs. <span class="serif">Zero</span> dropped balls.</h2>
+    </div>
+    <div class="flow" id="flowEl">
+      <div class="steps" aria-label="Job flow">
+        <button class="step on" aria-current="step"><span class="bar"></span><span class="n">01 — Intake</span><h3>Check it in properly</h3><p>Intake asks for exactly what your trade needs — IMEI, VIN or HIN — with condition photos, passcodes stored encrypted, and a typical-turnaround estimate.</p></button>
+        <button class="step"><span class="bar"></span><span class="n">02 — Estimate</span><h3>AI drafts the estimate</h3><p>Paste the customer's words. Tekly AI drafts labour and parts from your own catalog and prices. You review and send.</p></button>
+        <button class="step"><span class="bar"></span><span class="n">03 — Approval</span><h3>The customer says yes on their phone</h3><p>Line by line, with a signature. Found more mid-repair? They tick what they want — nothing is added unless they choose it.</p></button>
+        <button class="step"><span class="bar"></span><span class="n">04 — Parts</span><h3>Parts find their own job</h3><p>Order from the job. Scan the box when it arrives and the part is written off to the right work order — and the customer's ETA updates.</p></button>
+        <button class="step"><span class="bar"></span><span class="n">05 — Paid</span><h3>Paid, posted, payroll done</h3><p>Payment at the counter or by link. Revenue, margin and the technician's commission post the moment the job closes.</p></button>
+      </div>
+      <div class="stage" aria-live="polite">
+        <div class="scene on">
+          <div class="card">
+            <div class="card-h"><span class="t">WO-1042 · iPhone 14 Pro</span><span class="st wait">Diagnosing</span></div>
+            <div class="card-b">
+              <div class="kv">
+                <div><div class="k">IMEI</div><div class="v mono">35 291811 402177 3</div></div>
+                <div><div class="k">Passcode</div><div class="v">•••••• <span class="muted" style="font-size:11.5px;color:var(--mute)">encrypted</span></div></div>
+                <div class="full"><div class="k">Customer says</div><div class="v">“Dropped it in the pool. Won't charge, screen flickers.”</div></div>
+              </div>
+              <div style="margin-top:12px">
+                <div class="li"><span class="okc"><svg><use href="#check"/></svg></span>3 intake photos · cracked back glass noted</div>
+                <div class="li"><span class="okc"><svg><use href="#check"/></svg></span>Liquid indicator triggered</div>
+                <div class="li"><span style="color:var(--mute)">Typical time in diagnosis</span><span class="r tnum">1h 40m · ready Thu</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="scene">
+          <div class="card">
+            <div class="card-h"><span class="t">Estimate E-1042</span><span class="tag">Drafted by Tekly AI</span></div>
+            <div class="card-b">
+              <div class="li"><span class="ai">AI</span>Liquid-damage diagnostic<span class="r tnum">$49.00</span></div>
+              <div class="li"><span class="ai">AI</span>Ultrasonic board clean<span class="r tnum">$65.00</span></div>
+              <div class="li"><span class="ai">AI</span>Charging port flex<span class="r tnum">$89.00</span></div>
+              <div class="li"><span class="ai">AI</span>Display assembly — OEM grade<span class="r tnum">$279.00</span></div>
+              <div class="sumrow"><span>Total</span><span class="tnum">$482.00</span></div>
+              <p style="font-size:12px;margin:12px 0 0;color:var(--mute)">From your catalog and prices · nothing is sent until you tap Send</p>
+            </div>
+          </div>
+        </div>
+        <div class="scene">
+          <div class="phone" aria-hidden="true">
+            <div class="scr">
+              <div class="island"></div>
+              <div class="p-head"><div class="shop"><b></b>Northside Repair Co.</div><div class="t">Approve your repair</div></div>
+              <div class="p-body">
+                <div class="p-row on"><span class="cb"><svg><use href="#check"/></svg></span><span>Diagnostic &amp; clean</span><span class="amt tnum">$114</span></div>
+                <div class="p-row on"><span class="cb"><svg><use href="#check"/></svg></span><span>Charging port</span><span class="amt tnum">$89</span></div>
+                <div class="p-row on"><span class="cb"><svg><use href="#check"/></svg></span><span>Display assembly</span><span class="amt tnum">$279</span></div>
+                <div class="p-row"><span class="cb"><svg><use href="#check"/></svg></span><span>Battery</span><span class="amt tnum">$69</span></div>
+                <div class="p-note">Nothing is added unless you choose it.</div>
+                <div class="p-sig go"><svg viewBox="0 0 200 40" preserveAspectRatio="none"><path d="M5 30 C 20 5, 30 5, 35 25 S 50 35, 60 15 S 80 5, 85 28 S 105 30, 115 12 C 125 2, 135 30, 150 22 S 180 10, 195 18"/></svg></div>
+              </div>
+              <div class="p-foot"><button class="p-btn" tabindex="-1">Approve $482</button></div>
+            </div>
+          </div>
+        </div>
+        <div class="scene">
+          <div class="card">
+            <div class="card-h"><span class="t">PO-2208 · received</span><span class="st ok">All in</span></div>
+            <div class="card-b">
+              <div class="li"><span class="okc"><svg><use href="#box"/></svg></span><span>Display assembly — iPhone 14 Pro<br><span class="mono" style="font-size:11px;color:var(--mute)">DSP-IP14P-OEM · scanned 2:14 pm</span></span><span class="r st ok">Arrived 1</span></div>
+              <div class="track"><span>Stock</span><span class="ln"></span><span style="color:var(--ink)">WO-1042</span></div>
+              <div class="li"><span class="okc"><svg><use href="#check"/></svg></span>Written off to WO-1042 · customer notified</div>
+              <div class="kv" style="margin-top:12px"><div><div class="k">Part cost</div><div class="v tnum">$118.40</div></div><div><div class="k">Job margin</div><div class="v tnum" style="color:var(--green)">51%</div></div></div>
+            </div>
+          </div>
+        </div>
+        <div class="scene">
+          <div class="card">
+            <div class="card-h"><span class="t">Today</span><span class="s">Northside Repair Co.</span></div>
+            <div class="card-b">
+              <div class="mini-kpis"><div><div class="k">Collected</div><div class="v tnum">$3,940</div><div class="d">+18% vs last Tue</div></div><div><div class="k">Avg. margin</div><div class="v tnum">46%</div><div class="d">+4 pts</div></div><div><div class="k">Jobs closed</div><div class="v tnum">14</div><div class="d">2 early</div></div></div>
+              <svg class="spark" viewBox="0 0 400 90" preserveAspectRatio="none"><path class="a" fill="url(#sparkfill)" d="M0 70 L40 62 L80 66 L120 50 L160 54 L200 40 L240 44 L280 30 L320 34 L360 18 L400 12 L400 90 L0 90Z"/><path class="l" d="M0 70 L40 62 L80 66 L120 50 L160 54 L200 40 L240 44 L280 30 L320 34 L360 18 L400 12"/></svg>
+              <div class="li"><span class="okc"><svg><use href="#card"/></svg></span><span>WO-1042 paid · <span class="tnum">$482.00</span><br><span style="font-size:11.5px;color:var(--mute)">Commission to Priya S. · <span class="tnum">$48.20</span> · added to this pay run</span></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════ TRADES (interactive) ════════ -->
+<section class="sec" id="trades">
+  <div class="guides" aria-hidden="true"><div class="wrap"><span></span><span></span><span></span><span></span></div></div>
+  <div class="wrap">
+    <div class="head">
+      <p class="kicker rv"><span class="k-n">03</span>Industries</p>
+      <h2 class="d-xl split" data-split>Built for your bench, <span class="serif">whatever's on it</span>.</h2>
+      <p class="lead rv">Pick your trade and Tekly sets up the right intake fields, asset types and services. Run more than one? Use several templates in one account.</p>
+    </div>
+    <div class="switch rv">
+      <div class="trade-list" id="tradeList" role="tablist" aria-label="Choose a trade"></div>
+      <div class="trade-view" role="tabpanel" id="tradePanel" aria-live="polite">
+        <div class="tv-photo"><img id="tvImg" alt=""><img id="tvImg2" class="out" alt=""><div class="credit" id="tvCredit"></div></div>
+        <div class="tv-info">
+          <div class="fade-swap" id="tvSwap">
+            <span class="tag" id="tvTag"></span>
+            <h3 id="tvTitle"></h3>
+            <p id="tvDesc"></p>
+            <div class="intake"><div class="intake-h"><span>New work order · intake</span><span class="mono" id="tvAsset"></span></div><div class="intake-g" id="tvFields"></div></div>
+          </div>
+          <div class="tv-svc fade-swap" id="tvSvc"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════ AI ════════ -->
+<section class="sec dark on-dark" id="ai">
+  <div class="guides" aria-hidden="true"><div class="wrap"><span></span><span></span><span></span><span></span></div></div>
+  <div class="wrap">
+    <div class="head">
+      <p class="kicker rv"><span class="k-n">04</span>Tekly AI</p>
+      <h2 class="d-xl split" data-split>AI that does the paperwork. <span class="serif">You do the repairs.</span></h2>
+      <p class="lead rv">Built into the screens you already use — not a chatbot in a corner. It drafts; your team decides. Every plan includes AI — never a paid add-on.</p>
+    </div>
+    <div class="ai-grid">
+      <article class="ai-card span2 rv">
+        <span class="lbl">ESTIMATE DRAFTING · PRO</span>
+        <h3>Turn “grinding when I brake” into a priced estimate.</h3>
+        <p>Paste or dictate the customer's words. Tekly drafts labour and parts from your catalog, at your prices.</p>
+        <div class="ai-ui" id="aiEst">
+          <div class="q"><span class="ai-type" id="aiQ">“Grinding noise when braking, pulls to the left.”</span><span class="tag">2019 Honda CR-V</span></div>
+          <div class="li" data-l><span class="ai">AI</span>Brake inspection &amp; road test<span class="r tnum">$59.00</span></div>
+          <div class="li" data-l><span class="ai">AI</span>Front pads &amp; rotors — pair<span class="r tnum">$289.00</span></div>
+          <div class="li" data-l><span class="ai">AI</span>Caliper slide service<span class="r tnum">$45.00</span></div>
+        </div>
+      </article>
+      <article class="ai-card rv">
+        <span class="lbl">JOB SUMMARIES · ALL PLANS</span>
+        <h3>Catch up on any job in one read.</h3>
+        <p>Every note, status change and message — summarised for whoever picks it up next.</p>
+        <div class="ai-ui"><div class="li">Board cleaned; charging restored.</div><div class="li">Customer added back glass by phone.</div><div class="li">Display arrives today — ready by 4:30.</div></div>
+      </article>
+      <article class="ai-card rv">
+        <span class="lbl">REPLY SUGGESTIONS · ALL PLANS</span>
+        <h3>Answer “is it ready?” in one tap.</h3>
+        <p>Replies that know the job's real status and sound like your shop.</p>
+        <div class="ai-ui" style="display:flex;flex-direction:column;gap:6px"><div class="bub in">Hi! Any update on my MacBook?</div><div class="bub out">Hi Marcus — the keyboard arrived this morning. You can pick up after 4 pm today.</div><div class="sugg">suggested · edit before sending</div></div>
+      </article>
+      <article class="ai-card rv">
+        <span class="lbl">CALL INSIGHTS · SCALE</span>
+        <h3>Spot the unhappy call before the review.</h3>
+        <p>Calls transcribed, summarised and tagged by sentiment.</p>
+        <div class="ai-ui">
+          <div class="call"><span class="who">Ana Ruiz<span>Booked Saturday pickup</span></span><span class="senti pos">Positive</span></div>
+          <div class="call"><span class="who">Fleetline Ltd<span>Asked for PO number on invoice</span></span><span class="senti neu">Neutral</span></div>
+          <div class="call"><span class="who">J. Patel<span>Third call about delayed part</span></span><span class="senti neg">Negative</span></div>
+        </div>
+      </article>
+      <article class="ai-card rv">
+        <span class="lbl">PARTS RECOGNITION · PRO</span>
+        <h3>Paste a supplier list. Get line items.</h3>
+        <p>Messy invoices and dictation become clean parts with quantities and prices.</p>
+        <div class="ai-ui"><div class="q"><span class="mono" style="font-size:11.5px">2x 14pro scrn oem @118.40</span></div><div class="li"><span class="ai">2×</span>Display assembly — iPhone 14 Pro<span class="r tnum">$118.40</span></div></div>
+      </article>
+    </div>
+    <div class="ai-row">
+      <div class="rv"><h3>Approval-first, always</h3><p>AI drafts estimates and replies. A person on your team presses send.</p></div>
+      <div class="rv"><h3>Your shop's data stays yours</h3><p>Each shop's data stays inside its own account — never pooled into a shared model.</p></div>
+      <div class="rv"><h3>Never in the way</h3><p>Every AI screen has a manual path, so a slow connection never stops the bench.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════ STORIES ════════ -->
+<section class="sec" id="stories">
+  <div class="wrap">
+    <div class="story">
+      <div class="ph-wrap rv">
+        <div class="ph"><img data-photo="parts" alt="Scanning a delivered part in the stockroom" loading="lazy" data-parallax><span class="credit" data-credit="parts"></span></div>
+        <div class="pin" style="right:-20px;bottom:28px"><span class="ic"><svg><use href="#box"/></svg></span><span><span class="k">Low stock · 6 parts</span><br><span class="v">Draft purchase order ready</span></span></div>
+      </div>
+      <div>
+        <p class="kicker rv"><span class="k-n">05</span>Inventory &amp; purchasing</p>
+        <h2 class="d-lg split" data-split>Parts that know which job they're for.</h2>
+        <ul class="ticks">
+          <li class="rv"><svg><use href="#checkc"/></svg>Order from the work order; receive with a scan</li>
+          <li class="rv"><svg><use href="#checkc"/></svg>Parts reserved, written off and costed into the job automatically</li>
+          <li class="rv"><svg><use href="#checkc"/></svg>Multi-warehouse stock, bins, transfers and serial numbers</li>
+          <li class="rv"><svg><use href="#checkc"/></svg>Low-stock alerts that draft the reorder for you</li>
+        </ul>
+        <a class="link rv" href="#start" data-pane="demo">See inventory in a demo <svg class="arr"><use href="#arr"/></svg></a>
+      </div>
+    </div>
+
+    <div class="story flip">
+      <div class="ph-wrap rv">
+        <div class="ph"><img data-photo="pickup" alt="A customer collecting a repaired phone at the counter" loading="lazy" data-parallax><span class="credit" data-credit="pickup"></span></div>
+        <div class="pin" style="left:-20px;top:28px"><span class="ic"><svg><use href="#phone"/></svg></span><span><span class="k">Text to Neha · 3:58 pm</span><br><span class="v">Your iPhone is ready for pickup</span></span></div>
+      </div>
+      <div>
+        <p class="kicker rv"><span class="k-n">06</span>Customer experience</p>
+        <h2 class="d-lg split" data-split>Customers who never have to call to ask.</h2>
+        <ul class="ticks">
+          <li class="rv"><svg><use href="#checkc"/></svg>A private portal: live status, photos, estimates, invoices</li>
+          <li class="rv"><svg><use href="#checkc"/></svg>Online booking with real available time slots</li>
+          <li class="rv"><svg><use href="#checkc"/></svg>SMS, email and chat in one shared inbox</li>
+          <li class="rv"><svg><use href="#checkc"/></svg>Feedback requests timed to a happy pickup</li>
+        </ul>
+        <a class="link rv" href="#start" data-pane="demo">See the customer portal <svg class="arr"><use href="#arr"/></svg></a>
+      </div>
+    </div>
+
+    <div class="story">
+      <div class="ph-wrap rv">
+        <div class="ph"><img data-photo="owner" alt="A shop owner reviewing the day on a tablet" loading="lazy" data-parallax><span class="credit" data-credit="owner"></span></div>
+        <div class="pin" style="right:-20px;top:28px"><span><span class="k">October so far</span><br><span class="v tnum" style="font-size:22px;font-weight:300;letter-spacing:-.6px">$48,210</span><br><span class="k" style="color:var(--green)">+12% · margin 44%</span></span></div>
+      </div>
+      <div>
+        <p class="kicker rv"><span class="k-n">07</span>Money &amp; people</p>
+        <h2 class="d-lg split" data-split>Know your numbers without a spreadsheet.</h2>
+        <ul class="ticks">
+          <li class="rv"><svg><use href="#checkc"/></svg>Payroll with commissions, time clock and pay-run audit</li>
+          <li class="rv"><svg><use href="#checkc"/></svg>Profit per job, per technician and per location</li>
+          <li class="rv"><svg><use href="#checkc"/></svg>Cash flow, P&amp;L and ready-made reports</li>
+          <li class="rv"><svg><use href="#checkc"/></svg>Two-way sync with QuickBooks and Xero</li>
+        </ul>
+        <a class="link rv" href="#calc">Estimate what it's worth <svg class="arr"><use href="#arr"/></svg></a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════ CALCULATOR ════════ -->
+<section class="sec soft" id="calc">
+  <div class="wrap">
+    <div class="head">
+      <p class="kicker rv"><span class="k-n">08</span>What it's worth</p>
+      <h2 class="d-xl split" data-split>See what Tekly gives back to <span class="serif">your</span> shop.</h2>
+      <p class="lead rv">Move the sliders. Figures update from your numbers and our assumptions, shown below — treat them as a starting point.</p>
+    </div>
+    <div class="calc rv">
+      <div class="calc-in">
+        <div class="rng"><label for="cJobs">Jobs per month <output class="tnum" id="oJobs">250</output></label><input type="range" id="cJobs" min="20" max="2000" step="10" value="250"><small>Work orders you open in a typical month</small></div>
+        <div class="rng"><label for="cTicket">Average ticket <output class="tnum" id="oTicket">$180</output></label><input type="range" id="cTicket" min="30" max="1500" step="10" value="180"><small>Average invoice per job</small></div>
+        <div class="rng"><label for="cRate">Front-desk hourly cost <output class="tnum" id="oRate">$28</output></label><input type="range" id="cRate" min="12" max="90" step="1" value="28"><small>Loaded hourly cost of admin time</small></div>
+      </div>
+      <div class="calc-out">
+        <span class="k">Estimated value each month</span>
+        <div class="big tnum" id="oTotal">$2,610</div>
+        <span class="per tnum" id="oHours">0 hours of admin back</span>
+        <div class="calc-break">
+          <div><span>Admin time saved</span><span id="oAdmin">$0</span></div>
+          <div><span>Extra work approved by phone</span><span id="oUpsell">$0</span></div>
+          <div><span>Fewer “is it ready?” calls</span><span id="oCalls">$0</span></div>
+        </div>
+        <p class="fine" id="oAssume"></p>
+        <a class="btn btn-white" href="#start" data-pane="demo">Walk through it with us <svg class="arr"><use href="#arr"/></svg></a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════ COMPARE ════════ -->
+<section class="sec">
+  <div class="wrap">
+    <div class="head">
+      <p class="kicker rv"><span class="k-n">09</span>Why shops switch</p>
+      <h2 class="d-xl split" data-split>What most shop software still doesn't do.</h2>
+    </div>
+    <div class="cmp rv">
+      <table>
+        <thead><tr><th>Capability</th><th class="us">Tekly</th><th>Many shop tools</th></tr></thead>
+        <tbody>
+          <tr><td>Line-by-line approval with signature<small>Customers tick extras mid-repair, from their phone</small></td><td class="us"><span class="y"><svg><use href="#checkc"/></svg>Built in</span></td><td><span class="p"><svg><use href="#half"/></svg>All or nothing</span></td></tr>
+          <tr><td>Parts written off to the right job on arrival<small>With live job margin</small></td><td class="us"><span class="y"><svg><use href="#checkc"/></svg>Automatic</span></td><td><span class="n"><svg><use href="#x"/></svg>Manual</span></td></tr>
+          <tr><td>AI estimate drafting from the customer's words</td><td class="us"><span class="y"><svg><use href="#checkc"/></svg>Pro and up</span></td><td><span class="p"><svg><use href="#half"/></svg>Often a paid add-on</span></td></tr>
+          <tr><td>Payroll &amp; commissions from closed jobs<small>Pay runs that can't pay twice</small></td><td class="us"><span class="y"><svg><use href="#checkc"/></svg>Built in</span></td><td><span class="n"><svg><use href="#x"/></svg>Separate tool</span></td></tr>
+          <tr><td>One app for phones, cars, boats, bikes and fleets<small>Templates with IMEI, VIN, HIN and DOT fields</small></td><td class="us"><span class="y"><svg><use href="#checkc"/></svg>10 templates</span></td><td><span class="p"><svg><use href="#half"/></svg>Usually one trade</span></td></tr>
+          <tr><td>Role editor, approval rules, audit log, SSO &amp; MFA</td><td class="us"><span class="y"><svg><use href="#checkc"/></svg>Included</span></td><td><span class="p"><svg><use href="#half"/></svg>Top tier only</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ════════ SECURITY ════════ -->
+<section class="sec soft" id="security">
+  <div class="wrap">
+    <div class="head">
+      <p class="kicker rv"><span class="k-n">10</span>Security &amp; control</p>
+      <h2 class="d-xl split" data-split>Serious about your shop's data.</h2>
+      <p class="lead rv">Customer passcodes, payments and payroll deserve more than a password. This is on by default.</p>
+    </div>
+    <div class="sec-grid">
+      <div class="sg rv"><div class="ic"><svg><use href="#lock"/></svg></div><h3>Encrypted where it matters</h3><p>Device passcodes and integration keys are encrypted at rest; everything travels over HTTPS.</p></div>
+      <div class="sg rv"><div class="ic"><svg><use href="#users"/></svg></div><h3>Roles you actually control</h3><p>Permissions down to each screen and record, with limits on refunds and discounts.</p></div>
+      <div class="sg rv"><div class="ic"><svg><use href="#log"/></svg></div><h3>A complete audit trail</h3><p>Who changed a price, voided a sale or ran payroll — recorded and searchable.</p></div>
+      <div class="sg rv"><div class="ic"><svg><use href="#key"/></svg></div><h3>MFA &amp; single sign-on</h3><p>Two-factor sign-in for everyone, SSO for larger teams, and sign-out-everywhere.</p></div>
+      <div class="sg rv"><div class="ic"><svg><use href="#down"/></svg></div><h3>Your data, exportable</h3><p>Export customers, jobs, stock and finances to CSV or Excel whenever you like.</p></div>
+      <div class="sg rv"><div class="ic"><svg><use href="#wifi"/></svg></div><h3>Keeps working offline</h3><p>The technician app rides out a dropped connection and syncs when it's back.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════ MIGRATION ════════ -->
+<section class="sec" style="padding-bottom:40px">
+  <div class="wrap">
+    <div class="cream rv" id="migrate">
+      <div>
+        <p class="kicker"><span class="k-n">11</span>Switching</p>
+        <h2 class="d-lg split" data-split>Moving from another system? We'll carry it over.</h2>
+        <p class="lead">Send us an export from RepairDesk, Orderry, Shopmonkey, a spreadsheet — or whatever you use today. Our team brings your customers, devices, stock and history across, free.</p>
+        <div style="margin-top:26px"><a class="btn btn-primary" href="#start" data-pane="demo">Plan my switch <svg class="arr"><use href="#arr"/></svg></a></div>
+      </div>
+      <div class="moves" aria-label="Example migration">
+        <div class="move"><span class="from">Customers</span><span class="bar"><i></i></span><span class="cnt" data-to="4812">0</span></div>
+        <div class="move"><span class="from">Devices</span><span class="bar"><i></i></span><span class="cnt" data-to="6130">0</span></div>
+        <div class="move"><span class="from">Inventory</span><span class="bar"><i></i></span><span class="cnt" data-to="1204">0</span></div>
+        <div class="move"><span class="from">Past jobs</span><span class="bar"><i></i></span><span class="cnt" data-to="18977">0</span></div>
+        <p style="font-size:12px;margin:4px 2px 0;color:var(--mute)">Example migration for a two-location shop.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════ PRICING ════════ -->
+<section class="sec" id="pricing">
+  <div class="wrap">
+    <div class="head c">
+      <p class="kicker rv"><span class="k-n">12</span>Pricing</p>
+      <h2 class="d-xl split" data-split>Simple plans. <span class="serif">AI on every plan.</span></h2>
+      <p class="lead rv">Every plan includes Tekly AI, the customer portal and free onboarding. No setup fees. No contracts.</p>
+      <div class="bill rv" role="group" aria-label="Billing period"><span class="knob"></span><button class="on" data-bill="monthly" aria-pressed="true">Monthly</button><button data-bill="annual" aria-pressed="false">Yearly <span class="save" data-save>Save 20%</span></button></div>
+    </div>
+    <div class="plans" id="plans"></div>
+    <div class="ent rv" id="ent"></div>
+    <div class="pfoot">
+      <span><svg><use href="#check"/></svg><span><span data-trial>14</span>-day free trial, no card</span></span>
+      <span><svg><use href="#swap"/></svg>Free migration from your old system</span>
+      <span><svg><use href="#shield"/></svg>Cancel any time, export everything</span>
+    </div>
+  </div>
+</section>
+
+<!-- ════════ GET STARTED ════════ -->
+<section class="sec" id="start" style="padding-top:24px">
+  <div class="wrap">
+    <div class="start rv">
+      <div class="start-media">
+        <img data-photo="owner2" alt="" loading="lazy">
+        <div class="cap-card">
+          <h3>See your shop on Tekly in 30 minutes</h3>
+          <ul class="agenda">
+            <li><span class="t">00:00</span>Your trade and workflow, set up live</li>
+            <li><span class="t">10:00</span>One job from intake to paid, with AI</li>
+            <li><span class="t">20:00</span>Moving your data, pricing, questions</li>
+          </ul>
+        </div>
+      </div>
+      <div class="start-form">
+        <div class="seg" role="tablist" aria-label="Get started">
+          <button class="on" role="tab" aria-selected="true" data-tab="demo" id="tab-demo" aria-controls="pane-demo">Book a demo</button>
+          <button role="tab" aria-selected="false" data-tab="register" id="tab-register" aria-controls="pane-register" tabindex="-1">Create account</button>
+          <button role="tab" aria-selected="false" data-tab="signin" id="tab-signin" aria-controls="pane-signin" tabindex="-1">Sign in</button>
+        </div>
+        <div class="pane on" id="pane-demo" role="tabpanel" aria-labelledby="tab-demo">
+          <h3>Book a live demo</h3>
+          <p class="body">Tell us a little about your shop and we'll email you to find a time.</p>
+          <form class="form" id="demoForm" novalidate>
+            <div><label for="d-name">Full name</label><input class="in" id="d-name" name="name" autocomplete="name" placeholder="Alex Morgan" required aria-describedby="d-name-err"><div class="err" id="d-name-err" role="alert">Please add your name.</div></div>
+            <div><label for="d-email">Work email</label><input class="in" id="d-email" name="email" type="email" autocomplete="email" placeholder="alex@yourshop.com" required aria-describedby="d-email-err"><div class="err" id="d-email-err" role="alert">Please enter a valid email.</div></div>
+            <div><label for="d-shop">Shop name</label><input class="in" id="d-shop" name="shop" autocomplete="organization" placeholder="Northside Repair Co." required aria-describedby="d-shop-err"><div class="err" id="d-shop-err" role="alert">Please add your shop's name.</div></div>
+            <div><label for="d-phone">Phone <small>optional</small></label><input class="in" id="d-phone" name="phone" type="tel" autocomplete="tel" placeholder="+1 555 010 2030"></div>
+            <div><label for="d-ind">Trade</label><select class="in" id="d-ind" name="industry" required aria-describedby="d-ind-err"><option value="">Choose one</option></select><div class="err" id="d-ind-err" role="alert">Please choose your trade.</div></div>
+            <div><label for="d-loc">Locations</label><select class="in" id="d-loc" name="locations"><option>1</option><option>2–3</option><option>4–10</option><option>10+</option></select></div>
+            <div class="full"><label for="d-now">Using today <small>optional</small></label><input class="in" id="d-now" name="current" placeholder="Spreadsheets, RepairDesk, Shopmonkey…"></div>
+            <div class="full"><button class="btn btn-primary" type="submit">Request my demo <svg class="arr"><use href="#arr"/></svg></button></div>
+          </form>
+          <p class="fine" id="demoFine">By requesting a demo you agree to be contacted about Tekly. We never sell your details.</p>
+          <div class="done" id="demoDone" role="status" aria-live="polite">
+            <span class="okc"><svg><use href="#check"/></svg></span>
+            <h3>You're on the list.</h3>
+            <p class="body" style="margin-top:8px">We'll email you shortly to find a time.</p>
+            <div style="margin-top:22px"><a class="link" data-app="signup" href="#start">Start a free trial meanwhile <svg class="arr"><use href="#arr"/></svg></a></div>
+          </div>
+        </div>
+        <div class="pane" id="pane-register" role="tabpanel" aria-labelledby="tab-register">
+          <h3>Start your free trial</h3>
+          <p class="body"><span data-trial>14</span> days of every feature, Tekly AI included. No credit card.</p>
+          <div class="auth">
+            <a class="btn btn-primary" data-app="signup" href="#start">Start free trial <svg class="arr"><use href="#arr"/></svg></a>
+            <div class="or">about three minutes to set up</div>
+          </div>
+          <ul class="ticks" style="margin-top:20px">
+            <li><svg><use href="#checkc"/></svg>Pick your trade — fields and services are pre-filled</li>
+            <li><svg><use href="#checkc"/></svg>Explore with sample jobs, then clear them in one click</li>
+            <li><svg><use href="#checkc"/></svg>Invite your team whenever you're ready</li>
+          </ul>
+        </div>
+        <div class="pane" id="pane-signin" role="tabpanel" aria-labelledby="tab-signin">
+          <h3>Welcome back</h3>
+          <p class="body">Sign in to your shop's Tekly workspace.</p>
+          <div class="auth">
+            <a class="btn btn-primary" data-app="signin" href="#start">Sign in to Tekly <svg class="arr"><use href="#arr"/></svg></a>
+            <div class="or">or</div>
+            <a class="btn btn-secondary" data-app="signin" href="#start">Continue with single sign-on</a>
+          </div>
+          <p class="fine">Forgot your password? Choose “Reset password” on the sign-in screen.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════ FAQ ════════ -->
+<section class="sec" style="padding-top:40px">
+  <div class="wrap faq">
+    <div>
+      <p class="kicker rv"><span class="k-n">13</span>Questions</p>
+      <h2 class="d-lg split" data-split>Straight answers.</h2>
+      <p class="body rv" style="margin-top:16px">Something else? <a class="link" href="#start" data-pane="demo">Ask a person <svg class="arr"><use href="#arr"/></svg></a></p>
+    </div>
+    <div class="rv">
+      <details><summary>How long does it take to switch?<svg><use href="#plus"/></svg></summary><div class="ans"><p>Most single-location shops can be set up in a day. Send us an export from your current system or spreadsheets and our team brings customers, devices and stock across as part of onboarding.</p></div></details>
+      <details><summary>Is Tekly AI really included?<svg><use href="#plus"/></svg></summary><div class="ans"><p>Yes. Every plan gets job summaries and reply suggestions. Pro adds estimate drafting and parts-list recognition; Scale adds call transcripts with sentiment. There is no per-message AI fee.</p></div></details>
+      <details><summary>Will AI ever message my customers by itself?<svg><use href="#plus"/></svg></summary><div class="ans"><p>No. Tekly AI drafts — estimates, replies, summaries — and a person on your team decides what gets sent.</p></div></details>
+      <details><summary>Do I need special hardware?<svg><use href="#plus"/></svg></summary><div class="ans"><p>No. Tekly runs in any modern browser on a computer, tablet or phone, and works with standard barcode scanners, label printers and receipt printers.</p></div></details>
+      <details><summary>Can I run more than one kind of repair?<svg><use href="#plus"/></svg></summary><div class="ans"><p>Yes. A shop that fixes phones and e-bikes, or cars and boats, can use several templates side by side — each job gets the right fields.</p></div></details>
+      <details><summary>What happens to my data if I leave?<svg><use href="#plus"/></svg></summary><div class="ans"><p>It's yours. Export everything to CSV or Excel at any time, including after you cancel.</p></div></details>
+    </div>
+  </div>
+</section>
+
+<!-- ════════ CLOSING ════════ -->
+<section class="closing">
+  <div class="mesh-band" aria-hidden="true"><div class="mesh-css"></div><canvas id="mesh2"></canvas></div>
+  <div class="wrap closing-grid">
+    <div>
+      <h2 class="d-xl split" data-split>Run the shop you <span class="serif">always meant to.</span></h2>
+      <p class="lead rv">Start free today, or let us show you around. Either way, the bench gets quieter.</p>
+      <div class="hero-cta rv"><a class="btn btn-primary btn-lg" data-app="signup" href="#start">Start free trial <svg class="arr"><use href="#arr"/></svg></a><a class="link" href="#start" data-pane="demo">Book a demo <svg class="arr"><use href="#arr"/></svg></a></div>
+    </div>
+    <div class="closing-links">
+      <div class="rv"><h3>Always free to try</h3><p>Every feature for <span data-trial>14</span> days. No card, no sales call required.</p></div>
+      <div class="rv"><h3>We'll move you in</h3><p>Free migration and onboarding on every plan.</p><a class="link" href="#start" data-pane="demo">Plan my switch <svg class="arr"><use href="#arr"/></svg></a></div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot">
+      <div><a href="#top" class="logo"><svg fill="url(#nut)"><use href="#mark"/></svg>tekly</a><p class="about">The operating system for repair shops — from complaint to paid, in one calm flow.</p></div>
+      <div><h2>Platform</h2><ul><li><a href="#platform">Overview</a></li><li><a href="#flow">How a job moves</a></li><li><a href="#ai">Tekly AI</a></li><li><a href="#pricing">Pricing</a></li></ul></div>
+      <div><h2>Industries</h2><ul><li><a href="#trades" data-trade="phone">Phone &amp; computer</a></li><li><a href="#trades" data-trade="auto">Auto &amp; fleet</a></li><li><a href="#trades" data-trade="marine">Marine &amp; powersports</a></li><li><a href="#trades" data-trade="bike">Bike &amp; small engine</a></li></ul></div>
+      <div><h2>Company</h2><ul><li><a href="#start" data-pane="demo">Book a demo</a></li><li><a href="#security">Security</a></li><li><a data-mail href="#start">Contact</a></li></ul></div>
+      <div><h2>Account</h2><ul><li><a data-app="signin" href="#start">Sign in</a></li><li><a data-app="signup" href="#start">Create account</a></li></ul></div>
+    </div>
+    <div class="legal"><span>© <span id="yr">2026</span> Tekly</span><details><summary>Photo credits</summary><div class="credits" id="credits"></div></details></div>
+  </div>
+</footer>
+
+<script defer src="site.config.js"></script>
+<script defer src="photos.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+<script defer src="mesh.js"></script>
+<script defer src="main.js"></script>
+</body>
+</html>
