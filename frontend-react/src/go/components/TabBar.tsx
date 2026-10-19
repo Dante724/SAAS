@@ -1,10 +1,10 @@
-// Bottom tab bar: Today · Scan (raised centre button) · Clock · More.
+// Bottom tab bar: Today · Tasks · Scan (raised centre button) · Clock · More.
 // Sits above the home indicator (safe-area inset); every target is at least 44pt.
 import { NavLink } from "react-router-dom";
-import { CalendarCheck, Clock3, Ellipsis, ScanLine, type LucideIcon } from "lucide-react";
+import { CalendarCheck, Clock3, Ellipsis, ListTodo, ScanLine, type LucideIcon } from "lucide-react";
 
 type Tab = { to: string; label: string; Icon: LucideIcon };
-const LEFT: Tab = { to: "/today", label: "Today", Icon: CalendarCheck };
+const LEFT: Tab[] = [{ to: "/today", label: "Today", Icon: CalendarCheck }, { to: "/tasks", label: "Tasks", Icon: ListTodo }];
 const RIGHT: Tab[] = [{ to: "/clock", label: "Clock", Icon: Clock3 }, { to: "/more", label: "More", Icon: Ellipsis }];
 
 function Item({ to, label, Icon, badge }: Tab & { badge?: number }) {
@@ -26,15 +26,15 @@ function Item({ to, label, Icon, badge }: Tab & { badge?: number }) {
   );
 }
 
-export default function TabBar({ moreBadge }: { moreBadge?: number }) {
+export default function TabBar({ moreBadge, tasksBadge }: { moreBadge?: number; tasksBadge?: number }) {
   return (
     <nav aria-label="Main"
       className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200/70 bg-white/85 backdrop-blur-xl pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
-      <div className="mx-auto flex max-w-xl items-end gap-1 px-3 pt-1.5 pb-1">
-        <Item {...LEFT} />
+      <div className="mx-auto flex max-w-xl items-end gap-0.5 px-2 pt-1.5 pb-1">
+        {LEFT.map((t) => <Item key={t.to} {...t} badge={t.to === "/tasks" ? tasksBadge : undefined} />)}
         <div className="flex-1 flex justify-center">
           <NavLink to="/scan" aria-label="Scan"
-            className={({ isActive }) => `-mt-7 flex h-16 w-16 items-center justify-center rounded-[1.375rem] text-white shadow-[0_10px_24px_-6px_rgba(0,89,186,.55),inset_0_1px_0_rgba(255,255,255,.35)] ring-4 ring-white active:scale-95 transition-transform ${isActive ? "bg-primary-container" : "bg-primary"}`}>
+            className={({ isActive }) => `-mt-7 flex h-[3.75rem] w-[3.75rem] items-center justify-center rounded-[1.375rem] text-white shadow-[0_10px_24px_-6px_rgba(0,89,186,.55),inset_0_1px_0_rgba(255,255,255,.35)] ring-4 ring-white active:scale-95 transition-transform ${isActive ? "bg-primary-container" : "bg-primary"}`}>
             <ScanLine size={30} strokeWidth={2} />
           </NavLink>
         </div>

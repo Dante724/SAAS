@@ -1,7 +1,7 @@
 // Tekly Go shell: routes, bottom tab bar, offline banner, toasts.
 // iPad / tablet (≥768px): Today and a job share the screen — list on the left, job on the right.
 import { useCallback, useState } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { CloudOff, MousePointerClick } from "lucide-react";
 import TabBar from "./components/TabBar";
 import { Toast, type ToastMsg } from "./components/ui";
@@ -11,6 +11,9 @@ import Scan from "./screens/Scan";
 import Job from "./screens/Job";
 import Clock from "./screens/Clock";
 import More from "./screens/More";
+import Tasks, { useTaskBadge } from "./screens/Tasks";
+import NewJob from "./screens/NewJob";
+import NewMenu from "./components/NewMenu";
 import { AssetScreen, Part } from "./screens/PartAsset";
 
 function SplitView({ jobOpen }: { jobOpen: boolean }) {
@@ -45,6 +48,9 @@ function OfflineBar() {
 export default function GoApp() {
   const wide = useWide();
   const q = useQueueStatus();
+  const loc = useLocation();
+  const tasksDue = useTaskBadge();
+  const showNew = loc.pathname === "/today" || loc.pathname === "/tasks";
   const [toast, setToast] = useState<ToastMsg | null>(null);
   const clear = useCallback(() => setToast(null), []);
 
@@ -56,6 +62,9 @@ export default function GoApp() {
           <Route path="/" element={<Navigate to="/today" replace />} />
           <Route path="/today" element={wide ? <SplitView jobOpen={false} /> : <Today />} />
           <Route path="/job/:id" element={wide ? <SplitView jobOpen /> : <Job />} />
+          <Route path="/tasks" element={<Tasks />} />
+          <Route path="/new/job" element={<NewJob key="job" />} />
+          <Route path="/new/estimate" element={<NewJob key="estimate" />} />
           <Route path="/scan" element={<Scan />} />
           <Route path="/part/:id" element={<Part />} />
           <Route path="/asset/:id" element={<AssetScreen />} />
@@ -63,7 +72,8 @@ export default function GoApp() {
           <Route path="/more" element={<More />} />
           <Route path="*" element={<Navigate to="/today" replace />} />
         </Routes>
-        <TabBar moreBadge={q.conflicts || undefined} />
+        {showNew && <NewMenu />}
+        <TabBar moreBadge={q.conflicts || undefined} tasksBadge={tasksDue || undefined} />
         <Toast msg={toast} onDone={clear} />
       </div>
     </ToastCtx.Provider>

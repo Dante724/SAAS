@@ -2,7 +2,7 @@ import secrets
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -306,6 +306,7 @@ def _serialize_order_scalars(o: Order) -> dict:
         "client_msg_unread": getattr(o, "client_msg_unread", 0) or 0,
         "rec_unread": getattr(o, "rec_unread", 0) or 0,
         "public_token": o.public_token,
+        "signed": bool(getattr(o, "signature", None)),   # customer signature captured (Go shows it)
         "created_at": o.created_at.isoformat(),
         "closed_at": o.closed_at.isoformat() if o.closed_at else None,
         "client": {"id": o.client.id, "name": o.client.name, "phone": o.client.phone,
@@ -714,9 +715,29 @@ async def bulk_action(
 @router.post("", status_code=201)
 async def create_order(
     data: OrderIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_tickets")),
 ):
+    # Estimates have their own permission (it used to be listed but never checked).
+    if data.is_estimate:
+        await assert_perm(db, current, "can_create_estimates")
+    # A retried create (double tap, phone timeout) with the same Idempotency-Key returns the
+    # first job instead of raising a second one.
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "orders.create")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _create_order(data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
     # Build 144df: location is optional from the client — default to the org's
     # first active location, creating a "Main" one if the org has none yet, so a
     # fresh shop can raise its first work order without a setup dead-end.
@@ -1331,6 +1352,12 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         .order_by(OrderStatus.sort_order)
     )).scalars().first()
     is_closing = target.is_terminal if target else (data.status in ("done", "closed", "delivered"))
+    # Finishing a job is its own permission (closing used to need none). Bulk changes and
+    # /complete come through here too.
+    if is_closing:
+        from backend.services.auth import has_perm
+        if not await has_perm(db, current, "can_close_tickets"):
+            raise HTTPException(403, "Your role can't finish jobs. Move it to a ready status, or ask someone who can.")
 
     # Phase B.7: enforce status transfer rules (allowed from->to for this role)
     from backend.routers.statuses import is_transition_allowed
@@ -1730,6 +1757,30 @@ async def set_intake_photos(
     return {"ok": True, "intake_photos": _intake_photos_payload(order)}
 
 
+@router.post("/{order_id}/intake-photos/add")
+async def add_intake_photos(
+    order_id: str,
+    data: IntakePhotosIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Append photos to a work order (the phone app's camera button). Unlike the PATCH, which
+    replaces the whole list, this adds to whatever is there now under a row lock, so two people
+    adding photos at once can't wipe each other's. Adding an id that's already there is a no-op,
+    so a retry is safe. Still capped at 40."""
+    order = (await db.execute(select(Order).where(
+        Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
+    current_ids = list(order.intake_photos or [])
+    if len(current_ids) >= 40 and any(i not in current_ids for i in data.photos):
+        raise HTTPException(409, "This job already has 40 photos, the most it can hold.")
+    order.intake_photos = await _clean_intake_photos(db, current.org_id, current_ids + list(data.photos))
+    await db.commit()
+    return {"ok": True, "intake_photos": _intake_photos_payload(order)}
+
+
 class MarkupIn(BaseModel):
     original_id: str   # the intake photo being marked up (stays untouched)
     marked_id: str     # the uploaded annotated copy (POST /api/media first)
@@ -2059,7 +2110,7 @@ async def payment_link(
     order_id: str,
     regenerate: bool = False,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
+    current: Employee = Depends(require_perm("can_create_payment_links")),
 ):
     """Create a payment intent for the order's outstanding balance and return a
     shareable link + QR code. Uses the live gateway's checkout URL when

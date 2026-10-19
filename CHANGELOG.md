@@ -1,5 +1,68 @@
 # Changelog
 
+## Tekly Go — message the customer (phase 1b)
+
+- **Message** on every job, with a red badge when the customer has written.
+  - **Chat:** the job's conversation (customer messages from their tracking page plus shop replies).
+    A reply here shows on the customer's tracking page.
+  - **Text / WhatsApp:** pick a saved template, filled in on the server with the same
+    {Placeholders} as documents (links made absolute). Edit it, then "Open in Messages" or
+    "Open in WhatsApp" opens the phone's own app with number and text ready, and you tap Send there.
+    Back in Tekly, "Did the text go?" records it. Only "Sent" goes into the job history and the
+    portal thread, so the customer never sees a message that may not have gone.
+- **Consent:**
+  - No texts to customers who opted out.
+  - WhatsApp has its own consent (`clients.consent_whatsapp`, null = not asked). Staff record the
+    customer's yes or no in two taps; it's kept in the consent history as `mobile_verbal`.
+- `message_handoffs` records each phone message (opened → sent / cancelled, or unknown after 24h).
+  GDPR erasure scrubs them.
+- `services/phones.to_e164`: international numbers for wa.me links (no phone library in the stack).
+- API, all needing `can_send_sms`:
+  - `GET /api/mobile/orders/{id}/compose`
+  - `POST /api/mobile/messages`
+  - `PATCH /api/mobile/messages/{id}`
+  - `POST /api/mobile/clients/{id}/whatsapp-consent`
+
+## Tekly Go — create jobs, estimates and tasks; photos, items, signature, finish and pay
+
+Designed with a three-reviewer council (one-handed UX, data integrity, permissions).
+
+- **Navigation:** five tabs, Today · Tasks · Scan · Clock · More, with a badge on Tasks for anything
+  due today or overdue. A thumb-reach "+" on Today and Tasks opens New job · New estimate · New task.
+- **New job / estimate:** one screen, no wizard, and every field is optional.
+  - Customer search, with "Add 'Maria 0412…'" inline when nothing matches; it splits name and phone.
+  - That customer's devices as chips, or a new device.
+  - Problem text with quick chips.
+  - Photos, shrunk on the phone to 1600px with EXIF stripped, uploaded after the job exists.
+  - Who's on it.
+- **Job screen:**
+  - Action row: Call · Photo · Add item · Timer.
+  - Photo strip.
+  - Items, with an add sheet that stays open for several, and tap a line to change qty or remove it.
+  - Customer signature pad.
+  - A main button that does the next step: Mark Ready, then Finish & take payment (or Finish job).
+  - The ··· menu adds a task for the job, takes a payment, or opens the full job.
+- **Payment:** amount due in big type, part payments allowed, never above what's owed.
+  - Cash shows quick "handed you" amounts and the change due.
+  - Card records a terminal charge. A pay link shows a QR and watches for the balance to reach zero.
+  - Two-step confirm naming the customer and the staff member. Pay first, then close.
+- **Tasks:** mine (assigned, shared or created by me), grouped Overdue / Today / Coming up / No date / Done.
+  Ticking one off goes through the offline queue.
+- **Never queued offline:** payments, finishing, creating jobs, adding items.
+- **Server rules:**
+  - New permissions `can_close_tickets` and `can_take_payments` (replacing `can_view_finance` on
+    job payments). `can_create_estimates` and `can_create_payment_links` are now enforced.
+  - Migration `gc144g1` keeps everyone's access exactly as it was.
+  - Payments are capped at the balance due.
+  - Tasks: assigning other people needs `can_assign_staff`; only the creator, assignees or a manager
+    can change or delete a task.
+- **Idempotency-Key** on create job, create customer, create task and pay (`idempotency_records`,
+  swept after 48h), so a retried tap runs once.
+- `POST /orders/{id}/intake-photos/add` appends photos under a row lock; the PATCH replaced the whole
+  list and two phones could wipe each other's.
+- Known follow-ups: PIN/Face ID re-check before payment after idle; a "Start a job for this device"
+  shortcut when a scan finds an unknown serial.
+
 ## Tekly Go phase 1a — the phone app at /go
 
 - **New page of the React build, served at `/go/`** (`frontend-react/go/index.html` → `src/go/`). It
