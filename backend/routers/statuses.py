@@ -127,45 +127,51 @@ async def ensure_seeded(db: AsyncSession, org_id: str):
         OrderStatus.key.like("est\\_%", escape="\\")))
     if heal.rowcount:
         await db.commit()
-    existing = (await db.execute(
-        select(func.count()).select_from(OrderStatus).where(OrderStatus.org_id == org_id)
-    )).scalar() or 0
-    if not existing:
-        for i, (key, name, grp, color, dflt, t_inv, t_not, t_pay, term) in enumerate(DEFAULT_STATUSES):
-            db.add(OrderStatus(
-                org_id=org_id, key=key, name=name, status_group=grp, color=color,
-                sort_order=i, is_default=dflt, triggers_invoice=t_inv,
-                triggers_notification=False, triggers_payment=t_pay, is_terminal=term,
-                record_type="work_order",
-            ))
-        await db.commit()
-    # seed estimate statuses if missing (separate set)
-    est_existing = (await db.execute(
-        select(func.count()).select_from(OrderStatus).where(
-            OrderStatus.org_id == org_id, OrderStatus.record_type == "estimate")
-    )).scalar() or 0
-    if not est_existing:
-        for i, (key, name, grp, color, accept, conv) in enumerate(ESTIMATE_STATUSES):
-            db.add(OrderStatus(
-                org_id=org_id, key=key, name=name, status_group=grp, color=color,
-                sort_order=i, is_estimate=True, record_type="estimate",
-                shows_accept=accept, converts_to_order=conv,
-                is_terminal=grp in ("closed", "dropped"),
-            ))
-        await db.commit()
-    # 144ij — seed the three newer Orderry pipelines, each independently.
-    for rt, rows in RECORD_TYPE_DEFAULTS.items():
-        rt_existing = (await db.execute(
-            select(func.count()).select_from(OrderStatus).where(
-                OrderStatus.org_id == org_id, OrderStatus.record_type == rt)
-        )).scalar() or 0
-        if not rt_existing:
-            for i, (key, name, grp, color, dflt, term) in enumerate(rows):
-                db.add(OrderStatus(
-                    org_id=org_id, key=key, name=name, status_group=grp, color=color,
-                    sort_order=i, is_default=dflt, is_terminal=term, record_type=rt,
-                ))
-            await db.commit()
+    # Each pipeline is seeded only while it is empty (a shop that deletes a default status keeps
+    # it deleted). Launch QA B2: inserts skip rows that already exist (unique index on
+    # org_id+record_type+key), so parallel first-load requests can't seed duplicate copies.
+    have = {rt for (rt,) in (await db.execute(
+        select(OrderStatus.record_type).where(OrderStatus.org_id == org_id).distinct()))}
+    rows: list[dict] = []
+    if "work_order" not in have:
+        rows += [dict(key=key, name=name, status_group=grp, color=color, sort_order=i, is_default=dflt,
+                      triggers_invoice=t_inv, triggers_notification=False, triggers_payment=t_pay,
+                      is_terminal=term, record_type="work_order")
+                 for i, (key, name, grp, color, dflt, t_inv, t_not, t_pay, term) in enumerate(DEFAULT_STATUSES)]
+    if "estimate" not in have:
+        rows += [dict(key=key, name=name, status_group=grp, color=color, sort_order=i, is_estimate=True,
+                      record_type="estimate", shows_accept=accept, converts_to_order=conv,
+                      is_terminal=grp in TERMINAL_GROUPS)
+                 for i, (key, name, grp, color, accept, conv) in enumerate(ESTIMATE_STATUSES)]
+    # 144ij — the newer Orderry pipelines, each independently.
+    for rt, defaults in RECORD_TYPE_DEFAULTS.items():
+        if rt not in have:
+            rows += [dict(key=key, name=name, status_group=grp, color=color, sort_order=i, is_default=dflt,
+                          is_terminal=term, record_type=rt)
+                     for i, (key, name, grp, color, dflt, term) in enumerate(defaults)]
+    if rows:
+        await _insert_missing(db, org_id, rows)
+
+
+# Every column a seeded row may set, so one multi-row INSERT gets a uniform column list.
+_SEED_DEFAULTS = dict(is_default=False, triggers_invoice=False, triggers_notification=False,
+                      triggers_payment=False, is_terminal=False, is_estimate=False, shows_accept=False,
+                      converts_to_order=False, locks_edits=False, require_comment=False,
+                      require_payment=False, require_checklist=False, active=True)
+
+
+async def _insert_missing(db: AsyncSession, org_id: str, rows: list[dict]) -> None:
+    """INSERT the rows, silently skipping any (org_id, record_type, key) that already exists."""
+    from backend.models import _uuid
+    values = [{**_SEED_DEFAULTS, **r, "id": _uuid(), "org_id": org_id} for r in rows]
+    dialect = db.get_bind().dialect.name
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as _insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert as _insert
+    await db.execute(_insert(OrderStatus).values(values).on_conflict_do_nothing(
+        index_elements=["org_id", "record_type", "key"]))
+    await db.commit()
 
 
 @router.get("")
@@ -256,11 +262,15 @@ async def create_status(
         raise HTTPException(400, f"Group must be one of {GROUPS}")
     rt = _resolve_rt(data)
     key = data.key or _slugify(data.name)
-    # ensure unique key within org (keys are org-global; suffix on collision)
-    dupe = (await db.execute(select(OrderStatus).where(
-        OrderStatus.org_id == current.org_id, OrderStatus.key == key, OrderStatus.active == True))).scalar_one_or_none()  # noqa: E712
-    if dupe:
-        key = f"{key}_{(await db.execute(select(func.count()).select_from(OrderStatus).where(OrderStatus.org_id == current.org_id))).scalar()}"
+    # ensure unique key within org (keys are org-global; suffix on collision). Inactive rows count
+    # too: the unique index (org_id, record_type, key) covers them.
+    taken = set((await db.execute(select(OrderStatus.key).where(
+        OrderStatus.org_id == current.org_id, OrderStatus.key.like(f"{key}%")))).scalars())
+    if key in taken:
+        n = len(taken)
+        while f"{key}_{n}" in taken:
+            n += 1
+        key = f"{key}_{n}"
     if data.is_default:
         for s in (await db.execute(select(OrderStatus).where(OrderStatus.org_id == current.org_id, OrderStatus.is_default == True, OrderStatus.record_type == rt))).scalars().all():  # noqa: E712
             s.is_default = False

@@ -435,6 +435,9 @@ class OrderStatus(Base):
     pending/ready/closed/dropped), which is what reports and triggers key off.
     Per-status automation: auto-invoice, auto-notify, request payment, lock edits."""
     __tablename__ = "order_statuses"
+    # Launch QA B2: one row per key in each pipeline. Without it, parallel first-load requests
+    # each seeded a copy and bare-key lookups raised MultipleResultsFound (estimates 500'd).
+    __table_args__ = (Index("uq_order_statuses_org_rt_key", "org_id", "record_type", "key", unique=True),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("organisations.id"))
     location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"))
