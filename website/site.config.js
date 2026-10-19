@@ -13,6 +13,10 @@ window.TEKLY_SITE = {
   demoEndpoint: "",
   demoEmail: "hello@tekly.app",
 
+  // Analytics: set a Google Tag Manager ID (e.g. "GTM-ABC123") to load GTM. Left empty, nothing
+  // third-party loads; CTA clicks and demo requests still go to window.dataLayer.
+  analytics: { gtmId: "" },
+
   currency: "$",
   annualDiscount: 0.2,   // 20% off when billed yearly
   trialDays: 14,

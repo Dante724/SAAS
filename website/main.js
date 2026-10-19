@@ -162,20 +162,20 @@
     general: '<path d="M14.5 6.5a4 4 0 0 0-5.2 5.1L4 17l3 3 5.3-5.3a4 4 0 0 0 5.2-5.2l-2.4 2.4-2.6-.5-.5-2.6z"/>',
   };
   const TEMPLATES = [
-    { name: "Electronics", icons: ["phone", "computer"], covers: ["Phones", "Tablets", "Laptops", "Desktops"],
+    { name: "Electronics", slug: "phone-repair-software", label: "Phone & computer repair software", icons: ["phone", "computer"], covers: ["Phones", "Tablets", "Laptops", "Desktops"],
       desc: "One template for every device on the bench.",
       smart: "Asks for the IMEI on phones and tablets, and the serial number on computers.",
       fields: [["Device", "iPhone 14 Pro"], ["IMEI", "35 291811 402177 3"], ["Passcode", "•••••• encrypted"], ["Storage", "256 GB"]],
       alt: { tabs: ["Phone", "Computer"], fields: [["Device", "MacBook Air M2"], ["Serial number", "C02FK3XYQ6L4"], ["Password", "•••••• encrypted"], ["Charger", "Received"]] } },
-    { name: "Vehicles", icons: ["auto", "fleet", "motorcycle"], covers: ["Cars", "Trucks", "RVs", "Bikes"],
+    { name: "Vehicles", slug: "auto-repair-shop-software", label: "Auto repair shop software", icons: ["auto", "fleet", "motorcycle"], covers: ["Cars", "Trucks", "RVs", "Bikes"],
       desc: "From a family hatchback to a fleet truck or an RV.",
       smart: "Every visit stays on the vehicle's history, found by VIN or plate.",
       fields: [["Vehicle", "2019 Honda CR-V"], ["VIN", "2HKRW2H5…KH604117"], ["Plate", "8KXM 214"], ["Mileage", "61,240 mi"]] },
-    { name: "Tools & small engine", icons: ["tools", "small-engine"], covers: ["Power tools", "Mowers", "Saws", "Generators"],
+    { name: "Tools & small engine", slug: "small-engine-repair-software", label: "Small engine repair software", icons: ["tools", "small-engine"], covers: ["Power tools", "Mowers", "Saws", "Generators"],
       desc: "Workshop gear and outdoor power equipment in one template.",
       smart: "Captures voltage for tools and engine hours for small engines.",
       fields: [["Item", "21-inch push mower"], ["Serial", "2214 0938 7712"], ["Engine", "OHV 163 cc"], ["Hours", "212"]] },
-    { name: "Marine", icons: ["marine"], covers: ["Outboards", "Inboards", "Hulls", "Trailers"],
+    { name: "Marine", slug: "marine-repair-software", label: "Marine repair software", icons: ["marine"], covers: ["Outboards", "Inboards", "Hulls", "Trailers"],
       desc: "Built for boatyards, from winterising to a full repower.",
       smart: "Tracks the hull ID and each engine's serial separately.",
       fields: [["Vessel", "19 ft centre console"], ["HIN", "ABC12345D707"], ["Engine serial", "1B3L-401229"], ["Length", "19 ft"]] },
@@ -192,6 +192,7 @@
         <dl>${dl(t.fields)}</dl>
       </div>
       <p class="tpl-smart">${t.smart}</p>
+      <a class="link tpl-more" href="/${t.slug}/">${t.label} <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
     </article>`).join("");
   $$(".mini-seg").forEach(seg => seg.addEventListener("click", e => {
     const btn = e.target.closest("button"); if (!btn) return;
@@ -230,6 +231,8 @@
   }));
   renderPlans();
 
+  document.dispatchEvent(new Event("tekly:links-ready"));
+
   /* ── Get started tabs ── */
   const tabs = $$(".seg button");
   const openPane = id => {
@@ -261,6 +264,8 @@
     const req = $$("[required]", form);
     if (!req.map(validate).every(Boolean)) { req.find(f => f.classList.contains("bad"))?.focus(); return; }
     const data = Object.fromEntries(new FormData(form)), btn = $("button[type=submit]", form);
+    document.dispatchEvent(new CustomEvent("tekly:demo_request", { detail: data }));
+    Object.assign(data, window.TEKLY_ATTRIBUTION || {});
     btn.disabled = true; btn.textContent = "Sending…";
     try {
       if (C.demoEndpoint) {

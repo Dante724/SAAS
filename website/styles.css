@@ -624,3 +624,24 @@ select.in { appearance: none; background: var(--canvas) url("data:image/svg+xml,
   .tpl-form dl div:first-child { border-top: 0 !important; }
 }
 .tpl-form dl { grid-template-columns: repeat(2, minmax(0, 1fr)); } @media (max-width: 380px) { .tpl-form dl { grid-template-columns: minmax(0, 1fr); } }
+.h1-k { display: block; font-family: var(--text); font-weight: 400; font-size: 12px; line-height: 1.4; letter-spacing: .6px; text-transform: uppercase; color: var(--caption); margin-bottom: 18px; }
+
+/* ══ Industry landing pages ══ */
+.sub-hero { padding: 88px 0 96px; }
+.sub-hero .h-display { font-size: 60px; letter-spacing: -2.4px; max-width: 16ch; margin-top: 8px; }
+.sub-hero .hero-sub { max-width: 58ch; }
+.crumbs { display: flex; gap: 8px; font-size: 13px; color: var(--caption); margin-bottom: 18px; }
+.crumbs a { color: #dfe2ff; }
+.crumbs a:hover { text-decoration: underline; }
+.sub-dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.sub-dl dd { white-space: normal; }
+.sub .two-col { align-items: center; }
+.sub .card h3 { font-size: 19px; }
+.sub-price { display: grid; grid-template-columns: 1fr auto; gap: 40px; align-items: center; border: 1px solid var(--line); border-radius: var(--r-lg); padding: 36px; }
+.sub-price-ctas { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.others { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.others a { font-family: var(--display); font-weight: 600; font-size: 16px; }
+.tpl-more { margin-top: 18px; }
+@media (max-width: 1023px) { .sub-price { grid-template-columns: 1fr; } .sub-price-ctas { align-items: flex-start; } .others { grid-template-columns: 1fr; } }
+@media (max-width: 767px) { .sub-hero { padding: 56px 0 64px; } .sub-hero .h-display { font-size: 38px; letter-spacing: -1.3px; } .sub-dl { grid-template-columns: minmax(0, 1fr); } .sub-dl div { border-left: 0 !important; border-top: 1px solid var(--line) !important; } .sub-dl div:first-child { border-top: 0 !important; } .sub-price { padding: 24px 20px; } }
+.foot-grid { grid-template-columns: 1.4fr 1fr 1fr 1fr 1fr; } @media (max-width: 1023px) { .foot-grid { grid-template-columns: 1fr 1fr; } } .sub .foot-grid { grid-template-columns: 1.6fr 1fr 1fr 1fr; } @media (max-width: 1023px) { .sub .foot-grid { grid-template-columns: 1fr 1fr; } }
