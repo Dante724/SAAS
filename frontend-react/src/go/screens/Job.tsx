@@ -4,7 +4,7 @@
 // payment are online only: pay first, then close, so a job is never closed on a payment that failed.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { AlertTriangle, Camera, Check, ChevronDown, ChevronLeft, CloudOff, Ellipsis, ExternalLink, ListTodo, Loader2, Minus, PenLine, Phone, Plus, RefreshCw, Smartphone, Timer, Trash2, User, Wrench, X } from "lucide-react";
+import { AlertTriangle, Camera, Check, ChevronDown, ChevronLeft, CloudOff, Ellipsis, ExternalLink, ListTodo, Loader2, MessageCircle, Minus, PenLine, Phone, Plus, RefreshCw, Smartphone, Timer, Trash2, User, Wrench, X } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import AuthedImage from "../../components/AuthedImage";
@@ -13,6 +13,7 @@ import ItemsSheet from "../components/ItemsSheet";
 import SignatureSheet from "../components/SignatureSheet";
 import PaySheet from "../components/PaySheet";
 import TaskSheet from "../components/TaskSheet";
+import MessageSheet from "../components/MessageSheet";
 import { addPhotosToJob, shrinkPhoto, uploadPhoto, type IntakePhoto } from "../lib/photos";
 import { finishTarget, money } from "../lib/pay";
 import { refusal } from "../lib/statusChange";
@@ -32,6 +33,7 @@ type Order = {
   status_logs?: { from?: string; to: string; at: string; note?: string | null }[];
   intake_photos?: IntakePhoto[];
   signed?: boolean;
+  client_msg_unread?: number;
 };
 type Line = NonNullable<Order["lines"]>[number];
 
@@ -63,7 +65,7 @@ export default function Job() {
   const [allowed, setAllowed] = useState<string[] | null>(null);
   const [sheet, setSheet] = useState(false);
   const [pending, setPending] = useState(false);   // a change is on screen but not confirmed yet
-  const [open, setOpen] = useState<null | "items" | "sign" | "pay" | "task" | "more" | "line" | "photo">(null);
+  const [open, setOpen] = useState<null | "items" | "sign" | "pay" | "task" | "more" | "line" | "photo" | "msg">(null);
   const [line, setLine] = useState<Line | null>(null);
   const [photo, setPhoto] = useState<IntakePhoto | null>(null);
   const [uploading, setUploading] = useState(0);
@@ -231,7 +233,7 @@ export default function Job() {
     primary = { label: "Change status", run: () => setSheet(true) };
   }
 
-  const action = "min-h-[4rem] rounded-2xl border border-slate-200 bg-white flex flex-col items-center justify-center gap-1 text-[0.8125rem] font-semibold text-ink-primary active:bg-slate-50 disabled:opacity-40";
+  const action = "min-h-[4rem] rounded-2xl border border-slate-200 bg-white flex flex-col items-center justify-center gap-1 text-[0.75rem] font-semibold text-ink-primary active:bg-slate-50 disabled:opacity-40";
 
   return (
     <>
@@ -253,12 +255,16 @@ export default function Job() {
           )}
         </Card>
 
-        <div className="mt-3 grid grid-cols-4 gap-2">
+        <div className="mt-3 grid grid-cols-5 gap-1.5">
           {order.client?.phone
             ? <a href={`tel:${order.client.phone.replace(/[^\d+]/g, "")}`} className={action}><Phone size={20} />Call</a>
             : <button disabled className={action}><Phone size={20} />Call</button>}
+          <button onClick={() => setOpen("msg")} disabled={!order.client} className={`${action} relative`}>
+            <MessageCircle size={20} />Message
+            {!!order.client_msg_unread && <span className="absolute right-1.5 top-1.5 min-w-[1.125rem] h-[1.125rem] px-1 rounded-full bg-rose-500 text-white text-[0.625rem] font-bold leading-[1.125rem] text-center">{order.client_msg_unread}</span>}
+          </button>
           <button onClick={() => fileRef.current?.click()} disabled={isClosed} className={action}>{uploading ? <Loader2 size={20} className="animate-spin" /> : <Camera size={20} />}Photo</button>
-          <button onClick={() => setOpen("items")} disabled={!mayAddItems} className={action}><Plus size={20} />Add item</button>
+          <button onClick={() => setOpen("items")} disabled={!mayAddItems} className={action}><Plus size={20} />Item</button>
           <button onClick={startTimer} disabled={me?.clock_wo_enabled === false || isClosed} className={action}><Timer size={20} />Timer</button>
         </div>
         <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple hidden onChange={(e) => onPhotos(e.target.files)} />
@@ -337,6 +343,8 @@ export default function Job() {
       <SignatureSheet open={open === "sign"} onClose={() => setOpen(null)} orderId={order.id} customer={order.client?.name} onSaved={load} />
       <PaySheet open={open === "pay"} onClose={() => setOpen(null)} orderId={order.id} orderNumber={order.order_number} customer={order.client?.name}
         onPaid={(left) => { setBalance(left); if (left <= 0.009 && finishAfterPay.current && !isClosed) { finishAfterPay.current = false; closeJob(); } else load(); }} />
+      <MessageSheet open={open === "msg"} onClose={() => setOpen(null)} orderId={order.id}
+        onRead={() => setOrder((o) => (o ? { ...o, client_msg_unread: 0 } : o))} />
       <TaskSheet open={open === "task"} onClose={() => setOpen(null)} orderId={order.id} orderLabel={order.order_number} />
 
       <Sheet open={open === "line"} onClose={() => setOpen(null)} title={line?.description || "Item"}>

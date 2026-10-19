@@ -357,6 +357,9 @@ class Client(Base):
     loyalty_tier: Mapped[str] = mapped_column(String(50), default="standard")
     consent_phone: Mapped[bool] = mapped_column(Boolean, default=True)
     consent_email: Mapped[bool] = mapped_column(Boolean, default=True)
+    # WhatsApp is its own consent (agreeing to texts isn't agreeing to WhatsApp).
+    # None = not asked yet; staff record the customer's answer from the phone app.
+    consent_whatsapp: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     balance: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     blacklisted: Mapped[bool] = mapped_column(Boolean, default=False)
     # Build 122: preferred billing currency for this contact (None → org base). Documents
@@ -1236,9 +1239,9 @@ class ConsentLog(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     client_id: Mapped[str] = mapped_column(String, ForeignKey("clients.id"), index=True)
-    channel: Mapped[str] = mapped_column(String(20))     # email|phone|marketing
+    channel: Mapped[str] = mapped_column(String(20))     # email|phone|whatsapp|marketing
     granted: Mapped[bool] = mapped_column(Boolean)
-    source: Mapped[Optional[str]] = mapped_column(String(60))   # staff|appointment|import|erasure
+    source: Mapped[Optional[str]] = mapped_column(String(60))   # staff|appointment|import|erasure|mobile_verbal
     actor_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
@@ -3301,3 +3304,24 @@ class IdempotencyRecord(Base):
     response: Mapped[Optional[dict]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
     __table_args__ = (UniqueConstraint("org_id", "key", name="uq_idempotency_org_key"),)
+
+
+class MessageHandoff(Base):
+    """A text or WhatsApp a staff member opened on their own phone from Tekly Go. Tekly fills in
+    the message; the phone's own SMS/WhatsApp app sends it after the person taps Send, so Tekly
+    can't know it was delivered, only what the person told us when they came back ("Sent?").
+    state: opened → sent | cancelled, or unknown when nobody answered within 24h. Only `sent`
+    goes into the customer's portal thread."""
+    __tablename__ = "message_handoffs"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id", ondelete="SET NULL"), index=True)
+    client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id", ondelete="SET NULL"))
+    actor_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id", ondelete="SET NULL"))
+    channel: Mapped[str] = mapped_column(String(10))            # sms|whatsapp
+    template_id: Mapped[Optional[str]] = mapped_column(String)
+    body: Mapped[str] = mapped_column(Text)
+    to_number: Mapped[Optional[str]] = mapped_column(String(32))
+    state: Mapped[str] = mapped_column(String(12), default="opened")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime)

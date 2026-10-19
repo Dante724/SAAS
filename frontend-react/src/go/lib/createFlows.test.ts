@@ -89,3 +89,22 @@ describe("tasks", () => {
     expect(dueFor("pick", "2026-11-01T09:30", now)).toBe("2026-11-01T09:30");
   });
 });
+
+import { smsLink, smsSegments, waLink } from "./messaging";
+
+describe("messaging links", () => {
+  it("builds SMS links the way each phone wants them", () => {
+    expect(smsLink("+44 7700 900123", "Ready & paid?", true)).toBe("sms:+447700900123&body=Ready%20%26%20paid%3F");
+    expect(smsLink("+447700900123", "Hi", false)).toBe("sms:+447700900123?body=Hi");
+  });
+  it("builds wa.me links without the plus", () => {
+    expect(waLink("+447700900123", "Hi Sara")).toBe("https://wa.me/447700900123?text=Hi%20Sara");
+  });
+  it("counts SMS segments", () => {
+    expect(smsSegments("")).toBe(0);
+    expect(smsSegments("a".repeat(160))).toBe(1);
+    expect(smsSegments("a".repeat(161))).toBe(2);
+    expect(smsSegments("Ready 👍")).toBe(1);
+    expect(smsSegments("👍".repeat(40))).toBe(2);
+  });
+});

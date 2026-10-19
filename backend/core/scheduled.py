@@ -130,9 +130,13 @@ async def retry_failed_webhooks() -> None:
 async def sweep_idempotency_keys() -> None:
     """Forget Idempotency-Keys older than 48h (services/idempotency.py)."""
     from backend.db.database import AsyncSessionLocal
+    from backend.routers.mobile_messages import expire_open_handoffs
     from backend.services.idempotency import sweep
 
     async with AsyncSessionLocal() as db:
         removed = await sweep(db)
         if removed:
             log.info("idempotency-sweep: removed %d old key(s)", removed)
+        expired = await expire_open_handoffs(db)
+        if expired:
+            log.info("idempotency-sweep: %d phone message(s) never confirmed, marked unknown", expired)

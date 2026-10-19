@@ -1,5 +1,28 @@
 # Changelog
 
+## Tekly Go — message the customer (phase 1b)
+
+- **Message** on every job, with a red badge when the customer has written.
+  - **Chat:** the job's conversation (customer messages from their tracking page plus shop replies).
+    A reply here shows on the customer's tracking page.
+  - **Text / WhatsApp:** pick a saved template, filled in on the server with the same
+    {Placeholders} as documents (links made absolute). Edit it, then "Open in Messages" or
+    "Open in WhatsApp" opens the phone's own app with number and text ready, and you tap Send there.
+    Back in Tekly, "Did the text go?" records it. Only "Sent" goes into the job history and the
+    portal thread, so the customer never sees a message that may not have gone.
+- **Consent:**
+  - No texts to customers who opted out.
+  - WhatsApp has its own consent (`clients.consent_whatsapp`, null = not asked). Staff record the
+    customer's yes or no in two taps; it's kept in the consent history as `mobile_verbal`.
+- `message_handoffs` records each phone message (opened → sent / cancelled, or unknown after 24h).
+  GDPR erasure scrubs them.
+- `services/phones.to_e164`: international numbers for wa.me links (no phone library in the stack).
+- API, all needing `can_send_sms`:
+  - `GET /api/mobile/orders/{id}/compose`
+  - `POST /api/mobile/messages`
+  - `PATCH /api/mobile/messages/{id}`
+  - `POST /api/mobile/clients/{id}/whatsapp-consent`
+
 ## Tekly Go — create jobs, estimates and tasks; photos, items, signature, finish and pay
 
 Designed with a three-reviewer council (one-handed UX, data integrity, permissions).
