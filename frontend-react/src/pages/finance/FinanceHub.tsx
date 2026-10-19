@@ -70,7 +70,8 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
     try {
       const [y, m] = month.split("-").map(Number);
       const end = new Date(y, m, 0).getDate();
-      await api.post("/payroll/run", { period_start: `${month}-01`, period_end: `${month}-${String(end).padStart(2, "0")}`, draft: true });
+      // Drafts the whole team for the month; the single-run endpoint needs an employee.
+      await api.post("/payroll/run-all", { period_start: `${month}-01`, period_end: `${month}-${String(end).padStart(2, "0")}`, draft: true });
       loadRuns();
     } catch (e: any) { await alertDialog(`Could not run payroll: ${e.message}`); } finally { runBusyRef.current = false; setRunBusy(false); }
   }

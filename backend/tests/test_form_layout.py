@@ -57,13 +57,17 @@ async def test_reorder_and_layout_need_settings_permission(client, tenant, db):
     from sqlalchemy import select
 
     from backend.models import Employee, Role
+    from backend.services.auth import hash_password
     tid = await _type(client, tenant)
     me = (await client.get("/api/auth/me", headers=tenant)).json()
     role = Role(org_id=me["org_id"], name="Front desk", permissions={"can_manage_settings": False})
     db.add(role)
     await db.flush()
-    emp = (await db.execute(select(Employee).where(Employee.id == me["id"]))).scalar_one()
-    emp.role_id = role.id
+    # a teammate on that role (the shop owner always keeps every permission)
+    db.add(Employee(org_id=me["org_id"], role_id=role.id, name="Desk", email="desk-layout@t.dev",
+                    password_hash=hash_password("pw-desk-12345"), active=True))
     await db.commit()
-    assert (await client.patch(f"/api/forms/types/{tid}/fields/reorder", json={"ordered_ids": []}, headers=tenant)).status_code == 403
-    assert (await client.put("/api/forms/layout", json={"form": "order", "type_id": tid, "items": []}, headers=tenant)).status_code == 403
+    tok = (await client.post("/api/auth/token", data={"username": "desk-layout@t.dev", "password": "pw-desk-12345"})).json()
+    desk = {"Authorization": f"Bearer {tok['access_token']}"}
+    assert (await client.patch(f"/api/forms/types/{tid}/fields/reorder", json={"ordered_ids": []}, headers=desk)).status_code == 403
+    assert (await client.put("/api/forms/layout", json={"form": "order", "type_id": tid, "items": []}, headers=desk)).status_code == 403

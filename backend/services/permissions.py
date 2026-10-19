@@ -151,15 +151,31 @@ NOT_YET_ENFORCED = {
 }
 
 # Seed templates (deny-lists per template; anything not listed = allowed).
+# Money, payroll, exports and destructive deletes are off for anyone who isn't running the
+# shop: a technician or outside partner must not pay themselves, move money or bulk-export
+# customers just because a newer code defaulted to "on".
+_NOT_FOR_STAFF = {
+    "can_view_finance": False, "can_view_cashflow": False, "can_view_cashflow_any_period": False,
+    "can_transfer_money": False, "can_delete_transactions": False, "can_correct_transactions": False,
+    "can_retroactive_cash": False, "can_manage_accounts": False,
+    "can_view_payroll": False, "can_manage_payroll": False, "can_accrue_payroll": False,
+    "can_export_payroll": False, "can_create_bonuses": False, "can_create_penalties": False,
+    "can_config_exceptional_commissions": False,
+    "can_view_reports": False, "can_export_accountant": False, "can_export_clients": False,
+    "can_export_sales": False,
+    "can_delete_clients": False, "can_delete_orders": False, "can_delete_sales": False,
+    "can_delete_refunds": False, "can_delete_products": False, "can_delete_invoices": False,
+    "can_delete_tickets": False,
+    "can_view_purchase_price": False, "can_see_profit": False, "can_set_cost_price": False,
+    "can_see_asset_cost": False,
+}
 TEMPLATES = {
     "Full access": {},                       # nothing denied
     "Manager": {"can_delete_transactions": False, "can_manage_roles": False},
     "Partner": {"can_manage_settings": False, "can_manage_roles": False,
-                "can_manage_employees": False},
+                "can_manage_employees": False, **_NOT_FOR_STAFF},
     "Specialist": {"can_manage_settings": False, "can_manage_roles": False,
-                   "can_manage_employees": False, "can_view_purchase_price": False,
-                   "can_see_profit": False, "can_delete_tickets": False,
-                   "can_delete_invoices": False, "can_view_cashflow": False},
+                   "can_manage_employees": False, **_NOT_FOR_STAFF},
 }
 
 

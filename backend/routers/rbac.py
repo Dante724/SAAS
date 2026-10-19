@@ -112,8 +112,9 @@ _NARROW = {"own", "selected"}
 
 
 async def _editor_role(db: AsyncSession, current: Employee) -> Optional[Role]:
-    if not current.role_id:
-        return None                 # the owner
+    from backend.services.auth import is_shop_owner
+    if not current.role_id or await is_shop_owner(db, current):
+        return None                 # the owner: no limits to stay within
     role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
     if role is None:
         raise HTTPException(403, "Your role is missing; ask the owner")

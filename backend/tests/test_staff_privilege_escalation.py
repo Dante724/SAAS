@@ -130,11 +130,11 @@ async def test_owner_keeps_full_control(client, db, team):
 
 @pytest.mark.asyncio
 async def test_manager_cannot_manage_role_that_can_do_more_in_any_area(client, db, team):
-    """The default Specialist template may delete transactions while Manager may not. Managing
-    that account (e.g. resetting its password) would let the manager act with that permission,
+    """A Full access account may delete transactions while Manager may not. Managing that
+    account (e.g. resetting its password) would let the manager act with that permission,
     so it is refused — owners can deny can_delete_transactions on the role to allow it."""
     org_id = team["owner"].org_id
-    spec = Role(org_id=org_id, name="Specialist (default)", permissions=dict(TEMPLATES["Specialist"]))
+    spec = Role(org_id=org_id, name="Full access (default)", permissions=dict(TEMPLATES["Full access"]))
     db.add(spec)
     await db.flush()
     other = Employee(org_id=org_id, location_id=team["owner"].location_id, role_id=spec.id, name="S",

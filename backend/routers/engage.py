@@ -235,7 +235,7 @@ async def generate_client_coupon(
     client_id: str,
     data: ClientCouponIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_set_discount")),   # same gate as the other coupon routes
 ):
     """144bi — mint a coupon issued to a specific returning client. Auto-codes so the
     front desk can generate one in a click and offer it now; it's redeemed on the
@@ -247,6 +247,10 @@ async def generate_client_coupon(
         raise HTTPException(404, "Client not found")
     if data.kind not in ("pct", "fixed") or data.value <= 0:
         raise HTTPException(422, "kind must be pct|fixed with a positive value")
+    if data.kind == "pct" and data.value > 100:
+        raise HTTPException(422, "A percentage coupon can't be more than 100%")
+    if not 1 <= data.max_uses <= 100:
+        raise HTTPException(422, "A returning-customer coupon can be used 1 to 100 times")
     import random
     import string
     # unique short code for this org

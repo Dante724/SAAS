@@ -146,10 +146,26 @@ async def get_current_employee(
     return employee
 
 
+async def is_shop_owner(db: AsyncSession, employee: Employee) -> bool:
+    """The shop's creator (organisations.owner_id). Their sign-up role is an explicit
+    allow-list, so without this a permission added later would lock the owner out of it."""
+    from backend.models import Organisation
+    owner_id = (await db.execute(select(Organisation.owner_id).where(
+        Organisation.id == employee.org_id))).scalar_one_or_none()
+    return bool(owner_id) and owner_id == employee.id
+
+
+async def assert_not_self(db: AsyncSession, current: Employee, employee_id: str, what: str) -> None:
+    """Separation of duties for pay: nobody approves, rewards or pays themself — except the
+    owner, who answers to no one in their own shop."""
+    if employee_id == current.id and current.role_id and not await is_shop_owner(db, current):
+        raise HTTPException(403, f"You can't {what}. Ask the owner or another manager.")
+
+
 async def has_perm(db: AsyncSession, employee: Employee, perm_key: str) -> bool:
     """Does this person's role grant the permission? (services/permissions.role_allows.)
     Employees with no role (org owners) have every permission."""
-    if not employee.role_id:
+    if not employee.role_id or await is_shop_owner(db, employee):
         return True
     from backend.models import Role
     from backend.services.permissions import role_allows
