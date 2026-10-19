@@ -10,26 +10,24 @@ python3 -m http.server 4321 --directory website
 
 | Change | File |
 |---|---|
-| Prices, plan names/features, yearly discount, trial length | `site.config.js` → `plans`, `annualDiscount`, `trialDays` |
+| Prices ($49 Starter / $99 Pro), plan features, yearly discount, trial length | `site.config.js` → `plans`, `annualDiscount`, `trialDays` |
 | App sign-in / sign-up URLs | `site.config.js` → `appUrl`, `signInPath`, `signUpPath` |
 | Where demo requests go | `site.config.js` → `demoEndpoint` (POST JSON) or `demoEmail` (mailto fallback) |
-| Calculator assumptions | `site.config.js` → `calculator` |
 | Photos per slot + credits | `photos.js` |
 | Copy and sections | `index.html` |
 
 ## Design system
-Follows `stripe.design.md`: white canvas, animated gradient mesh (`mesh.js`, WebGL with CSS fallback),
-indigo `#533afd` as the single filled CTA per band, Hanken Grotesk display/body with tight
-tracking, IBM Plex Mono for IDs, tabular figures on every number (Geist only for the wordmark).
-Refined with the Impeccable detector: no italic-serif accents, no marquee, no icon tiles, flat
-sections instead of nested cards, hero copy on white with the gradient behind the product.
-Scroll motion uses GSAP + ScrollTrigger reveals on native scrolling (smooth-scroll and scroll
-pinning were removed — they made the page drift and lag). The mesh renders at half resolution,
-capped at 30 fps, and pauses off-screen. Everything respects `prefers-reduced-motion` and still
-works if the CDNs fail.
+Follows `exa.design.md`: white canvas with a single near-black band (#181815) for the product,
+editorial serif display (Newsreader 300 as the open-source stand-in for Arizona Light), Hanken
+Grotesk body, IBM Plex Mono for labels and numbers. Electric blue `#1f40ed` is reserved for the
+main action and links; secondary actions are greige. Hairline borders, 2–4px corners, no gradients.
 
-Measured (headless Chrome): scroll 60 fps with no long frames; Lighthouse mobile 98
-performance, accessibility 97.
+No animation libraries: reveal-on-scroll and the demos are plain JS with IntersectionObserver.
+Interactive pieces: the complaint → AI estimate box in the hero, the five job-stage tabs in the
+dark band, the phone approval demo, the pricing toggle and the demo / sign-up / sign-in panels.
+
+Measured (headless Chrome): scroll 60 fps; Lighthouse accessibility, best practices and SEO 100;
+performance 94 desktop / 86 mobile; page weight ~340 KB.
 
 ## Photography
 Two council rounds (art director, shop owner, conversion marketer; majority vote) picked the
