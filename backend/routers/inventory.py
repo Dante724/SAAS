@@ -802,7 +802,7 @@ class ReserveIn(BaseModel):
 async def reserve_stock(
     data: ReserveIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_reserve_stock")),
 ):
     """Reserve stock for an order. Reserved qty is excluded from available."""
     sl = (await db.execute(select(StockLevel).where(
@@ -826,7 +826,7 @@ async def reserve_stock(
 async def release_reservation(
     res_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_reserve_stock")),
 ):
     r = (await db.execute(select(StockReservation).where(
         StockReservation.id == res_id, StockReservation.org_id == current.org_id))).scalar_one_or_none()
@@ -1321,7 +1321,7 @@ async def send_po(
     po_id: str,
     data: SendPOIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_purchase_orders")),
 ):
     """Build 132 — send a PO to the supplier over email / SMS / WhatsApp. Delivery is
     stubbed at the provider boundary (like every other channel); the message is logged to

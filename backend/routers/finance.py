@@ -114,7 +114,7 @@ async def list_invoices(
     search: Optional[str] = None,     # invoice number, order number or customer name
     skip: int = _paging.skip_query(), limit: int = _paging.limit_query(50),
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_invoices")),
 ):
     from backend.models import Order
     limit = _paging.clamp(limit)
@@ -170,7 +170,7 @@ async def list_invoices(
 async def get_invoice(
     invoice_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_invoices")),
 ):
     """Build 144dt — single invoice with its lines resolved through the
     Order-display mode (detailed / simplified / one_line). Lines are computed
@@ -244,7 +244,7 @@ async def set_einvoice_status(
     invoice_id: str,
     data: EInvoiceStatusIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_invoices")),
 ):
     """Record the clearance outcome manually (no live authority connection in-house)."""
     if data.status not in _EINV_STATUSES:
@@ -263,7 +263,7 @@ async def set_einvoice_status(
 async def download_einvoice(
     invoice_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_invoices")),
 ):
     from fastapi import Response
     inv = await _load_invoice(db, invoice_id, current.org_id)

@@ -510,7 +510,7 @@ IMPORTABLE = {"name", "phone", "email", "address", "notes", "source", "discount_
 async def import_clients(
     data: ImportIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     """Import contacts from a CSV/sheet with an explicit column mapping.
 

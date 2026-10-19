@@ -63,7 +63,7 @@ async def list_suppliers(
 async def supplier_ledger(
     supplier_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_finance")),
 ):
     """Build 124 — the supplier's Balance tab: the unified contact ledger for the
     contact this supplier mirrors (``Supplier.client_id``). Postings we owe show as

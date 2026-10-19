@@ -1514,7 +1514,7 @@ class InvoiceBatchIn(BaseModel):
 async def render_invoice_batch(
     data: InvoiceBatchIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_invoices")),
 ):
     """144ie — print anything: render a full invoice template against many INVOICES at once,
     one invoice per physical page. Unlike labels these are full documents with line rows —

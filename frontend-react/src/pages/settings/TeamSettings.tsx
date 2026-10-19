@@ -235,8 +235,11 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const allowed = (code: string) => perms[code] !== false;     // deny-wins: absent = allowed
-  const toggle = (code: string) => setPerms((p) => ({ ...p, [code]: !(p[code] !== false) }));
+  // Saved roles are allow-lists on the server: a code they don't list is off, so show it off
+  // (otherwise a permission added later looks granted here while the API refuses it).
+  const explicit = !!role?.perms_explicit;
+  const allowed = (code: string) => (explicit ? perms[code] === true : perms[code] !== false);
+  const toggle = (code: string) => setPerms((p) => ({ ...p, [code]: !(explicit ? p[code] === true : p[code] !== false) }));
   const grantAll = (codes: { code: string }[], on: boolean) => setPerms((p) => { const n = { ...p }; codes.forEach((c) => { n[c.code] = on; }); return n; });
   const ql = q.trim().toLowerCase();
   const filtered = useMemo(() => Object.entries(catalog)

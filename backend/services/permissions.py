@@ -141,12 +141,12 @@ NOT_YET_ENFORCED = {
     "can_see_asset_cost", "can_view_own_compensation", "can_create_estimates", "can_delete_tickets",
     "can_view_asset_info", "can_view_item_prices", "can_view_invoices_tab",
     "can_edit_closed_ticket", "can_manage_shared_filters", "can_add_custom_service",
-    "can_add_custom_product", "can_create_payment_links", "can_create_purchase_orders",
+    "can_add_custom_product", "can_create_payment_links",
     "can_view_labors", "can_delete_products", "can_track_serials", "can_manage_bundles",
-    "can_delete_sales", "can_sell_services", "can_edit_sale_price", "can_export_sales",
-    "can_view_invoices", "can_delete_invoices", "can_edit_issued_invoices", "can_create_incomes",
-    "can_retroactive_cash", "can_view_cashflow_any_period", "can_manage_accounts",
-    "can_create_returns", "can_delete_refunds", "can_accrue_payroll", "can_create_penalties",
+    "can_delete_sales", "can_sell_services", "can_export_sales",
+    "can_delete_invoices", "can_edit_issued_invoices", "can_create_incomes",
+    "can_retroactive_cash", "can_view_cashflow_any_period",
+    "can_delete_refunds", "can_accrue_payroll", "can_create_penalties",
     "can_create_bonuses", "can_export_payroll",
 }
 

@@ -16,7 +16,7 @@ from backend.db.database import get_db
 from backend.models import (
     Employee, Order, OrderStatus, Sale, Payment, WorkOrderType, Location, Account, InsightCard,
 )
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, require_perm
 from backend.services.money import q2
 
 router = APIRouter(prefix="/api/reports/insights", tags=["insights"])
@@ -153,7 +153,7 @@ def _bucket_key(ts, period):
 @router.get("/data")
 async def data(kind: str = "diagram", subject: str = "closed_orders", metric: str = "amount",
                group: Optional[str] = None, period: str = "30d", location_id: Optional[str] = None,
-               db: AsyncSession = Depends(get_db), current: Employee = Depends(get_current_employee)):
+               db: AsyncSession = Depends(get_db), current: Employee = Depends(require_perm("can_view_reports"))):
     if subject not in SUBJECTS:
         raise HTTPException(400, "Unknown subject")
     if metric not in SUBJECTS[subject]["metrics"]:

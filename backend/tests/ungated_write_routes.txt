@@ -86,7 +86,6 @@ POST /api/chats/threads/{tid}/to-lead [staff]
 POST /api/chats/threads/{tid}/to-order [staff]
 # clients
 POST /api/clients [staff]
-POST /api/clients/import [staff]
 POST /api/clients/merge/preview [staff]
 PATCH /api/clients/{client_id} [staff]
 PUT /api/clients/{client_id} [staff]
@@ -102,7 +101,6 @@ POST /api/documents/preview [staff]
 POST /api/documents/print-view [staff]
 POST /api/documents/render-asset-labels [staff]
 POST /api/documents/render-client-labels [staff]
-POST /api/documents/render-invoice-batch [staff]
 POST /api/documents/render-labels [staff]
 # ecommerce
 POST /api/ecommerce/integrations/{integration_id}/sync-order [staff]
@@ -110,7 +108,6 @@ POST /api/ecommerce/integrations/{integration_id}/sync-order [staff]
 DELETE /api/feed/item/{item_id} [staff]
 POST /api/feed/{entity_type}/{entity_id} [staff]
 # finance
-PATCH /api/finance/invoices/{invoice_id}/einvoice [staff]
 # forms
 # inbox
 POST /api/inbox/threads [staff]
@@ -118,10 +115,7 @@ PATCH /api/inbox/threads/{thread_id} [staff]
 POST /api/inbox/threads/{thread_id}/reply [staff]
 POST /api/inbox/threads/{thread_id}/to-order [staff]
 # inventory
-POST /api/inventory/po/{po_id}/send [staff]
 POST /api/inventory/reorder-digest [staff]
-POST /api/inventory/reservations/{res_id}/release [staff]
-POST /api/inventory/reserve [staff]
 # leads
 POST /api/leads [staff]
 PATCH /api/leads/{lead_id} [staff]

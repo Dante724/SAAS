@@ -41,6 +41,8 @@ async def permission_catalog(current: Employee = Depends(get_current_employee)):
 
 def _ser_role(r: Role) -> dict:
     return {"id": r.id, "name": r.name, "permissions": r.permissions or {},
+            # explicit roles are allow-lists: a code they don't list is OFF (see role_allows)
+            "perms_explicit": bool(getattr(r, "perms_explicit", False)),
             "location_scope": getattr(r, "location_scope", "all"),
             "location_ids": json.loads(getattr(r, "location_ids", None) or "[]"),
             "contact_scope": getattr(r, "contact_scope", "all"),

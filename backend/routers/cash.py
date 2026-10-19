@@ -27,7 +27,7 @@ from backend.models import (
     Payment,
     Transaction,
 )
-from backend.services.auth import require_perm, record_scope
+from backend.services.auth import assert_perm, require_perm, record_scope
 from backend.core import paging as _paging
 from backend.services.numbering import next_number
 from backend.services.money import q2
@@ -185,7 +185,7 @@ async def total_money(
 async def create_account(
     data: AccountIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
+    current: Employee = Depends(require_perm("can_manage_accounts")),
 ):
     if not data.name.strip():
         raise HTTPException(400, "Name is required")
@@ -222,7 +222,7 @@ async def update_account(
 async def delete_account(
     account_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
+    current: Employee = Depends(require_perm("can_manage_accounts")),
 ):
     a = (await db.execute(select(Account).where(Account.id == account_id, Account.org_id == current.org_id))).scalar_one_or_none()
     if not a:
@@ -726,6 +726,7 @@ async def refund_overpayment(
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
     """Refund an overpayment (prepayments exceeded the order total) from a cashbox."""
+    await assert_perm(db, current, "can_create_returns")   # paying money back, not just seeing it
     # Row lock (B11): two refunds at once both read the same overpayment and paid it out twice.
     o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
                           .with_for_update())).scalar_one_or_none()

@@ -24,7 +24,7 @@ from backend.models import (
     StockMovement,
 )
 from backend.services import industry as _ind
-from backend.services.auth import get_current_employee, require_perm, record_scope
+from backend.services.auth import assert_perm, get_current_employee, require_perm, record_scope
 from backend.services.numbering import next_number
 
 router = APIRouter(prefix="/api/orders", tags=["orders"],
@@ -567,6 +567,11 @@ async def bulk_action(
 ):
     if not data.order_ids:
         raise HTTPException(400, "No orders selected")
+    # Bulk actions need the same permission as doing it to one order.
+    _bulk_perm = {"assign": "can_assign_staff", "create_invoice": "can_create_invoices",
+                  "group_invoice": "can_create_invoices"}.get(data.action)
+    if _bulk_perm:
+        await assert_perm(db, current, _bulk_perm)
 
     # 144-G: archive / restore are destructive — gate them (default-allow, like require_perm)
     # and run each through the single-order helper so refunds, commission reversal and audit
@@ -3302,6 +3307,8 @@ async def add_line(
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_editable(db, order, current)
+    if (data.discount or 0) > 0:
+        await assert_perm(db, current, "can_set_discount")
     await _validate_line_assignment(db, current.org_id, technician_id=data.technician_id, co_technicians=data.co_technicians)
     if data.order_item_id:
         from backend.services import multi_asset as _ma
@@ -3665,6 +3672,11 @@ async def update_line(
     payload = data.model_dump(exclude_unset=True)
     if current.role_id and not (await _order_perms(db, current)).get("can_view_purchase_price"):
         payload.pop("cost_price", None)
+    # Changing what the customer pays needs the matching right (a technician can't zero a job).
+    if "discount" in payload and (payload["discount"] or 0) != (line.discount or 0):
+        await assert_perm(db, current, "can_set_discount")
+    if "unit_price" in payload and payload["unit_price"] is not None and float(payload["unit_price"]) != float(line.unit_price or 0):
+        await assert_perm(db, current, "can_edit_sale_price")
     if "order_item_id" in payload:
         payload["order_item_id"] = payload["order_item_id"] or None
         if payload["order_item_id"]:

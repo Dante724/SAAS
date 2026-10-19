@@ -868,6 +868,7 @@ async def run_report(
         raise HTTPException(404, "Unknown report")
     tab, title, builder = REPORTS[report_key]
     df, dt = _parse_range(date_from, date_to)
+    location_id = await _scoped_location(db, current, location_id)
     cols, rows = await builder(db, current.org_id, df, dt, location_id=location_id)
     # totals row for numeric columns
     return {"key": report_key, "title": title, "tab": tab,
@@ -892,6 +893,7 @@ async def export_report(
     from openpyxl.styles import Font, PatternFill, Alignment
     tab, title, builder = REPORTS[report_key]
     df, dt = _parse_range(date_from, date_to)
+    location_id = await _scoped_location(db, current, location_id)
     cols, rows = await builder(db, current.org_id, df, dt, location_id=location_id)
 
     wb = openpyxl.Workbook()
@@ -939,6 +941,7 @@ async def export_report_csv(
     import csv
     _tab, _title, builder = REPORTS[report_key]
     df, dt = _parse_range(date_from, date_to)
+    location_id = await _scoped_location(db, current, location_id)
     cols, rows = await builder(db, current.org_id, df, dt, location_id=location_id)
     buf = io.StringIO()
     w = csv.writer(buf)
@@ -963,6 +966,7 @@ async def company_dashboard(
     from datetime import datetime
     from backend.models import Account, OrderStatus
     oid = current.org_id
+    location_id = await _scoped_location(db, current, location_id)
     now = datetime.utcnow()
     today0 = now.replace(hour=0, minute=0, second=0, microsecond=0)
     month0 = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -1077,6 +1081,28 @@ async def company_dashboard(
 #  stamped on the line) − labour cost (Σ TimeEntry duration × snapshot rate,
 #  timer AND manual). Rolled up per location. No schema, no WO-page changes.
 # ══════════════════════════════════════════════════════════════════════════
+
+
+async def _scoped_location(db, current, location_id):
+    """The branch a report or dashboard may cover for this caller. A role limited to some
+    locations can only ask for one of them, and with no choice gets its only branch (or is
+    told to pick one) instead of the whole shop's figures."""
+    from fastapi import HTTPException
+
+    from backend.models import Role
+    from backend.services.auth import check_location_access, is_shop_owner
+    if not current.role_id or await is_shop_owner(db, current):
+        return location_id
+    if location_id:
+        await check_location_access(db, current, location_id)
+        return location_id
+    role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
+    allow = _allowed_location_ids(role)
+    if allow is None:
+        return None
+    if len(allow) == 1:
+        return next(iter(allow))
+    raise HTTPException(403, "Choose one of your locations to see this report")
 
 
 def _allowed_location_ids(role):
