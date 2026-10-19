@@ -11,14 +11,17 @@ vi.mock("../../components/DateField", () => ({ default: () => <input aria-label=
 import FinanceHub from "./FinanceHub";
 
 let posts: string[] = [];
+let bodies: unknown[] = [];
 let failPost = false;
+let runStatus = "draft";
 const reply = (status: number, body: unknown) => ({ ok: status < 400, status, statusText: "", headers: new Headers(), json: async () => body, text: async () => (typeof body === "string" ? body : JSON.stringify(body)) }) as Response;
 
 beforeEach(() => {
-  posts = []; failPost = false;
+  posts = []; bodies = []; failPost = false; runStatus = "draft";
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
-    if (init?.method === "POST") { posts.push(url); return failPost ? reply(500, "boom") : reply(200, {}); }
-    if (url.startsWith("/api/payroll/runs")) return reply(200, { items: [{ id: "r1", period_start: "2026-10-01", period_end: "2026-10-31", status: "draft" }] });
+    if (init?.method === "POST") { posts.push(url); bodies.push(JSON.parse(String(init.body || "{}"))); return failPost ? reply(500, "boom") : reply(200, {}); }
+    if (url.startsWith("/api/payroll/runs")) return reply(200, { items: [{ id: "r1", period_start: "2026-10-01", period_end: "2026-10-31", status: runStatus }] });
+    if (url.startsWith("/api/cash/summary")) return reply(200, { accounts: [{ id: "a1", name: "Main till" }] });
     return reply(200, { items: [] });
   }));
 });
@@ -46,6 +49,20 @@ describe("FinanceHub payroll", () => {
     const confirm = screen.getAllByRole("button", { name: "Mark paid" }).pop()!;
     await u.click(confirm);
     await vi.waitFor(() => expect(posts).toEqual(["/api/payroll/runs/r1/pay"]));
+    // the payout is taken out of a real account
+    expect(bodies).toEqual([{ account_id: "a1" }]);
+  });
+
+  it("Void asks for a reason and posts it", async () => {
+    const u = userEvent.setup();
+    runStatus = "paid";
+    renderPayroll();
+    await u.click(await screen.findByRole("button", { name: "Void" }));
+    await u.type(await screen.findByRole("textbox"), "Wrong period");
+    await u.click(screen.getByRole("button", { name: "Void run" }));
+    await vi.waitFor(() => expect(posts).toEqual(["/api/payroll/runs/r1/void"]));
+    expect(bodies).toEqual([{ reason: "Wrong period" }]);
+    expect(screen.queryByRole("button", { name: "Mark paid" })).toBeNull();
   });
 
   it("a failed payroll run is shown, not swallowed", async () => {

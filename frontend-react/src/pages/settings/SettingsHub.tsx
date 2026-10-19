@@ -1296,7 +1296,7 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
       hired_at: f.hired_at || null, note: f.note || null,
       role_id: f.role_id || null, location_id: f.location_id || null,
       wage_type: f.wage_type || "fixed", wage_value: Number(f.wage_value) || 0,
-      commission_labour: Number(f.commission_labour) || 0, commission_parts: Number(f.commission_parts) || 0,
+      hourly_basis: f.hourly_basis === "attendance" ? "attendance" : "labour",
       track_job_hours: f.track_job_hours !== false, track_attendance: f.track_attendance !== false,
     };
     try {
@@ -1378,7 +1378,8 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
               <div><label className={lblc}>Wage type</label>
                 <select value={f.wage_type || "fixed"} onChange={(e) => set("wage_type", e.target.value)} className={`${fld} appearance-none`}><option value="fixed">Fixed salary</option><option value="hourly">Hourly</option></select></div>
               <div><label className={lblc}>Wage value</label><input type="number" value={f.wage_value ?? ""} onChange={(e) => set("wage_value", e.target.value)} className={`${fld} font-mono`} /></div>
-              <div><label className={lblc}>Labour comm. %</label><input type="number" value={f.commission_labour ?? ""} onChange={(e) => set("commission_labour", e.target.value)} className={`${fld} font-mono`} /></div>
+              <div><label className={lblc}>Pay hours from</label>
+                <select value={f.hourly_basis === "attendance" ? "attendance" : "labour"} onChange={(e) => set("hourly_basis", e.target.value)} className={`${fld} appearance-none`}><option value="labour">Approved job timesheets</option><option value="attendance">Shop clock-in / out</option></select></div>
             </div>
             <div className="divide-y divide-slate-100">
               <label className="flex items-center justify-between py-2 cursor-pointer"><span className="text-xs font-semibold text-ink-primary">Work-order / job timer</span>

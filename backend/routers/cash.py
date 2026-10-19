@@ -316,7 +316,8 @@ async def _get_txn(db, org_id, txn_id) -> Transaction:
 
 # Cash legs posted by a payment document. Voiding/correcting only the cash row reversed the till
 # while the Payment, invoice.amount_paid, client ledger and sale.paid stayed as they were.
-_DOCUMENT_LEGS = {"order": "work order payment", "invoice": "invoice payment", "sale": "sale"}
+_DOCUMENT_LEGS = {"order": "work order payment", "invoice": "invoice payment", "sale": "sale",
+                  "payroll_run": "payroll run"}
 
 
 def _guard_document_leg(t) -> None:
@@ -404,6 +405,8 @@ async def restore_transaction(
     t = await _get_txn(db, current.org_id, txn_id)
     if t.status != "deleted":
         raise HTTPException(400, "Transaction is not deleted")
+    if t.ref_type == "payroll_run":   # voided with its run; reviving it alone would pay twice
+        raise HTTPException(409, "This was the payout of a voided payroll run. Accrue and pay the period again instead.")
     legs = [t]
     if t.transfer_pair_id:
         legs = (await db.execute(select(Transaction).where(

@@ -35,7 +35,8 @@ async def test_runs_list_is_enriched_and_can_be_paid(client, tenant):
     assert row["paid_at"] is None
 
     # mark paid
-    pay = await client.post(f"/api/payroll/runs/{run_id}/pay", json={}, headers=tenant)
+    till = (await client.post("/api/cash/accounts", json={"name": "Till"}, headers=tenant)).json()["id"]
+    pay = await client.post(f"/api/payroll/runs/{run_id}/pay", json={"account_id": till}, headers=tenant)
     assert pay.status_code == 200, pay.text
     assert pay.json()["status"] == "paid"
 

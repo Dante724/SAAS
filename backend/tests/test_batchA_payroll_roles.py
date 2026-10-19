@@ -26,6 +26,12 @@ async def _register(client):
     return H, body["org_id"], me["id"]
 
 
+async def _till(client, H):
+    r = await client.post("/api/cash/accounts", json={"name": "Till"}, headers=H)
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
 async def _admin_role_id(db, org_id):
     from backend.models import Role
     return (await db.execute(select(Role.id).where(Role.org_id == org_id, Role.name == "admin"))).scalar_one()
@@ -102,8 +108,9 @@ async def test_overlapping_runs_are_refused_and_paid_runs_stay_paid(client, db):
     assert again.status_code == 409
 
     run_id = first.json()["id"]
-    assert (await client.post(f"/api/payroll/runs/{run_id}/pay", headers=H)).status_code == 200
-    assert (await client.post(f"/api/payroll/runs/{run_id}/pay", headers=H)).status_code == 409
+    pay = {"account_id": await _till(client, H)}
+    assert (await client.post(f"/api/payroll/runs/{run_id}/pay", json=pay, headers=H)).status_code == 200
+    assert (await client.post(f"/api/payroll/runs/{run_id}/pay", json=pay, headers=H)).status_code == 409
 
 
 # ── separation of duties ──────────────────────────────────────────
@@ -122,9 +129,10 @@ async def test_nobody_approves_rewards_or_pays_themself(client, db):
     assert r.status_code == 403
     run = (await client.post("/api/payroll/run", json={
         "employee_id": emp, "period_start": "2026-08-01", "period_end": "2026-08-31"}, headers=H)).json()
-    assert (await client.post(f"/api/payroll/runs/{run['id']}/pay", headers=T)).status_code == 403
+    pay = {"account_id": await _till(client, H)}
+    assert (await client.post(f"/api/payroll/runs/{run['id']}/pay", json=pay, headers=T)).status_code == 403
     # the owner can still do it for them
-    assert (await client.post(f"/api/payroll/runs/{run['id']}/pay", headers=H)).status_code == 200
+    assert (await client.post(f"/api/payroll/runs/{run['id']}/pay", json=pay, headers=H)).status_code == 200
 
 
 # ── roles ─────────────────────────────────────────────────────────
