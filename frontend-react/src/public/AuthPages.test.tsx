@@ -60,9 +60,13 @@ describe("auth pages", () => {
     await u.type(screen.getByLabelText("Email"), "asha@fixit.in");
     await u.type(screen.getByLabelText("Password (8+ characters)"), "pw-12345678");
     await u.click(screen.getByRole("button", { name: "Create shop" }));
+    expect(screen.getByRole("alert").textContent).toMatch(/Terms of service/);   // must tick the box first
+    expect(calls.find((c) => c.url === "/api/auth/register")).toBeUndefined();
+    await u.click(screen.getByLabelText(/I agree to the/));
+    await u.click(screen.getByRole("button", { name: "Create shop" }));
     await vi.waitFor(() => expect(localStorage.getItem("ros_tok")).toBe("tok-9"));
     const reg = calls.find((c) => c.url === "/api/auth/register")!.body;
-    expect(reg).toMatchObject({ org_name: "Fix-It Pro", name: "Asha", email: "asha@fixit.in", industry_template: "tools", region: "in", currency_code: "INR" });
+    expect(reg).toMatchObject({ org_name: "Fix-It Pro", name: "Asha", email: "asha@fixit.in", industry_template: "tools", region: "in", currency_code: "INR", accept_terms: true });
   });
 
   it("an invalid invite says so plainly", async () => {

@@ -58,14 +58,21 @@ async def test_concurrent_sessions_get_distinct_numbers(client, tenant, db):
 
 
 @pytest.mark.asyncio
-async def test_duplicate_report_script_finds_existing_duplicates(client, tenant, db, capsys):
+async def test_duplicate_invoice_numbers_are_refused_and_the_report_is_clean(client, tenant, db, capsys):
+    """uq_invoices_org_number (ls144r4) now refuses a second copy, so new duplicates can't exist.
+    The report script stays for databases from before the migration (which skips the constraint
+    while legacy duplicates remain): on a clean database it finds none."""
     import os
     import sys
+
+    from sqlalchemy.exc import IntegrityError
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     from scripts import find_duplicate_invoice_numbers as report
     org = (await db.execute(select(Organisation))).scalars().first()
-    for _ in range(2):
-        db.add(Invoice(org_id=org.id, invoice_number="INV-DUP-1", status="draft", total=0, amount_paid=0))
+    db.add(Invoice(org_id=org.id, invoice_number="INV-DUP-1", status="draft", total=0, amount_paid=0))
     await db.commit()
-    assert await report.main() == 1
-    assert "INV-DUP-1 x2" in capsys.readouterr().out
+    db.add(Invoice(org_id=org.id, invoice_number="INV-DUP-1", status="draft", total=0, amount_paid=0))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
+    assert await report.main() == 0

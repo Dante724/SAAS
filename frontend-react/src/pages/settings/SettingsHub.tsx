@@ -9,6 +9,7 @@ import DirectoriesManager from "./DirectoriesManager";
 import FormCustomizer, { type FormKey } from "../../components/FormCustomizer";
 import { resetTerminology } from "../../lib/useTerminology";
 import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
+import { useMe } from "../../context/Me";
 import { NAV, CATS, SEC_CAT, searchSections, type SectionId } from "./settingsRegistry";
 import { SetupChecklist } from "./SetupChecklist";
 import { StatusList, StatusEditor } from "./StatusesSettings";
@@ -1287,6 +1288,10 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
   const [locations, setLocations] = useState<any[]>([]);
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   const [pw, setPw] = useState("");
+  const { me } = useMe();
+  const isSelf = !!emp?.id && emp.id === me?.id;
+  // Your own email or password needs your current password (the API refuses without it).
+  const askCurrent = () => promptDialog("Enter your current password to confirm.", { title: "Confirm it's you", type: "password", confirmLabel: "Confirm" });
   const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
   useEffect(() => { api.get<any>("/staff/locations").then((r) => setLocations(r.items || r || [])).catch(() => setLocations([])); }, []);
 
@@ -1304,14 +1309,21 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
       track_job_hours: f.track_job_hours !== false, track_attendance: f.track_attendance !== false,
     };
     try {
+      let current_password: string | undefined;
+      if (isSelf && (f.email || "").trim().toLowerCase() !== (emp.email || "").trim().toLowerCase()) {
+        const p = await askCurrent(); if (!p) { setBusy(false); return; }
+        current_password = p;
+      }
       if (isNew) await api.post("/staff/employees", body);
-      else await api.patch(`/staff/employees/${emp.id}`, { ...body, active: f.active !== false });
+      else await api.patch(`/staff/employees/${emp.id}`, { ...body, active: f.active !== false, ...(current_password ? { current_password } : {}) });
       onSaved(isNew ? "Employee added" : "Employee saved");
     } catch (e: any) { setErr(e?.message || "Could not save"); setBusy(false); }
   }
   async function resetPassword() {
     if (!pw.trim() || !emp?.id) return;
-    try { await api.post(`/staff/employees/${emp.id}/password`, { password: pw.trim() }); setPw(""); onSaved("Password updated"); }
+    let current_password: string | undefined;
+    if (isSelf) { const p = await askCurrent(); if (!p) return; current_password = p; }
+    try { await api.post(`/staff/employees/${emp.id}/password`, { password: pw.trim(), ...(current_password ? { current_password } : {}) }); setPw(""); onSaved("Password updated"); }
     catch (e: any) { setErr(e?.message || "Failed"); }
   }
   async function sendReset() { try { await api.post(`/staff/employees/${emp.id}/send-reset`, {}); onSaved("Reset link emailed"); } catch (e: any) { setErr(e?.message || "Failed"); } }

@@ -43,6 +43,8 @@ jobs:
             echo "TOKEN_ENCRYPTION_KEY=$(python3 -c 'import base64,os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
             echo "CORS_ORIGINS=http://localhost:8000"
             echo "PUBLIC_BASE_URL=http://localhost:8000"
+            echo "SMTP_HOST=smtp.invalid"
+            echo "SMTP_FROM=ci@tekly.invalid"
           } > ci.env
       - name: Migrate
         run: docker run --rm --network host --env-file ci.env repairos:ci alembic -c backend/alembic.ini upgrade head

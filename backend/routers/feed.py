@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core import paging as _paging
 from backend.db.database import get_db
 from backend.models import Client, Employee, EventFeedItem, Order
 from backend.services import audit
@@ -77,6 +78,7 @@ async def log_system_event(db: AsyncSession, org_id: str, entity_type: str,
 async def list_feed(
     entity_type: str,
     entity_id: str,
+    limit: int = _paging.limit_query(200),     # newest first; a busy job's timeline is capped
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
@@ -91,6 +93,7 @@ async def list_feed(
             EventFeedItem.entity_id == entity_id,
         )
         .order_by(desc(EventFeedItem.created_at))
+        .limit(_paging.clamp(limit))
     )
     items = result.scalars().all()
     # 144ba: opening a work-order feed clears its unread customer-message badge

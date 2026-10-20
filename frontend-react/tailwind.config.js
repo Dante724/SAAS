@@ -50,8 +50,8 @@ export default {
       textColor: T.text,
       ringColor: T.ring,
       fontFamily: {
-        sans: ["Geist", "Inter", "system-ui", "sans-serif"],
-        mono: ["Geist Mono", "JetBrains Mono", "ui-monospace", "monospace"],
+        sans: ["Geist Variable", "Geist", "Inter", "system-ui", "sans-serif"],
+        mono: ["Geist Mono Variable", "Geist Mono", "JetBrains Mono", "ui-monospace", "monospace"],
       },
       boxShadow: {
         // Shadows follow the theme (soft clay in light; quiet in dark, where surfaces carry depth).

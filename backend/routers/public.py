@@ -198,11 +198,11 @@ async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
             pass
         target = (await db.execute(select(OrderStatus).where(
             OrderStatus.org_id == order.org_id, OrderStatus.is_estimate == True,  # noqa: E712
-            OrderStatus.converts_to_order == True, OrderStatus.active == True))).scalar_one_or_none()  # noqa: E712
+            OrderStatus.converts_to_order == True, OrderStatus.active == True))).scalars().first()  # noqa: E712
         if not target:
             target = (await db.execute(select(OrderStatus).where(
                 OrderStatus.org_id == order.org_id, OrderStatus.is_estimate == True,  # noqa: E712
-                OrderStatus.status_group == "closed", OrderStatus.active == True))).scalar_one_or_none()  # noqa: E712
+                OrderStatus.status_group == "closed", OrderStatus.active == True))).scalars().first()  # noqa: E712
         if target:
             prev = order.status
             order.status = target.key
@@ -218,7 +218,7 @@ async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
     else:  # decline
         target = (await db.execute(select(OrderStatus).where(
             OrderStatus.org_id == order.org_id, OrderStatus.is_estimate == True,  # noqa: E712
-            OrderStatus.status_group == "dropped", OrderStatus.active == True))).scalar_one_or_none()  # noqa: E712
+            OrderStatus.status_group == "dropped", OrderStatus.active == True))).scalars().first()  # noqa: E712
         if target:
             prev = order.status
             order.status = target.key

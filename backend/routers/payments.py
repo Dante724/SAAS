@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core import paging as _paging
 from backend.config import settings
 from backend.core.webhook_security import provider_secrets, require_signature
 from backend.db.database import get_db
@@ -68,6 +69,17 @@ async def create_checkout(
     await assert_perm(db, current, "can_create_payment_links")
     if data.amount <= 0:
         raise HTTPException(400, "Amount must be positive")
+    if data.order_id and not data.currency:
+        # A checkout for an order asks at most for what's still owed on it.
+        from backend.models import Order
+        from backend.services.order_money import balance_due
+        order = (await db.execute(select(Order).where(
+            Order.id == data.order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+        if not order:
+            raise HTTPException(404, "Order not found")
+        owed = await balance_due(db, order)
+        if data.amount > owed + 0.005:
+            raise HTTPException(422, f"Amount is more than the {owed:.2f} still owed on this order.")
     try:
         intent = await pay.create_intent(
             db, org_id=current.org_id, order_id=data.order_id,
@@ -79,12 +91,16 @@ async def create_checkout(
 
 @router.get("/intents")
 async def list_intents(
+    skip: int = _paging.skip_query(), limit: int = _paging.limit_query(100),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
-    rows = (await db.execute(select(PaymentIntent).where(
-        PaymentIntent.org_id == current.org_id).order_by(desc(PaymentIntent.created_at)))).scalars().all()
-    return {"items": [_ser(i) for i in rows]}
+    from sqlalchemy import func
+    q = select(PaymentIntent).where(PaymentIntent.org_id == current.org_id)
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
+    rows = (await db.execute(q.order_by(desc(PaymentIntent.created_at))
+                             .offset(skip).limit(_paging.clamp(limit)))).scalars().all()
+    return {"items": [_ser(i) for i in rows], "total": total}
 
 
 @router.get("/intents/{intent_id}")
@@ -130,7 +146,8 @@ async def revoke_intent(
         raise HTTPException(404, "Intent not found")
     if i.status == "succeeded":
         raise HTTPException(400, "A paid link cannot be revoked")
-    i.status = "canceled"
+    from backend.services.order_money import revoke_pay_link
+    await revoke_pay_link(db, i)
     await db.commit()
     return {"ok": True, "status": i.status, "lifecycle": _LIFECYCLE.get(i.status, i.status)}
 

@@ -60,19 +60,28 @@ _SECURITY_HEADERS = {
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "Permissions-Policy": "camera=(self), microphone=(), geolocation=()",
     "Cross-Origin-Opener-Policy": "same-origin",
-    # SPA + inline handlers need 'unsafe-inline'; images/media may be data: URLs.
+    # Nothing the app serves belongs in a search index: staff screens, and /track, /portal and
+    # /pay pages whose URL is the customer's key.
+    "X-Robots-Tag": "noindex, nofollow",
+    # No inline script anywhere except the platform-admin page, which sends ADMIN_CSP itself, so a
+    # markup injection can't run code. Styles stay inline-friendly; media may be data: URLs.
     "Content-Security-Policy": (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob:; "
-        "font-src 'self' data: https://fonts.gstatic.com; "
+        "font-src 'self' data:; "
         "connect-src 'self'; "
         "frame-ancestors 'self'; "
         "base-uri 'self'; "
         "object-src 'none'"
     ),
 }
+
+
+# /admin still has inline handlers (onclick=…); it renders escaped data only. Route-set headers win
+# over the defaults above (setdefault).
+ADMIN_CSP = _SECURITY_HEADERS["Content-Security-Policy"].replace("script-src 'self';", "script-src 'self' 'unsafe-inline';")
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -89,39 +98,36 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 # ── rate limiter ─────────────────────────────────────────────────────────────
-_STATIC_SUFFIXES = (".js", ".mjs", ".css", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp",
-                    ".ico", ".woff", ".woff2", ".ttf", ".webmanifest", ".txt")
+def _rate_key(request) -> str:
+    """Who a request counts against. Signed-in calls count per user (or API key): staff
+    on one shop Wi-Fi, or every client behind a proxy that hides their IP, used to share one bucket
+    and lock each other out (launch QA B5). Anonymous calls, and forged or expired tokens, count
+    per IP so a made-up token can't buy a fresh budget."""
+    from backend.services import ratelimit
+    auth = request.headers.get("authorization", "")
+    if auth[:7].lower() == "bearer ":
+        tok = auth[7:].strip()
+        if tok.startswith("rok_"):
+            return "k:" + tok[:12]          # API key prefix (rok_<8 hex>)
+        try:
+            import jwt
 
-
-def _token_subject(request) -> str | None:
-    """Employee id from a validly signed bearer token, else None. Signature is checked so a forged
-    token can't buy a fresh budget; expiry/revocation are left to the endpoint's own auth."""
-    auth = request.headers.get("authorization") or ""
-    if not auth.lower().startswith("bearer "):
-        return None
-    import jwt
-
-    from backend.config import settings
-    try:
-        payload = jwt.decode(auth[7:].strip(), settings.SECRET_KEY, algorithms=[settings.ALGORITHM],
-                             options={"verify_exp": False})
-    except (jwt.PyJWTError, ValueError):
-        return None
-    sub = payload.get("sub")
-    return str(sub) if sub else None
+            from backend.config import settings
+            sub = jwt.decode(tok, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]).get("sub")
+            if sub:
+                return "u:" + str(sub)
+        except Exception:
+            pass                                          # bad/expired token: counts by IP
+    return "ip:" + ratelimit.client_ip(request)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Global request ceiling. Counts through services.ratelimit, so with REDIS_URL set every
-    worker and instance shares one counter (it used to be a per-process dict: N workers
-    allowed N x limit, and every IP ever seen stayed in memory).
-
-    Launch QA B5: a shop's staff share one Wi-Fi IP, so a flat per-IP limit that also counted page
-    assets locked the whole shop out. Static files are not counted; signed-in traffic is limited
-    per user (RATE_LIMIT_USER_PER_MIN); anonymous traffic keeps the per-IP ceiling
-    (RATE_LIMIT_IP_PER_MIN)."""
+    """Global ceiling on API calls: per user or API key when signed in (RATE_LIMIT_USER_PER_MIN),
+    per IP otherwise (RATE_LIMIT_IP_PER_MIN). Only /api/ is counted: page loads pull dozens of
+    assets, and counting those let one busy screen use up a shop's whole budget. Counts through
+    services.ratelimit, so with REDIS_URL set every worker and instance shares one counter."""
     def __init__(self, app, *, window_s: int = 60,
-                 exempt_prefixes=("/metrics", "/health", "/api/health", "/assets/", "/static/")):
+                 exempt_prefixes=("/metrics", "/health", "/api/health")):
         super().__init__(app)
         self.window = window_s
         self.exempt = exempt_prefixes
@@ -132,22 +138,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         from backend.config import settings
         from backend.services import ratelimit
         path = request.url.path
-        if any(path.startswith(p) for p in self.exempt) or (
-                not path.startswith("/api") and path.lower().endswith(_STATIC_SUFFIXES)):
+        if not path.startswith("/api/") or any(path.startswith(p) for p in self.exempt):
             return await call_next(request)
-        sub = _token_subject(request)
-        if sub:
-            bucket, key, limit = "global-user", sub, settings.RATE_LIMIT_USER_PER_MIN
-        else:
-            bucket, key, limit = "global", ratelimit.client_ip(request), settings.RATE_LIMIT_IP_PER_MIN
+        key = _rate_key(request)
+        limit = settings.RATE_LIMIT_IP_PER_MIN if key.startswith("ip:") else settings.RATE_LIMIT_USER_PER_MIN
         try:
-            await ratelimit.aenforce(bucket, key, limit, self.window)
-        except HTTPException as e:
-            return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"},
-                                headers=e.headers or {})
-        return await call_next(request)
-        try:
-            await ratelimit.aenforce("global", ratelimit.client_ip(request), self.limit, self.window)
+            await ratelimit.aenforce("global", key, limit, self.window)
         except HTTPException as e:
             return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"},
                                 headers=e.headers or {})

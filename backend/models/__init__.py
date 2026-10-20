@@ -254,6 +254,8 @@ class EmployeeGroup(Base):
 
 class Employee(Base):
     __tablename__ = "employees"
+    # Sign-in emails are case-insensitive (migration ls144r3); the app stores them lowercase.
+    __table_args__ = (Index("uq_employees_email_lower", text("lower(email)"), unique=True),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"))
@@ -395,7 +397,7 @@ class Device(Base):
     # assets (client_id NULL) unscoped — a cross-tenant IDOR. Every asset query now
     # filters on org_id. Nullable only to allow the backfill migration.
     org_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("organisations.id"), index=True)
-    client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"))
+    client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
     owner_type: Mapped[str] = mapped_column(String(20), default="client")  # client|company
     location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"))  # warehouse the asset sits in
     warehouse_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("warehouses.id"), index=True)  # Build 90: asset warehouse
@@ -430,14 +432,26 @@ class Device(Base):
 # ORDERS
 # ─────────────────────────────────────────────
 
+class RevokedSession(Base):
+    """A sign-in ended with POST /api/auth/logout. Its tokens are rejected until they expire;
+    rows past expires_at are swept by the jobs runner."""
+    __tablename__ = "revoked_sessions"
+    sid: Mapped[str] = mapped_column(String(64), primary_key=True)
+    employee_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
 class OrderStatus(Base):
     """A configurable work-order status. Belongs to a status GROUP (new/in_progress/
     pending/ready/closed/dropped), which is what reports and triggers key off.
     Per-status automation: auto-invoice, auto-notify, request payment, lock edits."""
     __tablename__ = "order_statuses"
-    # Launch QA B2: one row per key in each pipeline. Without it, parallel first-load requests
-    # each seeded a copy and bare-key lookups raised MultipleResultsFound (estimates 500'd).
-    __table_args__ = (Index("uq_order_statuses_org_rt_key", "org_id", "record_type", "key", unique=True),)
+    # One row per key in each pipeline: a new shop's parallel first requests used to seed
+    # the defaults several times over (migration ls144r1 removes the old copies).
+    __table_args__ = (
+        UniqueConstraint("org_id", "record_type", "key", name="uq_order_statuses_org_rt_key"),
+        Index("ix_order_statuses_org_id", "org_id"),
+    )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("organisations.id"))
     location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"))
@@ -930,7 +944,7 @@ class StockMovement(Base):
     __table_args__ = (Index("ix_stock_movements_part_created", "part_id", "created_at"),)   # phase 4 perf: hot lookup path
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
-    location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
+    location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"), index=True)
     warehouse_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("warehouses.id"), index=True)  # Build 84
     bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"), index=True)  # source/target bin
     movement_type: Mapped[str] = mapped_column(String(30))  # receive|use|return|writeoff|transfer
@@ -995,10 +1009,14 @@ class Supplier(Base):
 
 class PurchaseOrder(Base):
     __tablename__ = "purchase_orders"
+    # PO numbers are per shop like order numbers (migration ls144r2): a global unique made the
+    # second shop's first PO-00001 a 500.
+    __table_args__ = (UniqueConstraint("org_id", "po_number", name="uq_purchase_orders_org_number"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     supplier_id: Mapped[str] = mapped_column(String, ForeignKey("suppliers.id"))
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
-    po_number: Mapped[str] = mapped_column(String(50), unique=True)
+    po_number: Mapped[str] = mapped_column(String(50))
     source_order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)  # WO that needs these parts
     status: Mapped[str] = mapped_column(String(30), default="draft")  # RECEIPT state: draft|ordered|partial|received|cancelled (auto, receipt-driven)
     # 144an — manual, configurable WORKFLOW stage (references an OrderStatus key in the
@@ -1041,7 +1059,7 @@ class PurchaseOrder(Base):
 class POLine(Base):
     __tablename__ = "po_lines"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    po_id: Mapped[str] = mapped_column(String, ForeignKey("purchase_orders.id"))
+    po_id: Mapped[str] = mapped_column(String, ForeignKey("purchase_orders.id"), index=True)
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
     qty_ordered: Mapped[float] = mapped_column(Float, default=1.0)
     qty_received: Mapped[float] = mapped_column(Float, default=0.0)
@@ -1055,8 +1073,10 @@ class POLine(Base):
 
 class Invoice(Base):
     __tablename__ = "invoices"
-    # Invoices list: filter org_id, sort created_at DESC.
-    __table_args__ = (Index("ix_invoices_org_created", "org_id", "created_at"),)
+    # Invoices list: filter org_id, sort created_at DESC. One invoice number per shop (migration
+    # ls144r4; scripts/find_duplicate_invoice_numbers.py finds legacy clashes).
+    __table_args__ = (Index("ix_invoices_org_created", "org_id", "created_at"),
+                      UniqueConstraint("org_id", "invoice_number", name="uq_invoices_org_number"))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     invoice_number: Mapped[str] = mapped_column(String(50))
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
@@ -1403,7 +1423,7 @@ class WorkOrderType(Base):
     Each type has its own set of custom fields and an initial status."""
     __tablename__ = "work_order_types"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     name: Mapped[str] = mapped_column(String(100))
     color: Mapped[str] = mapped_column(String(20), default="#4f8ef7")
     initial_status: Mapped[str] = mapped_column(String(50), default="new")
@@ -1516,7 +1536,7 @@ class EventFeedItem(Base):
     """
     __tablename__ = "event_feed_items"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     entity_type: Mapped[str] = mapped_column(String(20))   # order | client
     entity_id: Mapped[str] = mapped_column(String, index=True)
     item_type: Mapped[str] = mapped_column(String(20))     # comment|photo|signature|file|system
@@ -1780,7 +1800,7 @@ class EmployeeBalanceLedger(Base):
     `idempotency_key` blocks the same accrual from posting twice (no double-dipping)."""
     __tablename__ = "employee_balance_ledger"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     employee_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"), index=True)
     entry_type: Mapped[str] = mapped_column(String(20))  # commission|base|bonus|penalty|clawback|payout
     amount: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)  # signed
@@ -2063,7 +2083,7 @@ class Sale(Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
     sale_number: Mapped[str] = mapped_column(String(20))
-    client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"))
+    client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
     seller_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"))
     account_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("accounts.id"))
     total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
@@ -2129,9 +2149,9 @@ class ClientReturn(Base):
     """Goods coming back from a client (separate from the money refund)."""
     __tablename__ = "client_returns"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
-    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))
-    client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"))
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
+    client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
     reason: Mapped[Optional[str]] = mapped_column(Text)
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
@@ -2221,8 +2241,8 @@ class Feedback(Base):
     """A submitted customer rating for an order."""
     __tablename__ = "feedback"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
-    order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"))
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"), index=True)
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"))
     token: Mapped[str] = mapped_column(String(40), index=True, default=lambda: _uuid().replace("-", "")[:16])
     system: Mapped[str] = mapped_column(String(20), default="five_point")
@@ -2307,7 +2327,7 @@ class PaymentIntent(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
-    invoice_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("invoices.id"))
+    invoice_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("invoices.id"), index=True)
     account_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("accounts.id"))  # target cashbox
     provider: Mapped[str] = mapped_column(String(20), default="simulated")  # stripe|simulated
     provider_ref: Mapped[Optional[str]] = mapped_column(String(120), index=True)  # session/intent id
@@ -2316,7 +2336,7 @@ class PaymentIntent(Base):
     status: Mapped[str] = mapped_column(String(16), default="created")  # created|pending|succeeded|failed|canceled
     checkout_url: Mapped[Optional[str]] = mapped_column(String(600))
     provider_link_id: Mapped[Optional[str]] = mapped_column(String(120))   # the link itself (Square needs it to delete one)
-    payment_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("payments.id"))
+    payment_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("payments.id"), index=True, unique=True)
     error: Mapped[Optional[str]] = mapped_column(Text)
     viewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)  # A2: first time the client opened the link
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)

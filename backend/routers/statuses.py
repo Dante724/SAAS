@@ -116,7 +116,9 @@ def _ser(s: OrderStatus) -> dict:
 
 
 async def ensure_seeded(db: AsyncSession, org_id: str):
-    """Create the default status set for an org if it has none."""
+    """Create the default status set for an org if it has none. Safe to run concurrently: a
+    new shop's first page load calls this from several requests at once, so every insert is
+    insert-or-ignore against uq_order_statuses_org_rt_key and the loser skips quietly."""
     # 144in self-heal: earlier builds could leave estimate statuses mis-typed as
     # record_type='work_order' (startup auto-add defaulted the new column) AND a
     # correct estimate-typed copy, producing duplicate keys that crash bare-key
@@ -262,15 +264,12 @@ async def create_status(
         raise HTTPException(400, f"Group must be one of {GROUPS}")
     rt = _resolve_rt(data)
     key = data.key or _slugify(data.name)
-    # ensure unique key within org (keys are org-global; suffix on collision). Inactive rows count
-    # too: the unique index (org_id, record_type, key) covers them.
-    taken = set((await db.execute(select(OrderStatus.key).where(
-        OrderStatus.org_id == current.org_id, OrderStatus.key.like(f"{key}%")))).scalars())
-    if key in taken:
-        n = len(taken)
-        while f"{key}_{n}" in taken:
-            n += 1
-        key = f"{key}_{n}"
+    # ensure unique key within org (keys are org-global; suffix on collision). Inactive statuses
+    # still hold their key (uq_order_statuses_org_rt_key), so they count as taken too.
+    taken = set((await db.execute(select(OrderStatus.key).where(OrderStatus.org_id == current.org_id))).scalars().all())
+    base, n = key, 2
+    while key in taken:
+        key, n = f"{base}_{n}", n + 1
     if data.is_default:
         for s in (await db.execute(select(OrderStatus).where(OrderStatus.org_id == current.org_id, OrderStatus.is_default == True, OrderStatus.record_type == rt))).scalars().all():  # noqa: E712
             s.is_default = False

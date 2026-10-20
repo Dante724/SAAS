@@ -24,6 +24,8 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.db.database import insert_ignore
+
 # ── Identifier kinds ─────────────────────────────────────────────────────────
 IDENTIFIER_LABELS = {
     "imei": "IMEI",
@@ -399,19 +401,6 @@ def describe(key: Optional[str]) -> dict:
 
 
 # ── Seeding ──────────────────────────────────────────────────────────────────
-async def _insert_ignore(db: AsyncSession, model, **values) -> bool:
-    """INSERT … ON CONFLICT DO NOTHING. Opening Settings › Industry & assets fires
-    several GET /api/settings/asset-* at once and each one seeds, so two seeds can
-    both see "row missing" and race to insert it; the loser must quietly skip
-    rather than 500 on the unique constraint. Returns True if this call inserted."""
-    if db.bind.dialect.name == "postgresql":
-        from sqlalchemy.dialects.postgresql import insert
-    else:
-        from sqlalchemy.dialects.sqlite import insert
-    res = await db.execute(insert(model).values(**values).on_conflict_do_nothing())
-    return res.rowcount == 1
-
-
 async def ensure_industry_seed(db: AsyncSession, org_id: str,
                                only_template: Optional[str] = None) -> dict:
     """Materialise default groups, identifier rules and starter brands/models for
@@ -447,7 +436,7 @@ async def ensure_industry_seed(db: AsyncSession, org_id: str,
         existing_groups = await group_ids(tk)
         missing = [(i, g) for i, g in enumerate(t["groups"]) if g["key"] not in existing_groups]
         for i, g in missing:
-            if await _insert_ignore(db, AssetGroup, org_id=org_id, template_key=tk, key=g["key"],
+            if await insert_ignore(db, AssetGroup, org_id=org_id, template_key=tk, key=g["key"],
                                     label=g["label"], sort_order=i, is_system=True):
                 created["groups"] += 1
         if missing:
@@ -459,7 +448,7 @@ async def ensure_industry_seed(db: AsyncSession, org_id: str,
         wanted = [(None, t["identifier"])] + [(existing_groups[g["key"]], g["identifier"])
                                               for g in t["groups"] if "identifier" in g]
         for gid, rule in wanted:
-            if gid not in have_rules and await _insert_ignore(
+            if gid not in have_rules and await insert_ignore(
                     db, AssetIdentifierRule, org_id=org_id, template_key=tk, asset_group_id=gid,
                     primary_kind=rule["primary"], allowed_kinds=list(rule["allowed"]), is_system=True):
                 created["rules"] += 1
@@ -468,7 +457,7 @@ async def ensure_industry_seed(db: AsyncSession, org_id: str,
         existing_brands = await brand_ids(tk)
         missing = [(i, n) for i, n in enumerate(STARTER_BRANDS.get(tk, [])) if n not in existing_brands]
         for i, name in missing:
-            if await _insert_ignore(db, AssetBrand, org_id=org_id, template_key=tk, asset_group_id=None,
+            if await insert_ignore(db, AssetBrand, org_id=org_id, template_key=tk, asset_group_id=None,
                                     name=name, sort_order=i, is_system=True):
                 created["brands"] += 1
         if missing:
@@ -483,7 +472,7 @@ async def ensure_industry_seed(db: AsyncSession, org_id: str,
                 AssetModel.org_id == org_id, AssetModel.template_key == tk,
                 AssetModel.brand_id == brand_id))).scalars().all())
             for i, mname in enumerate(models):
-                if mname not in have_models and await _insert_ignore(
+                if mname not in have_models and await insert_ignore(
                         db, AssetModel, org_id=org_id, template_key=tk, brand_id=brand_id,
                         name=mname, sort_order=i, is_system=True):
                     created["models"] += 1

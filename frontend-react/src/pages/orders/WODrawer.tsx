@@ -157,7 +157,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   async function printWO() {
     const w = window.open("", "_blank", "width=420,height=640"); if (!w) return;
     const css = `body{font-family:Inter,system-ui,sans-serif;margin:0;color:#14213f}.s{padding:22px;page-break-after:always}.s:last-child{page-break-after:auto}h1{font-size:16px;margin:0 0 4px}.k{font-size:10px;font-weight:800;text-transform:uppercase;color:#9aa7c4;letter-spacing:.05em;margin-top:12px}.v{font-size:14px;font-weight:600}.n{font-size:22px;font-weight:800;font-family:monospace}hr{border:none;border-top:1px dashed #c9d3ea;margin:12px 0}`;
-    const head = `<h1>${escapeHtml(me?.org_name || "Tekly")}</h1>`;
+    const head = `<h1>${escapeHtml(me?.org_name || "Tekly")}</h1>`;   // the shop's own name on its stickers
     const client = `<div class="k">Client</div><div class="v">${escapeHtml(c.name || "Walk-in")} ${c.phone ? "· " + escapeHtml(c.phone) : ""}</div>`;
     // Several items per job: one bench sticker per item, so each tool on the shelf carries its own.
     let items: JobItem[] = [];

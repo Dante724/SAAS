@@ -80,7 +80,7 @@ async def _dispatch_push(db: AsyncSession, employee_id: str, payload: dict) -> N
     except Exception:
         log.warning("pywebpush not installed; push not sent (employee=%s)", employee_id)
         return
-    claims = {"sub": f"mailto:{getattr(settings, 'VAPID_CLAIMS_EMAIL', 'admin@repairos.dev')}"}
+    claims = {"sub": f"mailto:{settings.VAPID_CLAIMS_EMAIL}"}
     for s in subs:
         try:
             webpush(

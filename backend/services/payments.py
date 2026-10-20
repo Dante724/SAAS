@@ -48,6 +48,14 @@ class SimulatedGateway(PaymentGateway):
                 "status": "pending"}
 
 
+def _return_url(configured: str, intent: PaymentIntent) -> str:
+    """Where a hosted checkout sends the customer back. A shop's or operator's own URL gets
+    ?intent=…; by default it's the customer's pay page, which confirms with the provider."""
+    if configured:
+        return configured + ("&" if "?" in configured else "?") + "intent=" + intent.id
+    return f"{settings.public_base}/pay/{intent.id}"
+
+
 class StripeGateway(PaymentGateway):
     name = "stripe"
 
@@ -59,8 +67,8 @@ class StripeGateway(PaymentGateway):
         c = self.creds
         data = {
             "mode": "payment",
-            "success_url": (c.get("success_url") or settings.STRIPE_SUCCESS_URL) + "?intent=" + intent.id,
-            "cancel_url": (c.get("cancel_url") or settings.STRIPE_CANCEL_URL) + "?intent=" + intent.id,
+            "success_url": _return_url(c.get("success_url") or settings.STRIPE_SUCCESS_URL, intent),
+            "cancel_url": _return_url(c.get("cancel_url") or settings.STRIPE_CANCEL_URL, intent),
             "client_reference_id": intent.id,
             "line_items[0][quantity]": "1",
             "line_items[0][price_data][currency]": intent.currency,
@@ -183,10 +191,17 @@ async def resolve_gateway(db: AsyncSession, org_id: str, provider: str | None = 
             raise RuntimeError(f"Unknown payment provider '{provider}'")
         if provider != "simulated" and not _configured(provider, creds.get(provider, {})):
             raise RuntimeError(f"Payment provider '{provider}' is not configured for this shop")
+        if provider == "simulated" and settings.is_deployed:
+            raise RuntimeError("The simulated payment provider is for testing only. "
+                               "Connect Stripe, Square or SumUp in Settings › Payments.")
         return cls(creds.get(provider, {}))
     for name in ("stripe", "square", "sumup"):
         if _configured(name, creds[name]):
             return _GW_CLASSES[name](creds[name])
+    if settings.is_deployed:
+        # A real deploy never hands customers a simulated checkout: it 403s and can't be paid.
+        raise RuntimeError("No payment provider is set up for this shop. "
+                           "Connect Stripe, Square or SumUp in Settings › Payments.")
     return SimulatedGateway()
 
 
@@ -232,7 +247,13 @@ async def create_intent(db: AsyncSession, *, org_id: str, order_id: Optional[str
         provider=gw.name, amount=q2(amount), currency=currency, status="created")
     db.add(intent)
     await db.flush()
-    res = await gw.create_checkout(intent=intent, description=description)
+    import httpx
+    try:
+        res = await gw.create_checkout(intent=intent, description=description)
+    except httpx.HTTPError as e:
+        # A timeout or dropped connection used to escape as a 500; the caller turns this into a 502.
+        log.warning("checkout with %s failed: %s", gw.name, type(e).__name__)
+        raise RuntimeError(f"Couldn't reach {gw.name.title()} right now. Try again in a minute.") from e
     intent.provider_ref = res["provider_ref"]
     intent.provider_link_id = res.get("provider_link_id")
     intent.checkout_url = res["checkout_url"]
@@ -251,6 +272,7 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
     # the public /refresh can all land concurrently, and a plain status check let two of them both
     # post a Transaction + Payment (double amount_paid). The conditional UPDATE row-locks on
     # Postgres, so the loser re-evaluates "payment_id IS NULL" after the winner commits.
+    was_canceled = intent.status == "canceled"
     from sqlalchemy import update as _upd
     claimed = await db.execute(_upd(PaymentIntent)
         .where(PaymentIntent.id == intent.id, PaymentIntent.payment_id.is_(None),
@@ -330,6 +352,18 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
             await db.flush()
             await cancel_open_pay_links(db, _ord)
 
+    # The provider took money on a link we had already revoked (the customer paid an old link,
+    # possibly on top of a newer one). It's recorded, since it was captured, but staff must look.
+    if was_canceled and intent.order_id:
+        log.warning("payment %s captured on revoked pay link %s", pay.id, intent.id)
+        try:
+            from backend.routers.feed import log_system_event
+            await log_system_event(db, intent.org_id, "order", intent.order_id,
+                                   f"Paid on a cancelled payment link ({intent.provider}, {intent.amount:.2f}). "
+                                   "Check for a double payment and refund if needed.")
+        except Exception:
+            log.exception("could not flag payment %s on revoked link", pay.id)
+
     # Build 144w: workflow automations for payment_received (best-effort).
     if intent.order_id:
         try:
@@ -402,7 +436,17 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
 
 # ── Provider status refresh (poll; used where no signed webhook exists) ─────
 async def refresh_intent(db: AsyncSession, intent: PaymentIntent) -> PaymentIntent:
-    """Poll the provider for the intent's status; reconcile on paid."""
+    """Poll the provider for the intent's status; reconcile on paid. The public pay page calls
+    this, so a provider that's down leaves the status as it was instead of a 500."""
+    import httpx
+    try:
+        return await _refresh_intent(db, intent)
+    except httpx.HTTPError as e:
+        log.warning("status poll for intent %s failed: %s", intent.id, type(e).__name__)
+        return intent
+
+
+async def _refresh_intent(db: AsyncSession, intent: PaymentIntent) -> PaymentIntent:
     if intent.status == "succeeded":
         return intent
     from backend.services import org_creds

@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from backend.core import paging as _paging
 from backend.db.database import get_db
 from backend.services.dates import parse_dt
 from backend.models import (
@@ -833,7 +834,7 @@ async def create_order(
         from backend.models import OrderStatus as _OS
         dflt = (await db.execute(select(_OS).where(
             _OS.org_id == current.org_id, _OS.is_default == True, _OS.active == True,  # noqa: E712
-            _OS.record_type == ("estimate" if data.is_estimate else "work_order")))).scalar_one_or_none()
+            _OS.record_type == ("estimate" if data.is_estimate else "work_order")))).scalars().first()
         if dflt:
             initial_status = dflt.key
         elif data.is_estimate:
@@ -1173,7 +1174,7 @@ async def board(
 
 @router.get("/archived")
 async def list_archived_orders(
-    limit: int = 100,
+    limit: int = _paging.limit_query(100),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
@@ -1182,7 +1183,7 @@ async def list_archived_orders(
     rows = (await db.execute(
         select(Order).where(Order.org_id == current.org_id, Order.archived == True)  # noqa: E712
         .options(selectinload(Order.client), selectinload(Order.assigned_to))
-        .order_by(Order.archived_at.desc()).limit(limit))).scalars().all()
+        .order_by(Order.archived_at.desc()).limit(_paging.clamp(limit)))).scalars().all()
     emp_names = {}
     ids = [o.archived_by_id for o in rows if o.archived_by_id]
     if ids:
@@ -1255,7 +1256,7 @@ async def get_order(
     if order.status_entered_at and not order.closed_at:
         st = (await db.execute(select(OrderStatus).where(
             OrderStatus.org_id == current.org_id, OrderStatus.key == order.status,
-            OrderStatus.is_estimate == bool(order.is_estimate)))).scalar_one_or_none()
+            OrderStatus.is_estimate == bool(order.is_estimate)))).scalars().first()
         mins = int((datetime.utcnow() - order.status_entered_at).total_seconds() // 60)
         data["minutes_in_status"] = mins
         data["status_time_limit_min"] = st.time_limit_min if st else None
@@ -1538,6 +1539,22 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
                 db, current.org_id, order.client_id, "charge", _delta,
                 note=_note, ref_type="order", ref_id=order.id, created_by_id=current.id)
 
+    # Mandate 1: payroll commissions. Accrue when the order enters a terminal
+    # (closed) state; claw back when it leaves one (reopen) or is an estimate.
+    # Runs before the commit below so the status, the client ledger and the commissions save
+    # together: accruing after it left a closed order with no commissions if accrual failed.
+    if not order.is_estimate:
+        from backend.services.payroll import CommissionEngine
+        eng = CommissionEngine(db, current.org_id)
+        if is_closing and not prev_terminal:
+            await db.refresh(order, ["lines"])
+            await eng.accrue_for_order_close(order)
+        elif prev_terminal and not is_closing:
+            await eng.clawback_for_order_reopen(order)
+        else:
+            await db.refresh(order, ["lines"])
+            await eng.accrue_on_status(order, order.status)
+
     await db.commit()
 
     # Customer/staff messages go out only AFTER the status change is committed — sending them
@@ -1577,20 +1594,6 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     except Exception:
         pass
 
-    # Mandate 1: payroll commissions. Accrue when the order enters a terminal
-    # (closed) state; claw back when it leaves one (reopen) or is an estimate.
-    if not order.is_estimate:
-        from backend.services.payroll import CommissionEngine
-        eng = CommissionEngine(db, current.org_id)
-        if is_closing and not prev_terminal:
-            await db.refresh(order, ["lines"])
-            await eng.accrue_for_order_close(order)
-        elif prev_terminal and not is_closing:
-            await eng.clawback_for_order_reopen(order)
-        else:
-            await db.refresh(order, ["lines"])
-            await eng.accrue_on_status(order, order.status)
-
     # Phase E: if this status is the configured feedback trigger, create a
     # pending Feedback row and fire a notification with the rating link.
     if target:
@@ -1627,7 +1630,7 @@ async def _convert_estimate(db, current, estimate):
     init = "new"
     dflt = (await db.execute(select(OrderStatus).where(
         OrderStatus.org_id == current.org_id, OrderStatus.is_default == True,
-        OrderStatus.active == True, OrderStatus.record_type == "work_order"))).scalar_one_or_none()  # noqa: E712
+        OrderStatus.active == True, OrderStatus.record_type == "work_order"))).scalars().first()  # noqa: E712
     if dflt:
         init = dflt.key
     # renumber E -> WO and flip type on the SAME record
@@ -1839,7 +1842,7 @@ async def switch_type(
     remapped = None
     # if the type defines an initial status and the order is still in a 'new' group, align it
     if wot.initial_status:
-        cur = (await db.execute(select(OrderStatus).where(OrderStatus.org_id == current.org_id, OrderStatus.key == order.status))).scalar_one_or_none()
+        cur = (await db.execute(select(OrderStatus).where(OrderStatus.org_id == current.org_id, OrderStatus.key == order.status))).scalars().first()
         if cur and cur.status_group == "new" and order.status != wot.initial_status:
             order.status = wot.initial_status
             order.status_entered_at = datetime.utcnow()
@@ -2117,15 +2120,18 @@ async def payment_link(
         PaymentIntent.org_id == current.org_id, PaymentIntent.order_id == order_id,
         PaymentIntent.status.in_(("created", "viewed", "pending"))
     ).order_by(PaymentIntent.created_at.desc()))).scalars().first()
-    if existing and not regenerate:
+    # A live link is only reused while it still asks for what's owed: after a part payment or a
+    # change to the order it would charge the old amount, so it's revoked and re-issued.
+    if existing and not regenerate and abs(float(existing.amount or 0) - float(balance)) < 0.005:
         base0 = (settings.PUBLIC_BASE_URL or "").rstrip("/")
         rel0 = existing.checkout_url if (existing.provider != "simulated" and existing.checkout_url) else f"/pay/{existing.id}"
         url0 = (base0 + rel0) if (base0 and rel0.startswith("/")) else rel0
         return {"intent_id": existing.id, "amount": existing.amount, "currency": existing.currency,
                 "gateway": existing.provider, "url": url0, "qr_svg": qr_svg_data_uri(url0),
                 "status": existing.status, "reused": True}
-    if existing and regenerate:
-        existing.status = "canceled"   # revoke the stale link before issuing a new one
+    if existing:
+        from backend.services.order_money import revoke_pay_link
+        await revoke_pay_link(db, existing)   # stale or regenerated: close it at the provider too
     try:
         intent = await pay.create_intent(db, org_id=current.org_id, order_id=order_id,
                                          amount=balance, account_id=None)   # org base currency
@@ -2436,7 +2442,7 @@ async def create_po_from_order(
     total = sum(qty * cost for _, qty, cost, _ in needed)
     po = PurchaseOrder(
         supplier_id=supplier.id, location_id=order.location_id,
-        po_number=await next_number(db, current.org_id, "po"),
+        org_id=current.org_id, po_number=await next_number(db, current.org_id, "po"),
         source_order_id=order.id,
         status="ordered" if data.auto_send else "draft",
         total=total, ordered_at=datetime.utcnow() if data.auto_send else None)
@@ -2454,8 +2460,9 @@ async def create_po_from_order(
                            f"Purchase order {po.po_number} raised ({len(needed)} part(s)) for {supplier.name}")
     if data.auto_send:
         # simulate sending the PO to the supplier (real transport wired in integrations)
-        print(f"[po:send:simulated] -> {supplier.email or supplier.name}: {po.po_number} "
-              f"({len(needed)} line(s), total {total})")
+        import logging
+        logging.getLogger(__name__).info("PO %s marked sent to supplier %s (%d line(s), simulated)",
+                                         po.po_number, supplier.id, len(needed))
     await db.commit()
     return {"ok": True, "po_id": po.id, "po_number": po.po_number, "status": po.status,
             "supplier": supplier.name, "line_count": len(needed), "total": total,

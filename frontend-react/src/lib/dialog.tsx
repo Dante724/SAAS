@@ -8,7 +8,7 @@ import { createRoot } from "react-dom/client";
 //   const v = prompt(msg);                →  const v = await promptDialog(msg);
 
 type ConfirmOpts = { title?: string; confirmLabel?: string; cancelLabel?: string; danger?: boolean };
-type PromptOpts = { title?: string; defaultValue?: string; placeholder?: string; confirmLabel?: string };
+type PromptOpts = { title?: string; defaultValue?: string; placeholder?: string; confirmLabel?: string; type?: "text" | "password" };
 
 function mount(render: (close: () => void) => any) {
   const host = document.createElement("div");
@@ -75,7 +75,8 @@ export function promptDialog(message: string, opts: PromptOpts = {}): Promise<st
           <div className={card}>
             {opts.title && <h3 className="text-sm font-bold text-ink-primary">{opts.title}</h3>}
             <p className="text-xs text-ink-secondary whitespace-pre-line">{message}</p>
-            <input autoFocus defaultValue={val} placeholder={opts.placeholder}
+            <input autoFocus defaultValue={val} placeholder={opts.placeholder} type={opts.type || "text"}
+              autoComplete={opts.type === "password" ? "current-password" : undefined}
               onChange={(e) => { val = e.target.value; }}
               onKeyDown={(e) => { if (e.key === "Enter") done(val); if (e.key === "Escape") done(null); }}
               className="glass-input w-full rounded-xl px-3 py-2 text-sm" />

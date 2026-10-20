@@ -8,6 +8,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from backend.core import paging as _paging
 from backend.db.database import get_db
 from backend.models import Employee, Part, StockLevel, StockMovement
 from backend.services import stock_posting
@@ -935,7 +936,7 @@ async def _resolve_received_workflow(db, org_id: str) -> Optional[str]:
     await ensure_seeded(db, org_id)
     return (await db.execute(select(OrderStatus.key).where(
         OrderStatus.org_id == org_id, OrderStatus.record_type == "purchase_order",
-        OrderStatus.active == True, OrderStatus.key == "po_received"))).scalar_one_or_none()  # noqa: E712
+        OrderStatus.active == True, OrderStatus.key == "po_received"))).scalars().first()  # noqa: E712
 
 
 def _ser_po(po: PurchaseOrder, lines, part_names, supplier=None) -> dict:
@@ -980,6 +981,7 @@ def _ser_po(po: PurchaseOrder, lines, part_names, supplier=None) -> dict:
 @router.get("/po")
 async def list_pos(
     location_id: Optional[str] = None,        # build 141: scope POs to a branch
+    skip: int = _paging.skip_query(), limit: int = _paging.limit_query(100),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
@@ -987,13 +989,19 @@ async def list_pos(
            .where(Supplier.org_id == current.org_id))
     if location_id:
         _pq = _pq.where(PurchaseOrder.location_id == location_id)
-    pos = (await db.execute(_pq.order_by(PurchaseOrder.created_at.desc()))).scalars().all()
-    part_names = {p.id: p.name for p in (await db.execute(select(Part).where(Part.org_id == current.org_id))).scalars().all()}
-    out = []
-    for po in pos:
-        lines = (await db.execute(select(POLine).where(POLine.po_id == po.id))).scalars().all()
-        out.append(_ser_po(po, lines, part_names))
-    return {"items": out}
+    total = (await db.execute(select(func.count()).select_from(_pq.subquery()))).scalar() or 0
+    pos = (await db.execute(_pq.order_by(PurchaseOrder.created_at.desc())
+                            .offset(skip).limit(_paging.clamp(limit)))).scalars().all()
+    # One query for every page's lines and only the parts they name (was a query per PO plus
+    # every part in the shop).
+    lines_by_po: dict = {}
+    if pos:
+        for ln in (await db.execute(select(POLine).where(POLine.po_id.in_([p.id for p in pos])))).scalars().all():
+            lines_by_po.setdefault(ln.po_id, []).append(ln)
+    part_ids = {ln.part_id for lns in lines_by_po.values() for ln in lns if ln.part_id}
+    part_names = {p.id: p.name for p in (await db.execute(select(Part).where(
+        Part.org_id == current.org_id, Part.id.in_(part_ids)))).scalars().all()} if part_ids else {}
+    return {"items": [_ser_po(po, lines_by_po.get(po.id, []), part_names) for po in pos], "total": total}
 
 
 @router.post("/po", status_code=201)
@@ -1016,7 +1024,7 @@ async def create_po(
         raise HTTPException(404, "Supplier not found")
     total = sum(l.qty_ordered * l.unit_cost for l in data.lines)
     po = PurchaseOrder(supplier_id=data.supplier_id, location_id=data.location_id,
-                       po_number=await next_number(db, current.org_id, "po"),
+                       org_id=current.org_id, po_number=await next_number(db, current.org_id, "po"),
                        status="draft" if data.draft else "ordered", total=total, on_credit=data.on_credit,
                        # 144an — manual workflow stage starts at Draft or Ordered to mirror the receipt state.
                        workflow_status="po_draft" if data.draft else "po_ordered",
@@ -1299,7 +1307,7 @@ async def group_pos(
                 merged[ln.part_id] = [ln.qty_ordered, ln.unit_cost]
     total = sum(q * c for q, c in merged.values())
     newpo = PurchaseOrder(supplier_id=pos[0].supplier_id, location_id=pos[0].location_id,
-                          po_number=await next_number(db, current.org_id, "po"),
+                          org_id=current.org_id, po_number=await next_number(db, current.org_id, "po"),
                           status="ordered", total=total, ordered_at=datetime.utcnow())
     db.add(newpo)
     await db.flush()
@@ -1459,7 +1467,7 @@ async def set_po_workflow(
     await ensure_seeded(db, current.org_id)
     valid = (await db.execute(select(OrderStatus.key).where(
         OrderStatus.org_id == current.org_id, OrderStatus.record_type == "purchase_order",
-        OrderStatus.active == True, OrderStatus.key == data.workflow_status))).scalar_one_or_none()  # noqa: E712
+        OrderStatus.active == True, OrderStatus.key == data.workflow_status))).scalars().first()  # noqa: E712
     if not valid:
         raise HTTPException(422, "Unknown purchase-order status for this workspace")
     changed = po.workflow_status != data.workflow_status
@@ -1467,7 +1475,7 @@ async def set_po_workflow(
     if changed:
         label = (await db.execute(select(OrderStatus.name).where(
             OrderStatus.org_id == current.org_id, OrderStatus.record_type == "purchase_order",
-            OrderStatus.key == data.workflow_status))).scalar_one_or_none() or data.workflow_status
+            OrderStatus.key == data.workflow_status))).scalars().first() or data.workflow_status
         from backend.services.po_links import notify_po_change
         await notify_po_change(db, current.org_id, po, f"stage is now {label}", actor_id=current.id)
     await db.commit()
@@ -1992,7 +2000,7 @@ async def create_pos_from_forecast(
     for sup_id, lines in by_sup.items():
         total = sum(q * c for _, q, c in lines)
         po = PurchaseOrder(supplier_id=sup_id, location_id=loc_id,
-                           po_number=await next_number(db, current.org_id, "po"),
+                           org_id=current.org_id, po_number=await next_number(db, current.org_id, "po"),
                            status="draft", total=total)
         db.add(po)
         await db.flush()

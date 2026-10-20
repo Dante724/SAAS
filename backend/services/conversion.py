@@ -42,7 +42,7 @@ async def _is_on_open_order(db: AsyncSession, org_id: str, unit: SerializedItem)
     if not order or order.archived:
         return False
     terminal = (await db.execute(select(OrderStatus.is_terminal).where(
-        OrderStatus.org_id == org_id, OrderStatus.key == order.status))).scalar_one_or_none()
+        OrderStatus.org_id == org_id, OrderStatus.key == order.status))).scalars().first()
     return not bool(terminal)
 
 
@@ -225,7 +225,7 @@ async def asset_to_product(db: AsyncSession, org_id: str, employee_id: str, *,
         Order.archived == False))).scalars().all()  # noqa: E712
     for o in open_order:
         terminal = (await db.execute(select(OrderStatus.is_terminal).where(
-            OrderStatus.org_id == org_id, OrderStatus.key == o.status))).scalar_one_or_none()
+            OrderStatus.org_id == org_id, OrderStatus.key == o.status))).scalars().first()
         if not terminal:
             raise HTTPException(
                 409, f"This asset is on open work order {o.order_number}. Close it first.")

@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     # -- Meta messaging (Messenger / Instagram / WhatsApp Cloud) — absent -> simulated --
     # One webhook verify token for all Meta channels; per-channel access tokens.
     META_VERIFY_TOKEN: str = ""          # echoed back on webhook subscription (GET hub.challenge)
-    META_APP_SECRET: str = ""            # (reserved) X-Hub-Signature validation
+    META_APP_SECRET: str = ""            # verifies X-Hub-Signature-256 on Meta webhooks
     META_PAGE_TOKEN: str = ""            # Facebook Page — Messenger send
     META_IG_TOKEN: str = ""             # Instagram — Direct send (falls back to page token)
     WHATSAPP_TOKEN: str = ""            # WhatsApp Cloud API access token
@@ -89,8 +89,10 @@ class Settings(BaseSettings):
     # -- Payments (Stripe) — absent keys -> simulated gateway --
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
-    STRIPE_SUCCESS_URL: str = "https://app.repairos.dev/pay/success"
-    STRIPE_CANCEL_URL: str = "https://app.repairos.dev/pay/cancel"
+    # Where Stripe Checkout returns the customer. Empty (default) = back to their own pay page,
+    # /pay/{intent_id} on PUBLIC_BASE_URL, which re-checks with the provider and shows "paid".
+    STRIPE_SUCCESS_URL: str = ""
+    STRIPE_CANCEL_URL: str = ""
 
     # -- Square (absent -> not selectable; per-org provider chooses at runtime) --
     SQUARE_ACCESS_TOKEN: str = ""
@@ -105,7 +107,7 @@ class Settings(BaseSettings):
     # -- QuickBooks Online --
     QBO_CLIENT_ID: str = ""
     QBO_CLIENT_SECRET: str = ""
-    QBO_REDIRECT_URI: str = "https://app.repairos.dev/api/integrations/qbo/callback"
+    QBO_REDIRECT_URI: str = ""                 # empty = {PUBLIC_BASE_URL}/api/integrations/qbo/callback
     QBO_ENVIRONMENT: str = "sandbox"
 
     # -- AI (Anthropic) — absent key -> deterministic stub --
@@ -127,7 +129,7 @@ class Settings(BaseSettings):
     GMAIL_CLIENT_SECRET: str = ""
     OUTLOOK_CLIENT_ID: str = ""
     OUTLOOK_CLIENT_SECRET: str = ""
-    EMAIL_OAUTH_REDIRECT: str = "http://localhost:8000/api/integrations/email/callback"
+    EMAIL_OAUTH_REDIRECT: str = ""             # empty = {PUBLIC_BASE_URL}/api/integrations/email/callback
 
     # ── Token encryption at rest (OAuth access/refresh tokens) ─────────────
     # A urlsafe-base64 Fernet key. Unset (dev/tests) → tokens stored as-is;
@@ -139,7 +141,7 @@ class Settings(BaseSettings):
     VAPID_PRIVATE_KEY: str = ""
     XERO_CLIENT_ID: str = ""
     XERO_CLIENT_SECRET: str = ""
-    VAPID_CLAIMS_EMAIL: str = "admin@repairos.dev"
+    VAPID_CLAIMS_EMAIL: str = ""               # empty = SMTP_FROM
 
     # -- Identifier lookups (VIN is free via NHTSA; IMEI TAC needs a provider) --
     VIN_LOOKUP_LIVE: bool = True          # attempt NHTSA vPIC enrichment (keyless, best-effort)
@@ -176,6 +178,11 @@ class Settings(BaseSettings):
         return self.ENVIRONMENT.lower() in ("production", "staging")
 
     @property
+    def public_base(self) -> str:
+        """PUBLIC_BASE_URL without a trailing slash; local dev falls back to the dev server."""
+        return (self.PUBLIC_BASE_URL or "http://localhost:8000").rstrip("/")
+
+    @property
     def is_sqlite(self) -> bool:
         return self.DATABASE_URL.startswith("sqlite")
 
@@ -193,6 +200,18 @@ class Settings(BaseSettings):
         return v
 
     @model_validator(mode="after")
+    def _derive_urls(self) -> "Settings":
+        """OAuth callbacks follow PUBLIC_BASE_URL unless set explicitly (they used to default to
+        the old app.repairos.dev domain and localhost)."""
+        if not self.QBO_REDIRECT_URI:
+            self.QBO_REDIRECT_URI = self.public_base + "/api/integrations/qbo/callback"
+        if not self.EMAIL_OAUTH_REDIRECT:
+            self.EMAIL_OAUTH_REDIRECT = self.public_base + "/api/integrations/email/callback"
+        if not self.VAPID_CLAIMS_EMAIL:
+            self.VAPID_CLAIMS_EMAIL = self.SMTP_FROM or "admin@localhost"
+        return self
+
+    @model_validator(mode="after")
     def _fail_closed_in_prod(self) -> "Settings":
         """Refuse to run production or staging with placeholder secrets, wildcard CORS, or
         secrets-at-rest left unencrypted."""
@@ -204,6 +223,27 @@ class Settings(BaseSettings):
                 )
             if "*" in self.cors_origin_list:
                 raise ValueError("CORS_ORIGINS must be an explicit allowlist in production (no '*').")
+            # The default DATABASE_URL is a local SQLite file: a deploy that forgot to set it booted
+            # on an empty database (runtime DDL is off when deployed) and /api/health still said ok.
+            if self.is_sqlite:
+                raise ValueError("DATABASE_URL must point at Postgres in production/staging, not SQLite.")
+            # Emailed links (verify, reset, invites, portals, pay links) and provider callbacks are
+            # built from PUBLIC_BASE_URL; empty made them relative and broken in every inbox.
+            from urllib.parse import urlparse
+            _base = urlparse(self.PUBLIC_BASE_URL or "")
+            if not (_base.scheme == "https" or (_base.scheme == "http" and _base.hostname in ("localhost", "127.0.0.1"))) \
+                    or not _base.hostname:
+                raise ValueError("PUBLIC_BASE_URL must be the app's public https:// address in production/staging.")
+            # Password reset, verification and invites go out through the platform SMTP account;
+            # without it they were only printed to the log and reported as sent.
+            if not (self.SMTP_HOST and self.SMTP_FROM):
+                raise ValueError("SMTP_HOST and SMTP_FROM must be set in production/staging "
+                                 "(password reset and verification emails).")
+            _stale = [k for k in ("STRIPE_SUCCESS_URL", "STRIPE_CANCEL_URL", "QBO_REDIRECT_URI",
+                                  "EMAIL_OAUTH_REDIRECT", "PUBLIC_BASE_URL")
+                      if "repairos.dev" in (getattr(self, k) or "")]
+            if _stale:
+                raise ValueError(f"{', '.join(_stale)} still point at the old repairos.dev domain.")
             # OAuth tokens and shop integration credentials are encrypted with this key. Without
             # it, OAuth tokens were stored in plaintext and shop credentials fell back to a key
             # derived from SECRET_KEY (the JWT signing key).
@@ -233,12 +273,28 @@ class Settings(BaseSettings):
                 self.META_VERIFY_TOKEN, self.META_PAGE_TOKEN,
                 self.META_IG_TOKEN, self.WHATSAPP_TOKEN,
             ])
+            import logging
+            import os
+            _log = logging.getLogger(__name__)
+            # Rate limits (login lockouts included) count in-process without Redis, so N workers
+            # or instances allow N times the limit.
+            if not self.REDIS_URL and int(os.environ.get("WEB_CONCURRENCY", "1") or 1) > 1:
+                _log.warning("REDIS_URL is not set but WEB_CONCURRENCY > 1: every worker keeps its own "
+                             "rate-limit counters. Set REDIS_URL so limits are shared.")
+            if self.MEDIA_BACKEND == "local" and self.MEDIA_LOCAL_DIR.startswith("/tmp"):
+                _log.warning("MEDIA_BACKEND=local with MEDIA_LOCAL_DIR under /tmp: uploaded photos and "
+                             "files are lost when the container restarts. Use MEDIA_BACKEND=s3 or a volume.")
+            # Behind a load balancer with neither setting changed, every anonymous request looks
+            # like it comes from the balancer, so they all share one rate-limit bucket.
+            if self.TRUSTED_PROXY_HOPS == 0 and os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1") == "127.0.0.1":
+                _log.warning("TRUSTED_PROXY_HOPS=0 and FORWARDED_ALLOW_IPS=127.0.0.1: if a load balancer "
+                             "sits in front, set one of them so rate limits see real client IPs.")
             if _meta_configured and not self.META_APP_SECRET:
                 import logging
                 logging.getLogger(__name__).warning(
                     "META_APP_SECRET is not set in production but a Meta channel appears "
-                    "configured; the /api/inbox/webhook/meta endpoint will accept unsigned "
-                    "posts. Set META_APP_SECRET to enable X-Hub-Signature-256 verification."
+                    "configured; /api/inbox/webhook/meta will refuse every post (signatures fail "
+                    "closed). Set META_APP_SECRET to receive Meta messages."
                 )
         return self
 

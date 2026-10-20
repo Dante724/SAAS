@@ -8,6 +8,7 @@ from backend.db.database import get_db
 from backend.models import Employee
 from backend.services.audit import record as audit_record
 from backend.services.auth import get_current_employee, verify_password
+from backend.services.ratelimit import aenforce
 from backend.services.mfa import (
     make_recovery_codes,
     new_secret,
@@ -51,6 +52,7 @@ async def mfa_activate(
 ):
     """Confirm a code from the authenticator, flip MFA on, and return one-time
     recovery codes (shown once)."""
+    await aenforce("mfa_activate", current.id, 10, 900)   # a 6-digit code can't be guessed in bulk
     if not current.mfa_secret:
         raise HTTPException(400, "Start enrollment first")
     if not verify(current.mfa_secret, data.code):

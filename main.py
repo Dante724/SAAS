@@ -283,7 +283,8 @@ async def serve_track(token: str):
 @app.get("/admin", include_in_schema=False)
 async def serve_admin():
     # Build 144cf: the separate platform-operator portal (own login, outside any tenant).
-    return FileResponse(os.path.join(frontend_dir, "admin.html"))
+    from backend.core.observability import ADMIN_CSP
+    return FileResponse(os.path.join(frontend_dir, "admin.html"), headers={"Content-Security-Policy": ADMIN_CSP})
 
 
 @app.get("/book/{slug}", include_in_schema=False)
@@ -296,6 +297,14 @@ async def serve_book(slug: str):
 @app.get("/tech", include_in_schema=False)
 async def serve_tech():
     return FileResponse(os.path.join(frontend_dir, "tech.html"))
+
+
+@app.get("/robots.txt", include_in_schema=False)
+async def robots_txt():
+    # The app domain is private (staff screens, tokenised customer links); the marketing site has
+    # its own robots.txt and sitemap.
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse("User-agent: *\nDisallow: /\n")
 
 
 @app.get("/sw.js", include_in_schema=False)
