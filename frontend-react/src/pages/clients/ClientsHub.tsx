@@ -171,7 +171,7 @@ export default function ClientsHub() {
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
               <table className="w-full text-left border-collapse text-xs">
                 <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
-                  <th className="py-3 pl-4 pr-1 w-8"><input type="checkbox" checked={allSel} onChange={toggleAll} className="accent-primary cursor-pointer" /></th>
+                  <th className="py-3 pl-4 pr-1 w-8"><input type="checkbox" aria-label="Select all" checked={allSel} onChange={toggleAll} className="accent-primary cursor-pointer" /></th>
                   <th className="py-3 px-4">Client</th><th className="py-3 px-4">Phone</th><th className="py-3 px-4">Email</th>
                   <th className="py-3 px-4">Tier</th><th className="py-3 px-4 text-right">Balance</th><th className="py-3 px-4">{term.assets}</th><th className="py-3 px-4">Orders</th><th className="py-3 px-4 w-12 text-center">Action</th>
                 </tr></thead>
@@ -181,7 +181,7 @@ export default function ClientsHub() {
                   {rows && cRows.length === 0 && <tr><td colSpan={9} className="py-6 px-4 text-ink-tertiary">No clients found.</td></tr>}
                   {pageC.map((c) => (
                     <tr key={c.id} className={`hover:bg-blue-50/40 cursor-pointer transition-colors ${sel.has(c.id) ? "bg-primary/5" : ""}`} onClick={() => setOpenClient(c.id)}>
-                      <td className="py-3 pl-4 pr-1" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={sel.has(c.id)} onChange={() => toggle(c.id)} className="accent-primary cursor-pointer" /></td>
+                      <td className="py-3 pl-4 pr-1" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label="Select row" checked={sel.has(c.id)} onChange={() => toggle(c.id)} className="accent-primary cursor-pointer" /></td>
                       <td className="py-3 px-4 font-bold text-ink-primary">{c.name || "—"}</td>
                       <td className="py-3 px-4 tabular-nums">{c.phone || "—"}</td>
                       <td className="py-3 px-4 text-ink-tertiary">{c.email || "—"}</td>

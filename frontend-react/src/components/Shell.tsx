@@ -29,7 +29,7 @@ import {
   CircleDollarSign, Percent, ShieldAlert, Globe, Gift, RotateCcw, SearchCheck, VideoOff,
   ShieldCheck, Target, EyeOff, Car, Sailboat, Bike, Laptop, Cog, Upload,
   ShoppingBag, Split,
-  LogOut,
+  LogOut, Menu as MenuIcon,
 } from "lucide-react";
 
 // Map the old Material-Symbols ligature names to bundled Lucide icons (no web font,
@@ -48,7 +48,7 @@ const ICONS: Record<string, any> = {
   pending_actions: ClipboardList, fact_check: ClipboardCheck,
   attach_money: Banknote, currency_rupee: IndianRupee,
   priority_high: AlertCircle, warning: AlertTriangle, flag: Flag, bolt: Zap, auto_awesome: Sparkles,
-  add: Plus, remove: Minus, close: X, check: Check, check_circle: CheckCircle2,
+  add: Plus, remove: Minus, close: X, menu: MenuIcon, check: Check, check_circle: CheckCircle2,
   delete: Trash2, delete_sweep: Trash2, undo: Undo2, assignment_return: Undo2,
   swap_horiz: ArrowLeftRight, sync_alt: RefreshCw,
   filter_list: Filter, filter_alt: Filter, view_column: Columns3,
@@ -178,76 +178,113 @@ export default function Shell({ title, children }: { title: string; children: Re
       .then((r) => { if (liveRef.current) setUnread((r.items || []).length); }).catch(() => {});
   }, 60000);
 
+  // Below 900px the sidebar becomes a slide-in drawer opened from the top bar's menu button.
+  const [navOpen, setNavOpen] = useState(false);
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setNavOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navOpen]);
+
+  // The nav list, shared by the desktop sidebar (optionally a narrow icon rail) and the phone drawer.
+  const renderNav = (collapsed: boolean, onNavigate?: () => void) => (
+    <>
+      {NAV_GROUPS.map((group) => {
+        const visible = group.items.filter((it) => can(NAV_PERM[it.to]));
+        if (visible.length === 0) return null;
+        return (
+          <div key={group.name || "home"} className="pb-1">
+            {group.name && !collapsed && (
+              <div className="px-2.5 pt-2.5 pb-1 text-[11px] font-bold text-ink-tertiary/80">{t(group.name)}</div>
+            )}
+            {group.name && collapsed && <div className="my-1.5 mx-2 border-t border-slate-200/70" />}
+            {visible.map((it) => (
+              <NavLink
+                key={it.to}
+                to={it.to}
+                end={it.end}
+                onClick={onNavigate}
+                title={collapsed ? t(it.l) : undefined}
+                className={({ isActive }) =>
+                  `flex items-center gap-2 px-2.5 rounded-lg text-xs transition-colors ${onNavigate ? "py-2.5 text-[13px]" : "py-1.5"} ${collapsed ? "justify-center" : ""} ${
+                    isActive
+                      ? "font-bold text-primary bg-blue-50/80 shadow-sm"
+                      : "font-medium text-ink-secondary hover:bg-slate-100 hover:text-ink-primary"
+                  }`
+                }
+              >
+                {({ isActive }) => (
+                  <>
+                    <M n={it.i} c={`text-[17px] ${isActive ? "text-primary" : "text-ink-tertiary"}`} />
+                    {!collapsed && <span>{t(it.l)}</span>}
+                  </>
+                )}
+              </NavLink>
+            ))}
+          </div>
+        );
+      })}
+    </>
+  );
+  const brand = (collapsed: boolean) => (
+    <div className={`flex items-center gap-2.5 px-2 pt-1 pb-3 ${collapsed ? "justify-center" : ""}`}>
+      <TeklyMark size={32} />
+      {!collapsed && (
+        <div>
+          <div className="font-bold text-[17px] leading-none tracking-[-0.05em] text-ink-primary flex items-center gap-1.5" aria-label="Tekly">tekly <span className="text-[10px] tracking-normal px-1 py-px rounded bg-blue-100 text-primary font-bold">PRO</span></div>
+          {me?.org_name && <p className="max-w-[140px] truncate text-[11px] text-ink-tertiary font-medium" title={me.org_name}>{me.org_name}</p>}
+        </div>
+      )}
+    </div>
+  );
+
   return (
-    <div className="bg-surface text-ink-primary antialiased h-screen w-screen overflow-hidden select-none flex flex-col font-sans">
+    <div className="bg-surface text-ink-primary antialiased h-screen h-[100dvh] w-full overflow-hidden select-none flex flex-col font-sans">
       <div className="flex flex-1 overflow-hidden relative">
-        {/* SIDEBAR */}
-        <aside className={`${railCollapsed ? "w-[64px]" : "w-[200px]"} flex-shrink-0 bg-sidebar border-r border-slate-200/80 flex flex-col justify-between z-10 transition-[width] duration-200`}>
-          <div className="p-3 space-y-0.5 overflow-y-auto">
-            <div className={`flex items-center gap-2.5 px-2 pt-1 pb-3 ${railCollapsed ? "justify-center" : ""}`}>
-              <TeklyMark size={32} />
-              {!railCollapsed && (
-                <div>
-                  <div className="font-bold text-[17px] leading-none tracking-[-0.05em] text-ink-primary flex items-center gap-1.5" aria-label="Tekly">tekly <span className="text-[10px] tracking-normal px-1 py-px rounded bg-blue-100 text-primary font-bold">PRO</span></div>
-                  {me?.org_name && <p className="max-w-[140px] truncate text-[11px] text-ink-tertiary font-medium" title={me.org_name}>{me.org_name}</p>}
-                </div>
-              )}
-            </div>
-            {NAV_GROUPS.map((group) => {
-              const visible = group.items.filter((it) => can(NAV_PERM[it.to]));
-              if (visible.length === 0) return null;
-              return (
-                <div key={group.name || "home"} className="pb-1">
-                  {group.name && !railCollapsed && (
-                    <div className="px-2.5 pt-2.5 pb-1 text-[11px] font-bold text-ink-tertiary/80">{t(group.name)}</div>
-                  )}
-                  {group.name && railCollapsed && <div className="my-1.5 mx-2 border-t border-slate-200/70" />}
-                  {visible.map((it) => (
-                    <NavLink
-                      key={it.to}
-                      to={it.to}
-                      end={it.end}
-                      title={railCollapsed ? t(it.l) : undefined}
-                      className={({ isActive }) =>
-                        `flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs transition-colors ${railCollapsed ? "justify-center" : ""} ${
-                          isActive
-                            ? "font-bold text-primary bg-blue-50/80 shadow-sm"
-                            : "font-medium text-ink-secondary hover:bg-slate-100 hover:text-ink-primary"
-                        }`
-                      }
-                    >
-                      {({ isActive }) => (
-                        <>
-                          <M n={it.i} c={`text-[17px] ${isActive ? "text-primary" : "text-ink-tertiary"}`} />
-                          {!railCollapsed && <span>{t(it.l)}</span>}
-                        </>
-                      )}
-                    </NavLink>
-                  ))}
-                </div>
-              );
-            })}
+        {/* SIDEBAR (900px and up) */}
+        <aside className={`${railCollapsed ? "w-[64px]" : "w-[200px]"} hidden min-[900px]:flex flex-shrink-0 bg-sidebar border-r border-slate-200/80 flex-col justify-between z-10 transition-[width] duration-200`}>
+          <nav aria-label={t("Main menu")} className="p-3 space-y-0.5 overflow-y-auto">
+            {brand(railCollapsed)}
+            {renderNav(railCollapsed)}
             <button onClick={toggleRail} title={railCollapsed ? t("Expand menu") : t("Collapse menu")} aria-label={railCollapsed ? t("Expand menu") : t("Collapse menu")}
               className={`mt-1.5 w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium text-ink-tertiary hover:bg-slate-100 hover:text-ink-primary transition-colors ${railCollapsed ? "justify-center" : ""}`}>
               <M n={railCollapsed ? "chevron_right" : "chevron_left"} c="text-[17px]" />
               {!railCollapsed && <span>{t("Collapse")}</span>}
             </button>
-          </div>
+          </nav>
         </aside>
 
+        {/* NAV DRAWER (below 900px). Kept mounted so it can slide; `invisible` takes it out of
+            the tab order and the accessibility tree while closed. */}
+        <div className={`min-[900px]:hidden fixed inset-0 z-[75] ${navOpen ? "" : "invisible pointer-events-none"}`} aria-hidden={!navOpen}>
+          <div className={`absolute inset-0 bg-ink-primary/40 transition-opacity duration-200 ${navOpen ? "opacity-100" : "opacity-0"}`} onClick={() => setNavOpen(false)} />
+          <aside id="nav-drawer" role="dialog" aria-modal="true" aria-label={t("Main menu")}
+            className={`absolute inset-y-0 start-0 w-[272px] max-w-[85vw] bg-sidebar border-e border-slate-200/80 shadow-clay-drawer flex flex-col transition-transform duration-200 ${navOpen ? "translate-x-0" : "-translate-x-full rtl:translate-x-full"}`}>
+            <div className="flex items-start justify-between p-3 pb-0">
+              {brand(false)}
+              <button onClick={() => setNavOpen(false)} aria-label={t("Close menu")} className="w-10 h-10 -mt-1 rounded-lg flex items-center justify-center text-ink-tertiary hover:bg-slate-100 hover:text-ink-primary"><M n="close" c="text-lg" /></button>
+            </div>
+            <div className="px-3 pb-2"><LocationSwitcher block /></div>
+            <nav className="px-3 pb-6 space-y-0.5 overflow-y-auto flex-1">{renderNav(false, () => setNavOpen(false))}</nav>
+          </aside>
+        </div>
+
         {/* MAIN */}
-        <main className="flex-1 flex flex-col min-w-0 bg-canvas overflow-hidden">
-          <header className="h-[52px] bg-white/80 backdrop-blur-md border-b border-slate-200/80 px-6 flex items-center justify-between flex-shrink-0 z-10">
-            <div className="flex items-center gap-4">
-              <h1 className="text-base font-bold text-ink-primary tracking-tight whitespace-nowrap">{t(title)}</h1>
-              <button onClick={() => setPalette(true)} className="relative w-64 flex-shrink-0 text-left group">
+        <main className="app-main flex-1 flex flex-col min-w-0 bg-canvas overflow-hidden">
+          <header className="h-[52px] bg-white/80 backdrop-blur-md border-b border-slate-200/80 px-2 sm:px-4 min-[1100px]:px-6 flex items-center justify-between gap-2 flex-shrink-0 z-10">
+            <div className="flex items-center gap-1.5 sm:gap-4 min-w-0">
+              <button onClick={() => setNavOpen(true)} aria-label={t("Open menu")} aria-expanded={navOpen} aria-controls="nav-drawer"
+                className="min-[900px]:hidden w-10 h-10 shrink-0 rounded-lg flex items-center justify-center text-ink-secondary hover:bg-slate-100 hover:text-ink-primary"><M n="menu" c="text-xl" /></button>
+              <h1 className="text-base font-bold text-ink-primary tracking-tight whitespace-nowrap truncate">{t(title)}</h1>
+              <button onClick={() => setPalette(true)} aria-label={t("Search")} className="relative shrink-0 text-left group w-8 h-8 sm:h-auto sm:w-44 min-[1100px]:w-64">
                 <M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" />
-                <div className="w-full bg-slate-100/80 group-hover:bg-white text-xs pl-8 pr-12 py-1.5 rounded-lg border border-slate-200/70 font-medium text-ink-placeholder whitespace-nowrap overflow-hidden text-ellipsis">{t("Search jobs, customers…")}</div>
-                <span className="absolute right-2 top-1.5 text-[11px] bg-white border border-slate-200 text-ink-tertiary font-mono px-1 rounded shadow-2xs">⌘K</span>
+                <div className="w-full h-8 sm:h-auto bg-slate-100/80 group-hover:bg-white text-xs pl-8 sm:pr-12 py-1.5 rounded-lg border border-slate-200/70 font-medium text-ink-placeholder whitespace-nowrap overflow-hidden text-ellipsis"><span className="hidden sm:inline">{t("Search jobs, customers…")}</span></div>
+                <span className="hidden sm:inline absolute right-2 top-1.5 text-[11px] bg-white border border-slate-200 text-ink-tertiary font-mono px-1 rounded shadow-2xs">⌘K</span>
               </button>
             </div>
-            <div className="flex items-center gap-3">
-              <LocationSwitcher />
+            <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+              <div className="hidden min-[900px]:block"><LocationSwitcher /></div>
               <ScanBox />
               {(me?.clock_attendance_enabled || me?.clock_wo_enabled) && <TimeClockChip me={me} />}
               <button onClick={() => setNotifOpen((o) => !o)} aria-label="Notifications" className="w-8 h-8 rounded-full border border-slate-200 bg-white flex items-center justify-center text-ink-secondary hover:text-ink-primary shadow-xs relative"><M n="notifications" c="text-sm" />{unread > 0 && <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-primary text-white text-[11px] font-bold flex items-center justify-center border-2 border-white">{unread > 9 ? "9+" : unread}</span>}</button>
@@ -283,7 +320,7 @@ export default function Shell({ title, children }: { title: string; children: Re
             </div>
           </header>
           {me?.mfa_required && !me?.mfa_enabled && (
-            <button onClick={() => setSecOpen(true)} className="w-full text-left bg-amber-50 border-b border-amber-200 text-amber-800 text-xs font-semibold px-6 py-2 flex items-center gap-2 hover:bg-amber-100">
+            <button onClick={() => setSecOpen(true)} className="w-full text-left bg-amber-50 border-b border-amber-200 text-amber-800 text-xs font-semibold px-3 sm:px-6 py-2 flex items-center gap-2 hover:bg-amber-100">
               <M n="lock" c="text-sm" />Your organization requires two-factor authentication. <span className="underline">Set it up now</span> to keep access.
             </button>
           )}
@@ -521,7 +558,7 @@ function NotificationsPanel({ onClose, onChanged }: { onClose: () => void; onCha
   }
   return (
     <div className="fixed inset-0 z-[80]" onClick={onClose}>
-      <div className="absolute right-5 top-[54px] w-[360px] max-w-[92vw] bg-white rounded-2xl shadow-drawer border border-slate-200 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+      <div className="absolute right-2 sm:right-5 top-[54px] w-[360px] max-w-[92vw] bg-white rounded-2xl shadow-drawer border border-slate-200 overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
           <h3 className="text-sm font-bold text-ink-primary">{t("Notifications")}</h3>
           <div className="flex items-center gap-2">
@@ -629,15 +666,15 @@ function TimeClockChip({ me }: { me: any }) {
   // status (what you're timing + live elapsed).
   return (
     <div className="relative">
-      <button onClick={() => setOpen((o) => !o)} title={jobName ? `Timing: ${jobName}` : t("Time clock")}
+      <button onClick={() => setOpen((o) => !o)} title={jobName ? `Timing: ${jobName}` : t("Time clock")} aria-label={running ? (jobName ? `Timing: ${jobName}` : t("Time clock")) : t("Clock in")}
         className={`flex items-center gap-1.5 h-8 px-2.5 rounded-full border text-xs font-semibold shadow-xs max-w-[220px] ${running ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-white border-slate-200 text-ink-secondary hover:text-ink-primary"}`}>
         {running
           ? <>
               <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-500" />
-              {jobName && <span className="truncate max-w-[96px]">{jobName}</span>}
+              {jobName && <span className="hidden sm:inline truncate max-w-[96px]">{jobName}</span>}
               <span className="tabular-nums shrink-0">{job ? fmtHMS(jobSec) : fmtHMS(shiftSec)}</span>
             </>
-          : <><M n="play_arrow" c="text-sm" />{t("Clock in")}</>}
+          : <><M n="play_arrow" c="text-sm" /><span className="hidden sm:inline">{t("Clock in")}</span></>}
       </button>
       {open && (
         <>
@@ -681,7 +718,7 @@ function TimeClockChip({ me }: { me: any }) {
 
 /* ── Top-bar branch switcher (legacy App.mountLocationSwitcher). Sets the global
    API location scope; changing it reloads so every list re-fetches scoped. ── */
-function LocationSwitcher() {
+function LocationSwitcher({ block = false }: { block?: boolean }) {
   const [locs, setLocs] = useState<{ id: string; name: string }[]>([]);
   const [sel, setSel] = useState<string>(getLocationScope());
   useEffect(() => {
@@ -698,7 +735,7 @@ function LocationSwitcher() {
   if (locs.length < 2) return null; // single branch: no switcher needed
   return (
     <select value={sel} onChange={(e) => { setSel(e.target.value); setLocationScope(e.target.value); window.location.reload(); }}
-      title="Location" className="h-8 rounded-full border border-slate-200 bg-white text-xs font-semibold text-ink-secondary px-2 shadow-xs max-w-[140px]">
+      title="Location" aria-label={t("Location")} className={`rounded-full border border-slate-200 bg-white text-xs font-semibold text-ink-secondary px-2 shadow-xs ${block ? "h-10 w-full" : "h-8 max-w-[140px]"}`}>
       <option value="">All locations</option>
       {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
     </select>

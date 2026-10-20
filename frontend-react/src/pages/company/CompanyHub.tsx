@@ -102,14 +102,20 @@ function Dashboard() {
   const isZero = (n?: number) => !n;
   // A role that can't see money gets null for it from the server; those tiles are left out.
   const has = (v: unknown) => v !== null && v !== undefined;
+  // While the dashboard loads, every tile (and the money tiles' hint line) is laid out with a
+  // skeleton value so nothing moves when the numbers arrive (layout shift was 0.15–0.47).
+  const loading = !d && !err;
+  const sk = (w = "w-14") => <span className={`sk inline-block h-7 ${w} align-middle`} aria-hidden />;
+  const val = (v: string) => (loading ? sk() : v);
   const stats: SummaryStat[] = [
-    { label: "New jobs today", value: String(t.work_orders ?? 0), onClick: () => navigate("/orders") },
-    ...(has(t.revenue) ? [{ label: "Paid today", value: money(t.revenue), hint: t.refunds ? `${money(t.refunds)} refunded` : undefined, onClick: () => navigate("/finance") }] : []),
-    { label: "Waiting to start", value: String(k.new ?? 0), onClick: () => navigate("/orders?status=new") },
-    { label: "Urgent", value: String(k.urgent ?? 0), onClick: () => navigate("/orders?priority=urgent") },
-    { label: "Late", value: String(k.overdue ?? 0), tone: "bad", zero: isZero(k.overdue), onClick: () => navigate("/orders") },
-    ...(has(k.receivables) ? [{ label: "To collect", value: money(k.receivables), onClick: () => navigate("/invoices") }] : []),
-    ...(has(k.total_money) ? [{ label: "In your accounts", value: money(k.total_money), hint: `${money(k.cash)} cash · ${money(k.cashless)} bank`, onClick: () => navigate("/finance") }] : []),
+    { label: "New jobs today", value: val(String(t.work_orders ?? 0)), onClick: () => navigate("/orders") },
+    ...(loading || has(t.revenue) ? [{ label: "Paid today", value: val(money(t.revenue)), hint: t.refunds ? `${money(t.refunds)} refunded` : undefined, onClick: () => navigate("/finance") }] : []),
+    { label: "Waiting to start", value: val(String(k.new ?? 0)), onClick: () => navigate("/orders?status=new") },
+    { label: "Urgent", value: val(String(k.urgent ?? 0)), onClick: () => navigate("/orders?priority=urgent") },
+    { label: "Late", value: val(String(k.overdue ?? 0)), tone: "bad", zero: isZero(k.overdue), onClick: () => navigate("/orders") },
+    ...(loading || has(k.receivables) ? [{ label: "To collect", value: val(money(k.receivables)), onClick: () => navigate("/invoices") }] : []),
+    ...(loading || has(k.total_money) ? [{ label: "In your accounts", value: val(money(k.total_money)),
+      hint: loading ? <span className="sk inline-block h-3 w-24 align-middle" aria-hidden /> : `${money(k.cash)} cash · ${money(k.cashless)} bank`, onClick: () => navigate("/finance") }] : []),
   ];
   return (
     <div className="space-y-6">
@@ -120,6 +126,19 @@ function Dashboard() {
 
       {/* Needs you — the action-first feed. Collapsible, but the count always shows
           so nothing waiting is ever hidden. Defaults open when there are items. */}
+      {!feed && (
+        <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-4" aria-busy="true">
+          <div className="flex items-center gap-2 py-0.5">
+            <M n={feedOpen === false ? "chevron_right" : "expand_more"} c="text-ink-tertiary text-base" />
+            <h3 className="text-sm font-semibold text-ink-primary">Needs you</h3>
+          </div>
+          {feedOpen !== false && (
+            <div className="space-y-1.5 mt-2.5" aria-hidden>
+              {[0, 1, 2].map((i) => <div key={i} className="h-[46px] rounded-xl border border-slate-200/70 px-3 flex items-center gap-3"><span className="sk w-7 h-7" /><span className="sk h-3.5 w-48 max-w-[50%]" /></div>)}
+            </div>
+          )}
+        </div>
+      )}
       {feed && (() => {
         const n = feed.items.length;
         const expanded = (feedOpen ?? n > 0);   // null = auto: open iff there are items
@@ -127,7 +146,7 @@ function Dashboard() {
         return (
           <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-4">
             <button onClick={toggleFeed} aria-expanded={expanded}
-              className="w-full flex items-center gap-2 text-left focus:outline-none">
+              className="w-full flex items-center gap-2 py-0.5 text-left focus:outline-none">
               <M n={expanded ? "expand_more" : "chevron_right"} c="text-ink-tertiary text-base" />
               <h3 className="text-sm font-semibold text-ink-primary">Needs you</h3>
               {n > 0 && <span className="text-[11px] font-bold bg-rose-100 text-rose-600 rounded-full px-1.5 py-0.5 leading-none">{n}</span>}
@@ -144,7 +163,7 @@ function Dashboard() {
                       <div key={it.key}
                         className="w-full flex items-center gap-3 rounded-xl border border-slate-200/70 hover:border-primary/50 hover:bg-blue-50/30 px-3 py-2 transition-all">
                         <span className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 ${feedTone[it.kind] || feedTone.info}`}><M n={it.icon} c="text-sm" /></span>
-                        <button onClick={() => navigate(it.to)} className="flex-1 text-sm font-medium text-ink-primary text-left focus:outline-none">{it.title}</button>
+                        <button onClick={() => navigate(it.to)} className="flex-1 py-1 text-sm font-medium text-ink-primary text-left focus:outline-none">{it.title}</button>
                         <button onClick={() => navigate(it.to)}
                           className={`shrink-0 inline-flex items-center gap-1 text-xs font-semibold rounded-full border px-2.5 py-1 ${feedTone[it.kind] || feedTone.info} hover:brightness-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40`}>
                           <M n={a.icon} c="text-sm" />{a.label}
@@ -170,16 +189,18 @@ function Dashboard() {
         <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-5">
           <h3 className="text-sm font-bold text-ink-primary mb-3">This month</h3>
           <div className="grid grid-cols-2 gap-4 text-sm">
-            <Metric l="Jobs in" v={String(m.work_orders_created ?? 0)} />
-            <Metric l="Jobs finished" v={String(m.work_orders_won ?? 0)} />
-            {m.revenue !== null && m.revenue !== undefined && <Metric l="Paid" v={money(m.revenue)} />}
-            <Metric l="Finished share" v={`${m.conversion ?? 0}%`} />
-            {m.avg_work_order !== null && m.avg_work_order !== undefined && <Metric l="Average job" v={money(m.avg_work_order)} />}
+            <Metric l="Jobs in" v={String(m.work_orders_created ?? 0)} loading={loading} />
+            <Metric l="Jobs finished" v={String(m.work_orders_won ?? 0)} loading={loading} />
+            {(loading || has(m.revenue)) && <Metric l="Paid" v={money(m.revenue)} loading={loading} />}
+            <Metric l="Finished share" v={`${m.conversion ?? 0}%`} loading={loading} />
+            {(loading || has(m.avg_work_order)) && <Metric l="Average job" v={money(m.avg_work_order)} loading={loading} />}
           </div>
         </div>
         <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-5">
           <h3 className="text-sm font-bold text-ink-primary mb-3">Open jobs by stage</h3>
-          {(d?.status_mix ?? []).length === 0 ? (
+          {loading ? (
+            <div className="space-y-2" aria-hidden>{[0, 1, 2].map((i) => <div key={i} className="h-5 flex items-center"><span className="sk h-3.5 w-40" /></div>)}</div>
+          ) : (d?.status_mix ?? []).length === 0 ? (
             <p className="text-sm text-ink-tertiary">No open orders.</p>
           ) : (
             <div className="space-y-2">
@@ -196,8 +217,8 @@ function Dashboard() {
     </div>
   );
 }
-function Metric({ l, v, mono }: { l: string; v: string; mono?: boolean }) {
-  return <div><p className="text-xs text-ink-tertiary">{l}</p><p className={`text-lg font-semibold text-ink-primary tabular-nums ${mono ? "" : ""}`}>{v}</p></div>;
+function Metric({ l, v, mono, loading }: { l: string; v: string; mono?: boolean; loading?: boolean }) {
+  return <div><p className="text-xs text-ink-tertiary">{l}</p><p className={`text-lg font-semibold text-ink-primary tabular-nums ${mono ? "" : ""}`}>{loading ? <span className="sk inline-block h-5 w-12 align-middle" aria-hidden /> : v}</p></div>;
 }
 
 /* ── Employee hours tab ────────────────────────────────────────── */
@@ -311,7 +332,7 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
                 <td className="py-3.5 px-3 text-ink-secondary">{s.category_name || s.category || "—"}</td>
                 <td className="py-3.5 px-3 text-right text-ink-secondary tabular-nums">{s.duration_min ? `${s.duration_min} min` : "—"}</td>
                 <td className="py-3.5 px-3 text-right font-bold text-ink-primary tabular-nums">{money(s.price)}</td>
-                <td className="py-3.5 pr-5 text-right"><button className="text-primary font-semibold hover:underline">Edit</button></td>
+                <td className="py-3.5 pr-5 text-right"><button className="text-primary font-semibold hover:underline px-2 py-1.5 -my-1.5 -mr-2">Edit</button></td>
               </tr>
             ))}
           </tbody>
@@ -374,7 +395,7 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
                 <td className="py-3.5 px-3 text-right text-ink-secondary tabular-nums">{money(p.cost_price)}</td>
                 <td className="py-3.5 px-3 text-right font-bold text-ink-primary tabular-nums">{money(p.sell_price)}</td>
                 <td className="py-3.5 px-3 text-right tabular-nums">{p.qty_available ?? 0}</td>
-                <td className="py-3.5 pr-5 text-right"><button className="text-primary font-semibold hover:underline">Edit</button></td>
+                <td className="py-3.5 pr-5 text-right"><button className="text-primary font-semibold hover:underline px-2 py-1.5 -my-1.5 -mr-2">Edit</button></td>
               </tr>
             ))}
           </tbody>

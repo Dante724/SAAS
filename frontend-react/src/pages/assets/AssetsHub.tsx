@@ -57,7 +57,7 @@ export default function AssetsHub() {
                   <td className="py-3 px-4"><span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-blue-100 text-blue-800 border border-blue-200">{a.owner_type === "company" ? "Company" : a.owner_name || "Client"}</span></td>
                   <td className="py-3 px-4">{a.condition || "—"}</td>
                   <td className="py-3 px-4 tabular-nums font-semibold text-ink-primary">{a.order_count ?? 0}</td>
-                  <td className="py-3 px-4 text-center"><button aria-label="Next" className="p-1 rounded text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="chevron_right" c="text-sm" /></button></td>
+                  <td className="py-3 px-4 text-center"><button aria-label="Next" className="p-1.5 rounded text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="chevron_right" c="text-sm" /></button></td>
                 </tr>
               ))}
             </tbody>
