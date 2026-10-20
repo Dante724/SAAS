@@ -81,7 +81,8 @@ def read_unsubscribe_token(token: str) -> Optional[tuple[str, str]]:
 
 
 def unsubscribe_url(org_id: str, client_id: str) -> str:
-    return f"{settings.public_base}/api/public/unsubscribe/{unsubscribe_token(org_id, client_id)}"
+    base = (settings.PUBLIC_BASE_URL or "http://localhost:8000").rstrip("/")   # local dev: the API itself
+    return f"{base}/api/public/unsubscribe/{unsubscribe_token(org_id, client_id)}"
 
 
 # ── Consent and opening hours ───────────────────────────────────────────────────
