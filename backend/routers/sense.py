@@ -35,11 +35,22 @@ class FeaturesIn(BaseModel):
     deferred: Optional[bool] = None
     ready_time_why: Optional[bool] = None
     margin_check: Optional[bool] = None
+    morning_brief: Optional[bool] = None
+    added_together: Optional[bool] = None
+    service_due: Optional[bool] = None
+
+
+class BriefIn(BaseModel):
+    recipients: Optional[list[str]] = Field(None, max_length=50)
+    hour: Optional[int] = Field(None, ge=0, le=23)
+    email: Optional[bool] = None
+    push: Optional[bool] = None
 
 
 class SettingsIn(BaseModel):
     enabled: Optional[bool] = None
     features: Optional[FeaturesIn] = None
+    brief: Optional[BriefIn] = None
 
 
 @router.put("/settings")
@@ -47,9 +58,19 @@ async def update_settings(data: SettingsIn, db: AsyncSession = Depends(get_db),
                           current: Employee = Depends(require_perm("can_manage_settings"))):
     if not await is_shop_owner(db, current):      # and, beyond the role: the owner only
         raise HTTPException(403, "Only the shop owner can change Tekly Sense")
+    brief = data.brief.model_dump(exclude_none=True) if data.brief else None
+    if brief and "recipients" in brief:
+        wanted = list(dict.fromkeys(brief["recipients"]))
+        rows = (await db.execute(select(Employee.id, Employee.active).where(
+            Employee.org_id == current.org_id, Employee.id.in_(wanted)))).all() if wanted else []
+        if len(rows) != len(wanted):
+            raise HTTPException(422, "Brief recipients must be people in this shop")
+        active = {i for i, a in rows if a}
+        brief["recipients"] = [i for i in wanted if i in active]   # people who left drop off quietly
     before = await sense.get_settings(db, current.org_id)
     after = await sense.save_settings(db, current.org_id, enabled=data.enabled,
-                                      features=data.features.model_dump(exclude_none=True) if data.features else None)
+                                      features=data.features.model_dump(exclude_none=True) if data.features else None,
+                                      brief=brief)
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="sense.settings.update",
                        entity_type="organisation", entity_id=current.org_id,
                        diff={"before": before, "after": after})
@@ -112,3 +133,43 @@ async def margin(order_id: str, db: AsyncSession = Depends(get_db),
     if not await sense.is_on(db, current.org_id, "margin_check"):
         return {"enabled": False, "flag": False}
     return {"enabled": True, **await sense.margin_check(db, o)}
+
+
+@router.get("/brief")
+async def brief(db: AsyncSession = Depends(get_db), current: Employee = Depends(get_current_employee)):
+    """Today's brief for the owner and the people the owner chose; nobody else."""
+    if not await is_shop_owner(db, current):
+        s = await sense.get_settings(db, current.org_id)
+        if current.id not in (s["brief"]["recipients"] or []):
+            raise HTTPException(403, "The morning brief is for the people the owner chose")
+    if not await sense.is_on(db, current.org_id, "morning_brief"):
+        return {"enabled": False}
+    money = await has_perm(db, current, "can_view_finance")
+    return {"enabled": True, **await sense.build_brief(db, current.org_id, show_money=money)}
+
+
+def _strip_prices(items: list, allowed: bool) -> list:
+    if not allowed:
+        for i in items:
+            i.pop("unit_price", None)
+    return items
+
+
+@router.get("/orders/{order_id}/together")
+async def together(order_id: str, db: AsyncSession = Depends(get_db),
+                   current: Employee = Depends(require_perm("can_use_sense_suggestions"))):
+    o = await _order(db, current, order_id)
+    if not await sense.is_on(db, current.org_id, "added_together"):
+        return {"enabled": False, "items": []}
+    items = await sense.together_for(db, o)
+    return {"enabled": True, "items": _strip_prices(items, await has_perm(db, current, "can_view_item_prices"))}
+
+
+@router.get("/orders/{order_id}/service-due")
+async def service_due(order_id: str, db: AsyncSession = Depends(get_db),
+                      current: Employee = Depends(require_perm("can_use_sense_suggestions"))):
+    o = await _order(db, current, order_id)
+    if not await sense.is_on(db, current.org_id, "service_due"):
+        return {"enabled": False, "items": []}
+    items = await sense.service_due_for(db, o)
+    return {"enabled": True, "items": _strip_prices(items, await has_perm(db, current, "can_view_item_prices"))}

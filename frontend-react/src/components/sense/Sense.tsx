@@ -8,10 +8,13 @@ import { money } from "../../pages/orders/types";
    Everything here suggests and explains; nothing changes a job on its own. Styling is
    deliberately plain (slate chip, one sapphire ✦) so it reads as part of the app, not a robot. */
 
-export type SenseFeature = "job_suggestions" | "deferred" | "ready_time_why" | "margin_check";
+export type SenseFeature = "job_suggestions" | "deferred" | "ready_time_why" | "margin_check"
+  | "morning_brief" | "added_together" | "service_due";
+export type BriefCfg = { recipients: string[]; hour: number; email: boolean; push: boolean };
 export type SenseSettings = {
   enabled: boolean;
   features: Record<SenseFeature, boolean>;
+  brief: BriefCfg;
   learning?: { closed_jobs: number; needed: number; ready: boolean };   // owner only
 };
 
@@ -168,13 +171,55 @@ export function ReadyWhy({ sampleN, typicalMin, fmt }: { sampleN: number; typica
 const FEATURE_ROWS: { group: string; rows: { k: SenseFeature; label: string; hint: string }[] }[] = [
   { group: "At the counter", rows: [
     { k: "job_suggestions", label: "Job suggestions on new jobs", hint: "Lines your shop usually adds for a complaint like this" },
+    { k: "added_together", label: "Usually added together", hint: "Lines your jobs often have alongside the ones already on this job" },
     { k: "deferred", label: "Work deferred last time", hint: "What the customer said \"not now\" to on an earlier visit" },
+    { k: "service_due", label: "Service due", hint: "Regular services this item is due for, learned from how often you repeat them" },
     { k: "ready_time_why", label: "Explain the ready-time estimate", hint: "Shows what the estimate is based on" },
   ] },
   { group: "For you", rows: [
+    { k: "morning_brief", label: "Morning Brief", hint: "Yesterday, today and what needs you, on your Today page" },
     { k: "margin_check", label: "Margin check", hint: "A note when a job makes far less than your usual margin" },
   ] },
 ];
+
+type Person = { id: string; name: string; active?: boolean };
+const HOURS = Array.from({ length: 24 }, (_, h) => h);
+const hourLabel = (h: number) => new Date(2000, 0, 1, h).toLocaleTimeString([], { hour: "numeric" });
+
+/** Who gets the brief, when, and how. Email and push stay off until the owner turns them on. */
+function BriefControls({ s, busy, save }: { s: SenseSettings; busy: boolean; save: (p: { brief: Partial<BriefCfg> }) => void }) {
+  const [people, setPeople] = useState<Person[]>([]);
+  const { me } = useMe();
+  useEffect(() => { api.get<Person[]>("/staff/employees").then((r) => setPeople((Array.isArray(r) ? r : []).filter((p) => p.active !== false))).catch(() => setPeople([])); }, []);
+  const b = s.brief;
+  const others = people.filter((p) => p.id !== me?.id);
+  const toggle = (id: string) => save({ brief: { recipients: b.recipients.includes(id) ? b.recipients.filter((x) => x !== id) : [...b.recipients, id] } });
+  return (
+    <div className="ml-1 mb-2 space-y-2.5 rounded-xl bg-slate-50 border border-slate-100 px-3.5 py-3 text-xs text-ink-secondary">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <label className="flex items-center gap-1.5">Send at
+          <select aria-label="Brief send time" value={b.hour} disabled={busy} onChange={(e) => save({ brief: { hour: Number(e.target.value) } })}
+            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs">{HOURS.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}</select>
+        </label>
+        <label className="flex items-center gap-1.5"><input type="checkbox" checked={b.email} disabled={busy} onChange={() => save({ brief: { email: !b.email } })} /> Email</label>
+        <label className="flex items-center gap-1.5"><input type="checkbox" checked={b.push} disabled={busy} onChange={() => save({ brief: { push: !b.push } })} /> Push to the phone app</label>
+      </div>
+      <div>
+        <div className="mb-1 text-[11px] text-ink-tertiary">Also send to (you always get it):</div>
+        {others.length ? (
+          <div className="flex flex-wrap gap-1.5">
+            {others.map((p) => (
+              <label key={p.id} className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${b.recipients.includes(p.id) ? "border-primary/40 bg-white text-ink-primary" : "border-slate-200 bg-white"}`}>
+                <input type="checkbox" checked={b.recipients.includes(p.id)} disabled={busy} onChange={() => toggle(p.id)} /> {p.name}
+              </label>
+            ))}
+          </div>
+        ) : <span className="text-[11px] text-ink-tertiary">No one else on the team yet.</span>}
+      </div>
+      <p className="text-[11px] text-ink-tertiary">Counts cover the whole shop; money lines follow each person's own permissions. The push only says the brief is ready.</p>
+    </div>
+  );
+}
 
 // Declared at module level so a save doesn't remount the switch (keeps keyboard focus on it).
 function Toggle({ on, label, onClick, disabled, busy }: { on: boolean; label: string; onClick: () => void; disabled?: boolean; busy?: boolean }) {
@@ -194,7 +239,7 @@ export function SenseSettingsSection() {
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { loadSense(true).then(setS); }, []);
   if (!s) return null;
-  const save = async (patch: { enabled?: boolean; features?: Partial<Record<SenseFeature, boolean>> }) => {
+  const save = async (patch: { enabled?: boolean; features?: Partial<Record<SenseFeature, boolean>>; brief?: Partial<BriefCfg> }) => {
     if (busy) return;
     setBusy(true); setErr(null);
     try { const r = await api.put<SenseSettings>("/sense/settings", patch); setS(r); cached = Promise.resolve(r); }
@@ -229,7 +274,8 @@ export function SenseSettingsSection() {
                   <span className="min-w-0"><span className="block text-sm text-ink-primary">{r.label}</span><span className="block text-[11px] text-ink-tertiary">{r.hint}</span></span>
                   <Toggle on={s.features[r.k]} label={r.label} busy={busy} disabled={!s.enabled} onClick={() => save({ features: { [r.k]: !s.features[r.k] } })} />
                 </div>
-              ))}
+              )).flatMap((el, i) => g.rows[i].k === "morning_brief" && s.enabled && s.features.morning_brief
+                ? [el, <BriefControls key="brief" s={s} busy={busy} save={save} />] : [el])}
             </div>
           ))}
         </div>
@@ -237,5 +283,130 @@ export function SenseSettingsSection() {
         {err && <p className="text-[11px] font-semibold text-status-overdue-ink">{err}</p>}
       </div>
     </section>
+  );
+}
+
+
+type BriefItem = { key: string; title: string; count: number; amount?: number; to: string };
+type Brief = { enabled: boolean; date?: string; yesterday?: { jobs_closed: number; paid?: number }; today?: { due: number }; attention?: BriefItem[] };
+
+/** Today page: the owner's morning brief. Only the owner and chosen people get one (else hidden). */
+export function MorningBriefCard({ onOpen }: { onOpen: (to: string) => void }) {
+  const [b, setB] = useState<Brief | null>(null);
+  const [open, setOpen] = useState(true);
+  useEffect(() => { api.get<Brief>("/sense/brief").then(setB).catch(() => setB(null)); }, []);
+  if (!b?.enabled || !b.yesterday || !b.today) return null;
+  const y = b.yesterday;
+  const items = b.attention || [];
+  return (
+    <section aria-label="Morning Brief" className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-4">
+      <button onClick={() => setOpen((v) => !v)} aria-expanded={open} className="w-full flex items-center gap-2 text-left focus:outline-none">
+        <M n={open ? "expand_more" : "chevron_right"} c="text-ink-tertiary text-base" />
+        <h3 className="text-sm font-semibold text-ink-primary flex items-center gap-1.5"><Spark /> Morning Brief</h3>
+        <span className="ml-auto text-[11px] text-ink-tertiary">Learned from your own jobs</span>
+      </button>
+      {open && (
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-xl bg-slate-50 px-3.5 py-2.5">
+            <div className="text-[11px] text-ink-tertiary">Yesterday</div>
+            <div className="text-sm font-semibold text-ink-primary">{y.jobs_closed} job{y.jobs_closed === 1 ? "" : "s"} closed</div>
+            {y.paid != null && <div className="text-[11px] text-ink-secondary tabular-nums">{money(y.paid)} taken</div>}
+          </div>
+          <div className="rounded-xl bg-slate-50 px-3.5 py-2.5">
+            <div className="text-[11px] text-ink-tertiary">Today</div>
+            <div className="text-sm font-semibold text-ink-primary">{b.today.due} job{b.today.due === 1 ? "" : "s"} due</div>
+          </div>
+          <div className="rounded-xl bg-slate-50 px-3.5 py-2.5 sm:col-span-1">
+            <div className="text-[11px] text-ink-tertiary">Worth a look</div>
+            {items.length ? (
+              <ul className="mt-0.5 space-y-1">
+                {items.map((i) => (
+                  <li key={i.key}>
+                    <button onClick={() => onOpen(i.to)} className="text-left text-xs font-medium text-ink-primary hover:text-primary">
+                      {i.title}{i.amount != null && <span className="text-ink-tertiary tabular-nums"> · {money(i.amount)}</span>}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : <div className="text-xs text-ink-secondary">Nothing else needs you.</div>}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+type Together = { description: string; kind?: string; line_type?: string; ref_id?: string | null; unit_price?: number; why: { with: string; together: number; of: number } };
+
+/** Work order: lines this shop's jobs usually have alongside the ones already on this job. */
+export function TogetherChips({ orderId, linesKey, onFlash, onChanged }: { orderId: string; linesKey: string; onFlash: (m: string) => void; onChanged?: () => void }) {
+  const { can } = useMe();
+  const allowed = can("can_use_sense_suggestions") && (can("can_add_services") || can("can_add_products"));
+  const on = useSenseOn("added_together");
+  const [items, setItems] = useState<Together[]>([]);
+  const [hidden, setHidden] = useState<string[]>([]);
+  useEffect(() => {
+    if (!allowed || !on || !linesKey) { setItems([]); return; }
+    api.get<any>(`/sense/orders/${orderId}/together`).then((r) => setItems(r.items || [])).catch(() => setItems([]));
+  }, [orderId, linesKey, allowed, on]);
+  const shown = items.filter((i) => !hidden.includes(i.description));
+  if (!allowed || !on || !shown.length) return null;
+  const add = async (i: Together) => {
+    setHidden((h) => [...h, i.description]);
+    try {
+      const kind = i.kind || "service";
+      await api.post(`/orders/${orderId}/lines`, { description: i.description, kind, line_type: i.line_type || (kind === "service" ? "labour" : "part"),
+        ref_id: i.ref_id || undefined, qty: 1, unit_price: i.unit_price || 0 });
+      onFlash("Line added"); onChanged?.();
+    } catch (e: any) { setHidden((h) => h.filter((x) => x !== i.description)); onFlash(e.message || "Couldn't add the line"); }
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-[11px] font-semibold text-ink-tertiary flex items-center gap-1"><Spark /> Usually added</span>
+      {shown.map((i) => (
+        <SuggestedChip key={i.description} label={i.description} price={i.unit_price}
+          why={`On ${i.why.together} of your last ${i.why.of} jobs with ${i.why.with}.`}
+          onAdd={() => add(i)} onDismiss={() => setHidden((h) => [...h, i.description])} />
+      ))}
+    </div>
+  );
+}
+
+type Due = { description: string; every_days: number; last_done_days_ago: number; due_in_days: number; unit_price?: number };
+const ago = (d: number) => (d >= 60 ? `${Math.round(d / 30)} months` : `${d} days`);
+
+/** Work order: regular services this item is due for, offered as a draft recommendation. */
+export function ServiceDue({ orderId, onFlash, onChanged }: { orderId: string; onFlash: (m: string) => void; onChanged?: () => void }) {
+  const { can } = useMe();
+  const allowed = can("can_use_sense_suggestions") && can("can_recommend");
+  const on = useSenseOn("service_due");
+  const [items, setItems] = useState<Due[]>([]);
+  const [done, setDone] = useState<string[]>([]);
+  useEffect(() => {
+    if (!allowed || !on) return;
+    api.get<any>(`/sense/orders/${orderId}/service-due`).then((r) => setItems(r.items || [])).catch(() => setItems([]));
+  }, [orderId, allowed, on]);
+  const left = items.filter((i) => !done.includes(i.description));
+  if (!allowed || !on || !left.length) return null;
+  const add = async (i: Due) => {
+    try {
+      await api.post(`/orders/${orderId}/recommendations`, { title: i.description, kind: "service", qty: 1,
+        ...(i.unit_price != null ? { unit_price: i.unit_price } : {}),
+        note: `Last done ${ago(i.last_done_days_ago)} ago; usually every ${ago(i.every_days)}.`, urgency: i.due_in_days <= 0 ? "now" : "soon" });
+      setDone((d) => [...d, i.description]); onFlash("Added as a draft recommendation"); onChanged?.();
+    } catch (e: any) { onFlash(e.message || "Couldn't add it"); }
+  };
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2">
+      <div className="text-[11px] font-semibold text-ink-tertiary flex items-center gap-1"><Spark /> Due for service</div>
+      {left.map((i) => (
+        <div key={i.description} className="flex items-center gap-2 text-xs">
+          <span className="font-semibold text-ink-primary truncate">{i.description}</span>
+          {i.unit_price != null && <span className="tabular-nums text-ink-tertiary">{money(i.unit_price)}</span>}
+          <span className="text-[11px] text-ink-tertiary truncate">· last done {ago(i.last_done_days_ago)} ago, usually every {ago(i.every_days)}{i.due_in_days < 0 ? " — overdue" : ""}</span>
+          <button type="button" onClick={() => add(i)} className="ml-auto flex-shrink-0 rounded-lg border border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-ink-secondary hover:border-primary/40 hover:text-primary">Add as draft</button>
+        </div>
+      ))}
+    </div>
   );
 }

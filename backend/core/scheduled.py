@@ -141,3 +141,29 @@ async def sweep_revoked_sessions() -> None:
         await db.commit()
         if res.rowcount:
             log.info("revoked-session-sweep: removed %d expired record(s)", res.rowcount)
+
+
+@job_runner.every(900, "sense-brief-sweep")
+async def sweep_morning_briefs() -> None:
+    """Tekly Sense: send each shop's morning brief once a day, after the owner's chosen hour
+    in the shop's time zone. Only shops that turned email or push on have anything to send;
+    send_briefs claims the day before sending, so a restart never sends twice."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.models import AutomationSetting, Organisation
+    from backend.services import sense
+
+    async with AsyncSessionLocal() as db:
+        org_ids = (await db.execute(
+            select(AutomationSetting.org_id)
+            .join(Organisation, Organisation.id == AutomationSetting.org_id)
+            .where(AutomationSetting.key == sense.SETTING_KEY, AutomationSetting.enabled == True,  # noqa: E712
+                   Organisation.active == True))).scalars().all()  # noqa: E712
+        sent = 0
+        for oid in org_ids:
+            try:
+                sent += await sense.send_briefs(db, oid)
+            except Exception:  # noqa: BLE001 — one bad org never stalls the sweep
+                await db.rollback()
+                log.exception("sense-brief-sweep failed for org %s", oid)
+        if sent:
+            log.info("sense-brief-sweep: sent %d brief(s)", sent)

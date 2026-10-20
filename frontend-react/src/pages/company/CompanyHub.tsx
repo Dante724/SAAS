@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { useMe } from "../../context/Me";
 import Shell, { M } from "../../components/Shell";
 import { api } from "../../api/client";
+import { MorningBriefCard } from "../../components/sense/Sense";
 import { Product, Service, Bundle, money } from "../inventory/types";
 import CategoryManager from "../../components/CategoryManager";
 import Pager from "../../components/Pager";
@@ -117,6 +118,8 @@ function Dashboard() {
         <h2 className="text-xl font-semibold text-ink-primary">Today</h2>
         <p className="text-sm text-ink-tertiary">{new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}</p>
       </div>
+
+      <MorningBriefCard onOpen={(to) => navigate(to)} />
 
       {/* Needs you — the action-first feed. Collapsible, but the count always shows
           so nothing waiting is ever hidden. Defaults open when there are items. */}
