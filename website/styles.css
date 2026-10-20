@@ -788,3 +788,5 @@ select.in { appearance: none; background: var(--canvas) url("data:image/svg+xml,
 .sense-row .why { grid-column: 1 / -1; font-size: 12.5px; color: var(--ink-muted); }
 @media (max-width: 1023px) { .sense-grid { grid-template-columns: 1fr; gap: 40px; } .ui.brief { position: static; } }
 @media (max-width: 767px) { .sense-list { grid-template-columns: 1fr; } }
+.plan .extra { margin: 8px 0 0; font-size: 14px; font-weight: 500; color: var(--ink); }
+.plan.is-featured .extra { color: #fff; }

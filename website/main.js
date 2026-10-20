@@ -12,7 +12,7 @@
   $$("[data-app]").forEach(a => { a.href = appUrl + (a.dataset.app === "signup" ? C.signUpPath || "/signup" : C.signInPath || "/login"); });
   $$("[data-mail]").forEach(a => { a.href = "mailto:" + (C.demoEmail || ""); });
   $$("[data-trial]").forEach(el => { el.textContent = C.trialDays ?? 14; });
-  $$("[data-save]").forEach(el => { el.textContent = `−${Math.round((C.annualDiscount ?? .2) * 100)}%`; });
+  $$("[data-save]").forEach(el => { el.textContent = `${12 - (C.yearlyMonths ?? 10)} months free`; });
   $("#yr").textContent = new Date().getFullYear();
 
   /* ── Nav ── */
@@ -206,18 +206,22 @@
 
   /* ── Pricing ── */
   let billing = "monthly";
-  const fmt = n => { const r = Math.round(n * 100) / 100; return Number.isInteger(r) ? String(r) : r.toFixed(2); };
+  const fmt = n => { const r = Math.round(n * 100) / 100; return r.toLocaleString("en-US", { minimumFractionDigits: Number.isInteger(r) ? 0 : 2, maximumFractionDigits: 2 }); };
   const renderPlans = () => {
-    const off = 1 - (C.annualDiscount ?? .2);
+    const ym = C.yearlyMonths ?? 10;
     $("#plans").innerHTML = (C.plans || []).map(p => {
-      const price = billing === "annual" ? p.monthly * off : p.monthly;
+      const yearly = billing === "annual";
+      const price = yearly ? p.monthly * ym : p.monthly;
+      const extra = p.extraLocation ? `<p class="extra">+ ${cur}${fmt(yearly ? p.extraLocation * ym : p.extraLocation)} for each extra location</p>` : "";
+      const unit = yearly ? p.unit.replace("per month", "per year") + ` · ${12 - ym} months free` : p.unit;
       return `<article class="plan${p.featured ? " is-featured" : ""}">
         <div class="plan-top"><h3>${p.name}</h3>${p.badge ? `<span class="mono badge">${p.badge}</span>` : ""}</div>
         <p class="tag">${p.tagline}</p>
-        <div class="price"><span class="c">${cur}</span><span class="a">${fmt(price)}</span>${billing === "annual" ? `<span class="was">${cur}${fmt(p.monthly)}</span>` : ""}</div>
-        <p class="unit mono">${p.unit}${billing === "annual" ? ", billed yearly" : ""}</p>
+        <div class="price"><span class="c">${cur}</span><span class="a">${fmt(price)}</span>${yearly ? `<span class="was">${cur}${fmt(p.monthly * 12)}</span>` : ""}</div>
+        <p class="unit mono">${unit}</p>
+        ${extra}
         <p class="seats">${p.seats}</p>
-        <a class="btn btn-lg wide ${p.featured ? "btn-brand" : "btn-line"}" href="${appUrl}${C.signUpPath || "/signup"}?plan=${p.id}&billing=${billing}">${p.cta}</a>
+        <a class="btn btn-lg wide ${p.featured ? "btn-brand" : "btn-line"}" href="${appUrl}${C.signUpPath || "/signup"}?plan=${p.id}&billing=${yearly ? "year" : "month"}">${p.cta}</a>
         <ul>${p.features.map(f => `<li><svg aria-hidden="true"><use href="#check"/></svg>${f}</li>`).join("")}</ul>
       </article>`;
     }).join("");

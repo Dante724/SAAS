@@ -19,7 +19,7 @@ PAGES = [
         "slug": "phone-repair-software", "noun": "Phone and computer repair",
         "template": "Electronics",
         "title": "Phone & Computer Repair Software | Tekly",
-        "desc": "Cell phone, tablet and computer repair shop software. IMEI or serial at intake, AI estimates, customer approvals by phone, parts and POS. From $49/mo.",
+        "desc": "Cell phone, tablet and computer repair shop software. IMEI or serial at intake, AI estimates, customer approvals by phone, parts and POS. From $29/mo.",
         "h1": "Phone and computer repair software",
         "lead": "One electronics template for phones, tablets, laptops and desktops. Tekly asks for the IMEI or the serial number depending on the device, drafts the estimate from the customer's words and gets their approval by phone.",
         "fields": [("Device type", "Phone, tablet, laptop or desktop"), ("Brand and model", "e.g. iPhone 14 Pro"), ("IMEI or serial", "IMEI for phones and tablets, serial for computers"), ("Passcode", "Stored encrypted"), ("Storage", "e.g. 256 GB"), ("Condition photos", "Taken at the counter")],
@@ -41,7 +41,7 @@ PAGES = [
         "slug": "auto-repair-shop-software", "noun": "Vehicle repair",
         "template": "Vehicles",
         "title": "Auto Repair Shop Software for Cars, Trucks & RVs | Tekly",
-        "desc": "Auto repair shop software for cars, trucks, RVs and bikes. VIN intake, AI estimates, digital approvals by text, parts and payroll. Plans from $49/mo.",
+        "desc": "Auto repair shop software for cars, trucks, RVs and bikes. VIN intake, AI estimates, digital approvals by text, parts and payroll. Plans from $29/mo.",
         "h1": "Auto repair shop software for cars, trucks, RVs and bikes",
         "lead": "One vehicle template from a family hatchback to a fleet truck or an RV. Check vehicles in by VIN or plate, draft the estimate with AI, and let customers approve each line from their phone.",
         "fields": [("VIN", "Kept on the vehicle's history"), ("Year, make and model", "e.g. 2019 Honda CR-V"), ("Plate", "Find the vehicle by plate"), ("Mileage or hours", "Logged every visit"), ("Unit number", "For fleet vehicles"), ("Condition photos", "Taken at check-in")],
@@ -158,7 +158,7 @@ def page(p):
     <h1 class="h-display">{e(p["h1"])}</h1>
     <p class="hero-sub">{e(p["lead"])}</p>
     <div class="hero-ctas"><a class="btn btn-brand btn-lg" data-app="signup" data-cta="hero_trial" href="/#start">Start free trial</a><a class="btn btn-ghost btn-lg" href="/#start" data-cta="hero_demo">Book a demo</a></div>
-    <p class="mono hero-fine"><span data-trial>14</span>-day trial · no card · from $49 per location</p>
+    <p class="mono hero-fine"><span data-trial>14</span>-day trial · no card · from $29 a month</p>
   </div>
 </section>
 
@@ -182,7 +182,7 @@ def page(p):
 
 <section class="sec sec-tight">
   <div class="wrap"><div class="sub-price rv">
-    <div><p class="eyebrow">Pricing</p><h2 class="h-sub">Three plans, priced per location.</h2><p class="lede">Starter is $49 a month for up to 3 people. Pro is $99 for up to 15 and adds purchase orders, payroll, AI estimate drafting and Tekly Sense suggestions. Business is $199 for unlimited people, with multi-location stock, the Watchdog, SSO and API access. No setup fee, no contract, free data migration.</p></div>
+    <div><p class="eyebrow">Pricing</p><h2 class="h-sub">Plans from $29 a month.</h2><p class="lede">Solo is $29 for up to 2 people. Shop is $69 for up to 8 and adds inventory, scanning, the time clock and reports. Pro is $129 for the first location ($79 each extra) with no limits, plus purchase orders, payroll, AI estimate drafting and accounting sync. Every trial includes all Pro features for 14 days, no card.</p></div>
     <div class="sub-price-ctas"><a class="btn btn-brand btn-lg" data-app="signup" data-cta="pricing_trial" href="/#start">Start free trial</a><a class="link" href="/#pricing">Compare plans</a></div>
   </div></div>
 </section>
