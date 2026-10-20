@@ -4,13 +4,13 @@ Adds order_lines.discount_by_id, refunds.created_by_id and cash_shifts.closed_by
 old rows stay empty and simply aren't attributed). Filled by backend/db/actors.py.
 
 Revision ID: sw144s3
-Revises: ls144r4
+Revises: vd144q4
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "sw144s3"
-down_revision = "ls144r4"
+down_revision = "vd144q4"
 branch_labels = None
 depends_on = None
 
