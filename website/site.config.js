@@ -61,8 +61,9 @@ window.TEKLY_SITE = {
       name: "Shop",
       tagline: "A full shop with a team, stock and regular customers.",
       monthly: 69,
-      unit: "per month",
-      seats: "8 team members · 1 location · unlimited jobs",
+      extraLocation: 49,
+      unit: "for the first location, per month",
+      seats: "8 team members · unlimited jobs",
       cta: "Start free trial",
       featured: true,
       badge: "Most popular",
@@ -78,7 +79,7 @@ window.TEKLY_SITE = {
     {
       id: "pro",
       name: "Pro",
-      tagline: "Bigger teams and shops with more than one location.",
+      tagline: "Bigger teams, chains and shops that move stock between sites.",
       monthly: 129,
       extraLocation: 79,
       unit: "for the first location, per month",
@@ -88,7 +89,7 @@ window.TEKLY_SITE = {
         "Everything in Shop",
         "Purchase orders",
         "Payroll and commissions",
-        "Multiple locations and stock transfers",
+        "Stock transfers between locations",
         "AI estimate drafting and parts recognition",
         "QuickBooks and Xero sync",
         "Single sign-on and API keys",
@@ -99,7 +100,7 @@ window.TEKLY_SITE = {
   // Shown under the plans.
   enterprise: {
     name: "Ten or more locations?",
-    text: "Pro covers any number of locations at $79 for each one after the first. Franchises, depots and fleets can ask us about custom terms.",
+    text: "Shop adds locations at $49 each and Pro at $79 each, as many as you need. Franchises, depots and fleets can ask us about custom terms.",
     cta: "Talk to us",
   },
 };
