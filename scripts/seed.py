@@ -10,6 +10,7 @@ from backend.models import (
     WorkOrderType, CustomField, NotificationTemplate, Service, Tax, Account, CashFlowItem
 )
 from backend.services.auth import hash_password
+from scripts.demo_credentials import DEMO_FILE, demo_passwords
 import uuid
 from datetime import datetime, timedelta
 
@@ -49,21 +50,23 @@ async def seed_demo_data():
         db.add(tech_role)
         await db.flush()
 
-        # Employees
+        # Employees. Passwords come from the environment or .env.demo, never a published default
+        # (launch QA F10 — see scripts/demo_credentials.py).
+        admin_pw, staff_pw = demo_passwords()
         admin = Employee(id=uid(), org_id=org.id, location_id=loc.id,
                          role_id=admin_role.id, name="Rahul Sharma",
                          email="admin@repairos.dev",
-                         password_hash=hash_password("admin123"),
+                         password_hash=hash_password(admin_pw),
                          wage_type="fixed", wage_value=50000)
         tech1 = Employee(id=uid(), org_id=org.id, location_id=loc.id,
                          role_id=tech_role.id, name="Priya Patel",
                          email="priya@repairos.dev",
-                         password_hash=hash_password("tech123"),
+                         password_hash=hash_password(staff_pw),
                          wage_type="commission", commission_labour=10.0)
         tech2 = Employee(id=uid(), org_id=org.id, location_id=loc.id,
                          role_id=tech_role.id, name="Amit Singh",
                          email="amit@repairos.dev",
-                         password_hash=hash_password("tech123"),
+                         password_hash=hash_password(staff_pw),
                          wage_type="hourly", wage_value=250)
         db.add(admin); db.add(tech1); db.add(tech2)
         await db.flush()
@@ -419,4 +422,4 @@ async def seed_demo_data():
         db.add(_CM(id=uid(), thread_id=th.id, direction="in", body="Hi! My MacBook screen is flickering, can you take a look this week?", status="received"))
         db.add(_CM(id=uid(), thread_id=th.id, direction="out", body="Of course! Bring it in any day before 6pm, diagnostics are free.", status="sent"))
         await db.commit()
-        print("Demo data seeded. Login: admin@repairos.dev / admin123")
+        print(f"Demo data seeded. Login: admin@repairos.dev (passwords: $DEMO_ADMIN_PASSWORD/$DEMO_STAFF_PASSWORD or {DEMO_FILE.name})")

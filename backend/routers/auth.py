@@ -270,6 +270,11 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
 
     await db.commit()
 
+    # Launch QA B2: seed every status pipeline now, before the app's parallel first-load
+    # requests race to do it lazily.
+    from backend.routers.statuses import ensure_seeded
+    await ensure_seeded(db, org.id)
+
     # Build 144cb: send an email-verification link (best-effort; never blocks signup).
     await _send_verification(db, employee)
 

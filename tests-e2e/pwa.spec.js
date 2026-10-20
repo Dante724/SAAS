@@ -1,11 +1,12 @@
 // End-to-end for the Tekly technician PWA: install/manifest, service worker,
 // login, and the offline → queue → sync loop. Runs in CI (needs a browser).
 const { test, expect } = require('@playwright/test');
+const { demoStaffPassword } = require('./demo-credentials');
 
 // A seeded technician: the offline test needs jobs assigned to whoever signs in, and the
 // demo admin has none (so that test always skipped).
 const EMAIL = process.env.E2E_EMAIL || 'priya@repairos.dev';
-const PASS = process.env.E2E_PASS || 'tech123';
+const PASS = process.env.E2E_PASS || demoStaffPassword();
 
 // Sign in through the form (exercised by the sign-in test).
 async function loginViaForm(page) {

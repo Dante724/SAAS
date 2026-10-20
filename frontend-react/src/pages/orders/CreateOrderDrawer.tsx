@@ -151,7 +151,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
         intake_photos: intakePhotos.map((p) => p.id),
         is_estimate: estimate,
         currency_code: curCode || null,
-        lines: lines.map((l) => ({ description: l.description, kind: l.kind, qty: 1, unit_price: l.price })),
+        lines: lines.map((l) => ({ description: l.description, kind: l.kind, line_type: l.kind === "product" ? "part" : "labour", qty: 1, unit_price: l.price })),
       });
       onCreated();
       if (!reopen) onClose();

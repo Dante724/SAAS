@@ -89,24 +89,63 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 # ── rate limiter ─────────────────────────────────────────────────────────────
+_STATIC_SUFFIXES = (".js", ".mjs", ".css", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp",
+                    ".ico", ".woff", ".woff2", ".ttf", ".webmanifest", ".txt")
+
+
+def _token_subject(request) -> str | None:
+    """Employee id from a validly signed bearer token, else None. Signature is checked so a forged
+    token can't buy a fresh budget; expiry/revocation are left to the endpoint's own auth."""
+    auth = request.headers.get("authorization") or ""
+    if not auth.lower().startswith("bearer "):
+        return None
+    import jwt
+
+    from backend.config import settings
+    try:
+        payload = jwt.decode(auth[7:].strip(), settings.SECRET_KEY, algorithms=[settings.ALGORITHM],
+                             options={"verify_exp": False})
+    except (jwt.PyJWTError, ValueError):
+        return None
+    sub = payload.get("sub")
+    return str(sub) if sub else None
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Global per-IP ceiling. Counts through services.ratelimit, so with REDIS_URL set every
+    """Global request ceiling. Counts through services.ratelimit, so with REDIS_URL set every
     worker and instance shares one counter (it used to be a per-process dict: N workers
-    allowed N x limit, and every IP ever seen stayed in memory)."""
-    def __init__(self, app, *, limit: int = 300, window_s: int = 60,
-                 exempt_prefixes=("/metrics", "/health", "/api/health")):
+    allowed N x limit, and every IP ever seen stayed in memory).
+
+    Launch QA B5: a shop's staff share one Wi-Fi IP, so a flat per-IP limit that also counted page
+    assets locked the whole shop out. Static files are not counted; signed-in traffic is limited
+    per user (RATE_LIMIT_USER_PER_MIN); anonymous traffic keeps the per-IP ceiling
+    (RATE_LIMIT_IP_PER_MIN)."""
+    def __init__(self, app, *, window_s: int = 60,
+                 exempt_prefixes=("/metrics", "/health", "/api/health", "/assets/", "/static/")):
         super().__init__(app)
-        self.limit = limit
         self.window = window_s
         self.exempt = exempt_prefixes
 
     async def dispatch(self, request, call_next):
         from fastapi import HTTPException
 
+        from backend.config import settings
         from backend.services import ratelimit
         path = request.url.path
-        if any(path.startswith(p) for p in self.exempt):
+        if any(path.startswith(p) for p in self.exempt) or (
+                not path.startswith("/api") and path.lower().endswith(_STATIC_SUFFIXES)):
             return await call_next(request)
+        sub = _token_subject(request)
+        if sub:
+            bucket, key, limit = "global-user", sub, settings.RATE_LIMIT_USER_PER_MIN
+        else:
+            bucket, key, limit = "global", ratelimit.client_ip(request), settings.RATE_LIMIT_IP_PER_MIN
+        try:
+            await ratelimit.aenforce(bucket, key, limit, self.window)
+        except HTTPException as e:
+            return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"},
+                                headers=e.headers or {})
+        return await call_next(request)
         try:
             await ratelimit.aenforce("global", ratelimit.client_ip(request), self.limit, self.window)
         except HTTPException as e:
