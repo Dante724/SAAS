@@ -289,6 +289,18 @@ async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = No
             log.status = "skipped"
             await db.commit()
             continue
+        # Consent is checked again at send time: a customer who replied STOP after this
+        # message was queued must not receive it.
+        if log.client_id:
+            from backend.models import Client
+            c = (await db.execute(select(Client).where(
+                Client.id == log.client_id, Client.org_id == org_id))).scalar_one_or_none()
+            if c is None or not channel_consented(c, log.channel):
+                log.status = "skipped"
+                log.error = ("Client no longer on file" if c is None
+                             else f"No client consent for {log.channel}")
+                await db.commit()
+                continue
         # Claim the row before sending and commit after each message: the old loop sent
         # everything and committed once at the end, so a crash mid-sweep re-sent every message
         # already delivered, and two runners could both send the same row. A row left in
@@ -358,6 +370,9 @@ async def evaluate_appointment(db: AsyncSession, *, org_id: str, appointment_id:
         if not recipient:
             log.status = "skipped"
             log.error = f"No {rule.channel} on file"
+        elif not await _appointment_consented(db, b, rule.channel):
+            log.status = "skipped"
+            log.error = f"No client consent for {rule.channel}"
         elif send_at <= now:
             res = await _send(db, org_id, rule.channel, 
                 recipient=recipient, subject=subject, body=body)
@@ -369,6 +384,17 @@ async def evaluate_appointment(db: AsyncSession, *, org_id: str, appointment_id:
             scheduled += 1
     await db.commit()
     return {"sent": sent, "scheduled": scheduled, "matched": len(rules)}
+
+
+async def _appointment_consented(db: AsyncSession, b: Appointment, channel: str) -> bool:
+    """Same consent gate as order notifications. A walk-in booking with no client record has
+    nothing to check against and is allowed (they gave the number to be contacted about it)."""
+    if not b.client_id:
+        return True
+    from backend.models import Client
+    c = (await db.execute(select(Client).where(
+        Client.id == b.client_id, Client.org_id == b.org_id))).scalar_one_or_none()
+    return c is not None and channel_consented(c, channel)   # a removed client gets nothing
 
 
 async def _appointment_recipient(db: AsyncSession, b: Appointment, channel: str) -> Optional[str]:
