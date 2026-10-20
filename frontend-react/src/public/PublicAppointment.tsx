@@ -239,7 +239,7 @@ export default function PublicAppointment() {
   }
 
   if (err) return <Shell accent="#0059ba"><div className="py-14 text-center text-ink-secondary">{err}</div></Shell>;
-  if (!cfg) return <div className="min-h-screen bg-surface" />;
+  if (!cfg) return <div className="min-h-screen bg-canvas" />;
 
   const noAvailability = days !== null && !days.some((d) => d.open && d.free > 0);
   const grouped: Record<string, string[]> = {};
@@ -343,7 +343,7 @@ export default function PublicAppointment() {
               {[null, ...cats].map((c) => (
                 <button key={c ?? "all"} onClick={() => setCat(c)}
                   className="rounded-full border px-3.5 py-1.5 text-[13px] font-bold"
-                  style={cat === c ? { background: accent, borderColor: accent, color: "#fff" } : { borderColor: "#c2c6d5", color: "#435577" }}>
+                  style={cat === c ? { background: accent, borderColor: accent, color: "#fff" } : { borderColor: "rgb(var(--c-line-300))", color: "rgb(var(--c-ink-secondary))" }}>
                   {c ?? "All"}
                 </button>
               ))}
@@ -441,7 +441,7 @@ export default function PublicAppointment() {
                   <div className="mt-2 flex flex-wrap gap-2">
                     {list.map((t) => (
                       <button key={t} onClick={() => setTime(t)} className="rounded-lg border px-4 py-2 text-sm font-bold"
-                        style={time === t ? { background: accent, borderColor: accent, color: "#fff" } : { borderColor: "#c2c6d5", color: "#14213f" }}>
+                        style={time === t ? { background: accent, borderColor: accent, color: "#fff" } : { borderColor: "rgb(var(--c-line-300))", color: "rgb(var(--c-ink-primary))" }}>
                         {t}
                       </button>
                     ))}
@@ -494,7 +494,7 @@ function Shell({ accent, cfg, steps, at, onBack, children }: {
   onBack?: () => void; children: ReactNode;
 }) {
   return (
-    <div className="min-h-screen bg-surface font-sans text-ink-primary">
+    <div className="min-h-screen bg-canvas font-sans text-ink-primary">
       <div className="mx-auto max-w-md px-4 py-7">
         <div className="mb-5 flex items-center gap-3">
           {onBack && (
@@ -515,7 +515,7 @@ function Shell({ accent, cfg, steps, at, onBack, children }: {
         {steps != null && at != null && (
           <div className="mb-5 flex gap-1.5">
             {Array.from({ length: steps }, (_, i) => (
-              <div key={i} className="h-1 flex-1 rounded-full" style={{ background: i <= at ? accent : "#dde2ee" }} />
+              <div key={i} className="h-1 flex-1 rounded-full" style={{ background: i <= at ? accent : "rgb(var(--c-slate-200))" }} />
             ))}
           </div>
         )}

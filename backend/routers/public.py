@@ -365,6 +365,9 @@ async def _track_payload(db: AsyncSession, order: "Order") -> dict:
         "asset_label": _ind.asset_label(getattr(device, "template_key", None)) if device else None,
         "complaint": order.complaint,
         "total": order.total,
+        # What the customer has paid and still owes, in their currency — so a settled job
+        # says "Paid" instead of a bare "Total" the customer might think they still owe.
+        **(await _paid_fields(db, order, _fx)),
         "created_at": order.created_at.isoformat() if order.created_at else None,
         # 144dr — only expose the scheduled date when the org opted in.
         "scheduled_for": (order.scheduled_for.isoformat() if order.scheduled_for else None) if getattr(org, "oe_show_scheduled", False) else None,
@@ -460,6 +463,19 @@ async def track_einvoice(token: str, db: AsyncSession = Depends(get_db)):
 #  /portal/{token} lets a customer see ALL their work orders &
 #  estimates, drill into one, and approve/decline estimates.
 # ════════════════════════════════════════════════════════════
+async def _paid_fields(db: AsyncSession, order: "Order", fx) -> dict:
+    """amount_paid / balance_due (customer currency) and paid_in_full for one job."""
+    from backend.services.order_money import net_paid
+    total = float(order.total or 0)
+    paid = max(0.0, await net_paid(db, order.id))
+    rate = fx or 1
+    return {
+        "amount_paid": q2(paid * rate),
+        "balance_due": q2(max(total - paid, 0) * rate),
+        "paid_in_full": total > 0 and paid >= total,
+    }
+
+
 async def _client_by_portal(db: AsyncSession, token: str) -> Client:
     if not token:
         raise HTTPException(404, "Not found")
@@ -523,6 +539,7 @@ async def portal_home(token: str, db: AsyncSession = Depends(get_db)):
             "total_converted": q2((o.total or 0) * fx),
             "currency_symbol": oci["symbol"],
             "awaiting_approval": await _can_sign(db, o),
+            **(await _paid_fields(db, o, fx)),
             "open_recommendations": open_recs.get(o.id, 0),
         })
         return c

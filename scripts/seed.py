@@ -82,8 +82,9 @@ async def seed_demo_data():
         db.add(repair_type); db.add(warranty_type); db.add(rental_type)
         await db.flush()
 
+        # The problem itself is the order's built-in "Complaint / description" field; a second
+        # "Fault reported" field asked the same thing twice (launch QA 2026-10-19).
         repair_fields = [
-            ("Fault reported", "textarea", True, "Describe the issue", []),
             ("Device passcode", "text", False, "If applicable", []),
             ("Accessories received", "select", False, None, ["None", "Charger", "Case", "Charger + Case"]),
             ("Data backup needed", "bool", False, None, []),

@@ -6,11 +6,25 @@ import VoidableList from "../../components/VoidableList";
 import { useClientSearch } from "../../hooks/useClientSearch";
 import NewClientDrawer from "../../components/NewClientDrawer";
 import { currencySymbol, money } from "../orders/types";
+import { escapeHtml } from "../../lib/safeHtml";
 
 type Product = { id: string; name?: string; sku?: string; sell_price?: number; qty_available?: number; image_data?: string | null; low_stock?: boolean };
 type Service = { id: string; name?: string; price?: number; duration_min?: number };
 type ClientLite = { id: string; name?: string; phone?: string };
-type Account = { id: string; name?: string };
+type Account = { id: string; name?: string; payment_option?: string };
+type Receipt = {
+  sale_number: string; shop_name: string; total: number; discount?: number; paid: boolean; created_at?: string | null;
+  lines: { description: string; qty: number; total: number }[];
+  client_email?: string | null; client_phone?: string | null; text: string;
+};
+
+// Payment goes into the account used last on this device, else the cash drawer, else the first.
+const LAST_ACCT = "pos_last_account";
+function defaultAccount(items: Account[]): string {
+  let last = "";
+  try { last = localStorage.getItem(LAST_ACCT) || ""; } catch { /* ignore */ }
+  return (items.find((a) => a.id === last) || items.find((a) => a.payment_option === "cash") || items[0])?.id || "";
+}
 type CartLine = { key: string; kind: "product" | "service"; ref_id: string; description: string; unit_price: number; qty: number; discount: number; stock?: number };
 
 export default function SalesPOS() {
@@ -38,7 +52,8 @@ export default function SalesPOS() {
 
   useEffect(() => { api.get<{ items: Product[] }>("/catalog/products").then((r) => setProducts(r.items || [])).catch(() => {}); }, []);
   useEffect(() => { api.get<{ items: Service[] }>("/catalog/services").then((r) => setServices(r.items || [])).catch(() => {}); }, []);
-  useEffect(() => { api.get<{ items: Account[] }>("/cash/accounts").then((r) => { setAccounts(r.items || []); if (r.items?.[0]) setAccountId(r.items[0].id); }).catch(() => {}); }, []);
+  useEffect(() => { api.get<{ items: Account[] }>("/cash/accounts").then((r) => { setAccounts(r.items || []); setAccountId(defaultAccount(r.items || [])); }).catch(() => {}); }, []);
+  const [receiptFor, setReceiptFor] = useState<string | null>(null);   // sale id → the after-sale receipt choices
   const [cOpen, setCOpen] = useState(false);
   const clientResults = useClientSearch<ClientLite>(clientQ, cOpen && !client, 6);
 
@@ -72,7 +87,10 @@ export default function SalesPOS() {
       });
       const red = r.redeemed && Object.keys(r.redeemed).length
         ? " · redeemed " + Object.entries(r.redeemed).map(([k, v]) => `${k} ${money(v as number)}`).join(", ") : "";
-      flash(`Sale ${r.sale_number} · ${money(r.total)} · profit ${money(r.profit)}${red}`);
+      // No profit here: the customer is usually looking at this screen.
+      flash(`Sale ${r.sale_number} · ${money(r.total)}${red}`);
+      try { if (accountId) localStorage.setItem(LAST_ACCT, accountId); } catch { /* ignore */ }
+      setReceiptFor(r.id);
       setRecentKey((k) => k + 1);
       setCart([]); setDiscount(0); setCoupon(""); setGiftCard(""); setRedeemPts(0); setShowRewards(false); setClient(null); setClientQ("");
       api.get<{ items: Product[] }>("/catalog/products").then((res) => setProducts(res.items || [])).catch(() => {});
@@ -204,7 +222,74 @@ export default function SalesPOS() {
         </aside>
       </div>
       {toast && <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-clay-drawer z-[60]">{toast}</div>}
+      {receiptFor && <ReceiptSheet saleId={receiptFor} onClose={() => setReceiptFor(null)} onFlash={flash} />}
       {newClient && <NewClientDrawer prefillName={clientQ.trim()} onClose={() => setNewClient(false)} onCreated={(c) => { setClient(c); setNewClient(false); setClientQ(""); flash(`Client "${c.name}" created & attached`); }} />}
     </Shell>
+  );
+}
+
+// After a sale: give the customer a receipt — print it, email it or send it on WhatsApp.
+function ReceiptSheet({ saleId, onClose, onFlash }: { saleId: string; onClose: () => void; onFlash: (m: string) => void }) {
+  const [rc, setRc] = useState<Receipt | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [sending, setSending] = useState(false);
+  useEffect(() => {
+    api.get<Receipt>(`/sales/${saleId}/receipt`).then((r) => { setRc(r); setEmail(r.client_email || ""); setPhone(r.client_phone || ""); })
+      .catch((e) => setErr(e.message || "Couldn't load the receipt"));
+  }, [saleId]);
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k);
+  }, [onClose]);
+
+  function print() {
+    if (!rc) return;
+    const w = window.open("", "_blank", "width=380,height=600"); if (!w) { onFlash("Allow pop-ups to print the receipt"); return; }
+    const rows = rc.lines.map((l) => `<tr><td>${l.qty !== 1 ? `${l.qty} × ` : ""}${escapeHtml(l.description)}</td><td class="r">${escapeHtml(money(l.total))}</td></tr>`).join("");
+    const css = "body{font-family:Inter,system-ui,sans-serif;margin:0;padding:18px;color:#14213f;font-size:13px}h1{font-size:15px;margin:0}p{margin:2px 0 12px;color:#5b6b8c}table{width:100%;border-collapse:collapse}td{padding:4px 0}.r{text-align:right}.t td{border-top:1px dashed #c9d3ea;padding-top:8px;font-weight:700;font-size:15px}";
+    w.document.write(`<html><head><title>${escapeHtml(rc.sale_number)}</title><style>${css}</style></head><body><h1>${escapeHtml(rc.shop_name)}</h1>`
+      + `<p>Receipt ${escapeHtml(rc.sale_number)}${rc.created_at ? " · " + escapeHtml(new Date(rc.created_at + (rc.created_at.endsWith("Z") ? "" : "Z")).toLocaleString()) : ""}</p>`
+      + `<table>${rows}${rc.discount ? `<tr><td>Discount</td><td class="r">−${escapeHtml(money(rc.discount))}</td></tr>` : ""}<tr class="t"><td>Total</td><td class="r">${escapeHtml(money(rc.total))}</td></tr></table>`
+      + `<p style="margin-top:12px">${rc.paid ? "Paid" : "Not paid yet"} · Thank you!</p></body></html>`);
+    w.document.close(); w.focus(); w.print();
+  }
+  async function sendEmail() {
+    setSending(true);
+    try { const r = await api.post<{ recipient: string }>(`/sales/${saleId}/receipt/email`, { email: email.trim() || null }); onFlash(`Receipt emailed to ${r.recipient}`); onClose(); }
+    catch (e: any) { onFlash(e.message || "Couldn't email the receipt"); } finally { setSending(false); }
+  }
+  const digits = phone.replace(/[^0-9]/g, "");
+  const waHref = rc && digits.length >= 7 ? `https://wa.me/${digits}?text=${encodeURIComponent(rc.text)}` : null;
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Receipt">
+      <div className="absolute inset-0 bg-ink-primary/40" onClick={onClose} />
+      <div className="relative w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5 shadow-clay-drawer">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-bold text-ink-primary">Sale complete</div>
+            <div className="text-xs text-ink-tertiary">{rc ? `${rc.sale_number} · ${money(rc.total)}` : err || "Loading…"}</div>
+          </div>
+          <button aria-label="Close" onClick={onClose} className="text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-lg" /></button>
+        </div>
+        <div className="mt-4 text-[11px] font-bold text-ink-tertiary">Give the customer a receipt</div>
+        <div className="mt-2 space-y-2.5">
+          <button onClick={print} disabled={!rc} className="w-full flex items-center justify-center gap-2 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold text-ink-primary hover:bg-slate-50 disabled:opacity-50"><M n="print" c="text-base" />Print receipt</button>
+          <div className="flex gap-2">
+            <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="Customer email" aria-label="Customer email" className="glass-input min-w-0 flex-1 px-3 py-2 rounded-lg text-xs" />
+            <button onClick={sendEmail} disabled={!rc || sending || !email.includes("@")} className="px-3 py-2 rounded-xl bg-primary text-white text-xs font-bold disabled:opacity-50 flex items-center gap-1.5"><M n="mail" c="text-sm" />{sending ? "Sending…" : "Email"}</button>
+          </div>
+          <div className="flex gap-2">
+            <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="WhatsApp number with country code" aria-label="WhatsApp number" className="glass-input min-w-0 flex-1 px-3 py-2 rounded-lg text-xs" />
+            {waHref
+              ? <a href={waHref} target="_blank" rel="noopener noreferrer" onClick={onClose} className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold flex items-center gap-1.5"><M n="chat" c="text-sm" />WhatsApp</a>
+              : <span className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold flex items-center gap-1.5 opacity-50" aria-disabled="true"><M n="chat" c="text-sm" />WhatsApp</span>}
+          </div>
+        </div>
+        <button onClick={onClose} className="mt-4 w-full py-2 text-xs font-bold text-ink-secondary hover:text-ink-primary">No receipt</button>
+      </div>
+    </div>
   );
 }

@@ -189,7 +189,7 @@ export default function Shell({ title, children }: { title: string; children: Re
               {!railCollapsed && (
                 <div>
                   <div className="font-bold text-[17px] leading-none tracking-[-0.05em] text-ink-primary flex items-center gap-1.5" aria-label="Tekly">tekly <span className="text-[10px] tracking-normal px-1 py-px rounded bg-blue-100 text-primary font-bold">PRO</span></div>
-                  <p className="text-[11px] text-ink-tertiary font-medium">{t("Workshop Central")}</p>
+                  {me?.org_name && <p className="max-w-[140px] truncate text-[11px] text-ink-tertiary font-medium" title={me.org_name}>{me.org_name}</p>}
                 </div>
               )}
             </div>

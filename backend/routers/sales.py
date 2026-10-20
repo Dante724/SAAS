@@ -381,6 +381,87 @@ async def create_sale(
             "paid": sale.paid, "redeemed": reward_detail}
 
 
+# ───────────────────────────── RECEIPT ─────────────────────────────
+class ReceiptEmailIn(BaseModel):
+    email: Optional[str] = Field(default=None, max_length=254)   # blank → the sale's client's email
+
+
+def receipt_text(org_name: str, sale: Sale, lines: list, sym: str, tz: Optional[str] = None) -> str:
+    """The customer's receipt in plain words — what was bought and what was paid. Never cost
+    or profit (that's the shop's business, not the customer's)."""
+    def m(v):
+        v = float(v or 0)
+        return f"{sym}{v:,.0f}" if abs(v - round(v)) < 0.005 else f"{sym}{v:,.2f}"
+    when = ""
+    if sale.created_at:   # stored as naive UTC; the customer reads it in the shop's time
+        from datetime import timezone as _tz
+        from zoneinfo import ZoneInfo
+        at = sale.created_at.replace(tzinfo=_tz.utc)
+        try:
+            at = at.astimezone(ZoneInfo(tz)) if tz else at
+        except Exception:
+            pass
+        when = at.strftime("%d %b %Y, %H:%M")
+    out = [org_name, f"Receipt {sale.sale_number}" + (f" · {when}" if when else ""), ""]
+    for ln in lines:
+        qty = ln.qty or 1
+        qty_s = f"{qty:g} × " if qty != 1 else ""
+        out.append(f"{qty_s}{ln.description or ln.kind}  {m(ln.total)}")
+    if float(sale.discount or 0):
+        out.append(f"Discount  −{m(sale.discount)}")
+    out += ["", f"Total  {m(sale.total)}", "Paid" if sale.paid else "Not paid yet", "", "Thank you!"]
+    return "\n".join(out)
+
+
+@router.get("/{sale_id}/receipt")
+async def sale_receipt(
+    sale_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_create_sales")),
+):
+    """The receipt for the after-sale Print / Email / WhatsApp choices."""
+    from backend.models import Client, Organisation
+    sale = (await db.execute(select(Sale).where(Sale.id == sale_id, Sale.org_id == current.org_id))).scalar_one_or_none()
+    if not sale:
+        raise HTTPException(404, "Sale not found")
+    org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
+    lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id))).scalars().all()
+    client = (await db.execute(select(Client).where(
+        Client.id == sale.client_id, Client.org_id == current.org_id))).scalar_one_or_none() if sale.client_id else None
+    sym = (org.currency if org else None) or "₹"
+    return {
+        "sale_number": sale.sale_number, "shop_name": org.name if org else "",
+        "total": sale.total, "discount": sale.discount, "paid": sale.paid,
+        "created_at": sale.created_at.isoformat() if sale.created_at else None,
+        "lines": [{"description": ln.description, "qty": ln.qty, "total": ln.total} for ln in lines],
+        "client_email": client.email if client else None, "client_phone": client.phone if client else None,
+        "text": receipt_text(org.name if org else "", sale, lines, sym, getattr(org, "timezone", None)),
+    }
+
+
+@router.post("/{sale_id}/receipt/email")
+async def email_sale_receipt(
+    sale_id: str, data: ReceiptEmailIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_create_sales")),
+):
+    """Email the receipt (connected Gmail/Outlook first, then SMTP, else the simulated adapter)."""
+    rc = await sale_receipt(sale_id, db, current)
+    to = (data.email or rc["client_email"] or "").strip()
+    if not to or "@" not in to:
+        raise HTTPException(422, "Add an email address for the receipt")
+    from backend.services.notifications import _adapter_for, notif_creds, try_oauth_email
+    subject = f"Your receipt {rc['sale_number']}" + (f" from {rc['shop_name']}" if rc["shop_name"] else "")
+    result = await try_oauth_email(db, current.org_id, recipient=to, subject=subject, body=rc["text"])
+    if result is None:
+        try:
+            await _adapter_for("email", await notif_creds(db, current.org_id, "email")).send(
+                recipient=to, subject=subject, body=rc["text"])
+        except Exception:
+            raise HTTPException(502, "Couldn't send the email. Check the shop's email settings and try again.")
+    return {"ok": True, "recipient": to}
+
+
 # ───────────────────────────── STOCKTAKE ─────────────────────────────
 async def _st_stock_row(db, part_id, st):
     """144bh — resolve a part's StockLevel for a stocktake, preferring the warehouse-keyed

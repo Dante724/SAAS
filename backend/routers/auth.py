@@ -615,6 +615,7 @@ async def me(current: Employee = Depends(get_current_employee),
         "name": current.name,
         "email": current.email,
         "org_id": current.org_id,
+        "org_name": org.name if org else None,   # the shop's name under the logo / on job stickers
         "location_id": current.location_id,
         "active": current.active,
         "currency": (org.currency if org else None) or "₹",
