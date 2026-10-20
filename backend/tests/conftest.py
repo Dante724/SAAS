@@ -22,6 +22,7 @@ if _xw:
         if _u and _u.startswith("sqlite") and _u.endswith(".db"):
             os.environ[_var] = _u[:-3] + f"_{_xw}.db"
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
