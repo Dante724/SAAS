@@ -158,7 +158,7 @@ export function ReadyWhy({ sampleN, typicalMin, fmt }: { sampleN: number; typica
       <button type="button" onClick={() => setOpen((v) => !v)} className="text-ink-tertiary underline decoration-dotted hover:text-primary">Why?</button>
       {open && (
         <span role="note" className="absolute right-0 top-full z-20 mt-1 w-64 rounded-xl border border-slate-200 bg-white p-2.5 text-[11px] leading-snug text-ink-secondary shadow-lg">
-          Based on how long your last {sampleN} similar job{sampleN === 1 ? "" : "s"} took in each step{typicalMin != null ? ` (this step usually ~${fmt(typicalMin)})` : ""}. It gets sharper as you close more jobs.
+          Based on how long your last {sampleN} similar job{sampleN === 1 ? "" : "s"} took in each step{typicalMin != null && typicalMin >= 1 ? ` (this step usually ~${fmt(typicalMin)})` : ""}. It gets sharper as you close more jobs.
         </span>
       )}
     </span>
@@ -176,6 +176,17 @@ const FEATURE_ROWS: { group: string; rows: { k: SenseFeature; label: string; hin
   ] },
 ];
 
+// Declared at module level so a save doesn't remount the switch (keeps keyboard focus on it).
+function Toggle({ on, label, onClick, disabled, busy }: { on: boolean; label: string; onClick: () => void; disabled?: boolean; busy?: boolean }) {
+  return (
+    <button type="button" role="switch" aria-checked={on} aria-label={label} onClick={onClick} disabled={disabled}
+      aria-busy={busy || undefined}
+      className={`ml-auto w-10 h-6 rounded-full flex-shrink-0 relative transition-colors disabled:opacity-50 ${on ? "bg-primary" : "bg-slate-300"}`}>
+      <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${on ? "left-[18px]" : "left-0.5"}`} />
+    </button>
+  );
+}
+
 /** Settings → General: the owner's switches for Tekly Sense. Saves each change straight away. */
 export function SenseSettingsSection() {
   const [s, setS] = useState<SenseSettings | null>(null);
@@ -184,17 +195,12 @@ export function SenseSettingsSection() {
   useEffect(() => { loadSense(true).then(setS); }, []);
   if (!s) return null;
   const save = async (patch: { enabled?: boolean; features?: Partial<Record<SenseFeature, boolean>> }) => {
+    if (busy) return;
     setBusy(true); setErr(null);
     try { const r = await api.put<SenseSettings>("/sense/settings", patch); setS(r); cached = Promise.resolve(r); }
     catch (e: any) { setErr(e.message || "Couldn't save"); }
     finally { setBusy(false); }
   };
-  const Toggle = ({ on, label, onClick, disabled }: { on: boolean; label: string; onClick: () => void; disabled?: boolean }) => (
-    <button type="button" role="switch" aria-checked={on} aria-label={label} onClick={onClick} disabled={disabled || busy}
-      className={`ml-auto w-10 h-6 rounded-full flex-shrink-0 relative transition-colors disabled:opacity-50 ${on ? "bg-primary" : "bg-slate-300"}`}>
-      <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${on ? "left-[18px]" : "left-0.5"}`} />
-    </button>
-  );
   const lr = s.learning;
   const pct = lr ? Math.min(100, Math.round((lr.closed_jobs / Math.max(1, lr.needed)) * 100)) : 0;
   return (
@@ -205,7 +211,7 @@ export function SenseSettingsSection() {
           <h3 className="text-sm font-semibold text-ink-primary">Tekly Sense</h3>
           <p className="text-[11px] text-ink-tertiary">Learns from your own jobs. Suggests, never acts, and every hint shows why. Only you see these settings.</p>
         </div>
-        <Toggle on={s.enabled} label="Tekly Sense" onClick={() => save({ enabled: !s.enabled })} />
+        <Toggle on={s.enabled} label="Tekly Sense" busy={busy} onClick={() => save({ enabled: !s.enabled })} />
       </div>
       <div className="px-5 pb-5 space-y-3">
         {lr && !lr.ready && (
@@ -221,7 +227,7 @@ export function SenseSettingsSection() {
               {g.rows.map((r) => (
                 <div key={r.k} className="flex items-center gap-3 py-2.5 border-t border-slate-100 first:border-0">
                   <span className="min-w-0"><span className="block text-sm text-ink-primary">{r.label}</span><span className="block text-[11px] text-ink-tertiary">{r.hint}</span></span>
-                  <Toggle on={s.features[r.k]} label={r.label} disabled={!s.enabled} onClick={() => save({ features: { [r.k]: !s.features[r.k] } })} />
+                  <Toggle on={s.features[r.k]} label={r.label} busy={busy} disabled={!s.enabled} onClick={() => save({ features: { [r.k]: !s.features[r.k] } })} />
                 </div>
               ))}
             </div>

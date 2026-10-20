@@ -148,3 +148,17 @@ async def test_deferred_work_done_on_a_later_visit_drops_off(client, db):
     await db.commit()
     new = await _job(db, org, "x", [], device_id=dev.id, days_ago=0)
     assert await sense.deferred_for(db, new) == []
+
+
+async def test_deferred_work_already_on_this_job_is_not_offered_again(client, db):
+    from backend.models import Device, Recommendation
+    H, org = await _register(client)
+    dev = Device(org_id=org, brand="A", model="B"); db.add(dev); await db.flush()
+    old = await _job(db, org, "x", [], device_id=dev.id, days_ago=200)
+    db.add(Recommendation(org_id=org, order_id=old.id, title="Back glass", status="declined", decline_reason="not_now"))
+    new = await _job(db, org, "x", [], device_id=dev.id, days_ago=0)
+    await db.commit()
+    assert [i["title"] for i in await sense.deferred_for(db, new)] == ["Back glass"]
+    db.add(Recommendation(org_id=org, order_id=new.id, title="Back glass", status="draft"))
+    await db.commit()
+    assert await sense.deferred_for(db, new) == []

@@ -864,6 +864,7 @@ function IntakePhotos({ orderId, photos, onChanged, onFlash }: {
 function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labor, onClockIn, isEstimate, emps, locked }: { orderId: string; deviceId?: string; lines?: Line[]; total?: number; onFlash: (m: string) => void; onChanged?: () => void; labor?: any; onClockIn?: (lineId: string) => void; isEstimate?: boolean; emps?: { id: string; name: string }[]; locked?: boolean }) {
   const { can } = useMe();
   const seePrices = can("can_view_item_prices");   // off: the API leaves line prices out
+  const [recsVersion, setRecsVersion] = useState(0);   // bumped when a deferred item becomes a draft
   const _secHM = (s: number) => { const h = Math.floor((s || 0) / 3600), m = Math.floor(((s || 0) % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m`; };
   const _byEmp = labor?.by_employee || [];
   const _timeTotal = _byEmp.reduce((n: number, b: any) => n + (b.total_seconds || 0), 0);
@@ -1091,8 +1092,8 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
         </div>
       ))}
 
-      <DeferredWork orderId={orderId} onFlash={onFlash} onChanged={onChanged} />
-      <RecommendationsPanel orderId={orderId} items={tagging ? jobItems.map((it) => ({ id: it.id, name: itemName(it) })) : []} onFlash={onFlash} onChanged={onChanged} />
+      <DeferredWork orderId={orderId} onFlash={onFlash} onChanged={() => { setRecsVersion((v) => v + 1); onChanged?.(); }} />
+      <RecommendationsPanel key={recsVersion} orderId={orderId} items={tagging ? jobItems.map((it) => ({ id: it.id, name: itemName(it) })) : []} onFlash={onFlash} onChanged={onChanged} />
 
       <MarginNote orderId={orderId} refreshKey={total} />
       <div className="bg-slate-50/90 rounded-2xl p-4 border border-slate-200 space-y-2">

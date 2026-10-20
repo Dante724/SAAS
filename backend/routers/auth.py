@@ -605,6 +605,12 @@ async def me(current: Employee = Depends(get_current_employee),
             from backend.services.permissions import effective_permissions
             permissions = effective_permissions(role)
             home_route = getattr(role, "home_route", None) or None
+    shop_owner = await is_shop_owner(db, current)
+    if shop_owner:
+        # The server grants the shop owner every permission (has_perm), including codes added
+        # after their role was saved, so the UI must not hide those controls from them.
+        from backend.services.permissions import ALL_CODES
+        permissions = {code: True for code in sorted(ALL_CODES)}
     return {
         "id": current.id,
         "name": current.name,
@@ -618,7 +624,7 @@ async def me(current: Employee = Depends(get_current_employee),
         "is_owner": current.role_id is None,
         # The shop's creator (organisations.owner_id), who may also hold a role: owner-only
         # screens such as Tekly Sense settings key off this, matching the server's check.
-        "is_shop_owner": await is_shop_owner(db, current),
+        "is_shop_owner": shop_owner,
         "home_route": home_route,
         "permissions": permissions,
         # build 144cb: account-security surface for the UI (verify banner, 2FA badge)

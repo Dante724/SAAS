@@ -38,7 +38,7 @@ export function useMe() { return useContext(MeContext); }
 export function canPerm(me: Me | null, code?: string): boolean {
   if (!code) return true;
   if (!me) return true;
-  if (me.is_owner) return true;
+  if (me.is_owner || me.is_shop_owner) return true;   // the server grants the shop owner everything
   return me.permissions?.[code] !== false;
 }
 

@@ -244,3 +244,18 @@ async def test_only_the_owner_gets_the_learning_count(client):
     assert "learning" not in staff_view and staff_view["enabled"] is True
     assert (await client.get("/api/auth/me", headers=H)).json()["is_shop_owner"] is True
     assert (await client.get("/api/auth/me", headers=T)).json()["is_shop_owner"] is False
+
+
+@pytest.mark.asyncio
+async def test_the_owner_sees_permissions_added_after_their_role_was_saved(client, db):
+    """The owner's saved role predates a new code; the server already grants it to the owner,
+    and /me must say so too, or the app hides the feature from the person who pays for it."""
+    from backend.models import Employee, Role
+    H, org_id = await _register(client)
+    me = (await client.get("/api/auth/me", headers=H)).json()
+    emp = (await db.execute(select(Employee).where(Employee.id == me["id"]))).scalar_one()
+    role = (await db.execute(select(Role).where(Role.id == emp.role_id))).scalar_one()
+    role.permissions = {k: v for k, v in (role.permissions or {}).items() if k != "can_use_sense_suggestions"}
+    await db.commit()
+    me = (await client.get("/api/auth/me", headers=H)).json()
+    assert me["permissions"]["can_use_sense_suggestions"] is True

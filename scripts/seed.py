@@ -67,6 +67,7 @@ async def seed_demo_data():
                          wage_type="hourly", wage_value=250)
         db.add(admin); db.add(tech1); db.add(tech2)
         await db.flush()
+        org.owner_id = admin.id   # the demo admin is the shop owner (owner-only settings, owner protections)
 
         # Work order types + custom fields
         repair_type = WorkOrderType(id=uid(), org_id=org.id, name="Repair",
