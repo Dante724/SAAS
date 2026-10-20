@@ -31,7 +31,7 @@
     if (!e.isIntersecting) return;
     navLinks.forEach(a => a.classList.toggle("cur", a.getAttribute("href") === "#" + e.target.id));
   }), { rootMargin: "-45% 0px -50% 0px" });
-  ["product", "mobile", "industries", "ai", "pricing", "faq"].forEach(id => secObs.observe(document.getElementById(id)));
+  ["product", "mobile", "industries", "ai", "features", "pricing", "faq"].forEach(id => secObs.observe(document.getElementById(id)));
 
   /* ── Reveal on scroll ── */
   const rvObs = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add("shown"); rvObs.unobserve(e.target); } }), { rootMargin: "0px 0px -8% 0px" });
