@@ -15,7 +15,7 @@
   const cur = C.currency || "$";
   const plans = C.plans || [];
   const solo = plans.find(p => p.id === "solo") || { monthly: 29, name: "Solo" };
-  const shop = plans.find(p => p.id === "shop") || { monthly: 69, extraLocation: 49, name: "Shop" };
+  const shop = plans.find(p => p.id === "shop") || { monthly: 69, extraLocation: 49, extraSeat: 4, name: "Shop" };
   const pro = plans.find(p => p.id === "pro") || { monthly: 129, extraLocation: 79, name: "Pro" };
   const ymo = C.yearlyMonths ?? 10;
   const trial = C.trialDays ?? 14;
@@ -47,7 +47,7 @@
     { id: "book", w: ["demo", "book", "booking", "meeting", "call", "schedule", "appointment", "walkthrough", "show", "talk", "sales", "person", "human", "someone"], a: () => ({ text: "Happy to set that up. A demo is 30 minutes: we set up your trade live, run one job from intake to paid, and answer questions about moving your data and pricing.", chips: ["Pick a time"], action: "book" }) },
     { id: "price", w: ["price", "prices", "pricing", "cost", "costs", "much", "expensive", "cheap", "plan", "plans", "pay", "fee", "monthly", "subscription", "per"], a: () => ({ text: `There are three plans:
 • ${solo.name} — ${cur}${solo.monthly}/month: 2 team members, 150 new jobs a month.
-• ${shop.name} — ${cur}${shop.monthly}/month for the first location and ${cur}${shop.extraLocation} for each extra: 8 team members, unlimited jobs, plus inventory, scanning, time clock and reports.
+• ${shop.name} — ${cur}${shop.monthly}/month for the first location and ${cur}${shop.extraLocation} for each extra: 8 team members shared across locations (${cur}${shop.extraSeat} a month per extra person), unlimited jobs, plus inventory, scanning, time clock and reports.
 • ${pro.name} — ${cur}${pro.monthly}/month for the first location and ${cur}${pro.extraLocation} for each extra, no limits, plus purchase orders, payroll, AI estimates and accounting sync.
 Yearly billing gets ${12 - ymo} months free. Every trial includes all Pro features for ${trial} days.`, chips: ["Which plan fits me?", "Book a demo"] }) },
     { id: "recommend", w: ["which", "recommend", "fit", "right", "best", "choose", "suit", "should"], a: () => ({ action: "recommend" }) },
@@ -182,11 +182,12 @@ Yearly billing gets ${12 - ymo} months free. Every trial includes all Pro featur
       await say("How many people will use Tekly, including you?");
       chips(["1–2", "3–8", "More than 8"], async d => {
         me(d);
-        if (d === "More than 8") return recommend("pro", "Shop covers up to 8 people; Pro has no limit.");
+        flow.data.big = d === "More than 8";
         await say("Do you need purchase orders, payroll and commissions, or QuickBooks/Xero sync?");
         chips(["Yes", "No"], async e => {
           me(e);
           if (e === "Yes") return recommend("pro", "Those come with Pro.");
+          if (flow.data.big) return recommend("shop", `It includes 8 people shared across your locations, and each extra person is ${cur}${shop.extraSeat} a month. Pro has no limit if you also need payroll or purchase orders.`);
           if (flow.data.multi) return recommend("shop", `Each extra location is ${cur}${shop.extraLocation} a month on Shop. If you need to move stock between locations, that comes with Pro.`);
           if (d === "3–8") return recommend("shop", "It covers up to 8 people with unlimited jobs, inventory, scanning, the time clock and reports.");
           await say("Do you keep parts in stock or need barcode labels?");

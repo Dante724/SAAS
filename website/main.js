@@ -212,7 +212,8 @@
     $("#plans").innerHTML = (C.plans || []).map(p => {
       const yearly = billing === "annual";
       const price = yearly ? p.monthly * ym : p.monthly;
-      const extra = p.extraLocation ? `<p class="extra">+ ${cur}${fmt(yearly ? p.extraLocation * ym : p.extraLocation)} for each extra location</p>` : "";
+      const extra = (p.extraLocation ? `<p class="extra">+ ${cur}${fmt(yearly ? p.extraLocation * ym : p.extraLocation)} for each extra location</p>` : "")
+        + (p.extraSeat ? `<p class="extra">+ ${cur}${fmt(yearly ? p.extraSeat * ym : p.extraSeat)} for each extra team member</p>` : "");
       const unit = yearly ? p.unit.replace("per month", "per year") + ` · ${12 - ym} months free` : p.unit;
       return `<article class="plan${p.featured ? " is-featured" : ""}">
         <div class="plan-top"><h3>${p.name}</h3>${p.badge ? `<span class="mono badge">${p.badge}</span>` : ""}</div>
