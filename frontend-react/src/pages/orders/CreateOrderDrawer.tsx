@@ -18,6 +18,7 @@ import { identifierFields } from "../../lib/assetIdentifiers";
 import { useMe } from "../../context/Me";
 import IdentifyHint, { type IdMatch } from "../../components/IdentifyHint";
 import NameSuggestInput from "../../components/NameSuggestInput";
+import { JobSuggestions } from "../../components/sense/Sense";
 
 type ClientLite = { id: string; name?: string; phone?: string; email?: string };
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
@@ -426,8 +427,10 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                     const add = (r.lines || []).map((l: any) => ({ id: Math.random().toString(36).slice(2), description: l.description, kind: "service", price: l.unit_price || 0 }));
                     if (add.length) setLines((ls) => [...ls, ...add]);
                   } catch (e: any) { await alertDialog(e.message || "AI draft failed"); }
-                }} className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[11px] font-bold shadow-clay-sm flex items-center gap-1"><M n="auto_awesome" c="text-xs" />AI draft from complaint</button>
+                }} className="text-[11px] font-semibold text-ink-tertiary hover:text-primary underline decoration-dotted">Draft from the complaint</button>
               </div>
+              <JobSuggestions complaint={complaint} deviceId={deviceId}
+                onAdd={(i) => setLines((ls) => [...ls, { id: Math.random().toString(36).slice(2), description: i.description, kind: i.kind, price: i.price, ref_id: i.ref_id || undefined }])} />
               <CatalogPicker placeholder="Search a service or product to add…" onPick={(i) => setLines((ls) => [...ls, { id: Math.random().toString(36).slice(2), description: i.name, kind: i.kind, price: i.price || 0, ref_id: i.ref_id }])} />
 
               <div className="space-y-2.5">

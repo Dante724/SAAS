@@ -1,5 +1,6 @@
 import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
 import RecommendationsPanel from "./RecommendationsPanel";
+import { DeferredWork, MarginNote, ReadyWhy } from "../../components/sense/Sense";
 import PartsPOPanel from "./PartsPOPanel";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useRef, useState } from "react";
@@ -287,6 +288,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                 <M n="event_available" c="text-sm text-emerald-600" />
                 Est. ready <span className="font-semibold text-ink-primary">{fmtDT(timing.predicted_ready_at)}</span>
                 {timing.confidence === "low" && <span className="text-ink-tertiary" title={`Based on ${timing.sample_n} past job(s)`}>· rough</span>}
+                <ReadyWhy sampleN={timing.sample_n} typicalMin={timing.typical_min} fmt={fmtDur} />
               </span>
             )}
           </div>
@@ -1089,8 +1091,10 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
         </div>
       ))}
 
+      <DeferredWork orderId={orderId} onFlash={onFlash} onChanged={onChanged} />
       <RecommendationsPanel orderId={orderId} items={tagging ? jobItems.map((it) => ({ id: it.id, name: itemName(it) })) : []} onFlash={onFlash} onChanged={onChanged} />
 
+      <MarginNote orderId={orderId} refreshKey={total} />
       <div className="bg-slate-50/90 rounded-2xl p-4 border border-slate-200 space-y-2">
         {/* Totals are for the whole job, whatever filter is on. No lines yet but a price on the job
             (agreed at check-in) reads as the quoted price, not a $0 subtotal next to a real total. */}

@@ -3,6 +3,8 @@ import { M } from "../../components/Shell";
 import CurrencyManager from "../../components/CurrencyManager";
 import { getLang, setLang, LANGS } from "../../i18n";
 import { api } from "../../api/client";
+import { useMe } from "../../context/Me";
+import { SenseSettingsSection } from "../../components/sense/Sense";
 
 /* Settings › General — the shop's profile. Edits land in local state and save together from a
    bar that only appears when something changed; a live preview shows how customers see the
@@ -59,6 +61,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
 }) {
   // `saved` lives in the hub so leaving the section and coming back still shows unsaved edits.
   if (saved.current == null) saved.current = co;
+  const { me } = useMe();
   const [saving, setSaving] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -214,6 +217,8 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
               <Switch k="require_mfa" label="Two-step sign-in for everyone" hint="Staff can't turn it off for themselves" />
             </Section>
           </div>
+
+          {(me?.is_shop_owner || me?.is_owner) && <SenseSettingsSection />}
 
           <div className="flex items-center gap-3 rounded-2xl border border-slate-200/90 bg-white px-5 py-4">
             <span className="w-9 h-9 rounded-xl bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n="refresh" c="text-lg" /></span>

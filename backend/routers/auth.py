@@ -12,7 +12,7 @@ from backend.db.database import get_db
 from backend.models import Employee, Location, Organisation, Role
 from backend.services import tokens as _tok
 from backend.services.audit import record as _audit
-from backend.services.auth import (create_access_token, get_current_employee, hash_password,
+from backend.services.auth import (create_access_token, get_current_employee, hash_password, is_shop_owner,
                                    is_old_default_password, norm_email, verify_password)
 from backend.services.notifications import send_direct_email
 from backend.services.ratelimit import client_ip as _ip
@@ -654,6 +654,9 @@ async def me(current: Employee = Depends(get_current_employee),
         "currency_code": (org.currency_code if org else None) or "INR",
         "role": role_name,
         "is_owner": current.role_id is None,
+        # The shop's creator (organisations.owner_id), who may also hold a role: owner-only
+        # screens such as Tekly Sense settings key off this, matching the server's check.
+        "is_shop_owner": await is_shop_owner(db, current),
         "home_route": home_route,
         "permissions": permissions,
         # build 144cb: account-security surface for the UI (verify banner, 2FA badge)
