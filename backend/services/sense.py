@@ -27,8 +27,9 @@ log = logging.getLogger("tekly.sense")
 
 SETTING_KEY = "sense"
 FEATURES = ("job_suggestions", "deferred", "ready_time_why", "margin_check",
-            "morning_brief", "added_together", "service_due")
+            "morning_brief", "added_together", "service_due", "watchdog")
 BRIEF_DEFAULTS = {"recipients": [], "hour": 7, "email": False, "push": False}
+WATCHDOG_DEFAULTS = {"discount_pct": 20, "cash_tolerance": 10}
 MIN_CLOSED_JOBS = 20      # before suggestions appear at all
 HISTORY_DAYS = 730        # job suggestions look back two years
 CANDIDATE_CAP = 500       # most recent closed jobs considered per request
@@ -57,9 +58,10 @@ def _shape(row: Optional[AutomationSetting]) -> dict:
     cfg = (row.config or {}) if row else {}
     feats = cfg.get("features") or {}
     brief = {**BRIEF_DEFAULTS, **{k: v for k, v in (cfg.get("brief") or {}).items() if k in BRIEF_DEFAULTS}}
+    wd = {**WATCHDOG_DEFAULTS, **{k: v for k, v in (cfg.get("watchdog") or {}).items() if k in WATCHDOG_DEFAULTS}}
     return {"enabled": True if row is None else bool(row.enabled),
             "features": {f: bool(feats.get(f, True)) for f in FEATURES},
-            "brief": brief}
+            "brief": brief, "watchdog": wd}
 
 
 async def get_settings(db: AsyncSession, org_id: str) -> dict:
@@ -67,7 +69,8 @@ async def get_settings(db: AsyncSession, org_id: str) -> dict:
 
 
 async def save_settings(db: AsyncSession, org_id: str, *, enabled: Optional[bool],
-                        features: Optional[dict], brief: Optional[dict] = None) -> dict:
+                        features: Optional[dict], brief: Optional[dict] = None,
+                        watchdog: Optional[dict] = None) -> dict:
     """`brief` recipients must already be checked to be active people in this shop."""
     row = await _row(db, org_id, lock=True)
     if row is None:
@@ -84,7 +87,8 @@ async def save_settings(db: AsyncSession, org_id: str, *, enabled: Optional[bool
     for k, v in (brief or {}).items():
         if k in BRIEF_DEFAULTS and v is not None:
             new_brief[k] = v
-    row.config = {**(row.config or {}), "features": feats, "brief": new_brief}
+    new_wd = {**cur["watchdog"], **{k: v for k, v in (watchdog or {}).items() if k in WATCHDOG_DEFAULTS and v is not None}}
+    row.config = {**(row.config or {}), "features": feats, "brief": new_brief, "watchdog": new_wd}
     return _shape(row)
 
 
@@ -327,7 +331,9 @@ async def brief_readers(db: AsyncSession, org_id: str) -> list:
         Employee.org_id == org_id, Employee.id.in_(ids), Employee.active == True))).scalars().all())  # noqa: E712
 
 
-async def build_brief(db: AsyncSession, org_id: str, *, show_money: bool, now: Optional[datetime] = None) -> dict:
+async def build_brief(db: AsyncSession, org_id: str, *, show_money: bool, now: Optional[datetime] = None,
+                      owner: bool = False) -> dict:
+    """`owner`: the reader is the shop owner, the only person the Watchdog line is for."""
     from backend.models import Invoice, Organisation, Payment
     now = now or datetime.utcnow()
     org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one()
@@ -387,6 +393,11 @@ async def build_brief(db: AsyncSession, org_id: str, *, show_money: bool, now: O
         if n_due:
             attention.append({"key": "service_due", "count": n_due, "to": "/clients",
                               "title": f"{n_due} customer item{'s' if n_due != 1 else ''} due for service in the next {DUE_SOON_DAYS} days"})
+    if owner and await is_on(db, org_id, "watchdog"):
+        n_flags = len((await watchdog(db, org_id, now=now))["flags"])
+        if n_flags:
+            attention.append({"key": "watchdog", "count": n_flags, "to": "/",
+                              "title": f"{n_flags} unusual thing{'s' if n_flags != 1 else ''} in Watchdog"})
     return {"date": (now.replace(tzinfo=timezone.utc).astimezone(tz)).date().isoformat(),
             "shop": org.name, "currency": getattr(org, "currency", None) or "", "yesterday": yesterday, "today": {"due": due_today}, "attention": attention}
 
@@ -449,14 +460,15 @@ async def send_briefs(db: AsyncSession, org_id: str, now: Optional[datetime] = N
 
     # Plain values up front: a failed send rolls the session back, which would expire loaded
     # Employee rows and break every reader after it.
-    readers = [(e.id, e.email, await has_perm(db, e, "can_view_finance")) for e in await brief_readers(db, org_id)]
-    built: dict[bool, dict] = {}            # one brief per money level, not one per reader
-    for emp_id, email, money in readers:
+    readers = [(e.id, e.email, await has_perm(db, e, "can_view_finance"), e.id == org.owner_id)
+               for e in await brief_readers(db, org_id)]
+    built: dict[tuple, dict] = {}           # one brief per (money, owner) level, not one per reader
+    for emp_id, email, money, is_owner in readers:
         try:
             if b["email"] and email:
-                if money not in built:
-                    built[money] = await build_brief(db, org_id, show_money=money, now=now)
-                brief = built[money]
+                if (money, is_owner) not in built:
+                    built[(money, is_owner)] = await build_brief(db, org_id, show_money=money, now=now, owner=is_owner)
+                brief = built[(money, is_owner)]
                 await _send_email(db, org_id, recipient=email,
                                   subject=f"Your morning brief — {brief['shop']}", body=brief_text(brief))
             if b["push"]:
@@ -628,3 +640,184 @@ async def devices_due(db: AsyncSession, org_id: str, now: Optional[datetime] = N
             if days - DUE_SOON_DAYS <= ago <= days + 180 and dev not in in_shop:
                 due.add(dev)
     return len(due)
+
+
+
+# ── Watchdog (shop owner only) ──────────────────────────────────────────────────
+WATCH_DAYS = 30
+WATCH_MIN = 3             # never flag fewer than this many events
+WATCH_FACTOR = 2.0        # ...and only at twice (or more) what others usually do
+
+
+def _pct(qty, price, disc, dtype) -> float:
+    gross = float(qty or 0) * float(price or 0)
+    d = float(disc or 0)
+    if (dtype or "pct") == "pct":
+        return d
+    return d / gross * 100 if gross > 0 else 0.0
+
+
+async def watchdog(db: AsyncSession, org_id: str, now: Optional[datetime] = None) -> dict:
+    """Unusual money events per person over the last 30 days, plus the team scorecard.
+
+    Fair by construction: a flag needs WATCH_MIN events AND at least WATCH_FACTOR times what
+    the others usually do (their median), and it carries that median and the records behind
+    it. The owner isn't compared or flagged (their discounts are theirs to give). Reviewed
+    flags are left out. Nothing here acts on anyone."""
+    from backend.models import CashShift, Employee, Location, Organisation, Refund, Sale, SaleLine
+    now = now or datetime.utcnow()
+    start = now - timedelta(days=WATCH_DAYS)
+    org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one()
+    cfg = await get_settings(db, org_id)
+    th = cfg["watchdog"]
+    row = await _row(db, org_id)
+    reviewed = set(((row.config or {}).get("watchdog_reviewed") or []) if row else [])
+    people = {e.id: e for e in (await db.execute(select(Employee).where(Employee.org_id == org_id))).scalars().all()}
+    staff = [e.id for e in people.values() if e.active and e.id != org.owner_id]
+
+    def name(eid):
+        return people[eid].name if eid in people else "Someone"
+
+    def others_median(counts: dict, eid: str) -> float:
+        vals = [counts.get(x, 0) for x in staff if x != eid]
+        return float(median(vals)) if vals else 0.0
+
+    events: dict[str, dict[str, list]] = {"big_discounts": defaultdict(list), "refunds": defaultdict(list),
+                                          "voids": defaultdict(list)}
+    # Big discounts on job lines and on counter sales.
+    for ln, num, when in (await db.execute(
+            select(OrderLine, Order.order_number, Order.created_at).join(Order, Order.id == OrderLine.order_id)
+            .where(Order.org_id == org_id, or_(Order.created_at >= start, Order.updated_at >= start),
+                   OrderLine.discount_by_id.isnot(None), OrderLine.discount > 0)
+            .order_by(Order.created_at.desc()).limit(5000))).all():
+        pct = _pct(ln.qty, ln.unit_price, ln.discount, ln.discount_type)
+        if pct >= float(th["discount_pct"]):
+            gross = float(ln.qty or 0) * float(ln.unit_price or 0)
+            events["big_discounts"][ln.discount_by_id].append(
+                {"date": when.date().isoformat(), "ref": num, "what": ln.description, "pct": round(pct, 1),
+                 "amount": round(gross * pct / 100, 2)})
+    for sl, sale in (await db.execute(
+            select(SaleLine, Sale).join(Sale, Sale.id == SaleLine.sale_id)
+            .where(Sale.org_id == org_id, Sale.created_at >= start, Sale.voided_at.is_(None),
+                   SaleLine.discount >= float(th["discount_pct"])).order_by(Sale.created_at.desc()).limit(5000))).all():
+        gross = float(sl.qty or 0) * float(sl.unit_price or 0)
+        events["big_discounts"][sale.seller_id].append(
+            {"date": sale.created_at.date().isoformat(), "ref": sale.sale_number, "what": sl.description,
+             "pct": round(float(sl.discount), 1), "amount": round(gross * float(sl.discount) / 100, 2)})
+    for sale in (await db.execute(select(Sale).where(
+            Sale.org_id == org_id, Sale.created_at >= start, Sale.voided_at.is_(None), Sale.discount > 0)
+            .order_by(Sale.created_at.desc()).limit(5000))).scalars().all():
+        before = float(sale.total or 0) + float(sale.discount or 0)       # whole-basket discount
+        pct = float(sale.discount) / before * 100 if before > 0 else 0.0
+        if pct >= float(th["discount_pct"]):
+            events["big_discounts"][sale.seller_id].append(
+                {"date": sale.created_at.date().isoformat(), "ref": sale.sale_number, "what": "Discount on the whole sale",
+                 "pct": round(pct, 1), "amount": round(float(sale.discount), 2)})
+    for r in (await db.execute(select(Refund).where(
+            Refund.org_id == org_id, Refund.created_at >= start, Refund.voided_at.is_(None),
+            Refund.created_by_id.isnot(None)).order_by(Refund.created_at.desc()).limit(5000))).scalars().all():
+        events["refunds"][r.created_by_id].append({"date": r.created_at.date().isoformat(), "ref": None,
+                                                   "what": (r.reason or "Refund")[:80], "amount": float(r.amount or 0)})
+    for sale in (await db.execute(select(Sale).where(
+            Sale.org_id == org_id, Sale.voided_at >= start, Sale.voided_by_id.isnot(None))
+            .order_by(Sale.voided_at.desc()).limit(5000))).scalars().all():
+        events["voids"][sale.voided_by_id].append({"date": sale.voided_at.date().isoformat(), "ref": sale.sale_number,
+                                                   "what": "Sale voided", "amount": float(sale.total or 0)})
+    for r in (await db.execute(select(Refund).where(
+            Refund.org_id == org_id, Refund.voided_at >= start, Refund.voided_by_id.isnot(None))
+            .order_by(Refund.voided_at.desc()).limit(5000))).scalars().all():
+        events["voids"][r.voided_by_id].append({"date": r.voided_at.date().isoformat(), "ref": None,
+                                                "what": "Refund voided", "amount": float(r.amount or 0)})
+
+    titles = {"big_discounts": "Unusual number of big discounts", "refunds": "Unusual number of refunds",
+              "voids": "Unusual number of voids"}
+    rules = {"big_discounts": f"Discounts of {th['discount_pct']}% or more in the last {WATCH_DAYS} days",
+             "refunds": f"Refunds made in the last {WATCH_DAYS} days",
+             "voids": f"Sales and refunds voided in the last {WATCH_DAYS} days"}
+    flags = []
+    for kind, by_emp in events.items():
+        counts = {e: len(v) for e, v in by_emp.items()}
+        for eid, evs in by_emp.items():
+            if eid not in staff:
+                continue
+            med = others_median(counts, eid)
+            if len(evs) >= WATCH_MIN and len(evs) >= WATCH_FACTOR * med:
+                evs = sorted(evs, key=lambda x: x["date"], reverse=True)
+                # Keyed on the latest event: once reviewed it stays hidden until something new happens.
+                key = f"{kind}:{eid}:{evs[0]['date']}"
+                if key in reviewed:
+                    continue
+                flags.append({"key": key, "kind": kind, "employee_id": eid, "employee_name": name(eid),
+                              "title": f"{titles[kind]} — {name(eid)}", "rule": rules[kind],
+                              "count": len(evs), "others_median": med,
+                              "amount": round(sum(x["amount"] for x in evs), 2), "evidence": evs[:5]})
+    # Cash short: each drawer closed more than the tolerance under what was expected.
+    for sh in (await db.execute(
+            select(CashShift).join(Location, Location.id == CashShift.location_id)
+            .where(Location.org_id == org_id, CashShift.closed_at >= start,
+                   CashShift.expected_cash.isnot(None), CashShift.closing_float.isnot(None))
+            .order_by(CashShift.closed_at.desc()).limit(2000))).scalars().all():
+        short = round(float(sh.expected_cash) - float(sh.closing_float), 2)
+        # Only the person who closed (counted) the drawer is named; when that wasn't recorded
+        # (drawers closed before it was), the shortfall is shown without a name, never pinned
+        # on whoever opened it.
+        who = sh.closed_by_id
+        if short > float(th["cash_tolerance"]) and (who is None or who in staff):
+            key = f"cash_short:{sh.id}"
+            if key in reviewed:
+                continue
+            flags.append({"key": key, "kind": "cash_short", "employee_id": who,
+                          "employee_name": name(who) if who else "Not recorded",
+                          "title": (f"Unusual cash shortfall — drawer closed by {name(who)}" if who
+                                    else "Unusual cash shortfall — who closed the drawer wasn't recorded"),
+                          "rule": f"Drawer closed more than {th['cash_tolerance']} under the expected cash",
+                          "count": 1, "others_median": None, "amount": short,
+                          "evidence": [{"date": sh.closed_at.date().isoformat(), "ref": None,
+                                        "what": f"Expected {float(sh.expected_cash):.2f}, counted {float(sh.closing_float):.2f}",
+                                        "amount": short}]})
+    flags.sort(key=lambda f: (-f["amount"], f["kind"]))
+    return {"window_days": WATCH_DAYS, "thresholds": th, "flags": flags,
+            "scorecard": await scorecard(db, org_id, people, events, start)}
+
+
+async def scorecard(db: AsyncSession, org_id: str, people: dict, events: dict, start: datetime) -> list[dict]:
+    """Per active person, last 30 days: jobs closed and their value, comebacks (the same item
+    back within 30 days of the job closing), big discounts and refunds."""
+    closed = (await db.execute(select(Order).where(
+        Order.org_id == org_id, Order.closed_at >= start, Order.assigned_to_id.isnot(None),
+        Order.is_estimate == False, Order.archived == False).limit(10000))).scalars().all()  # noqa: E712
+    dev_ids = {o.device_id for o in closed if o.device_id}
+    later = defaultdict(list)
+    if dev_ids:
+        for oid, dev, created in (await db.execute(select(Order.id, Order.device_id, Order.created_at).where(
+                Order.org_id == org_id, Order.device_id.in_(dev_ids), Order.created_at >= start,
+                Order.is_estimate == False, Order.archived == False))).all():  # noqa: E712
+            later[dev].append((oid, created))
+    rows = {}
+    for o in closed:
+        r = rows.setdefault(o.assigned_to_id, {"jobs_closed": 0, "value": 0.0, "comebacks": 0})
+        r["jobs_closed"] += 1
+        r["value"] += float(o.total or 0)
+        if o.device_id and any(oid != o.id and o.closed_at < c <= o.closed_at + timedelta(days=30)
+                               for oid, c in later[o.device_id]):
+            r["comebacks"] += 1
+    out = []
+    for eid, e in people.items():
+        if not e.active:
+            continue
+        r = rows.get(eid, {"jobs_closed": 0, "value": 0.0, "comebacks": 0})
+        out.append({"employee_id": eid, "name": e.name, **r, "value": round(r["value"], 2),
+                    "comeback_rate": round(r["comebacks"] / r["jobs_closed"] * 100, 1) if r["jobs_closed"] else None,
+                    "big_discounts": len(events["big_discounts"].get(eid, [])),
+                    "refunds": len(events["refunds"].get(eid, []))})
+    out.sort(key=lambda r: (-r["value"], r["name"]))
+    return out
+
+
+async def review_flag(db: AsyncSession, org_id: str, key: str) -> None:
+    row = await _row(db, org_id, lock=True)
+    if row is None:
+        row = AutomationSetting(org_id=org_id, key=SETTING_KEY, enabled=True, config={})
+        db.add(row)
+    done = [k for k in ((row.config or {}).get("watchdog_reviewed") or []) if k != key] + [key]
+    row.config = {**(row.config or {}), "watchdog_reviewed": done[-500:]}

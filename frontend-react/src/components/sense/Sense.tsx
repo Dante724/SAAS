@@ -9,12 +9,14 @@ import { money } from "../../pages/orders/types";
    deliberately plain (slate chip, one sapphire ✦) so it reads as part of the app, not a robot. */
 
 export type SenseFeature = "job_suggestions" | "deferred" | "ready_time_why" | "margin_check"
-  | "morning_brief" | "added_together" | "service_due";
+  | "morning_brief" | "added_together" | "service_due" | "watchdog";
+export type WatchdogCfg = { discount_pct: number; cash_tolerance: number };
 export type BriefCfg = { recipients: string[]; hour: number; email: boolean; push: boolean };
 export type SenseSettings = {
   enabled: boolean;
   features: Record<SenseFeature, boolean>;
   brief: BriefCfg;
+  watchdog: WatchdogCfg;
   learning?: { closed_jobs: number; needed: number; ready: boolean };   // owner only
 };
 
@@ -179,12 +181,32 @@ const FEATURE_ROWS: { group: string; rows: { k: SenseFeature; label: string; hin
   { group: "For you", rows: [
     { k: "morning_brief", label: "Morning Brief", hint: "Yesterday, today and what needs you, on your Today page" },
     { k: "margin_check", label: "Margin check", hint: "A note when a job makes far less than your usual margin" },
+    { k: "watchdog", label: "Watchdog and team scorecard", hint: "Unusual discounts, refunds, voids and cash shortfalls, for your eyes only" },
   ] },
 ];
 
 type Person = { id: string; name: string; active?: boolean };
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 const hourLabel = (h: number) => new Date(2000, 0, 1, h).toLocaleTimeString([], { hour: "numeric" });
+
+/** The owner's Watchdog thresholds. */
+function WatchdogControls({ s, busy, save }: { s: SenseSettings; busy: boolean; save: (p: { watchdog: Partial<WatchdogCfg> }) => void }) {
+  const w = s.watchdog;
+  const num = (v: string) => (v === "" ? undefined : Number(v));
+  return (
+    <div className="ml-1 mb-2 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl bg-slate-50 border border-slate-100 px-3.5 py-3 text-xs text-ink-secondary">
+      <label className="flex items-center gap-1.5">Big discount means
+        <input aria-label="Big discount percent" type="number" min={1} max={100} defaultValue={w.discount_pct} disabled={busy}
+          onBlur={(e) => { const v = num(e.target.value); if (v && v !== w.discount_pct) save({ watchdog: { discount_pct: v } }); }}
+          className="w-16 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs" />% or more</label>
+      <label className="flex items-center gap-1.5">Flag a drawer short by more than
+        <input aria-label="Cash tolerance" type="number" min={0} defaultValue={w.cash_tolerance} disabled={busy}
+          onBlur={(e) => { const v = num(e.target.value); if (v != null && v !== w.cash_tolerance) save({ watchdog: { cash_tolerance: v } }); }}
+          className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs" /></label>
+      <span className="w-full text-[11px] text-ink-tertiary">Only you see Watchdog. A flag needs at least 3 events and twice what others usually do, and it shows the records behind it.</span>
+    </div>
+  );
+}
 
 /** Who gets the brief, when, and how. Email and push stay off until the owner turns them on. */
 function BriefControls({ s, busy, save }: { s: SenseSettings; busy: boolean; save: (p: { brief: Partial<BriefCfg> }) => void }) {
@@ -239,7 +261,7 @@ export function SenseSettingsSection() {
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { loadSense(true).then(setS); }, []);
   if (!s) return null;
-  const save = async (patch: { enabled?: boolean; features?: Partial<Record<SenseFeature, boolean>>; brief?: Partial<BriefCfg> }) => {
+  const save = async (patch: { enabled?: boolean; features?: Partial<Record<SenseFeature, boolean>>; brief?: Partial<BriefCfg>; watchdog?: Partial<WatchdogCfg> }) => {
     if (busy) return;
     setBusy(true); setErr(null);
     try { const r = await api.put<SenseSettings>("/sense/settings", patch); setS(r); cached = Promise.resolve(r); }
@@ -275,7 +297,9 @@ export function SenseSettingsSection() {
                   <Toggle on={s.features[r.k]} label={r.label} busy={busy} disabled={!s.enabled} onClick={() => save({ features: { [r.k]: !s.features[r.k] } })} />
                 </div>
               )).flatMap((el, i) => g.rows[i].k === "morning_brief" && s.enabled && s.features.morning_brief
-                ? [el, <BriefControls key="brief" s={s} busy={busy} save={save} />] : [el])}
+                ? [el, <BriefControls key="brief" s={s} busy={busy} save={save} />]
+                : g.rows[i].k === "watchdog" && s.enabled && s.features.watchdog
+                  ? [el, <WatchdogControls key="watchdog" s={s} busy={busy} save={save} />] : [el])}
             </div>
           ))}
         </div>
@@ -408,5 +432,82 @@ export function ServiceDue({ orderId, onFlash, onChanged }: { orderId: string; o
         </div>
       ))}
     </div>
+  );
+}
+
+
+type Evidence = { date: string; ref?: string | null; what: string; pct?: number; amount: number };
+type Flag = { key: string; kind: string; employee_name: string; title: string; rule: string; count: number;
+  others_median: number | null; amount: number; evidence: Evidence[] };
+type ScoreRow = { employee_id: string; name: string; jobs_closed: number; value: number; comebacks: number;
+  comeback_rate: number | null; big_discounts: number; refunds: number };
+
+/** Today page, shop owner only: unusual money events per person, and the team scorecard. */
+export function WatchdogPanel() {
+  const { me } = useMe();
+  const owner = !!(me?.is_shop_owner || me?.is_owner);
+  const [d, setD] = useState<{ enabled: boolean; flags: Flag[]; scorecard: ScoreRow[]; window_days?: number } | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
+  const [team, setTeam] = useState(false);
+  const load = () => api.get<any>("/sense/watchdog").then(setD).catch(() => setD(null));
+  useEffect(() => { if (owner) load(); }, [owner]);  // eslint-disable-line react-hooks/exhaustive-deps
+  if (!owner || !d?.enabled) return null;
+  const review = async (key: string) => {
+    try { await api.post("/sense/watchdog/review", { key }); setD((x) => x && { ...x, flags: x.flags.filter((f) => f.key !== key) }); } catch { /* stays listed */ }
+  };
+  return (
+    <section aria-label="Watchdog" className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-ink-primary flex items-center gap-1.5"><Spark /> Watchdog</h3>
+        <span className="text-[11px] text-ink-tertiary">Last {d.window_days || 30} days · only you see this</span>
+        <button onClick={() => setTeam((v) => !v)} aria-expanded={team} className="ml-auto text-[11px] font-semibold text-ink-secondary hover:text-primary">{team ? "Hide team scorecard" : "Team scorecard"}</button>
+      </div>
+      {d.flags.length === 0 ? (
+        <div className="flex items-center gap-2 text-sm text-ink-tertiary"><M n="check_circle" c="text-base text-emerald-500" />Nothing unusual.</div>
+      ) : (
+        <ul className="space-y-2">
+          {d.flags.map((f) => (
+            <li key={f.key} className="rounded-xl border border-amber-200 bg-amber-50/60 px-3.5 py-2.5">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-amber-900">{f.title}</span>
+                <span className="text-xs tabular-nums text-amber-900/80">{f.count > 1 ? `${f.count} · ` : ""}{money(f.amount)}</span>
+                <button onClick={() => setOpen(open === f.key ? null : f.key)} aria-expanded={open === f.key} className="ml-auto text-[11px] underline decoration-dotted text-amber-900">Why?</button>
+                <button onClick={() => review(f.key)} className="text-[11px] font-semibold rounded-lg border border-amber-300 bg-white px-2 py-0.5 text-amber-900 hover:bg-amber-100">Mark reviewed</button>
+              </div>
+              {open === f.key && (
+                <div className="mt-2 text-[11px] text-amber-900/90 space-y-1">
+                  <div>{f.rule}.{f.others_median != null ? ` ${f.employee_name}: ${f.count}; others usually ${f.others_median}.` : ""} This is a pattern worth a conversation, not a conclusion.</div>
+                  <ul className="list-disc pl-4">
+                    {f.evidence.map((e, i) => <li key={i}>{e.date}{e.ref ? ` · ${e.ref}` : ""} · {e.what}{e.pct != null ? ` (${e.pct}%)` : ""} · {money(e.amount)}</li>)}
+                  </ul>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {team && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead><tr className="text-left text-[11px] text-ink-tertiary">
+              <th className="py-1.5 pr-3 font-medium">Person</th><th className="py-1.5 pr-3 font-medium text-right">Jobs closed</th>
+              <th className="py-1.5 pr-3 font-medium text-right">Value</th><th className="py-1.5 pr-3 font-medium text-right">Comebacks</th>
+              <th className="py-1.5 pr-3 font-medium text-right">Big discounts</th><th className="py-1.5 font-medium text-right">Refunds</th></tr></thead>
+            <tbody>
+              {d.scorecard.map((r) => (
+                <tr key={r.employee_id} className="border-t border-slate-100">
+                  <td className="py-1.5 pr-3 text-ink-primary">{r.name}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{r.jobs_closed}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{money(r.value)}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{r.comebacks}{r.comeback_rate != null ? ` (${r.comeback_rate}%)` : ""}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{r.big_discounts}</td>
+                  <td className="py-1.5 text-right tabular-nums">{r.refunds}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }

@@ -73,7 +73,7 @@ async def test_settings_default_on_and_only_the_owner_can_change_them(client, db
     s = (await client.get("/api/sense/settings", headers=H)).json()
     assert s["enabled"] is True
     assert s["features"] == {"job_suggestions": True, "deferred": True, "ready_time_why": True, "margin_check": True,
-                             "morning_brief": True, "added_together": True, "service_due": True}
+                             "morning_brief": True, "added_together": True, "service_due": True, "watchdog": True}
     assert s["brief"] == {"recipients": [], "hour": 7, "email": False, "push": False}   # nothing sent until asked
     assert s["learning"]["needed"] == 20 and s["learning"]["closed_jobs"] == 0 and s["learning"]["ready"] is False
 

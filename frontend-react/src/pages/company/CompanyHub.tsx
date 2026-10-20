@@ -5,7 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { useMe } from "../../context/Me";
 import Shell, { M } from "../../components/Shell";
 import { api } from "../../api/client";
-import { MorningBriefCard } from "../../components/sense/Sense";
+import { MorningBriefCard, WatchdogPanel } from "../../components/sense/Sense";
 import { Product, Service, Bundle, money } from "../inventory/types";
 import CategoryManager from "../../components/CategoryManager";
 import Pager from "../../components/Pager";
@@ -120,6 +120,7 @@ function Dashboard() {
       </div>
 
       <MorningBriefCard onOpen={(to) => navigate(to)} />
+      <WatchdogPanel />
 
       {/* Needs you — the action-first feed. Collapsible, but the count always shows
           so nothing waiting is ever hidden. Defaults open when there are items. */}

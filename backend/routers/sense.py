@@ -27,6 +27,12 @@ async def read_settings(db: AsyncSession = Depends(get_db),
     out = await sense.get_settings(db, current.org_id)
     if await is_shop_owner(db, current):         # the learning count is for the owner's settings page
         out["learning"] = await sense.learning(db, current.org_id)
+    else:
+        # Staff never learn whether Watchdog is on or where its lines are (so nobody can stay
+        # just under them), nor who else gets the brief.
+        out.pop("watchdog", None)
+        out.pop("brief", None)
+        out["features"].pop("watchdog", None)
     return out
 
 
@@ -38,6 +44,7 @@ class FeaturesIn(BaseModel):
     morning_brief: Optional[bool] = None
     added_together: Optional[bool] = None
     service_due: Optional[bool] = None
+    watchdog: Optional[bool] = None
 
 
 class BriefIn(BaseModel):
@@ -47,10 +54,16 @@ class BriefIn(BaseModel):
     push: Optional[bool] = None
 
 
+class WatchdogIn(BaseModel):
+    discount_pct: Optional[float] = Field(None, ge=1, le=100)
+    cash_tolerance: Optional[float] = Field(None, ge=0, le=1_000_000)
+
+
 class SettingsIn(BaseModel):
     enabled: Optional[bool] = None
     features: Optional[FeaturesIn] = None
     brief: Optional[BriefIn] = None
+    watchdog: Optional[WatchdogIn] = None
 
 
 @router.put("/settings")
@@ -70,7 +83,8 @@ async def update_settings(data: SettingsIn, db: AsyncSession = Depends(get_db),
     before = await sense.get_settings(db, current.org_id)
     after = await sense.save_settings(db, current.org_id, enabled=data.enabled,
                                       features=data.features.model_dump(exclude_none=True) if data.features else None,
-                                      brief=brief)
+                                      brief=brief,
+                                      watchdog=data.watchdog.model_dump(exclude_none=True) if data.watchdog else None)
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="sense.settings.update",
                        entity_type="organisation", entity_id=current.org_id,
                        diff={"before": before, "after": after})
@@ -138,14 +152,15 @@ async def margin(order_id: str, db: AsyncSession = Depends(get_db),
 @router.get("/brief")
 async def brief(db: AsyncSession = Depends(get_db), current: Employee = Depends(get_current_employee)):
     """Today's brief for the owner and the people the owner chose; nobody else."""
-    if not await is_shop_owner(db, current):
+    owner = await is_shop_owner(db, current)
+    if not owner:
         s = await sense.get_settings(db, current.org_id)
         if current.id not in (s["brief"]["recipients"] or []):
             raise HTTPException(403, "The morning brief is for the people the owner chose")
     if not await sense.is_on(db, current.org_id, "morning_brief"):
         return {"enabled": False}
     money = await has_perm(db, current, "can_view_finance")
-    return {"enabled": True, **await sense.build_brief(db, current.org_id, show_money=money)}
+    return {"enabled": True, **await sense.build_brief(db, current.org_id, show_money=money, owner=owner)}
 
 
 def _strip_prices(items: list, allowed: bool) -> list:
@@ -173,3 +188,34 @@ async def service_due(order_id: str, db: AsyncSession = Depends(get_db),
         return {"enabled": False, "items": []}
     items = await sense.service_due_for(db, o)
     return {"enabled": True, "items": _strip_prices(items, await has_perm(db, current, "can_view_item_prices"))}
+
+
+async def _owner_only(db: AsyncSession, current: Employee) -> None:
+    # Not a role permission on purpose: no role, however senior, sees Watchdog.
+    if not await is_shop_owner(db, current):
+        raise HTTPException(403, "Watchdog is for the shop owner only")
+
+
+@router.get("/watchdog")
+async def watchdog(db: AsyncSession = Depends(get_db), current: Employee = Depends(get_current_employee)):
+    await _owner_only(db, current)
+    if not await sense.is_on(db, current.org_id, "watchdog"):
+        return {"enabled": False, "flags": [], "scorecard": []}
+    return {"enabled": True, **await sense.watchdog(db, current.org_id)}
+
+
+class ReviewIn(BaseModel):
+    key: str = Field(max_length=200, pattern=r"^((big_discounts|refunds|voids):[\w-]+:\d{4}-\d{2}-\d{2}|cash_short:[\w-]+)$")
+    note: Optional[str] = Field(None, max_length=500)
+
+
+@router.post("/watchdog/review")
+async def review(data: ReviewIn, db: AsyncSession = Depends(get_db),
+                 current: Employee = Depends(require_perm("can_manage_settings"))):
+    await _owner_only(db, current)
+    await sense.review_flag(db, current.org_id, data.key)
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="watchdog.flag.review",
+                       entity_type="organisation", entity_id=current.org_id,
+                       diff={"key": data.key, "note": data.note})
+    await db.commit()
+    return {"ok": True}

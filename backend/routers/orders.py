@@ -2259,7 +2259,8 @@ async def duplicate_order(
             technician_id=l.technician_id, work_share=l.work_share,
             warranty_days=l.warranty_days, discount=l.discount, discount_type=l.discount_type,
             discount_paid_by=l.discount_paid_by, tax_id=l.tax_id, tax_rate=l.tax_rate,
-            tax_mode=l.tax_mode, total=l.total, pending_stock=0.0)
+            tax_mode=l.tax_mode, total=l.total, pending_stock=0.0,
+            discount_by_id=l.discount_by_id)   # a copied discount stays with whoever gave it
         new_lines.append(nl)
         if l.line_type == "labour":
             labour += l.total
