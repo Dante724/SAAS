@@ -64,8 +64,10 @@ if settings.is_sqlite:
 
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
-from backend.db import tenancy  # noqa: E402,F401 — registers the cross-tenant reference guard
-from backend.db import actors  # noqa: E402,F401 — records who discounted, refunded, closed a drawer
+from backend.db import (
+    actors,  # noqa: E402,F401 — records who discounted, refunded, closed a drawer
+    tenancy,  # noqa: E402,F401 — registers the cross-tenant reference guard
+)
 
 
 class Base(DeclarativeBase):

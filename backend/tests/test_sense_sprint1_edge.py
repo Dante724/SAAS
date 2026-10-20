@@ -2,10 +2,12 @@
 one price per job, long complaints, tax-free margin, deferred work shown once."""
 import uuid
 from datetime import datetime, timedelta
+
 import pytest
 from sqlalchemy import select
+
 from backend.services import sense
-from backend.tests.test_sense_sprint1 import _register, _closed_job, _history
+from backend.tests.test_sense_sprint1 import _closed_job, _history, _register
 
 pytestmark = pytest.mark.asyncio
 
@@ -17,7 +19,8 @@ async def _job(db, org_id, complaint, lines, days_ago=10, **kw):
     when = datetime.utcnow() - timedelta(days=days_ago)
     o = Order(org_id=org_id, order_number=f"E-{uuid.uuid4().hex[:8]}", location_id=loc, complaint=complaint,
               status="closed", created_at=when, closed_at=when, **kw)
-    db.add(o); await db.flush()
+    db.add(o)
+    await db.flush()
     for d, p, c, q, ref, tot in lines:
         db.add(OrderLine(order_id=o.id, line_type="labour", kind="service", description=d, qty=q,
                          unit_price=p, cost_price=c, ref_id=ref, total=tot if tot is not None else p * q))
@@ -31,7 +34,8 @@ async def _base(client, db, batteries=20):
 
 
 async def test_stopword_only_and_numbers_only_say_nothing(client, db):
-    H, org = await _register(client); await _history(db, org)
+    H, org = await _register(client)
+    await _history(db, org)
     for c in ["the and for with", "   ", "13", "on it"]:
         r = await sense.draft_lines(db, org, c)
         assert r == {"learning": False, "items": []}, (c, r)
@@ -57,7 +61,7 @@ async def test_accented_complaint_matches(client, db):
 
 async def test_catalog_and_custom_line_with_same_name_merge(client, db):
     H, org = await _base(client, db)
-    for i in range(6):
+    for _ in range(6):
         await _job(db, org, "cracked screen", [("Screen replacement", 129, 60, 1, "svc-1", None)])
         await _job(db, org, "cracked screen", [("Screen replacement", 129, 60, 1, None, None)])
     await db.commit()
@@ -99,15 +103,19 @@ async def test_exactly_min_closed_jobs_is_ready(client, db):
 
 
 async def test_long_natural_complaint_still_matches(client, db):
-    H, org = await _register(client); await _history(db, org)
+    H, org = await _register(client)
+    await _history(db, org)
     r = await sense.draft_lines(db, org, "Customer dropped her phone yesterday, screen cracked badly and touch unresponsive in one corner")
     assert r["items"], "long complaints dilute Jaccard below 0.25"
 
 
 async def test_margin_qty_and_zero_revenue(client, db):
-    H, org = await _register(client); await _history(db, org)
-    o = await _job(db, org, "x", [("Part", 50, 20, 2, None, 100)]); o.closed_at = None
-    z = await _job(db, org, "x", [("Warranty", 0, 30, 1, None, 0)]); z.closed_at = None
+    H, org = await _register(client)
+    await _history(db, org)
+    o = await _job(db, org, "x", [("Part", 50, 20, 2, None, 100)])
+    o.closed_at = None
+    z = await _job(db, org, "x", [("Warranty", 0, 30, 1, None, 0)])
+    z.closed_at = None
     await db.commit()
     assert (await sense.margin_check(db, o))["margin_pct"] == 60.0
     m = await sense.margin_check(db, z)
@@ -115,19 +123,23 @@ async def test_margin_qty_and_zero_revenue(client, db):
 
 
 async def test_margin_ignores_imposed_tax(client, db):
-    H, org = await _register(client); await _history(db, org)
+    H, org = await _register(client)
+    await _history(db, org)
     o = await _job(db, org, "x", [("Screen", 100, 90, 1, None, 120)])   # 20% tax imposed -> total 120
-    o.closed_at = None; await db.commit()
+    o.closed_at = None
+    await db.commit()
     assert (await sense.margin_check(db, o))["margin_pct"] == 10.0
 
 
 async def test_deferred_no_device_no_client_and_client_fallback(client, db):
-    from backend.models import Recommendation, Device
+    from backend.models import Device, Recommendation
     H, org = await _register(client)
     cid = (await client.post("/api/clients", json={"name": "Jo", "phone": "5551112222"}, headers=H)).json()["id"]
     bare = await _job(db, org, "x", [])
     assert await sense.deferred_for(db, bare) == []
-    dev = Device(org_id=org, client_id=cid, brand="A", model="B"); db.add(dev); await db.flush()
+    dev = Device(org_id=org, client_id=cid, brand="A", model="B")
+    db.add(dev)
+    await db.flush()
     old = await _job(db, org, "x", [], client_id=cid, device_id=dev.id)
     db.add(Recommendation(org_id=org, order_id=old.id, title="Tyres", status="declined", decline_reason="not_now"))
     old2 = await _job(db, org, "x", [], client_id=cid, device_id=dev.id)
@@ -141,7 +153,9 @@ async def test_deferred_no_device_no_client_and_client_fallback(client, db):
 async def test_deferred_work_done_on_a_later_visit_drops_off(client, db):
     from backend.models import Device, Recommendation
     H, org = await _register(client)
-    dev = Device(org_id=org, brand="A", model="B"); db.add(dev); await db.flush()
+    dev = Device(org_id=org, brand="A", model="B")
+    db.add(dev)
+    await db.flush()
     old = await _job(db, org, "x", [], device_id=dev.id, days_ago=200)
     db.add(Recommendation(org_id=org, order_id=old.id, title="Front tyres", status="declined", decline_reason="not_now"))
     await _job(db, org, "x", [("Front tyres", 340, 200, 1, None, None)], device_id=dev.id, days_ago=50)
@@ -153,7 +167,9 @@ async def test_deferred_work_done_on_a_later_visit_drops_off(client, db):
 async def test_deferred_work_already_on_this_job_is_not_offered_again(client, db):
     from backend.models import Device, Recommendation
     H, org = await _register(client)
-    dev = Device(org_id=org, brand="A", model="B"); db.add(dev); await db.flush()
+    dev = Device(org_id=org, brand="A", model="B")
+    db.add(dev)
+    await db.flush()
     old = await _job(db, org, "x", [], device_id=dev.id, days_ago=200)
     db.add(Recommendation(org_id=org, order_id=old.id, title="Back glass", status="declined", decline_reason="not_now"))
     new = await _job(db, org, "x", [], device_id=dev.id, days_ago=0)

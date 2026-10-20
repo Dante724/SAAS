@@ -8,8 +8,15 @@ from sqlalchemy import select
 
 from backend.services import notification_rules as nr
 from backend.services import sense_agents as agents
-from backend.tests.test_sense_sprint4 import (NOON, _customer, _logs, _overdue_invoice, _shop,
-                                              _turn_on, sent)  # noqa: F401 — fixture
+from backend.tests.test_sense_sprint4 import (
+    NOON,
+    _customer,
+    _logs,
+    _overdue_invoice,
+    _shop,
+    _turn_on,  # noqa: F401 — fixture
+    sent,
+)
 
 UTC_SHOP = None
 

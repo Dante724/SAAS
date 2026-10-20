@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from backend.services import sense
 from backend.tests.test_sense_sprint1 import _closed_job, _history, _register, _staff
-from backend.tests.test_sense_sprint2 import _open_job, _org, _emp_id, outbox, _services_every_180_days  # noqa: F401
+from backend.tests.test_sense_sprint2 import _emp_id, _open_job, _org, _services_every_180_days, outbox  # noqa: F401
 
 
 async def _job_at(db, org_id, when, **kw):
@@ -93,8 +93,9 @@ async def test_money_refunds_partial_and_invoice_statuses(client, db):
     now = datetime(2026, 10, 20, 12, 0)                          # IST 17:30; yesterday = Oct 19 IST
     yd = datetime(2026, 10, 19, 6, 0)
     past = now - timedelta(days=3)
-    mk = lambda st, tot, paid, due=past, org=org_id: Invoice(org_id=org, invoice_number=f"I-{uuid.uuid4().hex[:5]}",
-                                                             status=st, total=tot, amount_paid=paid, due_at=due)
+    def mk(st, tot, paid, due=past, org=org_id):
+        return Invoice(org_id=org, invoice_number=f"I-{uuid.uuid4().hex[:5]}",
+                       status=st, total=tot, amount_paid=paid, due_at=due)
     inv = mk("issued", 500, 120)                                 # partial: owes 380
     db.add_all([inv, mk("cancelled", 1000, 0), mk("draft", 1000, 0), mk("paid", 1000, 1000),
                 mk("issued", 1000, 1000), mk("issued", 1000, 0, due=now + timedelta(days=1)),
@@ -117,8 +118,10 @@ async def test_money_refunds_partial_and_invoice_statuses(client, db):
 async def test_stuck_excludes_estimates_closed_archived(client, db):
     H, org_id = await _register(client)
     await _open_job(db, org_id, days_in_status=10, estimate=True, created_days=100)
-    a = await _open_job(db, org_id, days_in_status=10); a.archived = True
-    c = await _open_job(db, org_id, days_in_status=10); c.closed_at = datetime.utcnow()
+    a = await _open_job(db, org_id, days_in_status=10)
+    a.archived = True
+    c = await _open_job(db, org_id, days_in_status=10)
+    c.closed_at = datetime.utcnow()
     await _open_job(db, org_id, days_in_status=4)
     await db.commit()
     b = await sense.build_brief(db, org_id, show_money=True)
@@ -185,7 +188,8 @@ async def test_service_interval_below_14_days_ignored(client, db):
     await _history(db, org_id)
     devs = []
     for _ in range(3):
-        d = await _device(db, org_id); devs.append(d)
+        d = await _device(db, org_id)
+        devs.append(d)
         for v in range(3):
             await _closed_job(db, org_id, "S", [("Wash", 10, 1)], device_id=d.id, days_ago=5 + 10 * v)
     o = await _open_job(db, org_id, device_id=devs[0].id)
