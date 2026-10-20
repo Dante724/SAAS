@@ -59,9 +59,10 @@ def _shape(row: Optional[AutomationSetting]) -> dict:
     feats = cfg.get("features") or {}
     brief = {**BRIEF_DEFAULTS, **{k: v for k, v in (cfg.get("brief") or {}).items() if k in BRIEF_DEFAULTS}}
     wd = {**WATCHDOG_DEFAULTS, **{k: v for k, v in (cfg.get("watchdog") or {}).items() if k in WATCHDOG_DEFAULTS}}
+    from backend.services.sense_agents import agent_settings
     return {"enabled": True if row is None else bool(row.enabled),
             "features": {f: bool(feats.get(f, True)) for f in FEATURES},
-            "brief": brief, "watchdog": wd}
+            "brief": brief, "watchdog": wd, "agents": agent_settings(cfg)}
 
 
 async def get_settings(db: AsyncSession, org_id: str) -> dict:
@@ -70,7 +71,7 @@ async def get_settings(db: AsyncSession, org_id: str) -> dict:
 
 async def save_settings(db: AsyncSession, org_id: str, *, enabled: Optional[bool],
                         features: Optional[dict], brief: Optional[dict] = None,
-                        watchdog: Optional[dict] = None) -> dict:
+                        watchdog: Optional[dict] = None, agents: Optional[dict] = None) -> dict:
     """`brief` recipients must already be checked to be active people in this shop."""
     row = await _row(db, org_id, lock=True)
     if row is None:
@@ -88,7 +89,16 @@ async def save_settings(db: AsyncSession, org_id: str, *, enabled: Optional[bool
         if k in BRIEF_DEFAULTS and v is not None:
             new_brief[k] = v
     new_wd = {**cur["watchdog"], **{k: v for k, v in (watchdog or {}).items() if k in WATCHDOG_DEFAULTS and v is not None}}
-    row.config = {**(row.config or {}), "features": feats, "brief": new_brief, "watchdog": new_wd}
+    from backend.services.sense_agents import AGENT_DEFAULTS
+    new_agents = {k: dict(v) for k, v in cur["agents"].items() if k in AGENT_DEFAULTS}
+    new_agents["daily_cap"] = cur["agents"]["daily_cap"]
+    for k, v in (agents or {}).items():
+        if k == "daily_cap" and v is not None:
+            new_agents["daily_cap"] = int(v)
+        elif k in AGENT_DEFAULTS and isinstance(v, dict):
+            new_agents[k].update({x: y for x, y in v.items() if x in AGENT_DEFAULTS[k] and y is not None})
+    row.config = {**(row.config or {}), "features": feats, "brief": new_brief, "watchdog": new_wd,
+                  "agents": new_agents}
     return _shape(row)
 
 
@@ -560,6 +570,9 @@ async def _service_history(db: AsyncSession, org_id: str):
 
 
 async def _read_service_history(db: AsyncSession, org_id: str):
+    from backend.models import Organisation
+    org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
+    tz = _tz(org)       # visit days in the shop's own calendar, the same one "today" uses
     since = datetime.utcnow() - timedelta(days=SERVICE_HISTORY_DAYS)
     rows = (await db.execute(
         select(Order.device_id, Order.closed_at, OrderLine.description, OrderLine.unit_price)
@@ -574,7 +587,7 @@ async def _read_service_history(db: AsyncSession, org_id: str):
         k = _norm(desc)
         if not k:
             continue
-        visits[k][dev].add(when.date())
+        visits[k][dev].add(when.replace(tzinfo=timezone.utc).astimezone(tz).date())
         prices[k].append(float(price or 0))
         names.setdefault(k, desc.strip())
     return visits, prices, names

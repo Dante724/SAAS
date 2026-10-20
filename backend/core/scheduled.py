@@ -150,3 +150,32 @@ async def sweep_morning_briefs() -> None:
                 log.exception("sense-brief-sweep failed for org %s", oid)
         if sent:
             log.info("sense-brief-sweep: sent %d brief(s)", sent)
+
+
+
+@job_runner.every(3600, "sense-agents-sweep")
+async def sweep_sense_agents() -> None:
+    """Tekly Sense agents: draft (or schedule) collections, quote follow-up and win-back
+    messages for shops that turned an agent on. Sending happens in notification-sweep, which
+    re-checks consent, opening hours and the switches at the moment of sending."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.models import AutomationSetting, Organisation
+    from backend.services import sense, sense_agents
+
+    if sense_agents.platform_off():
+        return
+    async with AsyncSessionLocal() as db:
+        org_ids = (await db.execute(
+            select(AutomationSetting.org_id)
+            .join(Organisation, Organisation.id == AutomationSetting.org_id)
+            .where(AutomationSetting.key == sense.SETTING_KEY, AutomationSetting.enabled == True,  # noqa: E712
+                   Organisation.active == True))).scalars().all()  # noqa: E712
+        made = 0
+        for oid in org_ids:
+            try:
+                made += await sense_agents.run_agents(db, oid)
+            except Exception:  # noqa: BLE001 — one bad org never stalls the sweep
+                await db.rollback()
+                log.exception("sense-agents-sweep failed for org %s", oid)
+        if made:
+            log.info("sense-agents-sweep: %d message(s) drafted or scheduled", made)

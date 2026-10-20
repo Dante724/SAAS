@@ -154,6 +154,8 @@ class Settings(BaseSettings):
 
     # -- Public base URL for shareable links (payment pages, portals). Empty -> relative. --
     PUBLIC_BASE_URL: str = ""
+    # -- Tekly Sense: platform-wide stop for every shop's automatic customer messages. --
+    SENSE_AGENTS_DISABLED: bool = False
 
     # -- Build 144ce: bootstrap platform-admin account for the /admin portal. --
     PLATFORM_ADMIN_EMAIL: str = ""
