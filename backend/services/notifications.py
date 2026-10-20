@@ -30,7 +30,7 @@ class ChannelAdapter:
     """Base adapter. Real providers subclass and implement send()."""
     name = "base"
 
-    async def send(self, *, recipient: str, subject: Optional[str], body: str) -> dict:
+    async def send(self, *, recipient: str, subject: Optional[str], body: str, headers: Optional[dict] = None) -> dict:
         raise NotImplementedError
 
 
@@ -39,7 +39,7 @@ class SimulatedAdapter(ChannelAdapter):
     def __init__(self, channel: str):
         self.name = channel
 
-    async def send(self, *, recipient: str, subject: Optional[str], body: str) -> dict:
+    async def send(self, *, recipient: str, subject: Optional[str], body: str, headers: Optional[dict] = None) -> dict:
         if not recipient:
             return {"status": "failed", "error": "No recipient address/number on file"}
         from backend.config import settings
@@ -63,7 +63,7 @@ class SmtpEmailAdapter(ChannelAdapter):
     def __init__(self, creds: Optional[dict] = None):
         self.creds = creds or {}   # 144jn: this shop's own SMTP settings
 
-    async def send(self, *, recipient: str, subject: Optional[str], body: str) -> dict:
+    async def send(self, *, recipient: str, subject: Optional[str], body: str, headers: Optional[dict] = None) -> dict:
         if not recipient:
             return {"status": "failed", "error": "No email address on file"}
         import asyncio
@@ -89,6 +89,8 @@ class SmtpEmailAdapter(ChannelAdapter):
             msg["Subject"] = subject or "Update on your order"
             msg["From"] = from_addr
             msg["To"] = recipient
+            for hk, hv in (headers or {}).items():   # e.g. List-Unsubscribe on Tekly Sense emails
+                msg[hk] = hv
             try:
                 with smtplib.SMTP(host, port, timeout=10) as s:
                     if use_tls:
@@ -109,7 +111,7 @@ class TwilioAdapter(ChannelAdapter):
         self.name = channel  # 'sms' or 'whatsapp'
         self.creds = creds or {}   # 144jn: this shop's own Twilio account
 
-    async def send(self, *, recipient: str, subject: Optional[str], body: str) -> dict:
+    async def send(self, *, recipient: str, subject: Optional[str], body: str, headers: Optional[dict] = None) -> dict:
         if not recipient:
             return {"status": "failed", "error": "No phone number on file"}
         from backend.config import settings

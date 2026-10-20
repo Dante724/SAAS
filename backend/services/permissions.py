@@ -44,6 +44,7 @@ CATALOG = {
         ("can_add_without_stock", "Add products without deduction"),
         ("can_create_payment_links", "Create payment links"),
         ("can_use_sense_suggestions", "See Tekly Sense suggestions on jobs"),
+        ("can_approve_agent_sends", "Approve automatic customer messages (Tekly Sense)"),
     ],
     "Inventory": [
         ("can_manage_inventory", "Manage inventory (stock, POs, receiving)"),
@@ -156,7 +157,7 @@ _NOT_FOR_STAFF = {
     "can_see_asset_cost": False,
 }
 TEMPLATES = {
-    "Full access": {"can_use_sense_suggestions": True},   # nothing denied
+    "Full access": {"can_use_sense_suggestions": True, "can_approve_agent_sends": True},   # nothing denied
     "Manager": {"can_delete_transactions": False, "can_manage_roles": False,
                 "can_use_sense_suggestions": True},
     "Partner": {"can_manage_settings": False, "can_manage_roles": False,
@@ -167,7 +168,7 @@ TEMPLATES = {
 
 
 # Codes that were always opt-in (only an explicit True grants them), even for legacy roles.
-OPT_IN = {"can_override_reservation", "can_use_sense_suggestions"}
+OPT_IN = {"can_override_reservation", "can_use_sense_suggestions", "can_approve_agent_sends"}
 
 
 def role_allows(role, perm_key: str) -> bool:

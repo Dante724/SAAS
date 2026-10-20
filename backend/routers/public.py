@@ -1543,3 +1543,44 @@ async def status_widget_js():
 })();"""
     return Response(content=js, media_type="application/javascript",
                     headers={"Cache-Control": "public, max-age=3600"})
+
+
+# ── Tekly Sense: one-click unsubscribe from a shop's automatic emails ─────────────
+_UNSUB_PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Unsubscribe</title><style>body{{font-family:-apple-system,system-ui,sans-serif;max-width:420px;margin:12vh auto;padding:0 20px;color:#14213f}}
+button{{background:#1e40af;color:#fff;border:0;border-radius:10px;padding:12px 18px;font-size:15px;cursor:pointer}}</style></head>
+<body>{body}</body></html>"""
+
+
+@router.get("/unsubscribe/{token}")
+async def unsubscribe_page(token: str, request: Request):
+    """Shows a confirm button. Opening the link changes nothing (mail scanners open links)."""
+    from backend.core.webhook_security import client_ip
+    from backend.services.ratelimit import aenforce
+    from backend.services.sense_agents import read_unsubscribe_token
+    await aenforce("unsub_ip", client_ip(request), 30, 600)
+    if not read_unsubscribe_token(token[:300]):
+        raise HTTPException(404, "This link isn't valid")
+    return _unsub_html(
+        "<h2>Stop emails from this shop?</h2><p>You won't get emails from this shop any more, "
+        "including reminders, offers and job updates.</p>"
+        '<form method="post"><button type="submit">Unsubscribe</button></form>')
+
+
+@router.post("/unsubscribe/{token}")
+async def unsubscribe_confirm(token: str, request: Request, db: AsyncSession = Depends(get_db)):
+    from backend.core.webhook_security import client_ip
+    from backend.services.ratelimit import aenforce
+    from backend.services.sense_agents import read_unsubscribe_token, unsubscribe
+    await aenforce("unsub_ip", client_ip(request), 30, 600)
+    ids = read_unsubscribe_token(token[:300])
+    if not ids or not await unsubscribe(db, *ids):
+        raise HTTPException(404, "This link isn't valid")
+    await db.commit()
+    return _unsub_html("<h2>You're unsubscribed.</h2><p>You won't get emails from this shop any more.</p>")
+
+
+def _unsub_html(body: str):
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(_UNSUB_PAGE.format(body=body), headers={
+        "Referrer-Policy": "no-referrer", "Cache-Control": "no-store", "X-Robots-Tag": "noindex"})

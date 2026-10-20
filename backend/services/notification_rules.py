@@ -30,10 +30,13 @@ from backend.models import (
 from backend.services.notifications import _adapter_for, channel_consented, notif_creds
 
 
-async def _send(db, org_id, channel, *, recipient, subject, body):
+async def _send(db, org_id, channel, *, recipient, subject, body, headers=None):
     """144jn: send through THIS shop's own provider credentials (per-tenant)."""
     creds = await notif_creds(db, org_id, channel)
-    return await _adapter_for(channel, creds).send(recipient=recipient, subject=subject, body=body)
+    adapter = _adapter_for(channel, creds)
+    if headers:
+        return await adapter.send(recipient=recipient, subject=subject, body=body, headers=headers)
+    return await adapter.send(recipient=recipient, subject=subject, body=body)
 
 WORK_START_MIN = 9 * 60      # 09:00
 WORK_END_MIN = 18 * 60       # 18:00
@@ -289,6 +292,19 @@ async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = No
             log.status = "skipped"
             await db.commit()
             continue
+        # Tekly Sense agent messages: the agent must still be on (and the platform switch off),
+        # win-back still needs marketing consent, and nothing goes outside opening hours.
+        if (log.trigger_event or "").startswith("agent."):
+            from backend.services import sense_agents
+            verdict, why = await sense_agents.send_check(db, org_id, log, now)
+            if verdict == "later":
+                log.send_at = why
+                await db.commit()
+                continue
+            if verdict == "stop":
+                log.status, log.error = "skipped", why
+                await db.commit()
+                continue
         # Consent is checked again at send time: a customer who replied STOP after this
         # message was queued must not receive it.
         if log.client_id:
@@ -311,8 +327,14 @@ async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = No
         await db.commit()
         if claimed.rowcount == 0:
             continue
+        extra = {}
+        if (log.trigger_event or "").startswith("agent."):
+            from backend.services.sense_agents import email_headers
+            h = email_headers(log)
+            if h:
+                extra["headers"] = h
         result = await _send(db, org_id, log.channel,
-            recipient=log.recipient, subject=log.subject, body=log.body)
+            recipient=log.recipient, subject=log.subject, body=log.body, **extra)
         log.status = result["status"]
         log.error = result.get("error")
         await db.commit()

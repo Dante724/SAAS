@@ -5,7 +5,7 @@ shop owner can change them. Suggestions need `can_use_sense_suggestions`; the ma
 needs see-profit and purchase-price; every order route checks the order is in the caller's
 shop and visible to them.
 """
-from typing import Optional
+from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -32,6 +32,7 @@ async def read_settings(db: AsyncSession = Depends(get_db),
         # just under them), nor who else gets the brief.
         out.pop("watchdog", None)
         out.pop("brief", None)
+        out.pop("agents", None)
         out["features"].pop("watchdog", None)
     return out
 
@@ -59,8 +60,28 @@ class WatchdogIn(BaseModel):
     cash_tolerance: Optional[float] = Field(None, ge=0, le=1_000_000)
 
 
+class AgentIn(BaseModel):
+    on: Optional[bool] = None
+    auto_send: Optional[bool] = None
+    wait_days: Optional[int] = Field(None, ge=1, le=60)
+    months: Optional[int] = Field(None, ge=3, le=36)
+    channel: Optional[str] = Field(None, pattern="^(sms|email)$")   # WhatsApp needs approved templates first
+
+
+class WinBackIn(AgentIn):
+    channel: Optional[str] = Field(None, pattern="^email$")   # marketing texts need written consent per channel
+
+
+class AgentsIn(BaseModel):
+    collections: Optional[AgentIn] = None
+    quote_followup: Optional[AgentIn] = None
+    win_back: Optional[WinBackIn] = None
+    daily_cap: Optional[int] = Field(None, ge=1, le=500)
+
+
 class SettingsIn(BaseModel):
     enabled: Optional[bool] = None
+    agents: Optional[AgentsIn] = None
     features: Optional[FeaturesIn] = None
     brief: Optional[BriefIn] = None
     watchdog: Optional[WatchdogIn] = None
@@ -84,7 +105,8 @@ async def update_settings(data: SettingsIn, db: AsyncSession = Depends(get_db),
     after = await sense.save_settings(db, current.org_id, enabled=data.enabled,
                                       features=data.features.model_dump(exclude_none=True) if data.features else None,
                                       brief=brief,
-                                      watchdog=data.watchdog.model_dump(exclude_none=True) if data.watchdog else None)
+                                      watchdog=data.watchdog.model_dump(exclude_none=True) if data.watchdog else None,
+                                      agents=data.agents.model_dump(exclude_none=True) if data.agents else None)
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="sense.settings.update",
                        entity_type="organisation", entity_id=current.org_id,
                        diff={"before": before, "after": after})
@@ -219,3 +241,44 @@ async def review(data: ReviewIn, db: AsyncSession = Depends(get_db),
                        diff={"key": data.key, "note": data.note})
     await db.commit()
     return {"ok": True}
+
+
+# ── Agents: drafts waiting for the OK ────────────────────────────────────────────
+@router.get("/agents/drafts")
+async def agent_drafts(db: AsyncSession = Depends(get_db),
+                       current: Employee = Depends(require_perm("can_approve_agent_sends"))):
+    from backend.models import Client, NotificationLog
+    rows = (await db.execute(
+        select(NotificationLog, Client.name).outerjoin(Client, Client.id == NotificationLog.client_id)
+        .where(NotificationLog.org_id == current.org_id, NotificationLog.status == "draft",
+               NotificationLog.trigger_event.like("agent.%"))
+        .order_by(NotificationLog.created_at).limit(200))).all()
+    return {"items": [{"id": m.id, "agent": (m.trigger_event or "").split(":", 1)[0].removeprefix("agent."),
+                       "customer": name, "channel": m.channel, "recipient": m.recipient, "body": m.body,
+                       "created_at": m.created_at.isoformat() if m.created_at else None} for m, name in rows]}
+
+
+class DraftIdsIn(BaseModel):
+    ids: list[Annotated[str, Field(max_length=64)]] = Field(max_length=200)
+
+
+@router.post("/agents/drafts/approve")
+async def approve_drafts(data: DraftIdsIn, db: AsyncSession = Depends(get_db),
+                         current: Employee = Depends(require_perm("can_approve_agent_sends"))):
+    from backend.services import sense_agents
+    n = await sense_agents.approve(db, current.org_id, data.ids)
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="sense.agent.send_batch",
+                       entity_type="organisation", entity_id=current.org_id, diff={"approved": n})
+    await db.commit()
+    return {"approved": n}
+
+
+@router.post("/agents/drafts/discard")
+async def discard_drafts(data: DraftIdsIn, db: AsyncSession = Depends(get_db),
+                         current: Employee = Depends(require_perm("can_approve_agent_sends"))):
+    from backend.services import sense_agents
+    n = await sense_agents.discard(db, current.org_id, data.ids)
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="sense.agent.discard_batch",
+                       entity_type="organisation", entity_id=current.org_id, diff={"discarded": n})
+    await db.commit()
+    return {"discarded": n}

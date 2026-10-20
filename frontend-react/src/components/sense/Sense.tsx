@@ -11,12 +11,16 @@ import { money } from "../../pages/orders/types";
 export type SenseFeature = "job_suggestions" | "deferred" | "ready_time_why" | "margin_check"
   | "morning_brief" | "added_together" | "service_due" | "watchdog";
 export type WatchdogCfg = { discount_pct: number; cash_tolerance: number };
+type AgentKey = "collections" | "quote_followup" | "win_back";
+type AgentCfg = { on: boolean; auto_send: boolean; wait_days?: number; months?: number; channel: "sms" | "email" };
+export type AgentsCfg = Record<AgentKey, AgentCfg> & { daily_cap: number };
 export type BriefCfg = { recipients: string[]; hour: number; email: boolean; push: boolean };
 export type SenseSettings = {
   enabled: boolean;
   features: Record<SenseFeature, boolean>;
   brief: BriefCfg;
   watchdog: WatchdogCfg;
+  agents: AgentsCfg;
   learning?: { closed_jobs: number; needed: number; ready: boolean };   // owner only
 };
 
@@ -208,6 +212,54 @@ function WatchdogControls({ s, busy, save }: { s: SenseSettings; busy: boolean; 
   );
 }
 
+const AGENT_ROWS: { k: AgentKey; label: string; hint: string; wait: "wait_days" | "months" }[] = [
+  { k: "collections", label: "Collections", hint: "Reminds customers about overdue invoices", wait: "wait_days" },
+  { k: "quote_followup", label: "Quote follow-up", hint: "Nudges customers who haven't answered a quote", wait: "wait_days" },
+  { k: "win_back", label: "Win-back", hint: "Invites back customers who gave marketing consent and haven't been in a while", wait: "months" },
+];
+
+/** Customers: the follow-up agents. Off, and asking before every send, until the owner says otherwise. */
+function AgentControls({ s, busy, save }: { s: SenseSettings; busy: boolean; save: (p: { agents: any }) => void }) {
+  const a = s.agents;
+  return (
+    <div className={s.enabled ? "" : "opacity-50"}>
+      <div className="pt-2 text-[11px] font-semibold text-ink-tertiary">Customers</div>
+      {AGENT_ROWS.map((r) => {
+        const c = a[r.k];
+        return (
+          <div key={r.k} className="py-2.5 border-t border-slate-100 first:border-0">
+            <div className="flex items-center gap-3">
+              <span className="min-w-0"><span className="block text-sm text-ink-primary">{r.label}</span><span className="block text-[11px] text-ink-tertiary">{r.hint}</span></span>
+              <Toggle on={c.on} label={r.label} busy={busy} disabled={!s.enabled} onClick={() => save({ agents: { [r.k]: { on: !c.on } } })} />
+            </div>
+            {c.on && (
+              <div className="mt-2 ml-1 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl bg-slate-50 border border-slate-100 px-3.5 py-2.5 text-xs text-ink-secondary">
+                <label className="flex items-center gap-1.5"><input type="checkbox" checked={!c.auto_send} disabled={busy}
+                  onChange={() => save({ agents: { [r.k]: { auto_send: !c.auto_send } } })} /> Ask me before sending</label>
+                <label className="flex items-center gap-1.5">{r.wait === "months" ? "After" : "Wait"}
+                  <input aria-label={`${r.label} wait`} type="number" min={1} defaultValue={r.wait === "months" ? c.months : c.wait_days} disabled={busy}
+                    onBlur={(e) => { const v = Number(e.target.value); if (v > 0 && v !== (r.wait === "months" ? c.months : c.wait_days)) save({ agents: { [r.k]: { [r.wait]: v } } }); }}
+                    className="w-14 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs" />{r.wait === "months" ? "months away" : r.k === "collections" ? "days after it's due" : "days"}</label>
+                <label className="flex items-center gap-1.5">By
+                  <select aria-label={`${r.label} channel`} value={c.channel} disabled={busy} onChange={(e) => save({ agents: { [r.k]: { channel: e.target.value } } })}
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs">
+                    {r.k !== "win_back" && <option value="sms">Text</option>}<option value="email">Email</option></select></label>
+                {r.k === "win_back" && <span className="w-full text-[11px] text-ink-tertiary">Email only, to customers who gave marketing consent. Your shop address from Settings goes at the bottom, as the law requires.</span>}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <div className="flex items-center gap-2 py-2 text-xs text-ink-secondary">At most
+        <input aria-label="Daily message cap" type="number" min={1} max={500} defaultValue={a.daily_cap} disabled={busy}
+          onBlur={(e) => { const v = Number(e.target.value); if (v > 0 && v !== a.daily_cap) save({ agents: { daily_cap: v } }); }}
+          className="w-16 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs" /> messages a day.
+        <span className="text-[11px] text-ink-tertiary">Each customer gets at most one every 3 days. Consent, opening hours and these switches are checked again right before sending, and every email has an unsubscribe link.</span>
+      </div>
+    </div>
+  );
+}
+
 /** Who gets the brief, when, and how. Email and push stay off until the owner turns them on. */
 function BriefControls({ s, busy, save }: { s: SenseSettings; busy: boolean; save: (p: { brief: Partial<BriefCfg> }) => void }) {
   const [people, setPeople] = useState<Person[]>([]);
@@ -261,7 +313,7 @@ export function SenseSettingsSection() {
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { loadSense(true).then(setS); }, []);
   if (!s) return null;
-  const save = async (patch: { enabled?: boolean; features?: Partial<Record<SenseFeature, boolean>>; brief?: Partial<BriefCfg>; watchdog?: Partial<WatchdogCfg> }) => {
+  const save = async (patch: { enabled?: boolean; features?: Partial<Record<SenseFeature, boolean>>; brief?: Partial<BriefCfg>; watchdog?: Partial<WatchdogCfg>; agents?: any }) => {
     if (busy) return;
     setBusy(true); setErr(null);
     try { const r = await api.put<SenseSettings>("/sense/settings", patch); setS(r); cached = Promise.resolve(r); }
@@ -303,6 +355,7 @@ export function SenseSettingsSection() {
             </div>
           ))}
         </div>
+        {s.agents && <AgentControls s={s} busy={busy} save={save} />}
         <p className="text-[11px] text-ink-tertiary">Staff see suggestions when their role has "See Tekly Sense suggestions on jobs" (Settings → Team).</p>
         {err && <p className="text-[11px] font-semibold text-status-overdue-ink">{err}</p>}
       </div>
@@ -508,6 +561,54 @@ export function WatchdogPanel() {
           </table>
         </div>
       )}
+    </section>
+  );
+}
+
+
+type Draft = { id: string; agent: string; customer?: string | null; channel: string; recipient?: string | null; body: string };
+const AGENT_LABEL: Record<string, string> = { collections: "Collections", quote_followup: "Quote follow-up", win_back: "Win-back" };
+
+/** Today page: customer messages the agents drafted, waiting for an OK. */
+export function AgentDraftsCard() {
+  const { can } = useMe();
+  const allowed = can("can_approve_agent_sends");
+  const [items, setItems] = useState<Draft[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = () => api.get<any>("/sense/agents/drafts").then((r) => setItems(r.items || [])).catch(() => setItems(null));
+  useEffect(() => { if (allowed) load(); }, [allowed]);  // eslint-disable-line react-hooks/exhaustive-deps
+  if (!allowed || !items?.length) return null;
+  const act = async (verb: "approve" | "discard", ids: string[]) => {
+    setBusy(true);
+    try { await api.post(`/sense/agents/drafts/${verb}`, { ids }); setItems((x) => (x || []).filter((d) => !ids.includes(d.id))); }
+    finally { setBusy(false); }
+  };
+  return (
+    <section aria-label="Messages waiting for your OK" className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-4 space-y-2.5">
+      <div className="flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-ink-primary flex items-center gap-1.5"><Spark /> Messages waiting for your OK</h3>
+        <span className="text-[11px] font-bold bg-blue-50 text-primary rounded-full px-1.5 py-0.5 leading-none">{items.length}</span>
+        <div className="ml-auto flex gap-1.5">
+          <button disabled={busy} onClick={() => act("approve", items.map((d) => d.id))} className="rounded-lg bg-primary px-2.5 py-1 text-[11px] font-semibold text-white disabled:opacity-50">Send all</button>
+          <button disabled={busy} onClick={() => act("discard", items.map((d) => d.id))} className="rounded-lg border border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-ink-secondary disabled:opacity-50">Discard all</button>
+        </div>
+      </div>
+      <ul className="space-y-1.5">
+        {items.map((d) => (
+          <li key={d.id} className="rounded-xl border border-slate-200/80 px-3 py-2">
+            <div className="flex items-center gap-2 text-[11px] text-ink-tertiary">
+              <span className="font-semibold text-ink-secondary">{AGENT_LABEL[d.agent] || d.agent}</span>
+              <span>· {d.customer || "Customer"} · {d.channel === "sms" ? "Text" : d.channel === "whatsapp" ? "WhatsApp" : "Email"}</span>
+              <span className="ml-auto flex gap-1.5">
+                <button disabled={busy} onClick={() => act("approve", [d.id])} className="rounded-md border border-primary/30 px-2 py-0.5 font-semibold text-primary disabled:opacity-50">Send</button>
+                <button disabled={busy} onClick={() => act("discard", [d.id])} className="rounded-md border border-slate-200 px-2 py-0.5 font-semibold text-ink-secondary disabled:opacity-50">Discard</button>
+              </span>
+            </div>
+            <p className="mt-1 whitespace-pre-line text-xs text-ink-primary">{d.body}</p>
+          </li>
+        ))}
+      </ul>
+      <p className="text-[11px] text-ink-tertiary">Sent inside opening hours. A customer who replies STOP or unsubscribes before then won't get it.</p>
     </section>
   );
 }
