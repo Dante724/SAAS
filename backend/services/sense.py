@@ -187,7 +187,7 @@ async def learning_ready(db: AsyncSession, org_id: str) -> bool:
 async def deferred_for(db: AsyncSession, order: Order, can_view=None) -> list[dict]:
     """Work the customer said "not now" to on earlier jobs for the same item (or, when this
     job has no item, for the same customer). Each piece of work appears once (the latest
-    time it was deferred) and drops off once a later job did it. `can_view(order)` drops
+    time it was deferred) and drops off once a later job did it or it is already on this job. `can_view(order)` drops
     earlier jobs the caller isn't allowed to open (own-orders-only roles, other branches,
     hidden statuses)."""
     if order.device_id:
@@ -210,7 +210,12 @@ async def deferred_for(db: AsyncSession, order: Order, can_view=None) -> list[di
         select(OrderLine.description, Order.created_at)
         .join(Order, Order.id == OrderLine.order_id)
         .where(Order.org_id == order.org_id, same).limit(2000))).all()
-    out, seen = [], set()
+    # Already on this job, as a recommendation (any state) or a line: nothing to bring back.
+    here = {_norm(t) for (t,) in (await db.execute(select(Recommendation.title).where(
+        Recommendation.org_id == order.org_id, Recommendation.order_id == order.id))).all()}
+    here |= {_norm(d) for (d,) in (await db.execute(select(OrderLine.description).where(
+        OrderLine.order_id == order.id))).all()}
+    out, seen = [], set(here)
     for r, src in rows:
         key = _norm(r.title)
         if key in seen:
