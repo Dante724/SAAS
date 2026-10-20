@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime as _dt
 from backend.db.database import get_db
@@ -590,7 +590,7 @@ async def portal_respond(token: str, order_id: str, data: AcceptIn, request: Req
 # ── Customer → shop messages (land in the work-order feed) — 144ba ──
 class MessageIn(BaseModel):
     body: str
-    name: Optional[str] = None
+    name: Optional[str] = Field(None, max_length=120)
 
 
 async def _can_sign(db: AsyncSession, order: "Order") -> bool:
@@ -775,11 +775,19 @@ async def _post_client_message(db: AsyncSession, order: "Order", body: str, who:
 
 
 @router.post("/track/{token}/message")
-async def track_message(token: str, data: MessageIn, db: AsyncSession = Depends(get_db)):
+async def track_message(token: str, data: MessageIn, request: Request,
+                        db: AsyncSession = Depends(get_db)):
+    from backend.core.webhook_security import client_ip
+    from backend.services.ratelimit import aenforce
+    await aenforce("track_msg_ip", client_ip(request), 30, 600)
     order = await _load(db, token)
-    who = data.name or (
-        (await db.execute(select(Client).where(Client.id == order.client_id))).scalar_one_or_none().name
-        if order.client_id else "Customer")
+    await aenforce("track_msg", order.id, 10, 600)   # no flooding a shop's inbox from one link
+    who = data.name
+    if not who and order.client_id:
+        c = (await db.execute(select(Client).where(
+            Client.id == order.client_id, Client.org_id == order.org_id))).scalar_one_or_none()
+        who = c.name if c else None
+    who = who or "Customer"
     await _post_client_message(db, order, data.body, who)
     await db.commit()
     return {"ok": True}
@@ -1362,18 +1370,19 @@ async def appointment_request(slug: str, data: AppointmentRequestIn, request: Re
 
 
 class HelloIn(BaseModel):
-    phone: str
+    phone: str = Field(max_length=32)
 
 
 @router.post("/appointment/{slug}/hello")
 async def appointment_hello(slug: str, data: HelloIn, request: Request,
                         db: AsyncSession = Depends(get_db)):
     """Returning-customer recognition: last-10-digit phone match within this org.
-    Returns only a first name (never full contact data) and is rate-limited to
+    Returns only whether the number is known (never a name or contact data) and is rate-limited to
     keep it from being an enumeration oracle."""
-    from backend.core.webhook_security import client_ip, enforce_rate_limit, lookup_limiter
-    enforce_rate_limit(lookup_limiter, f"hello:{client_ip(request)}")
+    from backend.core.webhook_security import client_ip
+    from backend.services.ratelimit import aenforce
     org = await _org_by_slug(db, slug)
+    await aenforce("appt_hello", f"{org.id}:{client_ip(request)}", 10, 60)
     digits = "".join(ch for ch in (data.phone or "") if ch.isdigit())[-10:]
     if len(digits) < 7:
         return {"known": False}
@@ -1383,8 +1392,8 @@ async def appointment_hello(slug: str, data: HelloIn, request: Request,
     for c in rows:
         on_file = "".join(ch for ch in (c.phone or "") if ch.isdigit())[-10:]
         if on_file and on_file == digits:
-            first = (c.name or "").strip().split(" ")[0]
-            return {"known": True, "name": first or None}
+            # Known, but no name: a phone number must not reveal who it belongs to.
+            return {"known": True}
     return {"known": False}
 
 
@@ -1420,24 +1429,28 @@ async def public_pay_info(intent_id: str, db: AsyncSession = Depends(get_db)):
 
 # ══ Build 109: public status lookup + embeddable widget ══════════════════════
 class LookupIn(BaseModel):
-    order_number: str
-    phone: str
-    shop: Optional[str] = None   # org subdomain/slug (or id) — scopes the lookup to one tenant
+    order_number: str = Field(max_length=40)
+    phone: str = Field(max_length=32)
+    shop: Optional[str] = Field(None, max_length=64)   # org subdomain/slug (or id) — scopes the lookup to one tenant
 
 
 @router.post("/lookup")
 async def lookup_order(data: LookupIn, request: Request, db: AsyncSession = Depends(get_db)):
-    from backend.core.webhook_security import client_ip, enforce_rate_limit, lookup_limiter
-    # Build 110: throttle per caller AND per order number, so neither a single IP nor a
-    # distributed guess against one order can brute-force the phone pairing.
-    enforce_rate_limit(lookup_limiter, f"ip:{client_ip(request)}")
-    enforce_rate_limit(lookup_limiter, f"num:{data.order_number.strip().lstrip('#')}")
     """Find an order from its number plus the customer's phone — the two things a
     customer actually has to hand. Both must match: the order number alone is guessable,
     so pairing it with the phone on file is what keeps this from leaking one customer's
     repair to another. Returns the public token, which the widget then renders through
     the existing /track view — no new rendering path, no new way to get status wrong.
     """
+    from backend.core.webhook_security import client_ip
+    from backend.services.ratelimit import aenforce
+    # Throttle per caller, and per caller per order number, shared across workers (Redis when
+    # configured). Guessing the phone that pairs with an order is a 10-digit search, so the
+    # per-caller bucket is what matters; there is deliberately no bucket shared by everyone,
+    # because order numbers repeat between shops and a shared one let anyone lock every
+    # shop's "#1001" customers out with a handful of requests.
+    ip = client_ip(request)
+    await aenforce("lookup_ip", ip, 20, 60)
     num = data.order_number.strip().lstrip("#")
     phone = "".join(ch for ch in data.phone if ch.isdigit())[-10:]  # last 10 digits, format-agnostic
     if not num or not phone:
@@ -1458,6 +1471,7 @@ async def lookup_order(data: LookupIn, request: Request, db: AsyncSession = Depe
             # same opaque 404 — don't confirm whether the shop/number/phone exists
             raise HTTPException(404, "No matching order — check the number and phone")
         q = q.where(Order.org_id == org.id)
+    await aenforce("lookup_num", f"{org.id if data.shop else '*'}:{ip}:{num}", 5, 3600)
 
     candidates = (await db.execute(q)).scalars().all()
     order = None
