@@ -77,6 +77,16 @@ async def _schema():
         await conn.run_sync(Base.metadata.drop_all)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_rate_limits():
+    """Each test starts with empty in-process rate-limit counters (every test client shares one
+    IP) and an empty Tekly Sense per-shop service-history cache."""
+    from backend.services import ratelimit, sense
+    ratelimit._HITS.clear()
+    sense._HISTORY_CACHE.clear()
+    yield
+
+
 @pytest_asyncio.fixture
 async def client():
     transport = ASGITransport(app=app)

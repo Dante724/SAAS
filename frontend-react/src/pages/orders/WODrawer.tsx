@@ -1,6 +1,6 @@
 import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
 import RecommendationsPanel from "./RecommendationsPanel";
-import { DeferredWork, MarginNote, ReadyWhy } from "../../components/sense/Sense";
+import { DeferredWork, MarginNote, ReadyWhy, ServiceDue, TogetherChips } from "../../components/sense/Sense";
 import PartsPOPanel from "./PartsPOPanel";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useRef, useState } from "react";
@@ -1077,6 +1077,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
         )}
       </div>
 
+      {!locked && <TogetherChips orderId={orderId} linesKey={(lines || []).map((l) => l.description).join("|")} onFlash={onFlash} onChanged={onChanged} />}
       {shown.length === 0 && <p className="text-xs text-ink-tertiary">No line items yet — add a service or product.</p>}
       {Object.entries(groups).map(([tech, ls], gi) => (
         <div key={tech || "all"} className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
@@ -1093,6 +1094,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
       ))}
 
       <DeferredWork orderId={orderId} onFlash={onFlash} onChanged={() => { setRecsVersion((v) => v + 1); onChanged?.(); }} />
+      <ServiceDue orderId={orderId} onFlash={onFlash} onChanged={() => { setRecsVersion((v) => v + 1); onChanged?.(); }} />
       <RecommendationsPanel key={recsVersion} orderId={orderId} items={tagging ? jobItems.map((it) => ({ id: it.id, name: itemName(it) })) : []} onFlash={onFlash} onChanged={onChanged} />
 
       <MarginNote orderId={orderId} refreshKey={total} />
