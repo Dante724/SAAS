@@ -182,7 +182,7 @@ def page(p):
 
 <section class="sec sec-tight">
   <div class="wrap"><div class="sub-price rv">
-    <div><p class="eyebrow">Pricing</p><h2 class="h-sub">Two plans, priced per location.</h2><p class="lede">Starter is $49 a month for a single shop with up to five people. Pro is $99 a month and adds purchase orders, payroll, multi-location stock and the full set of AI tools. No setup fee, no contract, free data migration.</p></div>
+    <div><p class="eyebrow">Pricing</p><h2 class="h-sub">Three plans, priced per location.</h2><p class="lede">Starter is $49 a month for up to 3 people. Pro is $99 for up to 15 and adds purchase orders, payroll, AI estimate drafting and Tekly Sense suggestions. Business is $199 for unlimited people, with multi-location stock, the Watchdog, SSO and API access. No setup fee, no contract, free data migration.</p></div>
     <div class="sub-price-ctas"><a class="btn btn-brand btn-lg" data-app="signup" data-cta="pricing_trial" href="/#start">Start free trial</a><a class="link" href="/#pricing">Compare plans</a></div>
   </div></div>
 </section>

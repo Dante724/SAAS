@@ -16,6 +16,7 @@
   const plans = C.plans || [];
   const starter = plans.find(p => p.id === "starter") || { monthly: 49, name: "Starter" };
   const pro = plans.find(p => p.id === "pro") || { monthly: 99, name: "Pro" };
+  const biz = plans.find(p => p.id === "business") || { monthly: 199, name: "Business" };
   const trial = C.trialDays ?? 14;
   const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
   const push = (event, data = {}) => (window.dataLayer = window.dataLayer || []).push({ event, ...data });
@@ -43,23 +44,28 @@
   /* ── Knowledge base: intents → answers. Every fact here is on the website. ── */
   const KB = [
     { id: "book", w: ["demo", "book", "booking", "meeting", "call", "schedule", "appointment", "walkthrough", "show", "talk", "sales", "person", "human", "someone"], a: () => ({ text: "Happy to set that up. A demo is 30 minutes: we set up your trade live, run one job from intake to paid, and answer questions about moving your data and pricing.", chips: ["Pick a time"], action: "book" }) },
-    { id: "price", w: ["price", "prices", "pricing", "cost", "costs", "much", "expensive", "cheap", "plan", "plans", "pay", "fee", "monthly", "subscription", "per"], a: () => ({ text: `There are two plans, priced per location:\n• ${starter.name} — ${cur}${starter.monthly}/month, up to 5 team members.\n• ${pro.name} — ${cur}${pro.monthly}/month, unlimited team members, plus purchase orders, payroll, multi-location stock and the full set of AI tools.\nYearly billing saves ${Math.round((C.annualDiscount ?? .2) * 100)}%. No setup fee and no contract.`, chips: ["Which plan fits me?", "Book a demo"] }) },
+    { id: "price", w: ["price", "prices", "pricing", "cost", "costs", "much", "expensive", "cheap", "plan", "plans", "pay", "fee", "monthly", "subscription", "per"], a: () => ({ text: `There are three plans, priced per location:
+• ${starter.name} — ${cur}${starter.monthly}/month, up to 3 team members.
+• ${pro.name} — ${cur}${pro.monthly}/month, up to 15, adding purchase orders, payroll, AI estimate drafting and Tekly Sense suggestions.
+• ${biz.name} — ${cur}${biz.monthly}/month, unlimited, adding multi-location stock, Watchdog, SSO and API access.
+Yearly billing saves ${Math.round((C.annualDiscount ?? .2) * 100)}%. No setup fee and no contract.`, chips: ["Which plan fits me?", "Book a demo"] }) },
     { id: "recommend", w: ["which", "recommend", "fit", "right", "best", "choose", "suit", "should"], a: () => ({ action: "recommend" }) },
     { id: "trial", w: ["trial", "free", "try", "test", "card", "credit"], a: () => ({ text: `Yes — every plan starts with a ${trial}-day free trial of all Pro features, no credit card needed. You can explore with sample jobs and clear them in one click.`, chips: ["Start free trial", "Book a demo"] }) },
     { id: "templates", w: ["template", "templates", "industry", "industries", "trade", "trades", "type", "kind", "support", "work"], a: () => ({ text: "Tekly has four templates: Electronics (phones, tablets, computers), Vehicles (cars, trucks, RVs, bikes), Tools & small engine, and Marine. Shops that fix more than one kind of thing can use several in one account. What do you repair?", chips: ["Phones & computers", "Cars & trucks", "Small engines", "Boats"] }) },
-    { id: "ai", w: ["ai", "artificial", "intelligence", "automatic", "draft", "drafting", "smart", "gpt", "summary", "summaries"], a: () => ({ text: "Tekly AI is built into the screens you use: it drafts estimates from the customer's words, summarises jobs, suggests replies, turns supplier lists into parts, and tags call sentiment. It only drafts — a person on your team always presses send. Job summaries and reply suggestions are on every plan; the rest is on Pro.", chips: ["Pricing", "Book a demo"] }) },
+    { id: "ai", w: ["ai", "artificial", "intelligence", "automatic", "draft", "drafting", "smart", "gpt", "summary", "summaries"], a: () => ({ text: "Tekly AI is built into the screens you use: it drafts estimates from the customer's words, summarises jobs, suggests replies, turns supplier lists into parts, and tags call sentiment. It only drafts — a person on your team always presses send. Job summaries and reply suggestions are on every plan; estimate drafting and parts recognition start on Pro, call insights on Business.", chips: ["Pricing", "Book a demo"] }) },
     { id: "approve", w: ["approve", "approval", "approvals", "sign", "signature", "estimate", "estimates", "quote", "quotes", "authorize", "consent"], a: () => ({ text: "Customers get a link by SMS, WhatsApp or email, approve each line of the estimate and sign on their phone. If you find more work mid-repair, they choose what to add — nothing is added unless they approve it.", chips: ["How do parts work?", "Book a demo"] }) },
     { id: "parts", w: ["parts", "part", "inventory", "stock", "purchase", "order", "orders", "po", "supplier", "warehouse", "barcode", "serial", "reorder"], a: () => ({ text: "Order parts from the work order. When they arrive and you scan them, they're written off to the right job and costed into its margin, and the customer's ready time updates. Pro adds multi-location stock, transfers, bins and serial numbers, and low-stock alerts draft the reorder for you.", chips: ["Payroll", "Book a demo"] }) },
     { id: "payroll", w: ["payroll", "commission", "commissions", "wages", "staff", "technician", "technicians", "employees", "timeclock", "clock", "hours"], a: () => ({ text: "On Pro, technician commission and hours post automatically when a job closes, so the pay run is ready when you sit down. Pay runs can't pay twice, and there's a full audit log.", chips: ["Pricing", "Book a demo"] }) },
     { id: "pos", w: ["pos", "checkout", "sell", "sales", "retail", "payment", "payments", "stripe", "square", "invoice", "invoices", "receipt", "cash"], a: () => ({ text: "Tekly has a quick POS with cash drawers, invoices and payment links. Card payments go through Stripe or Square, and customers can pay online from their tracking page.", chips: ["Accounting sync", "Book a demo"] }) },
     { id: "accounting", w: ["quickbooks", "xero", "accounting", "accountant", "books", "bookkeeping", "ledger", "tax"], a: () => ({ text: "Pro syncs with QuickBooks and Xero. Revenue, margin and payroll post to one ledger, so profit per job, technician and location is always current.", chips: ["Pricing", "Book a demo"] }) },
     { id: "messages", w: ["sms", "text", "texts", "whatsapp", "email", "gmail", "outlook", "notify", "notifications", "message", "messages", "inbox", "remind", "reminders"], a: () => ({ text: "Customer updates go out by SMS, WhatsApp or email (Gmail or Outlook), and replies land in one shared inbox. Customers also get a tracking link with live status, photos and the ready time.", chips: ["Approvals", "Book a demo"] }) },
-    { id: "switch", w: ["switch", "switching", "migrate", "migration", "import", "move", "moving", "transfer", "repairdesk", "shopmonkey", "orderry", "jobber", "spreadsheet", "excel", "current"], a: () => ({ text: "Switching is free on both plans. Send us an export from your current system or spreadsheets and we bring your customers, devices and stock across. Most single-location shops can be set up in a day.", chips: ["Book a demo", "Start free trial"] }) },
+    { id: "switch", w: ["switch", "switching", "migrate", "migration", "import", "move", "moving", "transfer", "repairdesk", "shopmonkey", "orderry", "jobber", "spreadsheet", "excel", "current"], a: () => ({ text: "Switching is free on every plan. Send us an export from your current system or spreadsheets and we bring your customers, devices and stock across. Most single-location shops can be set up in a day.", chips: ["Book a demo", "Start free trial"] }) },
     { id: "data", w: ["data", "export", "security", "secure", "safe", "privacy", "encrypt", "encryption", "gdpr", "leave", "cancel", "contract", "lock"], a: () => ({ text: "Your data is yours: export customers, jobs, stock and finances to CSV or Excel any time, even after you cancel. Passcodes and keys are encrypted, there's two-factor sign-in, role permissions and an audit log. Plans are month to month with no contract.", chips: ["Pricing", "Book a demo"] }) },
     { id: "mobile", w: ["mobile", "phone app", "app", "technician", "tech", "offline", "android", "iphone", "home", "install", "field"], a: () => ({ text: "Technicians get the Tekly Technician app: install it to the home screen from the browser, no app store. It shows today's jobs, runs the labour timer and checklists, scans parts with the camera, has a time clock, and keeps working offline.", chips: ["Book a demo", "Pricing"], link: { href: "/#mobile", label: "See the app" } }) },
+    { id: "sense", w: ["sense", "learn", "learns", "suggest", "suggestion", "suggestions", "brief", "morning", "watchdog", "scorecard", "pattern", "upsell", "margin", "due"], a: () => ({ text: "Tekly Sense learns from your own closed jobs — no AI service, nothing shared between shops. It suggests lines from similar jobs, work usually added together, and services that are due, flags a job priced under your usual margin, and sends a Morning Brief. On Business, the owner also gets the Watchdog for unusual discounts, refunds and short drawers, plus a team scorecard.", chips: ["Pricing", "Book a demo"], link: { href: "/#sense", label: "See Tekly Sense" } }) },
     { id: "hardware", w: ["hardware", "printer", "scanner", "ipad", "tablet", "device", "install", "download", "app", "offline", "browser", "windows"], a: () => ({ text: "No special hardware — Tekly runs in any modern browser on a computer, tablet or phone, and works with standard barcode scanners, label printers and receipt printers.", chips: ["Book a demo"] }) },
     { id: "locations", w: ["locations", "location", "multi", "multiple", "branches", "stores", "franchise", "shops"], a: () => ({ text: `Pricing is per location. Pro supports multiple locations with shared stock and transfers. For ten or more locations there's volume pricing and a named contact.`, chips: ["Which plan fits me?", "Book a demo"] }) },
-    { id: "setup", w: ["setup", "onboarding", "start", "started", "long", "quick", "training", "learn"], a: () => ({ text: "Most single-location shops are set up in a day, and onboarding is free on both plans. Pick your trade and the intake fields and services are pre-filled.", chips: ["Start free trial", "Book a demo"] }) },
+    { id: "setup", w: ["setup", "onboarding", "start", "started", "long", "quick", "training", "learn"], a: () => ({ text: "Most single-location shops are set up in a day, and onboarding is free on every plan. Pick your trade and the intake fields and services are pre-filled.", chips: ["Start free trial", "Book a demo"] }) },
     { id: "hello", w: ["hi", "hello", "hey", "hiya", "morning", "afternoon", "evening", "yo"], a: () => ({ text: "Hi! I can answer questions about Tekly, help you pick a plan, or book a 30-minute demo. What do you repair?", chips: ["Book a demo", "Which plan fits me?", "Pricing"] }) },
     { id: "thanks", w: ["thanks", "thank", "cheers", "great", "perfect", "awesome", "ok", "okay", "cool"], a: () => ({ text: "You're welcome! Anything else I can help with?", chips: ["Book a demo", "Pricing"] }) },
   ];
@@ -142,6 +148,7 @@
       "Phones & computers": () => tradeAnswer("electronics"), "Cars & trucks": () => tradeAnswer("vehicles"), "Small engines": () => tradeAnswer("tools"), "Boats": () => tradeAnswer("marine") };
     if (quick[text]) return quick[text]();
     const { intent, trade, toks } = classify(text);
+    if (/\bhow much\b|\bwhat does it cost\b|\bprice\b|\bpricing\b/i.test(text) && !(intent && intent.id === "price")) { if (trade) mem.trade = trade; return answer(KB.find(k => k.id === "price").a()); }
     if (toks.some(t => ["which", "recommend", "should", "best", "right", "fit", "suit", "choose", "pick"].includes(t)) && toks.some(t => ["plan", "plans", "price", "tier", "option", "package"].includes(t))) { if (trade) mem.trade = trade; return startRecommend(); }
     push("assistant_message", { intent: intent ? intent.id : (trade ? "trade" : "unknown") });
     if (trade && (!intent || intent.id === "templates" || intent.id === "hello")) return tradeAnswer(trade);
@@ -170,11 +177,12 @@
     await say("Two quick questions. How many locations do you run?");
     chips(["One", "Two or more"], async c => {
       me(c); flow.data.multi = c !== "One"; mem.locations = c; save();
-      if (flow.data.multi) return recommend("pro", "With more than one location you'll want Pro for shared stock, transfers and reporting across shops.");
+      if (flow.data.multi) return recommend("business", "With more than one location you'll want Business for shared stock, transfers and controls across shops.");
       await say("How many people work in the shop, including you?");
-      chips(["Up to 5", "More than 5"], async d => {
+      chips(["Up to 3", "4 to 15", "More than 15"], async d => {
         me(d);
-        if (d !== "Up to 5") return recommend("pro", "Starter covers up to five people, so Pro fits a larger team.");
+        if (d === "More than 15") return recommend("business", "Pro covers up to 15 people, so Business fits a team your size.");
+        if (d === "4 to 15") return recommend("pro", "Starter covers up to three people, so Pro fits your team.");
         await say("Do you need purchase orders, payroll and commissions, or accounting sync?");
         chips(["Yes", "Not yet"], async e => { me(e); recommend(e === "Yes" ? "pro" : "starter", e === "Yes" ? "Those are all Pro features." : "Starter covers the counter and the bench, and you can move to Pro any time."); });
       });
@@ -182,8 +190,8 @@
   }
   async function recommend(id, why) {
     flow = null;
-    const p = id === "pro" ? pro : starter;
-    await say(`I'd go with ${p.name} — ${cur}${p.monthly} per location, per month. ${why} Both start with a ${trial}-day free trial, no card.`);
+    const p = id === "business" ? biz : id === "pro" ? pro : starter;
+    await say(`I'd go with ${p.name} — ${cur}${p.monthly} per location, per month. ${why} Every plan starts with a ${trial}-day free trial, no card.`);
     push("assistant_recommend", { plan: id });
     chips(["Start free trial", "Book a demo", "Pricing"]);
   }

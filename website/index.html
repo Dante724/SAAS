@@ -88,6 +88,19 @@
      "unitText": "per location per month"
     },
     "url": "https://tekly.app/#pricing"
+   },
+   {
+    "@type": "Offer",
+    "name": "Business",
+    "price": "199",
+    "priceCurrency": "USD",
+    "priceSpecification": {
+     "@type": "UnitPriceSpecification",
+     "price": "199",
+     "priceCurrency": "USD",
+     "unitText": "per location per month"
+    },
+    "url": "https://tekly.app/#pricing"
    }
   ]
  },
@@ -129,10 +142,10 @@
    },
    {
     "@type": "Question",
-    "name": "What's the difference between Starter and Pro?",
+    "name": "What's the difference between Starter, Pro and Business?",
     "acceptedAnswer": {
      "@type": "Answer",
-     "text": "Starter ($49 per location per month) covers the counter and the bench for a single shop with up to five people. Pro ($99 per location per month) adds purchase orders, payroll and commissions, multi-location stock, the full set of AI tools, accounting sync, SSO and priority support."
+     "text": "Starter ($49 per location per month, up to 3 people) covers the counter and the bench. Pro ($99, up to 15 people) adds purchase orders, payroll and commissions, AI estimate drafting, Tekly Sense suggestions, loyalty and gift cards, and accounting sync. Business ($199, unlimited people) adds multi-location stock, the Watchdog and team scorecard, role and approval controls, SSO, multi-currency and API access."
     }
    },
    {
@@ -190,8 +203,7 @@
     <nav class="nav-links" aria-label="Primary">
       <a href="#product">Product</a>
       <a href="#industries">Industries</a>
-      <a href="#mobile">Mobile app</a>
-      <a href="#ai">AI</a>
+      <a href="#sense">Tekly Sense</a>
       <a href="#features">Features</a>
       <a href="#pricing">Pricing</a>
       <a href="#faq">FAQ</a>
@@ -498,14 +510,52 @@
       <p class="lede rv">Built into the screens you already use, on every plan. It drafts; a person presses send.</p>
     </div>
     <div class="ai-grid">
-      <article class="card rv"><p class="mono card-k">Estimate drafting <span>Pro</span></p><h3>From the customer's words to priced lines.</h3><p>Labour and parts from your own catalog, at your prices, in seconds.</p></article>
+      <article class="card rv"><p class="mono card-k">Estimate drafting <span>Pro and up</span></p><h3>From the customer's words to priced lines.</h3><p>Labour and parts from your own catalog, at your prices, in seconds.</p></article>
       <article class="card rv"><p class="mono card-k">Job summaries <span>All plans</span></p><h3>Catch up on any job in one read.</h3><p>Notes, status changes and messages, summarised for whoever picks it up next.</p></article>
       <article class="card rv"><p class="mono card-k">Reply suggestions <span>All plans</span></p><h3>Answer “is it ready?” in one tap.</h3><p>Replies that know the job's real status, written the way your shop talks.</p></article>
-      <article class="card rv"><p class="mono card-k">Call insights <span>Pro</span></p><h3>Spot the unhappy call before the review.</h3><p>Calls transcribed, summarised and tagged positive, neutral or negative.</p></article>
-      <article class="card rv"><p class="mono card-k">Parts recognition <span>Pro</span></p><h3>Paste a supplier list, get line items.</h3><p>Messy invoices and dictation become parts with quantities and prices.</p></article>
+      <article class="card rv"><p class="mono card-k">Call insights <span>Business</span></p><h3>Spot the unhappy call before the review.</h3><p>Calls transcribed, summarised and tagged positive, neutral or negative.</p></article>
+      <article class="card rv"><p class="mono card-k">Parts recognition <span>Pro and up</span></p><h3>Paste a supplier list, get line items.</h3><p>Messy invoices and dictation become parts with quantities and prices.</p></article>
       <article class="card rv"><p class="mono card-k">Your data <span>Always</span></p><h3>Each shop's data stays in its own account.</h3><p>Never pooled into a shared model. Every AI screen also has a manual path.</p></article>
     </div>
   </div>
+</section>
+
+<!-- ════════ TEKLY SENSE ════════ -->
+<section class="sec sense" id="sense">
+  <div class="wrap sense-grid">
+    <div>
+      <p class="mono eyebrow rv">Tekly Sense</p>
+      <h2 class="h-section rv">It learns how your shop works. From your own jobs.</h2>
+      <p class="lede rv">No AI service and nothing shared between shops: Tekly Sense reads your own closed jobs and turns the patterns into one-tap suggestions — each with a “Why?” that shows the jobs behind it.</p>
+      <div class="sense-list">
+        <div class="rv"><h3>Suggested lines <span class="fx-pro">Pro</span></h3><p>Lines from similar closed jobs, at the price you usually charge.</p></div>
+        <div class="rv"><h3>Usually added together <span class="fx-pro">Pro</span></h3><p>The work that normally goes with what's already on the job.</p></div>
+        <div class="rv"><h3>Service due <span class="fx-pro">Pro</span></h3><p>Spots work you repeat on the same item at regular intervals.</p></div>
+        <div class="rv"><h3>Margin check <span class="fx-pro">Pro</span></h3><p>Flags a job priced well under your usual margin before it goes out.</p></div>
+        <div class="rv"><h3>Morning Brief</h3><p>Yesterday's closed jobs, today's due list and what's stuck — by email or push.</p></div>
+        <div class="rv"><h3>Watchdog &amp; scorecard <span class="fx-pro biz">Business</span></h3><p>For the owner only: unusual discounts, refunds and short drawers, and each person's jobs and comebacks.</p></div>
+      </div>
+    </div>
+    <div class="ui brief rv" aria-label="Morning Brief preview">
+      <div class="ui-top"><span class="ui-t">Morning Brief · Tuesday</span><span class="pill">7:30 am</span></div>
+      <div class="ui-kpis">
+        <div><span class="k">Yesterday</span><b class="tnum">14</b><span class="d">jobs · $3,940</span></div>
+        <div><span class="k">Due today</span><b class="tnum">9</b><span class="d">2 before noon</span></div>
+        <div><span class="k">Worth a look</span><b class="tnum">5</b><span class="d">see below</span></div>
+      </div>
+      <ul class="brief-list">
+        <li><span class="dot-warn" aria-hidden="true"></span>WO-1031 stuck in Waiting parts for 6 days</li>
+        <li><span class="dot-warn" aria-hidden="true"></span>2 quotes waiting on the customer for 2+ days</li>
+        <li><span class="dot-warn" aria-hidden="true"></span>1 invoice overdue · $420.00</li>
+        <li><span class="dot-ok" aria-hidden="true"></span>3 customers due for a service — draft reminders ready</li>
+      </ul>
+      <div class="sense-sugg">
+        <p class="sense-k">✦ Suggested for WO-1042 · iPhone 14 Pro</p>
+        <div class="sense-row"><span>Screen protector, fitted</span><b class="tnum">$19.00</b><span class="why">Why? On 31 of 44 similar jobs</span></div>
+      </div>
+    </div>
+  </div>
+  <p class="wrap app-cap mono">Sample data. Tekly Sense starts after about 20 closed jobs, and the owner chooses who sees what.</p>
 </section>
 
 <!-- ════════ INDUSTRIES ════════ -->
@@ -533,7 +583,7 @@
           <tr><th scope="row">Line-by-line approval with signature</th><td><svg class="yes"><use href="#check"/></svg>Built in</td><td class="dim">All or nothing</td></tr>
           <tr><th scope="row">Parts booked to the job on arrival</th><td><svg class="yes"><use href="#check"/></svg>Automatic</td><td class="dim">Manual</td></tr>
           <tr><th scope="row">Payroll and commissions from closed jobs</th><td><svg class="yes"><use href="#check"/></svg>Built in</td><td class="dim">Separate tool</td></tr>
-          <tr><th scope="row">AI estimate drafting</th><td><svg class="yes"><use href="#check"/></svg>Pro</td><td class="dim">Often a paid add-on</td></tr>
+          <tr><th scope="row">AI estimate drafting</th><td><svg class="yes"><use href="#check"/></svg>Pro and up</td><td class="dim">Often a paid add-on</td></tr>
           <tr><th scope="row">Phones, cars, boats, bikes and fleets</th><td><svg class="yes"><use href="#check"/></svg>4 templates</td><td class="dim">Usually one trade</td></tr>
         </tbody>
       </table>
@@ -559,9 +609,9 @@
     <div class="sec-head">
       <p class="mono eyebrow rv">Everything in Tekly</p>
       <h2 class="h-section rv">One system, every part of the shop.</h2>
-      <p class="lede rv">Most of it is on Starter. Items marked <span class="fx-pro">Pro</span> come with the $99 plan.</p>
+      <p class="lede rv">Untagged features are on every plan. Tagged ones start on <span class="fx-pro">Pro</span> or <span class="fx-pro biz">Business</span>.</p>
     </div>
-    <div class="fx-grid"><div class="fx-group rv"><h3>Front desk</h3><ul><li>Online booking with real time slots</li><li>Leads pipeline with response-time <span class="nobr">targets<span class="fx-pro">Pro</span></span></li><li>Customer portal and live tracking link</li><li>SMS, WhatsApp and email in one inbox</li><li>Click-to-call with call <span class="nobr">log<span class="fx-pro">Pro</span></span></li><li>Feedback requests and <span class="nobr">NPS<span class="fx-pro">Pro</span></span></li></ul></div><div class="fx-group rv"><h3>Workshop</h3><ul><li>Intake templates: IMEI, VIN, HIN, serial</li><li>Photo capture and annotation</li><li>Checklists with required steps</li><li>Labour timer and time in each status</li><li>Tasks linked to jobs and customers</li><li>Technician app that works offline</li></ul></div><div class="fx-group rv"><h3>Sales & stock</h3><ul><li>Quick POS, cash drawer and shift counts</li><li>Payment links via Stripe or Square</li><li>Bundles and kits that explode into parts</li><li>Purchase orders booked to the <span class="nobr">job<span class="fx-pro">Pro</span></span></li><li>Multi-location stock, transfers and <span class="nobr">bins<span class="fx-pro">Pro</span></span></li><li>Returns and refunds as separate documents</li></ul></div><div class="fx-group rv"><h3>Growth</h3><ul><li>Gift cards and <span class="nobr">coupons<span class="fx-pro">Pro</span></span></li><li>Loyalty <span class="nobr">points<span class="fx-pro">Pro</span></span></li><li>Declined work saved for the next visit</li><li>Branded documents and warranty certificates</li><li>Automations for overdue jobs and low <span class="nobr">stock<span class="fx-pro">Pro</span></span></li><li>Custom report <span class="nobr">builder<span class="fx-pro">Pro</span></span></li></ul></div><div class="fx-group rv"><h3>Money & people</h3><ul><li>Invoices, deposits and partial payments</li><li>Payroll with commission <span class="nobr">cycles<span class="fx-pro">Pro</span></span></li><li>Refunds claw back commission <span class="nobr">automatically<span class="fx-pro">Pro</span></span></li><li>Time clock with breaks and <span class="nobr">approvals<span class="fx-pro">Pro</span></span></li><li>QuickBooks and Xero <span class="nobr">sync<span class="fx-pro">Pro</span></span></li><li>Multi-currency with rate <span class="nobr">history<span class="fx-pro">Pro</span></span></li></ul></div><div class="fx-group rv"><h3>Control</h3><ul><li>Role editor down to each <span class="nobr">screen<span class="fx-pro">Pro</span></span></li><li>Approval limits for refunds and <span class="nobr">discounts<span class="fx-pro">Pro</span></span></li><li>Full audit log</li><li>Two-factor sign-in and <span class="nobr">SSO<span class="fx-pro">Pro</span></span></li><li>API keys and <span class="nobr">webhooks<span class="fx-pro">Pro</span></span></li><li>Export everything, any time</li></ul></div></div>
+    <div class="fx-grid"><div class="fx-group rv"><h3>Front desk</h3><ul><li>Online booking with real time slots</li><li>Customer portal and live tracking link</li><li>SMS, WhatsApp and email in one inbox</li><li>Leads pipeline with response-time <span class="nobr">targets<span class="fx-pro">Pro</span></span></li><li>Feedback requests and <span class="nobr">NPS<span class="fx-pro">Pro</span></span></li><li>Click-to-call with call <span class="nobr">log<span class="fx-pro biz">Business</span></span></li></ul></div><div class="fx-group rv"><h3>Workshop</h3><ul><li>Intake templates: IMEI, VIN, HIN, serial</li><li>Photo capture and annotation</li><li>Checklists with required steps</li><li>Labour timer and time in each status</li><li>Tasks linked to jobs and customers</li><li>Technician app that works offline</li></ul></div><div class="fx-group rv"><h3>Sales & stock</h3><ul><li>Quick POS, cash drawer and shift counts</li><li>Payment links via Stripe or Square</li><li>Bundles and kits that explode into parts</li><li>Returns and refunds as separate documents</li><li>Purchase orders booked to the <span class="nobr">job<span class="fx-pro">Pro</span></span></li><li>Multi-location stock, transfers and <span class="nobr">bins<span class="fx-pro biz">Business</span></span></li></ul></div><div class="fx-group rv"><h3>Growth</h3><ul><li>Declined work saved for the next visit</li><li>Branded documents and warranty certificates</li><li>Gift cards and <span class="nobr">coupons<span class="fx-pro">Pro</span></span></li><li>Loyalty <span class="nobr">points<span class="fx-pro">Pro</span></span></li><li>Automations for overdue jobs and low <span class="nobr">stock<span class="fx-pro">Pro</span></span></li><li>Custom report <span class="nobr">builder<span class="fx-pro">Pro</span></span></li></ul></div><div class="fx-group rv"><h3>Money & people</h3><ul><li>Invoices, deposits and partial payments</li><li>Payroll with commission <span class="nobr">cycles<span class="fx-pro">Pro</span></span></li><li>Refunds claw back commission <span class="nobr">automatically<span class="fx-pro">Pro</span></span></li><li>Time clock with breaks and <span class="nobr">approvals<span class="fx-pro">Pro</span></span></li><li>QuickBooks and Xero <span class="nobr">sync<span class="fx-pro">Pro</span></span></li><li>Multi-currency with rate <span class="nobr">history<span class="fx-pro biz">Business</span></span></li></ul></div><div class="fx-group rv"><h3>Control</h3><ul><li>Full audit log</li><li>Two-factor sign-in</li><li>Export everything, any time</li><li>Role editor down to each <span class="nobr">screen<span class="fx-pro biz">Business</span></span></li><li>Approval limits for refunds and <span class="nobr">discounts<span class="fx-pro biz">Business</span></span></li><li>Single sign-on, API keys and <span class="nobr">webhooks<span class="fx-pro biz">Business</span></span></li></ul></div></div>
   </div>
 </section>
 
@@ -570,7 +620,7 @@
   <div class="wrap">
     <div class="sec-head center">
       <p class="mono eyebrow rv">Pricing</p>
-      <h2 class="h-section rv">Two plans. AI on both.</h2>
+      <h2 class="h-section rv">Three plans. AI on every one.</h2>
       <p class="lede rv">Priced per location. Free onboarding and data migration, no setup fee, no contract.</p>
       <div class="bill rv" role="group" aria-label="Billing period">
         <button type="button" class="on" data-bill="monthly" aria-pressed="true">Monthly</button>
@@ -582,7 +632,7 @@
     <ul class="promises rv" aria-label="Our promises">
       <li><b>No contracts</b><span>Month to month. Cancel in two clicks.</span></li>
       <li><b>Your data, always</b><span>Export everything to CSV or Excel, even after you leave.</span></li>
-      <li><b>We move you in</b><span>Free data migration and onboarding on both plans.</span></li>
+      <li><b>We move you in</b><span>Free data migration and onboarding on every plan.</span></li>
       <li><b>AI never sends alone</b><span>It drafts. A person on your team presses send.</span></li>
     </ul>
   </div>
@@ -675,7 +725,7 @@
       <details><summary>Which kinds of repair shops is Tekly for?<svg aria-hidden="true"><use href="#plus"/></svg></summary><p>Tekly has four templates: Electronics (phones, tablets and computers), Vehicles (cars, trucks, RVs and bikes), Tools &amp; small engine (power tools, mowers, saws and generators) and Marine (outboards, inboards and hulls). Shops that fix more than one kind of thing can use several templates in one account.</p></details>
       <details><summary>Can customers approve estimates on their phone?<svg aria-hidden="true"><use href="#plus"/></svg></summary><p>Yes. Customers get a link, approve each line of the estimate and sign on their phone. If you find more work mid-repair, they choose what to add; nothing is added unless they approve it.</p></details>
       <details><summary>How long does it take to switch?<svg aria-hidden="true"><use href="#plus"/></svg></summary><p>Most single-location shops can be set up in a day. Send us an export from your current system or spreadsheets and we bring customers, devices and stock across as part of onboarding.</p></details>
-      <details><summary>What's the difference between Starter and Pro?<svg aria-hidden="true"><use href="#plus"/></svg></summary><p>Starter ($49 per location per month) covers the counter and the bench for a single shop with up to five people. Pro ($99 per location per month) adds purchase orders, payroll and commissions, multi-location stock, the full set of AI tools, accounting sync, SSO and priority support.</p></details>
+      <details><summary>What's the difference between Starter, Pro and Business?<svg aria-hidden="true"><use href="#plus"/></svg></summary><p>Starter ($49 per location per month, up to 3 people) covers the counter and the bench. Pro ($99, up to 15 people) adds purchase orders, payroll and commissions, AI estimate drafting, Tekly Sense suggestions, loyalty and gift cards, and accounting sync. Business ($199, unlimited people) adds multi-location stock, the Watchdog and team scorecard, role and approval controls, SSO, multi-currency and API access.</p></details>
       <details><summary>Does Tekly work with QuickBooks, Xero, Stripe or Square?<svg aria-hidden="true"><use href="#plus"/></svg></summary><p>Yes. Tekly syncs with QuickBooks and Xero, takes card payments through Stripe or Square, and sends customer updates by SMS, WhatsApp and email from Gmail or Outlook.</p></details>
       <details><summary>Will AI ever message my customers by itself?<svg aria-hidden="true"><use href="#plus"/></svg></summary><p>No. Tekly AI drafts estimates, replies and summaries, and a person on your team decides what gets sent.</p></details>
       <details><summary>Do I need special hardware?<svg aria-hidden="true"><use href="#plus"/></svg></summary><p>No. Tekly runs in any modern browser on a computer, tablet or phone, and works with standard barcode scanners, label printers and receipt printers.</p></details>
