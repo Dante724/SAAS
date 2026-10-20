@@ -2,12 +2,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { JobSuggestions, MorningBriefCard, SenseSettingsSection, loadSense } from "./Sense";
+import { JobSuggestions, MorningBriefCard, SenseSettingsSection, WatchdogPanel, loadSense } from "./Sense";
+import { MeProvider } from "../../context/Me";
 
 const reply = (body: unknown) => ({ ok: true, status: 200, headers: new Headers(), json: async () => body, text: async () => JSON.stringify(body) }) as Response;
 const SETTINGS = { enabled: true, features: { job_suggestions: true, deferred: true, ready_time_why: true, margin_check: true,
-  morning_brief: true, added_together: true, service_due: true },
+  morning_brief: true, added_together: true, service_due: true, watchdog: true },
   brief: { recipients: [], hour: 7, email: false, push: false },
+  watchdog: { discount_pct: 20, cash_tolerance: 10 },
   learning: { closed_jobs: 12, needed: 20, ready: false } };
 
 let calls: { url: string; method: string; body?: any }[] = [];
@@ -18,6 +20,12 @@ beforeEach(() => {
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     calls.push({ url, method, body });
     if (url.includes("/sense/settings") && method === "PUT") return reply({ ...SETTINGS, features: { ...SETTINGS.features, ...(body.features || {}) }, brief: { ...SETTINGS.brief, ...(body.brief || {}) } });
+    if (url.includes("/auth/me")) return reply({ id: "o1", name: "Owner", is_shop_owner: true, permissions: {} });
+    if (url.includes("/sense/watchdog/review")) return reply({ ok: true });
+    if (url.includes("/sense/watchdog")) return reply({ enabled: true, window_days: 30, scorecard: [], flags: [
+      { key: "big_discounts:e2:2026-10-18", kind: "big_discounts", employee_name: "Ana", title: "Unusual number of big discounts — Ana",
+        rule: "Discounts of 20% or more in the last 30 days", count: 5, others_median: 0.5, amount: 300,
+        evidence: [{ date: "2026-10-18", ref: "WO-1", what: "Screen", pct: 30, amount: 60 }] }] });
     if (url.includes("/staff/employees")) return reply([{ id: "e2", name: "Ana", active: true }]);
     if (url.includes("/sense/brief")) return reply({ enabled: true, yesterday: { jobs_closed: 3, paid: 410 }, today: { due: 2 },
       attention: [{ key: "stuck", title: "1 job in the same status for 5+ days", count: 1, to: "/orders" }] });
@@ -69,5 +77,17 @@ describe("Tekly Sense", () => {
     expect(screen.getByText("2 jobs due")).toBeTruthy();
     await u.click(screen.getByRole("button", { name: /same status/ }));
     expect(onOpen).toHaveBeenCalledWith("/orders");
+  });
+
+  it("shows the owner an unusual pattern with its evidence, and hides it once reviewed", async () => {
+    const u = userEvent.setup();
+    render(<MeProvider><WatchdogPanel /></MeProvider>);
+    expect(await screen.findByText("Unusual number of big discounts — Ana")).toBeTruthy();
+    await u.click(screen.getByRole("button", { name: "Why?" }));
+    expect(screen.getByText(/others usually 0.5/)).toBeTruthy();
+    expect(screen.getByText(/WO-1/)).toBeTruthy();
+    await u.click(screen.getByRole("button", { name: "Mark reviewed" }));
+    expect(calls.find((c) => c.url.includes("/watchdog/review"))?.body).toEqual({ key: "big_discounts:e2:2026-10-18" });
+    expect(await screen.findByText("Nothing unusual.")).toBeTruthy();
   });
 });
