@@ -28,7 +28,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-FIELDS = ["name", "sku", "price", "barcode", "category", "brand"]
+FIELDS = ["name", "sku", "mpn", "price", "barcode", "category", "brand"]
 
 
 # ── labels & price tags ──────────────────────────────────────────────────────
@@ -84,16 +84,36 @@ def render_labels(items: list[dict], *, width_mm: float = 50, height_mm: float =
             c.setFont("Helvetica", 6)
             c.drawString(x + pad, cur, f"SKU {it['sku']}")
             cur -= 3.5 * mm
+        if "mpn" in fields and it.get("mpn"):
+            c.setFont("Helvetica", 6)
+            c.drawString(x + pad, cur, f"MPN {it['mpn']}")
+            cur -= 3.5 * mm
         if "price" in fields and it.get("price") is not None:
             c.setFont("Helvetica-Bold", 11)
             c.drawString(x + pad, cur, f"{it['price']}")
             cur -= 5 * mm
 
-        code = it.get("barcode") or it.get("sku")
+        code = it.get("barcode")
+        kind = it.get("barcode_kind") or barcode_type
         if "barcode" in fields and code:
             avail = cur - y - 2 * mm       # what's left below the text
             if avail > 6 * mm:
-                if barcode_type == "qr":
+                if kind in ("ean13", "upca"):
+                    # the caller has already validated/normalised the GTIN
+                    from reportlab.graphics import renderPDF
+                    from reportlab.graphics.barcode import eanbc
+                    bh = min(avail, 9 * mm)
+                    w = (eanbc.Ean13BarcodeWidget(code[:12]) if kind == "ean13"
+                         else eanbc.UPCA(code[:11]))
+                    w.barHeight = bh
+                    bx0, by0, bx1, by1 = w.getBounds()
+                    scale = min(1.0, (lw - 2 * pad) / max(1, bx1 - bx0))
+                    d = Drawing((bx1 - bx0) * scale, (by1 - by0) * scale)
+                    w.x, w.y = -bx0, -by0
+                    d.add(w)
+                    d.scale(scale, scale)
+                    renderPDF.draw(d, c, x + pad, y + 2 * mm)
+                elif kind == "qr":
                     from reportlab.graphics import renderPDF
                     from reportlab.graphics.barcode import qr
                     size = min(avail, lh * 0.4)

@@ -26,7 +26,9 @@ from backend.models import (
     CustomField, WorkOrderType, Device,
 )
 from backend.services.auth import get_current_employee, require_perm, record_scope
-from backend.services.codes import code128_svg, qr_svg
+from backend.services.codes import (
+    barcode_svg, code128_svg, label_barcode, qr_svg, unprintable_message, validate_barcode_options,
+)
 from backend.config import settings
 
 
@@ -98,7 +100,7 @@ VARIABLE_GROUPS = [
         "{Products Table By Technicians}", "{Services Table}", "{Services Table By Technicians}",
         # per-row product variables — repeat inside a products table row
         "{Row Number}", "{Product Name}", "{Product Qty}", "{Product UoM}",
-        "{Product Code}", "{Product SKU}", "{Product Barcode}", "{Product Serial Number}", "{Product Description}",
+        "{Product Code}", "{Product SKU}", "{Product MPN}", "{Product Barcode}", "{Product Serial Number}", "{Product Description}",
         "{Product Comment}", "{Product Color}", "{Product Bin Location}", "{Product Warehouse}",
         "{Product Default Supplier Name}", "{Product Client Warranty}", "{Product Expiration Date}",
         "{Product Length}", "{Product Width}", "{Product Height}", "{Product DimensionsUnit}",
@@ -302,7 +304,9 @@ def _ser_tpl(t: DocumentTemplate) -> dict:
             "page_w_mm": getattr(t, "page_w_mm", None), "page_h_mm": getattr(t, "page_h_mm", None),
             "margin_mm": getattr(t, "margin_mm", None),
             "font_family": getattr(t, "font_family", "Sans-Serif") or "Sans-Serif",
-            "print_statuses": _parse_statuses(getattr(t, "print_statuses", None))}
+            "print_statuses": _parse_statuses(getattr(t, "print_statuses", None)),
+            "barcode_field": t.barcode_field,   # opa: null = first filled of barcode/sku/code
+            "barcode_types": t.barcode_types if isinstance(t.barcode_types, dict) else {}}
 
 
 async def _ensure_defaults(db: AsyncSession, org_id: str):
@@ -372,6 +376,8 @@ class TemplateIn(BaseModel):
     margin_mm: Optional[float] = None
     font_family: str = "Sans-Serif"
     print_statuses: list[str] = []
+    barcode_field: Optional[str] = None      # opa: label {Barcode} source — barcode|sku|code|mpn
+    barcode_types: dict[str, str] = {}       # opa: symbology per field — code128|ean13|upca|qr
 
     @field_validator("page_size")
     @classmethod
@@ -384,6 +390,13 @@ class TemplateIn(BaseModel):
         if v not in VALID_PAGE_SIZES:
             raise ValueError(f"page_size must be one of: {', '.join(sorted(VALID_PAGE_SIZES))}")
         return v
+
+
+def _check_barcode_options(data) -> None:
+    try:
+        validate_barcode_options(data.barcode_field, data.barcode_types, None)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
 
 
 @router.post("/templates", status_code=201)
@@ -399,6 +412,8 @@ async def create_template(
                          page_w_mm=data.page_w_mm, page_h_mm=data.page_h_mm, margin_mm=data.margin_mm,
                          font_family=data.font_family or "Sans-Serif",
                          print_statuses=json.dumps(data.print_statuses) if data.print_statuses else None)
+    _check_barcode_options(data)
+    t.barcode_field, t.barcode_types = data.barcode_field, (data.barcode_types or None)
     db.add(t)
     await db.commit()
     await db.refresh(t)
@@ -425,6 +440,11 @@ async def update_template(
     t.page_w_mm = data.page_w_mm; t.page_h_mm = data.page_h_mm; t.margin_mm = data.margin_mm
     t.font_family = data.font_family or "Sans-Serif"
     t.print_statuses = json.dumps(data.print_statuses) if data.print_statuses else None
+    _check_barcode_options(data)
+    if "barcode_field" in data.model_fields_set:      # opa: older editors don't send these
+        t.barcode_field = data.barcode_field
+    if "barcode_types" in data.model_fields_set:
+        t.barcode_types = data.barcode_types or None
     await db.commit()
     return {"ok": True}
 
@@ -517,6 +537,7 @@ def _row_vars(i: int, line: OrderLine, part, tech) -> dict:
         "{Product UoM}": (getattr(part, "uom", None) if part else "") or "",
         "{Product Code}": (getattr(part, "code", None) if part else "") or "",
         "{Product SKU}": (getattr(part, "sku", None) if part else "") or "",
+        "{Product MPN}": (getattr(part, "mpn", None) if part else "") or "",
         "{Product Barcode}": (getattr(part, "barcode", None) if part else "") or "",
         "{Product Serial Number}": "",
         "{Product Description}": (getattr(part, "category", None) if part else "") or (line.description or ""),
@@ -1076,6 +1097,8 @@ class PreviewIn(BaseModel):
     body_html: str = ""
     doc_type: str = "work_order"
     order_id: Optional[str] = None
+    barcode_field: Optional[str] = None      # opa: label preview shows the chosen barcode source
+    barcode_types: dict[str, str] = {}
 
 
 @router.post("/preview")
@@ -1104,6 +1127,25 @@ async def preview_template(
             doc, rows = await _resolve_credit_note(db, current.org_id, cn)
             return {"html": _render(body, doc, rows), "sample": cn.number or "Draft"}
         return {"html": _render(body, {}, []), "sample": None}
+
+    _check_barcode_options(data)
+    if (data.doc_type or "") in (LABEL_DOC_TYPES - {"vehicle_label"}) and "{Asset " not in (data.body_html or ""):
+        # opa: a product label previews against the newest product, with the template's
+        # (unsaved) barcode source, so the editor shows what will actually print. Asset/vehicle
+        # labels keep the order-based preview, which fills the {Asset …} variables.
+        part = (await db.execute(select(Part).where(Part.org_id == current.org_id, Part.active == True)  # noqa: E712
+                                 .order_by(Part.created_at.desc()))).scalars().first()
+        if part:
+            import types as _types
+            org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
+            body = await _expand_components(db, current.org_id, data.body_html)
+            tpl = _types.SimpleNamespace(barcode_field=data.barcode_field, barcode_types=data.barcode_types)
+            try:
+                varmap = await _resolve_part(org, part, part.sell_price, tpl)
+            except ValueError as e:
+                return {"html": f"<p style='color:#b91c1c'>{_esc(unprintable_message([f'{part.name} ({e})']))}</p>",
+                        "sample": part.name}
+            return {"html": _render(body, varmap, []), "sample": part.name}
 
     q = select(Order).where(Order.id == data.order_id, Order.org_id == current.org_id) if data.order_id \
         else select(Order).where(Order.org_id == current.org_id).order_by(Order.created_at.desc())
@@ -1335,15 +1377,24 @@ async def render_invoice_document(
     return {"html": html, "name": tpl.name}
 
 
-async def _resolve_part(org, part: Part, price) -> dict:
-    """Variable map for a label/price-tag rendered against a single product."""
+async def _resolve_part(org, part: Part, price, tpl=None) -> dict:
+    """Variable map for a label/price-tag rendered against a single product. A template with a
+    barcode_field (opa) encodes that field with its chosen symbology in {Barcode}; EAN-13/UPC-A
+    raise ValueError for a value that isn't a valid code."""
     code_val = (part.barcode or part.sku or part.code or part.name or "0")
+    bc_field = getattr(tpl, "barcode_field", None)
+    if bc_field:
+        bc_val, bc_kind = label_barcode(part, bc_field, getattr(tpl, "barcode_types", None))
+        bc_html = barcode_svg(bc_val, bc_kind) if bc_val else ""
+    else:
+        bc_html = code128_svg(code_val)
     cur = (org.currency if org else "") or ""
     return {
         "{Product Title}": part.name or "—",
         "{Product Name}": part.name or "—",
         "{Product Code}": part.code or part.sku or "",
         "{Product SKU}": part.sku or "",
+        "{Product MPN}": part.mpn or "",
         "{Product Article}": part.sku or part.code or "",
         "{Product Description}": part.category or "",
         "{Product UoM}": part.uom or "",
@@ -1355,7 +1406,7 @@ async def _resolve_part(org, part: Part, price) -> dict:
         "{Company Name}": org.name if org else "Tekly",
         "{Today Date}": _fmt_date(datetime.utcnow()),
         "{Current Date}": _fmt_date(datetime.utcnow()),
-        "{Barcode}": _Html(code128_svg(code_val)),
+        "{Barcode}": _Html(bc_html),
         "{QR Code}": _Html(qr_svg(code_val)),
     }
 
@@ -1388,11 +1439,17 @@ async def render_labels(
         raise HTTPException(404, "No matching products")
     copies = max(1, min(int(data.copies or 1), 500))
 
-    tiles = []
+    tiles, bad = [], []
     for p in parts:
-        varmap = await _resolve_part(org, p, p.sell_price)
+        try:
+            varmap = await _resolve_part(org, p, p.sell_price, tpl)
+        except ValueError as e:              # opa: EAN-13/UPC-A value that isn't a valid code
+            bad.append(f"{p.name} ({e})")
+            continue
         body = _render(tpl.body_html, varmap, [])
         tiles.extend([f"<div class='lbl'>{body}</div>"] * copies)
+    if bad:
+        raise HTTPException(422, unprintable_message(bad))
 
     return {"html": _labels_html(tpl, tiles), "name": tpl.name, "count": len(tiles)}
 

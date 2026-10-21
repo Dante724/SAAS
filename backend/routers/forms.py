@@ -683,7 +683,7 @@ SYSTEM_FIELDS: dict[str, list[tuple[str, str]]] = {
     "device": [("asset_type", "Type"), ("condition", "Condition"), ("brand", "Brand"), ("model", "Model"),
                ("identifiers", "Serial / IMEI / VIN"), ("color", "Color")],
     "product": [("category", "Category"), ("description", "Description"), ("code", "Code"), ("sku", "SKU"),
-                ("stock_policy", "Stock tracking"), ("pricing", "Pricing"), ("compatibility", "Compatible devices")],
+                ("mpn", "MPN"), ("stock_policy", "Stock tracking"), ("pricing", "Pricing"), ("compatibility", "Compatible devices")],
 }
 # Built-ins that always carry a value (or are whole sections), so "required" would mean nothing.
 _NO_REQUIRE = {"order": {"priority"}, "client": {"loyalty_tier"}, "device": {"asset_type"},
@@ -694,7 +694,8 @@ _ENTITY_SYS_ATTRS = {
                "discount_card": ("discount_card",), "notes": ("notes",)},
     "device": {"condition": ("condition",), "brand": ("brand",), "model": ("model",),
                "identifiers": ("serial", "imei", "vin", "hin"), "color": ("color",)},
-    "product": {"category": ("category_id",), "description": ("description",), "code": ("code",), "sku": ("sku",)},
+    "product": {"category": ("category_id",), "description": ("description",), "code": ("code",), "sku": ("sku",),
+                "mpn": ("mpn",)},
 }
 _LEGACY_KEY = {"vehicle": "asset"}   # old SystemFieldsEditor keys
 

@@ -52,6 +52,8 @@ export type Track = {
   shop_address?: string | null; shop_phone?: string | null; location_name?: string | null;
   shop_hours?: Record<string, { open?: string; close?: string; closed?: boolean }> | null;
   feedback?: Feedback | null;
+  // 144dr — only sent when the shop turned on "show the scheduled date" (server-side gate)
+  scheduled_for?: string | null; scheduled_to?: string | null;
 };
 
 const WEEK = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -99,6 +101,23 @@ export function onColor(hex: string) {
 const asUtc = (s: string) => (/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : s + "Z");
 export const fmtDate = (s?: string) =>
   s ? new Date(asUtc(s)).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+// Scheduled visit for the Details list: one line for a single day ("Tue, Oct 21, 2:00 – 4:00 PM"),
+// Start and End lines when the job spans several days. Empty when the shop doesn't share it.
+export function scheduleLines(from?: string | null, to?: string | null): { label: string; value: string }[] {
+  if (!from) return [];
+  const a = new Date(asUtc(from));
+  if (isNaN(a.getTime())) return [];
+  const day: Intl.DateTimeFormatOptions = { weekday: "short", month: "short", day: "numeric" };
+  const time: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
+  const full = (d: Date) => `${d.toLocaleDateString([], day)}, ${d.toLocaleTimeString([], time)}`;
+  const b = to ? new Date(asUtc(to)) : null;
+  if (!b || isNaN(b.getTime()) || b.getTime() <= a.getTime()) return [{ label: "Scheduled for", value: full(a) }];
+  // an end at exactly midnight ("until end of day") still belongs to the start's day
+  const endDay = b.getHours() === 0 && b.getMinutes() === 0 && b.getTime() - a.getTime() <= 86_400_000 ? new Date(b.getTime() - 1) : b;
+  if (a.toDateString() === endDay.toDateString())
+    return [{ label: "Scheduled for", value: `${full(a)} – ${b.toLocaleTimeString([], time)}` }];
+  return [{ label: "Start", value: full(a) }, { label: "End", value: full(b) }];
+}
 export const initials = (s?: string) =>
   (s || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase() || "R";
 
@@ -253,6 +272,7 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
   const onAccent = onColor(accent);
   const nStages = d.stages?.length ?? 6;
   const stageIdx = d.stage_index ?? 0;
+  const sched = scheduleLines(d.scheduled_for, d.scheduled_to);
   const nearEnd = stageIdx >= (nStages - 2);   // "Ready for pickup" or later
   const hoursLine = todayHours(d.shop_hours);
   const mapHref = d.shop_address ? "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(d.shop_address) : null;
@@ -320,9 +340,10 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
           </div>
 
           {/* what's being repaired */}
-          {(d.complaint || (d.custom_fields || []).length > 0) && (
+          {(d.complaint || (d.custom_fields || []).length > 0 || sched.length > 0) && (
             <dl className="mt-8 grid grid-cols-1 gap-x-8 gap-y-3 sm:grid-cols-2">
               {d.device && <div><dt className="text-[13px] text-ink-tertiary">{d.asset_label || "Item"}</dt><dd className="text-[15px] text-ink-primary">{d.device}</dd></div>}
+              {sched.map((r) => <div key={r.label}><dt className="text-[13px] text-ink-tertiary">{r.label}</dt><dd className="text-[15px] text-ink-primary">{r.value}</dd></div>)}
               {d.complaint && <div className="sm:col-span-2"><dt className="text-[13px] text-ink-tertiary">What you told us</dt><dd className="text-[15px] text-ink-primary">{d.complaint}</dd></div>}
               {(d.custom_fields || []).map((f) => <div key={f.label}><dt className="text-[13px] text-ink-tertiary">{f.label}</dt><dd className="text-[15px] text-ink-primary">{f.value}</dd></div>)}
             </dl>

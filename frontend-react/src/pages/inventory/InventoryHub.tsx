@@ -85,6 +85,7 @@ export default function InventoryHub() {
   const [labelTpls, setLabelTpls] = useState<any[]>([]);
   const [labelTplId, setLabelTplId] = useState("");
   const [labelCopies, setLabelCopies] = useState(1);
+  const [labelErr, setLabelErr] = useState<string | null>(null);   // e.g. a product whose MPN isn't a valid EAN-13
   async function openLabelDlg(mode: "product" | "asset") {
     setLabelMode(mode);
     try {
@@ -93,7 +94,7 @@ export default function InventoryHub() {
       const items = (d?.items || []).filter((t: any) => wanted.includes(t.doc_type));
       setLabelTpls(items); setLabelTplId(items[0]?.id || "");
     } catch { setLabelTpls([]); }
-    setLabelDlg(true);
+    setLabelErr(null); setLabelDlg(true);
   }
   async function printLabels() {
     if (!labelTplId) return;
@@ -101,11 +102,12 @@ export default function InventoryHub() {
     const body = labelMode === "asset"
       ? { template_id: labelTplId, asset_ids: [...asel], copies: labelCopies || 1 }
       : { template_id: labelTplId, part_ids: [...psel], copies: labelCopies || 1 };
+    setLabelErr(null);
     try {
       const r = await api.post<any>(url, body);
       const html = r?.html; if (!html) return;
       printHtmlInFrame(html); setLabelDlg(false);
-    } catch { /* noop */ }
+    } catch (e: any) { setLabelErr(e?.message || "Couldn't print these labels"); }
   }
   const labelSelCount = labelMode === "asset" ? asel.size : psel.size;
   const [pBusy, setPBusy] = useState(false);
@@ -247,9 +249,9 @@ export default function InventoryHub() {
   }
   function pExport() {
     const chosen = (products || []).filter((p) => psel.has(p.id));
-    const head = ["Name", "SKU", "Barcode", "Unit", "Cost", "Sell", "In stock"];
+    const head = ["Name", "SKU", "MPN", "Barcode", "Unit", "Cost", "Sell", "In stock"];
     const esc = (x: any) => `"${String(x ?? "").replace(/"/g, '""')}"`;
-    const body = chosen.map((p) => [p.name, p.sku || p.code, p.barcode, p.uom || "pcs", p.avg_cost ?? p.cost_price ?? 0, p.sell_price ?? 0, p.qty_available ?? 0].map(esc).join(","));
+    const body = chosen.map((p) => [p.name, p.sku || p.code, p.mpn, p.barcode, p.uom || "pcs", p.avg_cost ?? p.cost_price ?? 0, p.sell_price ?? 0, p.qty_available ?? 0].map(esc).join(","));
     const blob = new Blob([[head.join(","), ...body].join("\n")], { type: "text/csv" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
     a.download = `products-${isoDate()}.csv`; a.click();
@@ -265,7 +267,7 @@ export default function InventoryHub() {
   // Client-side stock filter (data already loaded) — search + availability wired; warehouse/category left static (no resolved names loaded).
   const AVAIL_LABEL = { all: "All", in: "In stock", low: "Low stock", out: "Out of stock" } as const;
   const shownProducts = (products || []).filter((p) => {
-    if (pq.trim()) { const q = pq.toLowerCase(); if (!`${p.name} ${p.sku || ""} ${p.code || ""} ${p.barcode || ""}`.toLowerCase().includes(q)) return false; }
+    if (pq.trim()) { const q = pq.toLowerCase(); if (!`${p.name} ${p.sku || ""} ${p.code || ""} ${p.barcode || ""} ${p.mpn || ""}`.toLowerCase().includes(q)) return false; }
     const qa = p.qty_available ?? 0;
     if (avail === "in") return qa > 0;
     if (avail === "low") return !!p.low_stock;
@@ -354,7 +356,7 @@ export default function InventoryHub() {
                 <button onClick={() => { setCat(""); setWh(""); setAvail("in"); }} className="px-2.5 py-1.5 text-xs font-semibold rounded-lg text-primary hover:bg-primary/10 flex items-center gap-1"><M n="filter_alt_off" c="text-sm" />Clear <span className="px-1.5 rounded-full bg-primary/15 text-[11px]">{(cat ? 1 : 0) + (wh ? 1 : 0) + (avail !== "in" ? 1 : 0)}</span></button>
               )}
             </div>
-            {searchBar("Search products, SKU, barcode...", pq, setPq)}
+            {searchBar("Search products, SKU, MPN, barcode...", pq, setPq)}
             <div className="ml-auto relative">
               <button onClick={() => setStockMenu((o) => !o)} className="h-[38px] px-4 rounded-xl bg-white hover:bg-slate-50 border border-slate-200/80 text-xs font-semibold text-ink-secondary flex items-center gap-2 shadow-clay-sm"><span>Actions</span><M n="expand_more" c="text-sm" /></button>
               {stockMenu && (
@@ -449,7 +451,7 @@ export default function InventoryHub() {
                       <td className="py-3.5 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label="Select row" checked={psel.has(p.id)} onChange={() => pToggle(p.id)} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
                       <td className="py-3.5 px-3"><div className="flex items-center gap-3">
                         {p.image_data ? <img src={p.image_data} alt="" className="w-8 h-8 rounded-lg object-cover border border-slate-200 flex-shrink-0" /> : <div className={`w-8 h-8 rounded-lg border flex items-center justify-center flex-shrink-0 font-bold text-[11px] ${b.cls}`}>{b.txt}</div>}
-                        <div className="min-w-0"><span className="font-bold text-ink-primary group-hover:text-primary transition-colors block truncate">{p.name}</span><span className="text-[11px] text-ink-tertiary font-mono block truncate">{[p.sku || p.code, p.barcode, p.brand].filter(Boolean).join(" · ") || "—"}</span></div>
+                        <div className="min-w-0"><span className="font-bold text-ink-primary group-hover:text-primary transition-colors block truncate">{p.name}</span><span className="text-[11px] text-ink-tertiary font-mono block truncate">{[p.sku || p.code, p.mpn ? `MPN ${p.mpn}` : "", p.barcode, p.brand].filter(Boolean).join(" · ") || "—"}</span></div>
                       </div></td>
                       <td className="py-3.5 px-3 text-ink-secondary font-medium">{p.category_id ? (catName[p.category_id] || "—") : <span className="text-ink-tertiary">Uncategorized</span>}</td>
                       <td className="py-3.5 px-3 text-ink-tertiary">{p.uom || "pcs"}</td>
@@ -589,6 +591,7 @@ export default function InventoryHub() {
             </select>
             <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Copies each</label>
             <input type="number" min={1} max={500} value={labelCopies} onChange={(e) => setLabelCopies(Math.max(1, +e.target.value || 1))} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2 mb-4" />
+            {labelErr && <div role="alert" className="mb-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{labelErr}</div>}
             <div className="flex justify-end gap-2">
               <button onClick={() => setLabelDlg(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
               <button onClick={printLabels} disabled={!labelTplId} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60 flex items-center gap-1"><M n="print" c="text-[15px]" /> Print {labelSelCount * labelCopies} label{labelSelCount * labelCopies === 1 ? "" : "s"}</button>
@@ -1008,7 +1011,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [suppliers, setSuppliers] = useState<{ id: string; name: string }[]>([]);
   const [locId, setLocId] = useState(""); const [supplierId, setSupplierId] = useState(""); const [note, setNote] = useState("");
-  const blank = (): PostRow => ({ code: "", name: "", qty: 1, purchase_price: 0, markup_pct: 0 });
+  const blank = (): PostRow => ({ code: "", mpn: "", name: "", qty: 1, purchase_price: 0, markup_pct: 0 });
   const [rows, setRows] = useState<PostRow[]>([blank()]);
   const [review, setReview] = useState<ReviewRow[] | null>(null);
   const [pasteOpen, setPasteOpen] = useState(false); const [pasteText, setPasteText] = useState("");
@@ -1046,18 +1049,18 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
     try {
       const fd = new FormData(); fd.append("file", f);
       const r = await api.postForm<any>("/inventory/postings/extract", fd);
-      const rws: PostRow[] = (r.rows || []).map((x: any) => ({ code: x.code || "", name: x.name || "", qty: Number(x.qty) || 1, purchase_price: Number(x.purchase_price) || 0, markup_pct: 0 }));
+      const rws: PostRow[] = (r.rows || []).map((x: any) => ({ code: x.code || "", mpn: x.mpn || "", name: x.name || "", qty: Number(x.qty) || 1, purchase_price: Number(x.purchase_price) || 0, markup_pct: 0 }));
       if (rws.length) { setRows(rws); setMapCols(null); setDataGrid(null); setInfo(`Read ${rws.length} line${rws.length === 1 ? "" : "s"} from the file — check each before posting.`); }
       else setInfo(r.note || "Nothing detected in that file. Paste or type the rows instead.");
     } catch (e: any) { setErr(e.message || "Could not read file"); }
     finally { setBusy(false); if (fileRef.current) fileRef.current.value = ""; }
   }
   async function doPreview() {
-    const clean = rows.filter((r) => (r.code.trim() || r.name.trim()) && r.qty > 0);
-    if (!clean.length) { setErr("Add at least one row (code or name + qty)."); return; }
+    const clean = rows.filter((r) => (r.code.trim() || r.mpn.trim() || r.name.trim()) && r.qty > 0);
+    if (!clean.length) { setErr("Add at least one row (code, MPN or name + qty)."); return; }
     setBusy(true); setErr(null);
     try {
-      const r = await api.post<any>("/inventory/postings/preview", { rows: clean.map((x) => ({ code: x.code || null, name: x.name || null, qty: Number(x.qty), purchase_price: Number(x.purchase_price) || null, markup_pct: x.markup_pct ? Number(x.markup_pct) : null })) });
+      const r = await api.post<any>("/inventory/postings/preview", { rows: clean.map((x) => ({ code: x.code || null, mpn: x.mpn || null, name: x.name || null, qty: Number(x.qty), purchase_price: Number(x.purchase_price) || null, markup_pct: x.markup_pct ? Number(x.markup_pct) : null })) });
       setReview((r.rows || []).map((rr: any) => ({ ...rr, chosen: rr.match_status === "matched" ? rr.part_id : (rr.candidates?.[0]?.id || "__new__") })));
     } catch (e: any) { setErr(e.message || "Could not match rows"); } finally { setBusy(false); }
   }
@@ -1069,7 +1072,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
         location_id: locId, supplier_id: supplierId || null, note: note || null,
         rows: review.map((r) => r.chosen && r.chosen !== "__new__"
           ? { part_id: r.chosen, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null }
-          : { new_name: (r.name || r.code || "").trim(), new_sku: r.code || null, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null }),
+          : { new_name: (r.name || r.code || r.mpn || "").trim(), new_sku: r.code || null, new_mpn: r.mpn || null, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null }),
       };
       await api.post("/inventory/postings/commit", body);
       onDone();
@@ -1097,7 +1100,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
           {!review ? (<>
             <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={onFile} />
             <div className="flex items-center justify-between flex-wrap gap-2">
-              <label className={lbl2} style={{ marginBottom: 0 }}>Rows — Code/SKU · Name · Qty · Cost · Markup%</label>
+              <label className={lbl2} style={{ marginBottom: 0 }}>Rows — Code/SKU · MPN · Name · Qty · Cost · Markup%</label>
               <div className="flex gap-2">
                 <button onClick={() => fileRef.current?.click()} disabled={busy} className="text-primary text-xs font-semibold flex items-center gap-1 disabled:opacity-50"><M n="document_scanner" c="text-sm" />Scan invoice / photo</button>
                 <button onClick={() => setPasteOpen((o) => !o)} className="text-primary text-xs font-semibold flex items-center gap-1"><M n="content_paste" c="text-sm" />Paste from Excel</button>
@@ -1128,10 +1131,11 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
               </div>
             )}
             <div className="space-y-1.5">
-              <div className="flex items-center gap-1.5 text-[11px] font-bold text-ink-tertiary px-1"><span className="w-28">Code/SKU</span><span className="flex-1">Name</span><span className="w-12 text-right">Qty</span><span className="w-16 text-right">Cost</span><span className="w-12 text-right">Mk%</span><span className="w-8" /></div>
+              <div className="flex items-center gap-1.5 text-[11px] font-bold text-ink-tertiary px-1"><span className="w-24">Code/SKU</span><span className="w-24">MPN</span><span className="flex-1">Name</span><span className="w-12 text-right">Qty</span><span className="w-16 text-right">Cost</span><span className="w-12 text-right">Mk%</span><span className="w-8" /></div>
               {rows.map((r, i) => (
                 <div key={i} className="flex items-center gap-1.5">
-                  <input value={r.code} onChange={(e) => setRow(i, "code", e.target.value)} placeholder="SKU" className={`${fld} w-28`} />
+                  <input value={r.code} onChange={(e) => setRow(i, "code", e.target.value)} placeholder="SKU" aria-label="Code or SKU" className={`${fld} w-24 min-w-0`} />
+                  <input value={r.mpn} onChange={(e) => setRow(i, "mpn", e.target.value)} placeholder="MPN" aria-label="MPN" className={`${fld} w-24 min-w-0`} />
                   <input value={r.name} onChange={(e) => setRow(i, "name", e.target.value)} placeholder="Product name (if new)" className={`${fld} flex-1`} />
                   <input type="number" min={0} value={r.qty} onChange={(e) => setRow(i, "qty", Number(e.target.value))} className={`${fld} w-12 text-right`} />
                   <input type="number" min={0} value={r.purchase_price} onChange={(e) => setRow(i, "purchase_price", Number(e.target.value))} className={`${fld} w-16 text-right`} />
@@ -1148,14 +1152,14 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
                 <div key={i} className="flex items-center gap-2 border border-slate-100 rounded-lg px-2.5 py-2">
                   <span className={`text-[11px] font-bold  px-1.5 py-0.5 rounded ${stBadge(r.chosen && r.chosen !== "__new__" ? "matched" : "new")}`}>{r.chosen && r.chosen !== "__new__" ? "match" : "new"}</span>
                   <div className="flex-1 min-w-0">
-                    <div className="text-xs font-semibold text-ink-primary truncate">{r.part_name || r.name || r.code || "—"}</div>
+                    <div className="text-xs font-semibold text-ink-primary truncate">{r.part_name || r.name || r.code || r.mpn || "—"}</div>
                     {(r.candidates && r.candidates.length > 0) ? (
                       <select value={r.chosen} onChange={(e) => setReview(review.map((x, j) => j === i ? { ...x, chosen: e.target.value } : x))} className="mt-1 bg-white border border-slate-200 rounded text-[11px] px-1.5 py-1 w-full">
                         {r.candidates.map((c) => <option key={c.id} value={c.id}>{c.name}{c.sku ? ` (${c.sku})` : ""}</option>)}
                         <option value="__new__">+ Create new: {r.name || r.code}</option>
                       </select>
                     ) : (
-                      <div className="text-[11px] text-ink-tertiary">{r.part_id ? `SKU ${r.sku || "—"}` : `New product${r.code ? ` · SKU ${r.code}` : ""}`}</div>
+                      <div className="text-[11px] text-ink-tertiary">{r.part_id ? `SKU ${r.sku || "—"}` : `New product${r.code ? ` · SKU ${r.code}` : ""}${r.mpn ? ` · MPN ${r.mpn}` : ""}`}</div>
                     )}
                   </div>
                   <span className="text-[11px] text-ink-tertiary">×{r.qty}</span>

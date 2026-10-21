@@ -295,7 +295,8 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
     const walk = (ns: any[], d: number) => (ns || []).forEach((n) => { flat.push({ id: n.id, name: n.name, depth: d }); if (n.children?.length) walk(n.children, d + 1); });
     api.get<any>("/catalog/categories?entity_type=service").then((r) => { walk(r.tree || [], 0); setCats(flat); }).catch(() => setCats([]));
   };
-  const load = () => api.get<{ items: Service[] }>("/catalog/services").then((r) => setItems(r.items || [])).catch(() => setItems([]));
+  const [err, setErr] = useState(false);
+  const load = () => { setErr(false); api.get<{ items: Service[] }>("/catalog/services").then((r) => setItems(r.items || [])).catch(() => { setItems([]); setErr(true); }); };
   useEffect(() => { load(); loadCats(); }, [refresh]); // eslint-disable-line
   const rows = (items ?? []).filter((s) =>
     (!q || (s.name || "").toLowerCase().includes(q.toLowerCase())) &&
@@ -319,16 +320,21 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
         </div>
       </div>
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-        <table className="w-full text-left border-collapse">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[560px] text-left border-collapse">
           <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary "><tr>
             <th className="py-3.5 px-5">Service title</th><th className="py-3.5 px-3">Category</th><th className="py-3.5 px-3 text-right">Duration</th><th className="py-3.5 px-3 text-right">Base labor fee</th><th className="py-3.5 pr-5 text-right">Actions</th>
           </tr></thead>
           <tbody className="divide-y divide-slate-100 text-xs">
             {!items && <SkeletonRows cols={5} />}
-            {items && rows.length === 0 && <tr><td colSpan={5} className="py-6 px-5 text-ink-tertiary">No services yet.</td></tr>}
+            {items && err && <tr><td colSpan={5} className="py-6 px-5 text-rose-600">Couldn't load services. <button onClick={load} className="font-semibold underline">Try again</button></td></tr>}
+            {items && !err && rows.length === 0 && <tr><td colSpan={5} className="py-6 px-5 text-ink-tertiary">{items.length ? "No services match." : "No services yet."}</td></tr>}
             {pageRows.map((s) => (
               <tr key={s.id} className="hover:bg-blue-50/30 cursor-pointer" onClick={() => onOpen(s)}>
-                <td className="py-3.5 px-5 font-bold text-ink-primary">{s.name}</td>
+                <td className="py-3.5 px-5 font-bold text-ink-primary">
+                  {s.name}
+                  {s.bookable !== false && <span title="Shown on the online booking page" className="ml-2 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-primary border border-blue-100 align-middle whitespace-nowrap"><M n="public" c="text-[12px]" />Online booking</span>}
+                </td>
                 <td className="py-3.5 px-3 text-ink-secondary">{s.category_name || s.category || "—"}</td>
                 <td className="py-3.5 px-3 text-right text-ink-secondary tabular-nums">{s.duration_min ? `${s.duration_min} min` : "—"}</td>
                 <td className="py-3.5 px-3 text-right font-bold text-ink-primary tabular-nums">{money(s.price)}</td>
@@ -337,6 +343,7 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
             ))}
           </tbody>
         </table>
+        </div>
         {items && rows.length > 0 && <Pager total={rows.length} page={Math.min(page, pages)} pageSize={CO_PAGE} onPage={setPage} noun="services" />}
       </div>
     </div>
@@ -356,10 +363,13 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
     const walk = (ns: any[], d: number) => (ns || []).forEach((n) => { flat.push({ id: n.id, name: n.name, depth: d }); if (n.children?.length) walk(n.children, d + 1); });
     api.get<any>("/catalog/categories?entity_type=product").then((r) => { walk(r.tree || [], 0); setCats(flat); }).catch(() => setCats([]));
   };
-  useEffect(() => { api.get<{ items: Product[] }>("/catalog/products").then((r) => setItems(r.items || [])).catch(() => setItems([])); loadCats(); }, [refresh]); // eslint-disable-line
+  const [err, setErr] = useState(false);
+  const load = () => { setErr(false); api.get<{ items: Product[] }>("/catalog/products").then((r) => setItems(r.items || [])).catch(() => { setItems([]); setErr(true); }); };
+  useEffect(() => { load(); loadCats(); }, [refresh]); // eslint-disable-line
   const catName = Object.fromEntries(cats.map((c) => [c.id, c.name]));
+  const ql = q.toLowerCase();
   const rows = (items ?? []).filter((p) =>
-    (!q || (p.name || "").toLowerCase().includes(q.toLowerCase()) || (p.sku || "").toLowerCase().includes(q.toLowerCase())) &&
+    (!q || [p.name, p.sku, p.code, p.mpn, p.barcode].some((v) => (v || "").toLowerCase().includes(ql))) &&
     (!catFilter || p.category_id === catFilter));
   useEffect(() => { setPage(1); }, [q, catFilter]);
   const pages = Math.max(1, Math.ceil(rows.length / CO_PAGE));
@@ -376,22 +386,25 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
         </select>
         <div className="relative flex-1 min-w-[240px] max-w-md">
           <M n="search" c="absolute left-3 top-2.5 text-ink-tertiary text-sm" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search products, SKU..." className="w-full bg-white border border-slate-200 rounded-xl text-sm pl-9 pr-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search products, SKU, MPN..." className="w-full bg-white border border-slate-200 rounded-xl text-sm pl-9 pr-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary" />
         </div>
       </div>
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-        <table className="w-full text-left border-collapse">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-left border-collapse">
           <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary "><tr>
-            <th className="py-3.5 px-5">Product</th><th className="py-3.5 px-3">Category</th><th className="py-3.5 px-3">SKU</th><th className="py-3.5 px-3 text-right">Cost</th><th className="py-3.5 px-3 text-right">Sell price</th><th className="py-3.5 px-3 text-right">In stock</th><th className="py-3.5 pr-5 text-right">Actions</th>
+            <th className="py-3.5 px-5">Product</th><th className="py-3.5 px-3">Category</th><th className="py-3.5 px-3">SKU</th><th className="py-3.5 px-3">MPN</th><th className="py-3.5 px-3 text-right">Cost</th><th className="py-3.5 px-3 text-right">Sell price</th><th className="py-3.5 px-3 text-right">In stock</th><th className="py-3.5 pr-5 text-right">Actions</th>
           </tr></thead>
           <tbody className="divide-y divide-slate-100 text-xs">
-            {!items && <SkeletonRows cols={7} />}
-            {items && rows.length === 0 && <tr><td colSpan={7} className="py-6 px-5 text-ink-tertiary">No products match.</td></tr>}
+            {!items && <SkeletonRows cols={8} />}
+            {items && err && <tr><td colSpan={8} className="py-6 px-5 text-rose-600">Couldn't load products. <button onClick={load} className="font-semibold underline">Try again</button></td></tr>}
+            {items && !err && rows.length === 0 && <tr><td colSpan={8} className="py-6 px-5 text-ink-tertiary">{items.length ? "No products match." : "No products yet."}</td></tr>}
             {pageRows.map((p) => (
               <tr key={p.id} className="hover:bg-blue-50/30 cursor-pointer" onClick={() => onOpen(p)}>
                 <td className="py-3.5 px-5 font-bold text-ink-primary">{p.name}</td>
                 <td className="py-3.5 px-3 text-ink-secondary">{p.category_id ? (catName[p.category_id] || "—") : <span className="text-ink-tertiary">Uncategorized</span>}</td>
                 <td className="py-3.5 px-3 text-ink-secondary font-mono">{p.sku || p.code || "—"}</td>
+                <td className="py-3.5 px-3 text-ink-secondary font-mono">{p.mpn || "—"}</td>
                 <td className="py-3.5 px-3 text-right text-ink-secondary tabular-nums">{money(p.cost_price)}</td>
                 <td className="py-3.5 px-3 text-right font-bold text-ink-primary tabular-nums">{money(p.sell_price)}</td>
                 <td className="py-3.5 px-3 text-right tabular-nums">{p.qty_available ?? 0}</td>
@@ -400,6 +413,7 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
             ))}
           </tbody>
         </table>
+        </div>
         {items && rows.length > 0 && <Pager total={rows.length} page={Math.min(page, pages)} pageSize={CO_PAGE} onPage={setPage} noun="products" />}
       </div>
     </div>
