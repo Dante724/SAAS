@@ -45,8 +45,8 @@ export default function AppointmentsHub() {
   }, [drawer, bkDate, f.employee_id, f.service_id, f.duration_min]);
   async function moveToHour(id: string, hour: number) {
     const b = (rows || []).find((x) => x.id === id); if (!b || !b.scheduled_for) return;
-    const d = new Date(b.scheduled_for); d.setHours(hour, 0, 0, 0);
-    const iso = d.toISOString();
+    // Scheduled times are shop wall-clock: keep the day as stored and send the new hour as-is.
+    const iso = `${b.scheduled_for.slice(0, 10)}T${String(hour).padStart(2, "0")}:00:00`;
     setRows((cur) => (cur || []).map((x) => x.id === id ? { ...x, scheduled_for: iso } : x)); // optimistic
     try { await api.patch(`/appointments/${id}`, { scheduled_for: iso }); flash("Rescheduled"); } catch { load(); }
   }
@@ -63,7 +63,7 @@ export default function AppointmentsHub() {
   async function reschedule() {
     if (!sel || !reDate || !reTime) { flash("Pick a new date & time"); return; }
     setSelBusy(true);
-    try { const iso = new Date(`${reDate}T${reTime}`).toISOString(); await api.patch(`/appointments/${sel.id}`, { scheduled_for: iso }); setSel({ ...sel, scheduled_for: iso }); flash("Rescheduled — client notified"); setReDate(""); setReTime(""); load(); }
+    try { const iso = `${reDate}T${reTime.slice(0, 5)}:00`; /* shop wall-clock, as picked */ await api.patch(`/appointments/${sel.id}`, { scheduled_for: iso }); setSel({ ...sel, scheduled_for: iso }); flash("Rescheduled — client notified"); setReDate(""); setReTime(""); load(); }
     catch (e: any) { flash(e.message || "Reschedule clashes with another appointment"); } finally { setSelBusy(false); }
   }
   async function convert(record: "work_order" | "estimate") {

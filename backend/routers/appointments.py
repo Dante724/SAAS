@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
-from backend.services.dates import parse_dt
+from backend.services.dates import parse_dt, parse_wall_dt
 from backend.models import Appointment, Client, Service, Employee
 from backend.services.auth import get_current_employee
 
@@ -71,7 +71,7 @@ async def create_appointment(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
-    start = parse_dt(data.scheduled_for, "scheduled_for")
+    start = await parse_wall_dt(db, current.org_id, current.location_id, data.scheduled_for, "scheduled_for")
     dur = data.duration_min
     if not dur and data.service_id:
         svc = (await db.execute(select(Service).where(Service.id == data.service_id))).scalar_one_or_none()
@@ -136,7 +136,8 @@ async def update_appointment(
     # ── Build 144bq: reschedule (move in time and/or to another tech) ──
     if data.scheduled_for is not None or data.employee_id is not None or data.duration_min is not None:
         try:
-            new_start = parse_dt(data.scheduled_for, "scheduled_for") if data.scheduled_for else b.scheduled_for
+            new_start = (await parse_wall_dt(db, current.org_id, b.location_id, data.scheduled_for, "scheduled_for")
+                         if data.scheduled_for else b.scheduled_for)
         except ValueError:
             raise HTTPException(400, "Bad scheduled_for")
         new_emp = data.employee_id or b.employee_id

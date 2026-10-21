@@ -30,10 +30,16 @@ describe("scheduleLines", () => {
   });
 
   it("keeps a job ending at midnight on one day", () => {
-    const start = new Date(2026, 9, 21, 9, 0);   // local times, so the test holds in any zone
-    const end = new Date(2026, 9, 22, 0, 0);
-    const r = scheduleLines(start.toISOString(), end.toISOString());
+    const r = scheduleLines("2026-10-21T09:00:00", "2026-10-22T00:00:00");
     expect(r.map((x) => x.label)).toEqual(["Scheduled for"]);
+  });
+
+  it("shows the shop's wall-clock time whatever the visitor's timezone", () => {
+    // Stored 09:00 shop time must read 9:00 AM, never shifted by the browser's offset.
+    const r = scheduleLines("2026-10-21T09:00:00", "2026-10-21T11:30:00");
+    expect(r[0].value).toMatch(/Oct 21/);
+    expect(r[0].value).toMatch(/9:00\s?AM/);
+    expect(r[0].value).toMatch(/11:30\s?AM/);
   });
 
   it("ignores an end that isn't after the start", () => {

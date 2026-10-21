@@ -103,18 +103,21 @@ export const fmtDate = (s?: string) =>
   s ? new Date(asUtc(s)).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
 // Scheduled visit for the Details list: one line for a single day ("Tue, Oct 21, 2:00 – 4:00 PM"),
 // Start and End lines when the job spans several days. Empty when the shop doesn't share it.
+// Scheduled times are the shop's wall-clock time (no zone), so they are shown exactly as the shop
+// booked them, whatever the visitor's own timezone: read the digits as UTC and format in UTC.
+const wall = (s: string) => new Date(s.replace(/([zZ]|[+-]\d\d:?\d\d)$/, "") + "Z");
 export function scheduleLines(from?: string | null, to?: string | null): { label: string; value: string }[] {
   if (!from) return [];
-  const a = new Date(asUtc(from));
+  const a = wall(from);
   if (isNaN(a.getTime())) return [];
-  const day: Intl.DateTimeFormatOptions = { weekday: "short", month: "short", day: "numeric" };
-  const time: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
+  const day: Intl.DateTimeFormatOptions = { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" };
+  const time: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit", timeZone: "UTC" };
   const full = (d: Date) => `${d.toLocaleDateString([], day)}, ${d.toLocaleTimeString([], time)}`;
-  const b = to ? new Date(asUtc(to)) : null;
+  const b = to ? wall(to) : null;
   if (!b || isNaN(b.getTime()) || b.getTime() <= a.getTime()) return [{ label: "Scheduled for", value: full(a) }];
   // an end at exactly midnight ("until end of day") still belongs to the start's day
-  const endDay = b.getHours() === 0 && b.getMinutes() === 0 && b.getTime() - a.getTime() <= 86_400_000 ? new Date(b.getTime() - 1) : b;
-  if (a.toDateString() === endDay.toDateString())
+  const endDay = b.getUTCHours() === 0 && b.getUTCMinutes() === 0 && b.getTime() - a.getTime() <= 86_400_000 ? new Date(b.getTime() - 1) : b;
+  if (a.toISOString().slice(0, 10) === endDay.toISOString().slice(0, 10))
     return [{ label: "Scheduled for", value: `${full(a)} – ${b.toLocaleTimeString([], time)}` }];
   return [{ label: "Start", value: full(a) }, { label: "End", value: full(b) }];
 }

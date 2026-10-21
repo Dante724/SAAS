@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from backend.core import paging as _paging
 from backend.db.database import get_db
-from backend.services.dates import parse_dt
+from backend.services.dates import parse_dt, parse_wall_dt
 from backend.models import (
     Client,
     DocumentSignature,
@@ -910,8 +910,10 @@ async def create_order(
         complaint=data.complaint,
         assigned_to_id=assigned_to_id,
         manager_id=manager_id,
-        scheduled_for=parse_dt(data.scheduled_for, "scheduled_for") if data.scheduled_for else None,
-        scheduled_to=parse_dt(data.scheduled_to, "scheduled_to") if data.scheduled_to else None,
+        scheduled_for=(await parse_wall_dt(db, current.org_id, data.location_id, data.scheduled_for, "scheduled_for")
+                       if data.scheduled_for else None),
+        scheduled_to=(await parse_wall_dt(db, current.org_id, data.location_id, data.scheduled_to, "scheduled_to")
+                      if data.scheduled_to else None),
         duration_min=data.duration_min or 60,
         resource_id=data.resource_id or None,
         type_id=data.type_id,
@@ -2275,8 +2277,8 @@ async def duplicate_order(
     pass ``scheduled_for`` / ``scheduled_to`` to book the copy straight onto the
     calendar, or omit them for an unscheduled draft. Stock is not deducted here
     (that happens when the copy is actually worked)."""
-    sched_for = parse_dt(data.scheduled_for, "scheduled_for") if data.scheduled_for else None
-    sched_to = parse_dt(data.scheduled_to, "scheduled_to") if data.scheduled_to else None
+    sched_for = await parse_wall_dt(db, current.org_id, None, data.scheduled_for, "scheduled_for") if data.scheduled_for else None
+    sched_to = await parse_wall_dt(db, current.org_id, None, data.scheduled_to, "scheduled_to") if data.scheduled_to else None
     if sched_for and sched_to and sched_to < sched_for:
         raise HTTPException(400, "Schedule to must be on or after schedule from")
     src = (await db.execute(
@@ -3151,13 +3153,15 @@ async def reschedule(
     # reschedule dialog can clear a schedule by sending scheduled_for: null.
     sent = data.model_fields_set
     if "scheduled_for" in sent:
-        order.scheduled_for = parse_dt(data.scheduled_for, "scheduled_for") if data.scheduled_for else None
+        order.scheduled_for = (await parse_wall_dt(db, current.org_id, order.location_id, data.scheduled_for, "scheduled_for")
+                               if data.scheduled_for else None)
     elif data.scheduled_for is not None:
-        order.scheduled_for = parse_dt(data.scheduled_for, "scheduled_for")
+        order.scheduled_for = await parse_wall_dt(db, current.org_id, order.location_id, data.scheduled_for, "scheduled_for")
     if "scheduled_to" in sent:
-        order.scheduled_to = parse_dt(data.scheduled_to, "scheduled_to") if data.scheduled_to else None
+        order.scheduled_to = (await parse_wall_dt(db, current.org_id, order.location_id, data.scheduled_to, "scheduled_to")
+                              if data.scheduled_to else None)
     elif data.scheduled_to is not None:
-        order.scheduled_to = parse_dt(data.scheduled_to, "scheduled_to")
+        order.scheduled_to = await parse_wall_dt(db, current.org_id, order.location_id, data.scheduled_to, "scheduled_to")
     if data.duration_min is not None:
         order.duration_min = data.duration_min
     if data.assigned_to_id is not None:
