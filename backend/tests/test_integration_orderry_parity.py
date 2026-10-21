@@ -59,3 +59,25 @@ async def test_reschedule_with_a_zoned_instant_stores_shop_time(client, tenant, 
     await client.patch(f"/api/orders/{oid}/schedule", headers=tenant, json={"scheduled_for": "2026-10-22T10:30"})
     o = (await client.get(f"/api/orders/{oid}", headers=tenant)).json()
     assert o["scheduled_for"].startswith("2026-10-22T10:30")
+
+
+async def test_made_up_api_keys_count_against_the_ip(client, tenant, monkeypatch):
+    """P4: a random "rok_…" token used to get its own rate budget; only a real key may."""
+    from backend.core import observability
+    from backend.services import ratelimit
+    observability._KEY_CACHE.clear()
+    seen = []
+    real = ratelimit.aenforce
+
+    async def spy(bucket, key, limit, window):
+        if bucket == "global":
+            seen.append(key)
+        return await real(bucket, key, limit, window)
+    monkeypatch.setattr(ratelimit, "aenforce", spy)
+    for fake in ("rok_aaaaaaaa_x", "rok_bbbbbbbb_y"):
+        await client.get("/api/v1/contacts", headers={"Authorization": f"Bearer {fake}"})
+    assert seen and all(k.startswith("ip:") for k in seen), seen
+    key = (await client.post("/api/api-keys", json={"name": "Partner"}, headers=tenant)).json()["key"]
+    seen.clear()
+    await client.get("/api/v1/contacts", headers={"Authorization": f"Bearer {key}"})
+    assert seen == ["k:" + key[:12]], seen

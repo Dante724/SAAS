@@ -108,7 +108,7 @@ def _rate_key(request) -> str:
     if auth[:7].lower() == "bearer ":
         tok = auth[7:].strip()
         if tok.startswith("rok_"):
-            return "k:" + tok[:12]          # API key prefix (rok_<8 hex>)
+            return "k:" + tok               # verified in dispatch (_key_bucket) before it gets its own budget
         try:
             import jwt
 
@@ -119,6 +119,48 @@ def _rate_key(request) -> str:
         except Exception:
             pass                                          # bad/expired token: counts by IP
     return "ip:" + ratelimit.client_ip(request)
+
+
+# Verified API keys: sha256 → (prefix or None, expires_at). A made-up "rok_…" token must not
+# buy a fresh budget, so only a key that exists and is active gets its own bucket; anything else
+# counts against the caller's IP. Results are cached briefly so a busy integration costs one
+# lookup per minute, and the cache is capped so random tokens can't grow it without bound.
+_KEY_CACHE: dict[str, tuple[str | None, float]] = {}
+_KEY_CACHE_TTL_S = 60.0
+_KEY_CACHE_MAX = 5000
+
+
+async def _key_bucket(request, token: str) -> str:
+    import time
+
+    from backend.services import ratelimit
+    from backend.services.apikeys import hash_key
+    h = hash_key(token)
+    now = time.monotonic()
+    hit = _KEY_CACHE.get(h)
+    if hit and hit[1] > now:
+        prefix = hit[0]
+    else:
+        prefix = None
+        try:
+            from sqlalchemy import select
+
+            from backend.db.database import get_db
+            from backend.models import ApiKey
+            dep = request.app.dependency_overrides.get(get_db, get_db)   # the test suite swaps the DB
+            agen = dep()
+            db = await agen.__anext__()
+            try:
+                prefix = (await db.execute(select(ApiKey.prefix).where(
+                    ApiKey.key_hash == h, ApiKey.active == True))).scalar()  # noqa: E712
+            finally:
+                await agen.aclose()
+        except Exception:
+            prefix = None
+        if len(_KEY_CACHE) >= _KEY_CACHE_MAX:
+            _KEY_CACHE.clear()
+        _KEY_CACHE[h] = (prefix, now + _KEY_CACHE_TTL_S)
+    return ("k:" + prefix) if prefix else ("ip:" + ratelimit.client_ip(request))
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -141,6 +183,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not path.startswith("/api/") or any(path.startswith(p) for p in self.exempt):
             return await call_next(request)
         key = _rate_key(request)
+        if key.startswith("k:"):
+            key = await _key_bucket(request, key[2:])
         limit = settings.RATE_LIMIT_IP_PER_MIN if key.startswith("ip:") else settings.RATE_LIMIT_USER_PER_MIN
         try:
             await ratelimit.aenforce("global", key, limit, self.window)
