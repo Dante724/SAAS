@@ -480,6 +480,9 @@ async def print_payroll_statement(
             can_manage = False
     if current.id != employee_id and not can_manage:
         raise HTTPException(403, "You can only print your own payroll statement")
+    if current.id != employee_id:
+        from backend.services.payroll_views import assert_payroll_scope
+        await assert_payroll_scope(db, current, employee_id)
 
     q = select(EmployeeBalanceLedger).where(
         EmployeeBalanceLedger.org_id == current.org_id,

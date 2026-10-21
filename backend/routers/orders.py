@@ -1000,6 +1000,16 @@ async def create_order(
     except Exception:  # noqa: BLE001 — never block order creation on an upsell
         pass
 
+    # E4 — a new order enters its first status: attach the checklists set to attach on it.
+    try:
+        from backend.routers.checklists import auto_attach_for_status
+        from backend.routers.feed import log_system_event as _log_ev
+        for _title in await auto_attach_for_status(db, order, order.status, author_id=current.id):
+            await _log_ev(db, current.org_id, "order", order.id, f"Checklist attached: {_title}")
+        await db.commit()
+    except Exception:  # noqa: BLE001 — never block order creation on a checklist
+        await db.rollback()
+
     if not order.is_estimate:
         try:
             from backend.services.webhooks import emit_event
@@ -1472,6 +1482,12 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order.id,
                            f"Status changed: {prev} \u2192 {data.status}")
+    # E4 — checklists set to attach on this status (after the gates above, so they never block
+    # entering it; the next require_checklist / close gate waits for them).
+    if prev != data.status:
+        from backend.routers.checklists import auto_attach_for_status
+        for _title in await auto_attach_for_status(db, order, data.status, author_id=current.id):
+            await log_system_event(db, current.org_id, "order", order.id, f"Checklist attached: {_title}")
 
     # Phase B.7: asset auto-movement between zones driven by the status
     if target and target.moves_asset_to and order.device_id:

@@ -39,9 +39,13 @@ export function toSteps(t: any): Step[] {
   }));
 }
 
-export function toBody(name: string, scope: string, typeIds: string[], steps: Step[]) {
+export type AutoKey = { record_type: "work_order" | "estimate"; key: string };
+
+// autoKeys undefined = leave the template's auto-attach statuses as they are (the API keeps them).
+export function toBody(name: string, scope: string, typeIds: string[], steps: Step[], autoKeys?: AutoKey[]) {
   return {
     name: name.trim(), scope, type_ids: scope === "selected" ? typeIds : [],
+    ...(autoKeys !== undefined ? { auto_status_keys: autoKeys } : {}),
     steps: steps.map((st) => ({
       title: st.title.trim() || "Step", description: st.description ?? null,
       sections: [{ title: "", allow_notes: !!st.allow_notes, items: st.items.map((i) => ({
@@ -152,6 +156,7 @@ export function ChecklistList({ templates, onOpen, onNew, onChanged, onFlash }: 
                   <span className="block text-[11px] text-ink-tertiary truncate">{c.checks} {c.checks === 1 ? "check" : "checks"} in {c.steps} {c.steps === 1 ? "step" : "steps"} · {appliesTo(t)}</span>
                 </span>
                 <span className="ml-auto flex items-center gap-1.5 flex-shrink-0">
+                  {(t.auto_status_keys || []).length > 0 && <span title="Attaches itself when a job enters a chosen status" className="inline-flex items-center gap-1 h-6 px-2 rounded-md bg-primary/10 text-[11px] text-primary"><M n="bolt" c="text-[13px]" />Auto</span>}
                   {c.visible > 0 && <span title={`${c.visible} shown to the customer`} className="inline-flex items-center gap-1 h-6 px-2 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="visibility" c="text-[13px]" />{c.visible}</span>}
                   {c.required > 0 && <span title={`${c.required} must be filled in`} className="inline-flex items-center gap-1 h-6 px-2 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="priority_high" c="text-[13px]" />{c.required}</span>}
                   <button aria-label={`More actions for ${t.name}`} onClick={(e) => { e.stopPropagation(); setMenu(menu === t.id ? null : t.id); }}
@@ -185,7 +190,13 @@ export function ChecklistEditor({ tpl, onClose, onSaved }: { tpl: any | null; on
   const [types, setTypes] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<string | null>(null);   // "si:ii" of the check showing its details
+  const [autoKeys, setAutoKeys] = useState<AutoKey[]>(tpl?.auto_status_keys || []);
+  const [statuses, setStatuses] = useState<{ work_order: any[]; estimate: any[] } | null>(null);
   useEffect(() => { api.get<any>("/forms/types").then((r) => setTypes(r.items || [])).catch(() => {}); }, []);
+  useEffect(() => {
+    Promise.all((["work_order", "estimate"] as const).map((rt) => api.get<any>(`/statuses?record_type=${rt}`).then((r) => (r.items || r || []).filter((s: any) => s.active !== false)).catch(() => [])))
+      .then(([wo, est]) => setStatuses({ work_order: wo, estimate: est }));
+  }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
@@ -211,7 +222,7 @@ export function ChecklistEditor({ tpl, onClose, onSaved }: { tpl: any | null; on
     if (!all.length) { alertDialog("Add at least one check"); return; }
     setBusy(true);
     try {
-      const body = toBody(name, scope, typeIds, steps);
+      const body = toBody(name, scope, typeIds, steps, autoKeys);
       if (isEdit) await api.put(`/checklist-templates/${tpl.id}`, body); else await api.post("/checklist-templates", body);
       onSaved();
     } catch (e: any) { alertDialog(e?.message || "Couldn't save the checklist"); setBusy(false); }
@@ -260,6 +271,8 @@ export function ChecklistEditor({ tpl, onClose, onSaved }: { tpl: any | null; on
               </div>
             )}
           </div>
+
+          <AutoAttachPicker value={autoKeys} onChange={setAutoKeys} statuses={statuses} />
 
           {steps.map((st, si) => (
             <div key={si} className="rounded-2xl border border-slate-200 bg-white">
@@ -335,6 +348,38 @@ export function ChecklistEditor({ tpl, onClose, onSaved }: { tpl: any | null; on
           <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-ink-primary text-white font-semibold text-xs hover:opacity-90 disabled:opacity-60">{busy ? "Saving…" : isEdit ? "Save" : "Create checklist"}</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* "Attach automatically when the order enters…": pick statuses (work orders and estimates are
+   separate pipelines, so each status carries its record type). Entering one attaches this
+   checklist to the job once; it's never added twice to the same job. */
+export function AutoAttachPicker({ value, onChange, statuses }: {
+  value: AutoKey[]; onChange: (v: AutoKey[]) => void; statuses: { work_order: any[]; estimate: any[] } | null;
+}) {
+  const has = (rt: AutoKey["record_type"], key: string) => value.some((k) => k.record_type === rt && k.key === key);
+  const flip = (rt: AutoKey["record_type"], key: string) =>
+    onChange(has(rt, key) ? value.filter((k) => !(k.record_type === rt && k.key === key)) : [...value, { record_type: rt, key }]);
+  const groups: [AutoKey["record_type"], string][] = [["work_order", "Work orders"], ["estimate", "Estimates"]];
+  return (
+    <div>
+      <div className="text-[11px] font-semibold text-ink-tertiary mb-0.5">Attach automatically when the order enters…</div>
+      <p className="text-[11px] text-ink-tertiary mb-2">{value.length ? "Added to the job once, the first time it reaches one of these statuses." : "Off. Pick statuses to add this checklist to jobs on its own, or keep attaching it by hand."}</p>
+      {!statuses && <div className="text-[11px] text-ink-tertiary">Loading statuses…</div>}
+      {statuses && groups.map(([rt, label]) => statuses[rt].length > 0 && (
+        <div key={rt} className="mb-2" role="group" aria-label={`${label} statuses`}>
+          <div className="text-[11px] text-ink-secondary mb-1">{label}</div>
+          <div className="flex flex-wrap gap-1.5">
+            {statuses[rt].map((s: any) => { const on = has(rt, s.key); return (
+              <button key={s.key} type="button" onClick={() => flip(rt, s.key)} aria-pressed={on}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border transition-colors ${on ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-dashed border-slate-300 text-ink-tertiary hover:text-ink-secondary"}`}>
+                {on ? <M n="check" c="text-[12px] text-primary" /> : <span className="w-2 h-2 rounded-full" style={{ background: s.color || "#94a3b8" }} />}{s.name}
+              </button>
+            ); })}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

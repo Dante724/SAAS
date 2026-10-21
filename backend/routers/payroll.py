@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +18,15 @@ from backend.models import (
 )
 from backend.services.auth import assert_not_self, assert_perm, get_current_employee, has_perm, require_perm
 from backend.services.payroll import CommissionEngine, _money
+from backend.services.payroll_views import (
+    adjustments,
+    assert_payroll_scope,
+    assert_payroll_scope_all,
+    commission_breakdown,
+    expected_base,
+    in_scope,
+    payroll_scope_ids,
+)
 from backend.services.money import q2
 
 router = APIRouter(prefix="/api/payroll", tags=["payroll"])
@@ -57,7 +66,17 @@ async def list_rules(
 ):
     rows = (await db.execute(select(CommissionRule).where(
         CommissionRule.org_id == current.org_id, CommissionRule.active == True))).scalars().all()  # noqa: E712
-    return {"items": [_ser_rule(r) for r in rows], "events": EVENTS}
+    ids = await payroll_scope_ids(db, current)
+    return {"items": [_ser_rule(r) for r in rows if r.employee_id is None or in_scope(ids, r.employee_id)],
+            "events": EVENTS}
+
+
+async def _assert_rule_scope(db, current, employee_id: Optional[str]) -> None:
+    """A rule for one person needs that person in scope; a shop-wide rule needs an unlimited scope."""
+    if employee_id:
+        await assert_payroll_scope(db, current, employee_id)
+    else:
+        await assert_payroll_scope_all(db, current)
 
 
 class RuleIn(BaseModel):
@@ -108,6 +127,7 @@ async def create_rule(
         raise HTTPException(400, f"event must be one of {EVENTS}")
     if data.calc_timing == "on_status" and not data.trigger_status_key:
         raise HTTPException(400, "on_status timing requires trigger_status_key")
+    await _assert_rule_scope(db, current, data.employee_id)
     r = CommissionRule(org_id=current.org_id)
     _apply_rule(r, data)
     db.add(r)
@@ -128,6 +148,8 @@ async def update_rule(
         CommissionRule.id == rule_id, CommissionRule.org_id == current.org_id))).scalar_one_or_none()
     if not r:
         raise HTTPException(404, "Rule not found")
+    await _assert_rule_scope(db, current, r.employee_id)
+    await _assert_rule_scope(db, current, data.employee_id)
     before = _ser_rule(r)
     _apply_rule(r, data)
     after = _ser_rule(r)
@@ -147,6 +169,7 @@ async def delete_rule(
     r = (await db.execute(select(CommissionRule).where(
         CommissionRule.id == rule_id, CommissionRule.org_id == current.org_id))).scalar_one_or_none()
     if r:
+        await _assert_rule_scope(db, current, r.employee_id)
         r.active = False
         await _audit(db, current, "payroll.rule_delete", "commission_rule", r.id, {"name": r.name})
         await db.commit()
@@ -164,6 +187,8 @@ async def employee_balance(
         if employee_id != current.id:
             await assert_perm(db, current, "can_manage_payroll")
         await assert_perm(db, current, "can_view_own_compensation")
+    else:
+        await assert_payroll_scope(db, current, employee_id)
     eng = CommissionEngine(db, current.org_id)
     bal = await eng.balance(employee_id)
     rows = (await db.execute(select(EmployeeBalanceLedger).where(
@@ -176,6 +201,73 @@ async def employee_balance(
                     "event": e.event, "ref_type": e.ref_type, "ref_id": e.ref_id,
                     "note": e.note, "created_at": e.created_at.isoformat() if e.created_at else None}
                    for e in rows],
+    }
+
+
+# ── E1: My earnings — the caller's own pay for a period, broken down ─────────
+def _accrual_status(runs: list) -> str:
+    live = [r.status for r in runs if r.status != "void"]
+    if not live:
+        return "not_accrued"
+    if all(st == "paid" for st in live):
+        return "paid"
+    if any(st in ("accrued", "paid") for st in live):
+        return "accrued"
+    return "draft"
+
+
+@router.get("/me")
+async def my_earnings(
+    date_from: Optional[str] = Query(None, alias="from"),
+    date_to: Optional[str] = Query(None, alias="to"),
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_view_own_payroll")),
+):
+    """What the signed-in person earned in a period (default: this month): base, hourly,
+    commissions broken down rule → work order → line item, bonuses, penalties, and whether the
+    period has been accrued or paid. Only ever the caller's own figures; the role's pay-history
+    limit (payroll_visibility_days) still applies."""
+    from backend.services import scoping
+    today = date.today()
+    ps = parse_date(date_from, "from") if date_from else today.replace(day=1)
+    pe = parse_date(date_to, "to") if date_to else _month_bounds(today.strftime("%Y-%m"))[1]
+    if pe < ps:
+        raise HTTPException(400, "from must be on or before to")
+    if (pe - ps).days > 366:
+        raise HTTPException(400, "Pick a period of a year or less")
+    cutoff = scoping.payroll_cutoff(await scoping.role_for(db, current))
+    asked_from = ps
+    if cutoff and ps < cutoff:
+        ps = cutoff
+    emp = (await db.execute(select(Employee).where(
+        Employee.id == current.id, Employee.org_id == current.org_id))).scalar_one()
+    empty = pe < ps                      # the whole period is older than the role may see
+    breakdown = [] if empty else await commission_breakdown(db, current.org_id, emp.id, ps, pe)
+    adj = {"bonuses": [], "penalties": []} if empty else await adjustments(db, current.org_id, emp.id, ps, pe)
+    base = _money(0) if empty else expected_base(emp, ps, pe)
+    hourly = _money(0) if empty else await _hourly_for_period(db, current.org_id, emp.id, ps, pe)
+    commissions = _money(sum(_money(g["total"]) for g in breakdown))
+    bonuses = _money(sum(_money(b["amount"]) for b in adj["bonuses"]))
+    penalties = _money(sum(_money(b["amount"]) for b in adj["penalties"]))
+    runs = [] if empty else (await db.execute(select(PayrollRun).where(
+        PayrollRun.org_id == current.org_id, PayrollRun.employee_id == emp.id,
+        PayrollRun.period_start <= pe, PayrollRun.period_end >= ps)
+        .order_by(PayrollRun.period_start))).scalars().all()
+    return {
+        "employee_id": emp.id, "name": emp.name, "wage_type": emp.wage_type,
+        "period_start": ps.isoformat(), "period_end": pe.isoformat(),
+        "visible_from": cutoff.isoformat() if cutoff and asked_from < cutoff else None,
+        "base_salary": float(base), "hourly_total": float(hourly),
+        "commissions_total": float(commissions), "bonuses_total": float(bonuses),
+        "penalties_total": float(penalties),
+        "total": float(_money(base + hourly + commissions + bonuses - penalties)),
+        "accrual_status": _accrual_status(runs),
+        "accruals": [{"id": r.id, "period_start": r.period_start.isoformat(),
+                      "period_end": r.period_end.isoformat(), "status": r.status,
+                      "gross_total": float(r.gross_total or 0),
+                      "paid_at": r.paid_at.isoformat() if r.paid_at else None}
+                     for r in runs if r.status != "void"],
+        "commissions": breakdown, "bonuses": adj["bonuses"], "penalties": adj["penalties"],
     }
 
 
@@ -208,6 +300,7 @@ async def create_payroll_run(
     Commissions are already in the ledger from order events."""
     await assert_perm(db, current, "can_accrue_payroll")
     await _assert_reward_rights(db, current, data.bonus, data.penalty)
+    await assert_payroll_scope(db, current, data.employee_id)
     ps = parse_date(data.period_start, "period_start")
     pe = parse_date(data.period_end, "period_end")
     today = date.today()
@@ -317,12 +410,17 @@ async def create_payroll_runs_bulk(
     if not data.draft and (pe.year, pe.month) >= (today.year, today.month):
         raise HTTPException(400, "Can't accrue payroll for the current or a future month; save as draft instead")
 
+    scope = await payroll_scope_ids(db, current)
     if data.employee_ids:
+        outside = [i for i in data.employee_ids if not in_scope(scope, i)]
+        if outside:
+            raise HTTPException(403, "Some of these people's payroll is outside what your role can see")
         emps = (await db.execute(select(Employee).where(
             Employee.org_id == current.org_id, Employee.id.in_(data.employee_ids)))).scalars().all()
     else:
-        emps = (await db.execute(select(Employee).where(
+        emps = [e for e in (await db.execute(select(Employee).where(
             Employee.org_id == current.org_id, Employee.active == True))).scalars().all()  # noqa: E712
+            if in_scope(scope, e.id)]
 
     accrued, skipped, results = 0, 0, []
     for emp in emps:
@@ -467,19 +565,43 @@ async def _hourly_for_period(db, org_id, employee_id, ps, pe) -> Decimal:
     return _money(total)
 
 
+async def filtered_employees(db: AsyncSession, current: Employee, *, location_id: Optional[str] = None,
+                             role_id: Optional[str] = None, employee_id: Optional[str] = None) -> list[Employee]:
+    """E2 — active employees for a payroll view: the caller's payroll scope, then the filters
+    (location, role/position, one employee). Shared by the calculation and the payroll report."""
+    from backend.services.auth import check_location_access
+    if location_id:
+        await check_location_access(db, current, location_id)
+    q = select(Employee).where(Employee.org_id == current.org_id, Employee.active == True)  # noqa: E712
+    if location_id:
+        # someone with no home location isn't tied to a branch, so they count in every branch
+        q = q.where((Employee.location_id == location_id) | Employee.location_id.is_(None))
+    if role_id:
+        q = q.where(Employee.role_id == role_id)
+    if employee_id:
+        q = q.where(Employee.id == employee_id)
+    scope = await payroll_scope_ids(db, current)
+    emps = [e for e in (await db.execute(q)).scalars().all() if in_scope(scope, e.id)]
+    return sorted(emps, key=lambda e: (e.name or "").lower())
+
+
 @router.get("/calculation")
 async def payroll_calculation(
     month: str,
+    location_id: Optional[str] = None,
+    role_id: Optional[str] = None,
+    employee_id: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_payroll")),
 ):
-    """Live, non-mutating preview of the month's payroll for every employee."""
+    """Live, non-mutating preview of the month's payroll for every employee the caller's payroll
+    scope covers, optionally narrowed to a location, a role (position) or one employee."""
     try:
         ps, pe = _month_bounds(month)
     except (ValueError, IndexError):
         raise HTTPException(400, "month must be YYYY-MM")
-    emps = (await db.execute(select(Employee).where(
-        Employee.org_id == current.org_id, Employee.active == True))).scalars().all()  # noqa: E712
+    emps = await filtered_employees(db, current, location_id=location_id, role_id=role_id,
+                                    employee_id=employee_id)
     runs = (await db.execute(select(PayrollRun).where(
         PayrollRun.org_id == current.org_id,
         PayrollRun.period_start == ps, PayrollRun.period_end == pe))).scalars().all()
@@ -504,7 +626,7 @@ async def payroll_calculation(
         total = base + _money(commissions) + _money(hourly) + bonuses - penalties
         items.append({
             "employee_id": e.id, "name": e.name, "wage_type": e.wage_type,
-            "position": roles.get(e.role_id) or "—",
+            "position": roles.get(e.role_id) or "—", "role_id": e.role_id, "location_id": e.location_id,
             "base_salary": float(base), "commissions_total": float(_money(commissions)),
             "hourly_total": float(_money(hourly)),
             "bonuses_total": float(bonuses), "penalties_total": float(penalties),
@@ -521,7 +643,41 @@ async def payroll_calculation(
         "computed_total": float(_money(sum(i["computed_total"] for i in items))),
     }
     return {"month": month, "period_start": ps.isoformat(), "period_end": pe.isoformat(),
+            "filters": {"location_id": location_id, "role_id": role_id, "employee_id": employee_id},
             "items": items, "totals": grand}
+
+
+@router.get("/calculation/export.csv")
+async def export_calculation(
+    month: str,
+    location_id: Optional[str] = None,
+    role_id: Optional[str] = None,
+    employee_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_manage_payroll")),
+):
+    """E2 — the payroll calculation as it is on screen (same scope and filters), as CSV."""
+    import csv
+    import io
+
+    from fastapi.responses import StreamingResponse
+
+    from backend.core.spreadsheet import safe_row
+    await assert_perm(db, current, "can_export_payroll")
+    data = await payroll_calculation(month, location_id, role_id, employee_id, db, current)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Employee", "Position", "Wage type", "Base", "Hourly", "Commission", "Bonuses",
+                "Penalties", "Total", "Accrual"])
+    for i in data["items"]:
+        w.writerow(safe_row([i["name"], i["position"], i["wage_type"] or "", i["base_salary"], i["hourly_total"],
+                             i["commissions_total"], i["bonuses_total"], i["penalties_total"],
+                             i["computed_total"], i["accrual_status"] or "not accrued"]))
+    t = data["totals"]
+    w.writerow(["Total", "", "", t["base_salary"], t["hourly_total"], t["commissions_total"],
+                t["bonuses_total"], t["penalties_total"], t["computed_total"], ""])
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="payroll_{month}.csv"'})
 
 
 # ── Build 144h: ad-hoc penalties & bonuses on the payroll-calculation page ────
@@ -548,6 +704,7 @@ async def add_adjustment(
         Employee.id == data.employee_id, Employee.org_id == current.org_id))).scalar_one_or_none()
     if not emp:
         raise HTTPException(404, "Employee not found")
+    await assert_payroll_scope(db, current, emp.id)
     await assert_not_self(db, current, emp.id, "add a bonus or penalty for yourself")
     amt = _money(data.amount)
     signed = amt if data.kind == "bonus" else -amt
@@ -587,6 +744,7 @@ async def remove_adjustment(
         raise HTTPException(404, "Adjustment not found")
     if e.ref_type != "manual" or e.entry_type not in ("penalty", "bonus"):
         raise HTTPException(400, "Only manual penalties/bonuses can be removed here")
+    await assert_payroll_scope(db, current, e.employee_id)
     await _audit(db, current, f"payroll.{e.entry_type}_remove", "employee", e.employee_id,
                  {"entry_id": e.id, "amount": float(e.amount or 0), "note": e.note})
     await db.delete(e)
@@ -601,7 +759,8 @@ async def calculation_detail(
     current: Employee = Depends(require_perm("can_manage_payroll")),
 ):
     """Per-employee breakdown for the payroll-calculation drawer: itemized
-    commissions, plus the manual penalties and bonuses for the month."""
+    commissions (flat, and grouped rule → document → line item), plus the manual
+    penalties and bonuses for the month."""
     try:
         ps, pe = _month_bounds(month)
     except (ValueError, IndexError):
@@ -610,6 +769,7 @@ async def calculation_detail(
         Employee.id == employee_id, Employee.org_id == current.org_id))).scalar_one_or_none()
     if not emp:
         raise HTTPException(404, "Employee not found")
+    await assert_payroll_scope(db, current, emp.id)
     rows = (await db.execute(select(EmployeeBalanceLedger).where(
         EmployeeBalanceLedger.org_id == current.org_id,
         EmployeeBalanceLedger.employee_id == employee_id,
@@ -636,6 +796,7 @@ async def calculation_detail(
         "penalties": penalties, "penalties_total": float(penalties_total),
         "bonuses": bonuses, "bonuses_total": float(bonuses_total),
         "computed_total": float(_money(base + comm_total + hourly + bonuses_total - penalties_total)),
+        "breakdown": await commission_breakdown(db, current.org_id, employee_id, ps, pe),
     }
 
 
@@ -666,6 +827,7 @@ async def accrue_calculation(
         Employee.id == data.employee_id, Employee.org_id == current.org_id))).scalar_one_or_none()
     if not emp:
         raise HTTPException(404, "Employee not found")
+    await assert_payroll_scope(db, current, emp.id)
     dupe = (await db.execute(select(PayrollRun).where(
         PayrollRun.org_id == current.org_id, PayrollRun.employee_id == data.employee_id,
         PayrollRun.status.notin_(_NOT_ACCRUED),
@@ -729,6 +891,7 @@ async def post_attendance_wages(
         Employee.id == data.employee_id, Employee.org_id == current.org_id))).scalar_one_or_none()
     if not emp:
         raise HTTPException(404, "Employee not found")
+    await assert_payroll_scope(db, current, emp.id)
     if (emp.hourly_basis or "labour") != "attendance":
         # One clock pays: labour-hours staff are paid by timesheet approval, so paying their
         # shifts too would pay the same hours twice.
@@ -768,8 +931,11 @@ async def list_runs(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_payroll")),
 ):
-    rows = (await db.execute(select(PayrollRun).where(
-        PayrollRun.org_id == current.org_id).order_by(PayrollRun.period_start.desc()).limit(200))).scalars().all()
+    q = select(PayrollRun).where(PayrollRun.org_id == current.org_id)
+    scope = await payroll_scope_ids(db, current)
+    if scope is not None:
+        q = q.where(PayrollRun.employee_id.in_(scope or {""}))
+    rows = (await db.execute(q.order_by(PayrollRun.period_start.desc()).limit(200))).scalars().all()
     names = {e.id: e.name for e in (await db.execute(select(Employee).where(
         Employee.org_id == current.org_id))).scalars().all()}
     items = [{
@@ -831,6 +997,7 @@ async def mark_run_paid(
     from backend.routers.cash import post_transaction
     from backend.services import scoping
     run = await _get_run(db, current.org_id, run_id)
+    await assert_payroll_scope(db, current, run.employee_id)
     if run.status == "draft":
         raise HTTPException(400, "Accrue the draft before marking it paid")
     if run.status == "paid":
@@ -894,6 +1061,7 @@ async def void_run(
     if not reason:
         raise HTTPException(400, "Give a reason for voiding this run")
     run = await _get_run(db, current.org_id, run_id)
+    await assert_payroll_scope(db, current, run.employee_id)
     if run.status == "void":
         raise HTTPException(409, "This run is already voided")
     if run.status == "draft":
@@ -946,8 +1114,9 @@ async def list_coefficients(
     q = select(EmployeeCoefficient).where(EmployeeCoefficient.org_id == current.org_id)
     if employee_id:
         q = q.where(EmployeeCoefficient.employee_id == employee_id)
+    scope = await payroll_scope_ids(db, current)
     rows = (await db.execute(q)).scalars().all()
-    return {"items": [_ser_coeff(c) for c in rows]}
+    return {"items": [_ser_coeff(c) for c in rows if in_scope(scope, c.employee_id)]}
 
 
 class CoeffIn(BaseModel):
@@ -969,6 +1138,7 @@ async def upsert_coefficient(
         raise HTTPException(400, "invalid scope_type")
     if data.context not in ("order", "sales"):
         raise HTTPException(400, "context must be order|sales")
+    await assert_payroll_scope(db, current, data.employee_id)
     existing = (await db.execute(select(EmployeeCoefficient).where(
         EmployeeCoefficient.org_id == current.org_id, EmployeeCoefficient.employee_id == data.employee_id,
         EmployeeCoefficient.scope_type == data.scope_type, EmployeeCoefficient.scope_ref == data.scope_ref,
@@ -1004,6 +1174,7 @@ async def delete_coefficient(
     c = (await db.execute(select(EmployeeCoefficient).where(
         EmployeeCoefficient.id == coeff_id, EmployeeCoefficient.org_id == current.org_id))).scalar_one_or_none()
     if c:
+        await assert_payroll_scope(db, current, c.employee_id)
         await _audit(db, current, "payroll.coefficient_delete", "employee", c.employee_id,
                      {"id": c.id, "scope": [c.scope_type, c.scope_ref, c.context],
                       "coefficient": float(c.coefficient or 1)})
