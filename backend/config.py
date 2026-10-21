@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_FROM: str = ""
     TWILIO_WHATSAPP_FROM: str = ""
+    # D1: a shop's live Twilio voice credentials are refused unless this is true AND
+    # ENVIRONMENT=production. Test credentials (magic numbers, nothing dials) always work.
+    ALLOW_LIVE_TELEPHONY: bool = False
 
     # -- Meta messaging (Messenger / Instagram / WhatsApp Cloud) — absent -> simulated --
     # One webhook verify token for all Meta channels; per-channel access tokens.

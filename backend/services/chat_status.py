@@ -48,9 +48,12 @@ async def link_client(db: AsyncSession, org_id: str, handle: str | None):
     match the client's email."""
     if not handle:
         return None
-    col = Client.email if "@" in handle else Client.phone
-    return (await db.execute(select(Client).where(Client.org_id == org_id, col == handle)
-                             .order_by(Client.created_at.desc()))).scalars().first()
+    if "@" in handle:
+        return (await db.execute(select(Client).where(Client.org_id == org_id, Client.email == handle)
+                                 .order_by(Client.created_at.desc()))).scalars().first()
+    # Same number rule as calls (D2): formatting-insensitive and country-code aware.
+    from backend.services.call_contacts import find_client
+    return await find_client(db, org_id, handle, newest=True)
 
 
 async def ingest_inbound(db: AsyncSession, org_id: str, *, channel: str, handle: str, body: str,

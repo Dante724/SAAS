@@ -1392,17 +1392,13 @@ async def appointment_hello(slug: str, data: HelloIn, request: Request,
     from backend.core.webhook_security import client_ip, enforce_rate_limit, lookup_limiter
     enforce_rate_limit(lookup_limiter, f"hello:{client_ip(request)}")
     org = await _org_by_slug(db, slug)
-    digits = "".join(ch for ch in (data.phone or "") if ch.isdigit())[-10:]
-    if len(digits) < 7:
+    from backend.services.call_contacts import digits, find_client   # same rule as calls/chats
+    if len(digits(data.phone)) < 7:
         return {"known": False}
-    # ponytail: full-org scan for format-agnostic matching; add a normalized-phone
-    # column + index when a shop's client list is big enough for this to show up.
-    rows = (await db.execute(select(Client).where(Client.org_id == org.id))).scalars().all()
-    for c in rows:
-        on_file = "".join(ch for ch in (c.phone or "") if ch.isdigit())[-10:]
-        if on_file and on_file == digits:
-            first = (c.name or "").strip().split(" ")[0]
-            return {"known": True, "name": first or None}
+    c = await find_client(db, org.id, data.phone)
+    if c:
+        first = (c.name or "").strip().split(" ")[0]
+        return {"known": True, "name": first or None}
     return {"known": False}
 
 
