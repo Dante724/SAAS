@@ -48,6 +48,8 @@ def _ser_role(r: Role) -> dict:
             "warehouse_ids": getattr(r, "warehouse_ids", None) or [],
             "account_ids": getattr(r, "account_ids", None) or [],
             "payroll_visibility_days": getattr(r, "payroll_visibility_days", None),
+            "payroll_scope": getattr(r, "payroll_scope", None) or "all",
+            "payroll_employee_ids": getattr(r, "payroll_employee_ids", None) or [],
             "hidden_status_keys": getattr(r, "hidden_status_keys", None) or [],
             "home_feed_sources": getattr(r, "home_feed_sources", None) or [],
             "home_route": getattr(r, "home_route", None) or ""}
@@ -73,6 +75,8 @@ class RoleIn(BaseModel):
     warehouse_ids: list[str] = []
     account_ids: list[str] = []     # empty = all accounts
     payroll_visibility_days: Optional[int] = None
+    payroll_scope: str = "all"           # E3: own | all | selected (whose payroll the role sees)
+    payroll_employee_ids: list[str] = []  # E3: the people when payroll_scope = selected
     hidden_status_keys: list[str] = []   # A5: order/estimate status keys this role can't view
     home_feed_sources: list[str] = []    # Home-feed signals this role sees ([] = all)
     home_route: Optional[str] = None      # landing page for this role ("" / None = Home)
@@ -80,7 +84,7 @@ class RoleIn(BaseModel):
 
 _SCOPE_FIELDS = ("location_scope", "location_ids", "contact_scope", "order_scope", "warehouse_scope",
                  "warehouse_ids", "account_ids", "payroll_visibility_days", "hidden_status_keys",
-                 "home_feed_sources", "home_route")
+                 "home_feed_sources", "home_route", "payroll_scope", "payroll_employee_ids")
 
 
 def _apply_scope(r: Role, data: "RoleIn") -> None:
@@ -93,6 +97,11 @@ def _apply_scope(r: Role, data: "RoleIn") -> None:
     r.warehouse_ids = data.warehouse_ids or None
     r.account_ids = data.account_ids or None
     r.payroll_visibility_days = data.payroll_visibility_days
+    if data.payroll_scope not in ("all", "own", "selected"):
+        raise HTTPException(422, "payroll_scope must be all|own|selected")
+    r.payroll_scope = data.payroll_scope
+    r.payroll_employee_ids = (list(dict.fromkeys(data.payroll_employee_ids))
+                              if data.payroll_scope == "selected" else None)
     r.hidden_status_keys = data.hidden_status_keys or None
     r.home_feed_sources = data.home_feed_sources or None
     r.home_route = (data.home_route or "").strip() or None
@@ -121,9 +130,14 @@ async def _editor_role(db: AsyncSession, current: Employee) -> Optional[Role]:
 
 
 def _assert_scope_not_wider(editor: Role, data: "RoleIn") -> None:
-    for field in ("order_scope", "contact_scope", "warehouse_scope", "location_scope"):
+    for field in ("order_scope", "contact_scope", "warehouse_scope", "location_scope", "payroll_scope"):
         if getattr(editor, field, "all") in _NARROW and getattr(data, field, "all") not in _NARROW:
             raise HTTPException(403, f"You can't give a role wider access than your own ({field.replace('_', ' ')})")
+    if getattr(editor, "payroll_scope", "all") == "own" and getattr(data, "payroll_scope", "all") != "own":
+        raise HTTPException(403, "You can't give a role wider access than your own (payroll scope)")
+    if getattr(editor, "payroll_scope", "all") == "selected" and getattr(data, "payroll_scope", "all") == "selected":
+        if not set(data.payroll_employee_ids or []) <= set(editor.payroll_employee_ids or []):
+            raise HTTPException(403, "You can't give a role payroll access to people outside your own")
     if getattr(editor, "location_scope", "all") == "selected":
         mine = set(json.loads(editor.location_ids or "[]"))
         if not set(data.location_ids or []) <= mine:

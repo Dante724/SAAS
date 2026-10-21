@@ -228,6 +228,9 @@ class Role(Base):
     warehouse_ids: Mapped[Optional[dict]] = mapped_column(JSON)   # list of location ids when scope=selected
     account_ids: Mapped[Optional[dict]] = mapped_column(JSON)     # cash accounts this role may see (null = all)
     payroll_visibility_days: Mapped[Optional[int]] = mapped_column(Integer)  # how far back own-compensation is visible
+    # E3: whose payroll this role may see and manage (own | all | selected); selected = payroll_employee_ids
+    payroll_scope: Mapped[str] = mapped_column(String(10), default="all", server_default="all")
+    payroll_employee_ids: Mapped[Optional[list]] = mapped_column(JSON)
     refund_ceiling: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2))  # Build 108: above this needs approval
     # A5: per-status VIEW ACL — order/estimate status keys this role may NOT see
     # (deny-wins, default-allow). Complements the existing transition (set) ACL.
@@ -2447,6 +2450,9 @@ class ChecklistTemplate(Base):
     name: Mapped[str] = mapped_column(String(160))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # E4: attach automatically when an order enters one of these statuses.
+    # List of {"record_type": "work_order"|"estimate", "key": OrderStatus.key}.
+    auto_status_keys: Mapped[Optional[list]] = mapped_column(JSON)
 
 
 class ChecklistStep(Base):

@@ -523,6 +523,9 @@ async def _rep_labor_cost(db, org, df, dt, **kw):
     rows = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == org, TimeEntry.state != "void",
         TimeEntry.started_at >= df, TimeEntry.started_at < dt))).scalars().all()
+    scope = kw.get("payroll_ids")          # E3: only the people the caller's payroll scope covers
+    if scope is not None:
+        rows = [e for e in rows if e.employee_id in scope]
     total = sum(e.duration_sec for e in rows)
     billable = sum(e.duration_sec for e in rows if e.billable)
     cost = sum(e.duration_sec / 3600 * (e.cost_rate or 0) for e in rows)
@@ -648,10 +651,19 @@ async def _rep_expiration(db, org, df, dt, **kw):
 async def _rep_payroll(db, org, df, dt, **kw):
     """Per-employee compensation accrued in the window, straight from the payroll
     ledger: commissions, hourly wages (both the labour-hours and shop-attendance
-    clocks post here), manual bonuses/penalties, and accrued base salary."""
+    clocks post here), manual bonuses/penalties, and accrued base salary.
+    E2: narrowed by location, role (position) and employee; `payroll_ids` is the caller's
+    payroll scope (None = everyone)."""
     from backend.models import EmployeeBalanceLedger, Role
-    emps = (await db.execute(select(Employee).where(
-        Employee.org_id == org, Employee.active == True))).scalars().all()  # noqa: E712
+    q = select(Employee).where(Employee.org_id == org, Employee.active == True)  # noqa: E712
+    if kw.get("location_id"):
+        q = q.where(Employee.location_id == kw["location_id"])
+    if kw.get("role_id"):
+        q = q.where(Employee.role_id == kw["role_id"])
+    if kw.get("employee_id"):
+        q = q.where(Employee.id == kw["employee_id"])
+    scope = kw.get("payroll_ids")
+    emps = [e for e in (await db.execute(q)).scalars().all() if scope is None or e.id in scope]
     roles = {r.id: r.name for r in (await db.execute(
         select(Role).where(Role.org_id == org))).scalars().all()}
     led = (await db.execute(select(EmployeeBalanceLedger).where(
@@ -824,6 +836,22 @@ async def _assert_report_access(db, current, report_key: str, export: bool = Fal
         await assert_perm(db, current, EXPORT_PERMS[report_key])
 
 
+PAYROLL_REPORTS = {"payroll", "labor_cost"}
+
+
+async def _builder_kw(db, current, report_key: str, location_id, role_id, employee_id) -> dict:
+    """Extra builder arguments: the branch, plus (payroll reports) the role/employee filters and
+    the caller's payroll scope, so the screen, the run and every export show the same rows."""
+    kw = {"location_id": location_id}
+    if report_key in PAYROLL_REPORTS:
+        from backend.services.payroll_views import assert_payroll_scope, payroll_scope_ids
+        if employee_id:
+            await assert_payroll_scope(db, current, employee_id)
+        kw.update(role_id=role_id, employee_id=employee_id,
+                  payroll_ids=await payroll_scope_ids(db, current))
+    return kw
+
+
 async def _report_from(db, current, report_key: str, df):
     """The cash flow starts no earlier than today for a role without "any period"."""
     if report_key != "cash_flow":
@@ -877,6 +905,8 @@ async def run_report(
     date_from: str = Query(None),
     date_to: str = Query(None),
     location_id: str = Query(None),           # build 141: scope order-based reports to a branch
+    role_id: str = Query(None),               # E2: payroll reports — one role (position)
+    employee_id: str = Query(None),           # E2: payroll reports — one employee
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
@@ -888,7 +918,8 @@ async def run_report(
     df, dt = _parse_range(date_from, date_to)
     df = await _report_from(db, current, report_key, df)
     location_id = await _scoped_location(db, current, location_id)
-    cols, rows = await builder(db, current.org_id, df, dt, location_id=location_id)
+    cols, rows = await builder(db, current.org_id, df, dt,
+                               **await _builder_kw(db, current, report_key, location_id, role_id, employee_id))
     # totals row for numeric columns
     return {"key": report_key, "title": title, "tab": tab,
             "columns": cols, "rows": rows, "row_count": len(rows)}
@@ -900,6 +931,8 @@ async def export_report(
     date_from: str = Query(None),
     date_to: str = Query(None),
     location_id: str = Query(None),
+    role_id: str = Query(None),
+    employee_id: str = Query(None),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
@@ -914,7 +947,8 @@ async def export_report(
     df, dt = _parse_range(date_from, date_to)
     df = await _report_from(db, current, report_key, df)
     location_id = await _scoped_location(db, current, location_id)
-    cols, rows = await builder(db, current.org_id, df, dt, location_id=location_id)
+    cols, rows = await builder(db, current.org_id, df, dt,
+                               **await _builder_kw(db, current, report_key, location_id, role_id, employee_id))
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -950,6 +984,8 @@ async def export_report_csv(
     date_from: str = Query(None),
     date_to: str = Query(None),
     location_id: str = Query(None),
+    role_id: str = Query(None),
+    employee_id: str = Query(None),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
@@ -963,7 +999,8 @@ async def export_report_csv(
     df, dt = _parse_range(date_from, date_to)
     df = await _report_from(db, current, report_key, df)
     location_id = await _scoped_location(db, current, location_id)
-    cols, rows = await builder(db, current.org_id, df, dt, location_id=location_id)
+    cols, rows = await builder(db, current.org_id, df, dt,
+                               **await _builder_kw(db, current, report_key, location_id, role_id, employee_id))
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(cols)

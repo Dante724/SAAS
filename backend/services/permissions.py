@@ -95,6 +95,7 @@ CATALOG = {
     ],
     "Payroll": [
         ("can_view_payroll", "View payroll calculation"),
+        ("can_view_own_payroll", "See their own earnings (My earnings)"),
         ("can_accrue_payroll", "Accrue payroll"),
         ("can_create_penalties", "Create penalties"),
         ("can_create_bonuses", "Create bonuses"),
