@@ -1178,7 +1178,7 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
   }
 
   // Result choices as a soft-tint segmented control: the chosen value takes its own tint.
-  const CHECK = [["pass", "Pass", "bg-emerald-50 text-emerald-700 ring-emerald-200"], ["fail", "Fail", "bg-rose-50 text-rose-700 ring-rose-200"], ["caution", "Caution", "bg-amber-50 text-amber-700 ring-amber-200"]] as const;
+  const CHECK = [["pass", "Pass", "bg-emerald-50 text-emerald-700 ring-emerald-200"], ["fail", "Fail", "bg-rose-50 text-rose-700 ring-rose-200"], ["caution", "Caution", "bg-amber-50 text-amber-700 ring-amber-200"], ["unknown", "Unknown", "bg-slate-100 text-ink-secondary ring-slate-200"]] as const;
   const segCls = (on: boolean, tone: string) => `px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${on ? `${tone} ring-1 ring-inset shadow-2xs` : "text-ink-secondary hover:text-ink-primary"}`;
 
   return (
@@ -1227,10 +1227,26 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
                       <input type={i.field_kind === "number" ? "number" : i.field_kind === "date" ? "date" : "text"} defaultValue={v ?? ""} onBlur={(e) => e.target.value !== (v ?? "") && fill(c.id, i.id, e.target.value)}
                         className="glass-input w-full px-2 py-1 rounded mt-2 text-xs" placeholder="Enter value…" />
                     )}
-                    {i.field_kind === "select" && (
-                      <select defaultValue={v ?? ""} onChange={(e) => fill(c.id, i.id, e.target.value)} className="glass-input w-full px-2 py-1 rounded mt-2 text-xs">
-                        <option value="">—</option>{(i.options || []).map((o: string) => <option key={o} value={o}>{o}</option>)}
+                    {/* Templates save "dropdown" (pick one) and "multiselect" (pick several); older ones "select". */}
+                    {(i.field_kind === "select" || i.field_kind === "dropdown") && (
+                      <select aria-label={i.label} value={v ?? ""} onChange={(e) => fill(c.id, i.id, e.target.value)} className="w-full mt-2 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs text-ink-primary focus:outline-none focus:ring-2 focus:ring-primary/30">
+                        <option value="">Choose…</option>{(i.options || []).map((o: string) => <option key={o} value={o}>{o}</option>)}
                       </select>
+                    )}
+                    {i.field_kind === "multiselect" && (
+                      <div role="group" aria-label={`${i.label} options`} className="flex flex-wrap gap-1.5 mt-2">
+                        {(i.options || []).map((o: string) => {
+                          const picked: string[] = Array.isArray(v) ? v : [];
+                          const on = picked.includes(o);
+                          return (
+                            <button key={o} type="button" aria-pressed={on}
+                              onClick={() => fill(c.id, i.id, on ? picked.filter((x) => x !== o) : [...picked, o])}
+                              className={`inline-flex items-center gap-1 whitespace-nowrap px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${on ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary border-slate-200 hover:text-ink-primary"}`}>
+                              {on && <M n="check" c="text-xs" />}{o}
+                            </button>
+                          );
+                        })}
+                      </div>
                     )}
                     {/* Attachments — photos / files / videos (like Orderry) */}
                     <div className="flex flex-wrap items-center gap-2 mt-2">
