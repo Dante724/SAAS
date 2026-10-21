@@ -45,12 +45,9 @@ OPT_IN_WORDS = {"START", "UNSTOP", "YES", "OPTIN", "OPT IN"}
 
 async def _link_client(db, org_id, phone):
     """Orderry rule: ambiguous numbers resolve to the most recent record."""
-    if not phone:
-        return None
-    rows = (await db.execute(select(Client).where(
-        Client.org_id == org_id, Client.phone == phone)
-        .order_by(Client.created_at.desc()))).scalars().all()
-    return rows[0] if rows else None
+    # Same number rule as calls (D2): formatting-insensitive, country-code aware.
+    from backend.services.call_contacts import find_client
+    return await find_client(db, org_id, phone, newest=True)
 
 
 def _ser_thread(t: ChatThread, client_name=None, last_body=None, unread=0) -> dict:
@@ -190,19 +187,13 @@ async def twilio_inbound(request: Request, db: AsyncSession = Depends(get_db),
     # Verify Twilio's X-Twilio-Signature (HMAC-SHA1 over the request URL + sorted form
     # params, base64) with this shop's auth token, else the operator-wide one. With no
     # token at all, unsigned posts are accepted only in development/test.
-    import base64
-    import hashlib
-    import hmac as _hmac
-
     from backend.config import settings as _settings
     from backend.core.webhook_security import provider_secrets, require_signature
+    from backend.services.twilio_voice import signature_ok
     secrets = await provider_secrets(db, org_id, "twilio", "auth_token", _settings.TWILIO_AUTH_TOKEN)
-    payload = str(request.url)
-    for k in sorted(form.keys()):
-        payload += k + str(form[k])
+    params = [(k, str(v)) for k, v in form.multi_items()]
     presented = request.headers.get("X-Twilio-Signature", "")
-    verified = any(_hmac.compare_digest(base64.b64encode(_hmac.new(
-        s.encode(), payload.encode(), hashlib.sha1).digest()).decode(), presented) for s in secrets)
+    verified = any(signature_ok(s, presented, [str(request.url)], params) for s in secrets)
     require_signature(secrets, verified, "Twilio", status=403)
     raw_from = (form.get("From") or "").strip()
     body = (form.get("Body") or "").strip()

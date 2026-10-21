@@ -14,6 +14,7 @@ import { useTerminology } from "../../lib/useTerminology";
 import Pager from "../../components/Pager";
 import { useDebounced, useServerPage } from "../../hooks/useServerPage";
 import { confirmDialog, alertDialog } from "../../lib/dialog";
+import TagFilterChip from "./TagFilterChip";
 
 type Client = { id: string; name?: string; phone?: string; email?: string; loyalty_tier?: string; balance?: number; devices?: any[]; order_count?: number };
 type Tab = "clients" | "suppliers";
@@ -36,9 +37,10 @@ export default function ClientsHub() {
 
   // Clients page on the server (search included); suppliers are few and stay client-side.
   const dq = useDebounced(q.trim());
-  const cp = useServerPage<Client>("/clients", { search: dq || undefined }, { pageSize: 50 });
+  const [tagId, setTagId] = useState<string | null>(null);
+  const cp = useServerPage<Client>("/clients", { search: dq || undefined, tag: tagId || undefined }, { pageSize: 50 });
   const rows = cp.rows;
-  useEffect(() => { if (cp.err) setErr(cp.err); }, [cp.err]);
+  useEffect(() => { setErr(cp.err); }, [cp.err]);   // clears once a later page or filter loads
   function loadClients() { cp.reload(); }
   function loadSuppliers() {
     api.get<{ items: Supplier[] }>("/suppliers").then((r) => setSuppliers(r.items || [])).catch(() => setSuppliers([]));
@@ -142,7 +144,10 @@ export default function ClientsHub() {
                     <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) importCsv(f); e.target.value = ""; }} /></label>
                 </div>
               : <button onClick={() => setNewSupplier(true)} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New supplier</button>}
-            <div className="relative w-72"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" /><input value={q} onChange={(e) => setQ(e.target.value)} className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg font-medium" placeholder="Search name, phone or email…" /></div>
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+              {tab === "clients" && <TagFilterChip value={tagId} onChange={(id) => { setTagId(id); clearSel(); }} />}
+              <div className="relative w-full sm:w-72"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" /><input value={q} onChange={(e) => setQ(e.target.value)} className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg font-medium" placeholder="Search name, phone or email…" /></div>
+            </div>
           </div>
 
           {tab === "clients" && merged && (
@@ -178,7 +183,7 @@ export default function ClientsHub() {
                 <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
                   {err && <tr><td colSpan={9} className="py-6 px-4 text-status-overdue-ink">Error: {err}</td></tr>}
                   {!rows && !err && <SkeletonRows cols={9} />}
-                  {rows && cRows.length === 0 && <tr><td colSpan={9} className="py-6 px-4 text-ink-tertiary">No clients found.</td></tr>}
+                  {rows && !err && cRows.length === 0 && <tr><td colSpan={9} className="py-6 px-4 text-ink-tertiary">{tagId ? "No clients with this tag." : "No clients found."}</td></tr>}
                   {pageC.map((c) => (
                     <tr key={c.id} className={`hover:bg-blue-50/40 cursor-pointer transition-colors ${sel.has(c.id) ? "bg-primary/5" : ""}`} onClick={() => setOpenClient(c.id)}>
                       <td className="py-3 pl-4 pr-1" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label="Select row" checked={sel.has(c.id)} onChange={() => toggle(c.id)} className="accent-primary cursor-pointer" /></td>

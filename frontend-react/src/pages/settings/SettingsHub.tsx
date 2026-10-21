@@ -23,6 +23,7 @@ import LocationsPage from "./LocationsPage";
 import { TeamPage, RoleEditor, Avatar } from "./TeamSettings";
 import { ChecklistList, ChecklistEditor } from "./ChecklistSettings";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
+import TelephonySettings from "./TelephonySettings";
 
 // Full section set = the registry sections + a few that have no nav entry of their own.
 type Section = SectionId | "overview" | "automation" | "payroll-rules";
@@ -439,6 +440,7 @@ export default function SettingsHub() {
           {sec === "integrations" && (
             <div className="max-w-4xl space-y-5">
               <IntegrationsHub data={integrations} goSection={setSec} reload={() => setIntegrations(null)} />
+              <TelephonySettings />
               <ApiKeysCard />
               <WebhooksCard />
             </div>
@@ -1105,8 +1107,8 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
         action: keyAction("smtp") },
       { name: "SMS & WhatsApp (Twilio)", desc: "Two-way messages; inbound webhook threads them to jobs.",
         badge: keyBadge("twilio"), action: keyAction("twilio") },
-      { name: "Calls / VoIP", desc: "Click-to-call and an inbound-call feed (Twilio, Aircall, Zadarma).",
-        badge: telOn ? { text: `Live: ${telProv}`, tone: "on" } : { text: "Simulated", tone: "off" }, hint: telOn ? undefined : "Configure a provider in Telephony" },
+      { name: "Calls / VoIP", desc: "Click-to-call and an inbound-call feed through your Twilio account.",
+        badge: telOn ? { text: telProv === "simulated" ? "Simulated" : telProv === "twilio" && data.tel?.twilio?.test_mode ? "Twilio: test mode" : `Live: ${telProv}`, tone: "on" } : { text: "Off", tone: "off" }, hint: telOn ? undefined : "Set up below in Calls & telephony" },
       { name: "Chat inbox (Messenger / Instagram / WhatsApp)", desc: "Meta channels land in one inbox, linked to clients & jobs.",
         badge: keyBadge("meta"), action: keyAction("meta") } ] },
     { group: "E-commerce", cards: [

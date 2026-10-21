@@ -72,6 +72,23 @@ PROVIDER_FIELDS: dict[str, list[dict]] = {
 
 PROVIDERS = tuple(PROVIDER_FIELDS.keys())
 
+# Credentials managed by their own feature screen rather than the generic Integrations
+# editor: not listed by status(), not writable through /api/integrations/credentials, and
+# never backed by a global env default (each shop's own account or nothing).
+# D1 — Twilio voice: written only by /api/telephony/twilio, which probes the keys first and
+# records whether they are test or live (`mode`), so the live-key guard can't be skipped.
+INTERNAL_PROVIDER_FIELDS: dict[str, list[dict]] = {
+    "twilio_voice": [
+        {"key": "account_sid", "label": "Account SID", "secret": True},
+        {"key": "auth_token", "label": "Auth token", "secret": True},
+        {"key": "mode", "label": "Mode (test/live, set by the server)"},
+    ],
+}
+
+
+def _fields(provider: str) -> list[dict]:
+    return PROVIDER_FIELDS.get(provider) or INTERNAL_PROVIDER_FIELDS.get(provider, [])
+
 
 # ── Encryption ───────────────────────────────────────────────────────────────
 def _fernet() -> MultiFernet:
@@ -99,7 +116,7 @@ def _decrypt(token: Optional[str]) -> dict:
 # ── Env fallback ─────────────────────────────────────────────────────────────
 def _env_creds(provider: str) -> dict:
     out = {}
-    for f in PROVIDER_FIELDS.get(provider, []):
+    for f in _fields(provider):
         env = f.get("env")
         val = getattr(settings, env, None) if env else None
         if val not in (None, ""):
@@ -130,7 +147,7 @@ async def effective(db: AsyncSession, org_id: str, provider: str) -> dict:
 # provider look configured.
 _ESSENTIAL = {
     "stripe": ("secret_key",), "square": ("access_token",), "sumup": ("api_key",),
-    "twilio": ("account_sid",), "smtp": ("host",),
+    "twilio": ("account_sid",), "smtp": ("host",), "twilio_voice": ("account_sid",),
     "meta": ("page_token", "ig_token", "whatsapp_token"),
 }
 
@@ -151,10 +168,10 @@ async def source(db: AsyncSession, org_id: str, provider: str) -> str:
 
 # ── Writes ───────────────────────────────────────────────────────────────────
 async def set_creds(db: AsyncSession, org_id: str, provider: str, data: dict) -> None:
-    if provider not in PROVIDER_FIELDS:
+    if not _fields(provider):
         raise ValueError(f"Unknown provider '{provider}'")
     # keep only known fields; drop blanks so a cleared field falls back to env
-    clean = {f["key"]: str(data[f["key"]]).strip() for f in PROVIDER_FIELDS[provider]
+    clean = {f["key"]: str(data[f["key"]]).strip() for f in _fields(provider)
              if f["key"] in data and str(data.get(f["key"]) or "").strip() != ""}
     row = await _row(db, org_id, provider)
     if not row:

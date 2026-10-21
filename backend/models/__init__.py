@@ -2886,6 +2886,8 @@ class Call(Base):
     """A7 — a VoIP call record (inbound/outbound), linked to a client if matched.
     Populated by the provider webhook; the provider itself is a gated seam."""
     __tablename__ = "calls"
+    # D1: one row per provider call (Twilio CallSid), so webhook retries never duplicate.
+    __table_args__ = (Index("uq_calls_org_provider_sid", "org_id", "provider_sid", unique=True),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     provider: Mapped[str] = mapped_column(String(20), default="manual")   # aircall|twilio|zadarma|manual
@@ -2898,6 +2900,7 @@ class Call(Base):
     duration_s: Mapped[int] = mapped_column(Integer, default=0)
     recording_url: Mapped[Optional[str]] = mapped_column(String(400))
     external_id: Mapped[Optional[str]] = mapped_column(String(120))
+    provider_sid: Mapped[Optional[str]] = mapped_column(String(64))       # D1: Twilio CallSid
     # ── Build 105: VoIP + AI depth ────────────────────────────────────────────
     transcript: Mapped[Optional[str]] = mapped_column(Text)
     summary: Mapped[Optional[str]] = mapped_column(Text)

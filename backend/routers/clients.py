@@ -93,6 +93,7 @@ async def list_clients(
     skip: int = _paging.skip_query(), limit: int = _paging.limit_query(50),
     q: Optional[str] = Query(None, alias="q"),   # the pickers send ?q=; same as ?search=
     sort: str = "name",                # name | recent (pickers list the newest clients before you type)
+    tag: Optional[str] = None,         # D3: only contacts carrying this tag (tag id)
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
@@ -100,6 +101,15 @@ async def list_clients(
     scope_role = await scoping.role_for(db, current)
     search = (search or q or "").strip() or None
     limit = _paging.clamp(limit)
+    tagged = None
+    if tag:
+        from backend.models import Tag, Taggable
+        if not (await db.execute(select(Tag.id).where(
+                Tag.id == tag, Tag.org_id == current.org_id))).scalar_one_or_none():
+            raise HTTPException(404, "Tag not found")
+        tagged = select(Taggable.entity_id).where(
+            Taggable.org_id == current.org_id, Taggable.tag_id == tag,
+            Taggable.entity_type == "contact")
 
     q = (select(Client)
          .where(Client.org_id == current.org_id)
@@ -113,6 +123,8 @@ async def list_clients(
     if search:
         q = q.where(or_(Client.name.icontains(search), Client.phone.icontains(search),
                          Client.email.icontains(search), Client.discount_card.icontains(search)))
+    if tagged is not None:
+        q = q.where(Client.id.in_(tagged))
     result = await db.execute(q.offset(skip).limit(limit))
     clients = result.scalars().all()
     count_q = select(func.count()).select_from(Client).where(Client.org_id == current.org_id)
@@ -124,6 +136,8 @@ async def list_clients(
     if search:   # the total counts the searched rows, not the whole shop
         count_q = count_q.where(or_(Client.name.icontains(search), Client.phone.icontains(search),
                                     Client.email.icontains(search), Client.discount_card.icontains(search)))
+    if tagged is not None:
+        count_q = count_q.where(Client.id.in_(tagged))
     total = (await db.execute(count_q)).scalar()
     from backend.models import Order
     ids = [c.id for c in clients]
