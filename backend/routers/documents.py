@@ -434,12 +434,15 @@ async def update_template(
     t.name = data.name
     t.doc_type = data.doc_type
     t.body_html = clean_template_html(data.body_html)
-    t.auto_print_on = data.auto_print_on
+    # The template editor doesn't send the auto-print settings; saving it used to wipe them.
+    if "auto_print_on" in data.model_fields_set:
+        t.auto_print_on = data.auto_print_on
     t.is_default = data.is_default
     t.page_size = data.page_size or "a4"
     t.page_w_mm = data.page_w_mm; t.page_h_mm = data.page_h_mm; t.margin_mm = data.margin_mm
     t.font_family = data.font_family or "Sans-Serif"
-    t.print_statuses = json.dumps(data.print_statuses) if data.print_statuses else None
+    if "print_statuses" in data.model_fields_set:
+        t.print_statuses = json.dumps(data.print_statuses) if data.print_statuses else None
     _check_barcode_options(data)
     if "barcode_field" in data.model_fields_set:      # opa: older editors don't send these
         t.barcode_field = data.barcode_field

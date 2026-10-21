@@ -6,13 +6,13 @@
   barcode_types ({field: code128|ean13|upca|qr}) so a label can encode the MPN, the SKU, etc.
 
 Revision ID: opa1
-Revises: ls144r4
+Revises: opf1
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "opa1"
-down_revision = "ls144r4"
+down_revision = "opf1"
 branch_labels = None
 depends_on = None
 
