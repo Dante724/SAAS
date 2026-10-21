@@ -123,7 +123,7 @@ def _status_overrides(matched: list) -> list:
 async def _render(db: AsyncSession, org_id: str, order: Order, rule: NotificationRule):
     """Render the rule's template against the order's variables. Falls back to a
     plain status line when the rule has no template attached."""
-    from backend.routers.documents import _apply, _resolve
+    from backend.routers.documents import _resolve
     variables = await _resolve(db, org_id, order)
     if isinstance(variables, tuple):   # build 144s made _resolve return (doc_map, rows)
         variables = variables[0]
@@ -132,8 +132,10 @@ async def _render(db: AsyncSession, org_id: str, order: Order, rule: Notificatio
         tpl = (await db.execute(select(NotificationTemplate).where(
             NotificationTemplate.id == rule.template_id))).scalar_one_or_none()
     if tpl:
-        return _apply(tpl.subject or "", variables) if tpl.subject else None, \
-               _apply(tpl.body_template or "", variables), tpl.id
+        from backend.services.message_vars import render_for_order
+        subject, body = await render_for_order(db, org_id, order, tpl.subject or None,
+                                               tpl.body_template or "", doc_vars=variables)
+        return subject, body, tpl.id
     # Sensible default per event when the rule has no template attached.
     ev = rule.event
     if ev == "created":
@@ -534,12 +536,13 @@ async def notify_contact_birthdays(db: AsyncSession, *, org_id: str,
                 continue
             first = (c.name or "").split()[0] if c.name else "there"
             if tpl:
-                from backend.routers.documents import _apply
+                from backend.services import message_vars
                 cmap = {"{Client Name}": c.name or "", "{First Name}": first,
                         "{Client First Name}": first, "{Client Email}": c.email or "",
                         "{Client Phone}": c.phone or ""}
-                subject = _apply(tpl.subject or "Happy birthday!", cmap)
-                body = _apply(tpl.body_template or "", cmap)
+                short = await message_vars.client_values(db, org_id, c, tpl.subject, tpl.body_template)
+                subject = message_vars.apply(tpl.subject or "Happy birthday!", short, cmap)
+                body = message_vars.apply(tpl.body_template or "", short, cmap)
             else:
                 subject = "Happy birthday!"
                 body = f"Happy birthday, {first}! Wishing you a great day from all of us."

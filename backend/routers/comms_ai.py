@@ -353,7 +353,7 @@ async def get_webhook_secret(
         await db.commit()
     return {"webhook_secret": org.webhook_secret,
             "header": "X-Webhook-Token",
-            "endpoints": [f"/api/inbox/webhook/{current.org_id}",
+            "endpoints": [f"/api/chats/webhook/{current.org_id}",
                           f"/api/comms/calls/webhook?org_id={current.org_id}"]}
 
 

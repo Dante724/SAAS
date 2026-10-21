@@ -141,3 +141,16 @@ async def sweep_revoked_sessions() -> None:
         await db.commit()
         if res.rowcount:
             log.info("revoked-session-sweep: removed %d expired record(s)", res.rowcount)
+
+
+@job_runner.every(900, "chat-autocomplete-sweep")
+async def autocomplete_replied_chats() -> None:
+    """C3 — a chat the shop answered and the customer hasn't written back to in 24h is done:
+    move it from Replied to Completed. A new customer message reopens it."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.services.chat_status import autocomplete_replied
+
+    async with AsyncSessionLocal() as db:
+        done = await autocomplete_replied(db)
+        if done:
+            log.info("chat-autocomplete-sweep: completed %d replied chat(s)", done)

@@ -129,6 +129,9 @@ CATALOG = {
         ("can_approve_rec_for_customer", "Approve recommendations on the customer's behalf (by phone)"),
         ("can_reply_customer", "Reply to customers from the inbox"),
     ],
+    "Chats": [
+        ("can_manage_chats", "Change chat status and mark chats as spam"),
+    ],
 }
 
 # All valid codes (flat), for validation.

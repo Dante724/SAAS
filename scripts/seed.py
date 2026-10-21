@@ -417,7 +417,8 @@ async def seed_demo_data():
         db.add(_BC(id=uid(), bundle_id=bdl.id, ref_type="service", ref_id=_first_svc.id, qty=1))
         db.add(_BC(id=uid(), bundle_id=bdl.id, ref_type="product", ref_id=parts[0].id, qty=1))
         th = _CT(id=uid(), org_id=org.id, channel="whatsapp", contact_phone=clients[0].phone,
-                 contact_name=clients[0].name, client_id=clients[0].id, last_message_at=now())
+                 contact_name=clients[0].name, client_id=clients[0].id, last_message_at=now(),
+                 status="replied", last_inbound_at=now(), last_outbound_at=now())
         db.add(th)
         await db.flush()   # thread row must exist before its messages (FK)
         db.add(_CM(id=uid(), thread_id=th.id, direction="in", body="Hi! My MacBook screen is flickering, can you take a look this week?", status="received"))

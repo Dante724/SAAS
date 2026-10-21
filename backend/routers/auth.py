@@ -12,6 +12,7 @@ from backend.db.database import get_db
 from backend.models import Employee, Location, Organisation, Role
 from backend.services import tokens as _tok
 from backend.services.audit import record as _audit
+from backend.services.currency import symbol_for as _symbol_for  # sign-up sends a code; we store its symbol
 from backend.services.auth import (create_access_token, get_current_employee, hash_password,
                                    is_old_default_password, norm_email, verify_password)
 from backend.services.notifications import send_direct_email
@@ -58,22 +59,6 @@ class RegisterRequest(BaseModel):
     document_language: Optional[str] = None
     company_phone: Optional[str] = None
     employee_count: Optional[str] = None
-
-
-# Common ISO-4217 code → display symbol, so the sign-up form can send a plain
-# code and we still store a proper symbol (falls back to the code itself).
-CURRENCY_SYMBOLS = {
-    "USD": "$", "CAD": "$", "AUD": "$", "NZD": "$", "SGD": "$", "HKD": "$", "MXN": "$",
-    "EUR": "€", "GBP": "£", "JPY": "¥", "CNY": "¥", "INR": "₹",
-    "AED": "AED", "SAR": "SAR", "QAR": "QAR", "KWD": "KWD", "BHD": "BHD", "OMR": "OMR",
-    "CHF": "CHF", "SEK": "kr", "NOK": "kr", "DKK": "kr", "ZAR": "R", "BRL": "R$", "TRY": "₺",
-}
-
-
-def _symbol_for(code: Optional[str], fallback: Optional[str] = None) -> Optional[str]:
-    if not code:
-        return fallback
-    return CURRENCY_SYMBOLS.get(code.upper(), code.upper())
 
 
 # Build 144cl — seed a sensible default tax so a new shop isn't starting blank.
@@ -632,7 +617,7 @@ async def invite_accept(data: InviteAccept, request: Request, db: AsyncSession =
 async def me(current: Employee = Depends(get_current_employee),
              db: AsyncSession = Depends(get_db)):
     # Build 125: surface the org's base currency so the whole UI can format money in it
-    # (fmt.currency) instead of a hard-coded ₹.
+    # (fmt.currency) instead of a hard-coded symbol.
     org = (await db.execute(select(Organisation).where(
         Organisation.id == current.org_id))).scalar_one_or_none()
     # Surface the employee's effective role permissions so the UI can hide the
@@ -655,8 +640,8 @@ async def me(current: Employee = Depends(get_current_employee),
         "org_name": org.name if org else None,   # the shop's name under the logo / on job stickers
         "location_id": current.location_id,
         "active": current.active,
-        "currency": (org.currency if org else None) or "₹",
-        "currency_code": (org.currency_code if org else None) or "INR",
+        "currency": (org.currency if org else None) or _symbol_for(org.currency_code if org else None, ""),
+        "currency_code": (org.currency_code if org else None) or "",
         "role": role_name,
         "is_owner": current.role_id is None,
         "home_route": home_route,

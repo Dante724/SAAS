@@ -907,10 +907,9 @@ async def client_balance(
         ClientLedgerEntry.client_id == client_id)
         .order_by(ClientLedgerEntry.created_at.desc()).limit(200))).scalars().all()
     # Build 122: include the client's display currency so balances can show converted.
-    cur = {"code": None, "symbol": "₹", "rate": 1.0}
-    if c.currency_code:
-        from backend.services import currency as _cur
-        cur = await _cur.rate_for_code(db, current.org_id, c.currency_code)
+    from backend.services import currency as _cur
+    cur = (await _cur.rate_for_code(db, current.org_id, c.currency_code) if c.currency_code
+           else await _cur.resolve_for_client(db, current.org_id, None))   # the org's own currency
     return {"balance": float(c.balance or 0),
             "currency": cur,
             "entries": [{"id": e.id, "entry_type": e.entry_type, "amount": float(e.amount),
@@ -1026,12 +1025,29 @@ async def client_communication(
     if author_ids:
         for e in (await db.execute(select(Emp).where(Emp.id.in_(author_ids)))).scalars().all():
             names[e.id] = e.name
-    return {"items": [{
+    items = [{
         "id": m.id, "channel": tmap[m.thread_id].channel if m.thread_id in tmap else None,
         "direction": m.direction, "body": m.body,
         "author": names.get(m.author_id), "delivered": m.delivered,
         "created_at": m.created_at.isoformat() if m.created_at else None,
-    } for m in msgs]}
+    } for m in msgs]
+    # C4: conversations from Chats (texts, WhatsApp, Meta, inbound email) belong here too.
+    from backend.models import ChatMessage, ChatThread
+    chats = dict((await db.execute(select(ChatThread.id, ChatThread.channel).where(
+        ChatThread.org_id == current.org_id, ChatThread.client_id == client_id))).all())
+    if chats:
+        cmsgs = (await db.execute(select(ChatMessage).where(
+            ChatMessage.thread_id.in_(list(chats)), ChatMessage.status != "system")
+            .order_by(ChatMessage.created_at.desc()).limit(200))).scalars().all()
+        for e in (await db.execute(select(Emp).where(Emp.id.in_(
+                {m.author_id for m in cmsgs if m.author_id} - set(names))))).scalars().all():
+            names[e.id] = e.name
+        items += [{"id": m.id, "channel": chats.get(m.thread_id),
+                   "direction": "inbound" if m.direction == "in" else "outbound", "body": m.body,
+                   "author": names.get(m.author_id), "delivered": m.status != "failed",
+                   "created_at": m.created_at.isoformat() if m.created_at else None} for m in cmsgs]
+        items = sorted(items, key=lambda i: i["created_at"] or "", reverse=True)[:200]
+    return {"items": items}
 
 
 class MessageIn(BaseModel):

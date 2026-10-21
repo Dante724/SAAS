@@ -15,17 +15,15 @@ from typing import Optional
 from backend.db.database import get_db
 from backend.models import NotificationTemplate, Employee, Order
 from backend.services.auth import get_current_employee, require_perm
+from backend.services.message_vars import SHORT_VARS, TOKENS
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 
 VALID_CHANNELS = {"sms", "email", "whatsapp"}
 VALID_EVENTS = {"status_change", "order_created", "comment_added"}
 
-# Variables a template author can use
-AVAILABLE_VARS = [
-    "{order_number}", "{client_name}", "{status}", "{total}",
-    "{device}", "{technician}", "{shop_name}",
-]
+# Short variables a template author can use: services/message_vars renders them on every send.
+AVAILABLE_VARS = TOKENS
 
 
 class TemplateIn(BaseModel):
@@ -125,18 +123,17 @@ async def delete_template(
 # ── rendering + firing ───────────────────────────────
 
 def render_template(body: str, ctx: dict) -> str:
-    out = body
-    for key, val in ctx.items():
-        out = out.replace("{" + key + "}", str(val if val is not None else ""))
-    return out
+    from backend.services.message_vars import apply
+    return apply(body, ctx)
 
 
 async def fire_notifications(db: AsyncSession, org_id: str, event: str,
-                             order: Order, *, shop_name: str = "Tekly",
+                             order: Order, *, shop_name: str = None,
                              client_name: str = None, device: str = None,
                              technician: str = None, new_status: str = None):
     """Find matching active templates, render, and log each to the event feed."""
     from backend.routers.feed import log_system_event
+    from backend.services.message_vars import order_values
 
     q = select(NotificationTemplate).where(
         NotificationTemplate.org_id == org_id,
@@ -147,21 +144,17 @@ async def fire_notifications(db: AsyncSession, org_id: str, event: str,
     if not templates:
         return 0
 
-    ctx = {
-        "order_number": order.order_number,
-        "client_name": client_name or "Customer",
-        "status": (new_status or order.status or "").replace("_", " "),
-        "total": f"\u20b9{int(order.total or 0)}",
-        "device": device or "your device",
-        "technician": technician or "our team",
-        "shop_name": shop_name,
-    }
-
     fired = 0
     for t in templates:
         # for status_change templates with a specific status filter, must match
         if event == "status_change" and t.trigger_status and t.trigger_status != new_status:
             continue
+        # {total} / {balance_due} format in the order's currency with cents (order_values).
+        ctx = await order_values(db, org_id, order, t.body_template)
+        overrides = {"client_name": client_name, "device": device, "technician": technician,
+                     "shop_name": shop_name,
+                     "status": (new_status or "").replace("_", " ") if new_status else None}
+        ctx.update({k: v for k, v in overrides.items() if v and k in ctx})
         msg = render_template(t.body_template, ctx)
         label = (t.channel or "sms").upper()
         await log_system_event(
@@ -386,7 +379,7 @@ MODULE_VAR_GROUPS = {
                 "Date", "Links", "Other", "Custom fields"],
     "appointment": ["Company", "Legal entity", "Client", "Date", "Links", "Other", "Custom fields"],
     "task":    ["Company", "Employees", "Date", "Other"],  # internal / staff-facing
-    "contact": ["Company", "Legal entity", "Client", "Date", "Links", "Other", "Custom fields"],
+    "contact": ["Message", "Company", "Legal entity", "Client", "Date", "Links", "Other", "Custom fields"],
 }
 
 
@@ -416,7 +409,8 @@ async def send_test(
         # "Send me a sample": render against the newest job so the owner sees a real message.
         from sqlalchemy.orm import selectinload
 
-        from backend.routers.documents import _apply, _resolve
+        from backend.routers.documents import _resolve
+        from backend.services.message_vars import render_for_order
         order = (await db.execute(select(Order).where(Order.org_id == current.org_id)
                                   .order_by(Order.created_at.desc())
                                   .options(selectinload(Order.client), selectinload(Order.lines),
@@ -425,8 +419,9 @@ async def send_test(
             variables = await _resolve(db, current.org_id, order)
             if isinstance(variables, tuple):
                 variables = variables[0]
-            body = _apply(body or "", variables)
-            subject = _apply(subject, variables) if subject else subject
+            # A preview never mints a customer's portal link (issue_links=False).
+            subject, body = await render_for_order(db, current.org_id, order, subject, body or "",
+                                                   doc_vars=variables, issue_links=False)
         if data.channel in ("sms", "whatsapp"):
             body = f"[Sample] {body}"
         elif subject:
@@ -530,7 +525,11 @@ async def variable_library(
 
     # Friendlier section names; keep the resolvable variable strings verbatim.
     RENAME = {"Ticket": "Order", "Device": "Asset"}
-    groups = {}
+    # Short message variables first: the everyday ones, resolved by services/message_vars.
+    from backend.services.message_vars import CLIENT_TOKENS
+    short = [t for t, _ in SHORT_VARS]
+    groups = {"Message": short if module in (None, "order") else
+              [t for t in short if t in CLIENT_TOKENS]}
     for name, items in VARIABLE_GROUPS:
         if name == "Tables":            # not meaningful in a notification body
             continue
@@ -547,7 +546,7 @@ async def variable_library(
         groups = {k: v for k, v in groups.items() if k in allow}
 
     # Preserve group order for the picker (dicts keep insertion order in py3.7+).
-    order = ["Company", "Legal entity", "Client", "Payer", "Order", "Asset",
+    order = ["Message", "Company", "Legal entity", "Client", "Payer", "Order", "Asset",
              "Employees", "Finance", "Date", "Links", "Other", "Custom fields"]
     ordered = {k: groups[k] for k in order if k in groups}
     for k in groups:                    # any group not in the explicit order

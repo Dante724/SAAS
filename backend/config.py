@@ -293,7 +293,7 @@ class Settings(BaseSettings):
                 import logging
                 logging.getLogger(__name__).warning(
                     "META_APP_SECRET is not set in production but a Meta channel appears "
-                    "configured; /api/inbox/webhook/meta will refuse every post (signatures fail "
+                    "configured; /api/chats/webhook/meta will refuse every post (signatures fail "
                     "closed). Set META_APP_SECRET to receive Meta messages."
                 )
         return self

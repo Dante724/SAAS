@@ -20,9 +20,16 @@ const SAMPLE: Record<string, string> = {
   "{Order Total}": "$229.00", "{Order Balance Due}": "$229.00", "{Balance Due}": "$229.00",
   "{Public Order URL}": "shop.link/t/8F2K", "{Order Payment URL}": "shop.link/p/8F2K", "{Order Scheduled Date}": "Oct 18, 10:00 AM",
   "{Today Date}": new Date().toLocaleDateString(), "{Location}": "Main Shop",
+  // Short message variables (services/message_vars.py on the server).
+  "{client_name}": "Sam Rivera", "{client_first_name}": "Sam", "{client_last_name}": "Rivera", "{client_phone}": "(555) 010-0123",
+  "{client_birthday}": "14 March", "{client_age}": "36", "{order_number}": "WO-1042", "{device}": "Apple iPhone 14",
+  "{technician}": "Alex", "{scheduled_for}": "Fri 18 Oct, 10:00", "{total}": "$229.00", "{balance_due}": "$129.00",
+  "{portal_link}": "shop.link/portal/8F2K",
 };
-const CHIPS: [string, string][] = [["{Client First Name}", "First name"], ["{Order Number}", "Job number"], ["{Order Status}", "Status"],
-  ["{Asset Model}", "Item"], ["{Order Total}", "Total"], ["{Public Order URL}", "Tracking link"], ["{Company Name}", "Shop name"]];
+export const CHIPS: [string, string][] = [["{Client First Name}", "First name"], ["{client_last_name}", "Last name"], ["{client_phone}", "Phone"],
+  ["{Order Number}", "Job number"], ["{Order Status}", "Status"], ["{Asset Model}", "Item"], ["{Order Total}", "Total"],
+  ["{balance_due}", "Balance due"], ["{scheduled_for}", "Scheduled for"], ["{Public Order URL}", "Tracking link"],
+  ["{portal_link}", "Customer portal"], ["{client_birthday}", "Birthday"], ["{client_age}", "Age"], ["{Company Name}", "Shop name"]];
 
 function fill(text: string, extra: Record<string, string>) {
   return (text || "").replace(/\{[^}]+\}/g, (m) => extra[m] ?? SAMPLE[m] ?? m);
@@ -352,7 +359,8 @@ function MessageEditor({ row, rt, channels, rules, templates, shopName, flash, s
     window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k);
   }, [onClose]);
 
-  const extra = { "{Order Status}": row.status ? row.label : "Ready for pickup", "{Company Name}": shopName || "Your shop" };
+  const extra = { "{Order Status}": row.status ? row.label : "Ready for pickup", "{status}": row.status ? row.label : "Ready for pickup",
+    "{Company Name}": shopName || "Your shop", "{shop_name}": shopName || "Your shop" };
   const shown = body.trim() ? body : defaultBody(row);
   const preview = fill(shown, extra);
   const segments = Math.max(1, Math.ceil(preview.length / 160));
