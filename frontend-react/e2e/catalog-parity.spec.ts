@@ -95,6 +95,8 @@ for (const [label, width, height] of [["desktop", 1280, 900], ["phone", 375, 812
         // Inventory › Stock search matches it too.
         await page.goto("/inventory");
         await page.getByPlaceholder("Search products, SKU, MPN, barcode...").fill(mpn);
+        // It has no stock yet, so the default "In stock" view offers to show it rather than hide it.
+        await page.getByRole("button", { name: "Show all matches" }).click();
         await expect(page.getByText(name)).toBeVisible();
         // and the scan lookup (POS, receiving) resolves the exact MPN
         const scan = await call(page, "GET", `/inventory/scan?code=${encodeURIComponent(mpn)}`);

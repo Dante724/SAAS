@@ -266,14 +266,22 @@ export default function InventoryHub() {
 
   // Client-side stock filter (data already loaded) — search + availability wired; warehouse/category left static (no resolved names loaded).
   const AVAIL_LABEL = { all: "All", in: "In stock", low: "Low stock", out: "Out of stock" } as const;
-  const shownProducts = (products || []).filter((p) => {
-    if (pq.trim()) { const q = pq.toLowerCase(); if (!`${p.name} ${p.sku || ""} ${p.code || ""} ${p.barcode || ""} ${p.mpn || ""}`.toLowerCase().includes(q)) return false; }
+  const matchesSearch = (p: any) => {
+    if (!pq.trim()) return true;
+    const q = pq.toLowerCase();
+    return `${p.name} ${p.sku || ""} ${p.code || ""} ${p.barcode || ""} ${p.mpn || ""}`.toLowerCase().includes(q);
+  };
+  const searchMatches = (products || []).filter(matchesSearch);
+  const shownProducts = searchMatches.filter((p) => {
     const qa = p.qty_available ?? 0;
     if (avail === "in") return qa > 0;
     if (avail === "low") return !!p.low_stock;
     if (avail === "out") return qa <= 0;
     return true;
   });
+  // A searched part that exists but is hidden by the availability filter (e.g. an MPN with no stock
+  // yet) used to look like "no such part"; the empty state offers to show those matches instead.
+  const hiddenByAvail = pq.trim() && avail !== "all" ? searchMatches.length - shownProducts.length : 0;
   const stockCols = cfg.enable_reservations ? 10 : 9;  // SKU folded into Product cell (Phase 3)
   const pAllSel = shownProducts.length > 0 && shownProducts.every((p) => psel.has(p.id));
   // Numbered pagination (50/page). Reset to page 1 when the filtered set changes, and
@@ -438,8 +446,17 @@ export default function InventoryHub() {
                     ) : (
                       <div className="flex flex-col items-center text-center gap-3 max-w-sm mx-auto">
                         <div className="w-12 h-12 rounded-2xl bg-slate-100 text-ink-tertiary flex items-center justify-center"><M n="search_off" c="text-2xl" /></div>
-                        <div><div className="font-bold text-ink-primary text-sm">No parts match these filters</div><div className="text-ink-tertiary mt-0.5">Try adjusting availability, category, warehouse or your search.</div></div>
-                        <button onClick={() => { setAvail("in"); setCat(""); setWh(""); setPq(""); }} className="h-[36px] px-4 rounded-xl bg-white border border-slate-200 text-ink-secondary text-xs font-bold hover:bg-slate-50 flex items-center gap-2 mt-1"><M n="filter_alt_off" c="text-sm" />Clear filters</button>
+                        {hiddenByAvail > 0 ? (
+                          <>
+                            <div><div className="font-bold text-ink-primary text-sm">{hiddenByAvail === 1 ? "1 part matches, but it isn't shown" : `${hiddenByAvail} parts match, but they aren't shown`}</div><div className="text-ink-tertiary mt-0.5">The availability filter is set to {AVAIL_LABEL[avail].toLowerCase()}.</div></div>
+                            <button onClick={() => setAvail("all")} className="h-[36px] px-4 rounded-xl bg-primary text-white text-xs font-bold hover:bg-primary/90 flex items-center gap-2 mt-1"><M n="visibility" c="text-sm" />Show all matches</button>
+                          </>
+                        ) : (
+                          <>
+                            <div><div className="font-bold text-ink-primary text-sm">No parts match these filters</div><div className="text-ink-tertiary mt-0.5">Try adjusting availability, category, warehouse or your search.</div></div>
+                            <button onClick={() => { setAvail("in"); setCat(""); setWh(""); setPq(""); }} className="h-[36px] px-4 rounded-xl bg-white border border-slate-200 text-ink-secondary text-xs font-bold hover:bg-slate-50 flex items-center gap-2 mt-1"><M n="filter_alt_off" c="text-sm" />Clear filters</button>
+                          </>
+                        )}
                       </div>
                     )}
                   </td></tr>
