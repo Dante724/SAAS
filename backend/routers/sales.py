@@ -476,7 +476,8 @@ async def sale_receipt(
     lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id))).scalars().all()
     client = (await db.execute(select(Client).where(
         Client.id == sale.client_id, Client.org_id == current.org_id))).scalar_one_or_none() if sale.client_id else None
-    sym = (org.currency if org else None) or "₹"
+    from backend.services.currency import _base
+    sym = _base(org)["symbol"]
     return {
         "sale_number": sale.sale_number, "shop_name": org.name if org else "",
         "total": sale.total, "discount": sale.discount, "paid": sale.paid,
