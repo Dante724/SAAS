@@ -3419,7 +3419,11 @@ class PaymentTerminal(Base):
     """F2/F3 — a card reader the shop charges from (server-driven). provider is stripe|square, or
     simulated (local development only). reader_id is Stripe's tmr_… or Square's device id."""
     __tablename__ = "payment_terminals"
-    __table_args__ = (UniqueConstraint("org_id", "provider", "reader_id", name="uq_payment_terminal_reader"),)
+    __table_args__ = (UniqueConstraint("org_id", "provider", "reader_id", name="uq_payment_terminal_reader"),
+                      # Review P8: a real (live) reader belongs to one shop. Sandbox test devices are
+                      # shared ids by design (e.g. Square's documented ones), so only live rows count.
+                      Index("uq_payment_terminal_live_reader", "provider", "reader_id", unique=True,
+                            sqlite_where=text("test_mode = 0"), postgresql_where=text("NOT test_mode")))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     provider: Mapped[str] = mapped_column(String(20))

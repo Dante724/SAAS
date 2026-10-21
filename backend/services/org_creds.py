@@ -114,6 +114,16 @@ def _decrypt(token: Optional[str]) -> dict:
 
 
 # ── Env fallback ─────────────────────────────────────────────────────────────
+def with_env_defaults(provider: str, creds: dict) -> dict:
+    """The shop's keys with any blank field filled from the operator env, then put through the
+    live-money guard (F4). For code that used to write `creds.get(k) or settings.X`, which skipped
+    the guard when the shop's row lacked that field (review S6)."""
+    merged = {**_env_creds(provider), **{k: v for k, v in (creds or {}).items() if v not in (None, "")}}
+    from backend.services.payment_guard import assert_allowed
+    assert_allowed(provider, merged)
+    return merged
+
+
 def _env_creds(provider: str) -> dict:
     out = {}
     for f in _fields(provider):
@@ -131,21 +141,25 @@ async def _row(db: AsyncSession, org_id: str, provider: str) -> Optional[OrgInte
         OrgIntegrationCredential.provider == provider))).scalar_one_or_none()
 
 
-async def effective(db: AsyncSession, org_id: str, provider: str, *, read_only: bool = False) -> dict:
+async def effective(db: AsyncSession, org_id: str, provider: str, *, read_only: bool = False,
+                    own_only: bool = False) -> dict:
     """The credentials to actually use for this shop: its own keys if configured
     and active, otherwise the operator-wide env defaults (may be empty).
 
     F4: for payment providers this is also the live-money gate. Live Stripe keys or Square's
     production env raise payment_guard.LivePaymentsRefused unless live payments are switched on,
     so every caller that would move money is covered. Callers that only inspect the keys (status
-    badges, webhook signature lookup) pass read_only=True."""
+    badges, webhook signature lookup) pass read_only=True.
+
+    own_only=True skips the operator-wide env defaults: card readers (F2/F3) must be the shop's own
+    Stripe/Square account, never one shared by every shop on the server (review P8)."""
     row = await _row(db, org_id, provider)
     data = None
     if row and row.active:
         data = _decrypt(row.data_enc)
         if not any(v not in (None, "") for v in data.values()):
             data = None
-    creds = data if data is not None else _env_creds(provider)
+    creds = data if data is not None else ({} if own_only else _env_creds(provider))
     if not read_only:
         from backend.services.payment_guard import assert_allowed
         assert_allowed(provider, creds)

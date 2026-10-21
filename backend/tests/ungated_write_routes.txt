@@ -23,7 +23,9 @@ POST /api/comms/twilio/voice [public]
 POST /api/inbox/webhook/meta/{org_id} [public]
 POST /api/inbox/webhook/{org_id} [public]
 POST /api/payments/square/webhook [public]
+POST /api/payments/square/webhook/{org_id} [public]
 POST /api/payments/stripe/webhook [public]
+POST /api/payments/stripe/webhook/{org_id} [public]
 
 ## Public — customer-facing pages, scoped by an unguessable token or shop slug (rate-limited)
 POST /api/feedback/public/{token} [public]
