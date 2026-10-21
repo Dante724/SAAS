@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { promptDialog } from "../lib/dialog";
+import { humanize } from "../lib/humanize";
 
 // A dropdown fed by a Settings → Directories list (lead sources, cancellation reasons, …).
 // Options can be added right here ("+ Add option…") — the counter can't stop to visit Settings —
@@ -39,7 +40,7 @@ export default function DirectorySelect({ dirKey, value, onChange, className = "
   return (
     <select value={value || ""} onChange={(e) => pick(e.target.value)} className={className} disabled={items === null}>
       <option value="">{items === null ? "Loading…" : placeholder}</option>
-      {legacy && <option value={legacy}>{legacy}</option>}
+      {legacy && <option value={legacy}>{/^[a-z0-9_]+$/.test(legacy) ? humanize(legacy) : legacy}</option>}
       {values.map((v) => <option key={v} value={v}>{v}</option>)}
       <option disabled>──────────</option>
       <option value={ADD}>+ Add option…</option>

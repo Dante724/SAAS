@@ -6,7 +6,7 @@ from sqlalchemy import select
 from backend.db.database import AsyncSessionLocal
 from backend.models import (
     Organisation, Location, Role, Employee, Client, Device,
-    Order, OrderStatusLog, Part, StockLevel, Task, Invoice,
+    Order, OrderLine, OrderStatusLog, Part, StockLevel, Task, Invoice, Payment,
     WorkOrderType, CustomField, NotificationTemplate, Service, Tax, Account, CashFlowItem
 )
 from backend.services.auth import hash_password
@@ -122,11 +122,11 @@ async def seed_demo_data():
 
 
         clients_data = [
-            ("Neha Gupta", "+91-9111222333", "neha@email.com", "Corporate", "walk_in"),
-            ("Vikram Reddy", "+91-9444555666", "vikram@email.com", "Standard", "referral"),
-            ("Ananya Iyer", "+91-9777888999", "ananya@email.com", "VIP", "google_ads"),
-            ("Saurabh Joshi", "+91-9000111222", None, "Standard", "walk_in"),
-            ("Kavya Nair", "+91-9333444555", "kavya@email.com", "Standard", "instagram"),
+            ("Neha Gupta", "+91-9111222333", "neha@email.com", "Corporate", "Walk-in"),
+            ("Vikram Reddy", "+91-9444555666", "vikram@email.com", "Standard", "Referral"),
+            ("Ananya Iyer", "+91-9777888999", "ananya@email.com", "VIP", "Google search"),
+            ("Saurabh Joshi", "+91-9000111222", None, "Standard", "Walk-in"),
+            ("Kavya Nair", "+91-9333444555", "kavya@email.com", "Standard", "Instagram"),
         ]
         clients = []
         for name, phone, email, tier, source in clients_data:
@@ -250,6 +250,13 @@ async def seed_demo_data():
             (clients[3].id, devices[3].id, "Phone not charging at all", statuses[3], tech2.id, 900 + 300, 900, 300),
             (clients[4].id, devices[4].id, "Screen flickering and touch not working", statuses[0], None, 7200 + 800, 7200, 800),
         ]
+        _DEMO_LINES = [
+            ("iPhone 14 Pro display assembly (OEM)", "Screen replacement labour"),
+            ("", "Battery health diagnosis and calibration"),
+            ("MacBook Air keyboard assembly", "Keyboard replacement labour"),
+            ("USB-C charging port flex", "Charging port replacement labour"),
+            ("Samsung S23 AMOLED display", "Display replacement labour"),
+        ]
         orders = []
         _today = now().replace(hour=9, minute=0, second=0, microsecond=0)
         _slots = [
@@ -275,6 +282,15 @@ async def seed_demo_data():
                 closed_at=now() - timedelta(days=1) if status == "delivered" else None,
             )
             db.add(o)
+            # Real lines behind the totals, so invoices, receipts and reports show what was done.
+            part_name, labour_name = _DEMO_LINES[i]
+            if parts_t:
+                db.add(OrderLine(id=uid(), order_id=o.id, line_type="part", kind="product",
+                                 description=part_name, qty=1, unit_price=parts_t, total=parts_t,
+                                 technician_id=tech_id))
+            db.add(OrderLine(id=uid(), order_id=o.id, line_type="labour", kind="service",
+                             description=labour_name, qty=1, unit_price=labour_t, total=labour_t,
+                             technician_id=tech_id))
             db.add(OrderStatusLog(id=uid(), order_id=o.id, from_status=None,
                                   to_status="new", changed_by_id=admin.id))
             if status != "new":
@@ -291,6 +307,9 @@ async def seed_demo_data():
             amount_paid=9400, issued_at=now() - timedelta(days=1),
         )
         db.add(inv)
+        db.add(Payment(id=uid(), invoice_id=inv.id, order_id=orders[0].id, client_id=clients[0].id,
+                       method="card", kind="payment", amount=9400, received_by_id=admin.id,
+                       reference="Paid at pickup", paid_at=now() - timedelta(days=1)))
 
         # Tasks
         tasks_data = [
