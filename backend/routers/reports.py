@@ -432,6 +432,9 @@ async def _rep_labor_utilization(db, org, df, dt, **kw):
     rows = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == org, TimeEntry.state != "void",
         TimeEntry.started_at >= df, TimeEntry.started_at < dt))).scalars().all()
+    scope = kw.get("payroll_ids")          # E3: labour cost reveals pay rates
+    if scope is not None:
+        rows = [e for e in rows if e.employee_id in scope]
     emps = {e.id: e.name for e in (await db.execute(
         select(Employee).where(Employee.org_id == org))).scalars().all()}
     agg = {}
@@ -459,6 +462,9 @@ async def _rep_labor_by_job(db, org, df, dt, **kw):
     rows = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == org, TimeEntry.state != "void", TimeEntry.order_id.is_not(None),
         TimeEntry.started_at >= df, TimeEntry.started_at < dt))).scalars().all()
+    scope = kw.get("payroll_ids")          # E3: labour cost reveals pay rates
+    if scope is not None:
+        rows = [e for e in rows if e.employee_id in scope]
     by_order = {}
     for e in rows:
         a = by_order.setdefault(e.order_id, {"sec": 0, "cost": 0.0, "bill": 0.0})
@@ -815,6 +821,7 @@ async def _rep_reorder_forecast(db, org, df, dt, **kw):
 # Reports exposing sensitive figures need the matching permission on top of can_view_reports.
 REPORT_PERMS = {
     "payroll": "can_view_payroll", "labor_cost": "can_view_payroll",
+    "labor_utilization": "can_view_payroll", "labor_by_job": "can_view_payroll",   # labour cost = pay rates
     "wo_profit": "can_see_profit",
     "cash_flow": "can_view_cashflow", "total_money": "can_view_balance",
     "stock_valuation": "can_view_purchase_price",
@@ -825,6 +832,7 @@ REPORT_PERMS = {
 EXPORT_PERMS = {
     "sold_products": "can_export_sales", "provided_services": "can_export_sales",
     "payroll": "can_export_payroll", "labor_cost": "can_export_payroll",
+    "labor_utilization": "can_export_payroll", "labor_by_job": "can_export_payroll",
 }
 
 
@@ -837,7 +845,7 @@ async def _assert_report_access(db, current, report_key: str, export: bool = Fal
         await assert_perm(db, current, EXPORT_PERMS[report_key])
 
 
-PAYROLL_REPORTS = {"payroll", "labor_cost"}
+PAYROLL_REPORTS = {"payroll", "labor_cost", "labor_utilization", "labor_by_job"}
 
 
 async def _builder_kw(db, current, report_key: str, location_id, role_id, employee_id) -> dict:

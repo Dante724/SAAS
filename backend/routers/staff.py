@@ -111,10 +111,14 @@ async def list_employees(
     # Pay and tax ids are payroll data: only roles allowed to view payroll see colleagues' values.
     see_pay = await has_perm(db, current, "can_view_payroll")
     see_own = see_pay or await has_perm(db, current, "can_view_own_compensation")
+    from backend.services.payroll_views import in_scope, payroll_scope_ids
+    scope = await payroll_scope_ids(db, current)   # E3: colleagues' pay only inside the payroll scope
     listed = await _picker_lists(db, current.org_id, employees)
 
     def pay(e, v):
-        return v if (see_pay or (e.id == current.id and see_own)) else None
+        if e.id == current.id:
+            return v if see_own else None
+        return v if (see_pay and in_scope(scope, e.id)) else None
     return [{"id": e.id, "name": e.name, "email": e.email,
              "phone": e.phone, "wage_type": pay(e, e.wage_type), "wage_value": pay(e, e.wage_value),
              "commission_labour": pay(e, e.commission_labour), "commission_parts": pay(e, e.commission_parts),
@@ -178,15 +182,19 @@ async def _assert_can_assign_role(db: AsyncSession, current: Employee, role_id: 
         editor = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
         target = (await db.execute(select(Role).where(Role.id == role_id))).scalar_one_or_none()
         if editor and target:
-            _assert_scope_not_wider(editor, _ScopeView(target))
+            from backend.routers.rbac import PAYROLL_ACCESS
+            from backend.services.permissions import role_allows
+            _assert_scope_not_wider(editor, _ScopeView(target),
+                                    grants_payroll=any(role_allows(target, c) for c in PAYROLL_ACCESS))
 
 
 class _ScopeView:
     """A role's data-scope fields in the shape rbac._assert_scope_not_wider reads."""
     def __init__(self, role: Role):
         import json
-        for f in ("order_scope", "contact_scope", "warehouse_scope", "location_scope"):
+        for f in ("order_scope", "contact_scope", "warehouse_scope", "location_scope", "payroll_scope"):
             setattr(self, f, getattr(role, f, None) or "all")
+        self.payroll_employee_ids = getattr(role, "payroll_employee_ids", None) or []
         self.location_ids = json.loads(role.location_ids or "[]") if isinstance(role.location_ids, str) else (role.location_ids or [])
 
 
@@ -234,7 +242,9 @@ async def create_employee(
         raise HTTPException(400, "Choose a different password")
     await _assert_can_assign_role(db, current, data.role_id)
     from backend.services.auth import has_perm
-    if not await has_perm(db, current, "can_view_payroll"):
+    from backend.services.payroll_views import payroll_scope_ids
+    # A role limited to some people's payroll (E3) can't set a newcomer's pay: they're outside it.
+    if not await has_perm(db, current, "can_view_payroll") or await payroll_scope_ids(db, current) is not None:
         defaults = EmployeeIn.model_fields
         for k in PAY_FIELDS:
             if k in defaults:
@@ -303,9 +313,14 @@ async def update_employee(
     await _assert_can_manage(db, current, emp)
     payload = data.model_dump(exclude_unset=True)
     from backend.services.auth import has_perm
-    if not await has_perm(db, current, "can_view_payroll"):
-        # Pay is hidden from this role in list_employees, so a full-form save would send blanks:
-        # never let it change (or wipe) compensation it can't see.
+    from backend.services.payroll_views import in_scope, payroll_scope_ids
+    from backend.services.auth import is_shop_owner
+    own_pay = emp.id == current.id and current.role_id and not await is_shop_owner(db, current)
+    if own_pay or not await has_perm(db, current, "can_view_payroll") \
+            or not in_scope(await payroll_scope_ids(db, current), emp.id):
+        # Pay is hidden from this role in list_employees (no payroll view, or outside its payroll
+        # scope), so a full-form save would send blanks: never let it change compensation it can't see.
+        # Nobody but the owner sets their own pay either (same rule as payroll's assert_not_self).
         for k in PAY_FIELDS:
             payload.pop(k, None)
     if "role_id" in payload and payload["role_id"] != emp.role_id:

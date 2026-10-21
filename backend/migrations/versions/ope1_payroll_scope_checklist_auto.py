@@ -2,8 +2,9 @@
 
 - roles.payroll_scope (own | all | selected) + roles.payroll_employee_ids: whose payroll a role
   may see and manage. Existing roles keep "all", so nothing changes until someone narrows it.
-- can_view_own_payroll is granted to every existing explicit role (it is on by default for
-  every built-in role; explicit roles would otherwise start without it).
+- can_view_own_payroll is granted to existing explicit roles that already hold
+  can_view_own_compensation (the older "see your own pay" right). A role that was denied its own
+  pay stays denied; explicit roles would otherwise start without it either way.
 - checklist_templates.auto_status_keys: statuses that attach the template automatically.
 
 Revision ID: ope1
@@ -32,7 +33,7 @@ def upgrade() -> None:
     for rid, raw in rows:
         perms = raw if isinstance(raw, dict) else (json.loads(raw) if raw else {})
         perms = dict(perms or {})
-        if "can_view_own_payroll" in perms:
+        if "can_view_own_payroll" in perms or perms.get("can_view_own_compensation") is not True:
             continue
         perms["can_view_own_payroll"] = True
         stmt = sa.text("UPDATE roles SET permissions = :p WHERE id = :i").bindparams(
