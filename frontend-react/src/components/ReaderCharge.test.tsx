@@ -45,6 +45,8 @@ describe("ReaderCharge", () => {
     expect(calls.find((c) => c.url.endsWith("/terminal/charge"))?.body).toEqual({ terminal_id: "t1", account_id: "acc", order_id: "o1", amount: 40 });
     expect(await screen.findByText("Waiting for card…")).toBeInTheDocument();
     expect(screen.getByText("Test mode")).toBeInTheDocument();
+    expect(screen.getByTestId("reader-spinner")).toBeInTheDocument();             // a small calm spinner…
+    expect(document.querySelector(".animate-pulse")).toBeNull();                  // …not a pulsing icon
     expect(screen.getByRole("button", { name: "Close" })).toBeDisabled();          // can't walk away mid-charge
     await act(async () => { await vi.advanceTimersByTimeAsync(POLL_MS); });
     expect(screen.getByText("Waiting for card…")).toBeInTheDocument();

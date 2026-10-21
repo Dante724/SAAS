@@ -111,7 +111,11 @@ describe("CreditNoteDrawer", () => {
     // issued is locked: no inputs, no save/issue, but it can be canceled
     expect(screen.queryByLabelText("Line 1 unit price")).toBeNull();
     expect(screen.queryByRole("button", { name: "Save draft" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Cancel credit note" })).toBeTruthy();
+    // the extra actions (PDF, print, cancel) live in the footer's "⋮" menu
+    await u.click(screen.getByRole("button", { name: "More actions" }));
+    expect(screen.getByRole("menuitem", { name: "Cancel credit note" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Download PDF" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Delete draft" })).toBeNull();
   });
 
   it("a standalone note needs a client", async () => {
@@ -139,6 +143,35 @@ describe("InvoiceDrawer", () => {
     expect(posted("/finance/invoices/i1")[0].body).toEqual({ display_mode: "one_line" });
     expect(screen.getByRole("button", { name: "Record payment" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Create credit note" })).toBeTruthy();
+  });
+
+  it("reads as a statement: total, then each payment and credit note, then Balance due", async () => {
+    routes["GET /api/finance/invoices/i1"] = () => inv({ amount_paid: 40, credited: 10, balance_due: 50,
+      payments: [{ id: "p1", kind: "payment", method: "cash", amount: 40, paid_at: "2026-10-02T10:00:00" }],
+      credit_notes: [{ id: "cn1", number: "CN-00001", status: "issued", total: 10, issued_at: "2026-10-03T10:00:00" }] });
+    render(<InvoiceDrawer id="i1" onClose={() => {}} onChanged={() => {}} />);
+    const statement = await screen.findByRole("list", { name: "Statement" });
+    const rows = [...statement.querySelectorAll("[data-row]")].map((r) => r.getAttribute("data-row"));
+    expect(rows).toEqual(["total", "payment", "credit", "balance"]);
+    expect(statement.querySelector('[data-row="payment"]')!.textContent).toMatch(/−\s*\$?40\.00/);
+    expect(statement.querySelector('[data-row="credit"]')!.textContent).toMatch(/−\s*\$?10\.00/);
+  });
+
+  it("keeps Balance due in ink until the due date has passed, then shows it red with the days late", async () => {
+    const soon = new Date(Date.now() + 5 * 86400000).toISOString();
+    routes["GET /api/finance/invoices/i1"] = () => inv({ due_at: soon });
+    const { unmount } = render(<InvoiceDrawer id="i1" onClose={() => {}} onChanged={() => {}} />);
+    const ok = await screen.findByTestId("balance-due");
+    expect(ok.className).not.toMatch(/rose/);
+    expect(screen.queryByText(/days? late/)).toBeNull();
+    unmount();
+
+    const past = new Date(Date.now() - 3 * 86400000).toISOString();
+    routes["GET /api/finance/invoices/i1"] = () => inv({ due_at: past });
+    render(<InvoiceDrawer id="i1" onClose={() => {}} onChanged={() => {}} />);
+    const late = await screen.findByTestId("balance-due");
+    expect(late.className).toMatch(/text-rose-600/);
+    expect(screen.getAllByText(/3 days late/).length).toBeGreaterThan(0);
   });
 
   it("hides money actions on a settled invoice", async () => {

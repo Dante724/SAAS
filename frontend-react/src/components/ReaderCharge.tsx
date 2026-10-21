@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { M } from "./Shell";
 import { api } from "../api/client";
 import { money } from "../pages/orders/types";
+import { inputCls } from "../pages/invoices/billing";
 
 // F2/F3 — "Charge on reader". Sends the amount to a registered card reader (Stripe Terminal,
 // Square Terminal, or the simulated reader in local testing), then follows the charge by polling
@@ -108,43 +109,46 @@ export default function ReaderCharge({ orderId, saleId, amount, accountId, title
       <div className="relative w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5 shadow-clay-drawer space-y-4">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-sm font-bold text-ink-primary flex items-center gap-2">{title || "Charge on reader"}
-              {testMode && <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[11px] font-bold">Test mode</span>}
+            <div className="text-sm font-semibold text-ink-primary flex items-center gap-2">{title || "Charge on reader"}
+              {testMode && <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200/70 text-[11px] font-semibold">Test mode</span>}
             </div>
-            <div className="text-xs text-ink-tertiary tabular-nums">{money(amount)}</div>
+            <div className="text-2xl font-semibold text-ink-primary tabular-nums mt-1">{money(amount)}</div>
           </div>
-          <button aria-label="Close" disabled={locked} onClick={() => onClose(charge)} className="text-ink-tertiary hover:text-ink-primary disabled:opacity-30"><M n="close" c="text-lg" /></button>
+          <button aria-label="Close" disabled={locked} onClick={() => onClose(charge)} className="w-9 h-9 -mr-2 -mt-2 rounded-lg grid place-items-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent"><M n="close" c="text-lg" /></button>
         </div>
 
         {!readers && !loadErr && <div className="text-xs text-ink-tertiary py-4 text-center">Loading card readers…</div>}
         {loadErr && <div className="text-xs text-rose-600 py-2">{loadErr}</div>}
         {readers && readers.length === 0 && (
-          <div className="rounded-xl border border-dashed border-slate-200 p-4 text-center text-xs text-ink-secondary">
-            <M n="contactless" c="text-2xl text-ink-tertiary block mx-auto mb-1" />No card reader yet. Add one in Settings › Integrations › Card readers.
+          <div className="rounded-xl border border-dashed border-slate-300 p-4 text-center text-xs text-ink-secondary">
+            <M n="contactless" c="text-xl text-ink-tertiary block mx-auto mb-1.5" />No card reader yet. Add one in Settings › Integrations › Card readers.
           </div>
         )}
 
         {readers && readers.length > 0 && !charge && (
           <>
             <div>
-              <label htmlFor="reader-pick" className="block text-[11px] font-bold text-ink-tertiary mb-1">Card reader</label>
-              <select id="reader-pick" value={readerId} onChange={(e) => setReaderId(e.target.value)} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl">
+              <label htmlFor="reader-pick" className="block text-xs font-semibold text-ink-tertiary mb-1">Card reader</label>
+              <select id="reader-pick" value={readerId} onChange={(e) => setReaderId(e.target.value)} className={inputCls}>
                 {readers.map((r) => <option key={r.id} value={r.id}>{r.label} · {PROVIDER[r.provider] || r.provider}</option>)}
               </select>
             </div>
-            <button onClick={send} disabled={busy || !readerId || amount <= 0} className="w-full py-2.5 rounded-xl bg-primary text-white text-sm font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-50 flex items-center justify-center gap-2">
+            <button onClick={send} disabled={busy || !readerId || amount <= 0} className="w-full h-11 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center justify-center gap-2 tabular-nums">
               <M n="contactless" c="text-base" />{busy ? "Sending…" : `Send ${money(amount)} to reader`}
             </button>
           </>
         )}
 
         {charge && (
-          <div role="status" aria-live="polite" className={`rounded-xl border p-4 text-center ${waiting ? "border-blue-100 bg-blue-50/60" : st === "succeeded" ? "border-emerald-200 bg-emerald-50" : "border-rose-200 bg-rose-50"}`}>
-            <M n={waiting ? "contactless" : st === "succeeded" ? "check_circle" : st === "canceled" ? "block" : "error"}
-              c={`text-3xl block mx-auto mb-1 ${waiting ? "text-primary animate-pulse" : st === "succeeded" ? "text-emerald-600" : "text-rose-600"}`} />
-            <div className="text-sm font-bold text-ink-primary">{waiting ? "Waiting for card…" : charge.status_label}</div>
-            <div className="text-[11px] text-ink-secondary mt-0.5">
+          <div role="status" aria-live="polite" className={`rounded-xl border px-4 py-3.5 flex items-start gap-3 ${waiting ? "border-slate-200 bg-slate-50" : st === "succeeded" ? "border-emerald-200 bg-emerald-50" : "border-rose-200 bg-rose-50"}`}>
+            {waiting
+              ? <span data-testid="reader-spinner" aria-hidden className="mt-0.5 w-4 h-4 flex-shrink-0 rounded-full border-2 border-slate-300 border-t-primary animate-spin motion-reduce:animate-none" />
+              : <M n={st === "succeeded" ? "check_circle" : st === "canceled" ? "block" : "error"} c={`text-base flex-shrink-0 mt-0.5 ${st === "succeeded" ? "text-emerald-600" : "text-rose-600"}`} />}
+            <div className="min-w-0 text-left">
+            <div className="text-sm font-semibold text-ink-primary">{waiting ? "Waiting for card…" : charge.status_label}</div>
+            <div className="text-xs text-ink-secondary mt-0.5">
               {waiting ? `Ask the customer to tap, insert or swipe on ${reader?.label || "the reader"}.` : charge.error || (st === "succeeded" ? "Payment recorded." : "")}
+            </div>
             </div>
           </div>
         )}
@@ -154,24 +158,24 @@ export default function ReaderCharge({ orderId, saleId, amount, accountId, title
         )}
         {err && (
           <div className="text-xs text-rose-600 flex items-start gap-1.5"><M n="error" c="text-sm" /><span className="flex-1">{err}</span>
-            {busyReader && <button onClick={clearReader} disabled={busy} className="font-bold text-primary hover:underline whitespace-nowrap">Cancel the waiting charge</button>}
+            {busyReader && <button onClick={clearReader} disabled={busy} className="font-semibold text-primary hover:underline whitespace-nowrap">Cancel the waiting charge</button>}
           </div>
         )}
 
         {canSimulate && (
-          <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-2.5 space-y-1.5">
-            <div className="text-[11px] font-bold text-amber-900">Test card</div>
+          <div className="rounded-xl border border-amber-200/70 bg-amber-50/60 p-3 space-y-2">
+            <div className="text-xs font-semibold text-amber-900">Test card <span className="font-normal text-amber-800">· nothing is charged</span></div>
             <div className="flex gap-2">
-              <button onClick={() => act("simulate", { outcome: "approve" })} disabled={busy} className="flex-1 py-1.5 rounded-lg bg-white border border-amber-200 text-xs font-bold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50">Approve</button>
-              <button onClick={() => act("simulate", { outcome: "decline" })} disabled={busy} className="flex-1 py-1.5 rounded-lg bg-white border border-amber-200 text-xs font-bold text-rose-700 hover:bg-rose-50 disabled:opacity-50">Decline</button>
+              <button onClick={() => act("simulate", { outcome: "approve" })} disabled={busy} className="flex-1 h-9 rounded-lg bg-white border border-slate-200 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50">Approve</button>
+              <button onClick={() => act("simulate", { outcome: "decline" })} disabled={busy} className="flex-1 h-9 rounded-lg bg-white border border-slate-200 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50">Decline</button>
             </div>
           </div>
         )}
 
         <div className="flex gap-2">
-          {waiting && <button onClick={() => act("cancel")} disabled={busy} className="flex-1 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold text-rose-600 hover:bg-rose-50 disabled:opacity-50">Cancel charge</button>}
-          {failed && <button onClick={() => { setCharge(null); setErr(null); }} className="flex-1 py-2 rounded-xl bg-primary text-white text-xs font-bold hover:brightness-110">Try again</button>}
-          {!locked && <button onClick={() => onClose(charge)} className="flex-1 py-2 rounded-xl border border-slate-200 bg-white text-xs font-bold text-ink-secondary hover:bg-slate-50">{st === "succeeded" ? "Done" : "Close"}</button>}
+          {waiting && <button onClick={() => act("cancel")} disabled={busy} className="flex-1 h-10 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50">Cancel charge</button>}
+          {failed && <button onClick={() => { setCharge(null); setErr(null); }} className="flex-1 h-10 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container">Try again</button>}
+          {!locked && <button onClick={() => onClose(charge)} className={`flex-1 h-10 rounded-lg text-xs font-semibold ${st === "succeeded" ? "bg-primary text-white hover:bg-primary-container" : "border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50"}`}>{st === "succeeded" ? "Done" : "Close"}</button>}
         </div>
       </div>
     </div>, document.body);

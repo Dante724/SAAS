@@ -1,4 +1,4 @@
-// A2 — the services list badges what's on the online booking page.
+// A2 — the services list quietly marks services hidden from online booking.
 // A3 — the products list shows MPN and finds products by it; the product drawer edits it.
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
@@ -23,13 +23,35 @@ function stub(routes: Record<string, unknown | number>) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Services list", () => {
-  it("badges services shown on the online booking page", async () => {
-    stub({ "/api/catalog/services": { items: [{ id: "a", name: "Diagnostics", price: 20, bookable: true }, { id: "b", name: "Internal rework", price: 0, bookable: false }] } });
+  it("marks only the services hidden from online booking, quietly", async () => {
+    stub({ "/api/catalog/services": { items: [
+      { id: "a", name: "Diagnostics", price: 20, bookable: true },
+      { id: "b", name: "Internal rework", price: 0, bookable: false },
+      { id: "c", name: "Legacy clean", price: 5 },                       // unset means shown
+    ] } });
     render(<Services onOpen={() => {}} />);
     const shown = (await screen.findByText("Diagnostics")).closest("tr")!;
-    expect(within(shown).getByText("Online booking")).toBeInTheDocument();
+    expect(within(shown).queryByText("Not bookable online")).toBeNull();
+    expect(within(screen.getByText("Legacy clean").closest("tr")!).queryByText("Not bookable online")).toBeNull();
     const hidden = screen.getByText("Internal rework").closest("tr")!;
-    expect(within(hidden).queryByText("Online booking")).toBeNull();
+    expect(within(hidden).getByText("Not bookable online")).toBeInTheDocument();
+    expect(screen.queryByText("Online booking")).toBeNull();                // no pill on every row
+    expect(screen.getByRole("columnheader", { name: "Price" })).toBeInTheDocument();
+  });
+
+  it("the whole row opens the service, and the row menu holds Edit and Duplicate", async () => {
+    const u = userEvent.setup();
+    const onOpen = vi.fn();
+    stub({ "/api/catalog/services": { items: [{ id: "a", name: "Diagnostics", price: 20, bookable: true }] } });
+    render(<Services onOpen={onOpen} />);
+    await u.click(await screen.findByText("Diagnostics"));
+    expect(onOpen).toHaveBeenLastCalledWith(expect.objectContaining({ id: "a" }));
+    onOpen.mockClear();
+    await u.click(screen.getByRole("button", { name: "More actions for Diagnostics" }));
+    expect(onOpen).not.toHaveBeenCalled();                                   // the menu doesn't open the row
+    await u.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+    expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: undefined, name: "Diagnostics (copy)" }));
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("shows an error with a retry instead of an empty list", async () => {
@@ -50,7 +72,7 @@ describe("Products list", () => {
     render(<Products onOpen={() => {}} />);
     expect(await screen.findByRole("columnheader", { name: "MPN" })).toBeInTheDocument();
     expect(screen.getByText("661-12345")).toBeInTheDocument();
-    await u.type(screen.getByPlaceholderText("Search products, SKU, MPN..."), "661-123");
+    await u.type(screen.getByPlaceholderText("Search products, SKU, MPN…"), "661-123");
     expect(screen.getByText("iPhone 13 screen")).toBeInTheDocument();
     expect(screen.queryByText("Battery")).toBeNull();
   });

@@ -76,11 +76,12 @@ describe("ChatsHub spam", () => {
   it("marks the open conversation as spam and removes it from the inbox list", async () => {
     const u = userEvent.setup();
     render(<ChatsHub />);
-    await u.click(await screen.findByRole("button", { name: "Mark as spam" }));
+    await u.click(await screen.findByRole("button", { name: "More actions" }));
+    await u.click(await screen.findByRole("button", { name: /Mark as spam/ }));
     const patch = calls.find((c) => c.method === "PATCH");
     expect(patch).toMatchObject({ url: "/api/chats/threads/t1", body: { is_spam: true } });
     expect(await screen.findByText("Moved to spam")).toBeInTheDocument();
-    expect(await screen.findByText("Pick a conversation")).toBeInTheDocument();
+    expect(await screen.findByText(/Pick a conversation/)).toBeInTheDocument();
   });
 
   it("restores a conversation from the Spam folder", async () => {
@@ -93,9 +94,10 @@ describe("ChatsHub spam", () => {
     expect(await screen.findByText("Moved back to the inbox")).toBeInTheDocument();
   });
 
-  it("changes the status from the conversation header", async () => {
+  it("changes the status from the conversation's more menu", async () => {
     const u = userEvent.setup();
     render(<ChatsHub />);
+    await u.click(await screen.findByRole("button", { name: "More actions" }));
     await u.selectOptions(await screen.findByRole("combobox", { name: "Chat status" }), "completed");
     expect(calls.find((c) => c.method === "PATCH")).toMatchObject({ body: { status: "completed" } });
     expect(await screen.findByText("Marked as completed")).toBeInTheDocument();
@@ -105,9 +107,40 @@ describe("ChatsHub spam", () => {
     const u = userEvent.setup();
     render(<ChatsHub />);
     await u.click(await screen.findByRole("tab", { name: /^New/ }));
-    const select = await screen.findByRole("combobox", { name: "Chat status" });
-    expect(select).toHaveValue("new");
+    await u.click(await screen.findByRole("button", { name: "More actions" }));
+    expect(await screen.findByRole("combobox", { name: "Chat status" })).toHaveValue("new");
     await u.type(screen.getByPlaceholderText("Message…"), "On it{Enter}");
+    await vi.waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/send"))).toBe(true));
+    await u.click(await screen.findByRole("button", { name: "More actions" }));
     await vi.waitFor(() => expect(screen.getByRole("combobox", { name: "Chat status" })).toHaveValue("replied"));
+  });
+});
+
+describe("ChatsHub polish", () => {
+  it("completes the open conversation in one click", async () => {
+    const u = userEvent.setup();
+    render(<ChatsHub />);
+    await u.click(await screen.findByRole("button", { name: /^Complete$/ }));
+    expect(calls.find((c) => c.method === "PATCH")).toMatchObject({ url: "/api/chats/threads/t1", body: { status: "completed" } });
+    expect(await screen.findByText("Marked as completed")).toBeInTheDocument();
+  });
+
+  it("puts a quick reply into the composer instead of sending it", async () => {
+    const u = userEvent.setup();
+    render(<ChatsHub />);
+    const input = await screen.findByPlaceholderText("Message…");
+    await u.type(input, "Hi Ana,");
+    await u.click(screen.getByRole("button", { name: /ready for pickup/ }));
+    expect(input).toHaveValue("Hi Ana, It's ready for pickup!");
+    expect(calls.some((c) => c.url.endsWith("/send"))).toBe(false);
+  });
+
+  it("hides zero counts on the status tabs", async () => {
+    render(<ChatsHub />);
+    const tabs = await screen.findByRole("tablist", { name: "Chat status" });
+    await screen.findAllByText("Ana");
+    expect(within(tabs).getByRole("tab", { name: "Replied" })).toBeInTheDocument();
+    expect(within(tabs).getByRole("tab", { name: "Completed" })).toBeInTheDocument();
+    expect(within(tabs).queryByText("0")).toBeNull();
   });
 });

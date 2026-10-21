@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
 // Orderry parity, team A. Runs against a live app (see README):
-//  A1/A2 — editing a service in the drawer keeps every field, and the booking toggle shows as a badge.
+//  A1/A2 — editing a service in the drawer keeps every field, and a service hidden from online booking says so in the list.
 //  A3    — a product is found by its MPN in Catalog › Products and Inventory › Stock.
 // Each test creates its own records through the API (with the signed-in session) and removes them.
 
@@ -39,7 +39,8 @@ for (const [label, width, height] of [["desktop", 1280, 900], ["phone", 375, 812
         await page.reload();
         await page.getByRole("button", { name: "Services", exact: true }).click();
         const row = page.getByRole("row").filter({ hasText: name });
-        await expect(row.getByText("Online booking")).toBeVisible();
+        await expect(row).toBeVisible();
+        await expect(row.getByText("Not bookable online")).toHaveCount(0);   // bookable rows stay quiet
 
         // Edit only the price and switch off online booking.
         await row.click();
@@ -55,7 +56,7 @@ for (const [label, width, height] of [["desktop", 1280, 900], ["phone", 375, 812
           duration_min: 90, description: "Full teardown", is_labor: true,
           allowed_employee_ids: [me.id], required_resource_types: ["bay"],
         });
-        await expect(row.getByText("Online booking")).toHaveCount(0);
+        await expect(row.getByText("Not bookable online")).toBeVisible();
 
         // Reopen: the drawer shows what was saved.
         await row.click();
@@ -80,7 +81,7 @@ for (const [label, width, height] of [["desktop", 1280, 900], ["phone", 375, 812
       try {
         await page.reload();
         await page.getByRole("button", { name: "Products", exact: true }).click();
-        await page.getByPlaceholder("Search products, SKU, MPN...").fill(mpn.toLowerCase());
+        await page.getByPlaceholder("Search products, SKU, MPN…").fill(mpn.toLowerCase());
         const row = page.getByRole("row").filter({ hasText: name });
         await expect(row).toHaveCount(1);
         await expect(row.getByText(mpn)).toBeVisible();
@@ -94,7 +95,7 @@ for (const [label, width, height] of [["desktop", 1280, 900], ["phone", 375, 812
 
         // Inventory › Stock search matches it too.
         await page.goto("/inventory");
-        await page.getByPlaceholder("Search products, SKU, MPN, barcode...").fill(mpn);
+        await page.getByPlaceholder("Search products, SKU, MPN, barcode…").fill(mpn);
         // It has no stock yet, so the default "In stock" view offers to show it rather than hide it.
         await page.getByRole("button", { name: "Show all matches" }).click();
         await expect(page.getByText(name)).toBeVisible();

@@ -118,4 +118,38 @@ describe("My earnings", () => {
     renderPage();
     expect(await screen.findByRole("note")).toHaveTextContent("Your role shows pay from");
   });
+
+  it("shows only the figures that aren't zero, with penalties in ink", async () => {
+    renderPage();
+    const stats = await screen.findByTestId("earnings-stats");
+    // hourly is 0 in this period, so it isn't shown; bonuses and penalties read as one net figure
+    expect(within(stats).queryByText("Hourly")).not.toBeInTheDocument();
+    expect(within(stats).getByText("Base salary")).toBeInTheDocument();
+    expect(within(stats).getByText("Commissions")).toBeInTheDocument();
+    expect(within(stats).getByText("Bonuses and penalties")).toBeInTheDocument();
+    expect(stats.querySelectorAll("dt")).toHaveLength(3);
+    expect(stats.innerHTML).not.toMatch(/rose|red-/);
+    const penalty = screen.getByText("Late").closest("li")!;
+    expect(penalty).toHaveTextContent("−");
+    expect(penalty.innerHTML).not.toMatch(/rose|red-/);
+  });
+
+  it("hides the figures row when everything but the total is zero", async () => {
+    respond = () => reply(200, { ...EARNINGS, base_salary: 0, commissions_total: 0, bonuses_total: 0, penalties_total: 0, total: 0, commissions: [], bonuses: [], penalties: [] });
+    renderPage();
+    await screen.findByTestId("earnings-total");
+    expect(screen.queryByTestId("earnings-stats")).not.toBeInTheDocument();
+  });
+
+  it("lists pay runs with a progress bar from estimated to paid", async () => {
+    respond = () => reply(200, { ...EARNINGS, accruals: [
+      { id: "a1", period_start: "2026-09-01", period_end: "2026-09-30", status: "paid", gross_total: 900, paid_at: "2026-10-01T09:00:00" },
+      { id: "a2", period_start: "2026-10-01", period_end: "2026-10-31", status: "accrued", gross_total: 1060, paid_at: null },
+    ] });
+    renderPage();
+    const bars = await screen.findAllByRole("progressbar");
+    expect(bars.map((b) => b.getAttribute("aria-valuetext"))).toEqual(["Paid", "Accrued"]);
+    expect(screen.getByText(/Paid Oct 1, 2026/)).toBeInTheDocument();
+    expect(screen.getByText("Accrued, waiting to be paid")).toBeInTheDocument();
+  });
 });

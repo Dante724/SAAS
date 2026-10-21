@@ -85,8 +85,8 @@ export default function RecordPaymentDrawer({ invoice, onClose, onPaid }: { invo
         <input id="pay-amount" type="number" inputMode="decimal" min={0} step="0.01" value={amount}
           onChange={(e) => setAmount(e.target.value)} className={`${inputCls} text-right tabular-nums`} />
         <div className="flex gap-2 mt-1.5">
-          <button type="button" onClick={() => setAmount(String(due))} className="text-[11px] font-semibold text-primary">Full balance</button>
-          {due > 0 && <button type="button" onClick={() => setAmount(String(round2(due / 2)))} className="text-[11px] font-semibold text-primary">Half</button>}
+          <button type="button" onClick={() => setAmount(String(due))} className="text-xs font-semibold text-primary">Full balance</button>
+          {due > 0 && <button type="button" onClick={() => setAmount(String(round2(due / 2)))} className="text-xs font-semibold text-primary">Half</button>}
         </div>
       </div>
       <div>
@@ -95,7 +95,7 @@ export default function RecordPaymentDrawer({ invoice, onClose, onPaid }: { invo
           {METHODS.map((m) => (
             <button key={m.key} type="button" role="radio" aria-checked={method === m.key} onClick={() => setMethod(m.key)}
               disabled={m.key === "balance" && !hasClient}
-              className={`px-3 py-2 rounded-lg border text-xs font-semibold disabled:opacity-40 ${method === m.key ? "border-primary bg-primary/5 text-primary" : "border-slate-200 text-ink-secondary hover:bg-slate-50"}`}>{m.label}</button>
+              className={`px-3 py-2.5 rounded-lg border text-xs font-semibold disabled:opacity-40 ${method === m.key ? "border-primary bg-primary/5 text-primary" : "border-slate-200 text-ink-secondary hover:bg-slate-50"}`}>{m.label}</button>
           ))}
         </div>
       </div>
@@ -116,7 +116,7 @@ export default function RecordPaymentDrawer({ invoice, onClose, onPaid }: { invo
       </div>
       {over && (
         <fieldset className="rounded-xl border border-amber-200 bg-amber-50/60 p-3 space-y-2">
-          <legend className="px-1 text-xs font-bold text-amber-900">{cash(excess)} more than the balance due</legend>
+          <legend className="px-1 text-xs font-semibold text-amber-900">{cash(excess)} more than the balance due</legend>
           <label className={`flex items-start gap-2 text-xs ${!hasClient || method === "balance" ? "opacity-50" : ""}`}>
             <input type="radio" name="overpay" checked={overpay === "keep_balance"} disabled={!hasClient || method === "balance"}
               onChange={() => setOverpay("keep_balance")} className="mt-0.5 accent-primary" />
@@ -133,9 +133,9 @@ export default function RecordPaymentDrawer({ invoice, onClose, onPaid }: { invo
       )}
       <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-1.5 text-sm">
         <div className="flex justify-between text-ink-secondary"><span>Applied to this invoice</span><span className="tabular-nums font-semibold text-ink-primary">{cash(Math.min(amt, due))}</span></div>
-        <div className="flex justify-between text-ink-secondary"><span>Balance due after</span><span className="tabular-nums font-semibold text-ink-primary">{cash(Math.max(0, due - amt))}</span></div>
+        <div className="pt-1.5 border-t border-slate-200 flex justify-between text-ink-secondary"><span>Balance due after</span><span className="tabular-nums font-semibold text-ink-primary">{cash(Math.max(0, due - amt))}</span></div>
       </div>
-      {problem && amount !== "" && <p className="text-[11px] text-ink-tertiary">{problem}</p>}
+      {problem && amount !== "" && <p className="text-xs text-ink-tertiary">{problem}</p>}
     </Drawer>
   );
 }

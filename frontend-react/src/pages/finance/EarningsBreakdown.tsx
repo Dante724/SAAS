@@ -36,7 +36,7 @@ const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month
 const signed = (n: number) => `${n < 0 ? "−" : ""}${money(Math.abs(n))}`;
 
 function Amount({ n, strong }: { n: number; strong?: boolean }) {
-  return <span className={`tabular-nums whitespace-nowrap ${n < 0 ? "text-rose-600" : strong ? "text-ink-primary" : "text-ink-secondary"} ${strong ? "font-semibold" : ""}`}>{signed(n)}</span>;
+  return <span className={`tabular-nums whitespace-nowrap ${strong ? "text-ink-primary font-semibold" : "text-ink-secondary"}`}>{signed(n)}</span>;
 }
 
 function DocLink({ d }: { d: BreakdownDoc }) {
@@ -61,11 +61,11 @@ export default function EarningsBreakdown({ rules, empty = "No commissions in th
         return (
           <li key={rk}>
             <button type="button" onClick={() => setOpenRule((o) => ({ ...o, [rk]: !ro }))} aria-expanded={ro}
-              className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-50">
+              className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-50/80 transition-colors">
               <M n={ro ? "expand_more" : "chevron_right"} c="text-base text-ink-tertiary flex-shrink-0" />
               <span className="min-w-0 flex-1">
-                <span className="block text-sm font-semibold text-ink-primary truncate">{r.rule_name}{!r.active && r.rule_id && <span className="ml-2 text-[11px] font-normal text-ink-tertiary">(rule removed)</span>}</span>
-                <span className="block text-[11px] text-ink-tertiary truncate">{[eventLabel(r.event), ruleSummary(r), `${r.documents.length} ${r.documents.length === 1 ? "job" : "jobs"}`].filter(Boolean).join(" · ")}</span>
+                <span className="block text-sm font-semibold text-ink-primary truncate">{r.rule_name}{!r.active && r.rule_id && <span className="ml-2 text-xs font-normal text-ink-tertiary">Rule removed</span>}</span>
+                <span className="block text-xs text-ink-tertiary truncate">{[eventLabel(r.event), ruleSummary(r), `${r.documents.length} ${r.documents.length === 1 ? "job" : "jobs"}`].filter(Boolean).join(" · ")}</span>
               </span>
               <Amount n={r.total} strong />
             </button>
@@ -96,10 +96,10 @@ export default function EarningsBreakdown({ rules, empty = "No commissions in th
                               {it.entries.length > 1 && (
                                 <ul className="mt-1 space-y-0.5">
                                   {it.entries.map((e) => (
-                                    <li key={e.id} className="flex items-center gap-3 text-[11px] text-ink-tertiary">
-                                      <span className="w-14 flex-shrink-0">{day(e.date)}</span>
+                                    <li key={e.id} className="flex items-center gap-3 text-xs text-ink-tertiary">
+                                      <span className="w-14 flex-shrink-0 tabular-nums">{day(e.date)}</span>
                                       <span className="flex-1 min-w-0 truncate">{e.kind === "reversed" ? "Taken back" : "Earned"}{e.note ? ` · ${e.note}` : ""}</span>
-                                      <span className={`tabular-nums ${e.amount < 0 ? "text-rose-600" : ""}`}>{signed(e.amount)}</span>
+                                      <span className="tabular-nums">{signed(e.amount)}</span>
                                     </li>
                                   ))}
                                 </ul>

@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
-import PageSummary, { type SummaryStat } from "../../components/PageSummary";
 import { api } from "../../api/client";
 import { money } from "../orders/types";
 import { isoDate } from "../../lib/localDate";
@@ -30,88 +29,137 @@ function monthRange(offset: number): [string, string] {
   return [isoDate(first), isoDate(last)];
 }
 
-const STATUS: Record<Earnings["accrual_status"], { label: string; hint: string; cls: string; icon: string }> = {
-  not_accrued: { label: "Not accrued yet", hint: "These are live figures. They're final once your manager accrues the period.", cls: "bg-slate-100 text-ink-secondary", icon: "hourglass_empty" },
-  draft: { label: "Draft", hint: "Your manager has drafted this period but not accrued it yet.", cls: "bg-amber-50 text-amber-700", icon: "edit_note" },
-  accrued: { label: "Accrued", hint: "This period is accrued and waiting to be paid.", cls: "bg-blue-50 text-primary", icon: "event_available" },
-  paid: { label: "Paid", hint: "This period has been paid out.", cls: "bg-emerald-50 text-emerald-700", icon: "verified" },
+const STATUS: Record<Earnings["accrual_status"], { label: string; hint: string; cls: string }> = {
+  not_accrued: { label: "Not accrued yet", hint: "These are live figures. They're final once your manager accrues the period.", cls: "bg-slate-100 text-ink-secondary" },
+  draft: { label: "Draft", hint: "Your manager has drafted this period but not accrued it yet.", cls: "bg-amber-50 text-amber-800" },
+  accrued: { label: "Accrued", hint: "This period is accrued and waiting to be paid.", cls: "bg-blue-50 text-primary" },
+  paid: { label: "Paid", hint: "This period has been paid out.", cls: "bg-emerald-50 text-emerald-700" },
 };
 
 const longDate = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+// "Oct 1 – 31, 2026" style ranges read faster than two full dates.
+function rangeText(a: string, b: string) {
+  const x = new Date(`${a}T00:00:00`), y = new Date(`${b}T00:00:00`);
+  if (x.getFullYear() !== y.getFullYear()) return `${longDate(a)} – ${longDate(b)}`;
+  const md = (d: Date) => d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return `${md(x)} – ${md(y)}, ${y.getFullYear()}`;
+}
+const signed = (n: number) => `${n < 0 ? "−" : ""}${money(Math.abs(n))}`;
+
+// Pay run stages, shown as the thin segmented bar the customer tracking page uses.
+const RUN_STAGES = ["Estimated", "Accrued", "Paid"] as const;
+const runStage = (status: string) => (status === "paid" ? 2 : status === "draft" ? 0 : 1);
+
+type Stat = { label: string; value: string; hint?: string; go?: () => void };
 
 export function EarningsView({ data }: { data: Earnings }) {
   const st = STATUS[data.accrual_status] || STATUS.not_accrued;
-  const stats: SummaryStat[] = [
-    { label: "Base salary", value: money(data.base_salary), zero: !data.base_salary },
-    { label: "Hourly", value: money(data.hourly_total), zero: !data.hourly_total },
-    { label: "Commissions", value: money(data.commissions_total), zero: !data.commissions_total, tone: data.commissions_total < 0 ? "bad" : undefined },
-    { label: "Bonuses", value: money(data.bonuses_total), zero: !data.bonuses_total },
-    { label: "Penalties", value: data.penalties_total ? `−${money(data.penalties_total)}` : money(0), tone: data.penalties_total ? "bad" : undefined, zero: !data.penalties_total },
-  ];
+  const commRef = useRef<HTMLDivElement>(null);
+  const adjRef = useRef<HTMLDivElement>(null);
+  const go = (r: RefObject<HTMLDivElement>) => () => r.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+
+  // At most three figures under the total, and only the ones that aren't zero.
+  const base = (data.base_salary || 0) + (data.hourly_total || 0);
+  const net = (data.bonuses_total || 0) - (data.penalties_total || 0);
+  const stats: Stat[] = [];
+  if (base) stats.push({
+    label: data.base_salary && data.hourly_total ? "Base pay" : data.hourly_total ? "Hourly" : "Base salary",
+    value: money(base),
+    hint: data.base_salary && data.hourly_total ? `${money(data.base_salary)} salary, ${money(data.hourly_total)} hourly` : undefined,
+  });
+  if (data.commissions_total) stats.push({ label: "Commissions", value: signed(data.commissions_total), hint: `${data.commissions.length} ${data.commissions.length === 1 ? "rule" : "rules"}`, go: go(commRef) });
+  if (data.bonuses_total || data.penalties_total) stats.push({
+    label: data.bonuses_total && data.penalties_total ? "Bonuses and penalties" : data.bonuses_total ? "Bonuses" : "Penalties",
+    value: data.bonuses_total && data.penalties_total ? `${net > 0 ? "+" : ""}${signed(net)}` : data.bonuses_total ? money(data.bonuses_total) : `−${money(data.penalties_total)}`,
+    hint: data.bonuses_total && data.penalties_total ? `${money(data.bonuses_total)} bonuses, −${money(data.penalties_total)} penalties` : undefined,
+    go: go(adjRef),
+  });
+
   const adjustments = [...data.bonuses.map((b) => ({ ...b, kind: "bonus" as const })), ...data.penalties.map((p) => ({ ...p, kind: "penalty" as const }))]
     .sort((a, b) => b.date.localeCompare(a.date));
   return (
     <div className="space-y-4">
       {data.visible_from && (
-        <div role="note" className="rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-xs px-3.5 py-2.5 flex items-start gap-2">
-          <M n="history" c="text-sm mt-px" />Your role shows pay from {longDate(data.visible_from)} onwards, so earlier days aren't included.
+        <div role="note" className="rounded-xl border border-slate-200 bg-white text-ink-secondary text-xs px-3.5 py-2.5 flex items-start gap-2">
+          <M n="history" c="text-sm mt-px text-ink-tertiary" />Your role shows pay from {longDate(data.visible_from)} onwards, so earlier days aren't included.
         </div>
       )}
-      <section className="bg-white rounded-2xl border border-slate-200/90 p-5 flex flex-wrap items-end gap-4">
-        <div className="min-w-0">
-          <p className="text-xs text-ink-tertiary">Earned {longDate(data.period_start)} – {longDate(data.period_end)}</p>
-          <p className={`text-3xl font-semibold tabular-nums ${data.total < 0 ? "text-rose-600" : "text-ink-primary"}`} data-testid="earnings-total">{data.total < 0 ? "−" : ""}{money(Math.abs(data.total))}</p>
+
+      <section aria-label="Summary" className="bg-white rounded-2xl border border-slate-200/90">
+        <div className="px-5 pt-5 pb-4 flex flex-wrap items-start gap-x-6 gap-y-3">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-ink-tertiary">Earned {rangeText(data.period_start, data.period_end)}</p>
+            <p className="mt-1 text-[32px] leading-none font-semibold tracking-tight tabular-nums text-ink-primary" data-testid="earnings-total">{signed(data.total)}</p>
+          </div>
+          <div className="sm:ml-auto sm:text-right max-w-xs">
+            <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold ${st.cls}`}>{st.label}</span>
+            <p className="text-xs text-ink-tertiary mt-1.5">{st.hint}</p>
+          </div>
         </div>
-        <div className="sm:ml-auto sm:text-right max-w-xs">
-          <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${st.cls}`}><M n={st.icon} c="text-sm" />{st.label}</span>
-          <p className="text-[11px] text-ink-tertiary mt-1">{st.hint}</p>
-        </div>
+        {stats.length > 0 && (
+          <dl data-testid="earnings-stats" className="border-t border-slate-100 flex flex-wrap sm:flex-nowrap sm:divide-x divide-slate-100">
+            {stats.map((x) => {
+              const body = <><dt className="text-xs font-medium text-ink-tertiary">{x.label}</dt>
+                <dd className="mt-0.5 text-lg font-semibold tabular-nums text-ink-primary whitespace-nowrap">{x.value}</dd>
+                {x.hint && <dd className="text-xs text-ink-tertiary truncate">{x.hint}</dd>}</>;
+              return x.go
+                ? <button key={x.label} type="button" onClick={x.go} className="flex-1 min-w-[150px] text-left px-5 py-3.5 hover:bg-slate-50/80 transition-colors last:rounded-br-2xl first:rounded-bl-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">{body}</button>
+                : <div key={x.label} className="flex-1 min-w-[150px] px-5 py-3.5">{body}</div>;
+            })}
+          </dl>
+        )}
       </section>
 
-      <PageSummary stats={stats} />
-
-      <section className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
+      <section aria-label="Breakdown" className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
+        <div ref={commRef} className="scroll-mt-4 px-4 py-3.5 border-b border-slate-100 flex items-baseline gap-2">
           <h3 className="text-sm font-semibold text-ink-primary">Commissions</h3>
-          <span className="hidden sm:inline text-[11px] text-ink-tertiary">By rule, then job, then line item</span>
-          <span className="ml-auto text-sm font-semibold tabular-nums text-ink-primary">{money(data.commissions_total)}</span>
+          <span className="hidden sm:inline text-xs text-ink-tertiary">By rule, then job, then line item</span>
+          {(data.commissions.length > 0 || !!data.commissions_total) && <span className="ml-auto text-sm font-semibold tabular-nums text-ink-primary">{signed(data.commissions_total)}</span>}
         </div>
         <EarningsBreakdown rules={data.commissions} empty="No commissions in this period yet." />
+        <div ref={adjRef} className="scroll-mt-4 px-4 py-3.5 border-y border-slate-100 flex items-baseline gap-2">
+          <h3 className="text-sm font-semibold text-ink-primary">Bonuses and penalties</h3>
+          {adjustments.length > 0 && <span className="ml-auto text-sm font-semibold tabular-nums text-ink-primary">{net > 0 ? "+" : ""}{signed(net)}</span>}
+        </div>
+        {adjustments.length === 0 ? <div className="px-4 py-6 text-xs text-ink-tertiary text-center">None in this period.</div> : (
+          <ul className="divide-y divide-slate-100">
+            {adjustments.map((a) => (
+              <li key={a.id} className="px-4 py-3 flex items-center gap-3 text-sm">
+                <span className="min-w-0 flex-1"><span className="block text-ink-primary truncate">{a.note || (a.kind === "bonus" ? "Bonus" : "Penalty")}</span>
+                  <span className="block text-xs text-ink-tertiary">{a.kind === "bonus" ? "Bonus" : "Penalty"} · {longDate(a.date.slice(0, 10))}</span></span>
+                <span className="tabular-nums font-semibold text-ink-primary whitespace-nowrap">{a.kind === "bonus" ? "+" : "−"}{money(a.amount)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <section className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
-          <div className="px-4 py-3 border-b border-slate-100 text-sm font-semibold text-ink-primary">Bonuses and penalties</div>
-          {adjustments.length === 0 ? <div className="px-4 py-6 text-xs text-ink-tertiary text-center">None in this period.</div> : (
-            <ul className="divide-y divide-slate-100">
-              {adjustments.map((a) => (
-                <li key={a.id} className="px-4 py-2.5 flex items-center gap-3 text-xs">
-                  <span className={`w-7 h-7 rounded-lg grid place-items-center flex-shrink-0 ${a.kind === "bonus" ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-600"}`}><M n={a.kind === "bonus" ? "redeem" : "flag"} c="text-sm" /></span>
-                  <span className="min-w-0 flex-1"><span className="block text-ink-primary truncate">{a.note || (a.kind === "bonus" ? "Bonus" : "Penalty")}</span><span className="text-[11px] text-ink-tertiary">{longDate(a.date.slice(0, 10))}</span></span>
-                  <span className={`tabular-nums font-semibold ${a.kind === "bonus" ? "text-emerald-700" : "text-rose-600"}`}>{a.kind === "bonus" ? "+" : "−"}{money(a.amount)}</span>
+      <section aria-label="Pay runs" className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
+        <div className="px-4 py-3.5 border-b border-slate-100"><h3 className="text-sm font-semibold text-ink-primary">Pay runs</h3></div>
+        {data.accruals.length === 0 ? <div className="px-4 py-6 text-xs text-ink-tertiary text-center">Nothing accrued for this period yet.</div> : (
+          <ul className="divide-y divide-slate-100">
+            {data.accruals.map((r) => {
+              const at = runStage(r.status);
+              const caption = at === 2 ? (r.paid_at ? `Paid ${longDate(r.paid_at.slice(0, 10))}` : "Paid") : at === 1 ? "Accrued, waiting to be paid" : "Estimated, not accrued yet";
+              return (
+                <li key={r.id} data-testid="pay-run" className="px-4 py-3.5">
+                  <div className="flex items-baseline gap-3">
+                    <span className="min-w-0 flex-1 text-sm font-medium text-ink-primary">{rangeText(r.period_start, r.period_end)}</span>
+                    <span className="tabular-nums text-sm font-semibold text-ink-primary">{money(r.gross_total)}</span>
+                  </div>
+                  <div className="mt-2.5 flex gap-1" role="progressbar" aria-label={`Pay run ${rangeText(r.period_start, r.period_end)}`} aria-valuemin={1} aria-valuemax={3} aria-valuenow={at + 1} aria-valuetext={RUN_STAGES[at]}>
+                    {RUN_STAGES.map((_, i) => <span key={i} className={`h-1 flex-1 rounded-full ${i <= at ? "bg-primary" : "bg-slate-200"}`} />)}
+                  </div>
+                  <div className="mt-1.5 hidden sm:flex">
+                    {RUN_STAGES.map((l, i) => <span key={l} className={`flex-1 text-xs ${i === at ? "font-semibold text-ink-primary" : "text-ink-tertiary"}`}>{l}</span>)}
+                  </div>
+                  <p className="mt-1.5 text-xs text-ink-tertiary sm:mt-1">{caption}</p>
                 </li>
-              ))}
-            </ul>
-          )}
-        </section>
-        <section className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
-          <div className="px-4 py-3 border-b border-slate-100 text-sm font-semibold text-ink-primary">Pay runs</div>
-          {data.accruals.length === 0 ? <div className="px-4 py-6 text-xs text-ink-tertiary text-center">Nothing accrued for this period yet.</div> : (
-            <ul className="divide-y divide-slate-100">
-              {data.accruals.map((r) => {
-                const s = STATUS[(r.status === "paid" ? "paid" : r.status === "draft" ? "draft" : "accrued")];
-                return (
-                  <li key={r.id} className="px-4 py-2.5 flex items-center gap-3 text-xs">
-                    <span className="min-w-0 flex-1 text-ink-primary">{longDate(r.period_start)} – {longDate(r.period_end)}{r.paid_at && <span className="block text-[11px] text-ink-tertiary">Paid {longDate(r.paid_at.slice(0, 10))}</span>}</span>
-                    <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${s.cls}`}>{s.label}</span>
-                    <span className="tabular-nums font-semibold text-ink-primary">{money(r.gross_total)}</span>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
-      </div>
+              );
+            })}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }
@@ -140,7 +188,7 @@ export default function MyEarnings() {
 
   return (
     <Shell title="My earnings">
-      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-4 max-w-5xl w-full mx-auto">
+      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-4 max-w-4xl w-full mx-auto">
         <div className="flex flex-wrap items-center gap-2">
           <div className="inline-flex rounded-xl bg-slate-100 p-1" role="group" aria-label="Period">
             {([["this", "This month"], ["last", "Last month"], ["custom", "Custom"]] as [Preset, string][]).map(([v, l]) => (
@@ -151,7 +199,7 @@ export default function MyEarnings() {
           {preset === "custom" && (
             <div className="flex items-center gap-1.5">
               <DateField mode="date" value={from} onChange={(v) => setRange([v, to])} placeholder="From" className="w-36" />
-              <span className="text-ink-tertiary text-xs">→</span>
+              <span className="text-ink-tertiary text-xs" aria-hidden>–</span>
               <DateField mode="date" value={to} onChange={(v) => setRange([from, v])} placeholder="To" className="w-36" />
             </div>
           )}
@@ -160,9 +208,9 @@ export default function MyEarnings() {
 
         {loading && !data && (
           <div className="space-y-4" aria-busy="true" aria-label="Loading your earnings">
+            <div className="h-40 rounded-2xl bg-slate-100 animate-pulse" />
+            <div className="h-56 rounded-2xl bg-slate-100 animate-pulse" />
             <div className="h-24 rounded-2xl bg-slate-100 animate-pulse" />
-            <div className="h-20 rounded-2xl bg-slate-100 animate-pulse" />
-            <div className="h-48 rounded-2xl bg-slate-100 animate-pulse" />
           </div>
         )}
         {err && !loading && (

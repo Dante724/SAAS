@@ -63,13 +63,14 @@ test("partial pay → overpay → credit note → print", async ({ page }) => {
   await page.getByRole("button", { name: "Issue", exact: true }).click();   // confirm
   const issued = page.getByRole("dialog", { name: /^Credit note CN-/ });
   await expect(issued).toContainText("Issued");
-  await expect(balance.getByText(/Credited/)).toBeVisible();
+  await expect(balance.getByText(/Credit note/)).toBeVisible();
   await expect(balance).toContainText("20.00");
 
   // 4) print: the PDF comes back from /print/credit-notes/{id}
+  await issued.getByRole("button", { name: "More actions" }).click();   // PDF / Print / Cancel live in "⋮"
   const [pdf] = await Promise.all([
     page.waitForResponse((r) => /\/api\/print\/credit-notes\//.test(r.url())),
-    issued.getByRole("button", { name: /PDF/ }).click(),
+    page.getByRole("menuitem", { name: "Download PDF" }).click(),
   ]);
   expect(pdf.status()).toBe(200);
   expect(pdf.headers()["content-type"]).toContain("application/pdf");

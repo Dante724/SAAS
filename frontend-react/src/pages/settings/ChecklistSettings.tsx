@@ -136,8 +136,8 @@ export function ChecklistList({ templates, onOpen, onNew, onChanged, onFlash }: 
                 className="text-left rounded-xl border border-slate-200 p-4 hover:border-primary/40 hover:bg-slate-50 transition-colors">
                 <span className="w-9 h-9 rounded-lg bg-primary/10 text-primary grid place-items-center mb-2.5"><M n={s.icon} c="text-lg" /></span>
                 <div className="text-sm font-medium text-ink-primary">{s.name}</div>
-                <div className="text-[11px] text-ink-tertiary">{s.blurb}</div>
-                <div className="text-[11px] text-ink-secondary mt-2">{s.steps.reduce((n, st) => n + st.items.length, 0)} checks in {s.steps.length} {s.steps.length === 1 ? "step" : "steps"}</div>
+                <div className="text-xs text-ink-tertiary">{s.blurb}</div>
+                <div className="text-xs text-ink-secondary mt-2">{s.steps.reduce((n, st) => n + st.items.length, 0)} checks in {s.steps.length} {s.steps.length === 1 ? "step" : "steps"}</div>
               </button>
             ))}
           </div>
@@ -151,16 +151,16 @@ export function ChecklistList({ templates, onOpen, onNew, onChanged, onFlash }: 
             return (
               <div key={t.id} onClick={() => onOpen(t)} className="group relative flex items-center gap-3 px-3 py-3 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors">
                 <span className="w-10 h-10 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n="fact_check" c="text-lg" /></span>
-                <span className="min-w-0">
+                <span className="min-w-0 flex-1">
                   <span className="block text-sm font-medium text-ink-primary truncate">{t.name}</span>
-                  <span className="block text-[11px] text-ink-tertiary truncate">{c.checks} {c.checks === 1 ? "check" : "checks"} in {c.steps} {c.steps === 1 ? "step" : "steps"} · {appliesTo(t)}</span>
+                  <span className="block text-xs text-ink-tertiary truncate">{c.checks} {c.checks === 1 ? "check" : "checks"} in {c.steps} {c.steps === 1 ? "step" : "steps"} · {appliesTo(t)}</span>
                 </span>
                 <span className="ml-auto flex items-center gap-1.5 flex-shrink-0">
-                  {(t.auto_status_keys || []).length > 0 && <span title="Attaches itself when a job enters a chosen status" className="inline-flex items-center gap-1 h-6 px-2 rounded-md bg-primary/10 text-[11px] text-primary"><M n="bolt" c="text-[13px]" />Auto</span>}
-                  {c.visible > 0 && <span title={`${c.visible} shown to the customer`} className="inline-flex items-center gap-1 h-6 px-2 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="visibility" c="text-[13px]" />{c.visible}</span>}
-                  {c.required > 0 && <span title={`${c.required} must be filled in`} className="inline-flex items-center gap-1 h-6 px-2 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="priority_high" c="text-[13px]" />{c.required}</span>}
+                  {(t.auto_status_keys || []).length > 0 && <span title="Attaches itself when a job reaches a chosen status" className="inline-flex items-center h-6 px-2 rounded-md bg-primary/10 text-[11px] font-medium text-primary">Adds itself</span>}
+                  {c.visible > 0 && <span title={`${c.visible} shown to the customer`} className="hidden sm:inline-flex items-center gap-1 h-6 px-2 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="visibility" c="text-[13px]" />{c.visible}</span>}
+                  {c.required > 0 && <span title={`${c.required} must be filled in`} className="hidden sm:inline-flex items-center gap-1 h-6 px-2 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="priority_high" c="text-[13px]" />{c.required}</span>}
                   <button aria-label={`More actions for ${t.name}`} onClick={(e) => { e.stopPropagation(); setMenu(menu === t.id ? null : t.id); }}
-                    className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:bg-slate-100 hover:text-ink-primary opacity-0 group-hover:opacity-100 focus:opacity-100"><M n="more_horiz" c="text-base" /></button>
+                    className="w-8 h-8 rounded-lg grid place-items-center text-ink-tertiary hover:bg-slate-100 hover:text-ink-primary sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100"><M n="more_horiz" c="text-base" /></button>
                 </span>
                 {menu === t.id && (
                   <div className="absolute right-2 top-12 z-20 w-40 bg-white rounded-xl border border-slate-200 shadow-clay-drawer py-1 text-xs" onClick={(e) => e.stopPropagation()}>
@@ -237,7 +237,7 @@ export function ChecklistEditor({ tpl, onClose, onSaved }: { tpl: any | null; on
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/30 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/30" onClick={onClose} />
       <div role="dialog" aria-label={isEdit ? `Edit ${name}` : "New checklist"} className="relative w-[600px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.28s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="flex items-center gap-3 px-5 pt-5 pb-3">
@@ -245,14 +245,14 @@ export function ChecklistEditor({ tpl, onClose, onSaved }: { tpl: any | null; on
           <div className="flex-1 min-w-0">
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Checklist name, like Intake check" autoFocus={!isEdit} aria-label="Checklist name"
               className="w-full text-lg font-semibold text-ink-primary bg-transparent outline-none placeholder:text-ink-tertiary placeholder:font-normal border-b border-transparent focus:border-slate-200 py-0.5" />
-            <div className="text-[11px] text-ink-tertiary">{all.length} {all.length === 1 ? "check" : "checks"} in {steps.length} {steps.length === 1 ? "step" : "steps"}{visible ? ` · ${visible} shown to the customer` : ""}</div>
+            <div className="text-xs text-ink-tertiary">{all.length} {all.length === 1 ? "check" : "checks"} in {steps.length} {steps.length === 1 ? "step" : "steps"}{visible ? ` · ${visible} shown to the customer` : ""}</div>
           </div>
           <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary flex-shrink-0"><M n="close" c="text-base" /></button>
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 pb-6 space-y-5">
           <div>
-            <div className="text-[11px] font-semibold text-ink-tertiary mb-1.5">Use on</div>
+            <div className="text-xs font-semibold text-ink-secondary mb-1.5">Use on</div>
             <div className="inline-flex rounded-xl bg-slate-100 p-1">
               {([["all", "All job types"], ["selected", "Some job types"]] as [string, string][]).map(([v, l]) => (
                 <button key={v} type="button" onClick={() => setScope(v)} aria-pressed={scope === v}
@@ -261,11 +261,11 @@ export function ChecklistEditor({ tpl, onClose, onSaved }: { tpl: any | null; on
             </div>
             {scope === "selected" && (
               <div className="flex flex-wrap gap-1.5 mt-2.5">
-                {types.length === 0 && <span className="text-[11px] text-ink-tertiary">No job types yet. Add them in Forms & fields.</span>}
+                {types.length === 0 && <span className="text-xs text-ink-tertiary">No job types yet. Add them in Forms & fields.</span>}
                 {types.map((t) => { const on = typeIds.includes(t.id); return (
                   <button key={t.id} type="button" onClick={() => setTypeIds((s) => (on ? s.filter((x) => x !== t.id) : [...s, t.id]))} aria-pressed={on}
                     className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border transition-colors ${on ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-dashed border-slate-300 text-ink-tertiary hover:text-ink-secondary"}`}>
-                    {on ? <M n="check" c="text-[12px] text-primary" /> : <span className="w-2 h-2 rounded-full" style={{ background: t.color || "#94a3b8" }} />}{t.name}
+                    <Dot color={t.color} />{t.name}{on && <M n="check" c="text-[13px] text-primary -mr-0.5" />}
                   </button>
                 ); })}
               </div>
@@ -321,14 +321,14 @@ export function ChecklistEditor({ tpl, onClose, onSaved }: { tpl: any | null; on
                           </div>
                           {hasOptions(it.field_kind) && (
                             <input value={it.options} onChange={(e) => upItem(si, ii, { options: e.target.value })} placeholder="Choices, separated by commas: Perfect, Scratched, Cracked" aria-label="Choices"
-                              className="glass-input w-full px-3 py-2 rounded-lg text-xs" />
+                              className="w-full bg-white border border-slate-200 rounded-lg text-xs px-3 py-2 text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10" />
                           )}
                           <div className="flex flex-wrap gap-1.5">
                             <Toggle on={it.required} onClick={() => upItem(si, ii, { required: !it.required })} icon="priority_high" label="Must be filled in" />
                             <Toggle on={it.client_visible} onClick={() => upItem(si, ii, { client_visible: !it.client_visible })} icon="visibility" label="Customer sees it" />
                             {it.field_kind === "check_result" && <Toggle on={it.affects_result} onClick={() => upItem(si, ii, { affects_result: !it.affects_result })} icon="flag" label="A fail fails the checklist" />}
                           </div>
-                          {it.raw?.upsell_kind && <p className="text-[11px] text-ink-tertiary"><M n="sell" c="text-[12px] mr-1" />This check suggests an extra service when it fails. That setting is kept.</p>}
+                          {it.raw?.upsell_kind && <p className="text-xs text-ink-tertiary"><M n="sell" c="text-[12px] mr-1" />This check suggests an extra service when it fails. That setting is kept.</p>}
                         </div>
                       )}
                     </div>
@@ -352,7 +352,11 @@ export function ChecklistEditor({ tpl, onClose, onSaved }: { tpl: any | null; on
   );
 }
 
-/* "Attach automatically when the order enters…": pick statuses (work orders and estimates are
+// A status or job-type colour dot; neutral when the record has no colour of its own.
+const Dot = ({ color }: { color?: string | null }) =>
+  color ? <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} /> : <span className="w-2 h-2 rounded-full flex-shrink-0 bg-slate-400" />;
+
+/* "When a job reaches…" (attach automatically): pick statuses (work orders and estimates are
    separate pipelines, so each status carries its record type). Entering one attaches this
    checklist to the job once; it's never added twice to the same job. */
 export function AutoAttachPicker({ value, onChange, statuses }: {
@@ -364,17 +368,17 @@ export function AutoAttachPicker({ value, onChange, statuses }: {
   const groups: [AutoKey["record_type"], string][] = [["work_order", "Work orders"], ["estimate", "Estimates"]];
   return (
     <div>
-      <div className="text-[11px] font-semibold text-ink-tertiary mb-0.5">Attach automatically when the order enters…</div>
-      <p className="text-[11px] text-ink-tertiary mb-2">{value.length ? "Added to the job once, the first time it reaches one of these statuses." : "Off. Pick statuses to add this checklist to jobs on its own, or keep attaching it by hand."}</p>
-      {!statuses && <div className="text-[11px] text-ink-tertiary">Loading statuses…</div>}
+      <div className="text-xs font-semibold text-ink-secondary mb-0.5">When a job reaches…</div>
+      <p className="text-xs text-ink-tertiary mb-2">{value.length ? "Added to the job once, the first time it reaches one of these statuses." : "Off. Pick statuses to add this checklist to jobs on its own, or keep attaching it by hand."}</p>
+      {!statuses && <div className="text-xs text-ink-tertiary">Loading statuses…</div>}
       {statuses && groups.map(([rt, label]) => statuses[rt].length > 0 && (
         <div key={rt} className="mb-2" role="group" aria-label={`${label} statuses`}>
-          <div className="text-[11px] text-ink-secondary mb-1">{label}</div>
+          <div className="text-xs text-ink-secondary mb-1">{label}</div>
           <div className="flex flex-wrap gap-1.5">
             {statuses[rt].map((s: any) => { const on = has(rt, s.key); return (
               <button key={s.key} type="button" onClick={() => flip(rt, s.key)} aria-pressed={on}
                 className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border transition-colors ${on ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-dashed border-slate-300 text-ink-tertiary hover:text-ink-secondary"}`}>
-                {on ? <M n="check" c="text-[12px] text-primary" /> : <span className="w-2 h-2 rounded-full" style={{ background: s.color || "#94a3b8" }} />}{s.name}
+                <Dot color={s.color} />{s.name}{on && <M n="check" c="text-[13px] text-primary -mr-0.5" />}
               </button>
             ); })}
           </div>

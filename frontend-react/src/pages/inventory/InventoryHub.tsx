@@ -21,6 +21,9 @@ import { useServerPage } from "../../hooks/useServerPage";
 import { useMe } from "../../context/Me";
 import { alertDialog, confirmDialog, promptDialog } from "../../lib/dialog";
 import { printHtmlInFrame } from "../../lib/safeHtml";
+import { inputCls } from "../invoices/billing";
+import { productGlyph } from "../sales/SalesPOS";
+import { RowMenu } from "../company/CompanyHub";
 
 type Tab = "stock" | "devices" | "services" | "bundles" | "purchase-orders"
   | "postings" | "reservations" | "conversions" | "transfers" | "stock-takes" | "write-offs" | "returns" | "bins";
@@ -33,21 +36,41 @@ const TABS: { id: Tab; label: string; count?: string }[] = [
   { id: "write-offs", label: "Write-offs" }, { id: "returns", label: "Returns" },
 ];
 
-// colored SKU badge (matches redesign-3)
-const BADGE = [
-  { bg: "bg-blue-50 border-blue-100 text-primary" },
-  { bg: "bg-purple-50 border-purple-100 text-purple-600" },
-  { bg: "bg-amber-50 border-amber-200/60 text-amber-700" },
-  { bg: "bg-emerald-50 border-emerald-100 text-emerald-600" },
-  { bg: "bg-rose-50 border-rose-100 text-rose-600" },
-];
-function badgeFor(p: Product, i: number) {
-  const src = (p.sku || p.code || p.name || "").replace(/[^A-Za-z]/g, "");
-  const txt = (src.slice(0, 4) || "ITM").toUpperCase();
-  return { txt, cls: BADGE[i % BADGE.length].bg };
+// A set filter reads as active in the primary tint; an unset one stays neutral.
+const filterSel = (on: boolean) => `h-8 px-3 text-xs font-semibold rounded-lg border cursor-pointer ${on ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`;
+
+// Margin as a percentage: ink when healthy, red only when the part sells below cost.
+export function marginOf(p: Pick<Product, "margin_pct" | "sell_price" | "cost_price">): number | null {
+  if (p.margin_pct != null) return p.margin_pct;
+  return (p.sell_price || 0) > 0 && p.cost_price != null ? Math.round((((p.sell_price || 0) - (p.cost_price || 0)) / (p.sell_price || 1)) * 100) : null;
 }
+
 // Exception-only stock status: healthy rows show a plain number (returns null),
 // only out/low get a coloured pill — so the eye lands on what needs action.
+const primaryBtn = "h-9 px-4 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container flex items-center gap-1.5";
+const ghostBtn = "h-9 px-3.5 rounded-lg bg-white border border-slate-200 text-ink-secondary text-xs font-semibold hover:bg-slate-50 flex items-center gap-1.5";
+
+// Empty history tab: why it's worth having, and (when the header has no button) the first step.
+const AUDIT_EMPTY: Record<string, { why: string; action?: string }> = {
+  postings: { why: "Paste or type a supplier delivery to bring stock in. Every receipt, count and correction is listed here.", action: "New posting" },
+  reservations: { why: "Parts are held here when you add them to a work order or a confirmed appointment, so nobody sells them twice." },
+  conversions: { why: "Turn a traded-in device into parts, or parts into a device, and keep both sides of your stock right." },
+  transfers: { why: "Move stock between locations to keep each branch supplied. Every move is listed here." },
+  "stock-takes": { why: "Count what is on the shelf and see the difference from what your stock says, part by part." },
+  "write-offs": { why: "Record damaged, lost or expired parts so your stock and costs stay accurate." },
+  returns: { why: "Log a part a customer brings back, or one you send back to a supplier, and the stock follows." },
+};
+function AuditEmpty({ tab, title, sub, onStart }: { tab: string; title: string; sub: string; onStart?: () => void }) {
+  const e = AUDIT_EMPTY[tab];
+  return (
+    <div className="flex flex-col items-center text-center gap-1 max-w-sm mx-auto">
+      <div className="text-sm font-semibold text-ink-primary">No {title.toLowerCase()} yet</div>
+      <div className="text-xs text-ink-tertiary">{e?.why || sub}</div>
+      {onStart && e?.action && <button onClick={onStart} className={`${ghostBtn} mt-2`}><M n="add" c="text-sm" />{e.action}</button>}
+    </div>
+  );
+}
+
 function stockPill(p: Product): { cls: string; dot: string; label: string } | null {
   const q = p.qty_available ?? 0;
   if (q <= 0) return { cls: "bg-rose-50 text-rose-700 border-rose-200/60", dot: "bg-rose-500", label: "Out of stock" };
@@ -201,6 +224,8 @@ export default function InventoryHub() {
     "write-offs": { icon: "delete_sweep", title: "Write-offs", sub: "Damaged, lost or expired stock removed from inventory." },
     returns: { icon: "assignment_return", title: "Returns", sub: "Customer and supplier returns processed here." },
   };
+  // The first step for a history tab whose header has no button of its own.
+  const AUDIT_START: Record<string, (() => void) | undefined> = { postings: () => setPostingOpen(true) };
   const AUDIT_URL: Record<string, string> = {
     postings: "/inventory/movements", reservations: "/inventory/reservations",
     conversions: "/conversions", transfers: "/transfers",
@@ -258,10 +283,10 @@ export default function InventoryHub() {
   }
 
   const newBtn = (label: string, kind: DrawerKind) => (
-    <button onClick={() => setDrawer({ kind })} className="h-[38px] px-4 rounded-xl bg-primary text-white text-[13px] font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-2 transition-all"><M n="add" c="text-sm font-bold" />{label}</button>
+    <button onClick={() => setDrawer({ kind })} className={primaryBtn}><M n="add" c="text-sm" />{label}</button>
   );
   const searchBar = (ph: string, value?: string, onChange?: (v: string) => void) => (
-    <div className="relative flex-1 max-w-md ml-1"><input value={value} onChange={onChange ? (e) => onChange(e.target.value) : undefined} className="glass-input w-full h-[38px] pl-4 pr-10 rounded-xl text-xs font-medium text-ink-primary" placeholder={ph} /><M n="search" c="absolute inset-y-0 right-0 pr-3.5 flex items-center text-ink-tertiary text-base" /></div>
+    <div className="relative flex-1 min-w-[200px] max-w-md"><M n="search" c="absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" /><input value={value} onChange={onChange ? (e) => onChange(e.target.value) : undefined} aria-label={ph.replace(/…$/, "")} className={`${inputCls} pl-9 text-ink-primary`} placeholder={ph} /></div>
   );
 
   // Client-side stock filter (data already loaded) — search + availability wired; warehouse/category left static (no resolved names loaded).
@@ -347,26 +372,26 @@ export default function InventoryHub() {
         {tab === "stock" && (<>
           <div className="flex items-center gap-3 mb-5 flex-wrap">
             {newBtn("Product / Stock", "product")}
-            <button onClick={() => setScanStock(true)} className="h-[38px] px-3 rounded-xl bg-white border border-emerald-200 text-emerald-700 text-[13px] font-bold hover:bg-emerald-50 flex items-center gap-1.5"><M n="qr_code_scanner" c="text-sm" />Scan to stock</button>
-            <div className="flex items-center gap-1.5 bg-white/80 p-1 rounded-xl border border-slate-200/80 shadow-clay-sm">
-              <select value={wh} onChange={(e) => setWh(e.target.value)} className={`px-3 py-1.5 text-xs font-semibold rounded-lg border cursor-pointer ${wh ? "bg-emerald-50 text-emerald-700 border-emerald-200/60" : "bg-slate-50 text-ink-secondary border-slate-200/60"}`}>
+            <button onClick={() => setScanStock(true)} className={ghostBtn}><M n="qr_code_scanner" c="text-sm text-ink-tertiary" />Scan to stock</button>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <select aria-label="Warehouse" value={wh} onChange={(e) => setWh(e.target.value)} className={filterSel(!!wh)}>
                 <option value="">Warehouse: All</option>
                 {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
               </select>
-              <select value={avail} onChange={(e) => setAvail(e.target.value as any)} className={`px-3 py-1.5 text-xs font-semibold rounded-lg border cursor-pointer ${avail !== "all" ? "bg-emerald-50 text-emerald-700 border-emerald-200/60" : "bg-slate-50 text-ink-secondary border-slate-200/60"}`}>
+              <select aria-label="Availability" value={avail} onChange={(e) => setAvail(e.target.value as any)} className={filterSel(avail !== "in")}>
                 {(["all", "in", "low", "out"] as const).map((k) => <option key={k} value={k}>Availability: {AVAIL_LABEL[k]}</option>)}
               </select>
-              <select value={cat} onChange={(e) => setCat(e.target.value)} className={`px-3 py-1.5 text-xs font-semibold rounded-lg border cursor-pointer ${cat ? "bg-emerald-50 text-emerald-700 border-emerald-200/60" : "bg-slate-50 text-ink-secondary border-slate-200/60"}`}>
+              <select aria-label="Category" value={cat} onChange={(e) => setCat(e.target.value)} className={filterSel(!!cat)}>
                 <option value="">Category: All</option>
                 {cats.map((c) => <option key={c.id} value={c.id}>{`${"  ".repeat(c.depth)}${c.name}`}</option>)}
               </select>
               {(cat || wh || avail !== "in") && (
-                <button onClick={() => { setCat(""); setWh(""); setAvail("in"); }} className="px-2.5 py-1.5 text-xs font-semibold rounded-lg text-primary hover:bg-primary/10 flex items-center gap-1"><M n="filter_alt_off" c="text-sm" />Clear <span className="px-1.5 rounded-full bg-primary/15 text-[11px]">{(cat ? 1 : 0) + (wh ? 1 : 0) + (avail !== "in" ? 1 : 0)}</span></button>
+                <button onClick={() => { setCat(""); setWh(""); setAvail("in"); }} className="h-8 px-2.5 text-xs font-semibold rounded-lg text-primary hover:bg-primary/10 flex items-center gap-1"><M n="filter_alt_off" c="text-sm" />Clear <span className="px-1.5 rounded-full bg-primary/15 text-[11px] tabular-nums">{(cat ? 1 : 0) + (wh ? 1 : 0) + (avail !== "in" ? 1 : 0)}</span></button>
               )}
             </div>
-            {searchBar("Search products, SKU, MPN, barcode...", pq, setPq)}
+            {searchBar("Search products, SKU, MPN, barcode…", pq, setPq)}
             <div className="ml-auto relative">
-              <button onClick={() => setStockMenu((o) => !o)} className="h-[38px] px-4 rounded-xl bg-white hover:bg-slate-50 border border-slate-200/80 text-xs font-semibold text-ink-secondary flex items-center gap-2 shadow-clay-sm"><span>Actions</span><M n="expand_more" c="text-sm" /></button>
+              <button onClick={() => setStockMenu((o) => !o)} aria-expanded={stockMenu} className={ghostBtn}><span>Actions</span><M n="expand_more" c="text-sm" /></button>
               {stockMenu && (
                 <>
                   <div className="fixed inset-0 z-30" onClick={() => setStockMenu(false)} />
@@ -397,7 +422,7 @@ export default function InventoryHub() {
             </div>
           </div>
           {psel.size > 0 && (
-            <div className="bg-primary/5 rounded-2xl border border-primary/30 shadow-clay-sm px-4 py-2.5 mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold">
+            <div className="bg-primary/5 rounded-xl border border-primary/30 px-4 py-2.5 mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold">
               <span className="text-primary">{psel.size} selected</span>
               <div className="flex-1" />
               <button onClick={() => openLabelDlg("product")} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="print" c="text-sm" />Print labels</button>
@@ -409,12 +434,13 @@ export default function InventoryHub() {
               <button aria-label="Close" onClick={pClear} className="px-2 py-1.5 rounded-lg hover:bg-slate-200/60 text-ink-tertiary"><M n="close" c="text-sm" /></button>
             </div>
           )}
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-            <table data-density={density} className="w-full text-left border-collapse">
-              <thead><tr className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary ">
+          <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
+            <div className="overflow-x-auto">
+            <table data-density={density} className="w-full min-w-[880px] text-left border-collapse">
+              <thead><tr className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary">
                 <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" aria-label="Select all" checked={pAllSel} onChange={pToggleAll} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
                 <th className="py-3.5 px-3">Product</th><th className="py-3.5 px-3">Category</th><th className="py-3.5 px-3">Unit</th>
-                <th className="py-3.5 px-3 text-right">Cost ({currencySymbol()})</th><th className="py-3.5 px-3 text-right">Sell price ({currencySymbol()})</th><th className="py-3.5 px-3 text-right">Margin</th><th className="py-3.5 px-3 text-center">In Stock</th>{cfg.enable_reservations && <th className="py-3.5 px-3 text-center">Reserved</th>}<th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
+                <th className="py-3.5 px-3 text-right">Cost ({currencySymbol()})</th><th className="py-3.5 px-3 text-right">Sell price ({currencySymbol()})</th><th className="py-3.5 px-3 text-right">Margin</th><th className="py-3.5 px-3 text-center">In stock</th>{cfg.enable_reservations && <th className="py-3.5 px-3 text-center">Reserved</th>}<th className="py-3.5 pr-5 pl-2 w-12"><span className="sr-only">Actions</span></th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-xs">
                 {/* 144bu — table-body skeleton (chrome stays real; geometry matches rows → no layout shift) */}
@@ -436,53 +462,59 @@ export default function InventoryHub() {
                   <tr><td colSpan={stockCols} className="py-14 px-5">
                     {products.length === 0 ? (
                       <div className="flex flex-col items-center text-center gap-3 max-w-sm mx-auto">
-                        <div className="w-12 h-12 rounded-2xl bg-slate-100 text-ink-tertiary flex items-center justify-center"><M n="inventory_2" c="text-2xl" /></div>
-                        <div><div className="font-bold text-ink-primary text-sm">No stock yet</div><div className="text-ink-tertiary mt-0.5">Add your first part, or paste a stock sheet to bring your inventory in.</div></div>
+                        <div className="w-11 h-11 rounded-full bg-slate-100 text-ink-tertiary flex items-center justify-center"><M n="inventory_2" c="text-2xl" /></div>
+                        <div><div className="font-semibold text-ink-primary text-sm">No stock yet</div><div className="text-ink-tertiary mt-0.5">Add your first part, or paste a stock sheet to bring your inventory in.</div></div>
                         <div className="flex gap-2 mt-1">
-                          <button onClick={() => setDrawer({ kind: "product" })} className="h-[36px] px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-2"><M n="add" c="text-sm" />Add product/stock</button>
-                          <button onClick={() => setPostingOpen(true)} className="h-[36px] px-4 rounded-xl bg-white border border-slate-200 text-ink-secondary text-xs font-bold hover:bg-slate-50 flex items-center gap-2"><M n="content_paste" c="text-sm" />New posting</button>
+                          <button onClick={() => setDrawer({ kind: "product" })} className={primaryBtn}><M n="add" c="text-sm" />Add product/stock</button>
+                          <button onClick={() => setPostingOpen(true)} className={ghostBtn}><M n="content_paste" c="text-sm" />New posting</button>
                         </div>
                       </div>
                     ) : (
                       <div className="flex flex-col items-center text-center gap-3 max-w-sm mx-auto">
-                        <div className="w-12 h-12 rounded-2xl bg-slate-100 text-ink-tertiary flex items-center justify-center"><M n="search_off" c="text-2xl" /></div>
+                        <div className="w-11 h-11 rounded-full bg-slate-100 text-ink-tertiary flex items-center justify-center"><M n="search_off" c="text-2xl" /></div>
                         {hiddenByAvail > 0 ? (
                           <>
-                            <div><div className="font-bold text-ink-primary text-sm">{hiddenByAvail === 1 ? "1 part matches, but it isn't shown" : `${hiddenByAvail} parts match, but they aren't shown`}</div><div className="text-ink-tertiary mt-0.5">The availability filter is set to {AVAIL_LABEL[avail].toLowerCase()}.</div></div>
-                            <button onClick={() => setAvail("all")} className="h-[36px] px-4 rounded-xl bg-primary text-white text-xs font-bold hover:bg-primary/90 flex items-center gap-2 mt-1"><M n="visibility" c="text-sm" />Show all matches</button>
+                            <div><div className="font-semibold text-ink-primary text-sm">{hiddenByAvail === 1 ? "1 part matches, but it isn't shown" : `${hiddenByAvail} parts match, but they aren't shown`}</div><div className="text-ink-tertiary mt-0.5">The availability filter is set to {AVAIL_LABEL[avail].toLowerCase()}.</div></div>
+                            <button onClick={() => setAvail("all")} className={`${primaryBtn} mt-1`}><M n="visibility" c="text-sm" />Show all matches</button>
                           </>
                         ) : (
                           <>
-                            <div><div className="font-bold text-ink-primary text-sm">No parts match these filters</div><div className="text-ink-tertiary mt-0.5">Try adjusting availability, category, warehouse or your search.</div></div>
-                            <button onClick={() => { setAvail("in"); setCat(""); setWh(""); setPq(""); }} className="h-[36px] px-4 rounded-xl bg-white border border-slate-200 text-ink-secondary text-xs font-bold hover:bg-slate-50 flex items-center gap-2 mt-1"><M n="filter_alt_off" c="text-sm" />Clear filters</button>
+                            <div><div className="font-semibold text-ink-primary text-sm">No parts match these filters</div><div className="text-ink-tertiary mt-0.5">Try adjusting availability, category, warehouse or your search.</div></div>
+                            <button onClick={() => { setAvail("in"); setCat(""); setWh(""); setPq(""); }} className={`${ghostBtn} mt-1`}><M n="filter_alt_off" c="text-sm" />Clear filters</button>
                           </>
                         )}
                       </div>
                     )}
                   </td></tr>
                 )}
-                {pageProducts.map((p, i) => {
-                  const b = badgeFor(p, i); const pill = stockPill(p);
+                {pageProducts.map((p) => {
+                  const pill = stockPill(p); const m = marginOf(p);
                   return (
-                    <tr key={p.id} onClick={() => setDrawer({ kind: "product", id: p.id })} className={`hover:bg-blue-50/30 transition-colors cursor-pointer group ${psel.has(p.id) ? "bg-primary/5" : ""}`}>
+                    <tr key={p.id} onClick={() => setDrawer({ kind: "product", id: p.id })} className={`hover:bg-slate-50 transition-colors cursor-pointer group ${psel.has(p.id) ? "bg-primary/5" : ""}`}>
                       <td className="py-3.5 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label="Select row" checked={psel.has(p.id)} onChange={() => pToggle(p.id)} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
                       <td className="py-3.5 px-3"><div className="flex items-center gap-3">
-                        {p.image_data ? <img src={p.image_data} alt="" className="w-8 h-8 rounded-lg object-cover border border-slate-200 flex-shrink-0" /> : <div className={`w-8 h-8 rounded-lg border flex items-center justify-center flex-shrink-0 font-bold text-[11px] ${b.cls}`}>{b.txt}</div>}
-                        <div className="min-w-0"><span className="font-bold text-ink-primary group-hover:text-primary transition-colors block truncate">{p.name}</span><span className="text-[11px] text-ink-tertiary font-mono block truncate">{[p.sku || p.code, p.mpn ? `MPN ${p.mpn}` : "", p.barcode, p.brand].filter(Boolean).join(" · ") || "—"}</span></div>
+                        {p.image_data ? <img src={p.image_data} alt="" className="w-8 h-8 rounded-lg object-cover border border-slate-200 flex-shrink-0" /> : <span data-testid="product-glyph" className="w-8 h-8 rounded-lg bg-slate-100 text-ink-tertiary flex items-center justify-center flex-shrink-0"><M n={productGlyph(p.name, p.brand)} c="text-sm" /></span>}
+                        <div className="min-w-0"><span className="font-semibold text-ink-primary block truncate">{p.name}</span><span className="text-[11px] text-ink-tertiary block truncate">{(() => { const codes = [p.sku || p.code, p.mpn ? `MPN ${p.mpn}` : "", p.barcode].filter(Boolean).join(" · "); return codes || p.brand ? <>{codes && <span className="font-mono">{codes}</span>}{codes && p.brand ? " · " : ""}{p.brand}</> : "—"; })()}</span></div>
                       </div></td>
                       <td className="py-3.5 px-3 text-ink-secondary font-medium">{p.category_id ? (catName[p.category_id] || "—") : <span className="text-ink-tertiary">Uncategorized</span>}</td>
                       <td className="py-3.5 px-3 text-ink-tertiary">{p.uom || "pcs"}</td>
-                      <td className="py-3.5 px-3 tabular-nums tabular-nums text-ink-secondary text-right">{money(p.avg_cost || p.cost_price)}</td>
-                      <td className="py-3.5 px-3 tabular-nums tabular-nums font-bold text-ink-primary text-right">{money(p.sell_price)}</td>
-                      <td className="py-3.5 px-3 font-semibold tabular-nums text-emerald-700 text-right">{(() => { const m = p.margin_pct ?? ((p.sell_price || 0) > 0 && p.cost_price != null ? Math.round((((p.sell_price || 0) - (p.cost_price || 0)) / (p.sell_price || 1)) * 100) : null); return m != null ? `${m}%` : "—"; })()}</td>
+                      <td className="py-3.5 px-3 tabular-nums text-ink-secondary text-right">{money(p.avg_cost || p.cost_price)}</td>
+                      <td className="py-3.5 px-3 tabular-nums font-semibold text-ink-primary text-right">{money(p.sell_price)}</td>
+                      <td data-testid="margin" className={`py-3.5 px-3 tabular-nums text-right ${m == null ? "text-ink-tertiary" : m < 0 ? "text-rose-600 font-semibold" : "text-ink-secondary"}`}>{m != null ? `${m < 0 ? "−" : ""}${Math.abs(m)}%` : "—"}</td>
                       <td className="py-3.5 px-3 text-center">{pill ? <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${pill.cls}`}><span className={`w-1.5 h-1.5 rounded-full ${pill.dot}`} />{pill.label}</span> : <span className="font-semibold tabular-nums text-ink-primary">{p.qty_available ?? 0}</span>}</td>
                       {cfg.enable_reservations && <td className="py-3.5 px-3 text-center font-semibold tabular-nums text-ink-secondary">{p.qty_reserved ? <span className="text-amber-700">{p.qty_reserved}</span> : <span className="text-ink-tertiary">—</span>}</td>}
-                      <td className="py-3.5 pr-5 pl-2 text-right" onClick={(e) => e.stopPropagation()}><button aria-label="More options" className="p-1.5 rounded-lg text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="more_vert" c="text-base" /></button></td>
+                      <td className="py-3.5 pr-5 pl-2 text-right" onClick={(e) => e.stopPropagation()}><RowMenu label={`More actions for ${p.name}`} items={[
+                        { label: "Open", icon: "edit", onClick: () => setDrawer({ kind: "product", id: p.id }) },
+                        { label: "Adjust quantity", icon: "tune", onClick: () => { setPsel(new Set([p.id])); setBulkAdj(true); } },
+                        { label: "Print label", icon: "print", onClick: () => { setPsel(new Set([p.id])); openLabelDlg("product"); } },
+                        { label: "Write off", icon: "delete_sweep", onClick: () => { setPsel(new Set([p.id])); setAction({ kind: "write-off" }); } },
+                      ]} /></td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+            </div>
             <Pager total={shownProducts.length} page={Math.min(pPage, pPages)} pageSize={PAGE_SIZE} onPage={setPPage} noun="items in stock" />
           </div>
         </>)}
@@ -490,21 +522,21 @@ export default function InventoryHub() {
         {/* DEVICES & ASSETS */}
         {tab === "devices" && (<>
           <div className="flex items-center gap-3 mb-5 flex-wrap">
-            <button onClick={() => setAssetCreate(true)} className="h-[38px] px-4 rounded-xl bg-primary text-white text-[13px] font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-2 transition-all"><M n="add" c="text-sm font-bold" />+ Add {term.asset}</button>
-            <div className="flex items-center gap-1.5 bg-white/80 p-1 rounded-xl border border-slate-200/80 shadow-clay-sm"><Chip label="Ownership: All" active /><Chip label="Company-owned" /><Chip label="Client-owned" /></div>
-            {searchBar("Search serial, IMEI, client...")}
+            <button onClick={() => setAssetCreate(true)} className={primaryBtn}><M n="add" c="text-sm" />Add {term.asset}</button>
+            <div className="flex items-center gap-1.5"><Chip label="Ownership: All" active /><Chip label="Company-owned" /><Chip label="Client-owned" /></div>
+            {searchBar("Search serial, IMEI, client…")}
           </div>
           {asel.size > 0 && (
-            <div className="bg-primary/5 rounded-2xl border border-primary/30 shadow-clay-sm px-4 py-2.5 mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold">
+            <div className="bg-primary/5 rounded-xl border border-primary/30 px-4 py-2.5 mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold">
               <span className="text-primary">{asel.size} selected</span>
               <div className="flex-1" />
               <button onClick={() => openLabelDlg("asset")} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="print" c="text-sm" />Print labels</button>
               <button aria-label="Close" onClick={() => setAsel(new Set())} className="px-2 py-1.5 rounded-lg hover:bg-slate-200/60 text-ink-tertiary"><M n="close" c="text-sm" /></button>
             </div>
           )}
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
+          <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
             <table className="w-full text-left border-collapse">
-              <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary "><tr>
+              <thead className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary"><tr>
                 <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" aria-label="Select all" checked={!!assets?.length && assets.every((a) => asel.has(a.id))} onChange={(e) => setAsel((s) => { const n = new Set(s); (assets || []).forEach((a) => (e.target.checked ? n.add(a.id) : n.delete(a.id))); return n; })} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
                 <th className="py-3.5 px-3">Device / Model</th><th className="py-3.5 px-3">Serial / IMEI</th><th className="py-3.5 px-3">Ownership</th><th className="py-3.5 px-3">Status</th><th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
               </tr></thead>
@@ -531,12 +563,12 @@ export default function InventoryHub() {
 
         {/* PURCHASE ORDERS */}
         {tab === "purchase-orders" && (<>
-          <div className="flex items-center gap-3 mb-5 flex-wrap"><button onClick={() => setNewPo(true)} className="h-[38px] px-4 rounded-xl bg-primary text-white text-[13px] font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-2 transition-all"><M n="add" c="text-sm font-bold" />New Purchase Order</button><button onClick={() => setReorderOpen(true)} className="h-[38px] px-4 rounded-xl bg-white border border-slate-200 text-ink-primary text-[13px] font-bold hover:bg-slate-50 flex items-center gap-2" title="Suggest POs for products below minimum stock"><M n="auto_awesome" c="text-sm text-primary" />Reorder suggestions</button><button onClick={() => setCockpitOpen(true)} className="h-[38px] px-4 rounded-xl bg-white border border-slate-200 text-ink-primary text-[13px] font-bold hover:bg-slate-50 flex items-center gap-2" title="What needs attention: overdue, arriving, recost, invoices, low stock"><M n="target" c="text-sm text-primary" />Cockpit</button>{searchBar("Search purchase orders, supplier, PO#...")}</div>
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
+          <div className="flex items-center gap-3 mb-5 flex-wrap"><button onClick={() => setNewPo(true)} className={primaryBtn}><M n="add" c="text-sm" />New purchase order</button><button onClick={() => setReorderOpen(true)} className={ghostBtn} title="Suggest POs for products below minimum stock"><M n="sync_alt" c="text-sm text-ink-tertiary" />Reorder suggestions</button><button onClick={() => setCockpitOpen(true)} className={ghostBtn} title="What needs attention: overdue, arriving, recost, invoices, low stock"><M n="target" c="text-sm text-ink-tertiary" />Cockpit</button>{searchBar("Search purchase orders, supplier, PO#…")}</div>
+          <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
             <table className="w-full text-left border-collapse">
-              <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary "><tr>
+              <thead className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary"><tr>
                 <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" aria-label="Select all" className="w-4 h-4 rounded border-slate-300 text-primary" /></th>
-                <th className="py-3.5 px-3">PO Number</th><th className="py-3.5 px-3">Supplier</th><th className="py-3.5 px-3">Expected</th><th className="py-3.5 px-3 text-right">Total ({currencySymbol()})</th><th className="py-3.5 px-3 text-center">Status</th><th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
+                <th className="py-3.5 px-3">PO number</th><th className="py-3.5 px-3">Supplier</th><th className="py-3.5 px-3">Expected</th><th className="py-3.5 px-3 text-right">Total ({currencySymbol()})</th><th className="py-3.5 px-3 text-center">Status</th><th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-xs">
                 {!pos && <SkeletonRows cols={7} />}
@@ -552,7 +584,7 @@ export default function InventoryHub() {
                       <td className="py-3.5 px-3 text-ink-secondary">{po.expected_at ? new Date(po.expected_at).toLocaleDateString() : "—"}</td>
                       <td className="py-3.5 px-3 text-right tabular-nums font-bold text-ink-primary">{money(po.total)}</td>
                       <td className="py-3.5 px-3 text-center"><span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-semibold border capitalize ${cls}`}>{st}</span></td>
-                      <td className="py-3.5 pr-5 pl-2 text-right"><button aria-label="Print / PDF" onClick={() => openAuthedDoc(`/print/purchase-order/${po.id}`).catch(() => alertDialog("Could not open PO PDF"))} title="Print / PDF" className="p-1.5 rounded-lg text-ink-tertiary hover:text-primary hover:bg-slate-100 align-middle"><M n="print" c="text-sm" /></button><button onClick={() => setPoOpen(po.id)} className="text-primary font-semibold text-xs hover:underline ml-1">View Details</button></td>
+                      <td className="py-3.5 pr-5 pl-2 text-right"><button aria-label="Print / PDF" onClick={() => openAuthedDoc(`/print/purchase-order/${po.id}`).catch(() => alertDialog("Could not open PO PDF"))} title="Print / PDF" className="p-1.5 rounded-lg text-ink-tertiary hover:text-primary hover:bg-slate-100 align-middle"><M n="print" c="text-sm" /></button><button onClick={() => setPoOpen(po.id)} className="text-primary font-semibold text-xs hover:underline ml-1">View details</button></td>
                     </tr>
                   );
                 })}
@@ -566,21 +598,21 @@ export default function InventoryHub() {
         {AUDIT[tab] && (
           <>
             <div className="mb-4 flex items-start justify-between gap-3">
-              <div><h3 className="text-sm font-bold text-ink-primary">{AUDIT[tab].title}</h3><p className="text-xs text-ink-tertiary">{AUDIT[tab].sub}</p></div>
-              {tab === "transfers" && <button onClick={() => setAction({ kind: "transfer" })} className="h-[36px] px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 whitespace-nowrap"><M n="add" c="text-sm" />New transfer</button>}
-              {tab === "write-offs" && <button onClick={() => setAction({ kind: "write-off" })} className="h-[36px] px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 whitespace-nowrap"><M n="add" c="text-sm" />New write-off</button>}
-              {tab === "returns" && <button onClick={() => setAction({ kind: "return" })} className="h-[36px] px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 whitespace-nowrap"><M n="add" c="text-sm" />New return</button>}
-              {tab === "conversions" && <button onClick={() => setConv(true)} className="h-[36px] px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 whitespace-nowrap"><M n="add" c="text-sm" />New conversion</button>}
-              {tab === "stock-takes" && <button onClick={() => setStk({})} className="h-[36px] px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 whitespace-nowrap"><M n="add" c="text-sm" />New stock take</button>}
+              <div><h3 className="text-sm font-semibold text-ink-primary">{AUDIT[tab].title}</h3><p className="text-xs text-ink-tertiary">{AUDIT[tab].sub}</p></div>
+              {tab === "transfers" && <button onClick={() => setAction({ kind: "transfer" })} className={`${primaryBtn} whitespace-nowrap`}><M n="add" c="text-sm" />New transfer</button>}
+              {tab === "write-offs" && <button onClick={() => setAction({ kind: "write-off" })} className={`${primaryBtn} whitespace-nowrap`}><M n="add" c="text-sm" />New write-off</button>}
+              {tab === "returns" && <button onClick={() => setAction({ kind: "return" })} className={`${primaryBtn} whitespace-nowrap`}><M n="add" c="text-sm" />New return</button>}
+              {tab === "conversions" && <button onClick={() => setConv(true)} className={`${primaryBtn} whitespace-nowrap`}><M n="add" c="text-sm" />New conversion</button>}
+              {tab === "stock-takes" && <button onClick={() => setStk({})} className={`${primaryBtn} whitespace-nowrap`}><M n="add" c="text-sm" />New stock take</button>}
             </div>
-            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
+            <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
               <table className="w-full text-left border-collapse text-xs">
-                <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary "><tr>
+                <thead className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary"><tr>
                   {(AUDIT_COLS[tab] || []).map(([h]) => <th key={h} className="py-3 px-4">{h}</th>)}
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 text-ink-secondary">
                   {auditRows[tab] == null && <SkeletonRows cols={8} />}
-                  {auditRows[tab]?.length === 0 && <tr><td colSpan={8} className="py-6 px-4 text-ink-tertiary">Nothing here yet.</td></tr>}
+                  {auditRows[tab]?.length === 0 && <tr><td colSpan={8} className="py-12 px-4"><AuditEmpty tab={tab} title={AUDIT[tab].title} sub={AUDIT[tab].sub} onStart={AUDIT_START[tab]} /></td></tr>}
                   {pageAudit.map((row: any, i: number) => (
                     <tr key={row?.id || i} onClick={tab === "stock-takes" && row?.id ? () => setStk({ id: row.id }) : undefined} className={`hover:bg-blue-50/30 ${tab === "stock-takes" ? "cursor-pointer" : ""}`}>
                       {(AUDIT_COLS[tab] || []).map(([h, fn], j) => <td key={h} className={`py-2.5 px-4 ${j === 0 ? "font-bold text-ink-primary" : ""}`}>{fn(row)}</td>)}
@@ -1345,7 +1377,7 @@ function BinsPanel() {
     <div className="max-w-3xl space-y-4">
       <div><h3 className="text-sm font-bold text-ink-primary">Storage bins</h3><p className="text-xs text-ink-tertiary">Give every product an address inside a warehouse — shelf / bin. Enabled in Settings → Inventory &amp; warehouses.</p></div>
       {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
         <table className="w-full text-xs">
           <thead className="bg-slate-50/70 text-ink-tertiary text-[11px] font-bold"><tr><th className="text-left py-2.5 px-4">Bin</th><th className="text-left py-2.5 px-4">Warehouse</th><th className="text-left py-2.5 px-4">Zone / shelf</th><th className="py-2.5 px-4"></th></tr></thead>
           <tbody className="divide-y divide-slate-100">
@@ -1374,5 +1406,5 @@ function BinsPanel() {
 }
 
 function Chip({ label, active }: { label: string; active?: boolean }) {
-  return <button className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 border ${active ? "bg-emerald-50 text-emerald-700 border-emerald-200/60" : "bg-slate-50 text-ink-secondary hover:bg-slate-100 border-slate-200/60"}`}>{label}<M n="expand_more" c="text-xs" /></button>;
+  return <button className={`h-8 px-3 text-xs font-semibold rounded-lg flex items-center gap-1.5 border ${active ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary hover:bg-slate-50 border-slate-200"}`}>{label}<M n="expand_more" c="text-xs" /></button>;
 }

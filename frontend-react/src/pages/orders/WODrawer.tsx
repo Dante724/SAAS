@@ -715,17 +715,33 @@ function NotesEditor({ initTech, initConcl, diagnosis, onSave }: { initTech: str
 }
 
 /* ---- Checklist rings ---- */
+// A thin progress arc: grey track, the filled share in blue, green once every check is done.
+function ProgressRing({ pct, size = 40, label = true }: { pct: number; size?: number; label?: boolean }) {
+  const sw = 3; const r = (size - sw) / 2; const len = 2 * Math.PI * r;
+  const done = pct >= 100;
+  return (
+    <span className="relative grid place-items-center flex-shrink-0" style={{ width: size, height: size }} role="img" aria-label={`${pct}% done`}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90" aria-hidden>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" strokeWidth={sw} className="stroke-slate-200" />
+        {pct > 0 && <circle cx={size / 2} cy={size / 2} r={r} fill="none" strokeWidth={sw} strokeLinecap="round"
+          strokeDasharray={len} strokeDashoffset={len * (1 - Math.min(pct, 100) / 100)} className={done ? "stroke-emerald-500" : "stroke-primary"} />}
+      </svg>
+      {(label || done) && <span className={`absolute text-[11px] font-semibold tabular-nums ${done ? "text-emerald-700" : "text-ink-primary"}`}>{done ? <M n="check" c={size < 36 ? "text-sm" : "text-base"} /> : `${pct}%`}</span>}
+    </span>
+  );
+}
 function ChecklistRings({ orderId, onOpen }: { orderId: string; onOpen: () => void }) {
   const [p, setP] = useState<{ done: number; total: number; name: string }[] | null>(null);
   useEffect(() => { api.get<any>(`/orders/${orderId}/checklists`).then((r) => {
     const cls = r.items || r || [];
-    setP(cls.map((c: any) => ({ done: c.done ?? c.items?.filter((i: any) => i.done).length ?? 0, total: c.total ?? c.items?.length ?? 0, name: c.title || c.name || "Checklist" })));
+    // The list endpoint sends a summary (items_done / items_total); older shapes carried done/total or the items.
+    setP(cls.map((c: any) => ({ done: c.items_done ?? c.done ?? c.items?.filter((i: any) => i.done).length ?? 0, total: c.items_total ?? c.total ?? c.items?.length ?? 0, name: c.title || c.name || "Checklist" })));
   }).catch(() => setP([])); }, [orderId]);
   if (p === null) return <div className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-sm text-xs text-ink-tertiary">Loading checklists…</div>;
   if (p.length === 0) return (
     <div className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-sm flex items-center justify-between">
       <span className="text-xs text-ink-tertiary">No checklists on this order.</span>
-      <button onClick={onOpen} className="text-xs font-bold text-primary hover:underline">Add one</button>
+      <button onClick={onOpen} className="text-xs font-semibold text-primary hover:underline">Add one</button>
     </div>
   );
   return (<>{p.slice(0, 2).map((c, i) => {
@@ -734,10 +750,10 @@ function ChecklistRings({ orderId, onOpen }: { orderId: string; onOpen: () => vo
     return (
       <div key={i} className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-sm flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className={`w-10 h-10 rounded-full border-4 flex items-center justify-center tabular-nums font-bold text-xs ${done ? "border-emerald-500 text-emerald-600" : "border-amber-500 border-t-slate-200 text-amber-600"}`}>{pct}%</div>
-          <div><h5 className="text-xs font-bold text-ink-primary">{c.done} / {c.total} {c.name}</h5><p className={`text-[11px] ${done ? "text-emerald-600 font-semibold" : "text-ink-tertiary"}`}>{done ? "Complete" : "In progress"}</p></div>
+          <ProgressRing pct={pct} />
+          <div><h5 className="text-xs font-semibold text-ink-primary">{c.name}</h5><p className={`text-xs tabular-nums ${done ? "text-emerald-700 font-medium" : "text-ink-tertiary"}`}>{done ? `All ${c.total} checks done` : `${c.done} of ${c.total} checks done`}</p></div>
         </div>
-        <button onClick={onOpen} className="text-xs font-bold text-primary hover:underline">View</button>
+        <button onClick={onOpen} className="text-xs font-semibold text-primary hover:underline">View</button>
       </div>
     );
   })}</>);
@@ -1161,7 +1177,9 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
     try { await api.del(`/orders/${orderId}/checklists/${cid}`); await load(); } catch { /* ignore */ }
   }
 
-  const CHECK = [["pass", "Pass", "bg-emerald-600"], ["fail", "Fail", "bg-rose-600"], ["caution", "Caution", "bg-amber-500"]] as const;
+  // Result choices as a soft-tint segmented control: the chosen value takes its own tint.
+  const CHECK = [["pass", "Pass", "bg-emerald-50 text-emerald-700 ring-emerald-200"], ["fail", "Fail", "bg-rose-50 text-rose-700 ring-rose-200"], ["caution", "Caution", "bg-amber-50 text-amber-700 ring-amber-200"]] as const;
+  const segCls = (on: boolean, tone: string) => `px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${on ? `${tone} ring-1 ring-inset shadow-2xs` : "text-ink-secondary hover:text-ink-primary"}`;
 
   return (
     <div className="space-y-5">
@@ -1184,8 +1202,8 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
         return (
           <div key={c.id} className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-4 space-y-3.5">
             <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-              <div className="flex items-center gap-2"><M n={pct === 100 ? "done_all" : "checklist"} c={pct === 100 ? "text-emerald-600 text-base" : "text-amber-600 text-base"} /><h5 className="text-xs font-bold text-ink-primary">{c.title || c.name || "Checklist"} ({done} of {items.length})</h5></div>
-              <div className="flex items-center gap-2"><span className={`text-[11px] font-mono font-bold ${pct === 100 ? "text-emerald-600" : "text-ink-tertiary"}`}>{pct}%</span><button aria-label="Remove" onClick={() => removeCl(c.id)} title="Remove" className="text-ink-tertiary hover:text-rose-600"><M n="delete" c="text-sm" /></button></div>
+              <div className="flex items-center gap-2.5 min-w-0"><ProgressRing pct={pct} size={28} label={false} /><div className="min-w-0"><h5 className="text-sm font-semibold text-ink-primary truncate">{c.title || c.name || "Checklist"}</h5><p className="text-xs text-ink-tertiary tabular-nums">{done} of {items.length} done</p></div></div>
+              <div className="flex items-center gap-2"><span className={`text-xs font-semibold tabular-nums ${pct === 100 ? "text-emerald-700" : "text-ink-tertiary"}`}>{pct}%</span><button aria-label="Remove" onClick={() => removeCl(c.id)} title="Remove" className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-sm" /></button></div>
             </div>
             <div className="space-y-2 text-xs font-medium text-ink-primary">
               {items.map((i: any) => {
@@ -1195,13 +1213,13 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
                     <div className="flex items-center justify-between gap-2">
                       <span className="flex items-center gap-1.5">{i.label}{i.required && <span className="text-rose-500">*</span>}</span>
                       {i.field_kind === "check_result" && (
-                        <div className="flex gap-1">{CHECK.map(([val, lbl, cls2]) => (
-                          <button key={val} onClick={() => fill(c.id, i.id, val)} className={`px-2 py-0.5 rounded text-[11px] font-bold ${String(v) === val ? `${cls2} text-white` : "bg-white border border-slate-200 text-ink-secondary"}`}>{lbl}</button>
+                        <div role="group" aria-label={`${i.label} result`} className="inline-flex gap-0.5 p-0.5 rounded-lg bg-white border border-slate-200 flex-shrink-0">{CHECK.map(([val, lbl, tone]) => (
+                          <button key={val} aria-pressed={String(v) === val} onClick={() => fill(c.id, i.id, val)} className={segCls(String(v) === val, tone)}>{lbl}</button>
                         ))}</div>
                       )}
                       {i.field_kind === "yes_no" && (
-                        <div className="flex gap-1">{[["yes", "Yes"], ["no", "No"]].map(([val, lbl]) => (
-                          <button key={val} onClick={() => fill(c.id, i.id, val)} className={`px-2 py-0.5 rounded text-[11px] font-bold ${String(v) === val ? "bg-primary text-white" : "bg-white border border-slate-200 text-ink-secondary"}`}>{lbl}</button>
+                        <div role="group" aria-label={`${i.label} answer`} className="inline-flex gap-0.5 p-0.5 rounded-lg bg-white border border-slate-200 flex-shrink-0">{[["yes", "Yes"], ["no", "No"]].map(([val, lbl]) => (
+                          <button key={val} aria-pressed={String(v) === val} onClick={() => fill(c.id, i.id, val)} className={segCls(String(v) === val, "bg-primary/10 text-primary ring-primary/30")}>{lbl}</button>
                         ))}</div>
                       )}
                     </div>

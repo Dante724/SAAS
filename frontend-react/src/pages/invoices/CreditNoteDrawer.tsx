@@ -5,7 +5,7 @@ import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog, confirmDialog } from "../../lib/dialog";
 import { humanize } from "../../lib/humanize";
 import { useMe } from "../../context/Me";
-import { Drawer, ErrorNote, StatusPill, btnDanger, btnGhost, btnPrimary, cash, fmtDate, inputCls, labelCls, round2, type InvoiceDetail } from "./billing";
+import { Drawer, ErrorNote, MoreMenu, StatusPill, btnGhost, btnPrimary, cash, fmtDate, inputCls, labelCls, round2, type InvoiceDetail } from "./billing";
 
 /* Credit note drawer: create / edit a draft, issue it (numbered + locked), cancel it, print it.
    Opened from the credit notes list, from an invoice ("Create credit note"), or from a client. */
@@ -143,16 +143,19 @@ export default function CreditNoteDrawer({ id, invoice, clientId, onClose, onCha
       title={<span className="flex items-center gap-2">{title}<StatusPill status={status} label={humanize(status)} /></span>}
       sub={invoiceId ? <>Credits invoice {cn?.invoice_number || invoice?.invoice_number}</> : "Standalone: adds credit to the client's balance"}
       footer={<>
-        {cn && <button onClick={() => openAuthedDoc(`/print/credit-notes/${cn.id}`).catch(() => alertDialog("Could not open the PDF"))} className={btnGhost}><M n="download" c="text-sm" />PDF</button>}
-        {cn && <button onClick={() => setPrintOpen(true)} className={btnGhost}><M n="print" c="text-sm" />Print</button>}
-        {cn?.status === "draft" && can("can_create_credit_notes") && <button onClick={remove} disabled={busy} className={btnDanger}>Delete draft</button>}
-        {cn && cn.status !== "canceled" && can("can_issue_credit_notes") && <button onClick={cancel} disabled={busy} className={btnDanger}>{cn.status === "issued" ? "Cancel credit note" : "Cancel draft"}</button>}
+        <MoreMenu className="mr-auto" align="start" items={[
+          { label: "Download PDF", icon: "download", hidden: !cn, onClick: () => { if (cn) openAuthedDoc(`/print/credit-notes/${cn.id}`).catch(() => alertDialog("Could not open the PDF")); } },
+          { label: "Print", icon: "print", hidden: !cn, onClick: () => setPrintOpen(true) },
+          { label: "Delete draft", icon: "delete", danger: true, disabled: busy, hidden: !(cn?.status === "draft" && can("can_create_credit_notes")), onClick: remove },
+          { label: cn?.status === "issued" ? "Cancel credit note" : "Cancel draft", icon: "block", danger: true, disabled: busy,
+            hidden: !(cn && cn.status !== "canceled" && can("can_issue_credit_notes")), onClick: cancel },
+        ]} />
         {editable && <button onClick={() => run(saveDraft)} disabled={busy} className={btnGhost}>{busy ? "Saving…" : "Save draft"}</button>}
         {editable && can("can_issue_credit_notes") && <button onClick={issue} disabled={busy || total <= 0} className={btnPrimary}>Issue {cash(total)}</button>}
       </>}>
       <ErrorNote msg={err} />
-      {cn?.status === "issued" && <div className="rounded-lg bg-sky-50 border border-sky-200 text-sky-800 text-xs px-3 py-2">Issued {fmtDate(cn.issued_at)}. Issued credit notes are locked. Cancel it to reverse the credit.</div>}
-      {cn?.status === "canceled" && <div className="rounded-lg bg-slate-50 border border-slate-200 text-ink-secondary text-xs px-3 py-2">Canceled {fmtDate(cn.canceled_at)}. Nothing on it counts any more.</div>}
+      {cn?.status === "issued" && <div role="note" className="rounded-lg bg-slate-50 border border-slate-200 text-ink-secondary text-xs px-3 py-2">Issued {fmtDate(cn.issued_at)}. Issued credit notes are locked. Cancel it to reverse the credit.</div>}
+      {cn?.status === "canceled" && <div role="note" className="rounded-lg bg-slate-50 border border-slate-200 text-ink-secondary text-xs px-3 py-2">Canceled {fmtDate(cn.canceled_at)}. Nothing on it counts any more.</div>}
       {!invoiceId && (
         <div>
           <label htmlFor="cn-client" className={labelCls}>Client</label>
@@ -165,7 +168,7 @@ export default function CreditNoteDrawer({ id, invoice, clientId, onClose, onCha
           ) : <div className="text-sm font-semibold text-ink-primary">{cn?.client_name || "—"}</div>}
         </div>
       )}
-      {invoiceId && <div className="text-xs text-ink-secondary">Client: <span className="font-semibold text-ink-primary">{cn?.client_name || invoice?.customer?.name || "Walk-in"}</span></div>}
+      {invoiceId && <div className="text-sm text-ink-secondary">Client <span className="font-semibold text-ink-primary">{cn?.client_name || invoice?.customer?.name || "Walk-in"}</span></div>}
       <div>
         <label htmlFor="cn-reason" className={labelCls}>Reason</label>
         {editable ? <input id="cn-reason" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} placeholder="Returned part, goodwill, price correction…" className={inputCls} />
@@ -174,7 +177,6 @@ export default function CreditNoteDrawer({ id, invoice, clientId, onClose, onCha
       <div>
         <div className="flex items-center justify-between mb-1"><span className={labelCls}>Lines</span>
           {editable && <button onClick={() => setLines([...lines, blank()])} className="text-primary text-xs font-semibold flex items-center gap-1"><M n="add" c="text-sm" />Add line</button>}</div>
-        {editable && lines.length > 0 && <div className="grid grid-cols-4 gap-2 px-2 mb-1 text-[11px] text-ink-tertiary text-right" aria-hidden><span>Qty</span><span>Unit price</span><span>Tax</span><span>Total</span></div>}
         <div className="space-y-2">
           {lines.map((l, i) => editable ? (
             <div key={i} className="rounded-lg border border-slate-200 p-2 space-y-2">
@@ -182,17 +184,20 @@ export default function CreditNoteDrawer({ id, invoice, clientId, onClose, onCha
                 <input aria-label={`Line ${i + 1} description`} value={l.description} onChange={(e) => setLine(i, "description", e.target.value)} placeholder="Description" className={`${inputCls} flex-1`} />
                 <button aria-label={`Remove line ${i + 1}`} onClick={() => setLines(lines.filter((_, j) => j !== i))} className="w-9 h-9 flex-shrink-0 rounded-lg hover:bg-rose-50 text-ink-tertiary hover:text-rose-600 flex items-center justify-center"><M n="delete" c="text-sm" /></button>
               </div>
-              <div className="grid grid-cols-4 gap-2 items-center">
-                <input aria-label={`Line ${i + 1} quantity`} type="number" min={0} step="any" value={l.qty} onChange={(e) => setLine(i, "qty", e.target.value)} className={`${inputCls} text-right`} />
-                <input aria-label={`Line ${i + 1} unit price`} type="number" min={0} step="0.01" value={l.unit_price} onChange={(e) => setLine(i, "unit_price", e.target.value)} className={`${inputCls} text-right`} />
-                <div className="relative"><input aria-label={`Line ${i + 1} tax percent`} type="number" min={0} max={100} step="any" value={l.tax_rate} onChange={(e) => setLine(i, "tax_rate", e.target.value)} className={`${inputCls} text-right pr-6`} /><span className="absolute right-2 top-2 text-xs text-ink-tertiary">%</span></div>
-                <div className="text-right text-sm font-semibold tabular-nums text-ink-primary">{cash(amounts[i].total)}</div>
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 items-end">
+                <label className="block"><span className={labelCls}>Qty</span>
+                  <input aria-label={`Line ${i + 1} quantity`} type="number" min={0} step="any" value={l.qty} onChange={(e) => setLine(i, "qty", e.target.value)} className={`${inputCls} text-right tabular-nums`} /></label>
+                <label className="block"><span className={labelCls}>Unit price</span>
+                  <input aria-label={`Line ${i + 1} unit price`} type="number" min={0} step="0.01" value={l.unit_price} onChange={(e) => setLine(i, "unit_price", e.target.value)} className={`${inputCls} text-right tabular-nums`} /></label>
+                <label className="block"><span className={labelCls}>Tax</span>
+                  <span className="relative block"><input aria-label={`Line ${i + 1} tax percent`} type="number" min={0} max={100} step="any" value={l.tax_rate} onChange={(e) => setLine(i, "tax_rate", e.target.value)} className={`${inputCls} text-right tabular-nums pr-6`} /><span className="absolute right-2 top-2 text-xs text-ink-tertiary">%</span></span></label>
+                <div className="col-span-3 sm:col-span-1 flex sm:block items-baseline justify-between sm:text-right"><span className={`${labelCls} sm:mb-1`}>Line total</span><span className="block py-2 text-sm font-semibold tabular-nums text-ink-primary">{cash(amounts[i].total)}</span></div>
               </div>
             </div>
           ) : (
             <div key={i} className="flex justify-between gap-3 text-sm border-b border-slate-100 pb-2">
-              <span className="text-ink-primary">{l.description} <span className="text-[11px] text-ink-tertiary">{Number(l.qty)} × {cash(Number(l.unit_price))}{Number(l.tax_rate) ? ` + ${Number(l.tax_rate)}% tax` : ""}</span></span>
-              <span className="tabular-nums font-semibold">{cash(amounts[i].total)}</span>
+              <span className="text-ink-primary">{l.description} <span className="block text-xs text-ink-tertiary tabular-nums">{Number(l.qty)} × {cash(Number(l.unit_price))}{Number(l.tax_rate) ? ` + ${Number(l.tax_rate)}% tax` : ""}</span></span>
+              <span className="tabular-nums font-semibold text-ink-primary">{cash(amounts[i].total)}</span>
             </div>
           ))}
           {editable && lines.length === 0 && <div className="text-xs text-ink-tertiary">No lines yet.</div>}
@@ -201,8 +206,8 @@ export default function CreditNoteDrawer({ id, invoice, clientId, onClose, onCha
       <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-1.5 text-sm">
         <div className="flex justify-between text-ink-secondary"><span>Subtotal</span><span className="tabular-nums font-semibold text-ink-primary">{cash(subtotal)}</span></div>
         <div className="flex justify-between text-ink-secondary"><span>Tax</span><span className="tabular-nums text-ink-primary">{cash(taxTotal)}</span></div>
-        <div className="pt-1.5 border-t border-slate-200 flex justify-between items-baseline"><span className="font-bold text-ink-primary">Credit total</span><span className="tabular-nums font-bold text-primary">{cash(total)}</span></div>
-        {editable && room !== null && <div className={`text-[11px] ${total > room ? "text-rose-600" : "text-ink-tertiary"}`}>This invoice can still be credited up to {cash(room)}.</div>}
+        <div className="pt-1.5 border-t border-slate-200 flex justify-between items-baseline"><span className="font-semibold text-ink-primary">Credit total</span><span className="tabular-nums text-base font-semibold text-ink-primary">{cash(total)}</span></div>
+        {editable && room !== null && <div className={`text-xs ${total > room ? "text-rose-600" : "text-ink-tertiary"}`}>This invoice can still be credited up to {cash(room)}.</div>}
       </div>
       {cn && <BulkPrintDialog open={printOpen} onClose={() => setPrintOpen(false)} ids={[cn.id]} noun="credit note"
         endpoint="/documents/render-credit-note-batch" idKey="credit_note_ids" docTypes={["credit_note"]} copies={false} />}
