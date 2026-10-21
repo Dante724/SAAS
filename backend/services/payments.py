@@ -169,9 +169,21 @@ def _configured(provider: str, creds: dict) -> bool:
 
 
 async def _all_creds(db: AsyncSession, org_id: str) -> dict:
-    """Effective (per-shop, else env) creds for every keyed gateway."""
+    """Effective (per-shop, else env) creds for every keyed gateway. A provider whose live keys
+    are refused here (F4) is left unconfigured, with the reason kept for resolve_gateway."""
     from backend.services import org_creds
-    return {p: await org_creds.effective(db, org_id, p) for p in ("stripe", "square", "sumup")}
+    from backend.services.payment_guard import LivePaymentsRefused
+    out = {}
+    for p in ("stripe", "square", "sumup"):
+        try:
+            out[p] = await org_creds.effective(db, org_id, p)
+        except LivePaymentsRefused as e:
+            out[p] = {"_refused": str(e)}
+    return out
+
+
+def _refusal(creds: dict) -> Optional[str]:
+    return next((c["_refused"] for c in creds.values() if c.get("_refused")), None)
 
 
 async def available_gateways_org(db: AsyncSession, org_id: str) -> dict:
@@ -189,6 +201,8 @@ async def resolve_gateway(db: AsyncSession, org_id: str, provider: str | None = 
         cls = _GW_CLASSES.get(provider)
         if not cls:
             raise RuntimeError(f"Unknown payment provider '{provider}'")
+        if (creds.get(provider) or {}).get("_refused"):
+            raise RuntimeError(creds[provider]["_refused"])   # F4: live keys outside production
         if provider != "simulated" and not _configured(provider, creds.get(provider, {})):
             raise RuntimeError(f"Payment provider '{provider}' is not configured for this shop")
         if provider == "simulated" and settings.is_deployed:
@@ -198,6 +212,8 @@ async def resolve_gateway(db: AsyncSession, org_id: str, provider: str | None = 
     for name in ("stripe", "square", "sumup"):
         if _configured(name, creds[name]):
             return _GW_CLASSES[name](creds[name])
+    if _refusal(creds):
+        raise RuntimeError(_refusal(creds))   # F4: never fall back to a fake checkout silently
     if settings.is_deployed:
         # A real deploy never hands customers a simulated checkout: it 403s and can't be paid.
         raise RuntimeError("No payment provider is set up for this shop. "
@@ -451,6 +467,14 @@ async def _refresh_intent(db: AsyncSession, intent: PaymentIntent) -> PaymentInt
     if intent.status == "succeeded":
         return intent
     from backend.services import org_creds
+    from backend.services.payment_guard import LivePaymentsRefused
+    try:
+        return await _poll_provider(db, intent, org_creds)
+    except LivePaymentsRefused:
+        return intent   # F4: live keys on a non-production server; nothing to poll
+
+
+async def _poll_provider(db: AsyncSession, intent: PaymentIntent, org_creds) -> PaymentIntent:
     if intent.provider == "sumup" and intent.provider_ref:
         c = await org_creds.effective(db, intent.org_id, "sumup")
         if c.get("api_key"):
@@ -471,38 +495,3 @@ async def _refresh_intent(db: AsyncSession, intent: PaymentIntent) -> PaymentInt
             if r.status_code == 200 and (r.json().get("order") or {}).get("state") == "COMPLETED":
                 return await mark_succeeded(db, intent)
     return intent
-
-
-# ── Stripe Terminal (in-person readers; SDK fetches connection tokens) ──────
-async def _stripe_key(db: AsyncSession, org_id: str) -> str:
-    from backend.services import org_creds
-    key = (await org_creds.effective(db, org_id, "stripe")).get("secret_key")
-    if not key:
-        raise RuntimeError("Stripe is not configured for this shop")
-    return key
-
-
-async def terminal_connection_token(db: AsyncSession, org_id: str) -> str:
-    key = await _stripe_key(db, org_id)
-    import httpx
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        r = await client.post("https://api.stripe.com/v1/terminal/connection_tokens",
-                              auth=(key, ""))
-    if r.status_code not in (200, 201):
-        raise RuntimeError(f"Stripe {r.status_code}: {r.text[:200]}")
-    return r.json()["secret"]
-
-
-async def terminal_payment_intent(db: AsyncSession, org_id: str, *, amount: float, currency: str, intent_id: str) -> dict:
-    key = await _stripe_key(db, org_id)
-    import httpx
-    data = {"amount": str(minor_units(amount, currency)), "currency": currency,
-            "payment_method_types[]": "card_present", "capture_method": "automatic",
-            "metadata[intent_id]": intent_id}
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        r = await client.post("https://api.stripe.com/v1/payment_intents", data=data,
-                              auth=(key, ""))
-    if r.status_code not in (200, 201):
-        raise RuntimeError(f"Stripe {r.status_code}: {r.text[:200]}")
-    b = r.json()
-    return {"provider_ref": b.get("id"), "client_secret": b.get("client_secret")}

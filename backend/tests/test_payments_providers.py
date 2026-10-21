@@ -152,9 +152,3 @@ async def test_sumup_refresh_poll_marks_paid(monkeypatch, client, tenant, db):
     await db.refresh(intent)
     r = await client.post(f"/api/payments/intents/{intent.id}/refresh")
     assert r.status_code == 200 and r.json()["status"] == "succeeded"
-
-
-@pytest.mark.asyncio
-async def test_terminal_endpoints_gated_without_stripe(client, tenant):
-    r = await client.post("/api/payments/terminal/connection-token", headers=tenant)
-    assert r.status_code == 503 and "not configured" in r.json()["detail"].lower()

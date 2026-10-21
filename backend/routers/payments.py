@@ -47,7 +47,11 @@ async def payments_config(
     prov = await pay.org_provider(db, current.org_id)
     sel = prov if prov != "auto" else None
     name = await pay.gateway_name_org(db, current.org_id, sel)
-    return {"gateway": name,
+    from backend.services import org_creds
+    from backend.services.payment_guard import test_mode as _test_mode
+    test_mode = name in ("simulated", "unconfigured") or _test_mode(
+        name, await org_creds.effective(db, current.org_id, name, read_only=True))
+    return {"gateway": name, "test_mode": test_mode,
             "org_provider": prov,
             "available": await pay.available_gateways_org(db, current.org_id),
             "live": name not in ("simulated", "unconfigured")}
@@ -193,14 +197,13 @@ async def square_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     """Square payment webhook. Verified with the shop's webhook signature key (or the
     operator-wide one): HMAC-SHA256 over notification_url + body. Fails closed outside
     development/test when no key is configured."""
-    import base64
-    import hashlib
-    import hmac
     raw = await request.body()
     try:
         event = json.loads(raw.decode() or "{}")
     except Exception:
         raise HTTPException(400, "Bad payload")
+    if event.get("type") == "terminal.checkout.updated":
+        return await _square_terminal_event(request, raw, event, db)
     if event.get("type") not in ("payment.created", "payment.updated"):
         return {"ok": True, "ignored": event.get("type")}
     payment = ((event.get("data") or {}).get("object") or {}).get("payment") or {}
@@ -212,14 +215,7 @@ async def square_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     if not intent:
         return {"ok": True, "unmatched": True}
     # Verify with the secret of the org that owns the matched intent — never trust the body first.
-    secrets = await provider_secrets(db, intent.org_id, "square", "webhook_signature_key",
-                                     settings.SQUARE_WEBHOOK_SIGNATURE_KEY)
-    url = (settings.PUBLIC_BASE_URL or "").rstrip("/") + "/api/payments/square/webhook"
-    got = request.headers.get("x-square-hmacsha256-signature", "")
-    verified = any(hmac.compare_digest(
-        base64.b64encode(hmac.new(s.encode(), url.encode() + raw, hashlib.sha256).digest()).decode(), got)
-        for s in secrets)
-    require_signature(secrets, verified, "Square")
+    await _require_square_signature(request, raw, db, intent.org_id)
     money = payment.get("amount_money") or {}
     if money.get("amount") is not None and int(money["amount"]) != _minor_units(intent.amount, intent.currency):
         log.warning("Square webhook amount mismatch for intent %s", intent.id)
@@ -232,43 +228,59 @@ async def square_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     return {"ok": True}
 
 
-@router.post("/terminal/connection-token")
-async def terminal_connection_token(db: AsyncSession = Depends(get_db),
-                                    current: Employee = Depends(require_perm("can_view_finance"))):
-    """Stripe Terminal: connection token for the reader SDK (503 when Stripe absent)."""
-    from backend.services import payments as pay
-    try:
-        return {"secret": await pay.terminal_connection_token(db, current.org_id)}
-    except RuntimeError as e:
-        raise HTTPException(503, str(e))
+async def _require_square_signature(request: Request, raw: bytes, db: AsyncSession, org_id: str) -> None:
+    """HMAC-SHA256 over notification_url + body with the signature key of the shop that owns the
+    matched payment (or the operator-wide key). Fails closed outside development/test."""
+    import base64
+    import hashlib
+    import hmac
+    secrets = await provider_secrets(db, org_id, "square", "webhook_signature_key",
+                                     settings.SQUARE_WEBHOOK_SIGNATURE_KEY)
+    url = (settings.PUBLIC_BASE_URL or "").rstrip("/") + "/api/payments/square/webhook"
+    got = request.headers.get("x-square-hmacsha256-signature", "")
+    verified = any(hmac.compare_digest(
+        base64.b64encode(hmac.new(s.encode(), url.encode() + raw, hashlib.sha256).digest()).decode(), got)
+        for s in secrets)
+    require_signature(secrets, verified, "Square")
 
 
-class TerminalIntentIn(BaseModel):
-    intent_id: str
-
-
-@router.post("/terminal/create-intent")
-async def terminal_create_intent(
-    data: TerminalIntentIn,
-    db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
-):
-    """Create a card_present PaymentIntent on Stripe for an existing Tekly
-    intent, so a reader can collect it in person."""
-    from backend.services import payments as pay
-    intent = (await db.execute(select(PaymentIntent).where(
-        PaymentIntent.id == data.intent_id, PaymentIntent.org_id == current.org_id))).scalar_one_or_none()
-    if not intent:
-        raise HTTPException(404, "Payment not found")
-    try:
-        res = await pay.terminal_payment_intent(db, current.org_id, amount=intent.amount,
-                                                currency=intent.currency, intent_id=intent.id)
-    except RuntimeError as e:
-        raise HTTPException(503, str(e))
-    intent.provider = "stripe"
-    intent.provider_ref = res["provider_ref"]
+async def _square_terminal_event(request: Request, raw: bytes, event: dict, db: AsyncSession) -> dict:
+    """F3: a Square Terminal checkout changed. Matched by checkout id to the charge we started, then
+    verified with THAT shop's key; applied once per event_id."""
+    from backend.services import terminal as term
+    co = ((event.get("data") or {}).get("object") or {}).get("checkout") or {}
+    ch = await term.find_charge(db, "square", co.get("id"))
+    if not ch:
+        return {"ok": True, "unmatched": True}
+    await _require_square_signature(request, raw, db, ch.org_id)
+    event_id = event.get("event_id")
+    if not event_id:
+        raise HTTPException(400, "Missing event id")
+    if not await term.claim_event(db, "square", event_id, ch.org_id):
+        return {"ok": True, "duplicate": True}
+    await term.apply_square_checkout(db, ch, co)
     await db.commit()
-    return {"client_secret": res["client_secret"], "provider_ref": res["provider_ref"]}
+    return {"ok": True, "status": ch.status}
+
+
+async def _stripe_terminal_event(payload: bytes, sig: str, event: dict, db: AsyncSession) -> dict:
+    """F2: a card_present PaymentIntent we sent to a reader succeeded, failed or was canceled.
+    Matched by PaymentIntent id, verified with the owning shop's signing secret (never trusting
+    metadata in the body), applied once per event id."""
+    from backend.services import terminal as term
+    pi = (event.get("data") or {}).get("object") or {}
+    ch = await term.find_charge(db, "stripe", pi.get("id"))
+    if not ch:
+        return {"ok": True, "unmatched": True}   # e.g. the PaymentIntent behind a hosted checkout
+    secrets = await provider_secrets(db, ch.org_id, "stripe", "webhook_secret", settings.STRIPE_WEBHOOK_SECRET)
+    require_signature(secrets, any(_verify_stripe_sig(payload, sig, s) for s in secrets), "Stripe")
+    if not event.get("id"):
+        raise HTTPException(400, "Missing event id")
+    if not await term.claim_event(db, "stripe", event["id"], ch.org_id):
+        return {"ok": True, "duplicate": True}
+    await term.apply_stripe_intent(db, ch, pi)
+    await db.commit()
+    return {"ok": True, "status": ch.status}
 
 
 @router.post("/stripe/webhook")
@@ -283,6 +295,9 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         event = json.loads(payload.decode() or "{}")
     except Exception:
         raise HTTPException(400, "Bad payload")
+    if event.get("type") in ("payment_intent.succeeded", "payment_intent.payment_failed",
+                             "payment_intent.canceled"):
+        return await _stripe_terminal_event(payload, sig, event, db)
     if event.get("type") not in ("checkout.session.completed",
                                  "checkout.session.async_payment_succeeded"):
         return {"ok": True, "ignored": event.get("type")}

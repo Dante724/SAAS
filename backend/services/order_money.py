@@ -109,7 +109,11 @@ async def _expire_stripe_checkout(db: AsyncSession, intent: PaymentIntent) -> bo
 
     from backend.config import settings
     from backend.services import org_creds
-    key = (await org_creds.effective(db, intent.org_id, "stripe")).get("secret_key") or settings.STRIPE_SECRET_KEY
+    from backend.services.payment_guard import LivePaymentsRefused
+    try:
+        key = (await org_creds.effective(db, intent.org_id, "stripe")).get("secret_key") or settings.STRIPE_SECRET_KEY
+    except LivePaymentsRefused:
+        return False   # F4: live keys refused on this server; the link is still cancelled here
     if not key:
         return False
     try:
@@ -132,8 +136,12 @@ async def _delete_square_link(db: AsyncSession, intent: PaymentIntent) -> bool:
 
     from backend.config import settings
     from backend.services import org_creds
+    from backend.services.payment_guard import LivePaymentsRefused
     from backend.services.payments import SquareGateway
-    c = await org_creds.effective(db, intent.org_id, "square")
+    try:
+        c = await org_creds.effective(db, intent.org_id, "square")
+    except LivePaymentsRefused:
+        return False   # F4: live keys refused on this server; the link is still cancelled here
     token = c.get("access_token") or settings.SQUARE_ACCESS_TOKEN
     if not token:
         return False

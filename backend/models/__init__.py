@@ -1179,6 +1179,7 @@ class Payment(Base):
     received_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     shift_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("cash_shifts.id"))
     reference: Mapped[Optional[str]] = mapped_column(String(200))
+    provider_ref: Mapped[Optional[str]] = mapped_column(String(120))   # F2: card-reader charge id (pi_… / Square checkout)
     paid_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     invoice: Mapped["Invoice"] = relationship(back_populates="payments")
 
@@ -3397,3 +3398,57 @@ class CreditNoteLine(Base):
     net: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     tax: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+
+
+class PaymentTerminal(Base):
+    """F2/F3 — a card reader the shop charges from (server-driven). provider is stripe|square, or
+    simulated (local development only). reader_id is Stripe's tmr_… or Square's device id."""
+    __tablename__ = "payment_terminals"
+    __table_args__ = (UniqueConstraint("org_id", "provider", "reader_id", name="uq_payment_terminal_reader"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(20))
+    reader_id: Mapped[str] = mapped_column(String(120))
+    label: Mapped[str] = mapped_column(String(120))
+    location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id", ondelete="SET NULL"), index=True)
+    provider_location: Mapped[Optional[str]] = mapped_column(String(120))   # Stripe tml_… the reader is registered to
+    device_type: Mapped[Optional[str]] = mapped_column(String(60))
+    test_mode: Mapped[bool] = mapped_column(Boolean, default=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class TerminalCharge(Base):
+    """One attempt to take money on a reader, for a work order or a counter sale. Settled exactly
+    once (webhook or status poll) into the cash system; payment_id links the recorded Payment."""
+    __tablename__ = "terminal_charges"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    terminal_id: Mapped[str] = mapped_column(String, ForeignKey("payment_terminals.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(20))
+    provider_ref: Mapped[Optional[str]] = mapped_column(String(120), index=True)   # pi_… / Square checkout id
+    provider_payment_id: Mapped[Optional[str]] = mapped_column(String(120))        # Square payment id (refunds)
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
+    sale_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("sales.id"), index=True)
+    account_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("accounts.id"))
+    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    currency: Mapped[str] = mapped_column(String(8), default="usd")
+    status: Mapped[str] = mapped_column(String(16), default="pending")   # pending|processing|succeeded|declined|canceled|failed
+    error: Mapped[Optional[str]] = mapped_column(Text)
+    payment_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("payments.id"), unique=True)
+    refunded_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class PaymentWebhookEvent(Base):
+    """Provider webhook events already applied (Stripe evt_…, Square event_id): a redelivery is
+    acknowledged without being applied twice."""
+    __tablename__ = "payment_webhook_events"
+    __table_args__ = (UniqueConstraint("provider", "event_id", name="uq_payment_webhook_event"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    provider: Mapped[str] = mapped_column(String(20))
+    event_id: Mapped[str] = mapped_column(String(255))
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

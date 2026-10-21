@@ -8,7 +8,7 @@
   can_edit_issued_invoices → can_issue_credit_notes.
 
 Revision ID: opb1
-Revises: ls144r4
+Revises: opc1
 """
 import json
 
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "opb1"
-down_revision = "ls144r4"
+down_revision = "opc1"
 branch_labels = None
 depends_on = None
 

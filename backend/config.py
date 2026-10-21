@@ -100,6 +100,11 @@ class Settings(BaseSettings):
     SQUARE_ENV: str = "sandbox"                # sandbox | production
     SQUARE_WEBHOOK_SIGNATURE_KEY: str = ""
 
+    # -- Live-money guardrail (F4) --
+    # Live keys (Stripe sk_live_/rk_live_, Square production) are refused unless this is true AND
+    # ENVIRONMENT=production. Everywhere else only test/sandbox credentials can move money.
+    ALLOW_LIVE_PAYMENTS: bool = False
+
     # -- SumUp --
     SUMUP_API_KEY: str = ""
     SUMUP_MERCHANT_CODE: str = ""

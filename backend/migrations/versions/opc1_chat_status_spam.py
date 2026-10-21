@@ -12,7 +12,7 @@ Roles: the new can_manage_chats permission (status / spam changes) is on in ever
 role template, so existing explicit roles get it too instead of silently losing the action.
 
 Revision ID: opc1
-Revises: ls144r4
+Revises: ope1
 """
 import json
 
@@ -20,7 +20,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "opc1"
-down_revision = "ls144r4"
+down_revision = "ope1"
 branch_labels = None
 depends_on = None
 

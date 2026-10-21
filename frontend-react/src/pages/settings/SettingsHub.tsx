@@ -23,6 +23,7 @@ import DocumentTemplatesPage from "./DocumentTemplatesPage";
 import LocationsPage from "./LocationsPage";
 import { TeamPage, RoleEditor, Avatar } from "./TeamSettings";
 import { ChecklistList, ChecklistEditor } from "./ChecklistSettings";
+import CardReadersCard from "./CardReadersCard";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
 
 // Full section set = the registry sections + a few that have no nav entry of their own.
@@ -441,6 +442,7 @@ export default function SettingsHub() {
           {sec === "integrations" && (
             <div className="max-w-4xl space-y-5">
               <IntegrationsHub data={integrations} goSection={setSec} reload={() => setIntegrations(null)} />
+              <CardReadersCard />
               <ApiKeysCard />
               <WebhooksCard />
             </div>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Shell, { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
@@ -7,11 +7,17 @@ import { useClientSearch } from "../../hooks/useClientSearch";
 import NewClientDrawer from "../../components/NewClientDrawer";
 import { currencySymbol, money } from "../orders/types";
 import { escapeHtml } from "../../lib/safeHtml";
+import ScanButton from "../../components/ScanButton";
+import ReaderCharge from "../../components/ReaderCharge";
+import CardPaymentsList from "../../components/CardPaymentsList";
+import { scanBeep, useWedgeScanner } from "../../lib/scanner";
 
 type Product = { id: string; name?: string; sku?: string; sell_price?: number; qty_available?: number; image_data?: string | null; low_stock?: boolean };
 type Service = { id: string; name?: string; price?: number; duration_min?: number };
 type ClientLite = { id: string; name?: string; phone?: string };
 type Account = { id: string; name?: string; payment_option?: string };
+// F1: what GET /sales/lookup returns for a scanned code.
+type Match = { id: string; name: string; sku?: string | null; barcode?: string | null; code?: string | null; mpn?: string | null; sell_price: number; qty_available: number; matched_on?: string | null };
 type Receipt = {
   sale_number: string; shop_name: string; total: number; discount?: number; paid: boolean; created_at?: string | null;
   lines: { description: string; qty: number; total: number }[];
@@ -63,6 +69,34 @@ export default function SalesPOS() {
     return services.filter((s) => !term || (s.name || "").toLowerCase().includes(term));
   }, [mode, q, products, services]);
 
+  // F1 scan-to-cart: a scanner (keyboard wedge or camera) or Enter in the search box looks the code
+  // up by SKU / barcode / internal code / MPN. One match goes in the cart, several open a picker.
+  const [matches, setMatches] = useState<{ code: string; items: Match[] } | null>(null);
+  const [lit, setLit] = useState<{ id: string; n: number } | null>(null);   // cart line that just changed
+  const [miss, setMiss] = useState(false);
+  const litTimer = useRef<ReturnType<typeof setTimeout>>();
+  const addMatch = useCallback((m: Match) => {
+    add("product", m.id, m.name, m.sell_price || 0, m.qty_available);
+    scanBeep(true);
+    setLit((x) => ({ id: m.id, n: (x?.n || 0) + 1 }));
+    clearTimeout(litTimer.current);
+    litTimer.current = setTimeout(() => setLit(null), 900);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const scan = useCallback(async (raw: string, fromSearch = false) => {
+    const code = raw.trim();
+    if (!code) return;
+    try {
+      const r = await api.get<{ items: Match[] }>(`/sales/lookup?code=${encodeURIComponent(code)}`);
+      const items = r.items || [];
+      if (items.length === 1) { addMatch(items[0]); flash(`Added ${items[0].name}`); if (fromSearch) setQ(""); return; }
+      if (items.length > 1) { setMatches({ code, items }); return; }
+      scanBeep(false); setMiss(true); setTimeout(() => setMiss(false), 900);
+      if (fromSearch) { setMode("products"); flash(`No product has the code "${code}". Showing search results.`); }
+      else flash(`No product has the code "${code}"`);
+    } catch (e: any) { scanBeep(false); flash(e.message || "Couldn't look up that code"); }
+  }, [addMatch]);
+
   function add(kind: "product" | "service", id: string, name: string, price: number, stock?: number) {
     setCart((c) => {
       const ex = c.find((l) => l.ref_id === id && l.kind === kind);
@@ -78,21 +112,28 @@ export default function SalesPOS() {
   // Phones: the cart is a full-screen sheet opened from the bottom bar instead of a side column.
   const [cartOpen, setCartOpen] = useState(false);
 
-  async function charge() {
+  // F2/F3: "Charge on reader" saves the sale unpaid, then the reader takes the card; the server
+  // marks it paid once the card is approved. A declined or canceled card leaves it "Not paid".
+  const [readerFor, setReaderFor] = useState<{ saleId: string; number: string; total: number } | null>(null);
+  const cardAccount = accounts.find((a) => a.id === accountId && (a.payment_option === "card" || a.payment_option === "cashless"))?.id;
+
+  useWedgeScanner((code) => { scan(code); }, { enabled: !receiptFor && !readerFor && !newClient && !matches });
+
+  async function charge(onReader = false) {
     if (cart.length === 0) { flash("Cart is empty"); return; }
     setBusy(true);
     try {
       const r = await api.post<any>("/sales", {
-        client_id: client?.id || null, account_id: accountId || null, discount,
+        client_id: client?.id || null, account_id: onReader ? null : (accountId || null), discount,
         coupon_code: coupon.trim() || null, gift_card_code: giftCard.trim() || null, redeem_points: redeemPts || 0,
         lines: cart.map((l) => ({ kind: l.kind, ref_id: l.ref_id, description: l.description, qty: l.qty, unit_price: l.unit_price, discount: l.discount })),
       });
       const red = r.redeemed && Object.keys(r.redeemed).length
         ? " · redeemed " + Object.entries(r.redeemed).map(([k, v]) => `${k} ${money(v as number)}`).join(", ") : "";
       // No profit here: the customer is usually looking at this screen.
-      flash(`Sale ${r.sale_number} · ${money(r.total)}${red}`);
       try { if (accountId) localStorage.setItem(LAST_ACCT, accountId); } catch { /* ignore */ }
-      setReceiptFor(r.id);
+      if (onReader && r.total > 0) setReaderFor({ saleId: r.id, number: r.sale_number, total: r.total });
+      else { flash(`Sale ${r.sale_number} · ${money(r.total)}${red}`); setReceiptFor(r.id); }
       setRecentKey((k) => k + 1);
       setCart([]); setCartOpen(false); setDiscount(0); setCoupon(""); setGiftCard(""); setRedeemPts(0); setShowRewards(false); setClient(null); setClientQ("");
       api.get<{ items: Product[] }>("/catalog/products").then((res) => setProducts(res.items || [])).catch(() => {});
@@ -109,7 +150,10 @@ export default function SalesPOS() {
               <button onClick={() => setMode("products")} className={`px-3 py-1.5 rounded-md font-semibold flex items-center gap-1.5 ${mode === "products" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="inventory_2" c="text-xs" />Products</button>
               {can("can_sell_services") && <button onClick={() => setMode("services")} className={`px-3 py-1.5 rounded-md font-semibold flex items-center gap-1.5 ${mode === "services" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="build" c="text-xs" />Services</button>}
             </div>
-            <div className="relative flex-1 min-w-[160px] max-w-md"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" /><input value={q} onChange={(e) => setQ(e.target.value)} className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg font-medium" placeholder={`Search ${mode}…`} /></div>
+            <div className="relative flex-1 min-w-[160px] max-w-md"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" /><input value={q} onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); scan(q, true); } }} aria-label="Search or scan"
+              className={`glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg font-medium transition-shadow ${miss ? "ring-2 ring-rose-400" : ""}`} placeholder={mode === "products" ? "Search or scan a barcode…" : `Search ${mode}…`} /></div>
+            <ScanButton onScan={(c) => scan(c)} title="Scan barcode" />
             <button onClick={() => setRecent((v) => !v)} className="ml-auto px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex items-center gap-1.5"><M n="receipt_long" c="text-sm" />Recent sales</button>
           </div>
           {recent && (
@@ -119,6 +163,7 @@ export default function SalesPOS() {
                 load={() => api.get<{ items: any[] }>("/sales").then((r) => (r.items || []).map((s) => ({
                   id: s.id, title: s.sale_number, sub: s.paid ? "Paid" : "Not paid", amount: s.total,
                   created_at: s.created_at, voided_at: s.voided_at, void_reason: s.void_reason })))} />
+              {can("can_take_card_payments") && <div className="border-t border-slate-100 p-2"><CardPaymentsList sales reloadKey={recentKey} /></div>}
             </div>
           )}
           <div className="flex-1 overflow-y-auto px-6 pb-6">
@@ -183,7 +228,7 @@ export default function SalesPOS() {
           <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2">
             {cart.length === 0 && <div className="text-xs text-ink-tertiary text-center py-10">Tap products or services to add them.</div>}
             {cart.map((l) => (
-              <div key={l.key} className="bg-slate-50/70 rounded-xl border border-slate-200/70 p-2.5">
+              <div key={l.key} data-testid="cart-line" className={`rounded-xl border p-2.5 transition-colors ${lit && lit.id === l.ref_id && l.kind === "product" ? "bg-emerald-50 border-emerald-300 ring-2 ring-emerald-300" : "bg-slate-50/70 border-slate-200/70"}`}>
                 <div className="flex items-start gap-2">
                   <div className="flex-1 min-w-0"><div className="text-xs font-bold text-ink-primary truncate">{l.description}</div><div className="text-[11px] text-ink-tertiary tabular-nums">{money(l.unit_price)} each</div></div>
                   <button aria-label="Close" onClick={() => remove(l.key)} className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>
@@ -223,14 +268,52 @@ export default function SalesPOS() {
                 {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
             </div>
-            <button onClick={charge} disabled={busy || cart.length === 0} className="w-full py-2.5 rounded-xl bg-primary text-white text-sm font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-50 flex items-center justify-center gap-2"><M n="point_of_sale" c="text-base" />{busy ? "Processing…" : `Charge ${money(total)}`}</button>
+            <button onClick={() => charge()} disabled={busy || cart.length === 0} className="w-full py-2.5 rounded-xl bg-primary text-white text-sm font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-50 flex items-center justify-center gap-2"><M n="point_of_sale" c="text-base" />{busy ? "Processing…" : `Charge ${money(total)}`}</button>
+            {can("can_take_card_payments") && <button onClick={() => charge(true)} disabled={busy || cart.length === 0 || total <= 0} className="w-full py-2 rounded-xl border border-primary/30 bg-white text-primary text-xs font-bold hover:bg-blue-50 disabled:opacity-50 flex items-center justify-center gap-2"><M n="contactless" c="text-base" />Charge on reader</button>}
           </div>
         </aside>
       </div>
       {toast && <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-clay-drawer z-[60]">{toast}</div>}
+      {matches && <MatchPicker code={matches.code} items={matches.items} onPick={(m) => { addMatch(m); flash(`Added ${m.name}`); setMatches(null); setQ(""); }} onClose={() => setMatches(null)} />}
+      {readerFor && <ReaderCharge saleId={readerFor.saleId} amount={readerFor.total} accountId={cardAccount} title={`Sale ${readerFor.number}`}
+        onApproved={() => { flash(`Sale ${readerFor.number} paid by card`); setRecentKey((k) => k + 1); }}
+        onClose={(c) => {
+          if (c?.status === "succeeded") setReceiptFor(readerFor.saleId);
+          else flash(`Sale ${readerFor.number} wasn't paid. It stays in Recent sales as Not paid, where you can delete it.`);
+          setRecentKey((k) => k + 1); setReaderFor(null);
+        }} />}
       {receiptFor && <ReceiptSheet saleId={receiptFor} onClose={() => setReceiptFor(null)} onFlash={flash} />}
       {newClient && <NewClientDrawer prefillName={clientQ.trim()} onClose={() => setNewClient(false)} onCreated={(c) => { setClient(c); setNewClient(false); setClientQ(""); flash(`Client "${c.name}" created & attached`); }} />}
     </Shell>
+  );
+}
+
+// Several products share the scanned code: let the cashier pick the right one.
+function MatchPicker({ code, items, onPick, onClose }: { code: string; items: Match[]; onPick: (m: Match) => void; onClose: () => void }) {
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Choose a product">
+      <div className="absolute inset-0 bg-ink-primary/40" onClick={onClose} />
+      <div className="relative w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5 shadow-clay-drawer">
+        <div className="flex items-start justify-between gap-3">
+          <div><div className="text-sm font-bold text-ink-primary">Which product?</div>
+            <div className="text-xs text-ink-tertiary">{items.length} products have the code <span className="font-mono">{code}</span></div></div>
+          <button aria-label="Close" onClick={onClose} className="text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-lg" /></button>
+        </div>
+        <div className="mt-3 space-y-1.5 max-h-80 overflow-y-auto">
+          {items.map((m) => (
+            <button key={m.id} onClick={() => onPick(m)} className="w-full text-left flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 hover:border-primary/50 hover:bg-blue-50/40">
+              <div className="min-w-0 flex-1"><div className="text-xs font-bold text-ink-primary truncate">{m.name}</div>
+                <div className="text-[11px] text-ink-tertiary truncate">{[m.sku && `SKU ${m.sku}`, m.barcode && `Barcode ${m.barcode}`, m.mpn && `MPN ${m.mpn}`].filter(Boolean).join(" · ")} · {m.qty_available} in stock</div></div>
+              <span className="text-xs font-bold tabular-nums text-primary">{money(m.sell_price)}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 

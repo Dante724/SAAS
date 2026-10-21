@@ -69,6 +69,7 @@ CATALOG = {
         ("can_sell_services", "Sell services"),
         ("can_edit_sale_price", "Edit price"),
         ("can_export_sales", "Export the sales"),
+        ("can_take_card_payments", "Take card payments on a card reader"),
     ],
     "Invoices": [
         ("can_view_invoices", "View invoices"),
@@ -95,6 +96,7 @@ CATALOG = {
         ("can_view_balance", "See balance"),
         ("can_create_returns", "Create returns"),
         ("can_delete_refunds", "Delete refunds"),
+        ("can_refund_card_payments", "Refund card-reader payments"),
     ],
     "Payroll": [
         ("can_view_payroll", "View payroll calculation"),
@@ -108,6 +110,7 @@ CATALOG = {
         ("can_manage_settings", "Manage company settings"),
         ("can_manage_roles", "Manage roles and permissions"),
         ("can_manage_employees", "Manage employees"),
+        ("can_manage_terminals", "Add and remove card readers"),
     ],
     "Checklists": [
         ("can_manage_checklist_templates", "Manage checklist templates"),
@@ -158,6 +161,7 @@ _NOT_FOR_STAFF = {
     "can_delete_clients": False, "can_delete_orders": False, "can_delete_sales": False,
     "can_delete_refunds": False, "can_delete_products": False, "can_delete_invoices": False,
     "can_delete_tickets": False, "can_issue_credit_notes": False,
+    "can_refund_card_payments": False, "can_manage_terminals": False,
     "can_view_purchase_price": False, "can_see_profit": False, "can_set_cost_price": False,
     "can_see_asset_cost": False,
 }
