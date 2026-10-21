@@ -221,6 +221,9 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
   const [locScope, setLocScope] = useState<string>(role?.location_scope || "all");
   const [locIds, setLocIds] = useState<string[]>(role?.location_ids || []);
   const [payrollDays, setPayrollDays] = useState<string>(role?.payroll_visibility_days != null ? String(role.payroll_visibility_days) : "");
+  const [payrollScope, setPayrollScope] = useState<string>(role?.payroll_scope || "all");
+  const [payrollIds, setPayrollIds] = useState<string[]>(role?.payroll_employee_ids || []);
+  const [people, setPeople] = useState<{ id: string; name: string }[]>([]);
   const [hiddenStatuses, setHiddenStatuses] = useState<string[]>(role?.hidden_status_keys || []);
   const [feedSources, setFeedSources] = useState<string[]>(role?.home_feed_sources || []);
   const [homeRoute, setHomeRoute] = useState<string>(role?.home_route || "");
@@ -230,6 +233,7 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
   const [locations, setLocations] = useState<any[]>([]);
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   useEffect(() => { api.get<any>("/staff/locations").then((r) => setLocations(r.items || r || [])).catch(() => setLocations([])); }, []);
+  useEffect(() => { api.get<any>("/staff/employees").then((r) => setPeople((r.items || r || []).map((e: any) => ({ id: e.id, name: e.name })))).catch(() => setPeople([])); }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
@@ -251,6 +255,7 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
   async function save() {
     if (!name.trim()) { setErr("Give the role a name"); return; }
     if (locScope !== "all" && locIds.length === 0) { setErr("Pick at least one location, or allow all locations"); return; }
+    if (payrollScope === "selected" && payrollIds.length === 0) { setErr("Pick at least one person whose pay they can see, or choose another payroll option"); return; }
     setBusy(true); setErr(null);
     const body: any = {
       name: name.trim(), permissions: perms,
@@ -260,6 +265,7 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
       warehouse_scope: role?.warehouse_scope || "all", warehouse_ids: role?.warehouse_ids || [],
       account_ids: role?.account_ids || [],
       payroll_visibility_days: payrollDays === "" ? null : Number(payrollDays),
+      payroll_scope: payrollScope, payroll_employee_ids: payrollScope === "selected" ? payrollIds : [],
       hidden_status_keys: hiddenStatuses, home_feed_sources: feedSources, home_route: homeRoute,
     };
     if (isNew && preset) body.template = preset;
@@ -397,6 +403,20 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
                       <button key={l.id} type="button" onClick={() => setLocIds((s) => (on ? s.filter((x) => x !== l.id) : [...s, l.id]))} aria-pressed={on}
                         className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border ${on ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-dashed border-slate-300 text-ink-tertiary"}`}>
                         {on && <M n="check" c="text-[12px] text-primary" />}{l.name}
+                      </button>
+                    ); })}
+                  </div>
+                )}
+              </Row>
+              <Row icon="group" title="Whose pay" hint="Whose payroll they can see and manage, where their permissions allow it. Their own earnings follow “See their own earnings”.">
+                <Choice value={payrollScope} set={setPayrollScope} options={[["all", "Everyone"], ["own", "Only themselves"], ["selected", "Only some people"]]} />
+                {payrollScope === "selected" && (
+                  <div className="flex flex-wrap gap-1.5 mt-2" role="group" aria-label="People whose pay they can see">
+                    {people.length === 0 && <span className="text-[11px] text-ink-tertiary">No team members yet.</span>}
+                    {people.map((p) => { const on = payrollIds.includes(p.id); return (
+                      <button key={p.id} type="button" onClick={() => setPayrollIds((s) => (on ? s.filter((x) => x !== p.id) : [...s, p.id]))} aria-pressed={on}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border ${on ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-dashed border-slate-300 text-ink-tertiary"}`}>
+                        {on && <M n="check" c="text-[12px] text-primary" />}{p.name}
                       </button>
                     ); })}
                   </div>

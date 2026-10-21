@@ -22,6 +22,7 @@ const InquiriesHub = lazy(() => import("./pages/inbox/InquiriesHub"));
 const ChatsHub = lazy(() => import("./pages/chats/ChatsHub"));
 const AppointmentsHub = lazy(() => import("./pages/appointments/AppointmentsHub"));
 const MarketingHub = lazy(() => import("./pages/marketing/MarketingHub"));
+const MyEarnings = lazy(() => import("./pages/finance/MyEarnings"));
 
 // ── Route-ownership table (Strangler Fig) ─────────────────────────────
 // Flip a module from "legacy" to "react" once it passes the parity gate.
@@ -65,6 +66,7 @@ export default function App() {
         <Route path="/chats" element={<ChatsHub />} />
         <Route path="/appointments" element={<AppointmentsHub />} />
         <Route path="/marketing" element={<MarketingHub />} />
+        <Route path="/my-earnings" element={<MyEarnings />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
       </Suspense>

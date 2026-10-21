@@ -25,7 +25,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "Grow": "Crecimiento", "Admin": "Administración",
     "Home": "Inicio", "My work": "Mi trabajo", "Catalog": "Catálogo",
     "Collapse": "Contraer", "Light mode": "Modo claro", "Dark mode": "Modo oscuro",
-    "Clock in": "Fichar entrada", "Security & two-factor": "Seguridad y doble factor", "Sign out": "Cerrar sesión",
+    "Clock in": "Fichar entrada", "Security & two-factor": "Seguridad y doble factor", "Sign out": "Cerrar sesión", "My earnings": "Mis ganancias",
   },
   ar: {
     "My company": "شركتي", "Inquiries": "الاستفسارات", "Tasks": "المهام",
@@ -37,7 +37,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "Grow": "النمو", "Admin": "الإدارة", "Collapse": "طيّ",
     "Notifications": "الإشعارات", "Language": "اللغة",
     "Light mode": "الوضع الفاتح", "Dark mode": "الوضع الداكن",
-    "Clock in": "تسجيل الدخول", "Security & two-factor": "الأمان والتحقق بخطوتين", "Sign out": "تسجيل الخروج",
+    "Clock in": "تسجيل الدخول", "Security & two-factor": "الأمان والتحقق بخطوتين", "Sign out": "تسجيل الخروج", "My earnings": "أرباحي",
   },
 };
 

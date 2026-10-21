@@ -427,3 +427,37 @@ async def test_role_editor_payroll_scope_validation(client, db):
     r = await client.post("/api/settings/rbac/roles", json={
         "name": "Same", "payroll_scope": "selected", "payroll_employee_ids": [inside]}, headers=E)
     assert r.status_code == 201, r.text
+
+
+@pytest.mark.asyncio
+async def test_calculation_export_matches_screen_filters_and_scope(client, db):
+    H, org, owner, inside, outside, mgr, M, role = await _scoped_setup(client, db)
+    staff_role = (await client.get(f"/api/payroll/calculation?month={MONTH}&employee_id={inside}", headers=H)).json()["items"][0]["role_id"]
+    r = await client.get(f"/api/payroll/calculation/export.csv?month={MONTH}&role_id={staff_role}", headers=H)
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv")
+    rows = list(csv.reader(io.StringIO(r.text)))
+    assert rows[0][:3] == ["Employee", "Position", "Wage type"]
+    assert sorted(x[0] for x in rows[1:-1]) == ["Inside", "Outside"] and rows[-1][0] == "Total"
+    assert rows[-1][3] == "200.0"                                   # base 100 + 100
+
+    # the scoped manager's export only has the people they may see
+    rows = list(csv.reader(io.StringIO((await client.get(f"/api/payroll/calculation/export.csv?month={MONTH}", headers=M)).text)))
+    assert [x[0] for x in rows[1:-1]] == ["Inside"]
+
+    no_export = await _role(client, H, "No export", template="Manager", permissions={"can_export_payroll": False})
+    _, N = await _person(client, H, "Nox", no_export["id"])
+    assert (await client.get(f"/api/payroll/calculation/export.csv?month={MONTH}", headers=N)).status_code == 403
+    assert (await client.get("/api/payroll/calculation/export.csv?month=bad", headers=H)).status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_payroll_endpoints_need_their_permission(client, db):
+    H, org, _ = await _register(client)
+    tech = await _role(client, H, "Tech", template="Specialist")
+    other, _ = await _person(client, H, "Other", tech["id"])
+    _, T = await _person(client, H, "Tess", tech["id"])
+    for url in (f"/api/payroll/calculation?month={MONTH}", f"/api/payroll/calculation/export.csv?month={MONTH}",
+                f"/api/payroll/calculation/detail?employee_id={other}&month={MONTH}", "/api/payroll/runs",
+                f"/api/reports/run/payroll?date_from={MONTH}-01"):
+        assert (await client.get(url, headers=T)).status_code == 403, url
+    assert (await client.get("/api/payroll/me", headers=T)).status_code == 200

@@ -646,6 +646,39 @@ async def payroll_calculation(
             "items": items, "totals": grand}
 
 
+@router.get("/calculation/export.csv")
+async def export_calculation(
+    month: str,
+    location_id: Optional[str] = None,
+    role_id: Optional[str] = None,
+    employee_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_manage_payroll")),
+):
+    """E2 — the payroll calculation as it is on screen (same scope and filters), as CSV."""
+    import csv
+    import io
+
+    from fastapi.responses import StreamingResponse
+
+    from backend.core.spreadsheet import safe_row
+    await assert_perm(db, current, "can_export_payroll")
+    data = await payroll_calculation(month, location_id, role_id, employee_id, db, current)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Employee", "Position", "Wage type", "Base", "Hourly", "Commission", "Bonuses",
+                "Penalties", "Total", "Accrual"])
+    for i in data["items"]:
+        w.writerow(safe_row([i["name"], i["position"], i["wage_type"] or "", i["base_salary"], i["hourly_total"],
+                             i["commissions_total"], i["bonuses_total"], i["penalties_total"],
+                             i["computed_total"], i["accrual_status"] or "not accrued"]))
+    t = data["totals"]
+    w.writerow(["Total", "", "", t["base_salary"], t["hourly_total"], t["commissions_total"],
+                t["bonuses_total"], t["penalties_total"], t["computed_total"], ""])
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="payroll_{month}.csv"'})
+
+
 # ── Build 144h: ad-hoc penalties & bonuses on the payroll-calculation page ────
 class AdjustmentIn(BaseModel):
     employee_id: str

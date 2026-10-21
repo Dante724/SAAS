@@ -12,9 +12,9 @@ import { isoMonth } from "../../lib/localDate";
 import { useMe } from "../../context/Me";
 import CashPanel from "../cash/CashPanel";
 import VoidableList from "../../components/VoidableList";
+import PayrollCalcPanel from "./PayrollCalcPanel";
 
 type Tab = "cashboxes" | "overview" | "pnl" | "reconcile" | "balances" | "refunds" | "payroll";
-type PayrollRow = { employee_id: string; name?: string; position?: string; wage_type?: string; base_salary?: number; hourly_total?: number; commissions_total?: number; bonuses_total?: number; penalties_total?: number; gross_total?: number; computed_total?: number; status?: string };
 type Account = { id: string; name?: string; balance?: number; payment_option?: string; is_virtual?: boolean };
 type Balance = { id: string; name?: string; phone?: string; balance?: number };
 
@@ -40,10 +40,9 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
   const [fin, setFin] = useState<any>(null);
   const [cash, setCash] = useState<any>(null);
   const [balances, setBalances] = useState<Balance[] | null>(null);
-  const [payroll, setPayroll] = useState<PayrollRow[] | null>(null);
   const [runs, setRuns] = useState<any[] | null>(null);
   const [runBusy, setRunBusy] = useState(false);
-  const [month] = useState<string>(() => isoMonth());
+  const [month, setMonth] = useState<string>(() => isoMonth());
   const [pack, setPack] = useState<any>(null);
   const [pnl, setPnl] = useState<any>(null);
   const [pnlBusy, setPnlBusy] = useState(false);
@@ -117,7 +116,6 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
     if (tab === "pnl" && !pnl) loadPnl();
     if (tab === "reconcile" && !recon) api.get<{ items: any[]; count: number }>("/finance/reconciliation").then(setRecon).catch(() => setRecon({ items: [], count: 0 }));
     if (tab === "balances" && !balances) api.get<{ items: Balance[] }>("/cash/balances").then((r) => setBalances(r.items || [])).catch(() => setBalances([]));
-    if (tab === "payroll" && !payroll) api.get<{ items: PayrollRow[] }>(`/payroll/calculation?month=${month}`).then((r) => setPayroll(r.items || [])).catch(() => setPayroll([]));
     if (tab === "payroll" && !runs) loadRuns();
   }, [tab]);
 
@@ -255,37 +253,8 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
 
         {tab === "payroll" && (
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-ink-primary">Payroll calculation — {month}</h3>
-              {can("can_accrue_payroll") && <button onClick={runPayroll} disabled={runBusy} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-60 flex items-center gap-1"><M n="save" c="text-xs" />{runBusy ? "Running…" : "Run payroll (draft)"}</button>}
-            </div>
-            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
-                  <th className="py-3 px-4">Employee</th><th className="py-3 px-4">Position</th><th className="py-3 px-4">Wage type</th>
-                  <th className="py-3 px-4 text-right">Base</th><th className="py-3 px-4 text-right">Hourly</th><th className="py-3 px-4 text-right">Commission</th>
-                  <th className="py-3 px-4 text-right">Bonus</th><th className="py-3 px-4 text-right">Penalty</th><th className="py-3 px-4 text-right">Total</th><th className="py-3 px-4"></th>
-                </tr></thead>
-                <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
-                  {!payroll && <SkeletonRows cols={10} />}
-                  {payroll?.length === 0 && <tr><td colSpan={10} className="py-6 px-4 text-ink-tertiary">No payroll data for this month.</td></tr>}
-                  {payroll?.map((p) => (
-                    <tr key={p.employee_id} className="hover:bg-blue-50/30">
-                      <td className="py-2.5 px-4 font-bold text-ink-primary">{p.name || "—"}</td>
-                      <td className="py-2.5 px-4">{p.position || "—"}</td>
-                      <td className="py-2.5 px-4 capitalize">{p.wage_type || "—"}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums">{money(p.base_salary)}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums">{money(p.hourly_total)}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums text-emerald-600">{money(p.commissions_total)}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums text-emerald-600">{money(p.bonuses_total)}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums text-rose-600">{money(p.penalties_total)}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums font-bold text-ink-primary">{money(p.computed_total ?? p.gross_total)}</td>
-                      <td className="py-2.5 px-4 text-right"><button aria-label="Print payslip" onClick={() => openAuthedDoc(`/print/payroll-statement/${p.employee_id}`).catch(() => alertDialog("Could not open payslip"))} title="Print payslip" className="p-1.5 rounded-lg text-ink-tertiary hover:text-primary hover:bg-slate-100"><M n="print" c="text-base" /></button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <PayrollCalcPanel month={month} onMonth={setMonth}
+              headerAction={can("can_accrue_payroll") && <button onClick={runPayroll} disabled={runBusy} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-60 flex items-center gap-1"><M n="save" c="text-xs" />{runBusy ? "Running…" : "Run payroll (draft)"}</button>} />
 
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
               <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary ">Payroll runs</div>

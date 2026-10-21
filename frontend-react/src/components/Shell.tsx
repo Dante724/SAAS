@@ -298,6 +298,11 @@ export default function Shell({ title, children }: { title: string; children: Re
                         <p className="font-bold text-ink-primary truncate">{me?.name || "—"}</p>
                         <p className="text-[11px] text-ink-tertiary truncate">{me?.email || me?.role || ""}</p>
                       </div>
+                      {can("can_view_own_payroll") && (
+                        <NavLink to="/my-earnings" onClick={() => setAvatarOpen(false)} className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-ink-secondary hover:bg-slate-100 hover:text-ink-primary">
+                          <M n="payments" c="text-base" />{t("My earnings")}
+                        </NavLink>
+                      )}
                       <button onClick={() => { setDark((d) => !d); }} className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-ink-secondary hover:bg-slate-100 hover:text-ink-primary">
                         <M n={dark ? "light_mode" : "dark_mode"} c="text-base" />{dark ? t("Light mode") : t("Dark mode")}
                       </button>

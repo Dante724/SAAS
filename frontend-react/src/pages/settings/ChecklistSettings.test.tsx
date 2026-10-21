@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { toBody, toSteps } from "./ChecklistSettings";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { AutoAttachPicker, ChecklistEditor, toBody, toSteps } from "./ChecklistSettings";
 
 // The editor folds sections into steps and shows only some per-check settings. Saving must not
 // lose the rest (upsell rules, descriptions, notes) — the old editor dropped them.
@@ -32,5 +34,65 @@ describe("checklist editor round trip", () => {
     steps[0].items[1].field_kind = "text";
     expect(toBody("x", "selected", ["a"], steps).steps[0].sections[0].items[1].options).toEqual([]);
     expect(toBody("x", "selected", ["a"], steps).type_ids).toEqual(["a"]);
+  });
+});
+
+// E4 — "Attach automatically when the order enters…"
+
+describe("auto-attach statuses", () => {
+  const statuses = {
+    work_order: [{ key: "in_repair", name: "In repair", color: "#9b7bf4" }, { key: "ready", name: "Ready", color: "#2cd4c0" }],
+    estimate: [{ key: "est_progress", name: "In progress", color: "#9b7bf4" }],
+  };
+
+  it("only sends auto_status_keys when the editor set them", () => {
+    expect(toBody("x", "all", [], [])).not.toHaveProperty("auto_status_keys");
+    expect(toBody("x", "all", [], [], [])).toMatchObject({ auto_status_keys: [] });
+    expect(toBody("x", "all", [], [], [{ record_type: "estimate", key: "est_progress" }]).auto_status_keys).toEqual([{ record_type: "estimate", key: "est_progress" }]);
+  });
+
+  it("toggles statuses per record type", async () => {
+    const u = userEvent.setup();
+    const onChange = vi.fn();
+    const { rerender } = render(<AutoAttachPicker value={[]} onChange={onChange} statuses={statuses} />);
+    expect(screen.getByText(/Off\. Pick statuses/)).toBeInTheDocument();
+    // "In progress" exists only for estimates; "In repair" only for work orders
+    await u.click(screen.getByRole("button", { name: "In repair" }));
+    expect(onChange).toHaveBeenLastCalledWith([{ record_type: "work_order", key: "in_repair" }]);
+    await u.click(screen.getByRole("button", { name: "In progress" }));
+    expect(onChange).toHaveBeenLastCalledWith([{ record_type: "estimate", key: "est_progress" }]);
+
+    rerender(<AutoAttachPicker value={[{ record_type: "work_order", key: "in_repair" }]} onChange={onChange} statuses={statuses} />);
+    expect(screen.getByRole("button", { name: "In repair" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText(/Added to the job once/)).toBeInTheDocument();
+    await u.click(screen.getByRole("button", { name: "In repair" }));
+    expect(onChange).toHaveBeenLastCalledWith([]);
+  });
+
+  describe("in the editor", () => {
+    let bodies: any[] = [];
+    const reply = (body: unknown) => ({ ok: true, status: 200, statusText: "", headers: new Headers(), json: async () => body, text: async () => JSON.stringify(body) }) as Response;
+    beforeEach(() => {
+      bodies = [];
+      vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "PUT" || init?.method === "POST") { bodies.push(JSON.parse(String(init.body))); return reply({}); }
+        if (url.includes("record_type=work_order")) return reply({ items: statuses.work_order });
+        if (url.includes("record_type=estimate")) return reply({ items: statuses.estimate });
+        return reply({ items: [] });
+      }));
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    it("loads the saved statuses and saves the change", async () => {
+      const u = userEvent.setup();
+      const saved = vi.fn();
+      const tpl = { id: "t1", name: "Intake", scope: "all", type_ids: [], steps: [{ title: "Condition", sections: [{ title: "", items: [{ label: "Battery", field_kind: "check_result", required: true, options: [] }] }] }] };
+      render(<ChecklistEditor tpl={{ ...tpl, auto_status_keys: [{ record_type: "work_order", key: "ready" }] }} onClose={() => {}} onSaved={saved} />);
+      expect(await screen.findByRole("button", { name: "Ready" })).toHaveAttribute("aria-pressed", "true");
+      await u.click(screen.getByRole("button", { name: "In repair" }));
+      await u.click(screen.getByRole("button", { name: "Save" }));
+      await vi.waitFor(() => expect(saved).toHaveBeenCalled());
+      expect(bodies[0].auto_status_keys).toEqual([{ record_type: "work_order", key: "ready" }, { record_type: "work_order", key: "in_repair" }]);
+    });
   });
 });
