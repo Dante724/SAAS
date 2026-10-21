@@ -176,6 +176,9 @@ for r in ROUTERS:
     app.include_router(r.router)
 app.include_router(sales.st_router)
 app.include_router(industry.scan_router)
+from backend.routers import credit_notes  # noqa: E402 — opb: credit notes
+
+app.include_router(credit_notes.router)
 
 
 @app.get("/health", include_in_schema=False)

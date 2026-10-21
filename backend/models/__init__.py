@@ -1108,6 +1108,8 @@ class Invoice(Base):
     tax: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     amount_paid: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    # opb — sum of ISSUED credit notes linked to this invoice; balance due = total − paid − credited.
+    credited: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0, server_default="0")
     legal_entity_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("legal_entities.id"))
     issued_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     due_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -3347,3 +3349,51 @@ class CustomReport(Base):
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class CreditNote(Base):
+    """opb — a credit note: money the shop owes back to a client, as a numbered, locked document.
+
+    draft → issued (locked, numbered via services/numbering doc_type "credit_note") → canceled.
+    Linked to an invoice it lowers that invoice's balance due (Invoice.credited); standalone it adds
+    client credit. Either way issuing posts a "credit_note" movement to the contact ledger and
+    canceling an issued note posts the reversal. The number is taken on issue, so deleted drafts
+    never leave gaps in the sequence."""
+    __tablename__ = "credit_notes"
+    __table_args__ = (Index("ix_credit_notes_org_created", "org_id", "created_at"),
+                      UniqueConstraint("org_id", "number", name="uq_credit_notes_org_number"))
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    number: Mapped[Optional[str]] = mapped_column(String(50))          # set on issue
+    client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
+    invoice_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("invoices.id"), index=True)
+    status: Mapped[str] = mapped_column(String(12), default="draft")   # draft|issued|canceled
+    reason: Mapped[str] = mapped_column(String(500), default="")
+    subtotal: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    tax_total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    issued_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    canceled_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    issued_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    canceled_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+    lines: Mapped[list["CreditNoteLine"]] = relationship(
+        cascade="all, delete-orphan", order_by="CreditNoteLine.sort_order")
+
+
+class CreditNoteLine(Base):
+    """opb — one credited line: qty × unit price, plus tax at tax_rate percent."""
+    __tablename__ = "credit_note_lines"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    credit_note_id: Mapped[str] = mapped_column(
+        String, ForeignKey("credit_notes.id", ondelete="CASCADE"), index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    description: Mapped[str] = mapped_column(String(500), default="")
+    qty: Mapped[float] = mapped_column(Numeric(12, 3, asdecimal=False), default=1.0)
+    unit_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    tax_rate: Mapped[float] = mapped_column(Numeric(7, 3, asdecimal=False), default=0.0)   # percent
+    net: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    tax: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)

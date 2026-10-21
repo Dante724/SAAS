@@ -12,6 +12,31 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import Invoice, Order, Organisation
+from backend.services.money import d2
+
+VOID_STATUSES = ("cancelled", "canceled", "void", "voided")
+DISPLAY_MODES = ("detailed", "simplified", "one_line")
+
+
+def balance_due(inv: "Invoice") -> float:
+    """What the client still owes on an invoice: total − paid − issued credit notes, never below 0."""
+    owed = d2(inv.total or 0) - d2(inv.amount_paid or 0) - d2(getattr(inv, "credited", 0) or 0)
+    return float(max(owed, d2(0)))
+
+
+def settle_status(inv: "Invoice") -> None:
+    """Set paid / partial from what's covered (payments + credit notes). An invoice whose payments
+    and credits were all reversed goes back to draft; a cancelled invoice is never touched."""
+    if (inv.status or "") in VOID_STATUSES:
+        return
+    total = d2(inv.total or 0)
+    covered = d2(inv.amount_paid or 0) + d2(getattr(inv, "credited", 0) or 0)
+    if total > 0 and covered >= total:
+        inv.status = "paid"
+    elif covered > 0:
+        inv.status = "partial"
+    elif inv.status in ("paid", "partial"):
+        inv.status = "draft"
 
 
 async def invoice_orders(db: AsyncSession, inv: "Invoice") -> list["Order"]:

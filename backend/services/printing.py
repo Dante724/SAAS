@@ -160,6 +160,7 @@ _DOC_PHRASES = {
     "Total":     {"hi": "कुल", "es": "Total", "fr": "Total", "de": "Gesamt", "pt": "Total", "ar": "المجموع", "ru": "Итого", "zh": "总计", "ja": "合計"},
     "Subtotal":  {"hi": "उप-योग", "es": "Subtotal", "fr": "Sous-total", "de": "Zwischensumme", "pt": "Subtotal", "ar": "المجموع الفرعي", "ru": "Подытог", "zh": "小计", "ja": "小計"},
     "Tax":       {"hi": "कर", "es": "Impuesto", "fr": "Taxe", "de": "Steuer", "pt": "Imposto", "ar": "ضريبة", "ru": "Налог", "zh": "税", "ja": "税"},
+    "Credit note": {"hi": "क्रेडिट नोट", "es": "Nota de crédito", "fr": "Avoir", "de": "Gutschrift", "pt": "Nota de crédito", "ar": "إشعار دائن", "ru": "Кредит-нота", "zh": "贷项通知单", "ja": "クレジットノート"},
     "Amount":    {"hi": "राशि", "es": "Importe", "fr": "Montant", "de": "Betrag", "pt": "Valor", "ar": "المبلغ", "ru": "Сумма", "zh": "金额", "ja": "金額"},
 }
 

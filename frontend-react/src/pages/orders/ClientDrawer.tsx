@@ -14,6 +14,7 @@ import CreateOrderDrawer from "./CreateOrderDrawer";
 import SupplierPanel from "../clients/SupplierPanel";
 import { useTerminology } from "../../lib/useTerminology";
 import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../../lib/formLayout";
+import { ClientCreditNotes } from "../invoices/CreditNotesList";
 
 const BASE_TABS = ["General info", "Devices & Assets", "Work orders", "Purchases", "Loyalty & Payout", "Communications"];
 
@@ -197,7 +198,7 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
           ) : tab === 3 ? (
             <PurchasesTab clientId={clientId} />
           ) : tab === 4 ? (
-            <LoyaltyTab clientId={clientId} />
+            <><LoyaltyTab clientId={clientId} /><ClientCreditNotes clientId={clientId} /></>
           ) : tab === 5 ? (
             <CommsTab clientId={clientId} />
           ) : c.supplier?.id ? (

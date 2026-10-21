@@ -11,11 +11,14 @@ import { humanize } from "../../lib/humanize";
 import { alertDialog, confirmDialog } from "../../lib/dialog";
 import { useMe } from "../../context/Me";
 import { money } from "../orders/types";
+import InvoiceDrawer from "./InvoiceDrawer";
+import CreditNotesList from "./CreditNotesList";
+import { DISPLAY_MODES } from "./billing";
 
 // Invoices are day-to-day front-desk work (issue, take payment, resend), so they get their own
 // page next to Sales instead of a tab inside Finance — which also kept staff who only need
 // invoices out of P&L and payroll. Finance links here from its Outstanding figure.
-type Invoice = { id: string; invoice_number?: string; status?: string; total?: number; amount_paid?: number; balance_due?: number; order_number?: string; issued_at?: string; created_at?: string; client_name?: string | null; einvoice_status?: string; einvoice_number?: string };
+type Invoice = { id: string; invoice_number?: string; status?: string; total?: number; amount_paid?: number; credited?: number; balance_due?: number; order_number?: string; issued_at?: string; created_at?: string; client_name?: string | null; einvoice_status?: string; einvoice_number?: string };
 const INV_PAGE_SIZE = 50;
 
 export default function InvoicesHub() {
@@ -53,18 +56,29 @@ export default function InvoicesHub() {
   }
   const cols = einv ? 11 : 10;
   const pageInv = invoices || [];
+  const [openInv, setOpenInv] = useState<string | null>(null);
+  const [view, setView] = useState<"invoices" | "credit_notes">("invoices");
 
   return (
     <Shell title="Invoices">
-      <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-4">
+          {can("can_view_credit_notes") && (
+            <div className="flex gap-4 border-b border-slate-200 text-sm font-semibold" role="tablist" aria-label="Billing documents">
+              {([["invoices", "Invoices"], ["credit_notes", "Credit notes"]] as const).map(([k, l]) => (
+                <button key={k} role="tab" aria-selected={view === k} onClick={() => setView(k)}
+                  className={`py-2 -mb-px border-b-2 ${view === k ? "text-primary border-primary" : "text-ink-tertiary border-transparent hover:text-ink-primary"}`}>{l}</button>
+              ))}
+            </div>
+          )}
+          {view === "credit_notes" ? <CreditNotesList /> : <>
           <div className="flex justify-end items-center gap-2">
             {invSel.size > 0 && (
               <button onClick={() => setInvPrint(true)} className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-ink-secondary text-xs font-semibold hover:bg-slate-50 flex items-center gap-1.5"><M n="print" c="text-sm" />Print {invSel.size} selected</button>
             )}
             <button onClick={() => setNewInv(true)} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New invoice</button>
           </div>
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden mt-3">
-            <table className="w-full text-left border-collapse text-xs">
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-x-auto mt-3">
+            <table className="w-full text-left border-collapse text-xs min-w-[860px]">
               <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
                 <th className="py-3 pl-4 pr-2 w-10"><input type="checkbox" aria-label="Select all" checked={!!invoices?.length && invoices.every((i) => invSel.has(i.id))} onChange={(e) => setInvSel((s) => { const n = new Set(s); (invoices || []).forEach((i) => (e.target.checked ? n.add(i.id) : n.delete(i.id))); return n; })} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
                 <th className="py-3 px-4">Invoice #</th><th className="py-3 px-4">Customer</th><th className="py-3 px-4">Date</th><th className="py-3 px-4">Job</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Total</th><th className="py-3 px-4 text-right">Paid</th><th className="py-3 px-4 text-right">Balance</th>{einv && <th className="py-3 px-4">E-invoice</th>}<th className="py-3 px-4"></th>
@@ -76,9 +90,9 @@ export default function InvoicesHub() {
                 {pageInv.map((i) => {
                   const paid = /paid/i.test(i.status || "");
                   return (
-                    <tr key={i.id} className="hover:bg-blue-50/30">
+                    <tr key={i.id} onClick={() => setOpenInv(i.id)} className="hover:bg-blue-50/30 cursor-pointer">
                       <td className="py-2.5 pl-4 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label="Select row" checked={invSel.has(i.id)} onChange={() => setInvSel((s) => { const n = new Set(s); n.has(i.id) ? n.delete(i.id) : n.add(i.id); return n; })} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
-                      <td className="py-2.5 px-4 font-mono font-bold text-primary">{i.invoice_number}</td>
+                      <td className="py-2.5 px-4 font-mono font-bold text-primary"><button onClick={(e) => { e.stopPropagation(); setOpenInv(i.id); }} className="hover:underline">{i.invoice_number}</button></td>
                       <td className="py-2.5 px-4 font-semibold text-ink-primary">{i.client_name || <span className="font-normal text-ink-tertiary">Walk-in</span>}</td>
                       <td className="py-2.5 px-4 text-ink-secondary whitespace-nowrap">{(i.issued_at || i.created_at) ? new Date((i.issued_at || i.created_at)!).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) : "—"}</td>
                       <td className="py-2.5 px-4 font-mono">{i.order_number || "—"}</td>
@@ -86,7 +100,7 @@ export default function InvoicesHub() {
                       <td className="py-2.5 px-4 text-right tabular-nums font-bold text-ink-primary">{money(i.total)}</td>
                       <td className="py-2.5 px-4 text-right tabular-nums text-emerald-600">{money(i.amount_paid)}</td>
                       <td className={`py-2.5 px-4 text-right tabular-nums font-bold ${(i.balance_due || 0) > 0 ? "text-rose-600" : "text-ink-tertiary"}`}>{money(i.balance_due)}</td>
-                      {einv && <td className="py-2.5 px-4">
+                      {einv && <td className="py-2.5 px-4" onClick={(e) => e.stopPropagation()}>
                         {(!i.einvoice_status || i.einvoice_status === "none") ? (
                           <button onClick={() => issueEinvoice(i.id)} disabled={!!issuingId} className="px-2 py-1 rounded-lg border border-slate-200 bg-white text-ink-secondary text-[11px] font-semibold hover:bg-slate-50 disabled:opacity-50">{issuingId === i.id ? "Issuing…" : "Issue e-invoice"}</button>
                         ) : (
@@ -97,8 +111,8 @@ export default function InvoicesHub() {
                           </div>
                         )}
                       </td>}
-                      <td className="py-2.5 px-4 text-right"><button aria-label="Print / PDF" onClick={() => openAuthedDoc(`/print/invoices/${i.id}`).catch(() => alertDialog("Could not open invoice PDF"))} title="Print / PDF" className="p-1.5 rounded-lg text-ink-tertiary hover:text-primary hover:bg-slate-100"><M n="print" c="text-base" /></button>
-                        {can("can_delete_invoices") && !["cancelled", "canceled"].includes(i.status || "") && !(i.amount_paid || 0) && <button aria-label="Delete invoice" onClick={() => deleteInvoice(i)} title="Delete" className="p-1.5 rounded-lg text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-base" /></button>}</td>
+                      <td className="py-2.5 px-4 text-right" onClick={(e) => e.stopPropagation()}><button aria-label="Print / PDF" onClick={() => openAuthedDoc(`/print/invoices/${i.id}`).catch(() => alertDialog("Could not open invoice PDF"))} title="Print / PDF" className="p-1.5 rounded-lg text-ink-tertiary hover:text-primary hover:bg-slate-100"><M n="print" c="text-base" /></button>
+                        {can("can_delete_invoices") && !["cancelled", "canceled"].includes(i.status || "") && !(i.amount_paid || 0) && !(i.credited || 0) && <button aria-label="Delete invoice" onClick={() => deleteInvoice(i)} title="Delete" className="p-1.5 rounded-lg text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-base" /></button>}</td>
                     </tr>
                   );
                 })}
@@ -106,7 +120,9 @@ export default function InvoicesHub() {
             </table>
             {invoices && invoices.length > 0 && <Pager total={ip.total} page={ip.page} pageSize={ip.pageSize} onPage={ip.setPage} noun="invoices" />}
           </div>
+          </>}
       </div>
+      {openInv && <InvoiceDrawer id={openInv} onClose={() => setOpenInv(null)} onChanged={reloadInvoices} />}
       {newInv && <NewInvoiceDrawer onClose={() => setNewInv(false)} onCreated={() => { setNewInv(false); reloadInvoices(); }} />}
       <BulkPrintDialog open={invPrint} onClose={() => setInvPrint(false)} ids={[...invSel]} noun="invoice"
         endpoint="/documents/render-invoice-batch" idKey="invoice_ids"
@@ -123,8 +139,10 @@ function NewInvoiceDrawer({ onClose, onCreated }: { onClose: () => void; onCreat
   const [due, setDue] = useState("");
   const [lines, setLines] = useState<{ kind: string; description: string; qty: number; unit_price: number }[]>([{ kind: "custom", description: "", qty: 1, unit_price: 0 }]);
   const [discount, setDiscount] = useState(0); const [tax, setTax] = useState(0); // percentages, per backend InvoiceIn
+  const [mode, setMode] = useState("detailed");   // starts at the shop's default (Settings › Finance)
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   useEffect(() => { api.get<{ items: any[] }>("/clients?limit=200").then((r) => setClients(r.items || [])).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/staff/company").then((c) => { if (c?.default_invoice_display) setMode(c.default_invoice_display); }).catch(() => {}); }, []);
   const setLine = (i: number, k: string, v: any) => setLines(lines.map((l, j) => j === i ? { ...l, [k]: v } : l));
   const subtotal = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unit_price) || 0), 0);
   const discountAmt = +(subtotal * (Number(discount) || 0) / 100).toFixed(2);
@@ -135,7 +153,7 @@ function NewInvoiceDrawer({ onClose, onCreated }: { onClose: () => void; onCreat
     if (!clean.length) { setErr("Add at least one line."); return; }
     setBusy(true); setErr(null);
     try {
-      await api.post("/finance/invoices", { client_id: clientId || null, comment, due_at: due || null,
+      await api.post("/finance/invoices", { client_id: clientId || null, comment, due_at: due || null, display_mode: mode,
         discount: Number(discount) || 0, tax: Number(tax) || 0,
         lines: clean.map((l) => ({ kind: l.kind || "custom", description: l.description.trim(), qty: Number(l.qty), unit_price: Number(l.unit_price) })) });
       onCreated();
@@ -177,6 +195,13 @@ function NewInvoiceDrawer({ onClose, onCreated }: { onClose: () => void; onCreat
               {discountAmt > 0 && <div className="flex justify-between text-ink-secondary"><span>Discount ({discount}%)</span><span className="tabular-nums text-rose-600">−{money(discountAmt)}</span></div>}
               {taxAmt > 0 && <div className="flex justify-between text-ink-secondary"><span>Tax ({tax}%)</span><span className="tabular-nums text-ink-primary">{money(taxAmt)}</span></div>}
               <div className="pt-1.5 border-t border-slate-200 flex justify-between items-baseline"><span className="font-bold text-ink-primary">Total</span><span className="tabular-nums font-bold text-primary">{money(total)}</span></div>
+            </div>
+          </div>
+          <div>
+            <span className="block text-[11px] font-semibold text-ink-tertiary mb-1">Display on the invoice</span>
+            <div role="radiogroup" aria-label="Display on the invoice" className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1">
+              {DISPLAY_MODES.map((m) => <button key={m.key} type="button" role="radio" aria-checked={mode === m.key} title={m.hint} onClick={() => setMode(m.key)}
+                className={`px-2 py-1.5 rounded-lg text-xs font-semibold ${mode === m.key ? "bg-white text-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>{m.label}</button>)}
             </div>
           </div>
           <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Comment</label><textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2" /></div>

@@ -11,6 +11,7 @@ const KINDS: { key: string; label: string; hint: string; icon: string }[] = [
   { key: "work_order", label: "Work order receipt", hint: "Given at check-in", icon: "build" },
   { key: "estimate", label: "Estimate", hint: "Sent for approval", icon: "request_quote" },
   { key: "invoice", label: "Invoice", hint: "What the customer pays", icon: "receipt_long" },
+  { key: "credit_note", label: "Credit note", hint: "Money credited back to a client", icon: "undo" },
   { key: "receipt", label: "Payment receipt", hint: "After they pay", icon: "payments" },
   { key: "label", label: "Labels and price tags", hint: "Stickers for items and shelves", icon: "label" },
   { key: "other", label: "Other documents", hint: "Anything else you print", icon: "description" },

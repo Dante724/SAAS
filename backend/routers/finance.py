@@ -11,6 +11,7 @@ from backend.services.auth import assert_perm, get_current_employee, require_per
 from backend.core import paging as _paging
 from backend.services.money import q2, q4, msum  # noqa: F401 — money quantizers used module-wide
 from backend.core.spreadsheet import safe_row
+from backend.services.invoicing import DISPLAY_MODES, balance_due as _balance_due, settle_status
 
 router = APIRouter(prefix="/api/finance", tags=["finance"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -27,7 +28,7 @@ class InvoiceIn(BaseModel):
     order_ids: list[str] = []                       # 144ed: bill several orders at create
     client_id: Optional[str] = None
     payer_client_id: Optional[str] = None          # 144dr: bill a different party
-    display_mode: str = "detailed"                  # 144dr: detailed|simplified|one_line
+    display_mode: Optional[str] = None              # 144dr: detailed|simplified|one_line (None → org default)
     subtotal: float = 0.0
     discount: float = 0.0
     tax: float = 0.0
@@ -42,6 +43,10 @@ class PaymentIn(BaseModel):
     reference: Optional[str] = None
     shift_id: Optional[str] = None
     account_id: Optional[str] = None   # 144av: cashbox the money lands in (non-balance methods)
+    paid_at: Optional[str] = None      # opb: ISO date the money was received (earlier needs can_retroactive_cash)
+    # opb (B3): what to do with money above the balance — keep it as client credit, or hand it back.
+    # Without a choice an amount above the balance is refused, as before.
+    overpay: Optional[str] = None      # keep_balance | refund
 
 class ShiftOpen(BaseModel):
     location_id: str
@@ -72,7 +77,8 @@ def _ser_invoice(inv: Invoice) -> dict:
         "status": inv.status, "subtotal": inv.subtotal,
         "discount": inv.discount, "tax": inv.tax, "total": inv.total,
         "amount_paid": inv.amount_paid,
-        "balance_due": q2(inv.total - inv.amount_paid),
+        "credited": getattr(inv, "credited", 0) or 0.0,          # opb: issued credit notes
+        "balance_due": _balance_due(inv),
         "issued_at": inv.issued_at.isoformat() if inv.issued_at else None,
         "due_at": inv.due_at.isoformat() if getattr(inv, "due_at", None) else None,
         "comment": getattr(inv, "comment", "") or "",
@@ -85,7 +91,8 @@ def _ser_invoice(inv: Invoice) -> dict:
         "einvoice_number": getattr(inv, "einvoice_number", None),
         "einvoice_format": getattr(inv, "einvoice_format", None),
         "einvoice_issued_at": inv.einvoice_issued_at.isoformat() if getattr(inv, "einvoice_issued_at", None) else None,
-        "payments": [{"method": p.method, "amount": p.amount,
+        "payments": [{"id": p.id, "method": p.method, "kind": p.kind or "payment", "amount": p.amount,
+                      "reference": p.reference,
                       "paid_at": p.paid_at.isoformat()} for p in inv.payments],
     }
 
@@ -106,6 +113,12 @@ async def _invoice_detail(db, inv) -> dict:
             out[key] = {"id": c.id, "name": c.name, "email": c.email} if c else None
         else:
             out[key] = None
+    # opb — credit notes raised against this invoice (drafts too, so the desk sees work in progress)
+    from backend.models import CreditNote
+    cns = (await db.execute(select(CreditNote).where(CreditNote.invoice_id == inv.id)
+                            .order_by(CreditNote.created_at))).scalars().all()
+    out["credit_notes"] = [{"id": c.id, "number": c.number, "status": c.status, "total": c.total,
+                            "issued_at": c.issued_at.isoformat() if c.issued_at else None} for c in cns]
     return out
 
 @router.get("/invoices")
@@ -296,6 +309,8 @@ async def delete_invoice(
         return {"ok": True, "status": inv.status}
     if float(inv.amount_paid or 0) > 0:
         raise HTTPException(409, "This invoice has payments on it. Refund them first, then delete it.")
+    if float(getattr(inv, "credited", 0) or 0) > 0:
+        raise HTTPException(409, "This invoice has issued credit notes. Cancel them first, then delete it.")
     await _assert_invoice_editable(db, current, inv)
     inv.status = "cancelled"
     from backend.services import audit
@@ -322,7 +337,9 @@ async def update_invoice(
         raise HTTPException(404, "Invoice not found")
     await _assert_invoice_editable(db, current, inv)
     mode = data.get("display_mode")
-    if mode in ("detailed", "simplified", "one_line"):
+    if mode is not None:
+        if mode not in DISPLAY_MODES:
+            raise HTTPException(422, "display_mode must be detailed, simplified or one_line")
         inv.display_mode = mode
     # 144dw — set/clear the payer (must be a client in this org). "" or null clears it.
     if "payer_client_id" in data:
@@ -379,6 +396,11 @@ async def create_invoice(
         except Exception:
             return None
 
+    mode = data.display_mode
+    if mode is None:
+        from backend.models import Organisation
+        mode = (await db.execute(select(Organisation.default_invoice_display).where(
+            Organisation.id == current.org_id))).scalar_one_or_none() or "detailed"
     inv = Invoice(
         # One numbering path for every invoice (was count+1 here, a sequence elsewhere → duplicates)
         invoice_number=await next_number(db, current.org_id, "invoice"),
@@ -386,7 +408,7 @@ async def create_invoice(
         order_id=order_ids[0] if order_ids else None,
         client_id=data.client_id,
         payer_client_id=data.payer_client_id,
-        display_mode=data.display_mode if data.display_mode in ("detailed", "simplified", "one_line") else "detailed",
+        display_mode=mode if mode in DISPLAY_MODES else "detailed",
         comment=(data.comment or "")[:1000],
         status="draft",
         subtotal=subtotal,
@@ -551,6 +573,14 @@ async def record_payment(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
+    """Record money received against an invoice. Partial payments are fine. An amount above the
+    balance needs ``overpay``: ``keep_balance`` books the excess as client credit (a client
+    advance on the contact ledger), ``refund`` records it as handed straight back (needs Create
+    returns). Either way the invoice itself is never paid beyond its total."""
+    from decimal import Decimal
+
+    from backend.models import Account
+    from backend.services.money import d2
     # Lock the invoice row so concurrent payments serialize (Postgres) — prevents a double-click /
     # retry from double-posting. No-op on SQLite, which serializes writes anyway.
     result = await db.execute(
@@ -562,56 +592,106 @@ async def record_payment(
         raise HTTPException(404, "Invoice not found")
     if inv.status in ("cancelled", "canceled"):
         raise HTTPException(409, "This invoice was deleted and can't take payments")
-    # Negative amounts used to post +|amount| into the cashbox while reducing amount_paid; an
-    # amount above the balance silently over-collected.
+    # Negative amounts used to post +|amount| into the cashbox while reducing amount_paid.
     if data.amount is None or data.amount <= 0:
         raise HTTPException(400, "Payment amount must be positive")
-    remaining = q2(float(inv.total or 0) - float(inv.amount_paid or 0))
-    if data.amount > remaining + 0.005:
-        raise HTTPException(400, f"Payment exceeds the invoice balance ({remaining:g})")
+    if data.overpay not in (None, "keep_balance", "refund"):
+        raise HTTPException(422, "overpay must be keep_balance or refund")
+    amount = d2(data.amount)
+    remaining = d2(_balance_due(inv))
+    excess = max(amount - remaining, Decimal(0))
+    applied = amount - excess
+    if excess > 0:
+        if remaining <= 0:
+            raise HTTPException(409, "This invoice is already settled")
+        if not data.overpay:
+            raise HTTPException(400, f"Payment exceeds the invoice balance ({remaining}). "
+                                     "Keep the difference as client balance or refund it.")
+        if data.method == "balance":
+            raise HTTPException(422, "A payment from client balance can't be more than the invoice balance")
+        if data.overpay == "keep_balance" and not inv.client_id:
+            raise HTTPException(422, "This invoice has no client to keep the difference for. Refund it instead.")
+        if data.overpay == "refund":
+            await assert_perm(db, current, "can_create_returns")    # paying money back out
+    # When the money came in: today by default; an earlier day is a retroactive cash entry.
+    paid_at, retro = datetime.utcnow(), False
+    if data.paid_at:
+        from backend.services.dates import parse_dt
+        day = parse_dt(data.paid_at, "paid_at")
+        if day.date() > datetime.utcnow().date():
+            raise HTTPException(422, "The payment date can't be in the future")
+        if day.date() < datetime.utcnow().date():
+            await assert_perm(db, current, "can_retroactive_cash")
+            paid_at, retro = day, True
+    acc = None
+    if data.account_id:
+        acc = (await db.execute(select(Account).where(
+            Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
+        if not acc:
+            raise HTTPException(404, "Account not found")
     # B10: cash taken against an invoice belongs to the open drawer shift, like order payments,
     # or the till close never counts it. A shift sent by the client must be this shop's.
     shift_id = data.shift_id
     if shift_id:
         await _shift_or_404(db, current.org_id, shift_id)
-    elif data.method == "cash" and data.account_id:
-        from backend.models import Account
+    elif data.method == "cash" and acc is not None:
         from backend.routers.cash import open_drawer_shift
-        _acc = (await db.execute(select(Account).where(
-            Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
-        shift_id = await open_drawer_shift(db, current.org_id, _acc)
-    payment = Payment(
-        invoice_id=invoice_id,
-        order_id=inv.order_id,          # so the order's own paid/balance math sees invoice payments
-        client_id=inv.client_id,
-        method=data.method,
-        amount=data.amount,
-        reference=data.reference,
-        shift_id=shift_id,
-        account_id=data.account_id,
-        received_by_id=current.id,
-    )
-    db.add(payment)
+        shift_id = await open_drawer_shift(db, current.org_id, acc)
+    label = inv.invoice_number or invoice_id
+    moves_cash = acc is not None and data.method != "balance"
+
+    def _pay(amt, **kw) -> Payment:
+        p = Payment(client_id=inv.client_id, method=data.method, amount=float(amt), shift_id=shift_id,
+                    account_id=data.account_id, received_by_id=current.id, paid_at=paid_at, **kw)
+        db.add(p)
+        return p
+
+    from backend.routers.cash import post_transaction
+    from backend.services.ledger import post_contact_ledger
+    # The invoice payment. With a refund it carries everything handed over and a refund row below
+    # gives the change back, so the drawer, the order and the ledger all net to what was applied.
+    received = amount if data.overpay == "refund" and excess > 0 else applied
+    payment = _pay(received, invoice_id=invoice_id, order_id=inv.order_id,   # the order's paid math sees it
+                   kind="payment", reference=data.reference)
     await db.flush()   # need payment.id for the ledger ref
     # 144av: real money (cash/card/transfer) must land in a cashbox account, not just move the
     # client's balance. 'balance' settles on account (no cash moves) → no Transaction.
-    if data.account_id and data.method != "balance":
-        from backend.routers.cash import post_transaction
-        await post_transaction(db, current.org_id, data.account_id, "invoice_payment", abs(data.amount),
-                               comment=f"Payment for invoice {inv.invoice_number or invoice_id}",
-                               ref_type="invoice", ref_id=invoice_id, employee_id=current.id)
-    inv.amount_paid = q2(inv.amount_paid + data.amount)
-    if inv.amount_paid >= inv.total:
-        inv.status = "paid"
-    else:
-        inv.status = "partial"
-    # move the client's balance through the shared ledger, same as the cash.py payment
-    # paths — otherwise the Balance tab and Client.balance drift from what was paid.
-    if inv.client_id:
-        from backend.services.ledger import post_contact_ledger
-        await post_contact_ledger(db, current.org_id, inv.client_id, "income", -abs(data.amount),
-                                  note=f"Payment for invoice {inv.invoice_number or invoice_id}",
-                                  ref_type="payment", ref_id=payment.id, created_by_id=current.id)
+    if moves_cash:
+        await post_transaction(db, current.org_id, acc.id, "invoice_payment", float(received),
+                               comment=f"Payment for invoice {label}", ref_type="invoice", ref_id=invoice_id,
+                               employee_id=current.id, is_retroactive=retro, actual_date=paid_at)
+    await post_contact_ledger(db, current.org_id, inv.client_id, "income", -float(received),
+                              note=f"Payment for invoice {label}", ref_type="payment",
+                              ref_id=payment.id, created_by_id=current.id)
+    kept = refunded = Decimal(0)
+    if excess > 0 and data.overpay == "keep_balance":
+        kept = excess
+        credit = _pay(excess, invoice_id=None, order_id=None, kind="prepayment",
+                      reference=f"Overpayment on invoice {label} kept as client balance")
+        await db.flush()
+        if moves_cash:
+            await post_transaction(db, current.org_id, acc.id, "invoice_payment", float(excess),
+                                   comment=f"Overpayment on invoice {label} (client balance)", ref_type="client",
+                                   ref_id=inv.client_id, employee_id=current.id, is_retroactive=retro,
+                                   actual_date=paid_at)
+        await post_contact_ledger(db, current.org_id, inv.client_id, "advance", -float(excess),
+                                  note=f"Overpayment on invoice {label} kept as balance", ref_type="payment",
+                                  ref_id=credit.id, created_by_id=current.id)
+    elif excess > 0:
+        refunded = excess
+        back = _pay(excess, invoice_id=invoice_id, order_id=inv.order_id, kind="refund",
+                    reference=f"Overpayment on invoice {label} refunded")
+        await db.flush()
+        if moves_cash:
+            await post_transaction(db, current.org_id, acc.id, "expense", -float(excess),
+                                   comment=f"Refund overpayment on invoice {label}", ref_type="invoice",
+                                   ref_id=invoice_id, employee_id=current.id, is_retroactive=retro,
+                                   actual_date=paid_at)
+        await post_contact_ledger(db, current.org_id, inv.client_id, "refund", float(excess),
+                                  note=f"Overpayment on invoice {label} refunded", ref_type="payment",
+                                  ref_id=back.id, created_by_id=current.id)
+    inv.amount_paid = float(d2(inv.amount_paid or 0) + applied)
+    settle_status(inv)
     if inv.order_id:
         from backend.services.order_money import cancel_open_pay_links
         order = (await db.execute(select(Order).where(Order.id == inv.order_id))).scalar_one_or_none()
@@ -619,7 +699,10 @@ async def record_payment(
             await db.flush()
             await cancel_open_pay_links(db, order)
     await db.commit()
-    return {"ok": True, "amount_paid": inv.amount_paid, "status": inv.status}
+    return {"ok": True, "amount_paid": inv.amount_paid, "status": inv.status,
+            "balance_due": _balance_due(inv), "applied": float(applied),
+            "kept_as_balance": float(kept), "refunded": float(refunded)}
+
 
 def _denoms_total(d: Optional[dict]) -> float:
     """Sum a {denomination: count} map, e.g. {"100": 2, "20": 5} → 300.0. Ignores junk keys."""
@@ -987,7 +1070,7 @@ async def finance_summary(
         select(func.sum(Invoice.total)).where(Invoice.org_id == current.org_id, Invoice.status == "paid")
     )).scalar() or 0
     total_outstanding = (await db.execute(
-        select(func.sum(Invoice.total - Invoice.amount_paid))
+        select(func.sum(Invoice.total - Invoice.amount_paid - Invoice.credited))
         .where(Invoice.org_id == current.org_id, Invoice.status.in_(["draft", "partial"]))
     )).scalar() or 0
     total_expenses = (await db.execute(

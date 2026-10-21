@@ -67,13 +67,14 @@ def _public_invoice_block(inv, fx) -> dict:
     """Client-safe invoice summary for the track page."""
     total = float(inv.total or 0)
     paid = float(inv.amount_paid or 0)
+    credited = float(getattr(inv, "credited", 0) or 0)   # issued credit notes lower what's owed
     return {
         "invoice_number": inv.invoice_number,
         "status": inv.status,
         "total": total,
         "total_converted": q2(total * fx) if fx else total,
         "amount_paid": paid,
-        "balance_due": q2(max(total - paid, 0)),
+        "balance_due": q2(max(total - paid - credited, 0)),
         "einvoice_status": getattr(inv, "einvoice_status", "none") or "none",
         "einvoice_number": getattr(inv, "einvoice_number", None),
         # download path is served by the track-scoped endpoint below (no auth, token-gated)

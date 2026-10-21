@@ -130,7 +130,13 @@ VARIABLE_GROUPS = [
     # Invoice-document variables (resolved by the invoice renderer)
     ("Invoice", ["{Invoice Number}", "{Invoice Date}", "{Invoice Due Date}", "{Invoice Status}",
                  "{Invoice Comment}", "{Invoice Subtotal}", "{Invoice Tax}", "{Invoice Total}",
-                 "{Invoice Paid}", "{Invoice Balance Due}", "{Invoice Table}", "{Invoice Payment URL}"]),
+                 "{Invoice Paid}", "{Invoice Balance Due}", "{Invoice Table}", "{Invoice Payment URL}",
+                 "{Invoice Credited}"]),
+    # opb — credit-note documents (resolved by _resolve_credit_note)
+    ("Credit note", ["{Credit Note Number}", "{Credit Note Date}", "{Credit Note Status}",
+                     "{Credit Note Reason}", "{Credit Note Invoice}", "{Credit Note Subtotal}",
+                     "{Credit Note Tax}", "{Credit Note Total}", "{Credit Note Total Spelled Out}",
+                     "{Credit Note Table}"]),
     ("Date", ["{Today Date}", "{Current Date}", "{Today Datetime}",
               "{Order Closed Date}", "{Order Due Date Time}"]),
     ("Links", ["{Tracking URL}", "{Client Feedback URL}", "{Public Order URL}",
@@ -313,6 +319,10 @@ async def _ensure_defaults(db: AsyncSession, org_id: str):
         db.add(DocumentTemplate(org_id=org_id, name="Estimate", doc_type="estimate",
                                 body_html=DEFAULT_ESTIMATE_HTML, is_default=True, page_size="a4"))
         added = True
+    if "credit note" not in existing:     # opb
+        db.add(DocumentTemplate(org_id=org_id, name="Credit note", doc_type="credit_note",
+                                body_html=DEFAULT_CREDIT_NOTE_HTML, page_size="a4"))
+        added = True
     if "price tag" not in existing:
         db.add(DocumentTemplate(org_id=org_id, name="Price tag", doc_type="label",
                                 body_html=DEFAULT_PRICETAG_HTML, page_size="label"))
@@ -338,7 +348,7 @@ async def list_templates(
         # label/price-tag docs are inventory artifacts — never offered for order printing;
         # remaining docs are gated by their allowed print statuses (empty = any status).
         items = [i for i in items if i["doc_type"] not in LABEL_DOC_TYPES
-                 and i["doc_type"] != "component"   # 144id — reusable blocks aren't printed on their own
+                 and i["doc_type"] not in ("component", "credit_note")   # 144id blocks; opb credit notes print from finance
                  and (not i["print_statuses"] or (status in i["print_statuses"]))]
     groups = [{"group": g, "items": items_} for g, items_ in VARIABLE_GROUPS]
     flat = list(AVAILABLE_VARIABLES)
@@ -1087,6 +1097,13 @@ async def preview_template(
             doc, rows = await _resolve_invoice(db, current.org_id, inv)
             return {"html": _render(body, doc, rows), "sample": inv.invoice_number}
         return {"html": _render(body, {}, []), "sample": None}
+    if (data.doc_type or "") == "credit_note":
+        cn = await _sample_credit_note(db, current.org_id)
+        body = await _expand_components(db, current.org_id, data.body_html)
+        if cn:
+            doc, rows = await _resolve_credit_note(db, current.org_id, cn)
+            return {"html": _render(body, doc, rows), "sample": cn.number or "Draft"}
+        return {"html": _render(body, {}, []), "sample": None}
 
     q = select(Order).where(Order.id == data.order_id, Order.org_id == current.org_id) if data.order_id \
         else select(Order).where(Order.org_id == current.org_id).order_by(Order.created_at.desc())
@@ -1186,6 +1203,9 @@ async def print_view(
         inv = (await db.execute(select(Invoice).where(Invoice.org_id == current.org_id)
             .order_by(Invoice.created_at.desc()))).scalars().first()
         doc, rows = (await _resolve_invoice(db, current.org_id, inv)) if inv else ({}, [])
+    elif (data.doc_type or "") == "credit_note":
+        cn = await _sample_credit_note(db, current.org_id)
+        doc, rows = (await _resolve_credit_note(db, current.org_id, cn)) if cn else ({}, [])
     else:
         q = select(Order).where(Order.id == data.order_id, Order.org_id == current.org_id) if data.order_id \
             else select(Order).where(Order.org_id == current.org_id).order_by(Order.created_at.desc())
@@ -1239,7 +1259,8 @@ async def _resolve_invoice(db, org_id, inv: Invoice):
         table_rows.append([i, l["description"] or "", f"{float(l.get('qty') or 0):g}",
                            m(l["unit_price"]), m(l["total"])])
     paid = inv.amount_paid or 0
-    bal = max((inv.total or 0) - paid, 0)
+    from backend.services.invoicing import balance_due as _inv_balance
+    bal = _inv_balance(inv)          # net of payments and issued credit notes
     logo = (getattr(org, "logo_data", None) if org else None) or ""
     logo_html = _Html(f'<img src="{_esc(logo)}" style="max-height:64px;max-width:220px;object-fit:contain;" />') if logo else ""
     order = (await db.execute(select(Order).where(Order.id == inv.order_id))).scalar_one_or_none() if inv.order_id else None
@@ -1264,7 +1285,7 @@ async def _resolve_invoice(db, org_id, inv: Invoice):
         "{Invoice Due Date}": _fmt_date(inv.due_at) if inv.due_at else "—",
         "{Invoice Comment}": inv.comment or "—",
         "{Invoice Subtotal}": m(inv.subtotal), "{Invoice Tax}": m(inv.tax), "{Invoice Total}": m(inv.total),
-        "{Invoice Paid}": m(paid), "{Invoice Balance Due}": m(bal),
+        "{Invoice Paid}": m(paid), "{Invoice Balance Due}": m(bal), "{Invoice Credited}": m(inv.credited),
         "{Invoice Table}": _table_block(hdr, table_rows), "{Invoice Payment URL}": pay_url,
         "{Today Date}": _fmt_date(datetime.utcnow()), "{Current Date}": _fmt_date(datetime.utcnow()),
         "{Today Datetime}": (datetime.utcnow()).strftime("%Y-%m-%d %H:%M"),
@@ -1550,3 +1571,127 @@ async def order_by_barcode(
     if not o:
         raise HTTPException(404, "No order for that code")
     return {"id": o.id, "order_number": o.order_number, "status": o.status}
+
+
+# ── opb: credit notes ─────────────────────────────────────────────────────────
+DEFAULT_CREDIT_NOTE_HTML = """<table style="border-collapse: collapse; width: 100%;" border="0"><tbody>
+<tr><td style="width: 50%;">{Company Logo}<br><span style="font-size: 18pt;"><strong>CREDIT NOTE</strong></span></td>
+<td style="width: 50%; text-align: right;"><p>{Company Name}</p><p>{Company Email}</p><p>{Company Address}</p></td></tr>
+</tbody></table>
+<p>&nbsp;</p>
+<table style="border-collapse: collapse; width: 100%;" border="0"><tbody>
+<tr><td style="width: 18%;"><strong>Client</strong></td><td style="width: 32%;">{Client Name}</td><td style="width: 18%;"><strong>Number</strong></td><td style="width: 32%;">{Credit Note Number}</td></tr>
+<tr><td><strong>Email</strong></td><td>{Client Email}</td><td><strong>Date</strong></td><td>{Credit Note Date}</td></tr>
+<tr><td><strong>Phone</strong></td><td>{Client Phone}</td><td><strong>Credits invoice</strong></td><td>{Credit Note Invoice}</td></tr>
+</tbody></table>
+<p><strong>Reason:</strong> {Credit Note Reason}</p>
+{Credit Note Table}
+<table style="border-collapse: collapse; width: 100%; margin-top: 8px;" border="0"><tbody>
+<tr><td style="text-align: right; width: 80%;">Subtotal</td><td style="text-align: right;">{Credit Note Subtotal}</td></tr>
+<tr><td style="text-align: right;">Tax</td><td style="text-align: right;">{Credit Note Tax}</td></tr>
+<tr><td style="text-align: right;"><strong>Total credited ({Currency})</strong></td><td style="text-align: right;"><strong>{Credit Note Total}</strong></td></tr>
+</tbody></table>
+<p>{Credit Note Total Spelled Out}</p>"""
+
+
+async def _sample_credit_note(db, org_id):
+    from backend.models import CreditNote
+    return (await db.execute(select(CreditNote).where(CreditNote.org_id == org_id)
+                             .options(selectinload(CreditNote.lines))
+                             .order_by(CreditNote.created_at.desc()))).scalars().first()
+
+
+async def _resolve_credit_note(db, org_id, cn):
+    """Variable map + repeating rows for a CREDIT NOTE document (doc_type='credit_note')."""
+    org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
+    client = (await db.execute(select(Client).where(Client.id == cn.client_id, Client.org_id == org_id))).scalar_one_or_none() \
+        if cn.client_id else None
+    inv = (await db.execute(select(Invoice).where(Invoice.id == cn.invoice_id, Invoice.org_id == org_id))).scalar_one_or_none() \
+        if cn.invoice_id else None
+
+    def g(o, a):
+        return (getattr(o, a, None) if o else "") or "—"
+
+    hdr = ["#", "Description", "Qty", "Unit Price", "Tax %", "Amount"]
+    rows, table_rows = [], []
+    for i, l in enumerate(cn.lines, 1):
+        rows.append({"{Row Number}": i, "{Product Name}": l.description or "—",
+                     "{Product Qty}": f"{float(l.qty or 0):g}", "{Product Price}": _money(l.unit_price),
+                     "{Product Tax Amount}": _money(l.tax), "{Product Amount}": _money(l.total)})
+        table_rows.append([i, l.description or "", f"{float(l.qty or 0):g}", _money(l.unit_price),
+                           f"{float(l.tax_rate or 0):g}", _money(l.total)])
+    logo = (getattr(org, "logo_data", None) if org else None) or ""
+    doc = {
+        "{Company Name}": org.name if org else "Tekly",
+        "{Company Logo}": _Html(f'<img src="{_esc(logo)}" style="max-height:64px;max-width:220px;object-fit:contain;" />') if logo else "",
+        "{Company Address}": g(org, "company_address"), "{Company Phone}": g(org, "company_phone"),
+        "{Company Email}": g(org, "company_email"), "{Company Website}": g(org, "website"),
+        "{Company Details}": g(org, "company_details"),
+        "{Brand Color}": (getattr(org, "brand_primary_color", None) if org else None) or "#2563eb",
+        "{Client Name}": g(client, "name"), "{Client Phone}": g(client, "phone"),
+        "{Client Email}": g(client, "email"), "{Client Address}": g(client, "address"),
+        "{Client Tax ID}": g(client, "tax_id"),
+        "{Credit Note Number}": cn.number or "Draft", "{Credit Note Status}": (cn.status or "draft").title(),
+        "{Credit Note Date}": _fmt_date(cn.issued_at or cn.created_at),
+        "{Credit Note Reason}": cn.reason or "—",
+        "{Credit Note Invoice}": inv.invoice_number if inv else "—",
+        "{Credit Note Subtotal}": _money(cn.subtotal), "{Credit Note Tax}": _money(cn.tax_total),
+        "{Credit Note Total}": _money(cn.total), "{Credit Note Total Spelled Out}": _spell_money(cn.total or 0),
+        "{Credit Note Table}": _table_block(hdr, table_rows),
+        "{Today Date}": _fmt_date(datetime.utcnow()), "{Current Date}": _fmt_date(datetime.utcnow()),
+        "{Currency}": (org.currency_code if org else "") or "",
+    }
+    return doc, rows
+
+
+@router.get("/render-credit-note/{cn_id}/{template_id}")
+async def render_credit_note_document(
+    cn_id: str, template_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_view_credit_notes")),
+):
+    """Render a credit note through a customizable document template (doc_type='credit_note')."""
+    from backend.models import CreditNote
+    tpl = (await db.execute(select(DocumentTemplate).where(
+        DocumentTemplate.id == template_id, DocumentTemplate.org_id == current.org_id))).scalar_one_or_none()
+    if not tpl:
+        raise HTTPException(404, "Template not found")
+    cn = (await db.execute(select(CreditNote).where(CreditNote.id == cn_id, CreditNote.org_id == current.org_id)
+                           .options(selectinload(CreditNote.lines)))).scalar_one_or_none()
+    if not cn:
+        raise HTTPException(404, "Credit note not found")
+    doc, rows = await _resolve_credit_note(db, current.org_id, cn)
+    body = await _expand_components(db, current.org_id, tpl.body_html)
+    return {"html": _render(body, doc, rows), "name": tpl.name}
+
+
+class CreditNoteBatchIn(BaseModel):
+    template_id: str
+    credit_note_ids: list[str] = []
+
+
+@router.post("/render-credit-note-batch")
+async def render_credit_note_batch(
+    data: CreditNoteBatchIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_view_credit_notes")),
+):
+    """Print one or many credit notes through a template, one per page (same as invoices)."""
+    from backend.models import CreditNote
+    tpl = (await db.execute(select(DocumentTemplate).where(
+        DocumentTemplate.id == data.template_id, DocumentTemplate.org_id == current.org_id))).scalar_one_or_none()
+    if not tpl:
+        raise HTTPException(404, "Template not found")
+    if not data.credit_note_ids:
+        raise HTTPException(422, "Pick at least one credit note")
+    notes = (await db.execute(select(CreditNote).where(
+        CreditNote.id.in_(data.credit_note_ids), CreditNote.org_id == current.org_id)
+        .options(selectinload(CreditNote.lines)))).scalars().all()
+    if not notes:
+        raise HTTPException(404, "No matching credit notes")
+    body_tpl = await _expand_components(db, current.org_id, tpl.body_html)
+    tiles = []
+    for cn in notes:
+        doc, rows = await _resolve_credit_note(db, current.org_id, cn)
+        tiles.append(f"<div class='lbl'>{_render(body_tpl, doc, rows)}</div>")
+    return {"html": _labels_html(tpl, tiles), "name": tpl.name, "count": len(tiles)}

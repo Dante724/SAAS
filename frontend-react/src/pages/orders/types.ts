@@ -31,8 +31,9 @@ export function setCurrencySymbol(sym?: string) {
 }
 // `sym` overrides the org default — used for per-account multi-currency displays (e.g. CashHub).
 // Number grouping follows the user's locale (US/EU/Arabic), never a hardcoded region.
-export function money(n?: number, sym?: string) {
+// `cents` always shows two decimals (balances must read 50.50, not 50.5).
+export function money(n?: number, sym?: string, cents = false) {
   let loc = "en-US";
   try { const l = localStorage.getItem("ros_lang"); loc = l === "es" ? "es-ES" : l === "ar" ? "ar" : "en-US"; } catch { /* ignore */ }
-  return `${sym ?? _sym}${(n ?? 0).toLocaleString(loc)}`;
+  return `${sym ?? _sym}${(n ?? 0).toLocaleString(loc, cents ? { minimumFractionDigits: 2, maximumFractionDigits: 2 } : undefined)}`;
 }

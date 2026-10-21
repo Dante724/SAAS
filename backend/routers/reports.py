@@ -67,7 +67,7 @@ async def _dashboard(db, oid: str) -> dict:
     )).scalar() or 0
 
     outstanding = (await db.execute(
-        select(func.sum(Invoice.total - Invoice.amount_paid))
+        select(func.sum(Invoice.total - Invoice.amount_paid - Invoice.credited))
         .where(Invoice.org_id == oid, Invoice.status.in_(["draft", "partial"]))
     )).scalar() or 0
 
@@ -1331,7 +1331,7 @@ async def home_feed(
 
     unpaid_n = (await db.execute(select(func.count()).select_from(Invoice).where(
         Invoice.org_id == oid, Invoice.status.in_(["draft", "partial", "issued"]),
-        (Invoice.total - Invoice.amount_paid) > 0))).scalar() or 0
+        (Invoice.total - Invoice.amount_paid - Invoice.credited) > 0))).scalar() or 0
 
     parts = (await db.execute(select(Part).where(Part.org_id == oid, Part.active == True))).scalars().all()  # noqa: E712
     low = 0

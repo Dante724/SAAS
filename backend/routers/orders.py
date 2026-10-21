@@ -1241,7 +1241,9 @@ async def get_order(
     # 144dd — payment_due drives the Invoices-tab "Due" badge: an ISSUED (non-draft/cancelled)
     # invoice on this order still has a balance. No issued-unpaid invoice → no badge.
     from backend.models import Invoice as _Inv
-    _due = (await db.execute(select(func.coalesce(func.sum(_Inv.total - _Inv.amount_paid), 0)).where(
+    from sqlalchemy import case as _case
+    _owed = _Inv.total - _Inv.amount_paid - _Inv.credited     # per invoice, never below 0
+    _due = (await db.execute(select(func.coalesce(func.sum(_case((_owed > 0, _owed), else_=0)), 0)).where(
         _Inv.order_id == order.id,
         _Inv.status.notin_(["draft", "cancelled", "canceled"])))).scalar() or 0
     data["payment_due"] = q2(float(_due)) > 0
