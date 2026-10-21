@@ -720,13 +720,21 @@ class ChatThread(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     channel: Mapped[str] = mapped_column(String(20), default="whatsapp")  # whatsapp|sms|email
-    contact_phone: Mapped[Optional[str]] = mapped_column(String(40), index=True)
+    contact_phone: Mapped[Optional[str]] = mapped_column(String(160), index=True)  # C4: phone, email or social id
     contact_name: Mapped[Optional[str]] = mapped_column(String(200))
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"))
     lead_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("leads.id"))
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))  # Build 81: chat → work order
     last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # C3: inbox status (new|reply_needed|replied|completed), set by message direction; replied
+    # threads auto-complete after 24h. Spam threads sit in their own folder and notify nobody.
+    status: Mapped[str] = mapped_column(String(16), default="new", server_default="new")
+    last_inbound_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_outbound_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    is_spam: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    spam_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    __table_args__ = (Index("ix_chat_threads_org_status", "org_id", "is_spam", "status"),)
 
 
 class ChatMessage(Base):
@@ -738,6 +746,9 @@ class ChatMessage(Base):
     author_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     status: Mapped[str] = mapped_column(String(15), default="sent")  # sent|failed|received
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    external_id: Mapped[Optional[str]] = mapped_column(String(160), index=True)  # C4: provider message id (de-dupe)
+    # C4: a provider retry racing the first delivery can't store the message twice.
+    __table_args__ = (Index("uq_chat_messages_thread_external", "thread_id", "external_id", unique=True),)
 
 
 class Part(Base):

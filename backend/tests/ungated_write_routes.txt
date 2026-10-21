@@ -14,7 +14,9 @@ POST /api/auth/register [public]
 POST /api/auth/token [public]
 
 ## Public — provider webhooks (signature-verified per shop, fail closed outside dev/test)
+POST /api/chats/webhook/meta/{org_id} [public]
 POST /api/chats/webhook/twilio [public]
+POST /api/chats/webhook/{org_id} [public]
 POST /api/comms/calls/webhook [public]
 POST /api/inbox/webhook/meta/{org_id} [public]
 POST /api/inbox/webhook/{org_id} [public]
@@ -109,11 +111,6 @@ DELETE /api/feed/item/{item_id} [staff]
 POST /api/feed/{entity_type}/{entity_id} [staff]
 # finance
 # forms
-# inbox
-POST /api/inbox/threads [staff]
-PATCH /api/inbox/threads/{thread_id} [staff]
-POST /api/inbox/threads/{thread_id}/reply [staff]
-POST /api/inbox/threads/{thread_id}/to-order [staff]
 # inventory
 POST /api/inventory/reorder-digest [staff]
 # leads

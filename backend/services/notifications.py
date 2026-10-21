@@ -231,7 +231,8 @@ async def dispatch_order_notifications(db: AsyncSession, *, org_id: str, order_i
         return 0
 
     # Reuse the document variable resolver so notification + document variables match.
-    from backend.routers.documents import _apply, _resolve
+    from backend.routers.documents import _resolve
+    from backend.services import message_vars
     variables = await _resolve(db, org_id, order)
     if isinstance(variables, tuple):   # build 144s made _resolve return (doc_map, rows)
         variables = variables[0]
@@ -239,8 +240,8 @@ async def dispatch_order_notifications(db: AsyncSession, *, org_id: str, order_i
 
     sent = 0
     for t in matched:
-        body = _apply(t.body_template or "", variables)
-        subject = _apply(t.subject or "", variables) if t.subject else None
+        subject, body = await message_vars.render_for_order(
+            db, org_id, order, t.subject or None, t.body_template or "", doc_vars=variables)
         recipient = None
         if client:
             recipient = client.email if t.channel == "email" else client.phone
