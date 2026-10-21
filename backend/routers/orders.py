@@ -1404,10 +1404,8 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
             if undone:
                 raise HTTPException(409, f"'{target.name}' requires all {len(items)} checklist item(s) done ({len(undone)} left).")
         if target.require_payment:
-            from backend.models import Invoice as _Inv
-            paid = (await db.execute(select(func.coalesce(func.sum(_Inv.amount_paid), 0)).where(
-                _Inv.order_id == order.id))).scalar() or 0
-            if q2((order.total or 0) - float(paid)) > 0:
+            from backend.services.order_money import balance_due as _due
+            if await _due(db, order) > 0:          # payments, refunds and credit notes all count
                 raise HTTPException(409, f"'{target.name}' requires the order to be fully paid first.")
 
     # Completion gate: when closing, enforce required checklist items + (optional)
@@ -2608,6 +2606,27 @@ async def _archive_order(db, current, order_id, reason, do_refund):
         raise HTTPException(400, "Order is already archived")
 
     from backend.models import Account, Payment, Refund
+
+    # Issued credit notes on this order's invoices put credit on the client's ledger; archiving
+    # zeroes the order's charge, so leaving them would hand the client phantom credit. They are
+    # canceled first, the same rule as deleting an invoice.
+    from backend.models import CreditNote, Invoice as _Inv, InvoiceOrder as _IO
+    _inv_ids = select(_Inv.id).where(_Inv.org_id == current.org_id, (_Inv.order_id == order_id) | _Inv.id.in_(
+        select(_IO.invoice_id).where(_IO.order_id == order_id)))
+    _notes = (await db.execute(select(CreditNote.number).where(
+        CreditNote.invoice_id.in_(_inv_ids), CreditNote.status == "issued"))).scalars().all()
+    if _notes:
+        raise HTTPException(409, f"This order's invoice has issued credit notes ({', '.join(sorted(_notes))}). "
+                                 "Cancel them first, then archive the order.")
+    # Card money taken on a reader goes back on the reader (Card reader payments › Refund), not as
+    # a cash refund here — booking it here too would let the reader refund it a second time.
+    from backend.services.order_money import reader_charge_in_flight, unrefunded_reader_money
+    if await reader_charge_in_flight(db, order_id):
+        raise HTTPException(409, "A card reader charge for this order is still in progress. "
+                                 "Finish or cancel it on the reader first.")
+    if do_refund and await unrefunded_reader_money(db, order_id) > 0:
+        raise HTTPException(409, "This order was paid on a card reader. Refund the card payment on the "
+                                 "reader first (Card reader payments › Refund), then archive the order.")
 
     # A3: deletion dependency chain — never orphan money. Compute net unrefunded
     # payments first; if there is money on the order and the caller did not ask to

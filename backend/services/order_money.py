@@ -42,8 +42,10 @@ async def credited(db: AsyncSession, order_id: str) -> float:
         Invoice.status.notin_(("void", "voided", "cancelled", "canceled"))))).scalars().all()
     total = 0.0
     for inv in invs:
-        oids = (await db.execute(select(InvoiceOrder.order_id).where(
-            InvoiceOrder.invoice_id == inv.id))).scalars().all() or [inv.order_id]
+        # Every order the invoice bills: its links plus the primary order_id (invoices created by a
+        # payment had no link row for it, so attaching a second order left the primary unlinked).
+        oids = set((await db.execute(select(InvoiceOrder.order_id).where(
+            InvoiceOrder.invoice_id == inv.id))).scalars().all()) | ({inv.order_id} if inv.order_id else set())
         if len(oids) <= 1:
             total += float(inv.credited or 0)
             continue
@@ -85,6 +87,31 @@ async def cancel_open_pay_links(db: AsyncSession, order: Order) -> int:
     for i in open_:
         await revoke_pay_link(db, i)
     return len(open_)
+
+
+async def revoke_links_above_balance(db: AsyncSession, inv: Invoice) -> int:
+    """After a credit note lowers what's owed, a pay link sent for the old amount would charge
+    the customer too much: revoke every open link (on the invoice or the orders it bills) for more
+    than the new balance. Staff can send a fresh link for the right amount. Caller commits."""
+    from backend.models import InvoiceOrder
+    from backend.services.invoicing import balance_due as invoice_due
+    oids = set((await db.execute(select(InvoiceOrder.order_id).where(
+        InvoiceOrder.invoice_id == inv.id))).scalars().all()) | ({inv.order_id} if inv.order_id else set())
+    due = {None: invoice_due(inv)}
+    for o in (await db.execute(select(Order).where(Order.id.in_(oids)))).scalars().all() if oids else []:
+        due[o.id] = await balance_due(db, o)
+    cond = PaymentIntent.invoice_id == inv.id
+    if oids:
+        cond = cond | PaymentIntent.order_id.in_(oids)
+    open_ = (await db.execute(select(PaymentIntent).where(
+        cond, PaymentIntent.status.in_(["created", "viewed", "pending"])))).scalars().all()
+    n = 0
+    for i in open_:
+        limit = due.get(i.order_id, due[None]) if i.order_id else due[None]
+        if q2(float(i.amount or 0)) > q2(limit):
+            await revoke_pay_link(db, i)
+            n += 1
+    return n
 
 
 async def revoke_pay_link(db: AsyncSession, intent: PaymentIntent) -> None:
@@ -154,3 +181,25 @@ async def _delete_square_link(db: AsyncSession, intent: PaymentIntent) -> bool:
     except httpx.HTTPError:
         logging.getLogger("tekly.payments").warning("could not delete Square link for intent %s", intent.id)
         return False
+
+
+# Reader charges still in flight: "pending" waits for the card, "processing" is approved but not
+# yet posted. While one exists, recording other money (or changing the balance) collects twice.
+READER_IN_FLIGHT = ("pending", "processing")
+
+
+async def reader_charge_in_flight(db: AsyncSession, order_id: str | None) -> bool:
+    if not order_id:
+        return False
+    from backend.models import TerminalCharge
+    return (await db.execute(select(TerminalCharge.id).where(
+        TerminalCharge.order_id == order_id, TerminalCharge.status.in_(READER_IN_FLIGHT))
+        .limit(1))).scalar_one_or_none() is not None
+
+
+async def unrefunded_reader_money(db: AsyncSession, order_id: str) -> float:
+    """Card money taken on a reader for this order and not yet given back on the reader."""
+    from backend.models import TerminalCharge
+    rows = (await db.execute(select(TerminalCharge.amount, TerminalCharge.refunded_amount).where(
+        TerminalCharge.order_id == order_id, TerminalCharge.status == "succeeded"))).all()
+    return q2(sum(float(a or 0) - float(r or 0) for a, r in rows))

@@ -25,7 +25,7 @@ from backend.models import (
     Employee, Organisation, Invoice, LegalEntity, Location, Part,
     CustomField, WorkOrderType, Device,
 )
-from backend.services.auth import get_current_employee, require_perm, record_scope
+from backend.services.auth import assert_perm, get_current_employee, require_perm, record_scope
 from backend.services.codes import (
     barcode_svg, code128_svg, label_barcode, qr_svg, unprintable_message, validate_barcode_options,
 )
@@ -1104,6 +1104,17 @@ class PreviewIn(BaseModel):
     barcode_types: dict[str, str] = {}
 
 
+# Previews fill a template with the shop's newest real invoice / credit note, so they need the
+# same permission as opening one.
+_SAMPLE_PERMS = {"invoice": "can_view_invoices", "credit_note": "can_view_credit_notes"}
+
+
+async def _assert_sample_perm(db, current, doc_type):
+    perm = _SAMPLE_PERMS.get(doc_type or "")
+    if perm:
+        await assert_perm(db, current, perm)
+
+
 @router.post("/preview")
 async def preview_template(
     data: PreviewIn,
@@ -1115,6 +1126,7 @@ async def preview_template(
     everything else uses the chosen order (or the newest order). Falls back to an
     empty resolve (variables render as their placeholders) when the org has no data
     yet, so the preview never errors on a fresh account."""
+    await _assert_sample_perm(db, current, data.doc_type)   # samples are real invoices / credit notes
     if (data.doc_type or "") == "invoice":
         inv = (await db.execute(select(Invoice).where(Invoice.org_id == current.org_id)
             .order_by(Invoice.created_at.desc()))).scalars().first()
@@ -1244,6 +1256,7 @@ async def print_view(
 ):
     """144ia — return a print-ready HTML document, resolved against a real sample record and
     wrapped in an exact-size @page rule so it prints true-to-size on any printer."""
+    await _assert_sample_perm(db, current, data.doc_type)   # samples are real invoices / credit notes
     if (data.doc_type or "") == "invoice":
         inv = (await db.execute(select(Invoice).where(Invoice.org_id == current.org_id)
             .order_by(Invoice.created_at.desc()))).scalars().first()
