@@ -225,26 +225,29 @@ async def test_calculation_and_report_filters_and_export_keep_them(client, db):
     loc2 = (await client.post("/api/staff/locations", json={"name": "Branch 2"}, headers=H)).json()["id"]
     techs = await _role(client, H, "Techs", template="Specialist")
     desk = await _role(client, H, "Desk", template="Specialist")
-    a, _ = await _person(client, H, "Ann", techs["id"], wage=100)
+    main = await _loc(client, H)
+    a, _ = await _person(client, H, "Ann", techs["id"], wage=100, location_id=main)
     b, _ = await _person(client, H, "Ben", techs["id"], wage=200, location_id=loc2)
     c, _ = await _person(client, H, "Cid", desk["id"], wage=300, location_id=loc2)
+    d, _ = await _person(client, H, "Dee", desk["id"], wage=50)        # no home location: every branch
 
     async def names(qs):
         r = await client.get(f"/api/payroll/calculation?month={MONTH}&{qs}", headers=H)
         assert r.status_code == 200, r.text
         return sorted(i["name"] for i in r.json()["items"])
 
-    assert {"Ann", "Ben", "Cid"} <= set(await names(""))
-    assert await names(f"location_id={loc2}") == ["Ben", "Cid"]
+    assert {"Ann", "Ben", "Cid", "Dee"} <= set(await names(""))
+    assert await names(f"location_id={loc2}") == ["Ben", "Cid", "Dee"]
+    assert "Dee" in await names(f"location_id={main}") and "Ben" not in await names(f"location_id={main}")
     assert await names(f"role_id={techs['id']}") == ["Ann", "Ben"]
     assert await names(f"location_id={loc2}&role_id={techs['id']}") == ["Ben"]
     assert await names(f"employee_id={c}") == ["Cid"]
 
     rng = f"date_from={MONTH}-01&date_to={MONTH}-28"
     rep = (await client.get(f"/api/reports/run/payroll?{rng}&role_id={desk['id']}", headers=H)).json()
-    assert [row[0] for row in rep["rows"]] == ["Cid"]
+    assert [row[0] for row in rep["rows"]] == ["Cid", "Dee"]
     rep = (await client.get(f"/api/reports/run/payroll?{rng}&location_id={loc2}", headers=H)).json()
-    assert sorted(row[0] for row in rep["rows"]) == ["Ben", "Cid"]
+    assert sorted(row[0] for row in rep["rows"]) == ["Ben", "Cid", "Dee"]
     csv_r = await client.get(f"/api/reports/export-csv/payroll?{rng}&employee_id={a}", headers=H)
     assert csv_r.status_code == 200
     rows = list(csv.reader(io.StringIO(csv_r.text)))
@@ -424,6 +427,8 @@ async def test_role_editor_payroll_scope_validation(client, db):
     r = await client.post("/api/settings/rbac/roles", json={
         "name": "Wider", "payroll_scope": "selected", "payroll_employee_ids": [inside, outside]}, headers=E)
     assert r.status_code == 403
+    r = await client.post("/api/settings/rbac/roles", json={"name": "Own", "payroll_scope": "own"}, headers=E)
+    assert r.status_code == 403            # "own" would cover whoever holds it, not just their people
     r = await client.post("/api/settings/rbac/roles", json={
         "name": "Same", "payroll_scope": "selected", "payroll_employee_ids": [inside]}, headers=E)
     assert r.status_code == 201, r.text

@@ -135,7 +135,9 @@ def _assert_scope_not_wider(editor: Role, data: "RoleIn") -> None:
             raise HTTPException(403, f"You can't give a role wider access than your own ({field.replace('_', ' ')})")
     if getattr(editor, "payroll_scope", "all") == "own" and getattr(data, "payroll_scope", "all") != "own":
         raise HTTPException(403, "You can't give a role wider access than your own (payroll scope)")
-    if getattr(editor, "payroll_scope", "all") == "selected" and getattr(data, "payroll_scope", "all") == "selected":
+    if getattr(editor, "payroll_scope", "all") == "selected":
+        if getattr(data, "payroll_scope", "all") != "selected":
+            raise HTTPException(403, "You can only give a role payroll access to people your own role covers")
         if not set(data.payroll_employee_ids or []) <= set(editor.payroll_employee_ids or []):
             raise HTTPException(403, "You can't give a role payroll access to people outside your own")
     if getattr(editor, "location_scope", "all") == "selected":

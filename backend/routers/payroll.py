@@ -574,7 +574,8 @@ async def filtered_employees(db: AsyncSession, current: Employee, *, location_id
         await check_location_access(db, current, location_id)
     q = select(Employee).where(Employee.org_id == current.org_id, Employee.active == True)  # noqa: E712
     if location_id:
-        q = q.where(Employee.location_id == location_id)
+        # someone with no home location isn't tied to a branch, so they count in every branch
+        q = q.where((Employee.location_id == location_id) | Employee.location_id.is_(None))
     if role_id:
         q = q.where(Employee.role_id == role_id)
     if employee_id:

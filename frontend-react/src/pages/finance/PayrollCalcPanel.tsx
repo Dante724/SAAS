@@ -27,6 +27,8 @@ export function filterQuery(month: string, f: PayrollFilters) {
   return p.toString();
 }
 
+const WAGE: Record<string, string> = { fixed: "Fixed", hourly: "Hourly", commission: "Commission only" };
+
 const ACCRUAL: Record<string, [string, string]> = {
   accrued: ["Accrued", "bg-blue-50 text-primary"], paid: ["Paid", "bg-emerald-50 text-emerald-700"],
   draft: ["Draft", "bg-amber-50 text-amber-700"], void: ["Voided", "bg-slate-100 text-ink-tertiary"],
@@ -48,16 +50,21 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
     api.get<any>("/staff/locations").then((r) => setLocations((r.items || r || []).map((l: any) => ({ id: l.id, name: l.name })))).catch(() => setLocations([]));
     api.get<any>("/settings/rbac/roles").then((r) => setRoles((r.items || []).map((x: any) => ({ id: x.id, name: x.name })))).catch(() => setRoles([]));
   }, []);
-  // The people list is everyone the payroll scope shows this month, before the other filters.
+  // The people list is everyone the payroll scope shows this month, before the other filters:
+  // taken from the unfiltered load, fetched on its own only when the month changes under a filter.
+  const [peopleMonth, setPeopleMonth] = useState("");
+  const toPeople = (items: PayrollRow[]) => items.map((x) => ({ id: x.employee_id, name: x.name || "—" }));
+  const unfiltered = !filters.location_id && !filters.role_id && !filters.employee_id;
   useEffect(() => {
+    if (unfiltered || peopleMonth === month) return;
     api.get<{ items: PayrollRow[] }>(`/payroll/calculation?month=${month}`)
-      .then((r) => setPeople((r.items || []).map((x) => ({ id: x.employee_id, name: x.name || "—" })))).catch(() => setPeople([]));
-  }, [month]);
+      .then((r) => { setPeople(toPeople(r.items || [])); setPeopleMonth(month); }).catch(() => setPeople([]));
+  }, [month, unfiltered, peopleMonth]);
   useEffect(() => {
     let live = true;
     setRows(null); setErr(null); setOpen(null); setDetails({});
     api.get<{ items: PayrollRow[] }>(`/payroll/calculation?${filterQuery(month, filters)}`)
-      .then((r) => { if (live) setRows(r.items || []); })
+      .then((r) => { if (!live) return; setRows(r.items || []); if (unfiltered) { setPeople(toPeople(r.items || [])); setPeopleMonth(month); } })
       .catch((e: any) => { if (live) { setErr(e?.message || "Couldn't load payroll"); setRows([]); } });
     return () => { live = false; };
   }, [month, filters]);
@@ -118,16 +125,16 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-x-auto">
-        <table className="w-full min-w-[760px] text-left border-collapse text-xs">
+        <table className="w-full min-w-[840px] text-left border-collapse text-xs">
           <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
-            <th className="py-3 pl-3 pr-1 w-8"></th><th className="py-3 px-3">Employee</th><th className="py-3 px-3">Position</th>
+            <th className="py-3 pl-3 pr-1 w-8"></th><th className="py-3 px-3">Employee</th><th className="py-3 px-3">Position</th><th className="py-3 px-3">Wage type</th>
             <th className="py-3 px-3 text-right">Base</th><th className="py-3 px-3 text-right">Hourly</th><th className="py-3 px-3 text-right">Commission</th>
             <th className="py-3 px-3 text-right">Bonus</th><th className="py-3 px-3 text-right">Penalty</th><th className="py-3 px-3 text-right">Total</th><th className="py-3 px-3"></th>
           </tr></thead>
           <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
-            {!rows && <SkeletonRows cols={10} />}
-            {err && <tr><td colSpan={10} className="py-6 px-4 text-rose-600" role="alert">{err}</td></tr>}
-            {rows?.length === 0 && !err && <tr><td colSpan={10} className="py-6 px-4 text-ink-tertiary">{active ? "Nobody matches these filters." : "No payroll data for this month."}</td></tr>}
+            {!rows && <SkeletonRows cols={11} />}
+            {err && <tr><td colSpan={11} className="py-6 px-4 text-rose-600" role="alert">{err}</td></tr>}
+            {rows?.length === 0 && !err && <tr><td colSpan={11} className="py-6 px-4 text-ink-tertiary">{active ? "Nobody matches these filters." : "No payroll data for this month."}</td></tr>}
             {rows?.map((p) => {
               const isOpen = open === p.employee_id;
               const d = details[p.employee_id];
@@ -138,6 +145,7 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
                     <td className="py-2.5 pl-3 pr-1"><button type="button" aria-expanded={isOpen} aria-label={`${isOpen ? "Hide" : "Show"} breakdown for ${p.name || "employee"}`} onClick={(e) => { e.stopPropagation(); toggle(p.employee_id); }} className="w-6 h-6 rounded-md grid place-items-center text-ink-tertiary hover:bg-slate-100"><M n={isOpen ? "expand_more" : "chevron_right"} c="text-sm" /></button></td>
                     <td className="py-2.5 px-3 font-bold text-ink-primary">{p.name || "—"}{acc && <span className={`ml-2 px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${acc[1]}`}>{acc[0]}</span>}</td>
                     <td className="py-2.5 px-3">{p.position || "—"}</td>
+                    <td className="py-2.5 px-3">{WAGE[p.wage_type || ""] || "—"}</td>
                     <td className="py-2.5 px-3 text-right tabular-nums">{money(p.base_salary)}</td>
                     <td className="py-2.5 px-3 text-right tabular-nums">{money(p.hourly_total)}</td>
                     <td className="py-2.5 px-3 text-right tabular-nums text-emerald-600">{money(p.commissions_total)}</td>
@@ -148,7 +156,7 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
                   </tr>
                   {isOpen && (
                     <tr className="bg-slate-50/50">
-                      <td colSpan={10} className="p-0">
+                      <td colSpan={11} className="p-0">
                         {!d && <div className="px-12 py-4 text-xs text-ink-tertiary">Loading the breakdown…</div>}
                         {d === "error" && <div className="px-12 py-4 text-xs text-rose-600" role="alert">Couldn't load the breakdown. <button className="font-semibold underline" onClick={() => loadDetail(p.employee_id)}>Try again</button></div>}
                         {d && d !== "error" && (

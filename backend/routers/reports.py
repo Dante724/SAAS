@@ -657,7 +657,8 @@ async def _rep_payroll(db, org, df, dt, **kw):
     from backend.models import EmployeeBalanceLedger, Role
     q = select(Employee).where(Employee.org_id == org, Employee.active == True)  # noqa: E712
     if kw.get("location_id"):
-        q = q.where(Employee.location_id == kw["location_id"])
+        # no home location = not tied to a branch, so they count in every branch's report
+        q = q.where((Employee.location_id == kw["location_id"]) | Employee.location_id.is_(None))
     if kw.get("role_id"):
         q = q.where(Employee.role_id == kw["role_id"])
     if kw.get("employee_id"):
