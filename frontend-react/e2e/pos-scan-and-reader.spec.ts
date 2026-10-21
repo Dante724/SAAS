@@ -29,6 +29,7 @@ test("scan a barcode into the cart and charge it on a simulated reader", async (
 
   try {
     await page.reload();
+    await expect(page.getByText(name).first()).toBeVisible();             // POS loaded and listening
     await page.locator("body").click({ position: { x: 5, y: 5 } });     // focus outside any field
     await page.keyboard.type(barcode, { delay: 5 });                       // a wedge scanner types fast…
     await page.keyboard.press("Enter");                                    // …and ends with Enter
