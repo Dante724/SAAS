@@ -51,9 +51,9 @@ async def inbound_webhook(org_id: str, data: LegacyInboundIn, request: Request,
 
 
 @router.get("/webhook/meta/{org_id}", include_in_schema=False)
-async def meta_verify(org_id: str, request: Request):
+async def meta_verify(org_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     """Deprecated: use GET /api/chats/webhook/meta/{org_id}."""
-    return await chats.meta_verify(org_id, request)
+    return await chats.meta_verify(org_id, request, db)
 
 
 @router.post("/webhook/meta/{org_id}", status_code=201, deprecated=True)

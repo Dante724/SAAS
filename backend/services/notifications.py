@@ -120,6 +120,10 @@ class TwilioAdapter(ChannelAdapter):
         from_addr = (c.get("whatsapp_from") or settings.TWILIO_WHATSAPP_FROM) if is_wa else (c.get("from") or settings.TWILIO_FROM)
         to_addr = f"whatsapp:{recipient}" if is_wa and not recipient.startswith("whatsapp:") else recipient
         text = ((subject + "\n\n") if subject else "") + body
+        from backend.services.twilio_voice import sms_refusal
+        refused = sms_refusal(c, whatsapp=is_wa)   # S7: no billed texts outside production
+        if refused:
+            return {"status": "failed", "error": refused}
         try:
             import httpx
             url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"

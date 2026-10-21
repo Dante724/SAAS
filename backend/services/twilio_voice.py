@@ -125,6 +125,27 @@ def signature_ok(auth_token: str, presented: str, urls: list[str],
     return any(hmac.compare_digest(signature(auth_token, u, params), presented) for u in urls)
 
 
+def request_urls(request) -> list[str]:
+    """URLs Twilio may have signed for this request: the one we received, and the public one
+    (behind a TLS-terminating proxy the app sees http://internal-host, Twilio signed https://…)."""
+    path_q = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+    return list(dict.fromkeys([str(request.url), settings.public_base + path_q]))
+
+
+def sms_refusal(creds: dict, *, whatsapp: bool = False) -> Optional[str]:
+    """S7 — the live guard for Twilio SMS/WhatsApp (provider `twilio`), same rule as voice: real,
+    billed messages only with ENVIRONMENT=production and ALLOW_LIVE_TELEPHONY=true. Elsewhere only
+    Twilio's test setup is allowed, i.e. SMS from the magic test number, which never delivers or
+    bills (with live keys Twilio rejects that number). Returns the refusal, or None if allowed."""
+    if live_allowed():
+        return None
+    if not whatsapp and (creds.get("from") or settings.TWILIO_FROM or "").strip() == TEST_FROM_NUMBER:
+        return None
+    return ("Live Twilio texting is off on this server. Use Twilio test credentials with "
+            f"{TEST_FROM_NUMBER} as the SMS number, or set ENVIRONMENT=production and "
+            "ALLOW_LIVE_TELEPHONY=true.")
+
+
 # ── URLs and TwiML ───────────────────────────────────────────────────────────
 def webhook_url(kind: str, org_id: str, call_id: Optional[str] = None) -> str:
     """Public URL Twilio calls back on. kind: 'voice' | 'status'."""
