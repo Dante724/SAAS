@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import LabelBarcodePicker, { LABEL_DOC_TYPES } from "./LabelBarcodePicker";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
@@ -69,6 +70,8 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
     page_w_mm: initial?.page_w_mm ?? null as number | null,
     page_h_mm: initial?.page_h_mm ?? null as number | null,
     margin_mm: initial?.margin_mm ?? null as number | null,
+    barcode_field: (initial?.barcode_field ?? null) as string | null,
+    barcode_types: (initial?.barcode_types || {}) as Record<string, string>,
   });
   const [templates, setTemplates] = useState<any[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(initial?.id || null);
@@ -146,7 +149,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
   // ── preview ──
   async function fetchPreview() {
     if (!edRef.current) return;
-    try { const r = await api.post<any>("/documents/preview", { body_html: serialize(edRef.current), doc_type: meta.doc_type }); setPreview(r?.html || ""); setSample(r?.sample || null); }
+    try { const r = await api.post<any>("/documents/preview", { body_html: serialize(edRef.current), doc_type: meta.doc_type, barcode_field: meta.barcode_field, barcode_types: meta.barcode_types }); setPreview(r?.html || ""); setSample(r?.sample || null); }
     catch { setPreview("<p style='color:#999'>Preview unavailable.</p>"); }
   }
   function toPreview() { if (code !== null) toggleCode(); fetchPreview(); setMode("preview"); }
@@ -203,13 +206,13 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
   useEffect(() => { loadList(); /* eslint-disable-next-line */ }, []);
   function openTpl(t: any) {
     setActionsOpen(false); setCode(null); setMode("edit");
-    setMeta({ name: t.name || "", doc_type: t.doc_type || "estimate", page_size: t.page_size || "a4", font_family: t.font_family || "Inter", is_default: !!t.is_default, page_w_mm: t.page_w_mm ?? null, page_h_mm: t.page_h_mm ?? null, margin_mm: t.margin_mm ?? null });
+    setMeta({ name: t.name || "", doc_type: t.doc_type || "estimate", page_size: t.page_size || "a4", font_family: t.font_family || "Inter", is_default: !!t.is_default, page_w_mm: t.page_w_mm ?? null, page_h_mm: t.page_h_mm ?? null, margin_mm: t.margin_mm ?? null, barcode_field: t.barcode_field ?? null, barcode_types: t.barcode_types || {} });
     setCurrentId(t.id || null);
     requestAnimationFrame(() => { if (edRef.current) { edRef.current.innerHTML = hydrate(t.body_html || ""); refreshBlocks(); } });
   }
   function newDoc() {
     setActionsOpen(false); setCode(null); setMode("edit");
-    setMeta({ name: "", doc_type: "estimate", page_size: "a4", font_family: "Inter", is_default: false, page_w_mm: null, page_h_mm: null, margin_mm: null });
+    setMeta({ name: "", doc_type: "estimate", page_size: "a4", font_family: "Inter", is_default: false, page_w_mm: null, page_h_mm: null, margin_mm: null, barcode_field: null, barcode_types: {} });
     setCurrentId(null);
     requestAnimationFrame(() => { if (edRef.current) { edRef.current.innerHTML = ""; refreshBlocks(); } });
   }
@@ -345,6 +348,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
               <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Default font</label>
                 <select value={meta.font_family} onChange={(e) => setMeta({ ...meta, font_family: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5">{FONTS.map((f) => <option key={f} value={f}>{f}</option>)}</select></div>
               <label className="flex items-center gap-2 text-sm text-ink-secondary"><input type="checkbox" checked={meta.is_default} onChange={(e) => setMeta({ ...meta, is_default: e.target.checked })} /> Default for this type</label>
+              {LABEL_DOC_TYPES.includes(meta.doc_type) && <LabelBarcodePicker value={meta} onChange={(v) => setMeta({ ...meta, ...v })} />}
             </div>
           )}
         </div>

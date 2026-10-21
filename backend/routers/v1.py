@@ -73,7 +73,7 @@ def _order(o: Order) -> dict:
 
 
 def _product(p: Part) -> dict:
-    return {"id": p.id, "sku": p.sku, "name": p.name, "brand": p.brand, "category": p.category,
+    return {"id": p.id, "sku": p.sku, "mpn": p.mpn, "name": p.name, "brand": p.brand, "category": p.category,
             "sell_price": p.sell_price, "cost_price": p.cost_price, "uom": p.uom,
             "barcode": p.barcode, "active": p.active}
 

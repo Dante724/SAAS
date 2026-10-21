@@ -21,8 +21,8 @@ async def test_bundle_category_tree_counts_and_filter(client, tenant):
     # filter bundles by category
     got = (await client.get(f"/api/bundles?category_id={cat}", headers=tenant)).json()["items"]
     assert [x["name"] for x in got] == ["Repair kit"]
-    # moving to no category clears it
+    # moving to no category clears it (sent explicitly: an omitted field is left alone, opa A1)
     await client.put(f"/api/bundles/{b['id']}", json={
-        "name": "Repair kit", "components": [{"ref_type": "product", "ref_id": pid, "qty": 2}]}, headers=tenant)
+        "name": "Repair kit", "category_id": None, "components": [{"ref_type": "product", "ref_id": pid, "qty": 2}]}, headers=tenant)
     again = (await client.get("/api/bundles", headers=tenant)).json()["items"][0]
     assert again["category_id"] is None

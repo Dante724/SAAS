@@ -25,13 +25,18 @@ async def render_code_svg(
     current: Employee = Depends(get_current_employee),
 ):
     """Build 144ef — the single app-wide barcode/QR image source. Renders any
-    value as a real Code128 or QR SVG (reusing the same generator the label/print
+    value as a real Code128, EAN-13, UPC-A or QR SVG (reusing the same generator the label/print
     engine uses), so Products, Services, Work orders, etc. all show identical codes."""
-    from backend.services.codes import code128_svg, qr_svg
+    from backend.services.codes import BARCODE_TYPES, barcode_svg
     data = (data or "").strip()
     if not data:
         raise HTTPException(400, "data is required")
-    svg = qr_svg(data) if type == "qr" else code128_svg(data, height=max(16, min(height, 160)))
+    if type not in BARCODE_TYPES:
+        raise HTTPException(400, f"type must be one of {'|'.join(BARCODE_TYPES)}")
+    try:                     # opa: EAN-13 / UPC-A are validated (check digit, length)
+        svg = barcode_svg(data, type, height=max(16, min(height, 160)))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return Response(content=svg, media_type="image/svg+xml",
                     headers={"Cache-Control": "public, max-age=86400"})
 
@@ -73,6 +78,26 @@ def _ser(s: Service, cat_names: Optional[dict] = None) -> dict:
         "required_resource_types": getattr(s, "required_resource_types", None) or [],
         "margin_pct": margin, "active": s.active,
     }
+
+
+async def _own_employee_ids(db, org_id, ids) -> list:
+    """Every id must be one of this org's employees (a service can't name another shop's
+    staff as the people allowed to perform it). Returns them de-duplicated, in order."""
+    want = [str(i) for i in (ids or []) if i]
+    if not want:
+        return []
+    own = set((await db.execute(select(Employee.id).where(
+        Employee.org_id == org_id, Employee.id.in_(want)))).scalars().all())
+    bad = [i for i in want if i not in own]
+    if bad:
+        raise HTTPException(400, "Unknown employee in allowed_employee_ids")
+    return list(dict.fromkeys(want))
+
+
+def _clean_resource_types(kinds) -> list:
+    """Free-form resource kinds (bay, room, "Lift"…): trimmed, de-duplicated, capped."""
+    out = [str(k).strip()[:40] for k in (kinds or []) if str(k or "").strip()]
+    return list(dict.fromkeys(out))[:20]
 
 
 async def _service_cat_names(db, org_id) -> dict:
@@ -122,10 +147,10 @@ async def create_service(
         is_labor=data.is_labor, unit=(data.unit or "pc")[:24],
         price=data.price, cost_price=data.cost_price if await can_see_costs(db, current) else 0,
         duration_min=max(0, data.duration_min or 0), flat_rate=data.flat_rate,
-        warranty_days=data.warranty_days, barcode=data.barcode,
+        warranty_days=max(0, data.warranty_days or 0), barcode=(data.barcode or "").strip() or None,
         bookable=data.bookable,
-        allowed_employee_ids=list(data.allowed_employee_ids or []),
-        required_resource_types=list(data.required_resource_types or []),
+        allowed_employee_ids=await _own_employee_ids(db, current.org_id, data.allowed_employee_ids),
+        required_resource_types=_clean_resource_types(data.required_resource_types),
     )
     db.add(s)
     await db.commit()
@@ -142,22 +167,40 @@ async def update_service(
     s = (await db.execute(select(Service).where(Service.id == service_id, Service.org_id == current.org_id))).scalar_one_or_none()
     if not s:
         raise HTTPException(404, "Service not found")
+    # A1: only write what the caller sent. A partial body (an older client, a quick toggle)
+    # must never reset warranty, barcode, booking rules etc. to their defaults.
+    sent = data.model_fields_set
+    if not data.name.strip():
+        raise HTTPException(400, "Name is required")
     s.name = data.name
-    s.description = (data.description or "")[:2000]
-    s.category = data.category
-    s.category_id = data.category_id
-    s.is_labor = data.is_labor
-    s.unit = (data.unit or "pc")[:24]
-    s.price = data.price
-    if "cost_price" in data.model_fields_set and await can_see_costs(db, current):
+    if "description" in sent:
+        s.description = (data.description or "")[:2000]
+    if "category" in sent:
+        s.category = data.category
+    if "category_id" in sent:
+        s.category_id = data.category_id
+    if "is_labor" in sent:
+        s.is_labor = data.is_labor
+    if "unit" in sent:
+        s.unit = (data.unit or "pc")[:24]
+    if "price" in sent:
+        s.price = data.price
+    if "cost_price" in sent and await can_see_costs(db, current):
         s.cost_price = data.cost_price
-    s.duration_min = max(0, data.duration_min or 0)
-    s.flat_rate = data.flat_rate
-    s.warranty_days = data.warranty_days
-    s.barcode = data.barcode
-    s.bookable = data.bookable
-    s.allowed_employee_ids = list(data.allowed_employee_ids or [])
-    s.required_resource_types = list(data.required_resource_types or [])
+    if "duration_min" in sent:
+        s.duration_min = max(0, data.duration_min or 0)
+    if "flat_rate" in sent:
+        s.flat_rate = data.flat_rate
+    if "warranty_days" in sent:
+        s.warranty_days = max(0, data.warranty_days or 0)
+    if "barcode" in sent:
+        s.barcode = (data.barcode or "").strip() or None
+    if "bookable" in sent:
+        s.bookable = data.bookable
+    if "allowed_employee_ids" in sent:
+        s.allowed_employee_ids = await _own_employee_ids(db, current.org_id, data.allowed_employee_ids)
+    if "required_resource_types" in sent:
+        s.required_resource_types = _clean_resource_types(data.required_resource_types)
     await db.commit()
     return _ser(s, await _service_cat_names(db, current.org_id))
 
@@ -291,7 +334,8 @@ async def catalog_search(
     if type in ("all", "product"):
         pq = select(Part).where(Part.org_id == current.org_id, Part.active == True).options(selectinload(Part.stock_levels))  # noqa: E712
         if q:
-            pq = pq.where(or_(Part.name.ilike(f"%{q}%"), Part.sku.ilike(f"%{q}%"), Part.barcode == q))
+            pq = pq.where(or_(Part.name.ilike(f"%{q}%"), Part.sku.ilike(f"%{q}%"), Part.barcode == q,
+                              Part.mpn.ilike(f"%{q}%")))
         parts = (await db.execute(pq.order_by(Part.name).limit(max(1, min(limit, 200))))).scalars().all()
         for p in parts:
             avail = sum(sl.qty_available for sl in p.stock_levels)
@@ -299,7 +343,7 @@ async def catalog_search(
                 "kind": "product", "ref_id": p.id, "name": p.name,
                 "category": p.category, "price": p.sell_price, "cost_price": p.cost_price,
                 "repair_price": (p.repair_price or 0) or p.sell_price,  # 144bk: WO price
-                "available": avail, "sku": p.sku,
+                "available": avail, "sku": p.sku, "mpn": p.mpn,
             }
             if dev_brand:
                 from backend.services.compatibility import part_fits
@@ -404,14 +448,19 @@ async def update_tax(
     t = (await db.execute(select(Tax).where(Tax.id == tax_id, Tax.org_id == current.org_id))).scalar_one_or_none()
     if not t:
         raise HTTPException(404, "Tax not found")
-    if data.is_default and not t.is_default:
+    # A1: write only what was sent, so a partial body can't reset the rate, code or locations.
+    sent = data.model_fields_set
+    if "is_default" in sent and data.is_default and not t.is_default:
         existing = (await db.execute(select(Tax).where(Tax.org_id == current.org_id, Tax.is_default == True))).scalars().all()  # noqa: E712
         for e in existing:
             e.is_default = False
     import json as _j3
-    t.name, t.rate, t.mode, t.is_default = data.name, data.rate, data.mode, data.is_default
-    t.code, t.name_for_document, t.location_scope = data.code, data.name_for_document, data.location_scope
-    t.location_ids = _j3.dumps(data.location_ids) if data.location_ids else None
+    t.name = data.name
+    for k in ("rate", "mode", "is_default", "code", "name_for_document", "location_scope"):
+        if k in sent:
+            setattr(t, k, getattr(data, k))
+    if "location_ids" in sent:
+        t.location_ids = _j3.dumps(data.location_ids) if data.location_ids else None
     await db.commit()
     return _ser_tax(t)
 

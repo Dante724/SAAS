@@ -36,6 +36,9 @@ from backend.models import (
     WriteOffLine,
 )
 from backend.services import printing
+from backend.services.codes import (
+    label_barcode, normalize_gtin, unprintable_message, validate_barcode_options,
+)
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.money import q2
 
@@ -65,6 +68,8 @@ def _ser_tpl(t: LabelTemplate) -> dict:
             "width_mm": t.width_mm, "height_mm": t.height_mm,
             "price_type_id": t.price_type_id, "is_default": t.is_default,
             "barcode_type": t.barcode_type,
+            "barcode_field": t.barcode_field,   # null = first filled of barcode/sku/code
+            "barcode_types": t.barcode_types if isinstance(t.barcode_types, dict) else {},
             "fields": t.fields if isinstance(t.fields, list) else []}
 
 
@@ -85,15 +90,19 @@ class TemplateIn(BaseModel):
     height_mm: float = 30
     price_type_id: Optional[str] = None
     fields: list[str] = ["name", "sku", "price", "barcode"]
-    barcode_type: str = "code128"       # code128|qr
+    barcode_type: str = "code128"       # code128|ean13|upca|qr — default for any field
+    barcode_field: Optional[str] = None  # opa: barcode|sku|code|mpn (null = first filled)
+    barcode_types: dict[str, str] = {}  # opa: symbology per field
     is_default: bool = False
 
 
 def _validate(data: TemplateIn) -> None:
     if data.kind not in ("label", "price_tag"):
         raise HTTPException(422, "kind must be label|price_tag")
-    if data.barcode_type not in ("code128", "qr"):
-        raise HTTPException(422, "barcode_type must be code128|qr")
+    try:
+        validate_barcode_options(data.barcode_field, data.barcode_types, data.barcode_type)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
     bad = set(data.fields) - set(printing.FIELDS)
     if bad:
         raise HTTPException(422, f"Unknown fields: {sorted(bad)}")
@@ -127,7 +136,7 @@ async def update_template(
         LabelTemplate.org_id == current.org_id))).scalar_one_or_none()
     if not t:
         raise HTTPException(404, "Template not found")
-    for k, v in data.model_dump().items():
+    for k, v in data.model_dump(exclude_unset=True).items():   # A1: partial bodies keep the rest
         setattr(t, k, v)
     await db.commit()
     return _ser_tpl(t)
@@ -202,11 +211,25 @@ async def print_labels(
             PriceTypeItem.item_id.in_([p.id for p in parts])))).scalars().all()
         overrides = {r.item_id: r.price for r in rows}
 
-    items = [{
-        "name": p.name, "sku": p.sku, "barcode": p.barcode or p.sku,
-        "brand": getattr(p, "brand", None), "category": getattr(p, "category", None),
-        "price": overrides.get(p.id, p.sell_price),
-    } for p in parts]
+    default_type = tpl.barcode_type if tpl else "code128"
+    items, bad = [], []
+    for p in parts:
+        value, kind = label_barcode(p, tpl.barcode_field if tpl else "barcode",
+                                    tpl.barcode_types if tpl else None, default_type)
+        if not tpl and not value:
+            value = p.sku           # no template: keep the old barcode-then-SKU fallback
+        if value and kind in ("ean13", "upca"):
+            try:
+                value = normalize_gtin(value, kind)
+            except ValueError as e:
+                bad.append(f"{p.name} ({e})")
+        items.append({
+            "name": p.name, "sku": p.sku, "mpn": p.mpn, "barcode": value, "barcode_kind": kind,
+            "brand": getattr(p, "brand", None), "category": getattr(p, "category", None),
+            "price": overrides.get(p.id, p.sell_price),
+        })
+    if bad:
+        raise HTTPException(422, unprintable_message(bad))
 
     pdf = await asyncio.to_thread(
         printing.render_labels,
@@ -214,7 +237,7 @@ async def print_labels(
         width_mm=tpl.width_mm if tpl else 50,
         height_mm=tpl.height_mm if tpl else 30,
         fields=fields,
-        barcode_type=tpl.barcode_type if tpl else "code128",
+        barcode_type=default_type,
         copies=data.copies,
         org_name=await _org_name(db, current.org_id))
     return _pdf(pdf, "labels.pdf")

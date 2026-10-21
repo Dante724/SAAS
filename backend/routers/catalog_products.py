@@ -12,7 +12,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +23,7 @@ from backend.models import (
 )
 from backend.services.auth import assert_perm, get_current_employee, require_perm
 from backend.routers.forms import resolve_custom_data
+from backend.services.codes import gtin_check_digit
 from backend.services.money import q2
 from backend.services.redact import can_see_costs, drop_cost_fields
 from backend.core.spreadsheet import (
@@ -206,7 +207,7 @@ async def _resolve_category_path(db, org_id, path: str) -> Optional[str]:
 # ── Product master ───────────────────────────────────────────────────────────
 def _ser_product(p: Part, qty=0.0, reserved=0.0, variant_count=0) -> dict:
     margin = round((p.sell_price - p.avg_cost) / p.avg_cost * 100, 1) if p.avg_cost else None
-    return {"id": p.id, "name": p.name, "code": p.code, "sku": p.sku, "barcode": p.barcode,
+    return {"id": p.id, "name": p.name, "code": p.code, "sku": p.sku, "mpn": p.mpn, "barcode": p.barcode,
             "barcode_type": p.barcode_type, "brand": p.brand, "category_id": p.category_id,
             "description": p.description, "default_supplier_id": p.default_supplier_id,
             "uom": p.uom, "cost_price": p.cost_price, "avg_cost": p.avg_cost, "sell_price": p.sell_price,
@@ -243,7 +244,8 @@ async def list_products(search: Optional[str] = None, category_id: Optional[str]
         q = q.where(Part.parent_id.is_(None))  # base products only
     if search:
         like = f"%{search}%"
-        q = q.where((Part.name.ilike(like)) | (Part.sku.ilike(like)) | (Part.barcode.ilike(like)) | (Part.code.ilike(like)))
+        q = q.where((Part.name.ilike(like)) | (Part.sku.ilike(like)) | (Part.barcode.ilike(like))
+                    | (Part.code.ilike(like)) | (Part.mpn.ilike(like)))
     if category_id:
         q = q.where(Part.category_id == category_id)
     wh_location_id = None
@@ -278,10 +280,38 @@ async def list_products(search: Optional[str] = None, category_id: Optional[str]
     return {"items": out}
 
 
+async def _checked_mpn(db, org_id, mpn, exclude_id=None) -> Optional[str]:
+    """Normalise an MPN (trimmed, blank = none) and refuse one another active product of this
+    org already uses — two cards with one MPN make scans and supplier imports ambiguous."""
+    v = (mpn or "").strip()[:64] or None
+    if v:
+        q = select(Part).where(Part.org_id == org_id, Part.active == True,  # noqa: E712
+                               func.lower(Part.mpn) == v.lower())
+        if exclude_id:
+            q = q.where(Part.id != exclude_id)
+        clash = (await db.execute(q)).scalars().first()
+        if clash:
+            raise HTTPException(409, f"MPN {v} is already used by {clash.name}")
+    return v
+
+
+async def commit_mpn_safe(db) -> None:
+    """Commit; a concurrent save that slipped past _checked_mpn hits uq_parts_org_mpn_active → 409."""
+    from sqlalchemy.exc import IntegrityError
+    try:
+        await db.commit()
+    except IntegrityError as e:
+        await db.rollback()
+        if "uq_parts_org_mpn_active" in str(e.orig):
+            raise HTTPException(409, "That MPN is already used by another product")
+        raise
+
+
 class ProductIn(BaseModel):
     name: str
     code: Optional[str] = None
     sku: Optional[str] = None
+    mpn: Optional[str] = Field(None, max_length=64)   # opa: manufacturer part number
     barcode: Optional[str] = None
     barcode_type: str = "code128"
     brand: Optional[str] = None
@@ -312,6 +342,7 @@ async def create_product(data: ProductIn, db: AsyncSession = Depends(get_db),
     from backend.routers.forms import check_entity_required
     await check_entity_required(db, current.org_id, "product", data)   # built-ins the product form requires
     payload = data.model_dump()
+    payload["mpn"] = await _checked_mpn(db, current.org_id, data.mpn)
     if not await can_see_costs(db, current):
         drop_cost_fields(payload)          # can't see costs, can't set them
     # enforce required custom fields (Settings → Forms → Products) on create
@@ -319,7 +350,7 @@ async def create_product(data: ProductIn, db: AsyncSession = Depends(get_db),
         db, current.org_id, "product", payload.get("custom_data"), creating=True)
     p = Part(org_id=current.org_id, **payload)
     await _sync_part_category_name(db, current.org_id, p)
-    db.add(p); await db.commit(); await db.refresh(p)
+    db.add(p); await commit_mpn_safe(db); await db.refresh(p)
     return _ser_product(p)
 
 
@@ -368,8 +399,9 @@ async def bulk_products(data: BulkProductsIn, db: AsyncSession = Depends(get_db)
 
 
 # ── Excel export / import ────────────────────────────────────────────────────
+# MPN (opa) goes last so existing sheets keep their column positions; import matches by header.
 _COLS = ["Code", "SKU", "Barcode", "Name", "Category", "UoM", "Cost price",
-         "Sell price", "Min stock", "Client warranty (days)", "Serialized"]
+         "Sell price", "Min stock", "Client warranty (days)", "Serialized", "MPN"]
 
 
 @router.get("/products/export")
@@ -388,7 +420,7 @@ async def export_products(db: AsyncSession = Depends(get_db), current: Employee 
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Products"; ws.append(_COLS)
     for p in rows:
         ws.append(safe_row([p.code, p.sku, p.barcode, p.name, path(p.category_id), p.uom, p.cost_price if show_cost else None,
-                            p.sell_price, p.min_stock, p.warranty_days, "yes" if p.serialized else "no"]))
+                            p.sell_price, p.min_stock, p.warranty_days, "yes" if p.serialized else "no", p.mpn]))
     buf = io.BytesIO(); await asyncio.to_thread(wb.save, buf); buf.seek(0)
     return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              headers={"Content-Disposition": 'attachment; filename="products.xlsx"'})
@@ -406,7 +438,8 @@ async def import_products(file: UploadFile = File(...), db: AsyncSession = Depen
     if "Name" not in idx:
         raise HTTPException(400, "Import file must have a 'Name' column")
     created = updated = 0
-    for row in ws.iter_rows(min_row=2):
+    mpn_rows = []                       # (part, mpn, sheet row) — applied after every row is read
+    for rownum, row in enumerate(ws.iter_rows(min_row=2), start=2):
         cells = [unguard_cell(c.value) for c in row]
         def g(col, cells=cells):
             i = idx.get(col)
@@ -423,15 +456,42 @@ async def import_products(file: UploadFile = File(...), db: AsyncSession = Depen
                       sell_price=float(g("Sell price") or 0), min_stock=int(g("Min stock") or 0),
                       warranty_days=int(g("Client warranty (days)") or 0),
                       serialized=str(g("Serialized") or "no").strip().lower() in ("yes", "true", "1"))
+        mpn = None
+        if "MPN" in idx:          # an older sheet without the column leaves MPNs alone
+            raw = g("MPN")
+            mpn = str(raw).strip() if raw is not None else ""
+            if len(mpn) > 64:     # same limit as the drawer / API (422 there)
+                raise HTTPException(409, f"Row {rownum}: MPN is longer than 64 characters")
         if existing:
+            target = existing
             for k, v in fields.items():
                 if k == "serialized" and existing.serialized:
                     continue  # never un-serialize
                 setattr(existing, k, v)
             updated += 1
         else:
-            db.add(Part(org_id=current.org_id, name=name, **fields)); created += 1
-    await db.commit()
+            target = Part(org_id=current.org_id, name=name, **fields)
+            db.add(target); created += 1
+        if mpn is not None:
+            mpn_rows.append((target, mpn or None, rownum))
+    if mpn_rows:
+        # Checked against the sheet's end state, so swapping two products' MPNs in one import
+        # works: clear the touched MPNs first, then assign + check each (one active product per MPN).
+        for part, _v, _n in mpn_rows:
+            part.mpn = None
+        await db.flush()
+        seen: dict = {}
+        for part, v, n in mpn_rows:
+            if v:
+                if v.lower() in seen:
+                    raise HTTPException(409, f"Row {n}: MPN {v} is also on row {seen[v.lower()]}")
+                seen[v.lower()] = n
+                try:
+                    await _checked_mpn(db, current.org_id, v, exclude_id=part.id)
+                except HTTPException as e:
+                    raise HTTPException(409, f"Row {n}: {e.detail}")
+            part.mpn = v
+    await commit_mpn_safe(db)
     return {"ok": True, "created": created, "updated": updated}
 
 
@@ -461,33 +521,32 @@ async def update_product(pid: str, data: ProductIn, db: AsyncSession = Depends(g
     p = (await db.execute(select(Part).where(Part.id == pid, Part.org_id == current.org_id))).scalar_one_or_none()
     if not p:
         raise HTTPException(404, "Product not found")
-    payload = data.model_dump()
-    # A cost that wasn't sent (or that the editor isn't allowed to see) is left alone
-    # instead of being reset to the 0 default.
-    if "cost_price" not in data.model_fields_set:
-        payload.pop("cost_price", None)
+    # A1: only fields the caller sent are written. A drawer that doesn't show weight, image or
+    # barcode type must not reset them to the defaults (a QR product silently becoming Code128,
+    # a product photo vanishing). The same goes for cost when it isn't sent.
+    payload = data.model_dump(exclude_unset=True)
+    payload["name"] = data.name
+    if "mpn" in payload:
+        payload["mpn"] = await _checked_mpn(db, current.org_id, data.mpn, exclude_id=p.id)
     if not await can_see_costs(db, current):
         drop_cost_fields(payload)
     # serialization is irreversible once enabled — cannot be turned off here
-    if p.serialized and not payload.get("serialized"):
+    if p.serialized and "serialized" in payload and not payload["serialized"]:
         raise HTTPException(409, "Serialization cannot be disabled once enabled (Orderry rule)")
     if payload.get("serialized") and not p.serialized:
         await assert_perm(db, current, "can_track_serials")
     # only touch custom_data when the caller explicitly sent it (avoid wiping on partial saves)
-    if "custom_data" not in data.model_fields_set:
-        payload.pop("custom_data", None)
-    else:
+    if "custom_data" in data.model_fields_set:
         # enforce required + lock_after_create against the stored values. (144aw: this resolve was
         # mistakenly nested under the compatibility_json branch below, so required/lock went
         # unenforced on edits unless compatibility_json also happened to be sent.)
         payload["custom_data"] = await resolve_custom_data(
             db, current.org_id, "product", payload.get("custom_data"), existing=p.custom_data or {})
-    if "compatibility_json" not in data.model_fields_set:   # 144jt: don't wipe compat on partial save
-        payload.pop("compatibility_json", None)
     for k, v in payload.items():
         setattr(p, k, v)
-    await _sync_part_category_name(db, current.org_id, p)
-    await db.commit(); await db.refresh(p)
+    if "category_id" in payload:
+        await _sync_part_category_name(db, current.org_id, p)
+    await commit_mpn_safe(db); await db.refresh(p)
     return _ser_product(p)
 
 
@@ -539,19 +598,14 @@ async def enable_serialization(pid: str, db: AsyncSession = Depends(get_db),
 
 
 # ── Barcode generator ────────────────────────────────────────────────────────
-def _ean_checksum(digits: str) -> str:
-    s = sum((3 if i % 2 else 1) * int(d) for i, d in enumerate(reversed(digits)))
-    return str((10 - s % 10) % 10)
-
-
 def _gen_barcode(btype: str) -> str:
     import random
     if btype == "ean13":
-        body = "".join(random.choices("0123456789", k=12)); return body + _ean_checksum(body)
+        body = "".join(random.choices("0123456789", k=12)); return body + gtin_check_digit(body)
     if btype == "ean8":
-        body = "".join(random.choices("0123456789", k=7)); return body + _ean_checksum(body)
+        body = "".join(random.choices("0123456789", k=7)); return body + gtin_check_digit(body)
     if btype == "upca":
-        body = "".join(random.choices("0123456789", k=11)); return body + _ean_checksum(body)
+        body = "".join(random.choices("0123456789", k=11)); return body + gtin_check_digit(body)
     # code128 / qr: free-form unique token
     return "RO" + "".join(random.choices("0123456789ABCDEFGHJKMNPQRSTUVWXYZ", k=10))
 

@@ -8,6 +8,7 @@ import CustomFields from "../../components/CustomFields";
 import CategoryPicker from "../../components/CategoryPicker";
 import CatalogPicker, { CatalogItem } from "../../components/CatalogPicker";
 import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../../lib/formLayout";
+import ServiceForm, { serviceBody } from "./ServiceForm";
 
 export type DrawerKind = "product" | "service" | "asset" | "bundle";
 type Props = { kind: DrawerKind; id?: string | null; initial?: any; onClose: () => void; onSaved?: () => void };
@@ -115,16 +116,18 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
   async function save() {
     try {
       if (kind === "product") {
-        const m = missingRequired(layout, { category: has(p.category_id), description: has(p.description), code: has(p.code), sku: has(p.sku) }, p.custom_data);
+        const m = missingRequired(layout, { category: has(p.category_id), description: has(p.description), code: has(p.code), sku: has(p.sku), mpn: has(p.mpn) }, p.custom_data);
         if (m) { flash(m); return; }
-        const body = { name: p.name, code: p.code, sku: p.sku, barcode: p.barcode, brand: p.brand, description: p.description,
+        // Everything this drawer shows goes back; fields it doesn't show (weight, image…) are left out
+        // and the API keeps them (it only writes what was sent).
+        const body = { name: p.name, code: p.code, sku: p.sku, mpn: (p.mpn || "").trim() || null, barcode: p.barcode, barcode_type: p.barcode_type || "code128", brand: p.brand, description: p.description,
           category_id: p.category_id || null, uom: p.uom || "pcs", cost_price: Number(p.cost_price) || 0, sell_price: Number(p.sell_price) || 0,
           min_stock: p.min_stock ?? 0, serialized: !!p.serialized, expiry_tracking: !!p.expiry_tracking, warranty_days: p.warranty_days ?? 0,
           compatibility_json: p.compatibility_json || {}, custom_data: p.custom_data || {} };
         if (editing) await api.put(`/catalog/products/${id}`, body); else await api.post("/catalog/products", body);
       } else if (kind === "service") {
-        const body = { name: p.name, description: p.description || "", category_id: p.category_id || null, category: p.category || null, is_labor: !!p.is_labor,
-          unit: p.unit || "pc", price: Number(p.price) || 0, cost_price: Number(p.cost_price) || 0, duration_min: Number(p.duration_min) || 0, flat_rate: !!p.flat_rate };
+        const body = serviceBody(p);
+        if (!body.name) { flash("Service title is required"); return; }
         if (editing) await api.put(`/catalog/services/${id}`, body); else await api.post("/catalog/services", body);
       } else if (kind === "bundle") {
         if (!can("can_manage_bundles")) { flash("Your role can't change job kits"); return; }
@@ -225,6 +228,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
               description: { el: <div><label className={lbl}>Description{star("description")}</label><textarea value={p.description || ""} onChange={(e) => set("description", e.target.value)} className={`${field} h-20 resize-none`} placeholder="Optional details..." /></div> },
               code: { half: true, el: <div><label className={lbl}>Code{star("code")}</label><input value={p.code || ""} onChange={(e) => set("code", e.target.value)} className={`${field} font-mono`} /></div> },
               sku: { half: true, el: <div><label className={lbl}>SKU{star("sku")}</label><input value={p.sku || ""} onChange={(e) => set("sku", e.target.value)} className={`${field} font-mono`} /></div> },
+              mpn: { half: true, el: <div><label htmlFor="prod-mpn" className={lbl}>MPN{star("mpn")} <span className="font-normal text-ink-tertiary">(manufacturer part number)</span></label><input id="prod-mpn" value={p.mpn || ""} maxLength={64} onChange={(e) => set("mpn", e.target.value)} className={`${field} font-mono`} /></div> },
               stock_policy: { el: <>
                 <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-3">
                   <div className="text-[11px] font-bold text-ink-primary ">Stock tracking & policies</div>
@@ -396,23 +400,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
             </div>
           </>)}
 
-          {kind === "service" && (
-            <div className="space-y-3.5">
-              <div><label className={lbl}>Service title <span className="text-rose-500">*</span></label><input value={p.name || ""} onChange={(e) => set("name", e.target.value)} className={field} /></div>
-              <div><label className={lbl}>Description</label><textarea value={p.description || ""} onChange={(e) => set("description", e.target.value)} className={`${field} h-20 resize-none`} /></div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className={lbl}>Category</label><CategoryPicker entity="service" value={p.category_id} onChange={(id) => set("category_id", id)} /></div>
-                <div><label className={lbl}>Standard duration (min)</label><input type="number" value={p.duration_min ?? 60} onChange={(e) => set("duration_min", e.target.value)} className={`${field} font-mono`} /></div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className={lbl}>Labor price ({currencySymbol()})</label><input type="number" value={p.price ?? 0} onChange={(e) => set("price", e.target.value)} className={`${field} font-mono font-bold`} /></div>
-                <div><label className={lbl}>Cost ({currencySymbol()})</label><input type="number" value={p.cost_price ?? 0} onChange={(e) => set("cost_price", e.target.value)} className={`${field} font-mono`} /></div>
-              </div>
-              <label className="flex items-center justify-between cursor-pointer p-3 rounded-xl bg-slate-50/90 border border-slate-200/80"><span className="text-ink-secondary font-medium">This is a labor operation</span><input type="checkbox" checked={!!p.is_labor} onChange={(e) => set("is_labor", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
-              {/* 144ax G3 — flat-rate labour: bill the standard duration × the fee as an hourly rate */}
-              <label className="flex items-center justify-between cursor-pointer p-3 rounded-xl bg-slate-50/90 border border-slate-200/80"><span className="text-ink-secondary font-medium">Flat-rate <span className="text-ink-tertiary font-normal">— bill booked hours × fee (fee = hourly rate)</span></span><input type="checkbox" checked={!!p.flat_rate} onChange={(e) => set("flat_rate", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
-            </div>
-          )}
+          {kind === "service" && <ServiceForm p={p} set={set} />}
 
           {kind === "asset" && (
             <div className="space-y-3.5">

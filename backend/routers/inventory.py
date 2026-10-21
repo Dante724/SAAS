@@ -67,7 +67,7 @@ def _ser_part(p: Part, stock: list[StockLevel]) -> dict:
         "id": p.id, "sku": p.sku, "uom": p.uom, "name": p.name, "brand": p.brand,
         "category": p.category, "category_id": getattr(p, "category_id", None),
         "cost_price": p.cost_price, "avg_cost": p.avg_cost, "sell_price": p.sell_price, "repair_price": p.repair_price,
-        "barcode": p.barcode, "min_stock": p.min_stock, "margin_pct": margin,
+        "barcode": p.barcode, "mpn": p.mpn, "min_stock": p.min_stock, "margin_pct": margin,
         "weight": getattr(p, "weight", None), "dimensions": getattr(p, "dimensions", None),
         "image_data": getattr(p, "image_data", None),
         "min_order_qty": getattr(p, "min_order_qty", 0) or 0,
@@ -92,7 +92,7 @@ async def list_parts(
         # Build 144an — POS findability: match name, SKU, barcode, or internal code.
         s = search.strip()
         q = q.where(or_(Part.name.icontains(s), Part.sku.icontains(s),
-                        Part.barcode.icontains(s), Part.code.icontains(s)))
+                        Part.barcode.icontains(s), Part.code.icontains(s), Part.mpn.icontains(s)))
     if category_id:
         q = q.where(Part.category_id == category_id)
     if category:
@@ -131,18 +131,20 @@ async def scan_resolve(
     current: Employee = Depends(get_current_employee),
 ):
     """Build 144an — resolve a scanned/typed code to a product for the POS. Matches, in
-    order: exact SKU, barcode, internal code, then a serialized unit's serial number.
+    order: exact SKU, barcode, internal code, MPN, then a serialized unit's serial number.
     Returns the product (with stock) and, for a serial hit, which unit was matched."""
     code = (code or "").strip()
     if not code:
         raise HTTPException(400, "No code provided")
     base = select(Part).where(Part.org_id == current.org_id, Part.active == True)  # noqa: E712
     part = (await db.execute(base.where(or_(
-        Part.sku == code, Part.barcode == code, Part.code == code)))).scalars().first()
+        Part.sku == code, Part.barcode == code, Part.code == code,
+        func.lower(Part.mpn) == code.lower())))).scalars().first()    # MPNs are unique case-insensitively
     matched_serial = None
     matched_on = None
     if part:
-        matched_on = "sku" if part.sku == code else "barcode" if part.barcode == code else "code"
+        matched_on = ("sku" if part.sku == code else "barcode" if part.barcode == code
+                      else "code" if part.code == code else "mpn")
     else:
         from backend.models import SerializedItem
         si = (await db.execute(select(SerializedItem).where(
@@ -363,6 +365,7 @@ async def create_posting(
 # ── 144bk: bulk-posting front doors (preview + commit) + bulk qty adjust ──────
 class PreviewRow(BaseModel):
     code: Optional[str] = None       # sku / barcode / code typed or pasted
+    mpn: Optional[str] = None        # opa: manufacturer part number column
     name: Optional[str] = None
     qty: float = 1
     purchase_price: Optional[float] = None
@@ -388,19 +391,25 @@ async def preview_posting(
     parts = (await db.execute(select(Part).where(
         Part.org_id == current.org_id, Part.active == True))).scalars().all()  # noqa: E712
     by_code = {}
+    by_mpn = {}
     for p in parts:
         for key in (p.sku, p.barcode, p.code):
             if key:
                 by_code[str(key).strip().lower()] = p
+        if p.mpn:
+            by_mpn[p.mpn.strip().lower()] = p
     names = {p.name.strip().lower(): p for p in parts if p.name}
     name_list = list(names.keys())
 
     out = []
     for i, row in enumerate(data.rows):
         code = (row.code or "").strip()
+        mpn = (row.mpn or "").strip()
         nm = (row.name or "").strip()
         status, part, cands = "new", None, []
-        hit = by_code.get(code.lower()) if code else None
+        hit = by_mpn.get(mpn.lower()) if mpn else None
+        if hit is None and code:     # a supplier sheet's "code" is often the MPN too
+            hit = by_code.get(code.lower()) or by_mpn.get(code.lower())
         if hit is None and nm:
             hit = names.get(nm.lower())
         if hit is not None:
@@ -421,7 +430,7 @@ async def preview_posting(
             "part_name": part.name if part else None,
             "sku": (part.sku if part else None) or code or None,
             "candidates": cands,
-            "code": code or None, "name": nm or None,
+            "code": code or None, "mpn": mpn or None, "name": nm or None,
             "qty": row.qty, "purchase_price": row.purchase_price, "markup_pct": row.markup_pct,
         })
     return {"rows": out}
@@ -431,6 +440,7 @@ class CommitRow(BaseModel):
     part_id: Optional[str] = None        # existing part chosen/confirmed
     new_name: Optional[str] = None       # create a new part with this name
     new_sku: Optional[str] = None
+    new_mpn: Optional[str] = None
     qty: float = 1
     purchase_price: Optional[float] = None
     markup_pct: Optional[float] = None
@@ -464,8 +474,11 @@ async def commit_posting(
                 raise HTTPException(422, "Each row needs an existing part or a new product name")
             cost = float(r.purchase_price or 0)
             sell = q2(cost * (1 + float(r.markup_pct) / 100.0)) if (r.markup_pct and cost) else 0.0
+            from backend.routers.catalog_products import _checked_mpn
             part = Part(org_id=current.org_id, name=r.new_name.strip(),
-                        sku=(r.new_sku or "").strip() or None, cost_price=cost, sell_price=sell)
+                        sku=(r.new_sku or "").strip() or None,
+                        mpn=await _checked_mpn(db, current.org_id, r.new_mpn),   # one active product per MPN
+                        cost_price=cost, sell_price=sell)
             db.add(part)
             await db.flush()
             pid = part.id
@@ -474,7 +487,8 @@ async def commit_posting(
                       "purchase_price": r.purchase_price, "markup_pct": r.markup_pct})
     posted, total_cost = await _do_posting(
         db, current.org_id, current.id, data.location_id, data.supplier_id, lines)
-    await db.commit()
+    from backend.routers.catalog_products import commit_mpn_safe
+    await commit_mpn_safe(db)
     return {"ok": True, "lines_posted": posted, "created_parts": created, "total_cost": total_cost}
 
 

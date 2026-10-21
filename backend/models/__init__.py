@@ -743,7 +743,12 @@ class ChatMessage(Base):
 class Part(Base):
     __tablename__ = "parts"
     # Inventory list: filter org_id (parts had no org index before), sort by name.
-    __table_args__ = (Index("ix_parts_org_name", "org_id", "name"),)
+    __table_args__ = (Index("ix_parts_org_name", "org_id", "name"),
+                      # opa: one active product per MPN per org, case-insensitive (backs _checked_mpn;
+                      # also the per-org index for MPN scans, which match on lower(mpn))
+                      Index("uq_parts_org_mpn_active", "org_id", text("lower(mpn)"), unique=True,
+                            sqlite_where=text("active = 1 AND mpn IS NOT NULL"),
+                            postgresql_where=text("active AND mpn IS NOT NULL")))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     sku: Mapped[Optional[str]] = mapped_column(String(100))
@@ -768,6 +773,7 @@ class Part(Base):
     low_stock_alerted: Mapped[bool] = mapped_column(Boolean, default=False)
     # ── catalog master (Phase F) ──
     code: Mapped[Optional[str]] = mapped_column(String(100))            # internal article/code, distinct from SKU/barcode
+    mpn: Mapped[Optional[str]] = mapped_column(String(64))              # opa: manufacturer part number
     category_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("categories.id"), index=True)
     barcode_type: Mapped[str] = mapped_column(String(12), default="code128")  # upca|ean13|ean8|code128|qr
     serialized: Mapped[bool] = mapped_column(Boolean, default=False)    # irreversible once True (Orderry rule)
@@ -2271,6 +2277,9 @@ class DocumentTemplate(Base):
     font_family: Mapped[str] = mapped_column(String(40), default="Sans-Serif")
     # build 144o: JSON list of status keys this doc may be printed in. null/empty = any status.
     print_statuses: Mapped[Optional[str]] = mapped_column(Text)
+    # opa: label templates — which product field {Barcode} encodes, and the symbology per field
+    barcode_field: Mapped[Optional[str]] = mapped_column(String(12))   # barcode|sku|code|mpn (null = first filled)
+    barcode_types: Mapped[Optional[dict]] = mapped_column(JSON)        # {"mpn": "code128", "barcode": "ean13"}
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -3118,6 +3127,9 @@ class LabelTemplate(Base):
     fields: Mapped[Optional[dict]] = mapped_column(
         JSON, default=lambda: ["name", "sku", "price", "barcode"])
     barcode_type: Mapped[str] = mapped_column(String(12), default="code128")  # code128|qr
+    # opa: which product field the barcode encodes, and the symbology chosen per field
+    barcode_field: Mapped[Optional[str]] = mapped_column(String(12))   # barcode|sku|code|mpn (null = barcode)
+    barcode_types: Mapped[Optional[dict]] = mapped_column(JSON)        # {"mpn": "code128", "barcode": "ean13"}
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 

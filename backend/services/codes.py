@@ -1,5 +1,7 @@
 """Barcode & QR rendering as self-contained inline SVG.
 
+- EAN-13 / UPC-A (retail GTINs) with check-digit validation; a 12/11-digit body gets its
+  check digit appended, a full-length one must carry the right digit.
 - Code128 (subset B, auto-C for long digit runs) drawn as vector bars so it stays
   scannable at any print resolution — no raster, no external service.
 - QR via `segno` (pure-python, zero runtime deps). If segno is unavailable the QR
@@ -113,6 +115,115 @@ def qr_svg(data: str, module: int = 3, quiet: int = 2) -> str:
     return (f"<svg xmlns='http://www.w3.org/2000/svg' width='{dim}' height='{dim}' "
             f"viewBox='0 0 {dim} {dim}' shape-rendering='crispEdges'>"
             f"<rect width='{dim}' height='{dim}' fill='#fff'/>{''.join(rects)}</svg>")
+
+
+# ── EAN-13 / UPC-A ───────────────────────────────────────────────────────────
+_EAN_L = ["0001101", "0011001", "0010011", "0111101", "0100011",
+          "0110001", "0101111", "0111011", "0110111", "0001011"]
+_EAN_R = ["".join("1" if b == "0" else "0" for b in c) for c in _EAN_L]
+_EAN_G = [c[::-1] for c in _EAN_R]
+# left-half parity by the (implicit) first digit: L = odd, G = even
+_EAN_PARITY = ["LLLLLL", "LLGLGG", "LLGGLG", "LLGGGL", "LGLLGG",
+               "LGGLLG", "LGGGLL", "LGLGLG", "LGLGGL", "LGGLGL"]
+
+BARCODE_FIELDS = ("barcode", "sku", "code", "mpn")      # product fields a label may encode
+BARCODE_TYPES = ("code128", "ean13", "upca", "qr")
+_GTIN_LEN = {"ean13": 13, "upca": 12}
+
+
+def gtin_check_digit(body: str) -> str:
+    """GS1 mod-10 check digit: weights 3,1,3,… from the right of the body."""
+    s = sum((3 if i % 2 == 0 else 1) * int(d) for i, d in enumerate(reversed(body)))
+    return str((10 - s % 10) % 10)
+
+
+def normalize_gtin(value: str, kind: str) -> str:
+    """Return the full EAN-13 / UPC-A for `value`, or raise ValueError with a plain reason.
+    A body one digit short gets its check digit appended; a full one is verified."""
+    n = _GTIN_LEN[kind]
+    name = "EAN-13" if kind == "ean13" else "UPC-A"
+    v = str(value or "").strip().replace(" ", "").replace("-", "")
+    if not v.isdigit():
+        raise ValueError(f"{name} needs digits only")
+    if len(v) == n - 1:
+        return v + gtin_check_digit(v)
+    if len(v) != n:
+        raise ValueError(f"{name} needs {n - 1} or {n} digits")
+    if gtin_check_digit(v[:-1]) != v[-1]:
+        raise ValueError(f"{name} check digit is wrong (expected {gtin_check_digit(v[:-1])})")
+    return v
+
+
+def ean13_modules(code13: str) -> str:
+    """The 95-module bar pattern ("1" = bar) for a validated 13-digit EAN."""
+    first, left, right = int(code13[0]), code13[1:7], code13[7:]
+    out = "101"
+    for d, par in zip(left, _EAN_PARITY[first]):
+        out += (_EAN_L if par == "L" else _EAN_G)[int(d)]
+    out += "01010"
+    for d in right:
+        out += _EAN_R[int(d)]
+    return out + "101"
+
+
+def gtin_svg(value: str, kind: str = "ean13", height: int = 48, module: int = 2, quiet: int = 11) -> str:
+    """EAN-13 or UPC-A as SVG (UPC-A is an EAN-13 with a leading 0). Raises ValueError
+    when the value isn't a valid code of that kind."""
+    code = normalize_gtin(value, kind)
+    mods = ean13_modules(code if kind == "ean13" else "0" + code)
+    guards = {0, 1, 2, 45, 46, 47, 48, 49, 92, 93, 94}
+    rects = []
+    for i, b in enumerate(mods):
+        if b == "1":
+            h = height + 6 if i in guards else height
+            rects.append(f"<rect x='{quiet + i * module}' y='0' width='{module}' height='{h}' fill='#000'/>")
+    total_w = quiet * 2 + len(mods) * module
+    caption = (f"<text x='{total_w/2}' y='{height+18}' font-size='11' font-family='monospace' "
+               f"text-anchor='middle' fill='#000'>{code}</text>")
+    return (f"<svg xmlns='http://www.w3.org/2000/svg' width='{total_w}' height='{height+22}' "
+            f"viewBox='0 0 {total_w} {height+22}' shape-rendering='crispEdges'>"
+            f"<rect width='{total_w}' height='{height+22}' fill='#fff'/>{''.join(rects)}{caption}</svg>")
+
+
+def barcode_svg(value: str, kind: str = "code128", height: int = 48) -> str:
+    """One entry point for any supported symbology. EAN/UPC raise ValueError on bad input."""
+    if kind == "qr":
+        return qr_svg(value)
+    if kind in _GTIN_LEN:
+        return gtin_svg(value, kind, height=height)
+    return code128_svg(value, height=height)
+
+
+def validate_barcode_options(field, types, default_type="code128") -> None:
+    """Template-save check for the barcode source settings; raises ValueError (routers → 422)."""
+    if field is not None and field not in BARCODE_FIELDS:
+        raise ValueError(f"barcode_field must be one of {'|'.join(BARCODE_FIELDS)}")
+    if default_type is not None and default_type not in BARCODE_TYPES:
+        raise ValueError(f"barcode_type must be one of {'|'.join(BARCODE_TYPES)}")
+    for f, t in (types or {}).items():
+        if f not in BARCODE_FIELDS or t not in BARCODE_TYPES:
+            raise ValueError(f"barcode_types: {f} → {t} isn't a supported field/type")
+
+
+def unprintable_message(bad: list[str]) -> str:
+    """One message for 'these products can't be encoded with this barcode type'."""
+    more = f" and {len(bad) - 5} more" if len(bad) > 5 else ""
+    return "These products can't be printed with this barcode type: " + "; ".join(bad[:5]) + more
+
+
+def label_barcode(part, field: str | None, types: dict | None, default_type: str = "code128"):
+    """What a label's barcode encodes for one product: (value, kind). `field` picks the product
+    field (null = first filled of barcode/sku/code); `types` holds the symbology per field.
+    The value is None when that field is empty on this product."""
+    types = types if isinstance(types, dict) else {}
+    if field in BARCODE_FIELDS:
+        value = (getattr(part, field, None) or "").strip() or None
+        return value, types.get(field) or default_type
+    for f in ("barcode", "sku", "code"):
+        value = (getattr(part, f, None) or "").strip()
+        if value:
+            return value, types.get(f) or default_type
+    return None, default_type
 
 
 def _xml_escape(s: str) -> str:

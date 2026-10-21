@@ -123,14 +123,25 @@ async def update_bundle(
         Bundle.id == bundle_id, Bundle.org_id == current.org_id))).scalar_one_or_none()
     if not b:
         raise HTTPException(404, "Bundle not found")
-    await _validate_components(db, current.org_id, data.components)
-    b.name, b.price_mode, b.price = data.name, data.price_mode, data.price
-    b.category_id = data.category_id or None
-    for old in (await db.execute(select(BundleComponent).where(
-            BundleComponent.bundle_id == b.id))).scalars().all():
-        await db.delete(old)
-    for c in data.components:
-        db.add(BundleComponent(bundle_id=b.id, ref_type=c.ref_type, ref_id=c.ref_id, qty=c.qty, device_variant=bool(getattr(c, "device_variant", False))))
+    # A1: write only what was sent — a body without category_id keeps the category, and one
+    # without components keeps the kit's items instead of emptying it.
+    sent = data.model_fields_set
+    b.name = data.name
+    if "price_mode" in sent:
+        b.price_mode = data.price_mode
+    if "price" in sent:
+        b.price = data.price
+    if "category_id" in sent:
+        b.category_id = data.category_id or None
+    if "components" in sent:
+        if not data.components:
+            raise HTTPException(400, "A bundle needs at least one component")
+        await _validate_components(db, current.org_id, data.components)
+        for old in (await db.execute(select(BundleComponent).where(
+                BundleComponent.bundle_id == b.id))).scalars().all():
+            await db.delete(old)
+        for c in data.components:
+            db.add(BundleComponent(bundle_id=b.id, ref_type=c.ref_type, ref_id=c.ref_id, qty=c.qty, device_variant=bool(getattr(c, "device_variant", False))))
     await db.commit()
     return await _ser(db, b)
 
