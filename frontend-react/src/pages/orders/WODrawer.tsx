@@ -24,6 +24,8 @@ import CatalogPicker, { type CatalogItem } from "../../components/CatalogPicker"
 import StatusControl, { type FullStatus } from "../../components/StatusControl";
 import { escapeHtml } from "../../lib/safeHtml";
 import JobCardFields from "../../components/JobCardFields";
+import ReaderCharge from "../../components/ReaderCharge";
+import CardPaymentsList from "../../components/CardPaymentsList";
 
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
 type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean; order_item_id?: string | null };
@@ -1305,6 +1307,7 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
   // Busy guard: the ref blocks a second click landing before React re-renders the disabled button,
   // so a double-click can never post the same payment twice.
   const [payBusy, setPayBusy] = useState(false); const payBusyRef = useRef(false);
+  const [onReader, setOnReader] = useState(false);   // F2/F3: card taken on a reader instead of recorded by hand
   const submit = async () => {
     if (payBusyRef.current) return;
     payBusyRef.current = true; setPayBusy(true);
@@ -1421,6 +1424,8 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
         </div>
       )}
 
+      <CardPaymentsList orderId={orderId} reloadKey={data?.payments.length} onChanged={load} />
+
       {data && data.invoices.length === 0 && data.payments.length === 0 && <p className="text-xs text-ink-tertiary">No invoices or payments yet. Use Take Payment or Take Prepayment.</p>}
 
       <div className="bg-slate-50/90 p-4 rounded-xl border border-slate-200 flex items-center justify-between text-xs">
@@ -1445,10 +1450,16 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
               <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Account</label>
                 <select value={account} onChange={(e) => setAccount(e.target.value)} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl">{accts.length === 0 && <option value="">No account</option>}{accts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
             </div>
+            {modal === "pay" && method === "card" && can("can_take_card_payments") && (
+              <button onClick={() => setOnReader(true)} disabled={!(parseFloat(amount) > 0)} className="w-full py-2 rounded-xl border border-primary/30 bg-white text-primary text-xs font-bold hover:bg-blue-50 disabled:opacity-50 flex items-center justify-center gap-2"><M n="contactless" c="text-base" />Charge on reader</button>
+            )}
             <div className="flex justify-end gap-2 pt-1"><button onClick={() => setModal(null)} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button><button onClick={submit} disabled={payBusy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{payBusy ? "Recording…" : `Record ${modal === "prepay" ? "prepayment" : "payment"}`}</button></div>
           </div>
         </div>
       , document.body)}
+      {onReader && <ReaderCharge orderId={orderId} amount={parseFloat(amount) || 0} accountId={account || undefined}
+        onApproved={() => { onFlash("Card payment approved"); load(); }}
+        onClose={(c) => { setOnReader(false); if (c?.status === "succeeded") setModal(null); }} />}
     </div>
   );
 }

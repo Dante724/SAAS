@@ -550,6 +550,81 @@ async def order_payment_context(
     }
 
 
+async def _order_invoice(db, org_id, o, *, check_backdating=True):
+    """The invoice an order payment lands on; created (draft) when the order has none yet."""
+    from backend.services.order_money import primary_invoice
+    inv = await primary_invoice(db, o.id)
+    if not inv:
+        if check_backdating:
+            await _check_backdating(db, org_id)
+        inv = Invoice(invoice_number=await next_number(db, org_id, "invoice"), org_id=org_id,
+                      order_id=o.id, client_id=o.client_id, status="draft",
+                      subtotal=o.total or 0, total=o.total or 0, issued_at=datetime.utcnow())
+        db.add(inv)
+        await db.flush()
+    return inv
+
+
+async def post_order_payment(db, org_id, o, amount, acc, method, *, actor_id=None, reference=None,
+                             provider_ref=None, comment=None, check_backdating=True):
+    """Money in for a work order, into a cashbox: income transaction (+ the account's processing
+    fee), a Payment on the order's invoice, the client's ledger, the invoice status, and any open
+    pay links closed once nothing is owed. One poster for the Take payment dialog and for card
+    readers (services/terminal), so the two never drift. Caller logs, commits and notifies.
+    Returns (payment, fee)."""
+    from backend.services.order_money import cancel_open_pay_links
+    inv = await _order_invoice(db, org_id, o, check_backdating=check_backdating)
+
+    # default cash flow item: org's per-doc-type default (2b), else the "Sales" category
+    _org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
+    sales_item = None
+    if _org and _org.cash_category_tickets_id:
+        sales_item = (await db.execute(select(CashFlowItem).where(
+            CashFlowItem.id == _org.cash_category_tickets_id))).scalar_one_or_none()
+    if not sales_item:
+        sales_item = (await db.execute(
+            select(CashFlowItem).where(CashFlowItem.org_id == org_id, CashFlowItem.name == "Sales")
+        )).scalar_one_or_none()
+
+    # income transaction to the account
+    await post_transaction(db, org_id, acc.id, "invoice_payment", abs(amount),
+                           cash_flow_item_id=sales_item.id if sales_item else None,
+                           comment=comment or f"Payment for {o.order_number}", ref_type="order",
+                           ref_id=o.id, employee_id=actor_id)
+
+    # transaction fee (auto-deduct as expense)
+    fee = 0.0
+    if acc.fee_pct or acc.fee_fixed:
+        fee = q2(abs(amount) * acc.fee_pct / 100 + acc.fee_fixed)
+        if fee > 0:
+            fee_item = (await db.execute(
+                select(CashFlowItem).where(CashFlowItem.org_id == org_id, CashFlowItem.name == "Transaction fees")
+            )).scalar_one_or_none()
+            await post_transaction(db, org_id, acc.id, "fee", -fee,
+                                   cash_flow_item_id=fee_item.id if fee_item else None,
+                                   comment=f"Processing fee for {o.order_number}", ref_type="order",
+                                   ref_id=o.id, employee_id=actor_id)
+
+    pay = Payment(invoice_id=inv.id, order_id=o.id, client_id=o.client_id, method=method,
+                  kind="payment", account_id=acc.id, amount=amount, received_by_id=actor_id,
+                  reference=reference, provider_ref=provider_ref,
+                  # cash into a till counts toward that drawer's close (was never linked → a short
+                  # drawer looked balanced or "over")
+                  shift_id=await open_drawer_shift(db, org_id, acc) if method == "cash" else None)
+    db.add(pay)
+    if o.client_id:
+        await db.flush()
+        from backend.services.ledger import post_contact_ledger
+        await post_contact_ledger(db, org_id, o.client_id, "income", -abs(amount),
+                                  note=f"Payment for {o.order_number}", ref_type="payment",
+                                  ref_id=pay.id, created_by_id=actor_id)
+    inv.amount_paid = q2((inv.amount_paid or 0) + amount)   # quantize: float sums left paid invoices "partial"
+    inv.status = "paid" if inv.amount_paid >= q2(inv.total) else "partial"
+    await db.flush()
+    await cancel_open_pay_links(db, o)   # a link sent earlier must not charge the customer again
+    return pay, fee
+
+
 @router.post("/orders/{order_id}/pay")
 async def pay_order(
     order_id: str,
@@ -573,20 +648,10 @@ async def pay_order(
     if amount is None or amount <= 0:
         raise HTTPException(400, "Nothing to pay — this order is already settled" if remaining <= 0 else "Payment amount must be positive")
 
-    # ensure an invoice exists for this order
-    from backend.services.order_money import primary_invoice
-    inv = await primary_invoice(db, order_id)
-    if not inv:
-        await _check_backdating(db, current.org_id)
-        inv = Invoice(invoice_number=await next_number(db, current.org_id, "invoice"), org_id=current.org_id,
-                      order_id=order_id, client_id=o.client_id, status="draft",
-                      subtotal=o.total or 0, total=o.total or 0, issued_at=datetime.utcnow())
-        db.add(inv)
-        await db.flush()
-
     from backend.routers.feed import log_system_event
 
     if data.method == "balance":
+        inv = await _order_invoice(db, current.org_id, o)
         # Close on account — no cash movement; the payment reduces the client's receivable.
         # Build 124: post it through the unified ledger so the balance moves *and* the
         # movement is auditable (was a silent Client.balance write before).
@@ -615,54 +680,9 @@ async def pay_order(
     if not acc:
         raise HTTPException(404, "Account not found")
 
-    # default cash flow item: org's per-doc-type default (2b), else the "Sales" category
-    _org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
-    sales_item = None
-    if _org and _org.cash_category_tickets_id:
-        sales_item = (await db.execute(select(CashFlowItem).where(
-            CashFlowItem.id == _org.cash_category_tickets_id))).scalar_one_or_none()
-    if not sales_item:
-        sales_item = (await db.execute(
-            select(CashFlowItem).where(CashFlowItem.org_id == current.org_id, CashFlowItem.name == "Sales")
-        )).scalar_one_or_none()
-
-    # income transaction to the account
-    await post_transaction(db, current.org_id, acc.id, "invoice_payment", abs(amount),
-                           cash_flow_item_id=sales_item.id if sales_item else None,
-                           comment=f"Payment for {o.order_number}", ref_type="order",
-                           ref_id=order_id, employee_id=current.id)
-
-    # transaction fee (auto-deduct as expense)
-    fee = 0.0
-    if acc.fee_pct or acc.fee_fixed:
-        fee = q2(abs(amount) * acc.fee_pct / 100 + acc.fee_fixed)
-        if fee > 0:
-            fee_item = (await db.execute(
-                select(CashFlowItem).where(CashFlowItem.org_id == current.org_id, CashFlowItem.name == "Transaction fees")
-            )).scalar_one_or_none()
-            await post_transaction(db, current.org_id, acc.id, "fee", -fee,
-                                   cash_flow_item_id=fee_item.id if fee_item else None,
-                                   comment=f"Processing fee for {o.order_number}", ref_type="order",
-                                   ref_id=order_id, employee_id=current.id)
-
-    pay = Payment(invoice_id=inv.id, order_id=order_id, client_id=o.client_id, method=data.method,
-                  kind="payment", account_id=acc.id, amount=amount, received_by_id=current.id,
-                  # cash into a till counts toward that drawer's close (was never linked → a short
-                  # drawer looked balanced or "over")
-                  shift_id=await open_drawer_shift(db, current.org_id, acc) if data.method == "cash" else None)
-    db.add(pay)
-    if o.client_id:
-        await db.flush()
-        from backend.services.ledger import post_contact_ledger
-        await post_contact_ledger(db, current.org_id, o.client_id, "income", -abs(amount),
-                                  note=f"Payment for {o.order_number}", ref_type="payment",
-                                  ref_id=pay.id, created_by_id=current.id)
-    inv.amount_paid = q2((inv.amount_paid or 0) + amount)   # quantize: float sums left paid invoices "partial"
-    inv.status = "paid" if inv.amount_paid >= q2(inv.total) else "partial"
+    _pay, fee = await post_order_payment(db, current.org_id, o, amount, acc, data.method, actor_id=current.id)
     await log_system_event(db, current.org_id, "order", order_id,
                            f"Payment {amount} via {data.method} to {acc.name}")
-    await db.flush()
-    await cancel_open_pay_links(db, o)   # a link sent earlier must not charge the customer again
     await db.commit()
     # 144jc: payment_received notifications (client receipt + staff), best-effort.
     try:

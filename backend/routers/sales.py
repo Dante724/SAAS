@@ -166,6 +166,49 @@ async def _pos_redemptions(db, org_id, sale, client_id, gross, data):
     return q2(extra), detail
 
 
+@router.get("/lookup")
+async def lookup_code(
+    code: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_create_sales")),
+):
+    """F1 scan-to-cart: every active product whose SKU, barcode, internal code or MPN equals the
+    scanned code (case-insensitive), else the product a serial number belongs to. One match goes
+    straight into the cart; several let the cashier pick."""
+    code = (code or "").strip()
+    if not code:
+        raise HTTPException(422, "Scan or type a code")
+    low = code.lower()
+    fields = {"sku": Part.sku, "barcode": Part.barcode, "code": Part.code}
+    mpn_col = getattr(Part, "mpn", None)          # A3 adds Part.mpn; match it once it exists
+    if mpn_col is not None:
+        fields["mpn"] = mpn_col
+    base = select(Part).where(Part.org_id == current.org_id, Part.active == True)  # noqa: E712
+    parts = (await db.execute(base.where(or_(*[func.lower(c) == low for c in fields.values()]))
+                              .order_by(Part.name).limit(20))).scalars().all()
+    matched = {p.id: next((k for k in fields if (getattr(p, k, None) or "").lower() == low), "code") for p in parts}
+    if not parts:
+        from backend.models import SerializedItem
+        si = (await db.execute(select(SerializedItem).where(
+            SerializedItem.org_id == current.org_id, SerializedItem.serial_number == code))).scalars().first()
+        if si:
+            parts = (await db.execute(base.where(Part.id == si.part_id))).scalars().all()
+            matched = {p.id: "serial" for p in parts}
+    loc_id = current.location_id
+    stock = {}
+    if parts:
+        q = select(StockLevel.part_id, func.coalesce(func.sum(StockLevel.qty_available), 0)).where(
+            StockLevel.part_id.in_([p.id for p in parts]))
+        if loc_id:
+            q = q.where(StockLevel.location_id == loc_id)
+        stock = {pid: float(qty or 0) for pid, qty in (await db.execute(q.group_by(StockLevel.part_id))).all()}
+    return {"code": code, "items": [{
+        "id": p.id, "name": p.name, "sku": p.sku, "barcode": p.barcode, "code": p.code,
+        "mpn": getattr(p, "mpn", None), "sell_price": p.sell_price or 0,
+        "qty_available": stock.get(p.id, 0.0), "image_data": p.image_data, "matched_on": matched.get(p.id),
+    } for p in parts]}
+
+
 @router.get("")
 async def list_sales(
     location_id: Optional[str] = None,        # build 138: scope sales to a branch
@@ -202,6 +245,11 @@ async def delete_sale(
         raise HTTPException(404, "Sale not found")
     if sale.voided_at:
         raise HTTPException(409, "This sale was already deleted")
+    # F2: voiding only reverses the books; money taken on a card reader must go back to the card first.
+    from backend.services.terminal import unrefunded_sale_card_payment
+    if await unrefunded_sale_card_payment(db, sale.id) > 0:
+        raise HTTPException(409, "This sale was paid on a card reader. Refund the card payment first "
+                                 "(Recent sales › Card reader payments), then delete the sale.")
     reason = (reason or "Deleted").strip()[:300]
 
     lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id))).scalars().all()

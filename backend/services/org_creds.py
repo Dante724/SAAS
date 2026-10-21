@@ -114,15 +114,25 @@ async def _row(db: AsyncSession, org_id: str, provider: str) -> Optional[OrgInte
         OrgIntegrationCredential.provider == provider))).scalar_one_or_none()
 
 
-async def effective(db: AsyncSession, org_id: str, provider: str) -> dict:
+async def effective(db: AsyncSession, org_id: str, provider: str, *, read_only: bool = False) -> dict:
     """The credentials to actually use for this shop: its own keys if configured
-    and active, otherwise the operator-wide env defaults (may be empty)."""
+    and active, otherwise the operator-wide env defaults (may be empty).
+
+    F4: for payment providers this is also the live-money gate. Live Stripe keys or Square's
+    production env raise payment_guard.LivePaymentsRefused unless live payments are switched on,
+    so every caller that would move money is covered. Callers that only inspect the keys (status
+    badges, webhook signature lookup) pass read_only=True."""
     row = await _row(db, org_id, provider)
+    data = None
     if row and row.active:
         data = _decrypt(row.data_enc)
-        if any(v not in (None, "") for v in data.values()):
-            return data
-    return _env_creds(provider)
+        if not any(v not in (None, "") for v in data.values()):
+            data = None
+    creds = data if data is not None else _env_creds(provider)
+    if not read_only:
+        from backend.services.payment_guard import assert_allowed
+        assert_allowed(provider, creds)
+    return creds
 
 
 # The one field whose presence means "this provider is actually usable" — so an
@@ -156,6 +166,9 @@ async def set_creds(db: AsyncSession, org_id: str, provider: str, data: dict) ->
     # keep only known fields; drop blanks so a cleared field falls back to env
     clean = {f["key"]: str(data[f["key"]]).strip() for f in PROVIDER_FIELDS[provider]
              if f["key"] in data and str(data.get(f["key"]) or "").strip() != ""}
+    # F4: live payment credentials are refused unless live payments are switched on in production.
+    from backend.services.payment_guard import assert_allowed
+    assert_allowed(provider, clean)
     row = await _row(db, org_id, provider)
     if not row:
         row = OrgIntegrationCredential(org_id=org_id, provider=provider)

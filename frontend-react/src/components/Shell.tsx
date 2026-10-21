@@ -28,7 +28,7 @@ import {
   History, Hourglass, LineChart, Lightbulb, Unlink, Truck, Lock, LockOpen, Merge,
   CircleDollarSign, Percent, ShieldAlert, Globe, Gift, RotateCcw, SearchCheck, VideoOff,
   ShieldCheck, Target, EyeOff, Car, Sailboat, Bike, Laptop, Cog, Upload,
-  ShoppingBag, Split,
+  ShoppingBag, Split, Nfc,
   LogOut, Menu as MenuIcon,
 } from "lucide-react";
 
@@ -72,7 +72,7 @@ const ICONS: Record<string, any> = {
   notifications: Bell, pause: Pause, play_arrow: Play, more_vert: MoreVertical, more_horiz: MoreHorizontal,
   print: Printer, save: Save, send: Send, campaign: Send, smartphone: Smartphone,
   photo_camera: Camera, add_a_photo: Camera, image: ImageIcon,
-  barcode: Barcode, qr_code_scanner: QrCode, scan: ScanLine,
+  barcode: Barcode, qr_code_scanner: QrCode, scan: ScanLine, contactless: Nfc,
   dashboard: LayoutDashboard, light_mode: Sun, dark_mode: Moon, language: Languages, logout: LogOut,
   // 144hx — document editor icons (were falling back to Circle)
   edit: Pencil, visibility: Eye, directions_car: Car, sailing: Sailboat, pedal_bike: Bike, laptop: Laptop, settings_suggest: Cog, upload: Upload, visibility_off: EyeOff, data_object: Braces, expand_less: ChevronUp,
