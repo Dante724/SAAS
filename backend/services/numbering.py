@@ -25,6 +25,7 @@ DEFAULT_TEMPLATES = {
     "sale": "S-{C:5}",
     "po": "PO-{C:5}",
     "transfer": "T-{C:5}",
+    "credit_note": "CN-{C:5}",
 }
 
 _TOKEN = re.compile(r"\{(D|M|Y|C(?::(\d+))?)\}")
@@ -82,12 +83,16 @@ async def _existing_count(db, org_id, doc_type) -> int:
 
     import backend.models as M
     name = {"order": "Order", "invoice": "Invoice", "sale": "Sale",
-            "po": "PurchaseOrder", "transfer": "StockTransfer", "inquiry": "Order"}.get(doc_type)
+            "po": "PurchaseOrder", "transfer": "StockTransfer", "inquiry": "Order",
+            "credit_note": "CreditNote"}.get(doc_type)
     model = getattr(M, name, None) if name else None
     if model is None or not hasattr(model, "org_id"):
         return 0
+    q = _sel(func.count()).select_from(model).where(model.org_id == org_id)
+    if doc_type == "credit_note":
+        q = q.where(model.number.isnot(None))     # drafts carry no number until issued
     try:
-        return (await db.execute(_sel(func.count()).select_from(model).where(model.org_id == org_id))).scalar() or 0
+        return (await db.execute(q)).scalar() or 0
     except Exception:
         return 0
 
@@ -130,8 +135,9 @@ async def next_number(
 
 
 async def _number_taken(db: AsyncSession, org_id: str, doc_type: str, number: str) -> bool:
-    from backend.models import Invoice, PurchaseOrder
-    col = {"invoice": (Invoice, Invoice.invoice_number), "po": (PurchaseOrder, PurchaseOrder.po_number)}.get(doc_type)
+    from backend.models import CreditNote, Invoice, PurchaseOrder
+    col = {"invoice": (Invoice, Invoice.invoice_number), "po": (PurchaseOrder, PurchaseOrder.po_number),
+           "credit_note": (CreditNote, CreditNote.number)}.get(doc_type)
     if col is None:
         return False
     model, number_col = col

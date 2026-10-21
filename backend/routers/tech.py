@@ -300,7 +300,7 @@ async def client_history(
         .order_by(Invoice.created_at.desc()))).scalars().all()
     inv_out = [{"id": i.id, "invoice_number": i.invoice_number, "status": i.status,
                 "total": i.total, "amount_paid": i.amount_paid,
-                "balance": q2((i.total or 0) - (i.amount_paid or 0)),
+                "balance": q2(max((i.total or 0) - (i.amount_paid or 0) - (i.credited or 0), 0)),
                 "issued_at": i.issued_at.isoformat() if i.issued_at else None} for i in invoices]
 
     devices = (await db.execute(select(Device).where(

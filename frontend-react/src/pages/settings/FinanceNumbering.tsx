@@ -10,7 +10,7 @@ import { confirmDialog } from "../../lib/dialog";
 
 const DOC_LABEL: Record<string, string> = {
   order: "Work orders", invoice: "Invoices", inquiry: "Inquiries", sale: "Counter sales", po: "Purchase orders",
-  transfer: "Stock transfers", estimate: "Estimates",
+  transfer: "Stock transfers", estimate: "Estimates", credit_note: "Credit notes",
 };
 const docLabel = (d: string) => DOC_LABEL[d] || (d.charAt(0).toUpperCase() + d.slice(1)).replace(/_/g, " ");
 
@@ -51,7 +51,7 @@ const Field = ({ label, hint, children }: { label: string; hint?: string; childr
   <label className="block"><span className="block text-xs font-medium text-ink-secondary mb-1.5">{label}</span>{children}{hint && <span className="block text-[11px] text-ink-tertiary mt-1">{hint}</span>}</label>
 );
 
-const DOC_ICON: Record<string, string> = { order: "build", invoice: "receipt_long", inquiry: "contact_support", sale: "point_of_sale", po: "shopping_cart", transfer: "swap_horiz", estimate: "request_quote" };
+const DOC_ICON: Record<string, string> = { order: "build", invoice: "receipt_long", inquiry: "contact_support", sale: "point_of_sale", po: "shopping_cart", transfer: "swap_horiz", estimate: "request_quote", credit_note: "undo" };
 
 export default function FinanceNumbering({ currency, shop }: { currency: string; shop?: { name?: string; address?: string; phone?: string; email?: string; logo?: string | null } }) {
   const [num, setNum] = useState<any[] | null>(null);

@@ -312,6 +312,26 @@ async def print_invoice(
     return _pdf(pdf, f"invoice-{inv.invoice_number or invoice_id[:8]}.pdf")
 
 
+@router.get("/credit-notes/{cn_id}")
+async def print_credit_note(
+    cn_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_view_credit_notes")),
+):
+    """opb — the credit note as a PDF (same layout as invoices)."""
+    from sqlalchemy.orm import selectinload
+
+    from backend.models import CreditNote
+    from backend.services.credit_notes import build_credit_note_pdf
+    cn = (await db.execute(select(CreditNote).where(CreditNote.id == cn_id, CreditNote.org_id == current.org_id)
+                           .options(selectinload(CreditNote.lines)))).scalar_one_or_none()
+    if not cn:
+        raise HTTPException(404, "Credit note not found")
+    pdf = await build_credit_note_pdf(db, cn, org_name=await _org_name(db, current.org_id),
+                                      lang=await _org_lang(db, current.org_id))
+    return _pdf(pdf, f"credit-note-{cn.number or cn_id[:8]}.pdf")
+
+
 @router.get("/write-offs/{doc_id}")
 async def print_write_off(
     doc_id: str,

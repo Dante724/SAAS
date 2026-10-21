@@ -32,9 +32,31 @@ async def net_paid(db: AsyncSession, order_id: str) -> float:
     return q2(paid - refunded)
 
 
+async def credited(db: AsyncSession, order_id: str) -> float:
+    """Issued credit notes on the (non-cancelled) invoices billing this order — they lower what's
+    owed. An invoice billing several orders shares its credit between them by order total."""
+    from backend.models import InvoiceOrder
+    linked = select(InvoiceOrder.invoice_id).where(InvoiceOrder.order_id == order_id)
+    invs = (await db.execute(select(Invoice).where(
+        (Invoice.order_id == order_id) | Invoice.id.in_(linked), Invoice.credited > 0,
+        Invoice.status.notin_(("void", "voided", "cancelled", "canceled"))))).scalars().all()
+    total = 0.0
+    for inv in invs:
+        oids = (await db.execute(select(InvoiceOrder.order_id).where(
+            InvoiceOrder.invoice_id == inv.id))).scalars().all() or [inv.order_id]
+        if len(oids) <= 1:
+            total += float(inv.credited or 0)
+            continue
+        amounts = dict((await db.execute(select(Order.id, Order.total).where(Order.id.in_(oids)))).all())
+        whole = sum(float(v or 0) for v in amounts.values())
+        share = float(amounts.get(order_id) or 0) / whole if whole else 1 / len(oids)
+        total += float(inv.credited or 0) * share
+    return q2(total)
+
+
 async def balance_due(db: AsyncSession, order: Order) -> float:
-    """Amount still owed on the order (never negative)."""
-    return q2(max(0.0, float(order.total or 0) - await net_paid(db, order.id)))
+    """Amount still owed on the order (never negative), net of payments and credit notes."""
+    return q2(max(0.0, float(order.total or 0) - await net_paid(db, order.id) - await credited(db, order.id)))
 
 
 async def overpaid(db: AsyncSession, order: Order) -> float:

@@ -31,6 +31,7 @@ from backend.services.auth import assert_perm, has_perm, require_perm, record_sc
 from backend.core import paging as _paging
 from backend.services.numbering import next_number
 from backend.services.money import q2
+from backend.services.invoicing import settle_status
 
 
 async def _check_backdating(db, org_id):
@@ -600,7 +601,7 @@ async def pay_order(
                                       note=f"Payment for {o.order_number}", ref_type="payment",
                                       ref_id=pay.id, created_by_id=current.id)
         inv.amount_paid = q2((inv.amount_paid or 0) + amount)   # quantize: float sums left paid invoices "partial"
-        inv.status = "paid" if inv.amount_paid >= q2(inv.total) else "partial"
+        settle_status(inv)
         await log_system_event(db, current.org_id, "order", order_id,
                                f"Closed on client balance: {amount}")
         await db.flush()
@@ -658,7 +659,7 @@ async def pay_order(
                                   note=f"Payment for {o.order_number}", ref_type="payment",
                                   ref_id=pay.id, created_by_id=current.id)
     inv.amount_paid = q2((inv.amount_paid or 0) + amount)   # quantize: float sums left paid invoices "partial"
-    inv.status = "paid" if inv.amount_paid >= q2(inv.total) else "partial"
+    settle_status(inv)
     await log_system_event(db, current.org_id, "order", order_id,
                            f"Payment {amount} via {data.method} to {acc.name}")
     await db.flush()

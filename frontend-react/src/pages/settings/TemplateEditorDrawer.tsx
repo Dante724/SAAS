@@ -12,7 +12,7 @@ type Grp = { group: string; items: string[] };
 const MOST_USED = ["{Company Name}", "{Company Logo}", "{Company Phone}", "{Client Name}", "{Client Phone}", "{Order Number}",
   "{Order Created Date}", "{Asset Brand}", "{Asset Model}", "{Asset Serial Number}", "{Order Complaint}", "{Items Table}",
   "{All Items Table}", "{Order Total}", "{Order Balance Due}", "{Barcode}"];
-const DOC_TYPES = ["estimate", "invoice", "receipt", "work_order", "label", "other"];
+const DOC_TYPES = ["estimate", "invoice", "credit_note", "receipt", "work_order", "label", "other"];
 // small identifying icon per variable group (Material Symbols names)
 const GROUP_ICON: Record<string, string> = {
   "Most used": "auto_awesome", Company: "storefront", "Legal entity": "gavel", Interactive: "bolt", Client: "person",

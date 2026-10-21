@@ -76,6 +76,9 @@ CATALOG = {
         ("can_edit_invoices", "Edit invoices"),
         ("can_delete_invoices", "Delete invoices"),
         ("can_edit_issued_invoices", "Edit issued invoices"),
+        ("can_view_credit_notes", "View credit notes"),
+        ("can_create_credit_notes", "Create and edit draft credit notes"),
+        ("can_issue_credit_notes", "Issue and cancel credit notes"),
     ],
     "Finance": [
         ("can_create_incomes", "Create incomes"),
@@ -150,7 +153,7 @@ _NOT_FOR_STAFF = {
     "can_export_sales": False,
     "can_delete_clients": False, "can_delete_orders": False, "can_delete_sales": False,
     "can_delete_refunds": False, "can_delete_products": False, "can_delete_invoices": False,
-    "can_delete_tickets": False,
+    "can_delete_tickets": False, "can_issue_credit_notes": False,
     "can_view_purchase_price": False, "can_see_profit": False, "can_set_cost_price": False,
     "can_see_asset_cost": False,
 }
