@@ -89,7 +89,6 @@ POST /api/chats/threads/{tid}/send [staff]
 POST /api/chats/threads/{tid}/to-lead [staff]
 POST /api/chats/threads/{tid}/to-order [staff]
 # clients
-POST /api/clients [staff]
 POST /api/clients/merge/preview [staff]
 PATCH /api/clients/{client_id} [staff]
 PUT /api/clients/{client_id} [staff]
@@ -191,8 +190,6 @@ POST /api/tech/notifications/read-all [staff]
 POST /api/tech/notifications/{nid}/dismiss [staff]
 POST /api/tech/notifications/{nid}/read [staff]
 PUT /api/tech/preferences [staff]
-# telephony
-POST /api/telephony/call [staff]
 # timeclock
 POST /api/timeclock/entries [staff]
 DELETE /api/timeclock/entries/{eid} [staff]

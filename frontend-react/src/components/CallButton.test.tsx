@@ -2,6 +2,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+
+let allowCalls = true;
+vi.mock("../context/Me", async (orig) => {
+  const real: any = await orig();
+  return { ...real, useMe: () => ({ can: (c: string) => c !== "can_make_calls" || allowCalls }) };
+});
 import CallButton, { _resetCallingCache } from "./CallButton";
 
 const reply = (body: unknown) => ({ ok: true, status: 200, statusText: "", headers: new Headers({ "content-type": "application/json" }), json: async () => body, text: async () => JSON.stringify(body) }) as Response;
@@ -13,7 +19,7 @@ function serve(enabled: boolean) {
     return reply({ enabled });
   }));
 }
-beforeEach(() => _resetCallingCache());
+beforeEach(() => { _resetCallingCache(); allowCalls = true; });
 afterEach(() => vi.unstubAllGlobals());
 
 describe("CallButton", () => {
@@ -22,6 +28,15 @@ describe("CallButton", () => {
     const { container } = render(<CallButton phone="+14155550100" clientId="c1" />);
     await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("is hidden when the role can't place calls, without asking the server", async () => {
+    serve(true);
+    allowCalls = false;
+    const { container } = render(<CallButton phone="+14155550100" clientId="c1" />);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(container).toBeEmptyDOMElement();
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("places a call for the contact", async () => {
