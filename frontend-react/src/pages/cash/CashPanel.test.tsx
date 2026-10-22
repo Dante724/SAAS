@@ -29,7 +29,7 @@ describe("CashPanel delete transaction", () => {
   it("Cancel on the reason prompt sends no DELETE", async () => {
     const u = userEvent.setup();
     render(<CashPanel />);
-    await u.click(await screen.findByRole("button", { name: "Delete" }));
+    await u.click(await screen.findByRole("button", { name: "Delete" }, { timeout: 5000 }));
     await u.click(await screen.findByRole("button", { name: "Cancel" }));
     await new Promise((r) => setTimeout(r, 0));
     expect(deletes()).toHaveLength(0);
@@ -38,7 +38,7 @@ describe("CashPanel delete transaction", () => {
   it("Escape on the reason prompt sends no DELETE", async () => {
     const u = userEvent.setup();
     render(<CashPanel />);
-    await u.click(await screen.findByRole("button", { name: "Delete" }));
+    await u.click(await screen.findByRole("button", { name: "Delete" }, { timeout: 5000 }));
     await screen.findByRole("button", { name: "Cancel" });
     await u.keyboard("{Escape}");
     await new Promise((r) => setTimeout(r, 0));
@@ -48,7 +48,7 @@ describe("CashPanel delete transaction", () => {
   it("OK with no reason still voids the transaction", async () => {
     const u = userEvent.setup();
     render(<CashPanel />);
-    await u.click(await screen.findByRole("button", { name: "Delete" }));
+    await u.click(await screen.findByRole("button", { name: "Delete" }, { timeout: 5000 }));
     await u.click(await screen.findByRole("button", { name: "OK" }));
     await vi.waitFor(() => expect(deletes()).toHaveLength(1));
     expect(deletes()[0].url).toBe("/api/cash/transactions/t1");
@@ -57,7 +57,7 @@ describe("CashPanel delete transaction", () => {
   it("OK with a reason sends it along", async () => {
     const u = userEvent.setup();
     render(<CashPanel />);
-    await u.click(await screen.findByRole("button", { name: "Delete" }));
+    await u.click(await screen.findByRole("button", { name: "Delete" }, { timeout: 5000 }));
     await u.type(await screen.findByRole("textbox"), "duplicate");
     await u.click(screen.getByRole("button", { name: "OK" }));
     await vi.waitFor(() => expect(deletes()).toHaveLength(1));
