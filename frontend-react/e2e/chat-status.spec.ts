@@ -18,8 +18,20 @@ async function api(page: Page, method: string, path: string, body?: unknown) {
 }
 
 const tab = (page: Page, name: RegExp) => page.getByRole("tablist", { name: "Chat status" }).getByRole("tab", { name });
-const count = async (page: Page, name: RegExp) =>
-  Number((await tab(page, name).locator("span.tabular-nums").innerText()).trim());
+// Empty tabs hide their "0", so a missing number reads as zero.
+const count = async (page: Page, name: RegExp) => {
+  const n = tab(page, name).locator("span.tabular-nums");
+  return (await n.count()) ? Number((await n.innerText()).trim()) : 0;
+};
+// The status select lives in the thread's "More actions" menu.
+async function statusOf(page: Page) {
+  const more = page.getByRole("button", { name: "More actions" });
+  await more.click();
+  const v = await page.locator("#chat-status").inputValue();
+  await page.keyboard.press("Escape");                     // close the menu again
+  await expect(more).toHaveAttribute("aria-expanded", "false");
+  return v;
+}
 
 test("chat moves through new → replied → reply needed → completed, and in and out of spam", async ({ page }) => {
   await page.goto("/chats");
@@ -44,16 +56,16 @@ test("chat moves through new → replied → reply needed → completed, and in 
   await expect.poll(() => count(page, /^New/)).toBe(newBefore - 1);
   await tab(page, /^Replied/).click();
   await page.getByRole("button", { name: new RegExp(who) }).click();
-  await expect(page.getByRole("combobox", { name: "Chat status" })).toHaveValue("replied");
+  expect(await statusOf(page)).toBe("replied");
 
   // The customer writes back → Reply needed.
   await api(page, "POST", `/chats/threads/${t.id}/inbound`, { body: "Great, see you at 5." });
   await tab(page, /^Reply needed/).click();
   await page.getByRole("button", { name: new RegExp(who) }).click();
-  await expect(page.getByRole("combobox", { name: "Chat status" })).toHaveValue("reply_needed");
+  expect(await statusOf(page)).toBe("reply_needed");
 
-  // Complete it by hand: it leaves the Reply needed tab.
-  await page.getByRole("combobox", { name: "Chat status" }).selectOption("completed");
+  // Complete it with one click: it leaves the Reply needed tab.
+  await page.getByRole("button", { name: "Complete", exact: true }).click();
   await expect(page.getByText("Marked as completed")).toBeVisible();
   await expect(page.getByRole("button", { name: new RegExp(who) })).toHaveCount(0);
   await tab(page, /^Completed/).click();
@@ -61,6 +73,7 @@ test("chat moves through new → replied → reply needed → completed, and in 
 
   // Spam, then restore.
   const spamBefore = await count(page, /^Spam/);
+  await page.getByRole("button", { name: "More actions" }).click();
   await page.getByRole("button", { name: "Mark as spam" }).click();
   await expect(page.getByText("Moved to spam")).toBeVisible();
   await expect.poll(() => count(page, /^Spam/)).toBe(spamBefore + 1);

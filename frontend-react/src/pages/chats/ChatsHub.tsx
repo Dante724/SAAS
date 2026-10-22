@@ -56,6 +56,13 @@ export default function ChatsHub() {
   const [text, setText] = useState("");
   const [convMenu, setConvMenu] = useState(false);
   const [more, setMore] = useState(false);
+  // Escape closes whichever thread menu is open (keyboard users can't reach the backdrop).
+  useEffect(() => {
+    if (!more && !convMenu) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setMore(false); setConvMenu(false); } };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [more, convMenu]);
   const [toast, setToast] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLInputElement>(null);

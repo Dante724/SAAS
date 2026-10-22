@@ -103,6 +103,17 @@ describe("ChatsHub spam", () => {
     expect(await screen.findByText("Marked as completed")).toBeInTheDocument();
   });
 
+  it("closes the more menu with Escape", async () => {
+    const u = userEvent.setup();
+    render(<ChatsHub />);
+    const more = await screen.findByRole("button", { name: "More actions" });
+    await u.click(more);
+    expect(more).toHaveAttribute("aria-expanded", "true");
+    await u.keyboard("{Escape}");
+    expect(more).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: /Mark as spam/ })).toBeNull();
+  });
+
   it("shows the new status in the header after a reply, even when the chat leaves the tab", async () => {
     const u = userEvent.setup();
     render(<ChatsHub />);
