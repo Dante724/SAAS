@@ -592,6 +592,10 @@ async def record_payment(
         raise HTTPException(404, "Invoice not found")
     if inv.status in ("cancelled", "canceled"):
         raise HTTPException(409, "This invoice was deleted and can't take payments")
+    from backend.services.credit_notes import reader_busy
+    if await reader_busy(db, inv):          # the card on the reader would collect it a second time
+        raise HTTPException(409, "A card reader charge for this invoice is still in progress. "
+                                 "Finish or cancel it on the reader first.")
     # Negative amounts used to post +|amount| into the cashbox while reducing amount_paid.
     if data.amount is None or data.amount <= 0:
         raise HTTPException(400, "Payment amount must be positive")
@@ -1067,7 +1071,8 @@ async def finance_summary(
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
     total_revenue = (await db.execute(
-        select(func.sum(Invoice.total)).where(Invoice.org_id == current.org_id, Invoice.status == "paid")
+        # credited revenue was never earned: a paid invoice counts what's left after its credit notes
+        select(func.sum(Invoice.total - Invoice.credited)).where(Invoice.org_id == current.org_id, Invoice.status == "paid")
     )).scalar() or 0
     total_outstanding = (await db.execute(
         select(func.sum(Invoice.total - Invoice.amount_paid - Invoice.credited))

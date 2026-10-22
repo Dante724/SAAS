@@ -466,14 +466,15 @@ async def track_einvoice(token: str, db: AsyncSession = Depends(get_db)):
 # ════════════════════════════════════════════════════════════
 async def _paid_fields(db: AsyncSession, order: "Order", fx) -> dict:
     """amount_paid / balance_due (customer currency) and paid_in_full for one job."""
-    from backend.services.order_money import net_paid
+    from backend.services.order_money import balance_due, net_paid
     total = float(order.total or 0)
     paid = max(0.0, await net_paid(db, order.id))
+    due = await balance_due(db, order)          # net of payments, refunds and credit notes
     rate = fx or 1
     return {
         "amount_paid": q2(paid * rate),
-        "balance_due": q2(max(total - paid, 0) * rate),
-        "paid_in_full": total > 0 and paid >= total,
+        "balance_due": q2(due * rate),
+        "paid_in_full": total > 0 and due <= 0,
     }
 
 

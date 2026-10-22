@@ -414,7 +414,7 @@ async def test_migration_grants_credit_note_codes_to_explicit_roles():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert mod.revision.startswith("opb")   # down_revision is re-chained at integration
-    assert mod._GRANTS["can_issue_credit_notes"] == "can_edit_issued_invoices"
+    assert "can_edit_issued_invoices" in mod._GRANTS["can_issue_credit_notes"]
 
 
 async def test_invoice_with_issued_credit_cant_be_cancelled(client):

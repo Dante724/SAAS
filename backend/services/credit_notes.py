@@ -80,6 +80,9 @@ async def issue(db: AsyncSession, cn: CreditNote, actor_id: str | None) -> None:
         inv = await lock_invoice(db, cn.org_id, cn.invoice_id)
         if (inv.status or "") in VOID_STATUSES:
             raise HTTPException(409, "That invoice was cancelled, so it can't be credited")
+        if await reader_busy(db, inv):
+            raise HTTPException(409, "A card reader charge for this invoice is still in progress. "
+                                     "Finish or cancel it on the reader before issuing a credit note.")
         room = creditable(inv)
         if total > room:
             raise HTTPException(422, f"This credit note is more than the invoice still allows ({room})")
@@ -92,10 +95,28 @@ async def issue(db: AsyncSession, cn: CreditNote, actor_id: str | None) -> None:
     if inv is not None:
         inv.credited = float(d2(inv.credited or 0) + total)
         settle_status(inv)
+        from backend.services.order_money import revoke_links_above_balance
+        await db.flush()
+        await revoke_links_above_balance(db, inv)     # a link for the old amount would overcharge
     what = f"invoice {inv.invoice_number}" if inv is not None else "client credit"
     await post_contact_ledger(db, cn.org_id, cn.client_id, "credit_note", float(-total),
                               note=f"Credit note {cn.number} ({what})", ref_type="credit_note",
                               ref_id=cn.id, created_by_id=actor_id)
+
+
+async def invoice_order_ids(db: AsyncSession, inv: Invoice) -> set:
+    """Every work order an invoice bills: its link rows plus the primary order_id."""
+    from backend.models import InvoiceOrder
+    return set((await db.execute(select(InvoiceOrder.order_id).where(
+        InvoiceOrder.invoice_id == inv.id))).scalars().all()) | ({inv.order_id} if inv.order_id else set())
+
+
+async def reader_busy(db: AsyncSession, inv: Invoice) -> bool:
+    from backend.services.order_money import reader_charge_in_flight
+    for oid in await invoice_order_ids(db, inv):
+        if await reader_charge_in_flight(db, oid):
+            return True
+    return False
 
 
 async def cancel(db: AsyncSession, cn: CreditNote, actor_id: str | None) -> None:

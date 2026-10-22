@@ -21,6 +21,7 @@ from backend.models import (
     Client,
     Employee,
     Invoice,
+    InvoiceOrder,
     Location,
     Order,
     Organisation,
@@ -529,24 +530,21 @@ async def order_payment_context(
     by_method = {"cash": [], "cashless": [], "card": []}
     for a in accts:
         by_method.setdefault(a.payment_option, []).append(_ser_account(a))
-    # all payments + prepayments against this order (across invoices + direct)
-    paid = (await db.execute(
-        select(func.coalesce(func.sum(Payment.amount), 0)).select_from(Payment)
-        .where(Payment.order_id == order_id, Payment.kind != "refund")
-    )).scalar() or 0
+    # Paid net of refunds, and what's still owed net of credit notes: the shared definitions the
+    # pay endpoint enforces, so the pre-filled amount is never more than the balance due.
+    from backend.services.order_money import balance_due, credited, net_paid, overpaid
     prepaid = (await db.execute(
         select(func.coalesce(func.sum(Payment.amount), 0)).select_from(Payment)
         .where(Payment.order_id == order_id, Payment.kind == "prepayment")
     )).scalar() or 0
-    total = o.total or 0
-    remaining = q2(total - paid)
     return {
-        "order_total": total,
+        "order_total": o.total or 0,
         "item_cost": (o.labour_total or 0) + (o.parts_total or 0),
-        "already_paid": paid,
+        "already_paid": await net_paid(db, order_id),
+        "credited": await credited(db, order_id),
         "prepaid": prepaid,
-        "remaining": max(remaining, 0),
-        "overpaid": max(-remaining, 0),   # refund due if prepayments exceed total
+        "remaining": await balance_due(db, o),
+        "overpaid": await overpaid(db, o),   # refund due if prepayments exceed total
         "accounts_by_method": by_method,
     }
 
@@ -562,6 +560,8 @@ async def _order_invoice(db, org_id, o, *, check_backdating=True):
                       order_id=o.id, client_id=o.client_id, status="draft",
                       subtotal=o.total or 0, total=o.total or 0, issued_at=datetime.utcnow())
         db.add(inv)
+        await db.flush()
+        db.add(InvoiceOrder(invoice_id=inv.id, order_id=o.id, sort_order=0))   # every billed order is linked
         await db.flush()
     return inv
 
@@ -640,14 +640,21 @@ async def pay_order(
         Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
-    # remaining = total minus everything already paid, net of refunds (shared definition)
-    from backend.services.order_money import balance_due, cancel_open_pay_links
+    # remaining = total minus everything already paid, net of refunds and credit notes (shared definition)
+    from backend.services.order_money import balance_due, cancel_open_pay_links, reader_charge_in_flight
+    if await reader_charge_in_flight(db, order_id):
+        raise HTTPException(409, "A card reader charge for this order is still in progress. "
+                                 "Finish or cancel it on the reader first.")
     remaining = await balance_due(db, o)
     amount = data.amount if data.amount is not None else max(remaining, 0)
     # Guard: positive amounts only, and don't let a "pay the balance" tap double-post once the
     # order is already settled (double-click / retry → remaining 0 → amount 0 → rejected here).
     if amount is None or amount <= 0:
         raise HTTPException(400, "Nothing to pay — this order is already settled" if remaining <= 0 else "Payment amount must be positive")
+    # Never more than the balance due (credit notes included): money for later goes in as a
+    # prepayment, an invoice overpayment through Invoices › Record payment.
+    if q2(amount) > q2(remaining):
+        raise HTTPException(400, f"Payment exceeds the balance due ({q2(remaining):g})")
 
     from backend.routers.feed import log_system_event
 

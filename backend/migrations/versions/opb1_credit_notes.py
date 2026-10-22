@@ -4,8 +4,10 @@
 - invoices.credited: sum of issued credit notes linked to the invoice.
 - Existing explicit (allow-list) roles get the credit-note codes that match what they can already
   do with invoices, so a Manager role does not silently lose access to a new document type:
-  can_view_invoices → can_view_credit_notes, can_create_invoices → can_create_credit_notes,
-  can_edit_issued_invoices → can_issue_credit_notes.
+  can_view_invoices → can_view_credit_notes, can_create_invoices → can_create_credit_notes.
+  Issuing moves money (it mints client credit), so can_issue_credit_notes goes only to roles that
+  already hold Edit issued invoices AND the money codes (can_view_finance + can_create_returns);
+  technician-style roles (Specialist / Partner templates deny can_view_finance) never get it.
 
 Revision ID: opb1
 Revises: opc1
@@ -20,11 +22,28 @@ down_revision = "opc1"
 branch_labels = None
 depends_on = None
 
+# new code → codes the role must ALL already hold
 _GRANTS = {
-    "can_view_credit_notes": "can_view_invoices",
-    "can_create_credit_notes": "can_create_invoices",
-    "can_issue_credit_notes": "can_edit_issued_invoices",
+    "can_view_credit_notes": ("can_view_invoices",),
+    "can_create_credit_notes": ("can_create_invoices",),
+    "can_issue_credit_notes": ("can_edit_issued_invoices", "can_view_finance", "can_create_returns"),
 }
+
+
+def grants_for(perms: dict, explicit: bool = True) -> dict:
+    """Credit-note codes to write for one role (codes it already sets are left alone).
+
+    Explicit roles are default-deny: grant a code only when the role holds every source code.
+    Legacy roles are default-allow (a code is on unless set to False), so they'd get every new code
+    for free: write can_issue_credit_notes=False unless they hold the money codes."""
+    if explicit:
+        return {new: True for new, needs in _GRANTS.items()
+                if new not in perms and all(perms.get(c) is True for c in needs)}
+    if perms.get("all") == "write" or "can_issue_credit_notes" in perms:
+        return {}                                   # the shop creator's admin role keeps everything
+    if all(perms.get(c) is not False for c in _GRANTS["can_issue_credit_notes"]):
+        return {}
+    return {"can_issue_credit_notes": False}
 
 
 def upgrade() -> None:
@@ -84,20 +103,15 @@ def upgrade() -> None:
     with op.batch_alter_table("invoices") as b:
         b.add_column(sa.Column("credited", sa.Numeric(12, 2, asdecimal=False), nullable=False, server_default="0"))
 
-    # Grant the new codes to explicit roles that already hold the matching invoice code.
+    # Grant (or, for legacy default-allow roles, withhold) the new codes — see grants_for.
     bind = op.get_bind()
     roles = sa.table("roles", sa.column("id", sa.String), sa.column("permissions", sa.JSON),
                      sa.column("perms_explicit", sa.Boolean))
     for rid, perms, explicit in bind.execute(sa.select(roles.c.id, roles.c.permissions, roles.c.perms_explicit)).fetchall():
-        if not explicit:
-            continue        # legacy roles are default-allow: they already get the new codes
         p = perms if isinstance(perms, dict) else json.loads(perms or "{}")
-        changed = False
-        for new, source in _GRANTS.items():
-            if new not in p and p.get(source) is True:
-                p[new] = True
-                changed = True
-        if changed:
+        add = grants_for(p, bool(explicit))
+        if add:
+            p.update(add)
             bind.execute(roles.update().where(roles.c.id == rid).values(permissions=p))
 
 

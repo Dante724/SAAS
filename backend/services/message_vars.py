@@ -162,7 +162,7 @@ async def order_values(db: AsyncSession, org_id: str, order, *texts: str | None,
                        issue_links: bool = True) -> dict[str, str]:
     """Values for every short token used in `texts`, for this order. Money is shown in the
     order's display currency (order override → client preference → org base), cents kept."""
-    from backend.models import Appointment, Invoice
+    from backend.models import Appointment
     from backend.services import currency as _cur
     want = _wanted(texts)
     if not want:
@@ -188,10 +188,9 @@ async def order_values(db: AsyncSession, org_id: str, order, *texts: str | None,
 
         def money(n):
             return _cur.format_money(float(n or 0) * fx, ci["symbol"], ci["code"])
-        paid = (await db.execute(select(func.coalesce(func.sum(Invoice.amount_paid), 0))
-                                 .where(Invoice.order_id == order.id))).scalar() or 0
+        from backend.services.order_money import balance_due
         vals["total"] = money(order.total)
-        vals["balance_due"] = money(max(float(order.total or 0) - float(paid), 0))
+        vals["balance_due"] = money(await balance_due(db, order))   # net of refunds and credit notes
     if "scheduled_for" in want:
         when = order.scheduled_for
         if when is None:             # fall back to the job's next booked appointment

@@ -16,7 +16,7 @@ from backend.core import paging as _paging
 from backend.db.database import get_db
 from backend.models import Client, CreditNote, Employee, Invoice
 from backend.services import credit_notes as svc
-from backend.services.auth import record_scope, require_perm
+from backend.services.auth import assert_perm, record_scope, require_perm
 from backend.services.invoicing import VOID_STATUSES
 
 router = APIRouter(prefix="/api/finance/credit-notes", tags=["credit-notes"],
@@ -207,6 +207,10 @@ async def issue_credit_note(
     current: Employee = Depends(require_perm("can_issue_credit_notes")),
 ):
     cn = await _load(db, current.org_id, cn_id, lock=True)
+    if not cn.invoice_id:
+        # A standalone note mints client credit with no invoice to cap it — the same power as
+        # putting money on the client's balance.
+        await assert_perm(db, current, "can_make_client_payments")
     await svc.issue(db, cn, current.id)
     from backend.services import audit
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="credit_note.issue",

@@ -321,6 +321,8 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
                           total=(o.total if o else intent.amount) or 0, issued_at=datetime.utcnow())
             db.add(inv)
             await db.flush()
+            from backend.models import InvoiceOrder
+            db.add(InvoiceOrder(invoice_id=inv.id, order_id=intent.order_id, sort_order=0))
             intent.invoice_id = inv.id
 
     # post income to the cashbox (reuse the canonical transaction poster)
