@@ -18,7 +18,7 @@
   <meta property="og:image" content="https://tekly.app/assets/og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Tekly — Diagnose. Approve. Get paid.">
+  <meta property="og:image:alt" content="Tekly — repair shop software for every trade: electronics, vehicles, small engine and marine. From $29 a month.">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Tekly — Repair shop software">
   <meta name="twitter:description" content="Repair shop software for every trade and location: estimates, phone approvals, parts, POS. From $29 a month.">
@@ -659,6 +659,7 @@ html:not(.js) .loader, .no-loader .loader { display: none; }
 .new-card .ico { width: 2.75rem; height: 2.75rem; border-radius: .875rem; display: grid; place-items: center; background: var(--sky); color: var(--sapphire); }
 .new-card .ico svg { width: 1.375rem; height: 1.375rem; }
 .new-card .top { display: flex; justify-content: space-between; align-items: center; }
+.new-more { margin-top: 2rem; }
 .new-card h3 { font-size: 1.3125rem; font-weight: 600; letter-spacing: -.02em; line-height: 1.2; }
 .new-card p { color: var(--muted); font-size: .9375rem; }
 .new-card ul { display: grid; gap: .375rem; font-size: .875rem; color: var(--ink-2); }
@@ -1366,6 +1367,28 @@ html.is-locked .ta { visibility: hidden; }
   </article>
 </section>
 
+<!-- ════════ PRICING ════════ -->
+<section class="card-sec" id="pricing" aria-labelledby="priceTitle">
+  <div class="sec-head center">
+    <p class="eyebrow">Pricing</p>
+    <h2 class="h2" id="priceTitle" data-reveal="words">Simple plans. Every Pro feature in your trial.</h2>
+    <p class="lede" data-rise>Try everything free for <span data-trial>14</span> days, no card. Then pick the plan that fits — free onboarding and data migration, no setup fee, no contract.</p>
+    <div class="bill" role="group" aria-label="Billing period" data-rise>
+      <button type="button" class="on" data-bill="monthly" aria-pressed="true">Monthly</button>
+      <button type="button" data-bill="annual" aria-pressed="false">Yearly <span class="save" data-save>2 months free</span></button>
+    </div>
+  </div>
+  <div class="plans" id="plans"></div>
+  <p class="multi-eg" id="multiEg" data-rise></p>
+  <div class="ent" id="ent" data-rise></div>
+  <ul class="promises" aria-label="Our promises">
+    <li data-rise><b>No contracts</b><span>Month to month. Cancel in two clicks.</span></li>
+    <li data-rise><b>Your data, always</b><span>Export everything to CSV or Excel, even after you leave.</span></li>
+    <li data-rise><b>We move you in</b><span>Free data migration and onboarding on every plan.</span></li>
+    <li data-rise><b>AI never sends alone</b><span>It drafts. A person on your team presses send.</span></li>
+  </ul>
+</section>
+
 <!-- ════════ TEKLY GO (two tilted screenshot cards) ════════ -->
 <section class="card-sec" id="mobile" aria-labelledby="goTitle">
   <div class="go-grid">
@@ -1477,7 +1500,7 @@ html.is-locked .ta { visibility: hidden; }
     <p class="eyebrow">New in Tekly</p>
     <div>
       <h2 class="h2" id="newTitle" data-reveal="words">Fresh off the bench this autumn.</h2>
-      <p class="lede" data-rise>We ship in small, careful steps and tell you exactly what changed. Here's what's landed lately.</p>
+      <p class="lede" data-rise>We ship in small, careful steps and tell you exactly what changed. Three highlights:</p>
     </div>
   </div>
   <div class="new-grid">
@@ -1494,48 +1517,13 @@ html.is-locked .ta { visibility: hidden; }
       <ul><li>Part payments, never above what's owed</li><li>Cash shows the change due</li><li>Pay-link QR that watches for the balance to reach zero</li></ul>
     </article>
     <article class="new-card" data-rise data-spring="lift">
-      <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span><span class="tag new">New</span></div>
-      <h3>Payment PIN, auto-lock and Face ID</h3>
-      <p>A quick re-check before money on shared or unattended phones.</p>
-      <ul><li>PIN before payments after 5 idle minutes</li><li>Auto-lock after 10 minutes, or Lock now</li><li>Optional Face ID / Touch ID per phone</li></ul>
-    </article>
-    <article class="new-card" data-rise data-spring="lift">
       <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 15c1.5-2 2.5 1 4-1s2.5 1 4-1"/></svg></span><span class="tag new">New</span></div>
       <h3>Tablet check-in with a drop-off signature</h3>
       <p>Book a job in on the counter iPad, side by side with a live summary.</p>
       <ul><li>Your own check-in questions, priority and promised-by date</li><li>Quote lines, deposit and condition photos</li><li>Print the ticket or text the tracking link</li></ul>
     </article>
-    <article class="new-card" data-rise data-spring="lift">
-      <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="7"/><path d="M12 9v4l2.5 2M10 3h4"/></svg></span><span class="tag new">New</span></div>
-      <h3>Technician tools on every job</h3>
-      <p>Start, pause or switch the job timer, and a queue that puts overdue work first.</p>
-      <ul><li>Bench notes and a conclusion the customer sees</li><li>Photos labelled Check-in, Before, After, Damage</li><li>“Part not here?” raises an urgent task for the manager</li></ul>
-    </article>
-    <article class="new-card" data-rise data-spring="lift">
-      <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l3 3v15H6z"/><path d="M9 11h6M9 15h6M9 7h3"/></svg></span><span class="tag new">New</span></div>
-      <h3>Credit notes and partial payments</h3>
-      <p>Billing that handles real life: record part of a payment, and decide what happens to an overpayment.</p>
-      <ul><li>Numbered credit notes: draft → issued → cancelled</li><li>Overpaid? Keep it as credit or refund it</li><li>Choose how invoices display</li></ul>
-    </article>
-    <article class="new-card" data-rise data-spring="lift">
-      <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/></svg></span><span class="tag new">New</span></div>
-      <h3>Chats that tell you who's waiting</h3>
-      <p>Every conversation is New, Reply needed, Replied or Completed, and finishes itself after 24 hours.</p>
-      <ul><li>A spam folder for the noise</li><li>Message variables: first name, portal link, balance due</li><li>Totals always in your shop's currency</li></ul>
-    </article>
-    <article class="new-card" data-rise data-spring="lift">
-      <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c.8-3.5 3.2-5 6-5s5.2 1.5 6 5M17 8h4M19 6v4"/></svg></span><span class="tag new">New</span></div>
-      <h3>My earnings, for every technician</h3>
-      <p>Each person sees what they've earned. Owners get payroll filters, drill-down and scope (own, all or selected).</p>
-      <ul><li>Checklists attach themselves on status change</li><li>MPN on products, and pick which field becomes the label barcode</li><li>The web app now fits phones and iPads</li></ul>
-    </article>
-    <article class="new-card" data-rise data-spring="lift">
-      <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="3" width="12" height="18" rx="2"/><path d="M9 7h6M9 17h2"/></svg></span><span class="tag soon">Rolling out</span></div>
-      <h3>Card readers, scan-to-cart and calling</h3>
-      <p>Scan straight into the POS cart. Stripe Terminal and Square Terminal readers, and calls through Twilio with contacts created from calls and click-to-call.</p>
-      <ul><li>Live once your shop connects its own accounts</li></ul>
-    </article>
   </div>
+  <p class="new-more" data-rise><a class="link" href="/changelog/" data-spring="nudge">See everything we've shipped <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a></p>
 </section>
 
 <!-- ════════ ABOUT / WHY WE'RE DIFFERENT ════════ -->
@@ -1643,28 +1631,6 @@ html.is-locked .ta { visibility: hidden; }
   </div>
 </section>
 
-<!-- ════════ PRICING ════════ -->
-<section class="card-sec" id="pricing" aria-labelledby="priceTitle">
-  <div class="sec-head center">
-    <p class="eyebrow">Pricing</p>
-    <h2 class="h2" id="priceTitle" data-reveal="words">Simple plans. Every Pro feature in your trial.</h2>
-    <p class="lede" data-rise>Try everything free for <span data-trial>14</span> days, no card. Then pick the plan that fits — free onboarding and data migration, no setup fee, no contract.</p>
-    <div class="bill" role="group" aria-label="Billing period" data-rise>
-      <button type="button" class="on" data-bill="monthly" aria-pressed="true">Monthly</button>
-      <button type="button" data-bill="annual" aria-pressed="false">Yearly <span class="save" data-save>2 months free</span></button>
-    </div>
-  </div>
-  <div class="plans" id="plans"></div>
-  <p class="multi-eg" id="multiEg" data-rise></p>
-  <div class="ent" id="ent" data-rise></div>
-  <ul class="promises" aria-label="Our promises">
-    <li data-rise><b>No contracts</b><span>Month to month. Cancel in two clicks.</span></li>
-    <li data-rise><b>Your data, always</b><span>Export everything to CSV or Excel, even after you leave.</span></li>
-    <li data-rise><b>We move you in</b><span>Free data migration and onboarding on every plan.</span></li>
-    <li data-rise><b>AI never sends alone</b><span>It drafts. A person on your team presses send.</span></li>
-  </ul>
-</section>
-
 <!-- ════════ FAQ ════════ -->
 <section class="card-sec tint" id="faq" aria-labelledby="faqTitle">
   <div class="faq">
@@ -1731,7 +1697,7 @@ html.is-locked .ta { visibility: hidden; }
 
   <footer class="foot">
     <div><a href="#top" class="wordmark"><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#mark"/></svg>tekly</a><p class="about-f">Repair shop software, from the first complaint to the final payment.</p></div>
-    <div><p class="foot-h">Product</p><ul><li><a href="#product">How a job moves</a></li><li><a href="#ai">Tekly AI</a></li><li><a href="#new">What's new</a></li><li><a href="#industries">Industries</a></li><li><a href="#pricing">Pricing</a></li></ul></div>
+    <div><p class="foot-h">Product</p><ul><li><a href="#product">How a job moves</a></li><li><a href="#ai">Tekly AI</a></li><li><a href="/changelog/">What's new</a></li><li><a href="#industries">Industries</a></li><li><a href="#pricing">Pricing</a></li></ul></div>
     <div><p class="foot-h">Software for</p><ul><li><a href="/phone-repair-software/">Phone &amp; computer repair</a></li><li><a href="/auto-repair-shop-software/">Auto repair shops</a></li><li><a href="/small-engine-repair-software/">Small engine &amp; tools</a></li><li><a href="/marine-repair-software/">Marine repair</a></li></ul></div>
     <div><p class="foot-h">Company</p><ul><li><a href="#about">About us</a></li><li><a href="#start" data-open-demo>Book a demo</a></li><li><a data-mail href="#start">Contact</a></li><li><a href="#faq">FAQ</a></li></ul></div>
     <div><p class="foot-h">Account</p><ul><li><a data-app="signin" href="#start">Sign in</a></li><li><a data-app="signup" href="#start">Start free trial</a></li></ul></div>
@@ -1754,13 +1720,13 @@ html.is-locked .ta { visibility: hidden; }
     <nav class="menu-links" aria-label="Site">
       <a href="#industries" data-close-menu><span class="n">01</span>Every trade</a>
       <a href="#product" data-close-menu><span class="n">02</span>Product</a>
-      <a href="#mobile" data-close-menu><span class="n">03</span>Tekly Go</a>
-      <a href="#ai" data-close-menu><span class="n">04</span>Tekly AI</a>
-      <a href="#sense" data-close-menu><span class="n">05</span>Tekly Sense</a>
-      <a href="#new" data-close-menu><span class="n">06</span>What's new</a>
-      <a href="#about" data-close-menu><span class="n">07</span>About us</a>
-      <a href="#features" data-close-menu><span class="n">08</span>Features</a>
-      <a href="#pricing" data-close-menu><span class="n">09</span>Pricing</a>
+      <a href="#pricing" data-close-menu><span class="n">03</span>Pricing</a>
+      <a href="#mobile" data-close-menu><span class="n">04</span>Tekly Go</a>
+      <a href="#ai" data-close-menu><span class="n">05</span>Tekly AI</a>
+      <a href="#sense" data-close-menu><span class="n">06</span>Tekly Sense</a>
+      <a href="#new" data-close-menu><span class="n">07</span>What's new</a>
+      <a href="#about" data-close-menu><span class="n">08</span>About us</a>
+      <a href="#features" data-close-menu><span class="n">09</span>Features</a>
       <a href="#faq" data-close-menu><span class="n">10</span>FAQ</a>
     </nav>
     <div class="menu-bottom">

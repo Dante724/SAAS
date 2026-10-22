@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>What's New in Tekly | Repair Shop Software Updates</title>
+  <meta name="description" content="Recent Tekly updates: create and finish jobs from the phone, payment PIN and Face ID, tablet check-in with signature, credit notes, chat statuses and more.">
+  <link rel="canonical" href="https://tekly.app/changelog/">
+  <!-- Ships with homepage v2; switch to "index, follow" when v2 replaces index.html. -->
+  <meta name="robots" content="noindex, follow">
+  <meta name="theme-color" content="#071633">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Tekly">
+  <meta property="og:url" content="https://tekly.app/changelog/">
+  <meta property="og:title" content="What's new in Tekly">
+  <meta property="og:description" content="Recent updates to Tekly, the repair shop software for every trade and location.">
+  <meta property="og:image" content="https://tekly.app/assets/og.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" type="image/svg+xml" href="/assets/tekly-mark.svg">
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+  <link rel="preload" href="/assets/fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <style>
+@font-face { font-family: "Geist"; font-style: normal; font-display: swap; font-weight: 100 900; src: url(/assets/fonts/geist-latin-wght-normal.woff2) format("woff2-variations"); }
+:root { --page: #eceff5; --card: #fff; --card-2: #f5f7fb; --ink: #0b1324; --ink-2: #26324a; --muted: #5a6680; --faint: #69738a; --line: #e1e6ef; --navy: #071633; --sapphire: #1c5fd6; --sapphire-2: #0a2f8f; --sky: #e8f0ff; --pill: 999px; }
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font-family: "Geist", system-ui, sans-serif; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+a { color: inherit; text-decoration: none; }
+h1, h2, h3, p, ul { margin: 0; } ul { padding: 0; list-style: none; }
+:focus-visible { outline: 2px solid var(--sapphire); outline-offset: 3px; border-radius: 4px; }
+main { padding: 12px; display: grid; gap: 12px; max-width: 1400px; margin: 0 auto; }
+.card { background: var(--card); border-radius: 28px; padding: clamp(28px, 5vw, 72px); }
+.bar { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 8px 8px 8px 16px; }
+.wordmark { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; letter-spacing: -.055em; font-size: 26px; }
+.wordmark svg { width: 1.15em; height: 1.15em; fill: url(#g); }
+.bar nav { display: flex; gap: 8px; align-items: center; }
+.btn { display: inline-flex; align-items: center; height: 44px; padding: 0 20px; border-radius: var(--pill); font-weight: 500; font-size: 15px; }
+.btn-solid { background: var(--sapphire); color: #fff; } .btn-solid:hover { background: #164fb8; }
+.btn-quiet { color: var(--ink-2); } .btn-quiet:hover { background: #fff; }
+.eyebrow { display: inline-flex; align-items: center; gap: 10px; font-size: 12px; letter-spacing: .22em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+.eyebrow::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--sapphire); }
+h1 { font-size: clamp(40px, 6vw, 80px); line-height: .98; letter-spacing: -.045em; font-weight: 600; margin: 18px 0 18px; text-wrap: balance; }
+.lede { font-size: 19px; color: var(--muted); max-width: 640px; }
+.month { display: flex; align-items: baseline; gap: 14px; margin: 0 0 24px; }
+.month h2 { font-size: 28px; letter-spacing: -.03em; font-weight: 600; }
+.month span { color: var(--faint); font-size: 15px; }
+.new-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.new-card { background: #fff; border: 1px solid var(--line); border-radius: 22px; padding: 26px; display: grid; gap: 13px; align-content: start; }
+.new-card .top { display: flex; justify-content: space-between; align-items: center; }
+.new-card .ico { width: 42px; height: 42px; border-radius: 13px; display: grid; place-items: center; background: var(--sky); color: var(--sapphire); }
+.new-card .ico svg { width: 21px; height: 21px; }
+.new-card h3 { font-size: 20px; font-weight: 600; letter-spacing: -.02em; line-height: 1.2; }
+.new-card p { color: var(--muted); font-size: 15px; }
+.new-card ul { display: grid; gap: 6px; font-size: 14px; color: var(--ink-2); }
+.new-card li { padding-left: 15px; position: relative; }
+.new-card li::before { content: ""; position: absolute; left: 0; top: .6em; width: 6px; height: 1px; background: var(--faint); }
+.tag { display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: var(--pill); font-size: 12px; font-weight: 500; }
+.tag.new { background: var(--sapphire); color: #fff; } .tag.soon { background: #fff4de; color: #8a5a00; }
+.cta { background: var(--navy); color: #fff; display: flex; justify-content: space-between; align-items: center; gap: 24px; flex-wrap: wrap; }
+.cta h2 { font-size: clamp(28px, 3.4vw, 44px); letter-spacing: -.04em; font-weight: 600; line-height: 1.05; }
+.cta p { color: #c4cee2; margin-top: 8px; }
+.cta .btn-solid { background: #fff; color: var(--ink); }
+.fine { text-align: center; color: var(--faint); font-size: 13px; padding: 8px 0 20px; }
+.fine a { text-decoration: underline; text-underline-offset: 2px; margin: 0 6px; }
+@media (max-width: 1024px) { .new-grid { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 639px) { main { padding: 8px; } .new-grid { grid-template-columns: 1fr; } .card { border-radius: 22px; } .bar .btn-quiet { display: none; } }
+  </style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2c72d9"/><stop offset="1" stop-color="#0a2f8f"/></linearGradient></defs>
+  <symbol id="mark" viewBox="0 0 64 64"><path fill-rule="evenodd" d="M59.50 27.67Q62.00 32.00 59.50 36.33L49.50 53.65Q47.00 57.98 42.00 57.98L22.00 57.98Q17.00 57.98 14.50 53.65L4.50 36.33Q2.00 32.00 4.50 27.67L14.50 10.35Q17.00 6.02 22.00 6.02L42.00 6.02Q47.00 6.02 49.50 10.35ZM24.5 19.5L34.5 15V25.5H42V33H34.5V40C34.5 41.8 35.4 42.5 37.2 42.5H42V49.8H35.8C28.6 49.8 24.5 46 24.5 39.5V33H20.5V25.5H24.5Z"/></symbol>
+</svg>
+<main>
+  <header class="bar">
+    <a href="/v2/" class="wordmark" aria-label="Tekly home"><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#mark"/></svg>tekly</a>
+    <nav aria-label="Primary"><a class="btn btn-quiet" href="/v2/#pricing">Pricing</a><a class="btn btn-quiet" data-app="signin" href="/v2/#start">Sign in</a><a class="btn btn-solid" data-app="signup" href="/v2/#start">Start free trial</a></nav>
+  </header>
+  <section class="card">
+    <p class="eyebrow">Changelog</p>
+    <h1>What's new in Tekly</h1>
+    <p class="lede">We ship in small, careful steps and say exactly what changed. Product screens on the homepage show sample data.</p>
+  </section>
+  <section class="card" aria-labelledby="m-2026-10">
+    <div class="month"><h2 id="m-2026-10">October 2026</h2><span>9 updates</span></div>
+    <div class="new-grid">
+    <article class="new-card">
+      <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M12 8v6M9 11h6"/></svg></span><span class="tag new">New</span></div>
+      <h3>Create jobs, estimates and tasks from the phone</h3>
+      <p>A thumb-reach + button in Tekly Go. Every field is optional, so a job can start with just a name.</p>
+      <ul><li>Customer search with “Add Maria 0412…” inline</li><li>Device chips, problem chips and photos</li><li>Tasks grouped by due date, with a badge for today</li></ul>
+    </article>
+    <article class="new-card">
+      <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M7 15h3"/></svg></span><span class="tag new">New</span></div>
+      <h3>Finish &amp; take payment, right at the bench</h3>
+      <p>The main button does the next step: Mark ready, then Finish &amp; take payment.</p>
+      <ul><li>Part payments, never above what's owed</li><li>Cash shows the change due</li><li>Pay-link QR that watches for the balance to reach zero</li></ul>
+    </article>
+    <article class="new-card">
+      <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span><span class="tag new">New</span></div>
+      <h3>Payment PIN, auto-lock and Face ID</h3>
+      <p>A quick re-check before money on shared or unattended phones.</p>
+      <ul><li>PIN before payments after 5 idle minutes</li><li>Auto-lock after 10 minutes, or Lock now</li><li>Optional Face ID / Touch ID per phone</li></ul>
+    </article>
+    <article class="new-card">
+      <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 15c1.5-2 2.5 1 4-1s2.5 1 4-1"/></svg></span><span class="tag new">New</span></div>
+      <h3>Tablet check-in with a drop-off signature</h3>
+      <p>Book a job in on the counter iPad, side by side with a live summary.</p>
+      <ul><li>Your own check-in questions, priority and promised-by date</li><li>Quote lines, deposit and condition photos</li><li>Print the ticket or text the tracking link</li></ul>
+    </article>
+    <article class="new-card">
+      <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="7"/><path d="M12 9v4l2.5 2M10 3h4"/></svg></span><span class="tag new">New</span></div>
+      <h3>Technician tools on every job</h3>
+      <p>Start, pause or switch the job timer, and a queue that puts overdue work first.</p>
+      <ul><li>Bench notes and a conclusion the customer sees</li><li>Photos labelled Check-in, Before, After, Damage</li><li>“Part not here?” raises an urgent task for the manager</li></ul>
+    </article>
+    <article class="new-card">
+      <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l3 3v15H6z"/><path d="M9 11h6M9 15h6M9 7h3"/></svg></span><span class="tag new">New</span></div>
+      <h3>Credit notes and partial payments</h3>
+      <p>Billing that handles real life: record part of a payment, and decide what happens to an overpayment.</p>
+      <ul><li>Numbered credit notes: draft → issued → cancelled</li><li>Overpaid? Keep it as credit or refund it</li><li>Choose how invoices display</li></ul>
+    </article>
+    <article class="new-card">
+      <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/></svg></span><span class="tag new">New</span></div>
+      <h3>Chats that tell you who's waiting</h3>
+      <p>Every conversation is New, Reply needed, Replied or Completed, and finishes itself after 24 hours.</p>
+      <ul><li>A spam folder for the noise</li><li>Message variables: first name, portal link, balance due</li><li>Totals always in your shop's currency</li></ul>
+    </article>
+    <article class="new-card">
+      <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c.8-3.5 3.2-5 6-5s5.2 1.5 6 5M17 8h4M19 6v4"/></svg></span><span class="tag new">New</span></div>
+      <h3>My earnings, for every technician</h3>
+      <p>Each person sees what they've earned. Owners get payroll filters, drill-down and scope (own, all or selected).</p>
+      <ul><li>Checklists attach themselves on status change</li><li>MPN on products, and pick which field becomes the label barcode</li><li>The web app now fits phones and iPads</li></ul>
+    </article>
+    <article class="new-card">
+      <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="3" width="12" height="18" rx="2"/><path d="M9 7h6M9 17h2"/></svg></span><span class="tag soon">Rolling out</span></div>
+      <h3>Card readers, scan-to-cart and calling</h3>
+      <p>Scan straight into the POS cart. Stripe Terminal and Square Terminal readers, and calls through Twilio with contacts created from calls and click-to-call.</p>
+      <ul><li>Live once your shop connects its own accounts</li></ul>
+    </article>
+    </div>
+  </section>
+  <section class="card cta">
+    <div><h2>Try every update free for <span data-trial>14</span> days.</h2><p>No card. Free data migration and onboarding on every plan.</p></div>
+    <a class="btn btn-solid" data-app="signup" href="/v2/#start">Start free trial</a>
+  </section>
+  <p class="fine">© <span id="yr">2026</span> Tekly <a href="/v2/">Home</a><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a></p>
+</main>
+<script src="/site.config.js"></script>
+<script>
+(() => {
+  const C = window.TEKLY_SITE || {}, app = (C.appUrl || "").replace(/\/$/, "");
+  document.querySelectorAll("[data-app]").forEach(a => { a.href = app + (a.dataset.app === "signup" ? C.signUpPath || "/signup" : C.signInPath || "/login"); });
+  document.querySelectorAll("[data-trial]").forEach(el => { el.textContent = C.trialDays ?? 14; });
+  document.getElementById("yr").textContent = new Date().getFullYear();
+  document.dispatchEvent(new Event("tekly:links-ready"));
+})();
+</script>
+<script defer src="/marketing.js"></script>
+</body>
+</html>

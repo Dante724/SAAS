@@ -110,8 +110,12 @@ JSON-LD, attribution and assistant. It's `noindex` with a canonical to `/` while
   chip jumps to its job; jobs live in each `<li data-fields>` in the HTML) sit side by side on desktop right after the intro, followed by a
   "One account for every repair business you run" band (trades, locations, stock transfers,
   per-location numbers). Below 1025px they become a swipeable carousel.
-- **New sections:** What's new (from the Tekly Go / parity PRs; card readers and calling are
-  marked "Rolling out" until live keys are set) and About us.
+- **New sections:** What's new shows three highlights and links to `/changelog/`, which lists all
+  of this autumn's updates (card readers and calling are marked "Rolling out" until live keys are
+  set); and About us. Pricing sits straight after the Approvals / Inventory / Money section.
+- **Share image:** `assets/og.png` (used by every page) is a light 1200×630 card: "Repair shop
+  software for every trade", four trade photos, from $29/mo. To remake it, render a 1200×630 HTML
+  card with headless Chrome (`--screenshot --window-size=1200,630`).
 - **Placeholders to fill before launch:** the founder note in About us; the customer-quotes
   section is `hidden` until real quotes exist (`PLACEHOLDER` comments in the HTML).
 - **Photos:** `assets/photos/` from Unsplash (Unsplash License) and Wikimedia Commons (public
@@ -119,5 +123,5 @@ JSON-LD, attribution and assistant. It's `noindex` with a canonical to `/` while
   keep them when you swap photos.
 
 To make it the homepage: move `v2/index.html` over `index.html`, change `robots` back to
-`index, follow, max-image-preview:large`, and update `lastmod` for `/` in `sitemap.xml`. Keep
+`index, follow, max-image-preview:large` (and on `changelog/`, then add it to `sitemap.xml`), and update `lastmod` for `/` in `sitemap.xml`. Keep
 `styles.css` (the landing pages still use it).
