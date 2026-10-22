@@ -105,7 +105,9 @@ JSON-LD, attribution and assistant. It's `noindex` with a canonical to `/` while
   landing-page links) are in the HTML, not injected by JS. Pricing cards are still rendered from
   `site.config.js` (prices are also in the FAQ and JSON-LD).
 - **Every trade, every location:** the four template cards (with live photo tiles that cycle
-  2–3 photos while on screen) sit side by side on desktop right after the intro, followed by a
+  2–3 photos, and a "Today's bench" board that rolls through sample jobs for each kind of work —
+  e.g. car, truck, RV and bike for Vehicles; the chips and intake form follow the job on top and a
+  chip jumps to its job; jobs live in each `<li data-fields>` in the HTML) sit side by side on desktop right after the intro, followed by a
   "One account for every repair business you run" band (trades, locations, stock transfers,
   per-location numbers). Below 1025px they become a swipeable carousel.
 - **New sections:** What's new (from the Tekly Go / parity PRs; card readers and calling are
