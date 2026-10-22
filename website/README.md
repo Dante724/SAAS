@@ -85,3 +85,25 @@ Without a slug, it collects a preferred day and morning/afternoon and sends a de
 Events pushed to `dataLayer`: `assistant_open`, `assistant_message` (matched intent),
 `assistant_booking_start`, `assistant_recommend`, `generate_lead`. To edit answers, change the
 `KB` and `TRADES` lists at the top of `assistant.js` — keep them to facts that are true.
+
+## Homepage v2 preview (`/v2/`)
+
+`v2/index.html` is a redesigned homepage, kept next to the live one until it's approved: one
+self-contained file (inline CSS and an ES module; Lenis 1.1.18 from jsDelivr is the only library)
+with the same copy, plans (`site.config.js`), links, demo destination, FAQ, JSON-LD, attribution
+and assistant. It's `noindex` with a canonical to `/` while it's a preview.
+
+- **Layout:** rounded "card" sections on a light page; a full-height photo hero with a navy scrim,
+  a navy stats band and a navy CTA footer. Geist and Tekly sapphire.
+- **Motion:** a small rAF spring helper drives clip-mask word reveals, in-view rises, hover springs
+  (off at ≤768px), hero and About parallax, ghost-word drift, the hero estimate carousel
+  (auto, 3.8s), the templates carousel (arrows, dots, swipe), the loader, the menu and the demo
+  modal. `prefers-reduced-motion` skips Lenis and shows everything at once.
+- **New sections:** What's new (from the Tekly Go / parity PRs; card readers and calling are
+  marked "Rolling out" until live keys are set) and About us.
+- **Placeholders to fill before launch:** the founder note in About us and the three customer
+  quotes (`PLACEHOLDER` comments in the HTML).
+- **Photos:** `assets/photos/` from Unsplash (Unsplash License), self-hosted.
+
+To make it the homepage: move `v2/index.html` over `index.html`, then change `robots` back to
+`index, follow`.
