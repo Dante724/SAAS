@@ -104,7 +104,10 @@ JSON-LD, attribution and assistant. It's `noindex` with a canonical to `/` while
 - **SEO:** one H1 with the keyword visible; job stages and the four template cards (with their
   landing-page links) are in the HTML, not injected by JS. Pricing cards are still rendered from
   `site.config.js` (prices are also in the FAQ and JSON-LD).
-- **Live tiles:** each template card cycles 2–3 photos while it's on screen.
+- **Every trade, every location:** the four template cards (with live photo tiles that cycle
+  2–3 photos while on screen) sit side by side on desktop right after the intro, followed by a
+  "One account for every repair business you run" band (trades, locations, stock transfers,
+  per-location numbers). Below 1025px they become a swipeable carousel.
 - **New sections:** What's new (from the Tekly Go / parity PRs; card readers and calling are
   marked "Rolling out" until live keys are set) and About us.
 - **Placeholders to fill before launch:** the founder note in About us; the customer-quotes

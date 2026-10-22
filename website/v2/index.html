@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Repair Shop Software with AI Estimates | Tekly</title>
-  <meta name="description" content="Repair shop management software for electronics, auto, small engine and marine shops. AI estimates, phone approvals, parts, POS and payroll. Try it free.">
+  <title>Repair Shop Software for Every Trade &amp; Location | Tekly</title>
+  <meta name="description" content="Repair shop software for electronics, auto, small engine and marine shops: every trade and location in one account. AI estimates, phone approvals, POS, payroll.">
   <!-- Preview of the redesigned homepage. Canonical points at the live homepage and this copy is
        kept out of search until it replaces website/index.html. -->
   <link rel="canonical" href="https://tekly.app/">
@@ -72,7 +72,7 @@
   "@type": "SoftwareApplication",
   "name": "Tekly",
   "applicationCategory": "BusinessApplication",
-  "applicationSubCategory": "Repair shop management software",
+  "applicationSubCategory": "Repair shop management software for multi-trade, multi-location repair businesses",
   "operatingSystem": "Web, iOS, Android",
   "url": "https://tekly.app/",
   "description": "Repair shop management software with AI-drafted estimates, customer approvals on the phone, parts and purchase orders, POS, inventory and payroll.",
@@ -139,7 +139,24 @@
    }
   ],
   "image": "https://tekly.app/assets/og.png",
-  "screenshot": "https://tekly.app/assets/tech-job.webp"
+  "screenshot": "https://tekly.app/assets/tech-job.webp",
+  "audience": {
+   "@type": "BusinessAudience",
+   "audienceType": "Repair shops: phone and computer repair, auto and truck repair, small engine and power tool repair, marine and outboard repair"
+  },
+  "featureList": [
+   "Work orders, estimates and invoices",
+   "AI estimate drafting",
+   "Line-by-line customer approval and signature on the phone",
+   "Intake templates for electronics (IMEI, serial), vehicles (VIN, plate), small engines and marine (HIN)",
+   "Several trade templates in one account",
+   "Multiple locations with shared team seats",
+   "Inventory, purchase orders and stock transfers between locations",
+   "POS, payment links, Stripe and Square",
+   "Payroll, commissions and time clock",
+   "QuickBooks and Xero sync",
+   "Tekly Go technician phone app"
+  ]
  },
  {
   "@context": "https://schema.org",
@@ -678,6 +695,27 @@ html:not(.js) .loader, .no-loader .loader { display: none; }
 .tile-dots i.on { width: 1rem; background: #fff; }
 .tile-live { position: absolute; z-index: 2; left: .625rem; top: .625rem; display: inline-flex; align-items: center; gap: .375rem; font-size: .6875rem; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: #fff; padding: .25rem .5rem; border-radius: var(--pill); background: rgba(7,22,51,.45); }
 .tile-live::before { content: ""; width: .375rem; height: .375rem; border-radius: 50%; background: #5ee0a0; }
+@media (min-width: 1025px) {
+  .car { margin: 0; padding: 0; overflow: visible; }
+  .car-track { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); transform: none !important; }
+  .tpl { padding: 1.25rem; gap: .875rem; }
+  .tpl h3 { font-size: 1.625rem; }
+  .tile { height: 13rem; }
+  .tpl-form dd { overflow-wrap: anywhere; }
+  .tpl-covers li { font-size: .75rem; padding: .2rem .6rem; }
+}
+.car-static .car-ctrl, .car-static .car-foot { display: none; }
+.multi { position: relative; z-index: 1; margin-top: var(--gap); display: grid; grid-template-columns: 1fr 1.6fr; gap: 3rem; background: var(--navy); color: #fff; border-radius: var(--r); padding: 2.5rem; }
+.multi-head { display: grid; gap: 1rem; align-content: start; }
+.multi-head h3 { font-size: 2rem; line-height: 1.08; letter-spacing: -.035em; font-weight: 600; text-wrap: balance; }
+.multi-head p { color: var(--on-navy); }
+.multi-head .link { color: #9fc0ff; justify-self: start; padding: 0; }
+.multi-list { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem 2rem; }
+.multi-list li { display: grid; gap: .375rem; padding-top: 1rem; border-top: 1px solid rgba(255,255,255,.16); }
+.multi-list b { font-weight: 600; letter-spacing: -.01em; }
+.multi-list span { color: var(--on-navy); font-size: .9375rem; }
+@media (max-width: 1024px) { .multi { grid-template-columns: 1fr; gap: 2rem; } }
+@media (max-width: 639px) { .multi { padding: 1.5rem 1.25rem; } .multi-list { grid-template-columns: 1fr; } .multi-head h3 { font-size: 1.5rem; } }
 .car-foot { position: relative; z-index: 1; margin-top: 2rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; color: var(--muted); font-size: .9375rem; }
 @media (max-width: 1024px) { .ghostwords span { font-size: 10rem; } .ind-head { margin-top: 11rem; } .car { margin: 0 -3rem; padding: 0 3rem; } .tpl { flex-basis: 28rem; } }
 @media (max-width: 639px) { .ghostwords { top: 3rem; } .ghostwords span { font-size: 5.5rem; } .ghostwords span:nth-child(2) { padding-left: 4rem; } .ind-head { margin-top: 7rem; } .car { margin: 0 -1.25rem; padding: 0 1.25rem; } .tpl { flex-basis: calc(100vw - 3.5rem); padding: 1.25rem; } .tpl h3 { font-size: 1.5rem; } .car-ctrl .circ { width: 2.75rem; height: 2.75rem; } }
@@ -980,7 +1018,7 @@ html.is-locked .ta { visibility: hidden; }
 
   <div class="hero-body">
     <div>
-      <h1 id="heroTitle"><span class="hero-kicker" data-hero-fade>Repair shop software for electronics, vehicles, tools &amp; marine</span><span class="sr">: </span><span class="hero-words" data-hero-words>Diagnose. <br>Approve. <br>Get paid.</span></h1>
+      <h1 id="heroTitle"><span class="hero-kicker" data-hero-fade>Repair shop software for every trade · electronics, vehicles, tools &amp; marine</span><span class="sr">: </span><span class="hero-words" data-hero-words>Diagnose. <br>Approve. <br>Get paid.</span></h1>
       <div class="hero-foot">
         <p class="hero-tag" id="heroTag"><span class="ln"><span class="lni">From the first complaint</span></span><span class="ln"><span class="lni">to the final payment.</span></span></p>
         <div data-hero-fade>
@@ -1021,6 +1059,80 @@ html.is-locked .ta { visibility: hidden; }
     <li data-rise><span class="k">Email</span><span class="v">Gmail · Outlook</span></li>
   </ul>
   <div class="works-cap" data-rise><span>Works with the tools you already use.</span><span class="note">No contracts · export anytime · free migration · AI never sends on its own</span></div>
+</section>
+
+<!-- ════════ EVERY REPAIR BUSINESS (ghost words + live tiles; carousel below 1025px) ════════ -->
+<section class="card-sec tint" id="industries" aria-labelledby="indTitle">
+  <div class="ghostwords" aria-hidden="true"><span id="ghostA">Phones · Cars · Boats ·</span><span id="ghostB">Mowers · Bikes · Fleets</span></div>
+  <div class="ind-head">
+    <div>
+      <p class="eyebrow">Every repair business</p>
+      <h2 class="h2" id="indTitle" data-reveal="words">Built for your bench, whatever is on it.</h2>
+      <p class="lede" data-rise>Four templates cover every bench. Each one asks for the right details at intake — and if you fix more than one kind of thing, use several in one account.</p>
+    </div>
+    <div class="car-ctrl">
+      <button class="circ" type="button" id="carPrev" aria-label="Previous template" data-spring="pop"><svg aria-hidden="true"><use href="#arl"/></svg></button>
+      <button class="circ" type="button" id="carNext" aria-label="Next template" data-spring="pop"><svg aria-hidden="true"><use href="#arr"/></svg></button>
+    </div>
+  </div>
+  <div class="car" id="car" aria-roledescription="carousel" aria-label="Templates">
+    <div class="car-track" id="tradesGrid">
+    <article class="tpl" role="group" aria-roledescription="slide" aria-label="Electronics, 1 of 4">
+      <div class="tile" data-tile><span class="tile-live" aria-hidden="true">Live</span><img src="/assets/photos/iphone-mat-600.webp" srcset="/assets/photos/iphone-mat-600.webp 600w, /assets/photos/iphone-mat-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="An iPhone opened up for repair on a blue work mat" loading="lazy" decoding="async" draggable="false" class="on"><img src="/assets/photos/repair-lab-1-600.webp" srcset="/assets/photos/repair-lab-1-600.webp 600w, /assets/photos/repair-lab-1-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A technician replacing parts inside a smartphone" loading="lazy" decoding="async" draggable="false"><img src="/assets/photos/repair-lab-2-600.webp" srcset="/assets/photos/repair-lab-2-600.webp 600w, /assets/photos/repair-lab-2-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A technician repairing a phone at a workbench" loading="lazy" decoding="async" draggable="false"><span class="tile-dots" aria-hidden="true"><i class="on"></i><i></i><i></i></span></div>
+      <div class="tpl-icons"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></svg><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg></div>
+      <h3>Electronics</h3>
+      <p class="tpl-desc">One template for every device on the bench.</p>
+      <ul class="tpl-covers" aria-label="Covers"><li>Phones</li><li>Tablets</li><li>Laptops</li><li>Desktops</li></ul>
+      <div class="tpl-form" aria-label="Example intake"><div class="tpl-form-h"><span>New job · intake</span><span class="mini-seg" role="group" aria-label="Device type"><button type="button" class="on" aria-pressed="true" data-k="0">Phone</button><button type="button" aria-pressed="false" data-k="1">Computer</button></span></div><dl><div><dt>Device</dt><dd>iPhone 14 Pro</dd></div><div><dt>IMEI</dt><dd>35 291811 402177 3</dd></div><div><dt>Passcode</dt><dd>•••••• encrypted</dd></div><div><dt>Storage</dt><dd>256 GB</dd></div></dl></div>
+      <p class="tpl-smart">Asks for the IMEI on phones and tablets, and the serial number on computers.</p>
+      <a class="link" href="/phone-repair-software/" data-spring="nudge">Phone &amp; computer repair software <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
+    </article>
+    <article class="tpl" role="group" aria-roledescription="slide" aria-label="Vehicles, 2 of 4">
+      <div class="tile" data-tile><span class="tile-live" aria-hidden="true">Live</span><img src="/assets/photos/motorcycle-600.webp" srcset="/assets/photos/motorcycle-600.webp 600w, /assets/photos/motorcycle-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A mechanic working on a motorcycle in a garage" loading="lazy" decoding="async" draggable="false" class="on"><img src="/assets/photos/mechanic-stool-600.webp" srcset="/assets/photos/mechanic-stool-600.webp 600w, /assets/photos/mechanic-stool-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A mechanic working on the front suspension of a raised pickup truck" loading="lazy" decoding="async" draggable="false"><img src="/assets/photos/workshop-garage-600.webp" srcset="/assets/photos/workshop-garage-600.webp 600w, /assets/photos/workshop-garage-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A mechanic at work in a vehicle workshop" loading="lazy" decoding="async" draggable="false"><span class="tile-dots" aria-hidden="true"><i class="on"></i><i></i><i></i></span></div>
+      <div class="tpl-icons"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15l2-5a2 2 0 0 1 2-1.5h10a2 2 0 0 1 2 1.5l2 5v2H3z"/><circle cx="7.5" cy="18" r="1.8"/><circle cx="16.5" cy="18" r="1.8"/></svg><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="7" width="12" height="9" rx="1"/><path d="M14 10h4l3 3v3h-7"/><circle cx="6" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5.5" cy="16.5" r="3"/><circle cx="18.5" cy="16.5" r="3"/><path d="M5.5 16.5l4-6h4l2 3h3M13.5 10.5l-2-3h-2"/></svg></div>
+      <h3>Vehicles</h3>
+      <p class="tpl-desc">From a family hatchback to a fleet truck or an RV.</p>
+      <ul class="tpl-covers" aria-label="Covers"><li>Cars</li><li>Trucks</li><li>RVs</li><li>Bikes</li></ul>
+      <div class="tpl-form" aria-label="Example intake"><div class="tpl-form-h"><span>New job · intake</span></div><dl><div><dt>Vehicle</dt><dd>2019 Honda CR-V</dd></div><div><dt>VIN</dt><dd>2HKRW2H5…KH604117</dd></div><div><dt>Plate</dt><dd>8KXM 214</dd></div><div><dt>Mileage</dt><dd>61,240 mi</dd></div></dl></div>
+      <p class="tpl-smart">Every visit stays on the vehicle's history, found by VIN or plate.</p>
+      <a class="link" href="/auto-repair-shop-software/" data-spring="nudge">Auto repair shop software <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
+    </article>
+    <article class="tpl" role="group" aria-roledescription="slide" aria-label="Tools &amp; small engine, 3 of 4">
+      <div class="tile" data-tile><span class="tile-live" aria-hidden="true">Live</span><img src="/assets/photos/generator-red-600.webp" srcset="/assets/photos/generator-red-600.webp 600w, /assets/photos/generator-red-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A portable petrol generator" loading="lazy" decoding="async" draggable="false" class="on"><img src="/assets/photos/tools-wall-600.webp" srcset="/assets/photos/tools-wall-600.webp 600w, /assets/photos/tools-wall-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="Spanners and sockets hanging on a workshop wall" loading="lazy" decoding="async" draggable="false"><img src="/assets/photos/generator-yard-600.webp" srcset="/assets/photos/generator-yard-600.webp 600w, /assets/photos/generator-yard-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A small-engine generator outdoors" loading="lazy" decoding="async" draggable="false"><span class="tile-dots" aria-hidden="true"><i class="on"></i><i></i><i></i></span></div>
+      <div class="tpl-icons"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h11l3 2v2l-3 2H8z"/><path d="M8 14l-2 6h4l1-6M17 11h4"/></svg><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15h14l2-5h-5l-2 2H5z"/><circle cx="7" cy="18" r="2"/><circle cx="16" cy="18" r="2"/><path d="M19 10l2-6"/></svg></div>
+      <h3>Tools &amp; small engine</h3>
+      <p class="tpl-desc">Workshop gear and outdoor power equipment in one template.</p>
+      <ul class="tpl-covers" aria-label="Covers"><li>Power tools</li><li>Mowers</li><li>Saws</li><li>Generators</li></ul>
+      <div class="tpl-form" aria-label="Example intake"><div class="tpl-form-h"><span>New job · intake</span></div><dl><div><dt>Item</dt><dd>21-inch push mower</dd></div><div><dt>Serial</dt><dd>2214 0938 7712</dd></div><div><dt>Engine</dt><dd>OHV 163 cc</dd></div><div><dt>Hours</dt><dd>212</dd></div></dl></div>
+      <p class="tpl-smart">Captures voltage for tools and engine hours for small engines.</p>
+      <a class="link" href="/small-engine-repair-software/" data-spring="nudge">Small engine repair software <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
+    </article>
+    <article class="tpl" role="group" aria-roledescription="slide" aria-label="Marine, 4 of 4">
+      <div class="tile" data-tile><span class="tile-live" aria-hidden="true">Live</span><img src="/assets/photos/outboard-students-600.webp" srcset="/assets/photos/outboard-students-600.webp 600w, /assets/photos/outboard-students-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="Technicians servicing an outboard motor on a test stand" loading="lazy" decoding="async" draggable="false" class="on"><img src="/assets/photos/boat-engine-600.webp" srcset="/assets/photos/boat-engine-600.webp 600w, /assets/photos/boat-engine-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A mechanic working on a boat's outboard engine on the water" loading="lazy" decoding="async" draggable="false"><span class="tile-dots" aria-hidden="true"><i class="on"></i><i></i></span></div>
+      <div class="tpl-icons"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15h18l-2.5 4.5h-13z"/><path d="M12 15V4l6 9h-6"/></svg></div>
+      <h3>Marine</h3>
+      <p class="tpl-desc">Built for boatyards, from winterising to a full repower.</p>
+      <ul class="tpl-covers" aria-label="Covers"><li>Outboards</li><li>Inboards</li><li>Hulls</li><li>Trailers</li></ul>
+      <div class="tpl-form" aria-label="Example intake"><div class="tpl-form-h"><span>New job · intake</span></div><dl><div><dt>Vessel</dt><dd>19 ft centre console</dd></div><div><dt>HIN</dt><dd>ABC12345D707</dd></div><div><dt>Engine serial</dt><dd>1B3L-401229</dd></div><div><dt>Length</dt><dd>19 ft</dd></div></dl></div>
+      <p class="tpl-smart">Tracks the hull ID and each engine's serial separately.</p>
+      <a class="link" href="/marine-repair-software/" data-spring="nudge">Marine repair software <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
+    </article>
+    </div>
+  </div>
+  <div class="car-foot"><div class="dots" id="carDots" role="group" aria-label="Choose template"></div><span>Drag, swipe or use the arrows.</span></div>
+  <div class="multi" data-rise>
+    <div class="multi-head">
+      <h3>One account for every repair business you run.</h3>
+      <p>Fix phones at one counter and outboards at another? Run two shops across town? Tekly keeps every trade and every location in one place.</p>
+      <button class="link text-btn" type="button" data-open-demo data-spring="nudge">Ten or more locations? Talk to us <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></button>
+    </div>
+    <ul class="multi-list">
+      <li><b>Several trades, one login</b><span>Use the Electronics, Vehicles, Tools &amp; small engine and Marine templates side by side in one account.</span></li>
+      <li><b>Add locations as you grow</b><span>Shop adds locations at $49 each and Pro at $79. Shop's 8 team members are shared across them.</span></li>
+      <li><b>Stock that moves between sites</b><span>Multi-location stock, bins and serial numbers, with transfers between locations on Pro.</span></li>
+      <li><b>Numbers for each location</b><span>Profit per job, per technician and per location is always current, with roles that limit who sees what.</span></li>
+    </ul>
+  </div>
 </section>
 
 <!-- ════════ HOW A JOB MOVES (numbered rows) ════════ -->
@@ -1388,67 +1500,6 @@ html.is-locked .ta { visibility: hidden; }
   </div>
 </section>
 
-<!-- ════════ INDUSTRIES (ghost words + manual carousel) ════════ -->
-<section class="card-sec tint" id="industries" aria-labelledby="indTitle">
-  <div class="ghostwords" aria-hidden="true"><span id="ghostA">Electronics · Vehicles ·</span><span id="ghostB">Tools · Marine · Fleets</span></div>
-  <div class="ind-head">
-    <div>
-      <p class="eyebrow">Industries</p>
-      <h2 class="h2" id="indTitle" data-reveal="words">Built for your bench, whatever is on it.</h2>
-      <p class="lede" data-rise>Four templates cover every bench. Each one asks for the right details at intake — and if you fix more than one kind of thing, use several in one account.</p>
-    </div>
-    <div class="car-ctrl">
-      <button class="circ" type="button" id="carPrev" aria-label="Previous template" data-spring="pop"><svg aria-hidden="true"><use href="#arl"/></svg></button>
-      <button class="circ" type="button" id="carNext" aria-label="Next template" data-spring="pop"><svg aria-hidden="true"><use href="#arr"/></svg></button>
-    </div>
-  </div>
-  <div class="car" id="car" aria-roledescription="carousel" aria-label="Templates">
-    <div class="car-track" id="tradesGrid">
-    <article class="tpl" role="group" aria-roledescription="slide" aria-label="Electronics, 1 of 4">
-      <div class="tile" data-tile><span class="tile-live" aria-hidden="true">Live</span><img src="/assets/photos/iphone-mat-600.webp" srcset="/assets/photos/iphone-mat-600.webp 600w, /assets/photos/iphone-mat-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="An iPhone opened up for repair on a blue work mat" loading="lazy" decoding="async" draggable="false" class="on"><img src="/assets/photos/repair-lab-1-600.webp" srcset="/assets/photos/repair-lab-1-600.webp 600w, /assets/photos/repair-lab-1-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A technician replacing parts inside a smartphone" loading="lazy" decoding="async" draggable="false"><img src="/assets/photos/repair-lab-2-600.webp" srcset="/assets/photos/repair-lab-2-600.webp 600w, /assets/photos/repair-lab-2-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A technician repairing a phone at a workbench" loading="lazy" decoding="async" draggable="false"><span class="tile-dots" aria-hidden="true"><i class="on"></i><i></i><i></i></span></div>
-      <div class="tpl-icons"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></svg><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg></div>
-      <h3>Electronics</h3>
-      <p class="tpl-desc">One template for every device on the bench.</p>
-      <ul class="tpl-covers" aria-label="Covers"><li>Phones</li><li>Tablets</li><li>Laptops</li><li>Desktops</li></ul>
-      <div class="tpl-form" aria-label="Example intake"><div class="tpl-form-h"><span>New job · intake</span><span class="mini-seg" role="group" aria-label="Device type"><button type="button" class="on" aria-pressed="true" data-k="0">Phone</button><button type="button" aria-pressed="false" data-k="1">Computer</button></span></div><dl><div><dt>Device</dt><dd>iPhone 14 Pro</dd></div><div><dt>IMEI</dt><dd>35 291811 402177 3</dd></div><div><dt>Passcode</dt><dd>•••••• encrypted</dd></div><div><dt>Storage</dt><dd>256 GB</dd></div></dl></div>
-      <p class="tpl-smart">Asks for the IMEI on phones and tablets, and the serial number on computers.</p>
-      <a class="link" href="/phone-repair-software/" data-spring="nudge">Phone &amp; computer repair software <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
-    </article>
-    <article class="tpl" role="group" aria-roledescription="slide" aria-label="Vehicles, 2 of 4">
-      <div class="tile" data-tile><span class="tile-live" aria-hidden="true">Live</span><img src="/assets/photos/motorcycle-600.webp" srcset="/assets/photos/motorcycle-600.webp 600w, /assets/photos/motorcycle-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A mechanic working on a motorcycle in a garage" loading="lazy" decoding="async" draggable="false" class="on"><img src="/assets/photos/mechanic-stool-600.webp" srcset="/assets/photos/mechanic-stool-600.webp 600w, /assets/photos/mechanic-stool-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A mechanic working on the front suspension of a raised pickup truck" loading="lazy" decoding="async" draggable="false"><img src="/assets/photos/workshop-garage-600.webp" srcset="/assets/photos/workshop-garage-600.webp 600w, /assets/photos/workshop-garage-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A mechanic at work in a vehicle workshop" loading="lazy" decoding="async" draggable="false"><span class="tile-dots" aria-hidden="true"><i class="on"></i><i></i><i></i></span></div>
-      <div class="tpl-icons"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15l2-5a2 2 0 0 1 2-1.5h10a2 2 0 0 1 2 1.5l2 5v2H3z"/><circle cx="7.5" cy="18" r="1.8"/><circle cx="16.5" cy="18" r="1.8"/></svg><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="7" width="12" height="9" rx="1"/><path d="M14 10h4l3 3v3h-7"/><circle cx="6" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5.5" cy="16.5" r="3"/><circle cx="18.5" cy="16.5" r="3"/><path d="M5.5 16.5l4-6h4l2 3h3M13.5 10.5l-2-3h-2"/></svg></div>
-      <h3>Vehicles</h3>
-      <p class="tpl-desc">From a family hatchback to a fleet truck or an RV.</p>
-      <ul class="tpl-covers" aria-label="Covers"><li>Cars</li><li>Trucks</li><li>RVs</li><li>Bikes</li></ul>
-      <div class="tpl-form" aria-label="Example intake"><div class="tpl-form-h"><span>New job · intake</span></div><dl><div><dt>Vehicle</dt><dd>2019 Honda CR-V</dd></div><div><dt>VIN</dt><dd>2HKRW2H5…KH604117</dd></div><div><dt>Plate</dt><dd>8KXM 214</dd></div><div><dt>Mileage</dt><dd>61,240 mi</dd></div></dl></div>
-      <p class="tpl-smart">Every visit stays on the vehicle's history, found by VIN or plate.</p>
-      <a class="link" href="/auto-repair-shop-software/" data-spring="nudge">Auto repair shop software <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
-    </article>
-    <article class="tpl" role="group" aria-roledescription="slide" aria-label="Tools &amp; small engine, 3 of 4">
-      <div class="tile" data-tile><span class="tile-live" aria-hidden="true">Live</span><img src="/assets/photos/generator-red-600.webp" srcset="/assets/photos/generator-red-600.webp 600w, /assets/photos/generator-red-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A portable petrol generator" loading="lazy" decoding="async" draggable="false" class="on"><img src="/assets/photos/tools-wall-600.webp" srcset="/assets/photos/tools-wall-600.webp 600w, /assets/photos/tools-wall-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="Spanners and sockets hanging on a workshop wall" loading="lazy" decoding="async" draggable="false"><img src="/assets/photos/generator-yard-600.webp" srcset="/assets/photos/generator-yard-600.webp 600w, /assets/photos/generator-yard-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A small-engine generator outdoors" loading="lazy" decoding="async" draggable="false"><span class="tile-dots" aria-hidden="true"><i class="on"></i><i></i><i></i></span></div>
-      <div class="tpl-icons"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h11l3 2v2l-3 2H8z"/><path d="M8 14l-2 6h4l1-6M17 11h4"/></svg><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15h14l2-5h-5l-2 2H5z"/><circle cx="7" cy="18" r="2"/><circle cx="16" cy="18" r="2"/><path d="M19 10l2-6"/></svg></div>
-      <h3>Tools &amp; small engine</h3>
-      <p class="tpl-desc">Workshop gear and outdoor power equipment in one template.</p>
-      <ul class="tpl-covers" aria-label="Covers"><li>Power tools</li><li>Mowers</li><li>Saws</li><li>Generators</li></ul>
-      <div class="tpl-form" aria-label="Example intake"><div class="tpl-form-h"><span>New job · intake</span></div><dl><div><dt>Item</dt><dd>21-inch push mower</dd></div><div><dt>Serial</dt><dd>2214 0938 7712</dd></div><div><dt>Engine</dt><dd>OHV 163 cc</dd></div><div><dt>Hours</dt><dd>212</dd></div></dl></div>
-      <p class="tpl-smart">Captures voltage for tools and engine hours for small engines.</p>
-      <a class="link" href="/small-engine-repair-software/" data-spring="nudge">Small engine repair software <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
-    </article>
-    <article class="tpl" role="group" aria-roledescription="slide" aria-label="Marine, 4 of 4">
-      <div class="tile" data-tile><span class="tile-live" aria-hidden="true">Live</span><img src="/assets/photos/outboard-students-600.webp" srcset="/assets/photos/outboard-students-600.webp 600w, /assets/photos/outboard-students-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="Technicians servicing an outboard motor on a test stand" loading="lazy" decoding="async" draggable="false" class="on"><img src="/assets/photos/boat-engine-600.webp" srcset="/assets/photos/boat-engine-600.webp 600w, /assets/photos/boat-engine-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A mechanic working on a boat's outboard engine on the water" loading="lazy" decoding="async" draggable="false"><span class="tile-dots" aria-hidden="true"><i class="on"></i><i></i></span></div>
-      <div class="tpl-icons"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15h18l-2.5 4.5h-13z"/><path d="M12 15V4l6 9h-6"/></svg></div>
-      <h3>Marine</h3>
-      <p class="tpl-desc">Built for boatyards, from winterising to a full repower.</p>
-      <ul class="tpl-covers" aria-label="Covers"><li>Outboards</li><li>Inboards</li><li>Hulls</li><li>Trailers</li></ul>
-      <div class="tpl-form" aria-label="Example intake"><div class="tpl-form-h"><span>New job · intake</span></div><dl><div><dt>Vessel</dt><dd>19 ft centre console</dd></div><div><dt>HIN</dt><dd>ABC12345D707</dd></div><div><dt>Engine serial</dt><dd>1B3L-401229</dd></div><div><dt>Length</dt><dd>19 ft</dd></div></dl></div>
-      <p class="tpl-smart">Tracks the hull ID and each engine's serial separately.</p>
-      <a class="link" href="/marine-repair-software/" data-spring="nudge">Marine repair software <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
-    </article>
-    </div>
-  </div>
-  <div class="car-foot"><div class="dots" id="carDots" role="group" aria-label="Choose template"></div><span>Drag, swipe or use the arrows.</span></div>
-</section>
-
 <!-- ════════ ABOUT / WHY WE'RE DIFFERENT ════════ -->
 <section class="card-sec" id="about" aria-labelledby="aboutTitle">
   <div class="about-grid">
@@ -1661,12 +1712,12 @@ html.is-locked .ta { visibility: hidden; }
       <button class="menu-x" type="button" aria-label="Close menu" data-close-menu data-spring="spin"><svg aria-hidden="true"><use href="#x"/></svg></button>
     </div>
     <nav class="menu-links" aria-label="Site">
-      <a href="#product" data-close-menu><span class="n">01</span>Product</a>
-      <a href="#mobile" data-close-menu><span class="n">02</span>Tekly Go</a>
-      <a href="#ai" data-close-menu><span class="n">03</span>Tekly AI</a>
-      <a href="#sense" data-close-menu><span class="n">04</span>Tekly Sense</a>
-      <a href="#new" data-close-menu><span class="n">05</span>What's new</a>
-      <a href="#industries" data-close-menu><span class="n">06</span>Industries</a>
+      <a href="#industries" data-close-menu><span class="n">01</span>Every trade</a>
+      <a href="#product" data-close-menu><span class="n">02</span>Product</a>
+      <a href="#mobile" data-close-menu><span class="n">03</span>Tekly Go</a>
+      <a href="#ai" data-close-menu><span class="n">04</span>Tekly AI</a>
+      <a href="#sense" data-close-menu><span class="n">05</span>Tekly Sense</a>
+      <a href="#new" data-close-menu><span class="n">06</span>What's new</a>
       <a href="#about" data-close-menu><span class="n">07</span>About us</a>
       <a href="#features" data-close-menu><span class="n">08</span>Features</a>
       <a href="#pricing" data-close-menu><span class="n">09</span>Pricing</a>
@@ -2030,8 +2081,9 @@ car.addEventListener("keydown", e => { if (e.target.closest("input,.mini-seg")) 
   }, { passive: true });
   addEventListener("pointerup", e => { if (!dragging) return; dragging = false; if (axis !== "x") return; const dx = e.clientX - sx; goTo(cIdx + (dx < -50 ? 1 : dx > 50 ? -1 : 0)); });
 }
-renderDots(); goTo(0, true);
-addEventListener("resize", () => { renderDots(); goTo(cIdx, true); }, { passive: true });
+const syncStatic = () => $("#industries").classList.toggle("car-static", maxIdx() === 0);
+renderDots(); goTo(0, true); syncStatic();
+addEventListener("resize", () => { renderDots(); goTo(cIdx, true); syncStatic(); }, { passive: true });
 
 /* ── Pricing ── */
 let billing = "monthly";
