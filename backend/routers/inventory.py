@@ -13,6 +13,7 @@ from backend.models import Employee, Part, StockLevel, StockMovement
 from backend.services import stock_posting
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.numbering import next_number
+from backend.services.redact import can_see_costs, drop_cost_fields
 
 router = APIRouter(prefix="/api/inventory", tags=["inventory"])
 
@@ -164,7 +165,10 @@ async def create_part(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_products")),
 ):
-    part = Part(org_id=current.org_id, **data.model_dump())
+    payload = data.model_dump()
+    if not await can_see_costs(db, current):
+        drop_cost_fields(payload)
+    part = Part(org_id=current.org_id, **payload)
     db.add(part)
     await db.commit()
     await db.refresh(part)
@@ -196,7 +200,10 @@ async def update_part(
         raise HTTPException(404, "Part not found")
     # exclude_unset so a client that omits a field (e.g. an older bundle without weight)
     # leaves it untouched instead of nulling it.
-    for k, v in data.model_dump(exclude_unset=True).items():
+    payload = data.model_dump(exclude_unset=True)
+    if not await can_see_costs(db, current):
+        drop_cost_fields(payload)
+    for k, v in payload.items():
         setattr(part, k, v)
     await db.commit()
     return {"ok": True}
@@ -228,7 +235,7 @@ async def adjust_stock(
         db.add(sl)
 
     if data.movement_type in ("receive", "adjust"):
-        sl.qty_available += data.qty
+        await _atomic_add(db, sl, "qty_available", data.qty, round_to=None)   # atomic
     elif data.movement_type == "writeoff":
         sl.qty_available = max(0, sl.qty_available - data.qty)
 
@@ -554,7 +561,7 @@ async def parts_to_order(
     supplier group into a PO via the existing /inventory/po endpoint."""
     from collections import defaultdict
     from datetime import datetime as _dt
-    from backend.models import Order, OrderLine, OrderStatus, POLine, PurchaseOrder, Supplier
+    from backend.models import Order, OrderLine, OrderStatus, POLine, Supplier
 
     closed = {"closed", "done", "delivered", "dropped", "cancelled", "completed", "picked_up"}
     for (k,) in (await db.execute(select(OrderStatus.key).where(
@@ -638,6 +645,9 @@ async def part_movements(
 ):
     """Full stock-movement history for the product's History tab — every posting, sale,
     transfer, write-off and adjustment with quantity, location and reference."""
+    # stock_movements carries no org_id: prove the part is this org's before reading its history
+    if not (await db.execute(select(Part.id).where(Part.id == part_id, Part.org_id == current.org_id))).scalar_one_or_none():
+        raise HTTPException(404, "Part not found")
     result = await db.execute(
         select(StockMovement)
         .where(StockMovement.part_id == part_id)
@@ -792,7 +802,7 @@ class ReserveIn(BaseModel):
 async def reserve_stock(
     data: ReserveIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_reserve_stock")),
 ):
     """Reserve stock for an order. Reserved qty is excluded from available."""
     sl = (await db.execute(select(StockLevel).where(
@@ -816,7 +826,7 @@ async def reserve_stock(
 async def release_reservation(
     res_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_reserve_stock")),
 ):
     r = (await db.execute(select(StockReservation).where(
         StockReservation.id == res_id, StockReservation.org_id == current.org_id))).scalar_one_or_none()
@@ -1161,7 +1171,13 @@ async def edit_po(
     if "supplier_invoice_date" in sent:
         po.supplier_invoice_date = _date.fromisoformat(data.supplier_invoice_date) if data.supplier_invoice_date else None
     if "expected_at" in sent:
+        _was = po.expected_at
         po.expected_at = datetime.fromisoformat(data.expected_at) if data.expected_at else None
+        if po.expected_at != _was:
+            from backend.services.po_links import notify_po_change
+            await notify_po_change(db, current.org_id, po,
+                                   f"now expected {po.expected_at:%b %-d}" if po.expected_at else "expected date cleared",
+                                   actor_id=current.id)
     if "notes" in sent:
         po.notes = data.notes or None
     if data.on_credit is not None:
@@ -1305,7 +1321,7 @@ async def send_po(
     po_id: str,
     data: SendPOIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_purchase_orders")),
 ):
     """Build 132 — send a PO to the supplier over email / SMS / WhatsApp. Delivery is
     stubbed at the provider boundary (like every other channel); the message is logged to
@@ -1323,7 +1339,8 @@ async def send_po(
     if thr and float(po.total or 0) > thr and current.role_id:
         from backend.models import Role
         role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-        if role and (role.permissions or {}).get("can_manage_settings") is False:
+        from backend.services.permissions import role_allows as _ra
+        if role is None or not _ra(role, "can_manage_settings"):
             raise HTTPException(403, f"PO total {float(po.total or 0):g} is over the approval limit "
                                      f"of {thr:g} — a manager must send it.")
     sup = (await db.execute(select(Supplier).where(Supplier.id == po.supplier_id))).scalar_one_or_none()
@@ -1346,6 +1363,8 @@ async def send_po(
                             body=body, author_id=current.id, delivered=True))
         thread.last_message_at = datetime.utcnow()
         logged = True
+    from backend.services.po_links import notify_po_change
+    await notify_po_change(db, current.org_id, po, "sent to the supplier", actor_id=current.id)
     await db.commit()
     return {"ok": True, "channel": data.channel, "po_number": po.po_number, "logged": logged}
 
@@ -1364,6 +1383,8 @@ async def cancel_po(
     _guard_po_transition(po.status, "cancelled")
     po.status = "cancelled"
     po.workflow_status = "po_cancelled"   # keep the manual stage in step with a cancel
+    from backend.services.po_links import notify_po_change
+    await notify_po_change(db, current.org_id, po, "cancelled, so these parts aren't coming", actor_id=current.id)
     await db.commit()
     return {"ok": True, "status": po.status}
 
@@ -1408,6 +1429,9 @@ async def set_po_status(
             raise HTTPException(409, f"Can't move a {cur} purchase order to ordered")
         po.status = "ordered"
         po.ordered_at = po.ordered_at or datetime.utcnow()
+    from backend.services.po_links import notify_po_change
+    await notify_po_change(db, current.org_id, po, "marked ordered" if po.status == "ordered" else f"back to {po.status}",
+                           actor_id=current.id)
     await db.commit()
     return {"ok": True, "status": po.status}
 
@@ -1438,7 +1462,14 @@ async def set_po_workflow(
         OrderStatus.active == True, OrderStatus.key == data.workflow_status))).scalar_one_or_none()  # noqa: E712
     if not valid:
         raise HTTPException(422, "Unknown purchase-order status for this workspace")
+    changed = po.workflow_status != data.workflow_status
     po.workflow_status = data.workflow_status
+    if changed:
+        label = (await db.execute(select(OrderStatus.name).where(
+            OrderStatus.org_id == current.org_id, OrderStatus.record_type == "purchase_order",
+            OrderStatus.key == data.workflow_status))).scalar_one_or_none() or data.workflow_status
+        from backend.services.po_links import notify_po_change
+        await notify_po_change(db, current.org_id, po, f"stage is now {label}", actor_id=current.id)
     await db.commit()
     return {"ok": True, "workflow_status": po.workflow_status}
 
@@ -1611,9 +1642,16 @@ async def receive_po(
     plan = []   # (pl, recv, part, rline)
     for pl in po_lines:
         rline = by_id.get(pl.id)
-        recv = rline.qty if rline else (pl.qty_ordered - pl.qty_received)  # default: receive remainder
+        left = (pl.qty_ordered or 0) - (pl.qty_received or 0)
+        recv = rline.qty if rline else left  # default: receive remainder
         if recv <= 0:
             continue
+        # B21: more than is still outstanding would post phantom stock and over-bill the
+        # supplier balance. Extra units go on a new PO (or a stock posting) instead.
+        if recv > left + 1e-9:
+            name = (await db.execute(select(Part.name).where(Part.id == pl.part_id))).scalar_one_or_none() or "a line"
+            raise HTTPException(409, f"Receiving {recv:g} of {name}, but only {max(left, 0):g} "
+                                     f"{'is' if left == 1 else 'are'} still to come on this order")
         part = (await db.execute(select(Part).where(Part.id == pl.part_id))).scalar_one_or_none()
         if not part:
             continue
@@ -1657,20 +1695,28 @@ async def receive_po(
         # ── Reserve-on-receive (P1-D): goods a work order was waiting on stay earmarked
         #    for it instead of landing as free stock. Orderry reserves incoming goods too;
         #    we go further by keeping the exact cost layer as well. ──
-        if pl.reserved_order_id:
+        from backend.services.po_links import apply_receipt_to_orders
+        to_reserve = recv - await apply_receipt_to_orders(db, current.org_id, po, pl, recv)
+        if pl.reserved_order_id and to_reserve > 0:
             from backend.models import StockReservation
             rsl = (await db.execute(select(StockLevel).where(
                 StockLevel.part_id == pl.part_id, StockLevel.location_id == po.location_id))).scalar_one_or_none()
             if rsl:
-                rsl.qty_reserved = (rsl.qty_reserved or 0) + recv
+                rsl.qty_reserved = (rsl.qty_reserved or 0) + to_reserve
                 db.add(StockReservation(org_id=current.org_id, part_id=pl.part_id,
                                         location_id=po.location_id, order_id=pl.reserved_order_id,
-                                        qty=recv, released=False))
+                                        qty=to_reserve, released=False))
         received_cost_now += recv * unit_cost
         received_any = True
     if received_any:
         fully = all((pl.qty_received or 0) >= pl.qty_ordered for pl in po_lines)
         po.status = "received" if fully else "partial"
+        from backend.services.po_links import notify_po_change
+        from backend.services.po_links import writes_off_automatically
+        arrived = "all parts arrived" if fully else "some parts arrived"
+        if not await writes_off_automatically(db, current.org_id):
+            arrived += ", ready to write off on the job"
+        await notify_po_change(db, current.org_id, po, arrived, actor_id=current.id)
         po.received_at = datetime.utcnow()
         po.received_cost = (po.received_cost or 0) + received_cost_now
         po.freight_capitalised = q2((po.freight_capitalised or 0) + freight_added_now)
@@ -1725,7 +1771,9 @@ async def part_pos(
     """POs this part is on (excluding closed) — shown in the product dialog."""
     rows = (await db.execute(
         select(PurchaseOrder, POLine).join(POLine, POLine.po_id == PurchaseOrder.id)
-        .where(POLine.part_id == part_id, PurchaseOrder.status != "closed")
+        .join(Supplier, PurchaseOrder.supplier_id == Supplier.id)   # POs are scoped via their supplier
+        .where(POLine.part_id == part_id, Supplier.org_id == current.org_id,
+               PurchaseOrder.status != "closed")
     )).all()
     return {"items": [{"id": po.id, "po_number": po.po_number, "status": po.status,
                        "qty_ordered": pl.qty_ordered, "qty_received": pl.qty_received,
@@ -1974,14 +2022,14 @@ async def reorder_digest(
     title = f"{len(items)} product{'' if len(items) == 1 else 's'} to reorder (~{total})"
     body = f"Soonest to run out: {top}." if top else "Review the reorder forecast in Inventory."
     # recipients: owners (no role) + roles that aren't explicitly denied inventory
-    roles = {r.id: (r.permissions or {}) for r in (await db.execute(
+    from backend.services.permissions import role_allows as _ra
+    roles = {r.id: r for r in (await db.execute(
         select(Role).where(Role.org_id == current.org_id))).scalars().all()}
     emps = (await db.execute(select(Employee).where(
         Employee.org_id == current.org_id, Employee.active == True))).scalars().all()  # noqa: E712
     sent = 0
     for e in emps:
-        perms = roles.get(e.role_id, {}) if e.role_id else {}
-        if perms.get("can_manage_inventory") is False:
+        if e.role_id and (e.role_id not in roles or not _ra(roles[e.role_id], "can_manage_inventory")):
             continue
         n = await push.notify(db, org_id=current.org_id, employee_id=e.id,
                               kind="inventory.reorder", title=title, body=body,
@@ -2035,14 +2083,16 @@ async def list_conversions(
     current: Employee = Depends(get_current_employee),
 ):
     """Assets converted into sellable products (Orderry's Conversions tab)."""
-    from sqlalchemy import or_
+    from sqlalchemy import and_, or_
 
     from backend.models import Client, Device, Part
-    client_ids = (await db.execute(
-        select(Client.id).where(Client.org_id == current.org_id))).scalars().all()
+    # Same org scoping as the asset list (144do): the old `owner_type == "company"` arm listed
+    # every shop's converted company assets.
+    client_ids = select(Client.id).where(Client.org_id == current.org_id)
     rows = (await db.execute(select(Device).where(
         Device.converted_to_part_id.is_not(None),
-        or_(Device.client_id.in_(client_ids), Device.owner_type == "company"))
+        or_(Device.org_id == current.org_id,
+            and_(Device.org_id.is_(None), Device.client_id.in_(client_ids))))
         .order_by(Device.id))).scalars().all()
     # resolve the converted products so we can show their real sell price
     part_ids = [d.converted_to_part_id for d in rows if d.converted_to_part_id]
@@ -2122,7 +2172,7 @@ async def merge_parts(
                 StockLevel.part_id == target.id,
                 StockLevel.location_id == sl.location_id))).scalar_one_or_none()
             if tgt_sl:
-                tgt_sl.qty_available += sl.qty_available
+                await _atomic_add(db, tgt_sl, "qty_available", sl.qty_available, round_to=None)   # atomic
                 tgt_sl.qty_reserved += sl.qty_reserved
                 sl.qty_available = 0
                 sl.qty_reserved = 0
@@ -2254,3 +2304,8 @@ async def bulk_update_parts(
 
     await db.commit()
     return {"ok": True, "changed": changed, "action": data.action}
+
+
+async def _atomic_add(db, obj, attr, delta, *, round_to=None):
+    from backend.services.money import add_to_column
+    return await add_to_column(db, obj, attr, delta, round_to=round_to)

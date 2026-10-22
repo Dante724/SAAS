@@ -12,6 +12,18 @@ import pytest
 from main import app
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+@pytest.fixture(autouse=True)
+def _react_shell(tmp_path, monkeypatch):
+    """CI runs the backend suite without building frontend-react, and without a build the app
+    answers 503 'not built' (main._NOT_BUILT). Point it at a stand-in shell so these tests check
+    path handling, not whether the frontend happened to be built on this machine."""
+    import main
+    shell = tmp_path / "index.html"
+    shell.write_text('<!doctype html><html><body><div id="root"></div></body></html>')
+    monkeypatch.setattr(main, "_have_react", True)
+    monkeypatch.setattr(main, "_react_index", str(shell))
 MAIN_PY = os.path.join(ROOT, "main.py")
 SECRET_MARKER = b"async def serve_spa"  # a line that only exists in main.py
 

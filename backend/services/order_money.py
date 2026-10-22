@@ -59,7 +59,61 @@ async def cancel_open_pay_links(db: AsyncSession, order: Order) -> int:
         return 0
     open_ = (await db.execute(select(PaymentIntent).where(
         PaymentIntent.order_id == order.id,
-        PaymentIntent.status.in_(["created", "pending"])))).scalars().all()
+        PaymentIntent.status.in_(["created", "viewed", "pending"])))).scalars().all()
     for i in open_:
         i.status = "canceled"
+        if i.provider == "stripe" and i.provider_ref:
+            await _expire_stripe_checkout(db, i)
+        elif i.provider == "square" and i.provider_link_id:
+            await _delete_square_link(db, i)
     return len(open_)
+
+
+async def _expire_stripe_checkout(db: AsyncSession, intent: PaymentIntent) -> bool:
+    """Close the Stripe-hosted checkout too, so a customer holding the old link can't pay on
+    Stripe's page after the order is settled (B3). Best effort: if Stripe can't be reached the
+    link is still cancelled here, and a late payment is still recorded (as an overpayment)
+    rather than lost."""
+    import logging
+
+    import httpx
+
+    from backend.config import settings
+    from backend.services import org_creds
+    key = (await org_creds.effective(db, intent.org_id, "stripe")).get("secret_key") or settings.STRIPE_SECRET_KEY
+    if not key:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.post(f"https://api.stripe.com/v1/checkout/sessions/{intent.provider_ref}/expire",
+                                  auth=(key, ""))
+        return r.status_code == 200
+    except httpx.HTTPError:
+        logging.getLogger("tekly.payments").warning("could not expire Stripe checkout for intent %s", intent.id)
+        return False
+
+
+async def _delete_square_link(db: AsyncSession, intent: PaymentIntent) -> bool:
+    """Delete the Square payment link so the customer can't pay on Square's page after the
+    order is settled (B3). Best effort, like the Stripe expiry. Links created before the link
+    id was stored (migration dp144q1) can't be closed this way."""
+    import logging
+
+    import httpx
+
+    from backend.config import settings
+    from backend.services import org_creds
+    from backend.services.payments import SquareGateway
+    c = await org_creds.effective(db, intent.org_id, "square")
+    token = c.get("access_token") or settings.SQUARE_ACCESS_TOKEN
+    if not token:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.delete(
+                f"{SquareGateway.base_url(c.get('env'))}/v2/online-checkout/payment-links/{intent.provider_link_id}",
+                headers={"Authorization": f"Bearer {token}", "Square-Version": "2024-06-04"})
+        return r.status_code == 200
+    except httpx.HTTPError:
+        logging.getLogger("tekly.payments").warning("could not delete Square link for intent %s", intent.id)
+        return False

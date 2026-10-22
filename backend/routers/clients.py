@@ -1,8 +1,8 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -10,7 +10,9 @@ from sqlalchemy.orm import selectinload
 from backend.db.database import get_db
 from backend.models import Client, Device, Employee
 from backend.services.auth import get_current_employee, require_perm, record_scope
-from backend.services.money import q2, q4
+from backend.core import paging as _paging
+from backend.services.money import q2
+from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
 
 router = APIRouter(prefix="/api/clients", tags=["clients"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -57,7 +59,7 @@ class DeviceIn(BaseModel):
     asset_group_id: Optional[str] = None
     custom_data: Optional[dict] = None
 
-def _ser_client(c: Client, supplier=None) -> dict:
+def _ser_client(c: Client, supplier=None, order_count=None) -> dict:
     return {
         # Build 144am — supplier role facet: the mirrored PO-facing Supplier row (lead
         # time, PO currency, what we owe). None when this contact isn't a supplier. Lets
@@ -81,24 +83,28 @@ def _ser_client(c: Client, supplier=None) -> dict:
         "devices": [{"id": d.id, "brand": d.brand, "model": d.model, "serial": d.serial,
                      "imei": d.imei, "vin": d.vin, "hin": d.hin, "condition": d.condition,
                      "custom_data": d.custom_data or {}} for d in c.devices],
-        "order_count": len(c.orders),
+        "order_count": len(c.orders) if order_count is None else order_count,
     }
 
 @router.get("")
 async def list_clients(
     search: Optional[str] = None,
     role: str = "all",                 # Build 114: all | client | supplier
-    skip: int = 0, limit: int = 50,
+    skip: int = _paging.skip_query(), limit: int = _paging.limit_query(50),
+    q: Optional[str] = Query(None, alias="q"),   # the pickers send ?q=; same as ?search=
+    sort: str = "name",                # name | recent (pickers list the newest clients before you type)
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
     from backend.services import scoping
     scope_role = await scoping.role_for(db, current)
+    search = (search or q or "").strip() or None
+    limit = _paging.clamp(limit)
 
     q = (select(Client)
          .where(Client.org_id == current.org_id)
-         .options(selectinload(Client.devices), selectinload(Client.orders))
-         .order_by(Client.name))
+         .options(selectinload(Client.devices))   # order counts come from one grouped query below
+         .order_by(Client.created_at.desc() if sort == "recent" else Client.name, Client.id))
     q = scoping.scope_clients(q, scope_role, current)
     if role == "supplier":
         q = q.where(Client.is_supplier == True)  # noqa: E712
@@ -115,8 +121,16 @@ async def list_clients(
         count_q = count_q.where(Client.is_supplier == True)  # noqa: E712
     elif role == "client":
         count_q = count_q.where(Client.is_supplier == False)  # noqa: E712
+    if search:   # the total counts the searched rows, not the whole shop
+        count_q = count_q.where(or_(Client.name.icontains(search), Client.phone.icontains(search),
+                                    Client.email.icontains(search), Client.discount_card.icontains(search)))
     total = (await db.execute(count_q)).scalar()
-    return {"total": total, "items": [_ser_client(c) for c in clients]}
+    from backend.models import Order
+    ids = [c.id for c in clients]
+    counts = dict((await db.execute(select(Order.client_id, func.count()).where(
+        Order.client_id.in_(ids)).group_by(Order.client_id))).all()) if ids else {}
+    return {"total": total, "items": [_ser_client(c, order_count=counts.get(c.id, 0)) for c in clients],
+            "skip": skip, "limit": limit}
 
 @router.post("", status_code=201)
 async def create_client(
@@ -144,7 +158,8 @@ async def create_client(
         if payload.get(k) is None:
             payload.pop(k, None)
     # 144gp — enforce custom-field rules (required / lock / conditional visibility).
-    from backend.routers.forms import resolve_custom_data
+    from backend.routers.forms import resolve_custom_data, check_entity_required
+    await check_entity_required(db, current.org_id, "client", data)
     payload["custom_data"] = await resolve_custom_data(
         db, current.org_id, "client", data.custom_data, creating=True)
     # Consent defaults from org policy unless explicitly provided
@@ -430,7 +445,7 @@ async def client_purchases(
 
     # ── POS sales ──
     sales = (await db.execute(
-        select(Sale).where(Sale.client_id == client_id, Sale.org_id == current.org_id)
+        select(Sale).where(Sale.client_id == client_id, Sale.org_id == current.org_id, Sale.voided_at.is_(None))
         .order_by(Sale.created_at.desc()))).scalars().all()
     # Fetch every sale's lines in ONE query, then group — avoids an N+1 (a query per sale).
     sale_lines: dict[str, list] = {}
@@ -482,7 +497,7 @@ async def client_purchases(
 
 # ── Build 82: CRM data ops — import, merge, export ───────────────────────────
 class ImportIn(BaseModel):
-    rows: list[dict]                 # raw rows as parsed from the CSV/sheet
+    rows: list[dict] = Field(max_length=MAX_IMPORT_ROWS)  # raw rows as parsed from the CSV/sheet
     mapping: dict[str, str] = {}     # {source_column: client_field}
     update_existing: bool = True     # match on phone/email and update rather than duplicate
     dry_run: bool = False            # preview the outcome without writing
@@ -495,7 +510,7 @@ IMPORTABLE = {"name", "phone", "email", "address", "notes", "source", "discount_
 async def import_clients(
     data: ImportIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     """Import contacts from a CSV/sheet with an explicit column mapping.
 
@@ -831,8 +846,8 @@ async def export_clients(
     w = csv.writer(buf)
     w.writerow(["name", "phone", "email", "address", "source", "balance", "notes"])
     for c in rows:
-        w.writerow([c.name, c.phone or "", c.email or "", c.address or "",
-                    c.source or "", c.balance or 0, c.notes or ""])
+        w.writerow(safe_row([c.name, c.phone or "", c.email or "", c.address or "",
+                             c.source or "", c.balance or 0, c.notes or ""]))
     buf.seek(0)
     return StreamingResponse(
         iter([buf.getvalue()]), media_type="text/csv",

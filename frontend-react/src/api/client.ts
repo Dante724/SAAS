@@ -1,4 +1,4 @@
-// RepairOS API client — reuses the EXISTING session (same-origin cookie/token).
+// Tekly API client — reuses the EXISTING session (same-origin cookie/token).
 // No auth redesign, no CORS: the React bundle is served from the same origin as
 // the live app, so the browser sends the logged-in session automatically.
 // Endpoints are the existing FastAPI ones (see inventory/endpoints.txt).
@@ -45,8 +45,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     body: body != null ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
-    // Guarded cutover: an expired/invalid session bounces back to the legacy
-    // login page (the redesign has no login screen of its own).
+    // An expired or invalid session goes back to the sign-in page.
     if (res.status === 401) {
       try {
         localStorage.removeItem("ros_tok");
@@ -64,11 +63,45 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return (await res.json()) as T;
 }
 
+// One validation problem in words that name the field: {"loc":["body","lines",0,"line_type"],
+// "msg":"Field required"} → "Line 1: line type is required".
+function fieldProblem(x: any): string {
+  const msg = String(x?.msg ?? x ?? "").replace(/^Value error, /, "");
+  const loc: (string | number)[] = Array.isArray(x?.loc) ? x.loc.filter((p: any) => p !== "body" && p !== "query" && p !== "path") : [];
+  if (!loc.length) return msg;
+  const parts: string[] = [];
+  loc.forEach((p, i) => {
+    if (typeof p === "number") {
+      const prev = parts.pop() || "item";
+      parts.push(`${prev.replace(/s$/, "")} ${p + 1}`);
+    } else parts.push(String(p).replace(/_id$/, "").replace(/_/g, " "));
+    if (i === 0 && parts.length) parts[0] = parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+  });
+  const where = parts.length > 1 ? `${parts.slice(0, -1).join(", ")}: ${parts[parts.length - 1]}` : parts[0];
+  if (/^field required$/i.test(msg)) return `${where} is required`;
+  return `${where}: ${msg.charAt(0).toLowerCase()}${msg.slice(1)}`;
+}
+
+// The server answers errors as {"detail": "..."} (or a list of field problems). Show the
+// sentence, not the JSON; the raw body stays on `.body` for anything that needs it.
+export function readableError(raw: string): string {
+  try {
+    const j = JSON.parse(raw);
+    const d = j?.detail ?? j?.message ?? j?.error;
+    if (typeof d === "string") return d;
+    if (Array.isArray(d)) return [...new Set(d.map(fieldProblem))].join("; ");
+    if (d && typeof d === "object" && typeof d.message === "string") return d.message;
+  } catch { /* not JSON */ }
+  return raw;
+}
+
 export class ApiError extends Error {
   status: number;
+  body: string;
   constructor(status: number, message: string) {
-    super(message);
+    super(readableError(message));
     this.status = status;
+    this.body = message;
   }
 }
 

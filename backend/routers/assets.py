@@ -15,8 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import Client, Device, Employee, Order
+from backend.services import asset_catalog as _cat
+from backend.services import identifiers as _ids
 from backend.services import industry as _ind
-from backend.services.auth import get_current_employee, require_perm
+from backend.core import paging as _paging
+from backend.services.auth import get_current_employee, has_perm, require_perm
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
 
@@ -43,13 +46,20 @@ class AssetIn(BaseModel):
     custom_data: Optional[dict] = None   # 144da: system extras (number_plate, year, engine…) + custom fields
 
 
+async def _hide_cost(db, current, *rows) -> None:
+    """Without "See an asset cost" an asset's purchase price stays out of the response."""
+    if not await has_perm(db, current, "can_see_asset_cost"):
+        for r in rows:
+            r.pop("purchase_price", None)
+
+
 def _gen_serial(asset_type: str = "Device") -> str:
     prefix = (asset_type or "AST")[:3].upper()
     body = "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
     return f"{prefix}-{body}"
 
 
-def _ser(d: Device, order_count: int = 0, owner_name: str = None) -> dict:
+def _ser(d: Device, order_count: int = 0, owner_name: str = None, inline_image: bool = True) -> dict:
     return {
         "id": d.id, "owner_type": d.owner_type, "client_id": d.client_id,
         "owner_name": owner_name,
@@ -63,7 +73,7 @@ def _ser(d: Device, order_count: int = 0, owner_name: str = None) -> dict:
         "asset_group_id": getattr(d, "asset_group_id", None),
         "is_generated_serial": d.is_generated_serial,
         "color": d.color, "condition": d.condition,
-        "image_data": getattr(d, "image_data", None),
+        **({"image_data": getattr(d, "image_data", None)} if inline_image else {}),
         "watch_out": getattr(d, "watch_out", None),
         "location_id": d.location_id,
         "asset_status": getattr(d, "asset_status", "in_use"),
@@ -90,16 +100,18 @@ async def list_assets(
     owner_type: Optional[str] = None,
     asset_type: Optional[str] = None,
     search: Optional[str] = None,
-    limit: int = 200,
+    skip: int = _paging.skip_query(),
+    limit: int = _paging.limit_query(200),
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_asset_info")),
 ):
     # Build 144do (security): scope strictly to this org. Previously company-owned
     # assets from ALL orgs leaked into every org's list via `owner_type == "company"`.
-    client_ids = (await db.execute(
-        select(Client.id).where(Client.org_id == current.org_id)
-    )).scalars().all()
-
+    # Batch 2: one page at a time with the real total; owner names and order counts are
+    # batched for the page (it used to load every client of the shop and count per row),
+    # and the photo is a URL, not inline base64.
+    from sqlalchemy.orm import defer
+    limit = _paging.clamp(limit)
     q = select(Device).where(Device.org_id == current.org_id)
     if owner_type:
         q = q.where(Device.owner_type == owner_type)
@@ -111,24 +123,31 @@ async def list_assets(
             Device.imei.ilike(f"%{search}%"),
             Device.brand.ilike(f"%{search}%"),
             Device.model.ilike(f"%{search}%"),
+            Device.asset_type.ilike(f"%{search}%"),
+            Device.client_id.in_(select(Client.id).where(Client.org_id == current.org_id,
+                                                         Client.name.ilike(f"%{search}%"))),
         ))
-    q = q.order_by(desc(Device.created_at)).limit(limit)
-    devices = (await db.execute(q)).scalars().all()
-
-    # owner names + order counts
-    client_map = {}
-    if client_ids:
-        rows = (await db.execute(select(Client).where(Client.id.in_(client_ids)))).scalars().all()
-        client_map = {c.id: c.name for c in rows}
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
+    devices = (await db.execute(q.options(defer(Device.image_data))
+                                .order_by(desc(Device.created_at), desc(Device.id))
+                                .offset(skip).limit(limit))).scalars().all()
+    ids = [d.id for d in devices]
+    cids = {d.client_id for d in devices if d.client_id and d.owner_type == "client"}
+    client_map = dict((await db.execute(select(Client.id, Client.name).where(
+        Client.org_id == current.org_id, Client.id.in_(cids)))).all()) if cids else {}
+    counts = dict((await db.execute(select(Order.device_id, func.count(Order.id)).where(
+        Order.org_id == current.org_id, Order.device_id.in_(ids)).group_by(Order.device_id))).all()) if ids else {}
+    with_img = set((await db.execute(select(Device.id).where(
+        Device.id.in_(ids), Device.image_data.is_not(None), Device.image_data != ""))).scalars().all()) if ids else set()
 
     out = []
     for d in devices:
-        cnt = (await db.execute(
-            select(func.count()).select_from(Order).where(Order.device_id == d.id)
-        )).scalar() or 0
         owner = client_map.get(d.client_id) if d.owner_type == "client" else "Company"
-        out.append(_ser(d, cnt, owner))
-    return {"total": len(out), "items": out}
+        row = _ser(d, counts.get(d.id, 0), owner, inline_image=False)
+        row["image_url"] = f"/api/assets/{d.id}/image" if d.id in with_img else None
+        out.append(row)
+    await _hide_cost(db, current, *out)
+    return {"total": total, "items": out, "skip": skip, "limit": limit}
 
 
 @router.post("", status_code=201)
@@ -139,6 +158,10 @@ async def create_asset(
 ):
     if data.owner_type == "client" and not data.client_id:
         raise HTTPException(400, "Client is required for a client-owned asset")
+    if not await has_perm(db, current, "can_see_asset_cost"):
+        data.purchase_price = 0.0
+    from backend.routers.forms import check_entity_required
+    await check_entity_required(db, current.org_id, "device", data)   # built-ins the device form requires
     serial = data.serial
     generated = False
     if not serial and not data.imei and not data.vin and not data.hin:
@@ -164,6 +187,8 @@ async def create_asset(
         asset_status=data.asset_status or ("in_use" if data.owner_type == "client" else "in_stock"),
         purchase_price=data.purchase_price or 0.0, sale_price=data.sale_price or 0.0,
     )
+    _ids.tidy_device(d)
+    d.brand, d.model = await _cat.canonical(db, current.org_id, template_key, d.brand, d.model)
     db.add(d)
     await db.flush()
     await _log_asset(db, current.org_id, d.id, "create",
@@ -171,14 +196,90 @@ async def create_asset(
                      note="Asset created", by=current.id)
     await db.commit()
     await db.refresh(d)
-    return _ser(d, 0)
+    res = _ser(d, 0)
+    await _hide_cost(db, current, res)
+    return res
+
+
+@router.get("/suggest")
+async def suggest_names(
+    field: str = "brand", q: str = "", brand: Optional[str] = None,
+    group: Optional[str] = None, template_key: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Brand / model picker options: the shop's own usage first, then its catalog, then the
+    built-in US/CA list. ``group`` (the asset group, e.g. "Power Tool") and the shop's industry
+    (``template_key``, defaulting to the org's) put the names that fit that group first."""
+    if field not in ("brand", "model"):
+        raise HTTPException(422, "field must be brand or model")
+    if not template_key:
+        from backend.models import Organisation
+        template_key = (await db.execute(select(Organisation.industry_template).where(
+            Organisation.id == current.org_id))).scalar_one_or_none()
+    return {"items": await _cat.suggest(db, current.org_id, field, q, brand,
+                                        group=group, template_key=template_key)}
+
+
+class IdentifyIn(BaseModel):
+    value: str
+    kind: Optional[str] = None          # imei|vin|hin|serial — guessed when omitted
+    client_id: Optional[str] = None     # the customer at the counter, to tell "theirs" from "someone else's"
+
+
+@router.post("/identify")
+async def identify(
+    data: IdentifyIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Intake helper for a typed or scanned IMEI / VIN / HIN / serial: tidy it, say if it looks
+    mistyped, and find it if this shop has seen it before (owner, last job, warranty) so staff
+    reuse the device instead of creating a duplicate. Never blocks anything."""
+    kind = data.kind if data.kind in _ids.KINDS else _ids.guess_kind(data.value)
+    norm = _ids.normalize(kind, data.value)
+    if not norm:
+        return {"kind": kind, "normalized": None, "problem": None, "matches": []}
+    candidates = {k: _ids.normalize(k, data.value) for k in _ids.KINDS}
+    cols = {"imei": Device.imei, "vin": Device.vin, "hin": Device.hin, "serial": Device.serial}
+    conds = [cols[k] == v for k, v in candidates.items() if v]
+    rows = (await db.execute(select(Device).where(
+        Device.org_id == current.org_id, or_(*conds)).limit(5))).scalars().all()
+    from datetime import date as _date
+    today = _date.today()
+    matches = []
+    for d in rows:
+        owner = None
+        if d.client_id:
+            c = (await db.execute(select(Client).where(
+                Client.id == d.client_id, Client.org_id == current.org_id))).scalar_one_or_none()
+            owner = {"id": c.id, "name": c.name, "phone": c.phone} if c else None
+        last = (await db.execute(select(Order).where(
+            Order.org_id == current.org_id, Order.device_id == d.id)
+            .order_by(desc(Order.created_at)).limit(1))).scalars().first()
+        jobs = (await db.execute(select(func.count()).select_from(Order).where(
+            Order.org_id == current.org_id, Order.device_id == d.id))).scalar() or 0
+        last_out = None
+        if last:
+            wu = last.warranty_until
+            last_out = {"id": last.id, "order_number": last.order_number, "status": last.status,
+                        "created_at": last.created_at.isoformat() if last.created_at else None,
+                        "warranty_until": wu.isoformat() if wu else None,
+                        "under_warranty": bool(wu and wu >= today)}
+        matches.append({
+            "id": d.id, "brand": d.brand, "model": d.model, "serial": d.serial, "imei": d.imei,
+            "vin": d.vin, "hin": d.hin, "color": d.color, "watch_out": d.watch_out,
+            "client": owner, "owner_type": d.owner_type,
+            "same_client": bool(data.client_id and d.client_id == data.client_id),
+            "jobs": jobs, "last_order": last_out})
+    return {"kind": kind, "normalized": norm, "problem": _ids.problem(kind, norm), "matches": matches}
 
 
 @router.get("/{asset_id}")
 async def get_asset(
     asset_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_asset_info")),
 ):
     d = (await db.execute(select(Device).where(
         Device.id == asset_id, Device.org_id == current.org_id))).scalar_one_or_none()
@@ -198,6 +299,7 @@ async def get_asset(
     elif d.owner_type == "company":
         owner = "Company"
     res = _ser(d, len(orders), owner)
+    await _hide_cost(db, current, res)
     res["client_balance"] = client_balance      # build 126: show the owner's balance inline
     res["history"] = [{
         "id": o.id, "order_number": o.order_number, "status": o.status,
@@ -222,6 +324,35 @@ class AssetUpdate(BaseModel):
     watch_out: Optional[str] = None    # Build 144ag: prominent per-asset warning
 
 
+@router.get("/{asset_id}/image")
+async def get_asset_image(
+    asset_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """The asset photo as an image, so lists and the board can reference it by URL instead
+    of inlining base64 on every row."""
+    import base64
+    import binascii
+
+    from fastapi import Response
+
+    from backend.routers.media import safe_media_response
+    data = (await db.execute(select(Device.image_data).where(
+        Device.id == asset_id, Device.org_id == current.org_id))).scalar_one_or_none()
+    if not data or not data.startswith("data:") or "," not in data:
+        raise HTTPException(404, "No photo")
+    head, b64 = data[5:].split(",", 1)
+    mime = head.split(";", 1)[0] or "application/octet-stream"
+    try:
+        raw = base64.b64decode(b64, validate=False) if ";base64" in head else b64.encode()
+    except (binascii.Error, ValueError):
+        raise HTTPException(404, "No photo")
+    kw = safe_media_response(raw, mime, "asset")
+    kw["headers"]["Cache-Control"] = "private, max-age=300"
+    return Response(content=raw, **kw)
+
+
 @router.put("/{asset_id}")
 async def update_asset(
     asset_id: str,
@@ -243,6 +374,8 @@ async def update_asset(
         if not owner:
             raise HTTPException(404, "Asset not found")
     payload = data.model_dump(exclude_unset=True)
+    if not await has_perm(db, current, "can_see_asset_cost"):
+        payload.pop("purchase_price", None)          # a cost they never saw stays as it was
     if payload.get("owner_type") == "client" and not (payload.get("client_id") or d.client_id):
         raise HTTPException(400, "Client is required for a client-owned asset")
     if "client_id" in payload and payload["client_id"]:
@@ -254,6 +387,9 @@ async def update_asset(
         payload["client_id"] = None
     for k, v in payload.items():
         setattr(d, k, v)
+    _ids.tidy_device(d)
+    if "brand" in payload or "model" in payload:
+        d.brand, d.model = await _cat.canonical(db, current.org_id, d.template_key, d.brand, d.model)
     await db.commit()
     await db.refresh(d)
     order_count = (await db.execute(select(func.count()).select_from(Order)
@@ -264,19 +400,24 @@ async def update_asset(
         owner_name = oc.name if oc else None
     elif d.owner_type == "company":
         owner_name = "Company"
-    return _ser(d, order_count, owner_name)
+    res = _ser(d, order_count, owner_name)
+    await _hide_cost(db, current, res)
+    return res
 
 
 @router.get("/{asset_id}/movements")
 async def asset_movements(
     asset_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_asset_info")),
 ):
     """Full lifecycle log for the asset's History tab: creation, transfers, write-offs,
     ownership changes and zone moves — each with who, when and detail."""
     from backend.models import AssetMovement
     from backend.models import Employee as Emp
+    if not (await db.execute(select(Device.id).where(
+            Device.id == asset_id, Device.org_id == current.org_id))).scalar_one_or_none():
+        raise HTTPException(404, "Asset not found")
     rows = (await db.execute(
         select(AssetMovement).where(AssetMovement.asset_id == asset_id)
         .order_by(desc(AssetMovement.moved_at)))).scalars().all()
@@ -403,7 +544,7 @@ async def convert_to_product(
         sl = (await db.execute(select(StockLevel).where(
             StockLevel.part_id == part.id, StockLevel.location_id == loc_id))).scalar_one_or_none()
         if sl:
-            sl.qty_available += 1
+            await _atomic_add(db, sl, "qty_available", 1, round_to=None)   # atomic
         else:
             db.add(StockLevel(part_id=part.id, location_id=loc_id, qty_available=1, qty_reserved=0))
         # record the stock movement so the product's History shows where the unit came from
@@ -428,3 +569,8 @@ async def convert_to_product(
     await log_system_event(db, current.org_id, "asset", d.id, f"Converted asset to product: {part.name}")
     await db.commit()
     return {"ok": True, "part_id": part.id, "name": part.name}
+
+
+async def _atomic_add(db, obj, attr, delta, *, round_to=None):
+    from backend.services.money import add_to_column
+    return await add_to_column(db, obj, attr, delta, round_to=round_to)

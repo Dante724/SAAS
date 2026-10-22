@@ -70,7 +70,7 @@ export default function NewAccountDrawer({ edit, onClose, onSaved }: Props) {
         <div className="flex-1 overflow-y-auto p-6 space-y-5 text-xs">
           {tab === "general" ? (<>
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-primary to-primary-container text-white flex items-center justify-center shadow-clay-sm"><M n={icon} c="text-xl" /></div>
+              <div className="w-12 h-12 rounded-full bg-primary text-white flex items-center justify-center shadow-clay-sm"><M n={icon} c="text-xl" /></div>
               <div className="flex items-center gap-1.5 flex-wrap">
                 {ICONS.map((ic) => <button key={ic} type="button" aria-label={`Select icon ${ic}`} onClick={() => setIcon(ic)} className={`w-8 h-8 rounded-lg border flex items-center justify-center ${icon === ic ? "border-primary bg-blue-50 text-primary" : "border-slate-200 text-ink-tertiary hover:bg-slate-50"}`}><M n={ic} c="text-base" /></button>)}
               </div>
@@ -78,7 +78,7 @@ export default function NewAccountDrawer({ edit, onClose, onSaved }: Props) {
             <div><label className="block font-semibold text-ink-secondary mb-1">Title <span className="text-rose-500">*</span></label><input autoFocus value={name} onChange={(e) => setName(e.target.value)} className="glass-input w-full px-3 py-2.5 rounded-lg text-sm font-semibold text-ink-primary" placeholder="e.g. Main Register" /></div>
             <div><label className="block font-semibold text-ink-secondary mb-1">Currency <span className="text-rose-500">*</span></label>
               <select value={currency} onChange={(e) => setCurrency(e.target.value)} disabled={!!edit} className="glass-input w-full px-3 py-2.5 rounded-lg text-sm font-semibold text-ink-primary appearance-none disabled:opacity-60">{curOpts.map(([c, l]) => <option key={c} value={c}>{l}</option>)}</select>
-              {edit && <p className="text-[10px] text-ink-tertiary mt-1">Currency is locked after creation.</p>}</div>
+              {edit && <p className="text-[11px] text-ink-tertiary mt-1">Currency is locked after creation.</p>}</div>
             <div><label className="block font-semibold text-ink-secondary mb-1.5">Type</label><Seg opts={[["company", "Company account"], ["location", "Location account"]]} value={type} onChange={(v) => setType(v as any)} /></div>
             <Check v={virtual} set={setVirtual} label="Virtual account" />
             <div><label className="block font-semibold text-ink-secondary mb-1.5">Payment option</label><Seg opts={[["cash", "Cash"], ["cashless", "Cashless"], ["card", "Credit card"]]} value={pay} onChange={setPay} /></div>
@@ -96,8 +96,8 @@ export default function NewAccountDrawer({ edit, onClose, onSaved }: Props) {
               <h4 className="text-sm font-bold text-ink-primary">Allowed account actions</h4>
               <div className="space-y-2.5"><Check v={acts.balance} set={(b) => setActs({ ...acts, balance: b })} label="View the account balance" /><Check v={acts.txns} set={(b) => setActs({ ...acts, txns: b })} label="View account transactions" /></div>
               <div className="grid grid-cols-2 gap-6 pt-2">
-                <div className="space-y-2.5"><div className="text-[11px] font-bold uppercase tracking-wider text-ink-tertiary">Incoming operations</div><Check v={acts.income} set={(b) => setActs({ ...acts, income: b })} label="Income" /><Check v={acts.inTransfer} set={(b) => setActs({ ...acts, inTransfer: b })} label="Transfer" /></div>
-                <div className="space-y-2.5"><div className="text-[11px] font-bold uppercase tracking-wider text-ink-tertiary">Outgoing operations</div><Check v={acts.expense} set={(b) => setActs({ ...acts, expense: b })} label="Expense" /><Check v={acts.outTransfer} set={(b) => setActs({ ...acts, outTransfer: b })} label="Transfer" /></div>
+                <div className="space-y-2.5"><div className="text-[11px] font-bold text-ink-tertiary">Incoming operations</div><Check v={acts.income} set={(b) => setActs({ ...acts, income: b })} label="Income" /><Check v={acts.inTransfer} set={(b) => setActs({ ...acts, inTransfer: b })} label="Transfer" /></div>
+                <div className="space-y-2.5"><div className="text-[11px] font-bold text-ink-tertiary">Outgoing operations</div><Check v={acts.expense} set={(b) => setActs({ ...acts, expense: b })} label="Expense" /><Check v={acts.outTransfer} set={(b) => setActs({ ...acts, outTransfer: b })} label="Transfer" /></div>
               </div>
             </div>
           )}
@@ -106,7 +106,7 @@ export default function NewAccountDrawer({ edit, onClose, onSaved }: Props) {
 
         <div className="p-4 border-t border-slate-100 bg-blue-50/30 flex items-center justify-end gap-2">
           <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-50">{busy ? "Saving…" : edit ? "Save changes" : "Create"}</button>
+          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-50">{busy ? "Saving…" : edit ? "Save changes" : "Create"}</button>
         </div>
       </div>
     </div>

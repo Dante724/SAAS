@@ -174,7 +174,7 @@ async def on_received(db: AsyncSession, org_id: str, part: Part,
     title = "Parts received — job can resume" if len(nums) == 1 else f"Parts received — {len(nums)} jobs can resume"
     body = f"{part.name} is in stock. Waiting: {', '.join(nums)}."
     for e in recips:
-        dl = f"/work-orders/{unblocked_ids[0]}" if len(unblocked_ids) == 1 else "/inventory"
+        dl = f"/orders?open={unblocked_ids[0]}" if len(unblocked_ids) == 1 else "/inventory"
         await push.notify(db, org_id=org_id, employee_id=e.id, kind=KIND_UNBLOCKED,
                           title=title, body=body, deep_link=dl, commit=False)
     return nums

@@ -34,7 +34,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import Client, ClientLedgerEntry
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 
 async def post_contact_ledger(

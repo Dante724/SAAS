@@ -113,6 +113,13 @@ def _rule_matches(rule: NotificationRule, *, event: str, status_key: Optional[st
     return True
 
 
+def _status_overrides(matched: list) -> list:
+    """A status's own message replaces the catch-all ("Every status change" / "Job finished")
+    on that channel, so the customer gets one message per channel, not two."""
+    own = {r.channel for r in matched if r.trigger_status_key}
+    return [r for r in matched if r.trigger_status_key or r.channel not in own]
+
+
 async def _render(db: AsyncSession, org_id: str, order: Order, rule: NotificationRule):
     """Render the rule's template against the order's variables. Falls back to a
     plain status line when the rule has no template attached."""
@@ -141,8 +148,25 @@ async def _render(db: AsyncSession, org_id: str, order: Order, rule: Notificatio
     if ev == "closed":
         return (f"Order {order.order_number} complete",
                 f"Your order {order.order_number} is complete.", None)
+    from backend.routers.documents import _status_name
+    status = await _status_name(db, org_id, order)
     return (f"Update on {order.order_number}",
-            f"Your order {order.order_number} is now: {order.status}", None)
+            f"Your order {order.order_number} is now: {status}", None)
+
+
+OPT_OUT_FOOTER = "Reply STOP to opt out."
+
+
+async def with_opt_out(db: AsyncSession, org_id: str, client_id: Optional[str], channel: str, body: str) -> str:
+    """US/Canada texting rules: the first text a customer gets from the shop says how to
+    stop them. Later texts stay short. Email is unaffected (it has its own unsubscribe)."""
+    if channel not in ("sms", "whatsapp") or not client_id or OPT_OUT_FOOTER in (body or ""):
+        return body
+    prior = (await db.execute(select(NotificationLog.id).where(
+        NotificationLog.org_id == org_id, NotificationLog.client_id == client_id,
+        NotificationLog.channel.in_(["sms", "whatsapp"]),
+        NotificationLog.status.in_(["sent", "scheduled"])).limit(1))).scalar_one_or_none()
+    return body if prior else f"{(body or '').rstrip()}\n{OPT_OUT_FOOTER}"
 
 
 async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
@@ -159,7 +183,8 @@ async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
     if not order:
         return {"sent": 0, "scheduled": 0}
 
-    matched = [r for r in rules if _rule_matches(r, event=event, status_key=status_key, order=order)]
+    matched = _status_overrides(
+        [r for r in rules if _rule_matches(r, event=event, status_key=status_key, order=order)])
     sent = scheduled = 0
     for rule in matched:
         subject, body, tpl_id = await _render(db, org_id, order, rule)
@@ -172,6 +197,7 @@ async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
             if chat_ch:
                 channel = chat_ch
         recipient = (client.email if channel == "email" else client.phone) if client else None
+        body = await with_opt_out(db, org_id, order.client_id, channel, body)
 
         send_at = now + timedelta(minutes=rule.delay_min or 0)
         if rule.working_hours_only:
@@ -232,6 +258,7 @@ async def queue_reminders(db: AsyncSession, *, org_id: str,
             subject, body, tpl_id = await _render(db, org_id, order, rule)
             client = order.client
             recipient = (client.email if rule.channel == "email" else client.phone) if client else None
+            body = await with_opt_out(db, org_id, order.client_id, rule.channel, body)
             send_at = order.scheduled_for - lead
             if not recipient:
                 status, err = "skipped", f"Client has no {rule.channel} on file"
@@ -256,19 +283,31 @@ async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = No
         NotificationLog.org_id == org_id, NotificationLog.status == "scheduled",
         NotificationLog.send_at.isnot(None), NotificationLog.send_at <= now))).scalars().all()
     sent = failed = 0
+    from sqlalchemy import update as _update
     for log in due:
         if not log.recipient:
             log.status = "skipped"
+            await db.commit()
             continue
-        result = await _send(db, org_id, log.channel, 
+        # Claim the row before sending and commit after each message: the old loop sent
+        # everything and committed once at the end, so a crash mid-sweep re-sent every message
+        # already delivered, and two runners could both send the same row. A row left in
+        # "sending" by a crash is never re-sent automatically (no duplicates to customers).
+        claimed = await db.execute(_update(NotificationLog)
+            .where(NotificationLog.id == log.id, NotificationLog.status == "scheduled")
+            .values(status="sending").execution_options(synchronize_session=False))
+        await db.commit()
+        if claimed.rowcount == 0:
+            continue
+        result = await _send(db, org_id, log.channel,
             recipient=log.recipient, subject=log.subject, body=log.body)
         log.status = result["status"]
         log.error = result.get("error")
+        await db.commit()
         if log.status == "sent":
             sent += 1
         else:
             failed += 1
-    await db.commit()
     return {"due": len(due), "sent": sent, "failed": failed}
 
 

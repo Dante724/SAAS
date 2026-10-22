@@ -7,13 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.services.dates import parse_date
-from backend.models import Feedback, FeedbackSettings, Order, Client, OrderStatus
+from backend.models import Feedback, FeedbackSettings, Order
 from backend.services.auth import get_current_employee, Employee, require_perm
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
 
@@ -175,7 +175,7 @@ async def feedback_report(
     figure (%promoters − %detractors), which is not the same thing as an average and
     can't be derived from one.
     """
-    from datetime import date, datetime as _dtm
+    from datetime import datetime as _dtm
 
     q = select(Feedback).where(Feedback.org_id == current.org_id,
                                Feedback.submitted_at.isnot(None))

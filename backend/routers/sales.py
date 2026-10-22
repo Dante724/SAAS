@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,9 +21,10 @@ from backend.models import (
     Stocktake,
     StocktakeLine,
 )
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import assert_perm, get_current_employee, require_perm
 from backend.services.numbering import next_number
-from backend.services.money import q2, q4
+from backend.services.money import add_to_column, q2, q4
+from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
 
 router = APIRouter(prefix="/api/sales", tags=["sales"])
 st_router = APIRouter(prefix="/api/stocktake", tags=["stocktake"])
@@ -36,7 +37,8 @@ async def _can_override_reservation(db, current) -> bool:
         return True
     from backend.models import Role
     role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-    return bool(role and (role.permissions or {}).get("can_override_reservation") is True)
+    from backend.services.permissions import role_allows
+    return bool(role and role_allows(role, "can_override_reservation"))
 
 
 # ─────────────────────────────── SALES ───────────────────────────────
@@ -111,10 +113,12 @@ async def _pos_redemptions(db, org_id, sale, client_id, gross, data):
         # guarded atomic increment (like the gift-card path) — refuse if a concurrent
         # redemption hit max_uses between the read above and this write.
         res = await db.execute(sa_update(Coupon)
-            .where(Coupon.id == c.id, or_(Coupon.max_uses.is_(None), Coupon.uses < Coupon.max_uses))
+            .where(Coupon.id == c.id, or_(Coupon.max_uses.is_(None), Coupon.max_uses == 0,   # 0 = unlimited
+                                       Coupon.uses < Coupon.max_uses))
             .values(uses=Coupon.uses + 1))
         if res.rowcount == 0:
             raise HTTPException(400, "Coupon usage limit reached")
+        sale.coupon_id = c.id
         extra += amt; remaining -= amt; detail["coupon"] = amt
     if data.gift_card_code:
         g = (await db.execute(select(GiftCard).where(
@@ -166,7 +170,7 @@ async def _pos_redemptions(db, org_id, sale, client_id, gross, data):
 async def list_sales(
     location_id: Optional[str] = None,        # build 138: scope sales to a branch
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_sales")),
 ):
     _q = select(Sale).where(Sale.org_id == current.org_id)
     if location_id:
@@ -176,7 +180,92 @@ async def list_sales(
         "id": s.id, "sale_number": s.sale_number, "client_id": s.client_id,
         "total": s.total, "total_cost": s.total_cost, "profit": q2(s.total - s.total_cost),
         "paid": s.paid, "created_at": s.created_at.isoformat() if s.created_at else None,
+        "voided_at": s.voided_at.isoformat() if s.voided_at else None, "void_reason": s.void_reason,
     } for s in rows]}
+
+
+@router.delete("/{sale_id}")
+async def delete_sale(
+    sale_id: str,
+    reason: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_delete_sales")),
+):
+    """Void a counter sale. The sale stays on record (struck through) and everything it did is
+    put back: products return to the shelf and to the FIFO cost layers they came from, holds
+    taken from other jobs are restored, the coupon use / gift-card spend / loyalty points come
+    back, and the takings leave the cashbox."""
+    from backend.models import Coupon, GiftCard, GiftCardLedger, LoyaltyLedger, StockReservation
+    sale = (await db.execute(select(Sale).where(
+        Sale.id == sale_id, Sale.org_id == current.org_id).with_for_update())).scalar_one_or_none()
+    if not sale:
+        raise HTTPException(404, "Sale not found")
+    if sale.voided_at:
+        raise HTTPException(409, "This sale was already deleted")
+    reason = (reason or "Deleted").strip()[:300]
+
+    lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id))).scalars().all()
+    for ln in lines:
+        if ln.kind != "product" or not ln.ref_id:
+            continue
+        sl = (await db.execute(select(StockLevel).where(
+            StockLevel.part_id == ln.ref_id, StockLevel.location_id == sale.location_id))).scalar_one_or_none()
+        if sl:
+            await add_to_column(db, sl, "qty_available", ln.qty, round_to=None)
+        else:
+            sl = StockLevel(part_id=ln.ref_id, location_id=sale.location_id, qty_available=ln.qty, qty_reserved=0)
+            db.add(sl)
+        db.add(StockMovement(part_id=ln.ref_id, location_id=sale.location_id, movement_type="return",
+                             qty=ln.qty, unit_cost=ln.cost_price or 0, ref_type="sale_void", ref_id=sale.id,
+                             created_by_id=current.id))
+        draws = ln.stock_draws or {}
+        for d in draws.get("layers") or []:
+            batch = (await db.execute(select(StockItemBatch).where(
+                StockItemBatch.id == d["batch_id"], StockItemBatch.org_id == current.org_id))).scalar_one_or_none()
+            if batch:
+                back = Decimal(str(d["qty"]))
+                cap = Decimal(str(batch.qty_received or 0))
+                batch.qty_remaining = min(Decimal(str(batch.qty_remaining or 0)) + back, cap)
+        for d in draws.get("holds") or []:
+            hold = (await db.execute(select(StockReservation).where(
+                StockReservation.id == d["hold_id"], StockReservation.org_id == current.org_id))).scalar_one_or_none()
+            if hold:
+                hold.qty = (hold.qty or 0) + d["qty"]
+                hold.released = False
+                sl.qty_reserved = (sl.qty_reserved or 0) + d["qty"]
+
+    if sale.coupon_id:
+        await db.execute(sa_update(Coupon).where(Coupon.id == sale.coupon_id, Coupon.uses > 0)
+                         .values(uses=Coupon.uses - 1))
+    for g in (await db.execute(select(GiftCardLedger).where(
+            GiftCardLedger.org_id == current.org_id, GiftCardLedger.ref_type == "sale",
+            GiftCardLedger.ref_id == sale.id))).scalars().all():
+        back = q2(-(g.amount or 0))
+        if back > 0:
+            await db.execute(sa_update(GiftCard).where(GiftCard.id == g.gift_card_id)
+                             .values(balance=GiftCard.balance + back))
+            db.add(GiftCardLedger(org_id=current.org_id, gift_card_id=g.gift_card_id, amount=back,
+                                  ref_type="sale_void", ref_id=sale.id, note=f"Sale {sale.sale_number} deleted"))
+    for pts in (await db.execute(select(LoyaltyLedger).where(
+            LoyaltyLedger.org_id == current.org_id, LoyaltyLedger.ref_type == "sale",
+            LoyaltyLedger.ref_id == sale.id))).scalars().all():
+        if (pts.points or 0) != 0:
+            db.add(LoyaltyLedger(org_id=current.org_id, client_id=pts.client_id, points=-pts.points,
+                                 ref_type="sale_void", ref_id=sale.id, note=f"Sale {sale.sale_number} deleted"))
+
+    from backend.routers.cash import void_document_legs
+    await void_document_legs(db, current.org_id, "sale", sale.id, reason, current.id)
+    sale.voided_at = datetime.utcnow()
+    sale.voided_by_id = current.id
+    sale.void_reason = reason
+    from backend.services import audit
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="sale.delete",
+                       entity_type="sale", entity_id=sale.id,
+                       diff={"sale_number": sale.sale_number, "total": float(sale.total or 0), "reason": reason})
+    from backend.routers.feed import log_system_event
+    await log_system_event(db, current.org_id, "sale", sale.id, f"Sale {sale.sale_number} deleted: {reason}")
+    await db.commit()
+    return {"ok": True, "id": sale.id, "voided_at": sale.voided_at.isoformat()}
 
 
 @router.post("", status_code=201)
@@ -190,6 +279,8 @@ async def create_sale(
     profit (total − cost) — is exact."""
     if not data.lines:
         raise HTTPException(400, "A sale needs at least one line")
+    if any(ln.kind == "service" for ln in data.lines):
+        await assert_perm(db, current, "can_sell_services")
     # A seller without a home location (e.g. the org owner) still needs a location on the sale —
     # sales.location_id is NOT NULL. Fall back to the org's first location rather than 500.
     loc_id = current.location_id
@@ -210,6 +301,7 @@ async def create_sale(
     for li in data.lines:
         line_total = q2(li.unit_price * li.qty * (1 - (li.discount or 0) / 100))
         cost = 0.0
+        draws = None
         if li.kind == "product" and li.ref_id:
             part = (await db.execute(select(Part).where(
                 Part.id == li.ref_id, Part.org_id == current.org_id))).scalar_one_or_none()
@@ -231,6 +323,8 @@ async def create_sale(
             if _g["blocked"] > 0:
                 raise HTTPException(409, f"{_g['blocked']:g} of '{part.name}' are reserved for a job. "
                                          f"A manager with override permission must approve selling them.")
+            draws = {"layers": [], "holds": [{"hold_id": o["hold_id"], "qty": o["qty"]}
+                                             for o in _g["overrides"] if o.get("hold_id")]}
             res = await db.execute(sa_update(StockLevel)
                 .where(StockLevel.id == sl.id, StockLevel.qty_available >= li.qty)
                 .values(qty_available=StockLevel.qty_available - li.qty))
@@ -247,6 +341,7 @@ async def create_sale(
                     rc = await consume_fifo_lifo(db, org_id=current.org_id, part_id=li.ref_id,
                                                  qty=Decimal(str(li.qty)), method="fifo")
                     unit_cost = rc["avg_unit_cost"]
+                    draws["layers"] = [{"batch_id": x["batch_id"], "qty": x["qty"]} for x in rc["layers"]]
                 except HTTPException:
                     pass
             cost = q4(unit_cost * li.qty)
@@ -258,7 +353,7 @@ async def create_sale(
         db.add(SaleLine(sale_id=sale.id, kind=li.kind, ref_id=li.ref_id,
                         description=li.description, qty=li.qty, unit_price=li.unit_price,
                         cost_price=cost / li.qty if li.qty else 0, discount=li.discount,
-                        total=line_total))
+                        total=line_total, stock_draws=draws))
         total += line_total
         total_cost += cost
 
@@ -284,6 +379,87 @@ async def create_sale(
     return {"id": sale.id, "sale_number": sale.sale_number, "total": sale.total,
             "total_cost": sale.total_cost, "profit": q2(sale.total - sale.total_cost),
             "paid": sale.paid, "redeemed": reward_detail}
+
+
+# ───────────────────────────── RECEIPT ─────────────────────────────
+class ReceiptEmailIn(BaseModel):
+    email: Optional[str] = Field(default=None, max_length=254)   # blank → the sale's client's email
+
+
+def receipt_text(org_name: str, sale: Sale, lines: list, sym: str, tz: Optional[str] = None) -> str:
+    """The customer's receipt in plain words — what was bought and what was paid. Never cost
+    or profit (that's the shop's business, not the customer's)."""
+    def m(v):
+        v = float(v or 0)
+        return f"{sym}{v:,.0f}" if abs(v - round(v)) < 0.005 else f"{sym}{v:,.2f}"
+    when = ""
+    if sale.created_at:   # stored as naive UTC; the customer reads it in the shop's time
+        from datetime import timezone as _tz
+        from zoneinfo import ZoneInfo
+        at = sale.created_at.replace(tzinfo=_tz.utc)
+        try:
+            at = at.astimezone(ZoneInfo(tz)) if tz else at
+        except Exception:
+            pass
+        when = at.strftime("%d %b %Y, %H:%M")
+    out = [org_name, f"Receipt {sale.sale_number}" + (f" · {when}" if when else ""), ""]
+    for ln in lines:
+        qty = ln.qty or 1
+        qty_s = f"{qty:g} × " if qty != 1 else ""
+        out.append(f"{qty_s}{ln.description or ln.kind}  {m(ln.total)}")
+    if float(sale.discount or 0):
+        out.append(f"Discount  −{m(sale.discount)}")
+    out += ["", f"Total  {m(sale.total)}", "Paid" if sale.paid else "Not paid yet", "", "Thank you!"]
+    return "\n".join(out)
+
+
+@router.get("/{sale_id}/receipt")
+async def sale_receipt(
+    sale_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_create_sales")),
+):
+    """The receipt for the after-sale Print / Email / WhatsApp choices."""
+    from backend.models import Client, Organisation
+    sale = (await db.execute(select(Sale).where(Sale.id == sale_id, Sale.org_id == current.org_id))).scalar_one_or_none()
+    if not sale:
+        raise HTTPException(404, "Sale not found")
+    org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
+    lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id))).scalars().all()
+    client = (await db.execute(select(Client).where(
+        Client.id == sale.client_id, Client.org_id == current.org_id))).scalar_one_or_none() if sale.client_id else None
+    sym = (org.currency if org else None) or "₹"
+    return {
+        "sale_number": sale.sale_number, "shop_name": org.name if org else "",
+        "total": sale.total, "discount": sale.discount, "paid": sale.paid,
+        "created_at": sale.created_at.isoformat() if sale.created_at else None,
+        "lines": [{"description": ln.description, "qty": ln.qty, "total": ln.total} for ln in lines],
+        "client_email": client.email if client else None, "client_phone": client.phone if client else None,
+        "text": receipt_text(org.name if org else "", sale, lines, sym, getattr(org, "timezone", None)),
+    }
+
+
+@router.post("/{sale_id}/receipt/email")
+async def email_sale_receipt(
+    sale_id: str, data: ReceiptEmailIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_create_sales")),
+):
+    """Email the receipt (connected Gmail/Outlook first, then SMTP, else the simulated adapter)."""
+    rc = await sale_receipt(sale_id, db, current)
+    to = (data.email or rc["client_email"] or "").strip()
+    if not to or "@" not in to:
+        raise HTTPException(422, "Add an email address for the receipt")
+    from backend.services.notifications import _adapter_for, notif_creds, try_oauth_email
+    subject = f"Your receipt {rc['sale_number']}" + (f" from {rc['shop_name']}" if rc["shop_name"] else "")
+    result = await try_oauth_email(db, current.org_id, recipient=to, subject=subject, body=rc["text"])
+    if result is None:
+        try:
+            await _adapter_for("email", await notif_creds(db, current.org_id, "email")).send(
+                recipient=to, subject=subject, body=rc["text"])
+        except Exception:
+            raise HTTPException(502, "Couldn't send the email. Check the shop's email settings and try again.")
+    return {"ok": True, "recipient": to}
 
 
 # ───────────────────────────── STOCKTAKE ─────────────────────────────
@@ -428,7 +604,7 @@ async def post_stocktake(
                             warehouse_id=st.warehouse_id, bin_id=l.bin_id or st.bin_id,
                             qty_available=0, qty_reserved=0)
             db.add(sl)
-        sl.qty_available = (sl.qty_available or 0) + l.variance
+        await _atomic_add(db, sl, "qty_available", l.variance, round_to=None)   # atomic
         part = (await db.execute(select(Part).where(Part.id == l.part_id))).scalar_one_or_none()
         db.add(StockMovement(part_id=l.part_id, location_id=st.location_id,
                              warehouse_id=st.warehouse_id, bin_id=l.bin_id or st.bin_id,
@@ -617,7 +793,7 @@ async def stocktake_lines(
 
 
 class CountImportIn(BaseModel):
-    rows: list[dict]                        # [{code, counted_qty}, ...]
+    rows: list[dict] = Field(max_length=MAX_IMPORT_ROWS)  # [{code, counted_qty}, ...]
     code_field: str = "code"
     qty_field: str = "counted_qty"
     register_unknown: bool = False
@@ -704,8 +880,8 @@ async def export_count_sheet(
     w = csv.writer(buf)
     w.writerow(["code", "name", "system_qty", "counted_qty"])
     for ln, name, sku in rows:
-        w.writerow([sku or "", name, ln.system_qty or 0,
-                    "" if ln.counted_qty is None else ln.counted_qty])
+        w.writerow(safe_row([sku or "", name, ln.system_qty or 0,
+                             "" if ln.counted_qty is None else ln.counted_qty]))
     buf.seek(0)
     return StreamingResponse(
         iter([buf.getvalue()]), media_type="text/csv",
@@ -767,3 +943,8 @@ async def _load_open_stocktake(db: AsyncSession, current: Employee, st_id: str) 
     if st.status == "posted":
         raise HTTPException(409, "This stocktake is posted — counts can't change now")
     return st
+
+
+async def _atomic_add(db, obj, attr, delta, *, round_to=None):
+    from backend.services.money import add_to_column
+    return await add_to_column(db, obj, attr, delta, round_to=round_to)

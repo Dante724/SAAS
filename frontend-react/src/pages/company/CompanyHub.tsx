@@ -1,4 +1,5 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import PageSummary, { type SummaryStat } from "../../components/PageSummary";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMe } from "../../context/Me";
@@ -7,6 +8,7 @@ import { api } from "../../api/client";
 import { Product, Service, Bundle, money } from "../inventory/types";
 import CategoryManager from "../../components/CategoryManager";
 import Pager from "../../components/Pager";
+import { useServerPage } from "../../hooks/useServerPage";
 
 const CO_PAGE = 50;
 
@@ -97,25 +99,46 @@ function Dashboard() {
     info: "bg-blue-50 text-primary border-blue-100",
   };
   const k = d?.kpis ?? {}, t = d?.today ?? {}, m = d?.monthly ?? {};
-  const cards: { l: string; v: string; icon: string; tint: string; mono?: boolean; sub?: string; to?: string }[] = [
-    { l: "Work orders today", v: String(t.work_orders ?? 0), icon: "handyman", tint: "bg-blue-50 text-primary", to: "/orders" },
-    { l: "Revenue today", v: money(t.revenue), icon: "trending_up", tint: "bg-emerald-50 text-emerald-600", mono: true, to: "/finance" },
-    { l: "Refunds today", v: money(t.refunds), icon: "undo", tint: "bg-rose-50 text-rose-600", mono: true, to: "/finance" },
-    { l: "Money in accounts", v: money(k.total_money), icon: "account_balance", tint: "bg-violet-50 text-violet-600", mono: true, sub: `Cash ${money(k.cash)} · Cashless ${money(k.cashless)}`, to: "/finance" },
-    { l: "New", v: String(k.new ?? 0), icon: "bolt", tint: "bg-blue-50 text-primary", to: "/orders?status=new" },
-    { l: "Urgent", v: String(k.urgent ?? 0), icon: "priority_high", tint: "bg-amber-50 text-amber-600", to: "/orders?priority=2" },
-    { l: "Overdue", v: String(k.overdue ?? 0), icon: "warning", tint: "bg-rose-50 text-rose-600", to: "/orders" },
-    { l: "Receivables", v: money(k.receivables), icon: "attach_money", tint: "bg-slate-100 text-ink-secondary", mono: true, to: "/invoices" },
+  const isZero = (n?: number) => !n;
+  // A role that can't see money gets null for it from the server; those tiles are left out.
+  const has = (v: unknown) => v !== null && v !== undefined;
+  // While the dashboard loads, every tile (and the money tiles' hint line) is laid out with a
+  // skeleton value so nothing moves when the numbers arrive (layout shift was 0.15–0.47).
+  const loading = !d && !err;
+  const sk = (w = "w-14") => <span className={`sk inline-block h-7 ${w} align-middle`} aria-hidden />;
+  const val = (v: string) => (loading ? sk() : v);
+  const stats: SummaryStat[] = [
+    { label: "New jobs today", value: val(String(t.work_orders ?? 0)), onClick: () => navigate("/orders") },
+    ...(loading || has(t.revenue) ? [{ label: "Paid today", value: val(money(t.revenue)), hint: t.refunds ? `${money(t.refunds)} refunded` : undefined, onClick: () => navigate("/finance") }] : []),
+    { label: "Waiting to start", value: val(String(k.new ?? 0)), onClick: () => navigate("/orders?status=new") },
+    { label: "Urgent", value: val(String(k.urgent ?? 0)), onClick: () => navigate("/orders?priority=urgent") },
+    { label: "Late", value: val(String(k.overdue ?? 0)), tone: "bad", zero: isZero(k.overdue), onClick: () => navigate("/orders") },
+    ...(loading || has(k.receivables) ? [{ label: "To collect", value: val(money(k.receivables)), onClick: () => navigate("/invoices") }] : []),
+    ...(loading || has(k.total_money) ? [{ label: "In your accounts", value: val(money(k.total_money)),
+      hint: loading ? <span className="sk inline-block h-3 w-24 align-middle" aria-hidden /> : `${money(k.cash)} cash · ${money(k.cashless)} bank`, onClick: () => navigate("/finance") }] : []),
   ];
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-bold text-ink-primary">Overview</h2>
-        <p className="text-sm text-ink-tertiary">Key performance metrics. Data may be delayed a few minutes.</p>
+        <h2 className="text-xl font-semibold text-ink-primary">Today</h2>
+        <p className="text-sm text-ink-tertiary">{new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}</p>
       </div>
 
       {/* Needs you — the action-first feed. Collapsible, but the count always shows
           so nothing waiting is ever hidden. Defaults open when there are items. */}
+      {!feed && (
+        <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-4" aria-busy="true">
+          <div className="flex items-center gap-2 py-0.5">
+            <M n={feedOpen === false ? "chevron_right" : "expand_more"} c="text-ink-tertiary text-base" />
+            <h3 className="text-sm font-semibold text-ink-primary">Needs you</h3>
+          </div>
+          {feedOpen !== false && (
+            <div className="space-y-1.5 mt-2.5" aria-hidden>
+              {[0, 1, 2].map((i) => <div key={i} className="h-[46px] rounded-xl border border-slate-200/70 px-3 flex items-center gap-3"><span className="sk w-7 h-7" /><span className="sk h-3.5 w-48 max-w-[50%]" /></div>)}
+            </div>
+          )}
+        </div>
+      )}
       {feed && (() => {
         const n = feed.items.length;
         const expanded = (feedOpen ?? n > 0);   // null = auto: open iff there are items
@@ -123,11 +146,11 @@ function Dashboard() {
         return (
           <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-4">
             <button onClick={toggleFeed} aria-expanded={expanded}
-              className="w-full flex items-center gap-2 text-left focus:outline-none">
+              className="w-full flex items-center gap-2 py-0.5 text-left focus:outline-none">
               <M n={expanded ? "expand_more" : "chevron_right"} c="text-ink-tertiary text-base" />
-              <h3 className="text-xs font-bold uppercase tracking-wider text-ink-tertiary">Needs you</h3>
-              {n > 0 && <span className="text-[10px] font-bold bg-rose-100 text-rose-600 rounded-full px-1.5 py-0.5 leading-none">{n}</span>}
-              {feed.ok && <span className="text-[10px] font-semibold text-emerald-600 flex items-center gap-1"><M n="check_circle" c="text-xs" />All caught up</span>}
+              <h3 className="text-sm font-semibold text-ink-primary">Needs you</h3>
+              {n > 0 && <span className="text-[11px] font-bold bg-rose-100 text-rose-600 rounded-full px-1.5 py-0.5 leading-none">{n}</span>}
+              {feed.ok && <span className="text-[11px] font-semibold text-emerald-600 flex items-center gap-1"><M n="check_circle" c="text-xs" />All caught up</span>}
             </button>
             {expanded && (
               feed.ok ? (
@@ -140,7 +163,7 @@ function Dashboard() {
                       <div key={it.key}
                         className="w-full flex items-center gap-3 rounded-xl border border-slate-200/70 hover:border-primary/50 hover:bg-blue-50/30 px-3 py-2 transition-all">
                         <span className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 ${feedTone[it.kind] || feedTone.info}`}><M n={it.icon} c="text-sm" /></span>
-                        <button onClick={() => navigate(it.to)} className="flex-1 text-sm font-medium text-ink-primary text-left focus:outline-none">{it.title}</button>
+                        <button onClick={() => navigate(it.to)} className="flex-1 py-1 text-sm font-medium text-ink-primary text-left focus:outline-none">{it.title}</button>
                         <button onClick={() => navigate(it.to)}
                           className={`shrink-0 inline-flex items-center gap-1 text-xs font-semibold rounded-full border px-2.5 py-1 ${feedTone[it.kind] || feedTone.info} hover:brightness-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40`}>
                           <M n={a.icon} c="text-sm" />{a.label}
@@ -161,47 +184,30 @@ function Dashboard() {
       })()}
 
       {err && <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-700 text-sm px-4 py-3">Couldn't load dashboard metrics right now.</div>}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {cards.map((c) => {
-          const clickable = !!c.to;
-          return (
-            <div key={c.l}
-              onClick={clickable ? () => navigate(c.to!) : undefined}
-              role={clickable ? "button" : undefined}
-              tabIndex={clickable ? 0 : undefined}
-              onKeyDown={clickable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); navigate(c.to!); } } : undefined}
-              className={`rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-4 ${clickable ? "cursor-pointer hover:border-primary/50 hover:shadow-clay-card transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40" : ""}`}>
-              <div className="flex items-start justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wide text-ink-tertiary">{c.l}</p>
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${c.tint}`}><M n={c.icon} c="text-sm" /></div>
-              </div>
-              <p className={`mt-2 text-2xl font-extrabold text-ink-primary ${c.mono ? "font-mono" : ""}`}>{c.v}</p>
-              {c.sub && <p className="mt-1 text-[11px] text-ink-tertiary">{c.sub}</p>}
-            </div>
-          );
-        })}
-      </div>
+      <PageSummary stats={stats} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-5">
           <h3 className="text-sm font-bold text-ink-primary mb-3">This month</h3>
           <div className="grid grid-cols-2 gap-4 text-sm">
-            <Metric l="Orders created" v={String(m.work_orders_created ?? 0)} />
-            <Metric l="Orders won" v={String(m.work_orders_won ?? 0)} />
-            <Metric l="Revenue" v={money(m.revenue)} mono />
-            <Metric l="Conversion" v={`${m.conversion ?? 0}%`} />
-            <Metric l="Avg. work order" v={money(m.avg_work_order)} mono />
+            <Metric l="Jobs in" v={String(m.work_orders_created ?? 0)} loading={loading} />
+            <Metric l="Jobs finished" v={String(m.work_orders_won ?? 0)} loading={loading} />
+            {(loading || has(m.revenue)) && <Metric l="Paid" v={money(m.revenue)} loading={loading} />}
+            <Metric l="Finished share" v={`${m.conversion ?? 0}%`} loading={loading} />
+            {(loading || has(m.avg_work_order)) && <Metric l="Average job" v={money(m.avg_work_order)} loading={loading} />}
           </div>
         </div>
         <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-5">
-          <h3 className="text-sm font-bold text-ink-primary mb-3">Order status mix</h3>
-          {(d?.status_mix ?? []).length === 0 ? (
+          <h3 className="text-sm font-bold text-ink-primary mb-3">Open jobs by stage</h3>
+          {loading ? (
+            <div className="space-y-2" aria-hidden>{[0, 1, 2].map((i) => <div key={i} className="h-5 flex items-center"><span className="sk h-3.5 w-40" /></div>)}</div>
+          ) : (d?.status_mix ?? []).length === 0 ? (
             <p className="text-sm text-ink-tertiary">No open orders.</p>
           ) : (
             <div className="space-y-2">
               {(d?.status_mix ?? []).map((s) => (
                 <div key={s.group} className="flex items-center justify-between text-sm">
-                  <span className="capitalize text-ink-secondary">{s.group.replace(/_/g, " ")}</span>
-                  <span className="font-mono font-bold text-ink-primary">{s.count}</span>
+                  <span className="text-ink-secondary">{({ new: "Waiting to start", in_progress: "Being worked on", pending: "Waiting (parts or customer)", ready: "Ready for pickup", closed: "Done", dropped: "Closed without repair" } as Record<string, string>)[s.group] || s.group.replace(/_/g, " ")}</span>
+                  <span className="font-semibold tabular-nums text-ink-primary">{s.count}</span>
                 </div>
               ))}
             </div>
@@ -211,23 +217,22 @@ function Dashboard() {
     </div>
   );
 }
-function Metric({ l, v, mono }: { l: string; v: string; mono?: boolean }) {
-  return <div><p className="text-xs text-ink-tertiary">{l}</p><p className={`text-lg font-bold text-ink-primary ${mono ? "font-mono" : ""}`}>{v}</p></div>;
+function Metric({ l, v, mono, loading }: { l: string; v: string; mono?: boolean; loading?: boolean }) {
+  return <div><p className="text-xs text-ink-tertiary">{l}</p><p className={`text-lg font-semibold text-ink-primary tabular-nums ${mono ? "" : ""}`}>{loading ? <span className="sk inline-block h-5 w-12 align-middle" aria-hidden /> : v}</p></div>;
 }
 
 /* ── Employee hours tab ────────────────────────────────────────── */
 export function EmployeeHours() {
   const [roster, setRoster] = useState<RosterRow[] | null>(null);
-  const [entries, setEntries] = useState<Entry[] | null>(null);
-  const [page, setPage] = useState(1);
+  // Time entries page on the server (the API serves at most 200 rows per request).
+  const ep = useServerPage<Entry>("/timeclock/entries", {}, { pageSize: CO_PAGE });
+  const entries = ep.err ? [] : ep.rows;
   useEffect(() => {
     api.get<{ items: RosterRow[] }>("/timeclock/roster").then((r) => setRoster(r.items || [])).catch(() => setRoster([]));
-    api.get<{ items: Entry[] }>("/timeclock/entries?limit=1000").then((r) => setEntries(r.items || [])).catch(() => setEntries([]));
   }, []);
   const onClock = (roster ?? []).filter((r) => r.on_shift);
-  const entTotal = entries?.length ?? 0;
-  const entPages = Math.max(1, Math.ceil(entTotal / CO_PAGE));
-  const pageEntries = (entries || []).slice((Math.min(page, entPages) - 1) * CO_PAGE, Math.min(page, entPages) * CO_PAGE);
+  const entTotal = ep.total;
+  const pageEntries = entries || [];
   return (
     <div className="space-y-6">
       <div>
@@ -243,14 +248,14 @@ export function EmployeeHours() {
               <div key={i} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                 <span className="text-sm font-semibold text-ink-primary">{r.employee_name}</span>
-                <span className="text-xs font-mono text-emerald-700">{hm((r.elapsed_sec ?? 0) / 60)}</span>
+                <span className="text-xs tabular-nums text-emerald-700">{hm((r.elapsed_sec ?? 0) / 60)}</span>
               </div>
             ))}
           </div>}
       </div>
       <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-card overflow-hidden">
         <table className="w-full text-left border-collapse">
-          <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary uppercase tracking-wider"><tr>
+          <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary "><tr>
             <th className="py-3 px-5">Employee</th><th className="py-3 px-3">Work order</th><th className="py-3 px-3">Type</th>
             <th className="py-3 px-3">Started</th><th className="py-3 px-3 text-right">Duration</th><th className="py-3 px-3">Status</th>
           </tr></thead>
@@ -263,15 +268,15 @@ export function EmployeeHours() {
                 <td className="py-3 px-3 text-primary font-mono">{e.order_number || "—"}</td>
                 <td className="py-3 px-3 text-ink-secondary capitalize">{e.category || "—"}</td>
                 <td className="py-3 px-3 text-ink-secondary">{e.started_at ? new Date(e.started_at).toLocaleString() : "—"}</td>
-                <td className="py-3 px-3 text-right font-mono font-bold text-ink-primary">{hm(e.duration_min)}</td>
+                <td className="py-3 px-3 text-right tabular-nums font-bold text-ink-primary">{hm(e.duration_min)}</td>
                 <td className="py-3 px-3">{e.running
-                  ? <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">Running</span>
-                  : <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-ink-secondary">Done</span>}</td>
+                  ? <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-700">Running</span>
+                  : <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-ink-secondary">Done</span>}</td>
               </tr>
             ))}
           </tbody>
         </table>
-        {entries && entTotal > 0 && <Pager total={entTotal} page={Math.min(page, entPages)} pageSize={CO_PAGE} onPage={setPage} noun="time entries" />}
+        {entries && entTotal > 0 && <Pager total={entTotal} page={ep.page} pageSize={CO_PAGE} onPage={ep.setPage} noun="time entries" />}
       </div>
     </div>
   );
@@ -315,7 +320,7 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
       </div>
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
         <table className="w-full text-left border-collapse">
-          <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary uppercase tracking-wider"><tr>
+          <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary "><tr>
             <th className="py-3.5 px-5">Service title</th><th className="py-3.5 px-3">Category</th><th className="py-3.5 px-3 text-right">Duration</th><th className="py-3.5 px-3 text-right">Base labor fee</th><th className="py-3.5 pr-5 text-right">Actions</th>
           </tr></thead>
           <tbody className="divide-y divide-slate-100 text-xs">
@@ -325,9 +330,9 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
               <tr key={s.id} className="hover:bg-blue-50/30 cursor-pointer" onClick={() => onOpen(s)}>
                 <td className="py-3.5 px-5 font-bold text-ink-primary">{s.name}</td>
                 <td className="py-3.5 px-3 text-ink-secondary">{s.category_name || s.category || "—"}</td>
-                <td className="py-3.5 px-3 text-right text-ink-secondary font-mono">{s.duration_min ? `${s.duration_min} min` : "—"}</td>
-                <td className="py-3.5 px-3 text-right font-bold text-ink-primary font-mono">{money(s.price)}</td>
-                <td className="py-3.5 pr-5 text-right"><button className="text-primary font-semibold hover:underline">Edit</button></td>
+                <td className="py-3.5 px-3 text-right text-ink-secondary tabular-nums">{s.duration_min ? `${s.duration_min} min` : "—"}</td>
+                <td className="py-3.5 px-3 text-right font-bold text-ink-primary tabular-nums">{money(s.price)}</td>
+                <td className="py-3.5 pr-5 text-right"><button className="text-primary font-semibold hover:underline px-2 py-1.5 -my-1.5 -mr-2">Edit</button></td>
               </tr>
             ))}
           </tbody>
@@ -376,7 +381,7 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
       </div>
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
         <table className="w-full text-left border-collapse">
-          <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary uppercase tracking-wider"><tr>
+          <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary "><tr>
             <th className="py-3.5 px-5">Product</th><th className="py-3.5 px-3">Category</th><th className="py-3.5 px-3">SKU</th><th className="py-3.5 px-3 text-right">Cost</th><th className="py-3.5 px-3 text-right">Sell price</th><th className="py-3.5 px-3 text-right">In stock</th><th className="py-3.5 pr-5 text-right">Actions</th>
           </tr></thead>
           <tbody className="divide-y divide-slate-100 text-xs">
@@ -387,10 +392,10 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
                 <td className="py-3.5 px-5 font-bold text-ink-primary">{p.name}</td>
                 <td className="py-3.5 px-3 text-ink-secondary">{p.category_id ? (catName[p.category_id] || "—") : <span className="text-ink-tertiary">Uncategorized</span>}</td>
                 <td className="py-3.5 px-3 text-ink-secondary font-mono">{p.sku || p.code || "—"}</td>
-                <td className="py-3.5 px-3 text-right text-ink-secondary font-mono">{money(p.cost_price)}</td>
-                <td className="py-3.5 px-3 text-right font-bold text-ink-primary font-mono">{money(p.sell_price)}</td>
-                <td className="py-3.5 px-3 text-right font-mono">{p.qty_available ?? 0}</td>
-                <td className="py-3.5 pr-5 text-right"><button className="text-primary font-semibold hover:underline">Edit</button></td>
+                <td className="py-3.5 px-3 text-right text-ink-secondary tabular-nums">{money(p.cost_price)}</td>
+                <td className="py-3.5 px-3 text-right font-bold text-ink-primary tabular-nums">{money(p.sell_price)}</td>
+                <td className="py-3.5 px-3 text-right tabular-nums">{p.qty_available ?? 0}</td>
+                <td className="py-3.5 pr-5 text-right"><button className="text-primary font-semibold hover:underline px-2 py-1.5 -my-1.5 -mr-2">Edit</button></td>
               </tr>
             ))}
           </tbody>
@@ -403,6 +408,7 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
 
 /* ── Bundles tab ───────────────────────────────────────────────── */
 export function Bundles({ onOpen, refresh }: { onOpen: (b?: Bundle) => void; refresh?: number }) {
+  const { can } = useMe();
   const [items, setItems] = useState<Bundle[] | null>(null);
   const [cat, setCat] = useState(false);
   const load = () => api.get<{ items: Bundle[] }>("/bundles").then((r) => setItems(r.items || [])).catch(() => setItems([]));
@@ -411,7 +417,7 @@ export function Bundles({ onOpen, refresh }: { onOpen: (b?: Bundle) => void; ref
     <div className="space-y-4">
       {cat && <CategoryManager entity="bundle" onClose={() => setCat(false)} onChanged={load} />}
       <div className="flex items-center gap-3">
-        <button onClick={() => onOpen()} className="bg-primary text-white text-sm font-semibold px-4 py-2 rounded-xl shadow-clay-sm hover:bg-primary-container flex items-center gap-1.5"><M n="add" c="text-sm" />New job kit</button>
+        {can("can_manage_bundles") && <button onClick={() => onOpen()} className="bg-primary text-white text-sm font-semibold px-4 py-2 rounded-xl shadow-clay-sm hover:bg-primary-container flex items-center gap-1.5"><M n="add" c="text-sm" />New job kit</button>}
         <button onClick={() => setCat(true)} className="bg-white border border-slate-200 text-ink-secondary text-sm font-semibold px-4 py-2 rounded-xl shadow-clay-sm hover:bg-slate-50 flex items-center gap-1.5"><M n="inventory" c="text-sm" />Categories</button>
       </div>
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-6 space-y-3">
@@ -419,9 +425,9 @@ export function Bundles({ onOpen, refresh }: { onOpen: (b?: Bundle) => void; ref
         {items?.length === 0 && <p className="text-xs text-ink-tertiary">No job kits configured yet.</p>}
         {items?.map((bd) => (
           <div key={bd.id} onClick={() => onOpen(bd)} className="border border-slate-200/80 rounded-xl p-4 bg-white flex items-center justify-between shadow-clay-sm hover:border-primary/40 cursor-pointer transition-all">
-            <div><div className="font-bold text-ink-primary text-sm flex items-center gap-1.5">{bd.name}{bd.broken && <span className="text-[9px] font-bold uppercase bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">Needs fixing</span>}</div><div className="text-[11px] text-ink-tertiary">{(bd.components || []).length} components{bd.broken ? " · an item no longer exists" : ""}</div></div>
+            <div><div className="font-bold text-ink-primary text-sm flex items-center gap-1.5">{bd.name}{bd.broken && <span className="text-[11px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">Needs fixing</span>}</div><div className="text-[11px] text-ink-tertiary">{(bd.components || []).length} components{bd.broken ? " · an item no longer exists" : ""}</div></div>
             <div className="text-right">
-              <span className="font-mono font-bold text-ink-primary text-sm">{money(bd.price)}</span>
+              <span className="tabular-nums font-bold text-ink-primary text-sm">{money(bd.price)}</span>
               {bd.total_std && bd.total_std > (bd.price || 0) && <span className="text-[11px] text-emerald-600 block font-semibold">Save {money(bd.total_std - (bd.price || 0))}</span>}
             </div>
           </div>

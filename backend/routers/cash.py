@@ -27,9 +27,10 @@ from backend.models import (
     Payment,
     Transaction,
 )
-from backend.services.auth import require_perm, record_scope
+from backend.services.auth import assert_perm, has_perm, require_perm, record_scope
+from backend.core import paging as _paging
 from backend.services.numbering import next_number
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 
 async def _check_backdating(db, org_id):
@@ -51,8 +52,16 @@ router = APIRouter(prefix="/api/cash", tags=["cash"],
 async def post_transaction(db, org_id, account_id, txn_type, amount, *,
                            cash_flow_item_id=None, comment=None, ref_type=None,
                            ref_id=None, employee_id=None, transfer_pair_id=None,
-                           fx_rate=None, is_retroactive=False, actual_date=None):
-    """Create a transaction and update the account balance in one step."""
+                           fx_rate=None, is_retroactive=False, actual_date=None,
+                           native_amount=False):
+    """Create a transaction and update the account balance in one step.
+
+    Documents (orders, invoices, sales, postings, refunds, client/supplier settlements) are
+    priced in the org's base currency. Posting such an amount into a till held in another
+    currency added e.g. 100 GBP-worth of order money as 100 USD, so a document leg must hit a
+    base-currency account. Manual entries and transfers (which carry fx_rate) are native already;
+    corrections pass native_amount=True because their delta is typed against the account itself.
+    """
     txn = Transaction(
         org_id=org_id, account_id=account_id, txn_type=txn_type, amount=amount,
         cash_flow_item_id=cash_flow_item_id, comment=comment, ref_type=ref_type,
@@ -65,6 +74,13 @@ async def post_transaction(db, org_id, account_id, txn_type, amount, *,
     # tenant's balance (the transaction row is org-stamped, but the balance mutation wasn't scoped).
     acc = (await db.execute(select(Account).where(
         Account.id == account_id, Account.org_id == org_id))).scalar_one_or_none()
+    if acc and acc.currency_code and ref_type not in (None, "manual") and fx_rate is None \
+            and not native_amount:
+        base = await _org_base_code(db, org_id)
+        if acc.currency_code.upper() != base.upper():
+            raise HTTPException(422, f"“{acc.name}” holds {acc.currency_code}, but this document is in "
+                                     f"{base}. Take the payment into a {base} account, then transfer "
+                                     "between accounts if the money is held in another currency.")
     if acc:
         from backend.services.money import add_to_column
         txn.balance_after = q2(await add_to_column(db, acc, "balance", amount))  # A1: running-balance snapshot
@@ -169,7 +185,7 @@ async def total_money(
 async def create_account(
     data: AccountIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
+    current: Employee = Depends(require_perm("can_manage_accounts")),
 ):
     if not data.name.strip():
         raise HTTPException(400, "Name is required")
@@ -206,7 +222,7 @@ async def update_account(
 async def delete_account(
     account_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
+    current: Employee = Depends(require_perm("can_manage_accounts")),
 ):
     a = (await db.execute(select(Account).where(Account.id == account_id, Account.org_id == current.org_id))).scalar_one_or_none()
     if not a:
@@ -267,12 +283,15 @@ async def create_transaction(
 ):
     if data.txn_type not in ("income", "expense"):
         raise HTTPException(400, "Use income or expense (transfer has its own endpoint)")
+    await assert_perm(db, current, "can_create_incomes" if data.txn_type == "income" else "can_create_expenses")
     amt = abs(data.amount) * (1 if data.txn_type == "income" else -1)
     retro = False
     actual = None
     if data.actual_date:
         actual = parse_dt(data.actual_date, "actual_date")
         retro = actual.date() < datetime.utcnow().date()
+        if retro:
+            await assert_perm(db, current, "can_retroactive_cash")
     await post_transaction(
         db, current.org_id, data.account_id, data.txn_type, amt,
         cash_flow_item_id=data.cash_flow_item_id, comment=data.comment,
@@ -300,7 +319,8 @@ async def _get_txn(db, org_id, txn_id) -> Transaction:
 
 # Cash legs posted by a payment document. Voiding/correcting only the cash row reversed the till
 # while the Payment, invoice.amount_paid, client ledger and sale.paid stayed as they were.
-_DOCUMENT_LEGS = {"order": "work order payment", "invoice": "invoice payment", "sale": "sale"}
+_DOCUMENT_LEGS = {"order": "work order payment", "invoice": "invoice payment", "sale": "sale",
+                  "payroll_run": "payroll run"}
 
 
 def _guard_document_leg(t) -> None:
@@ -332,6 +352,7 @@ async def correct_transaction(
         cash_flow_item_id=orig.cash_flow_item_id,
         comment=f"Correction: {data.reason.strip()}",
         ref_type=orig.ref_type, ref_id=orig.ref_id, employee_id=current.id,
+        native_amount=True,
     )
     corr.reverses_txn_id = orig.id       # link the delta row to the original
     orig.status = "corrected"            # original stays intact, just flagged
@@ -387,6 +408,8 @@ async def restore_transaction(
     t = await _get_txn(db, current.org_id, txn_id)
     if t.status != "deleted":
         raise HTTPException(400, "Transaction is not deleted")
+    if t.ref_type == "payroll_run":   # voided with its run; reviving it alone would pay twice
+        raise HTTPException(409, "This was the payout of a voided payroll run. Accrue and pay the period again instead.")
     legs = [t]
     if t.transfer_pair_id:
         legs = (await db.execute(select(Transaction).where(
@@ -709,7 +732,10 @@ async def refund_overpayment(
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
     """Refund an overpayment (prepayments exceeded the order total) from a cashbox."""
-    o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    await assert_perm(db, current, "can_create_returns")   # paying money back, not just seeing it
+    # Row lock (B11): two refunds at once both read the same overpayment and paid it out twice.
+    o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
+                          .with_for_update())).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
     acc = (await db.execute(select(Account).where(Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
@@ -779,6 +805,7 @@ async def list_order_invoices(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
+    await assert_perm(db, current, "can_view_invoices_tab")   # the work order's Invoices and payments tab
     invs = (await db.execute(select(Invoice).where(Invoice.order_id == order_id, Invoice.org_id == current.org_id))).scalars().all()
     pays = (await db.execute(select(Payment).where(Payment.order_id == order_id))).scalars().all()
     return {
@@ -791,18 +818,53 @@ async def list_order_invoices(
 
 # ── Account report / ledger ──────────────────────────
 
+async def void_document_legs(db, org_id, ref_type, ref_id, reason, actor_id) -> int:
+    """Soft-delete the cash legs a document posted (a sale's takings, a refund's payout) when
+    the document itself is voided: each leg's amount comes back out of its account balance and
+    the row stays, struck through. The document-side caller has already undone everything else."""
+    legs = (await db.execute(select(Transaction).where(
+        Transaction.org_id == org_id, Transaction.ref_type == ref_type, Transaction.ref_id == ref_id,
+        func.coalesce(Transaction.status, "active") != "deleted"))).scalars().all()
+    for leg in legs:
+        acc = (await db.execute(select(Account).where(
+            Account.id == leg.account_id, Account.org_id == org_id))).scalar_one_or_none()
+        if acc:
+            acc.balance = q2((acc.balance or 0) - leg.amount)
+        leg.status = "deleted"
+        leg.void_reason = reason
+        leg.voided_by_id = actor_id
+    return len(legs)
+
+
+async def cash_flow_floor(db, current) -> Optional[datetime]:
+    """Without "View the cash flow for any period" a role sees today's money movements only:
+    the start of today (UTC) to filter from, or None when every period is open to them."""
+    if await has_perm(db, current, "can_view_cashflow_any_period"):
+        return None
+    return datetime.combine(datetime.utcnow().date(), datetime.min.time())
+
+
 
 @router.get("/transactions")
 async def list_transactions(
     account_id: Optional[str] = None,
-    limit: int = 100,
+    skip: int = _paging.skip_query(),
+    limit: int = _paging.limit_query(100),
+    summary: bool = False,          # also return totals over every matching row (not just this page)
+    day: Optional[str] = None,      # YYYY-MM-DD for the summary's "today" in/out
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
+    limit = _paging.clamp(limit)
     q = select(Transaction).where(Transaction.org_id == current.org_id)
     if account_id:
         q = q.where(Transaction.account_id == account_id)
-    q = q.order_by(desc(Transaction.actual_date)).limit(limit)
+    since = await cash_flow_floor(db, current)
+    if since:
+        q = q.where(Transaction.actual_date >= since)
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
+    extra = {"summary": await _txn_summary(db, q, day)} if summary else {}
+    q = q.order_by(desc(Transaction.actual_date), desc(Transaction.id)).offset(skip).limit(limit)
     rows = (await db.execute(q)).scalars().all()
 
     # name lookups
@@ -820,7 +882,35 @@ async def list_transactions(
         # A1: append-only ledger fields
         "status": t.status, "balance_after": t.balance_after,
         "reverses_txn_id": t.reverses_txn_id, "void_reason": t.void_reason,
-    } for t in rows]}
+    } for t in rows], "total": total, "skip": skip, "limit": limit, **extra}
+
+
+async def _txn_summary(db, q, day: Optional[str]) -> dict:
+    """Totals the cash panel shows under a paged ledger, computed in SQL over all matching
+    rows: live (not deleted) count, money in, money out, and in/out on `day`."""
+    from datetime import date as _date
+    from datetime import timedelta
+
+    from sqlalchemy import case
+    sub = q.where(func.coalesce(Transaction.status, "") != "deleted").subquery()
+    absamt = func.abs(sub.c.amount)
+    cols = [func.count(),
+            func.coalesce(func.sum(case((sub.c.txn_type == "income", sub.c.amount), else_=0)), 0),
+            func.coalesce(func.sum(case((sub.c.txn_type == "expense", absamt), else_=0)), 0)]
+    if day:
+        try:
+            d0 = datetime.combine(_date.fromisoformat(day), datetime.min.time())
+        except ValueError:
+            raise HTTPException(422, "day must be YYYY-MM-DD")
+        on_day = (sub.c.actual_date >= d0) & (sub.c.actual_date < d0 + timedelta(days=1))
+        cols += [func.coalesce(func.sum(case((on_day & (sub.c.txn_type == "income"), absamt), else_=0)), 0),
+                 func.coalesce(func.sum(case((on_day & (sub.c.txn_type == "expense"), absamt), else_=0)), 0)]
+    r = (await db.execute(select(*cols).select_from(sub))).one()
+    out = {"count": r[0], "income": float(r[1] or 0), "expense": float(r[2] or 0)}
+    if day:
+        out["today_in"], out["today_out"] = float(r[3] or 0), float(r[4] or 0)
+        out["today_net"] = out["today_in"] - out["today_out"]
+    return out
 
 
 @router.get("/balances")

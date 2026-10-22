@@ -1,4 +1,7 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
+import { useVisibleInterval } from "../hooks/useVisibleInterval";
+import { toAppPath } from "../lib/deepLink";
+import { TeklyMark } from "./brand/TeklyLogo";
 import { NavLink, useNavigate } from "react-router-dom";
 import { api, getLocationScope, setLocationScope } from "../api/client";
 import { alertDialog } from "../lib/dialog";
@@ -24,7 +27,9 @@ import {
   Ban, CircleX, ListChecks, Pipette, ScanText, CheckCheck, Download, FilePen, CalendarCheck,
   History, Hourglass, LineChart, Lightbulb, Unlink, Truck, Lock, LockOpen, Merge,
   CircleDollarSign, Percent, ShieldAlert, Globe, Gift, RotateCcw, SearchCheck, VideoOff,
-  ShieldCheck, Target,
+  ShieldCheck, Target, EyeOff, Car, Sailboat, Bike, Laptop, Cog, Upload,
+  ShoppingBag, Split,
+  LogOut, Menu as MenuIcon,
 } from "lucide-react";
 
 // Map the old Material-Symbols ligature names to bundled Lucide icons (no web font,
@@ -34,7 +39,7 @@ const ICONS: Record<string, any> = {
   task_alt: CheckCircle2, mail: Mail, chat: MessageSquare, chat_bubble: MessageCircle,
   calendar_month: Calendar, calendar_view_week: CalendarRange, schedule: Clock, timer: Timer,
   contacts: Contact, group: Users, person: User, person_add: UserPlus, contact_support: LifeBuoy,
-  point_of_sale: ShoppingCart, shopping_cart: ShoppingCart,
+  point_of_sale: ShoppingCart, shopping_cart: ShoppingCart, shopping_bag: ShoppingBag, call_split: Split,
   inventory_2: Package, inventory: Boxes, warehouse: Warehouse,
   account_balance: Landmark, payments: Wallet, account_balance_wallet: Wallet, savings: PiggyBank,
   credit_card: CreditCard, request_quote: ReceiptText, receipt_long: Receipt, description: FileText,
@@ -43,7 +48,7 @@ const ICONS: Record<string, any> = {
   pending_actions: ClipboardList, fact_check: ClipboardCheck,
   attach_money: Banknote, currency_rupee: IndianRupee,
   priority_high: AlertCircle, warning: AlertTriangle, flag: Flag, bolt: Zap, auto_awesome: Sparkles,
-  add: Plus, remove: Minus, close: X, check: Check, check_circle: CheckCircle2,
+  add: Plus, remove: Minus, close: X, menu: MenuIcon, check: Check, check_circle: CheckCircle2,
   delete: Trash2, delete_sweep: Trash2, undo: Undo2, assignment_return: Undo2,
   swap_horiz: ArrowLeftRight, sync_alt: RefreshCw,
   filter_list: Filter, filter_alt: Filter, view_column: Columns3,
@@ -68,9 +73,9 @@ const ICONS: Record<string, any> = {
   print: Printer, save: Save, send: Send, campaign: Send, smartphone: Smartphone,
   photo_camera: Camera, add_a_photo: Camera, image: ImageIcon,
   barcode: Barcode, qr_code_scanner: QrCode, scan: ScanLine,
-  dashboard: LayoutDashboard, light_mode: Sun, dark_mode: Moon, language: Languages,
+  dashboard: LayoutDashboard, light_mode: Sun, dark_mode: Moon, language: Languages, logout: LogOut,
   // 144hx — document editor icons (were falling back to Circle)
-  edit: Pencil, visibility: Eye, data_object: Braces, expand_less: ChevronUp,
+  edit: Pencil, visibility: Eye, directions_car: Car, sailing: Sailboat, pedal_bike: Bike, laptop: Laptop, settings_suggest: Cog, upload: Upload, visibility_off: EyeOff, data_object: Braces, expand_less: ChevronUp,
   format_bold: Bold, format_italic: Italic, format_underlined: Underline,
   title: Heading1, text_fields: Heading2, format_list_bulleted: List,
   format_align_left: AlignLeft, format_align_center: AlignCenter, format_align_right: AlignRight,
@@ -166,97 +171,123 @@ export default function Shell({ title, children }: { title: string; children: Re
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const liveRef = useRef(true);
+  useEffect(() => { liveRef.current = true; return () => { liveRef.current = false; }; }, []);
+  useVisibleInterval(() => {
+    api.get<{ items: any[] }>("/tech/notifications?only_unread=true")
+      .then((r) => { if (liveRef.current) setUnread((r.items || []).length); }).catch(() => {});
+  }, 60000);
+
+  // Below 900px the sidebar becomes a slide-in drawer opened from the top bar's menu button.
+  const [navOpen, setNavOpen] = useState(false);
   useEffect(() => {
-    let live = true;
-    const poll = () => api.get<{ items: any[] }>("/tech/notifications?only_unread=true")
-      .then((r) => { if (live) setUnread((r.items || []).length); }).catch(() => {});
-    poll();
-    const id = setInterval(poll, 60000);
-    return () => { live = false; clearInterval(id); };
-  }, []);
+    if (!navOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setNavOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navOpen]);
+
+  // The nav list, shared by the desktop sidebar (optionally a narrow icon rail) and the phone drawer.
+  const renderNav = (collapsed: boolean, onNavigate?: () => void) => (
+    <>
+      {NAV_GROUPS.map((group) => {
+        const visible = group.items.filter((it) => can(NAV_PERM[it.to]));
+        if (visible.length === 0) return null;
+        return (
+          <div key={group.name || "home"} className="pb-1">
+            {group.name && !collapsed && (
+              <div className="px-2.5 pt-2.5 pb-1 text-[11px] font-bold text-ink-tertiary/80">{t(group.name)}</div>
+            )}
+            {group.name && collapsed && <div className="my-1.5 mx-2 border-t border-slate-200/70" />}
+            {visible.map((it) => (
+              <NavLink
+                key={it.to}
+                to={it.to}
+                end={it.end}
+                onClick={onNavigate}
+                title={collapsed ? t(it.l) : undefined}
+                className={({ isActive }) =>
+                  `flex items-center gap-2 px-2.5 rounded-lg text-xs transition-colors ${onNavigate ? "py-2.5 text-[13px]" : "py-1.5"} ${collapsed ? "justify-center" : ""} ${
+                    isActive
+                      ? "font-bold text-primary bg-blue-50/80 shadow-sm"
+                      : "font-medium text-ink-secondary hover:bg-slate-100 hover:text-ink-primary"
+                  }`
+                }
+              >
+                {({ isActive }) => (
+                  <>
+                    <M n={it.i} c={`text-[17px] ${isActive ? "text-primary" : "text-ink-tertiary"}`} />
+                    {!collapsed && <span>{t(it.l)}</span>}
+                  </>
+                )}
+              </NavLink>
+            ))}
+          </div>
+        );
+      })}
+    </>
+  );
+  const brand = (collapsed: boolean) => (
+    <div className={`flex items-center gap-2.5 px-2 pt-1 pb-3 ${collapsed ? "justify-center" : ""}`}>
+      <TeklyMark size={32} />
+      {!collapsed && (
+        <div>
+          <div className="font-bold text-[17px] leading-none tracking-[-0.05em] text-ink-primary flex items-center gap-1.5" aria-label="Tekly">tekly <span className="text-[10px] tracking-normal px-1 py-px rounded bg-blue-100 text-primary font-bold">PRO</span></div>
+          {me?.org_name && <p className="max-w-[140px] truncate text-[11px] text-ink-tertiary font-medium" title={me.org_name}>{me.org_name}</p>}
+        </div>
+      )}
+    </div>
+  );
 
   return (
-    <div className="bg-surface text-ink-primary antialiased h-screen w-screen overflow-hidden select-none flex flex-col font-sans">
+    <div className="bg-surface text-ink-primary antialiased h-screen h-[100dvh] w-full overflow-hidden select-none flex flex-col font-sans">
       <div className="flex flex-1 overflow-hidden relative">
-        {/* SIDEBAR */}
-        <aside className={`${railCollapsed ? "w-[64px]" : "w-[200px]"} flex-shrink-0 bg-white/70 backdrop-blur-xl border-r border-slate-200/80 flex flex-col justify-between z-10 transition-[width] duration-200`}>
-          <div className="p-3 space-y-0.5 overflow-y-auto">
-            <div className={`flex items-center gap-2.5 px-2 pt-1 pb-3 ${railCollapsed ? "justify-center" : ""}`}>
-              <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-primary to-primary-container flex items-center justify-center text-white shadow-clay-sm shrink-0"><M n="build" c="text-lg" /></div>
-              {!railCollapsed && (
-                <div>
-                  <div className="font-extrabold text-sm tracking-tight text-ink-primary flex items-center gap-1">RepairOS <span className="text-[9px] px-1 rounded bg-blue-100 text-primary font-bold">PRO</span></div>
-                  <p className="text-[10px] text-ink-tertiary font-medium">{t("Workshop Central")}</p>
-                </div>
-              )}
-            </div>
-            {NAV_GROUPS.map((group) => {
-              const visible = group.items.filter((it) => can(NAV_PERM[it.to]));
-              if (visible.length === 0) return null;
-              return (
-                <div key={group.name || "home"} className="pb-1">
-                  {group.name && !railCollapsed && (
-                    <div className="px-2.5 pt-2.5 pb-1 text-[9px] font-bold uppercase tracking-wider text-ink-tertiary/80">{t(group.name)}</div>
-                  )}
-                  {group.name && railCollapsed && <div className="my-1.5 mx-2 border-t border-slate-200/70" />}
-                  {visible.map((it) => (
-                    <NavLink
-                      key={it.to}
-                      to={it.to}
-                      end={it.end}
-                      title={railCollapsed ? t(it.l) : undefined}
-                      className={({ isActive }) =>
-                        `flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs transition-colors ${railCollapsed ? "justify-center" : ""} ${
-                          isActive
-                            ? "font-bold text-primary bg-blue-50/80 shadow-sm"
-                            : "font-medium text-ink-secondary hover:bg-slate-100 hover:text-ink-primary"
-                        }`
-                      }
-                    >
-                      {({ isActive }) => (
-                        <>
-                          <M n={it.i} c={`text-[17px] ${isActive ? "text-primary" : "text-ink-tertiary"}`} />
-                          {!railCollapsed && <span>{t(it.l)}</span>}
-                        </>
-                      )}
-                    </NavLink>
-                  ))}
-                </div>
-              );
-            })}
+        {/* SIDEBAR (900px and up) */}
+        <aside className={`${railCollapsed ? "w-[64px]" : "w-[200px]"} hidden min-[900px]:flex flex-shrink-0 bg-sidebar border-r border-slate-200/80 flex-col justify-between z-10 transition-[width] duration-200`}>
+          <nav aria-label={t("Main menu")} className="p-3 space-y-0.5 overflow-y-auto">
+            {brand(railCollapsed)}
+            {renderNav(railCollapsed)}
             <button onClick={toggleRail} title={railCollapsed ? t("Expand menu") : t("Collapse menu")} aria-label={railCollapsed ? t("Expand menu") : t("Collapse menu")}
               className={`mt-1.5 w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium text-ink-tertiary hover:bg-slate-100 hover:text-ink-primary transition-colors ${railCollapsed ? "justify-center" : ""}`}>
               <M n={railCollapsed ? "chevron_right" : "chevron_left"} c="text-[17px]" />
               {!railCollapsed && <span>{t("Collapse")}</span>}
             </button>
-          </div>
-          <div className="p-3 border-t border-slate-200/80 bg-slate-50/50">
-            <div className={`flex items-center gap-2 px-1 ${railCollapsed ? "justify-center" : ""}`} title={railCollapsed ? (me?.name || "") : undefined}>
-              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-bold flex items-center justify-center text-xs ring-2 ring-white shadow-sm shrink-0">{initials}</div>
-              {!railCollapsed && <>
-                <div className="flex-1 min-w-0"><p className="text-xs font-bold text-ink-primary truncate">{me?.name || "—"}</p><p className="text-[10px] text-ink-tertiary truncate">{me?.role || me?.email || ""}</p></div>
-                <M n="more_vert" c="text-ink-tertiary text-sm cursor-pointer hover:text-ink-primary" />
-              </>}
-            </div>
-          </div>
+          </nav>
         </aside>
 
+        {/* NAV DRAWER (below 900px). Kept mounted so it can slide; `invisible` takes it out of
+            the tab order and the accessibility tree while closed. */}
+        <div className={`min-[900px]:hidden fixed inset-0 z-[75] ${navOpen ? "" : "invisible pointer-events-none"}`} aria-hidden={!navOpen}>
+          <div className={`absolute inset-0 bg-ink-primary/40 transition-opacity duration-200 ${navOpen ? "opacity-100" : "opacity-0"}`} onClick={() => setNavOpen(false)} />
+          <aside id="nav-drawer" role="dialog" aria-modal="true" aria-label={t("Main menu")}
+            className={`absolute inset-y-0 start-0 w-[272px] max-w-[85vw] bg-sidebar border-e border-slate-200/80 shadow-clay-drawer flex flex-col transition-transform duration-200 ${navOpen ? "translate-x-0" : "-translate-x-full rtl:translate-x-full"}`}>
+            <div className="flex items-start justify-between p-3 pb-0">
+              {brand(false)}
+              <button onClick={() => setNavOpen(false)} aria-label={t("Close menu")} className="w-10 h-10 -mt-1 rounded-lg flex items-center justify-center text-ink-tertiary hover:bg-slate-100 hover:text-ink-primary"><M n="close" c="text-lg" /></button>
+            </div>
+            <div className="px-3 pb-2"><LocationSwitcher block /></div>
+            <nav className="px-3 pb-6 space-y-0.5 overflow-y-auto flex-1">{renderNav(false, () => setNavOpen(false))}</nav>
+          </aside>
+        </div>
+
         {/* MAIN */}
-        <main className="flex-1 flex flex-col min-w-0 bg-[#f7f8fd] overflow-hidden">
-          <header className="h-[52px] bg-white/80 backdrop-blur-md border-b border-slate-200/80 px-6 flex items-center justify-between flex-shrink-0 z-10">
-            <div className="flex items-center gap-4">
-              <h1 className="text-base font-bold text-ink-primary tracking-tight">{t(title)}</h1>
-              <button onClick={() => setPalette(true)} className="relative w-64 text-left group">
+        <main className="app-main flex-1 flex flex-col min-w-0 bg-canvas overflow-hidden">
+          <header className="h-[52px] bg-white/80 backdrop-blur-md border-b border-slate-200/80 px-2 sm:px-4 min-[1100px]:px-6 flex items-center justify-between gap-2 flex-shrink-0 z-10">
+            <div className="flex items-center gap-1.5 sm:gap-4 min-w-0">
+              <button onClick={() => setNavOpen(true)} aria-label={t("Open menu")} aria-expanded={navOpen} aria-controls="nav-drawer"
+                className="min-[900px]:hidden w-10 h-10 shrink-0 rounded-lg flex items-center justify-center text-ink-secondary hover:bg-slate-100 hover:text-ink-primary"><M n="menu" c="text-xl" /></button>
+              <h1 className="text-base font-bold text-ink-primary tracking-tight whitespace-nowrap truncate">{t(title)}</h1>
+              <button onClick={() => setPalette(true)} aria-label={t("Search")} className="relative shrink-0 text-left group w-8 h-8 sm:h-auto sm:w-44 min-[1100px]:w-64">
                 <M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" />
-                <div className="w-full bg-slate-100/80 group-hover:bg-white text-xs pl-8 pr-12 py-1.5 rounded-lg border border-slate-200/70 font-medium text-ink-placeholder">{t("Search orders, clients, serials…")}</div>
-                <span className="absolute right-2 top-1.5 text-[10px] bg-white border border-slate-200 text-ink-tertiary font-mono px-1 rounded shadow-2xs">⌘K</span>
+                <div className="w-full h-8 sm:h-auto bg-slate-100/80 group-hover:bg-white text-xs pl-8 sm:pr-12 py-1.5 rounded-lg border border-slate-200/70 font-medium text-ink-placeholder whitespace-nowrap overflow-hidden text-ellipsis"><span className="hidden sm:inline">{t("Search jobs, customers…")}</span></div>
+                <span className="hidden sm:inline absolute right-2 top-1.5 text-[11px] bg-white border border-slate-200 text-ink-tertiary font-mono px-1 rounded shadow-2xs">⌘K</span>
               </button>
             </div>
-            <div className="flex items-center gap-3">
-              <LocationSwitcher />
+            <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+              <div className="hidden min-[900px]:block"><LocationSwitcher /></div>
               <ScanBox />
               {(me?.clock_attendance_enabled || me?.clock_wo_enabled) && <TimeClockChip me={me} />}
-              <button onClick={() => setNotifOpen((o) => !o)} aria-label="Notifications" className="w-8 h-8 rounded-full border border-slate-200 bg-white flex items-center justify-center text-ink-secondary hover:text-ink-primary shadow-xs relative"><M n="notifications" c="text-sm" />{unread > 0 && <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-primary text-white text-[9px] font-bold flex items-center justify-center border-2 border-white">{unread > 9 ? "9+" : unread}</span>}</button>
+              <button onClick={() => setNotifOpen((o) => !o)} aria-label="Notifications" className="w-8 h-8 rounded-full border border-slate-200 bg-white flex items-center justify-center text-ink-secondary hover:text-ink-primary shadow-xs relative"><M n="notifications" c="text-sm" />{unread > 0 && <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-primary text-white text-[11px] font-bold flex items-center justify-center border-2 border-white">{unread > 9 ? "9+" : unread}</span>}</button>
               <div className="relative">
                 <button onClick={() => setAvatarOpen((o) => !o)} aria-label={t("Account menu")} className="w-8 h-8 rounded-full bg-primary text-white font-semibold text-xs flex items-center justify-center shadow-xs hover:brightness-110 relative">{initials}{me?.mfa_required && !me?.mfa_enabled && <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-amber-400 border-2 border-white" />}</button>
                 {avatarOpen && (
@@ -272,11 +303,15 @@ export default function Shell({ title, children }: { title: string; children: Re
                       </button>
                       <button onClick={() => setLang(lang === "en" ? "es" : lang === "es" ? "ar" : "en")} className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-ink-secondary hover:bg-slate-100 hover:text-ink-primary">
                         <span className="flex items-center gap-2.5"><M n="language" c="text-base" />{t("Language")}</span>
-                        <span className="text-[10px] font-bold bg-slate-100 text-ink-tertiary rounded px-1 uppercase">{lang}</span>
+                        <span className="text-[11px] font-bold bg-slate-100 text-ink-tertiary rounded px-1 ">{lang}</span>
                       </button>
                       <button onClick={() => { setAvatarOpen(false); setSecOpen(true); }} className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-ink-secondary hover:bg-slate-100 hover:text-ink-primary">
                         <span className="flex items-center gap-2.5"><M n="lock" c="text-base" />{t("Security & two-factor")}</span>
                         {me?.mfa_required && !me?.mfa_enabled && <span className="w-2 h-2 rounded-full bg-amber-400" />}
+                      </button>
+                      <div className="my-1 border-t border-slate-100" />
+                      <button onClick={() => { setAvatarOpen(false); signOut(); }} className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-ink-secondary hover:bg-slate-100 hover:text-ink-primary">
+                        <M n="logout" c="text-base" />{t("Sign out")}
                       </button>
                     </div>
                   </>
@@ -285,7 +320,7 @@ export default function Shell({ title, children }: { title: string; children: Re
             </div>
           </header>
           {me?.mfa_required && !me?.mfa_enabled && (
-            <button onClick={() => setSecOpen(true)} className="w-full text-left bg-amber-50 border-b border-amber-200 text-amber-800 text-xs font-semibold px-6 py-2 flex items-center gap-2 hover:bg-amber-100">
+            <button onClick={() => setSecOpen(true)} className="w-full text-left bg-amber-50 border-b border-amber-200 text-amber-800 text-xs font-semibold px-3 sm:px-6 py-2 flex items-center gap-2 hover:bg-amber-100">
               <M n="lock" c="text-sm" />Your organization requires two-factor authentication. <span className="underline">Set it up now</span> to keep access.
             </button>
           )}
@@ -309,6 +344,17 @@ function QrSvg({ data }: { data: string }) {
       .then((r) => (r.ok ? r.text() : "")).then(setSvg).catch(() => setSvg(""));
   }, [data]);
   return <div className="w-44 h-44 bg-white rounded-xl border border-slate-200 p-2 flex items-center justify-center [&>svg]:w-full [&>svg]:h-full" dangerouslySetInnerHTML={{ __html: svg || "" }} />;
+}
+
+// Sign out: tell the server first (it records the sign-out), then drop the token whatever it answers.
+async function signOut() {
+  let tok = ""; try { tok = localStorage.getItem("ros_tok") || ""; } catch { /* ignore */ }
+  if (tok) {
+    try { await fetch("/api/auth/logout", { method: "POST", headers: { Authorization: `Bearer ${tok}` } }); }
+    catch { /* offline: still sign out here */ }
+  }
+  try { localStorage.removeItem("ros_tok"); } catch { /* ignore */ }
+  window.location.replace("/login");
 }
 
 // Two-factor enrollment / management. Reached from the top-bar avatar and the org-required banner.
@@ -338,10 +384,6 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
     catch (e: any) { setErr(e.message || "Could not disable"); } finally { setBusy(false); }
   }
   const inp = "glass-input w-full px-3 py-2 rounded-lg text-sm font-semibold text-ink-primary";
-  function signOut() {
-    try { localStorage.removeItem("ros_tok"); } catch { /* ignore */ }
-    window.location.replace("/login");
-  }
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={forced ? undefined : onClose} />
@@ -361,7 +403,7 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
               {me?.mfa_required
                 ? <div className="text-xs text-ink-tertiary">Your organization requires 2FA, so it can't be turned off.</div>
                 : <div className="space-y-2">
-                    <label className="block text-[11px] font-bold uppercase text-ink-tertiary">Disable (confirm password)</label>
+                    <label className="block text-[11px] font-bold text-ink-tertiary">Disable (confirm password)</label>
                     <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="Account password" className={inp} />
                     <button onClick={disable} disabled={busy || !pw} className="px-3 py-2 rounded-lg bg-rose-600 text-white text-xs font-bold disabled:opacity-50">Turn off 2FA</button>
                   </div>}
@@ -372,7 +414,7 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
             <>
               {forced && <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2">Your organization requires two-factor authentication. Set it up to continue.</div>}
               <p className="text-ink-secondary text-xs">Protect your account with an authenticator app (Google Authenticator, Authy, 1Password…). You'll enter a 6-digit code at sign-in.</p>
-              <button onClick={startEnroll} disabled={busy} className="px-4 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm disabled:opacity-50">{busy ? "…" : "Enable two-factor"}</button>
+              <button onClick={startEnroll} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm disabled:opacity-50">{busy ? "…" : "Enable two-factor"}</button>
             </>
           )}
 
@@ -384,8 +426,8 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
                 <code className="text-[11px] font-mono bg-slate-100 rounded px-2 py-1 break-all text-ink-secondary">{enroll.secret}</code>
               </div>
               <p className="text-ink-secondary text-xs">2. Enter the 6-digit code it shows:</p>
-              <input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="123456" className={`${inp} font-mono tracking-widest text-center`} />
-              <button onClick={activate} disabled={busy || code.length < 6} className="w-full px-4 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm disabled:opacity-50">{busy ? "Verifying…" : "Verify & turn on"}</button>
+              <input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="123456" className={`${inp} font-mono  text-center`} />
+              <button onClick={activate} disabled={busy || code.length < 6} className="w-full px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm disabled:opacity-50">{busy ? "Verifying…" : "Verify & turn on"}</button>
             </>
           )}
 
@@ -395,7 +437,7 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
               {recovery.length > 0 && (
                 <div>
                   <p className="text-xs text-ink-secondary mb-1">Save these recovery codes somewhere safe — they're shown once and let you back in if you lose your device:</p>
-                  <div className="grid grid-cols-2 gap-1.5 bg-slate-50 rounded-lg border border-slate-200 p-3 font-mono text-xs">
+                  <div className="grid grid-cols-2 gap-1.5 bg-slate-50 rounded-lg border border-slate-200 p-3 tabular-nums text-xs">
                     {recovery.map((c) => <span key={c} className="text-ink-primary">{c}</span>)}
                   </div>
                 </div>
@@ -449,12 +491,12 @@ function CommandPalette({ onClose }: { onClose: () => void }) {
         <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100">
           <M n="search" c="text-ink-tertiary text-base" />
           <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("Search or jump to…")} className="flex-1 text-sm outline-none bg-transparent placeholder-ink-placeholder" />
-          <span className="text-[10px] text-ink-tertiary font-mono border border-slate-200 rounded px-1">Esc</span>
+          <span className="text-[11px] text-ink-tertiary tabular-nums border border-slate-200 rounded px-1">Esc</span>
         </div>
         <div className="max-h-[52vh] overflow-y-auto p-2">
           {hits.length > 0 && (
             <div className="mb-2">
-              <div className="px-2 py-1 text-[10px] font-bold text-ink-tertiary uppercase tracking-wider">{t("Results")}</div>
+              <div className="px-2 py-1 text-[11px] font-bold text-ink-tertiary ">{t("Results")}</div>
               {hits.map((h, i) => (
                 <button key={i} onClick={() => go(h.to)} className="w-full flex items-center gap-3 px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-left">
                   <M n={h.icon} c="text-sm text-primary" /><div className="min-w-0"><div className="text-sm font-semibold text-ink-primary truncate">{h.label}</div><div className="text-[11px] text-ink-tertiary truncate">{h.sub}</div></div>
@@ -462,7 +504,7 @@ function CommandPalette({ onClose }: { onClose: () => void }) {
               ))}
             </div>
           )}
-          <div className="px-2 py-1 text-[10px] font-bold text-ink-tertiary uppercase tracking-wider">{t("Navigate")}</div>
+          <div className="px-2 py-1 text-[11px] font-bold text-ink-tertiary ">{t("Navigate")}</div>
           {filteredCmds.map((c) => (
             <button key={c.to} onClick={() => go(c.to)} className="w-full flex items-center gap-3 px-2.5 py-2 rounded-lg hover:bg-slate-100 text-left">
               <M n={c.icon} c="text-sm text-ink-tertiary" /><span className="text-sm font-medium text-ink-primary">{c.label}</span>
@@ -494,7 +536,7 @@ function NotificationsPanel({ onClose, onChanged }: { onClose: () => void; onCha
   async function open(n: any) {
     if (!n.read) { try { await api.post(`/tech/notifications/${n.id}/read`, {}); } catch { /* ignore */ } }
     onClose();
-    if (n.deep_link) { const path = n.deep_link.replace(/^https?:\/\/[^/]+/, ""); nav(path.startsWith("/") ? path : "/" + path); }
+    if (n.deep_link) nav(toAppPath(n.deep_link));
   }
 
   async function enablePush() {
@@ -502,6 +544,10 @@ function NotificationsPanel({ onClose, onChanged }: { onClose: () => void; onCha
       const cfg = await api.get<any>("/push/vapid-public-key");
       if (!cfg.enabled || !cfg.public_key) { await alertDialog("Push isn't configured on this server."); return; }
       if (Notification.permission !== "granted") { const p = await Notification.requestPermission(); if (p !== "granted") { await alertDialog("Notifications were blocked."); return; } }
+      // The site's service worker only handles push here (it leaves the main app's pages and API
+      // alone); register it if this browser never has, or `ready` would wait forever.
+      if (!("serviceWorker" in navigator)) { await alertDialog("This browser can't receive push notifications."); return; }
+      if (!(await navigator.serviceWorker.getRegistration("/"))) await navigator.serviceWorker.register("/sw.js");
       const reg = await navigator.serviceWorker.ready;
       const b64 = (s: string) => { const pad = "=".repeat((4 - (s.length % 4)) % 4); const r = (s + pad).replace(/-/g, "+").replace(/_/g, "/"); const raw = atob(r); return Uint8Array.from([...raw].map((c) => c.charCodeAt(0))); };
       const sub: any = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(cfg.public_key) });
@@ -512,7 +558,7 @@ function NotificationsPanel({ onClose, onChanged }: { onClose: () => void; onCha
   }
   return (
     <div className="fixed inset-0 z-[80]" onClick={onClose}>
-      <div className="absolute right-5 top-[54px] w-[360px] max-w-[92vw] bg-white rounded-2xl shadow-drawer border border-slate-200 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+      <div className="absolute right-2 sm:right-5 top-[54px] w-[360px] max-w-[92vw] bg-white rounded-2xl shadow-drawer border border-slate-200 overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
           <h3 className="text-sm font-bold text-ink-primary">{t("Notifications")}</h3>
           <div className="flex items-center gap-2">
@@ -523,12 +569,12 @@ function NotificationsPanel({ onClose, onChanged }: { onClose: () => void; onCha
         </div>
         <div className="max-h-[60vh] overflow-y-auto divide-y divide-slate-100">
           {items == null && <div className="px-4 py-6 text-xs text-ink-tertiary">Loading…</div>}
-          {items?.length === 0 && <div className="px-4 py-10 text-center"><M n="notifications" c="text-2xl text-ink-placeholder" /><div className="text-xs text-ink-tertiary mt-2">{t("You're all caught up.")}</div></div>}
+          {items?.length === 0 && <div className="px-4 py-10 text-center"><M n="notifications" c="mx-auto mb-2 text-2xl text-ink-placeholder" /><div className="text-xs text-ink-tertiary mt-2">{t("You're all caught up.")}</div></div>}
           {items?.map((n) => (
             <div key={n.id} className={`group relative w-full hover:bg-blue-50/50 ${n.read ? "" : "bg-blue-50/30"}`}>
               <button onClick={() => open(n)} className="w-full text-left px-4 py-3 pr-9 flex gap-3">
                 <span className={`mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0 ${n.read ? "bg-transparent" : "bg-primary"}`} />
-                <div className="min-w-0"><div className="text-xs font-bold text-ink-primary">{n.title || n.kind || "Update"}</div>{n.body && <div className="text-[11px] text-ink-secondary mt-0.5 line-clamp-2">{n.body}</div>}<div className="text-[10px] text-ink-tertiary mt-1">{n.created_at ? new Date(n.created_at).toLocaleString([], { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : ""}</div></div>
+                <div className="min-w-0"><div className="text-xs font-bold text-ink-primary">{n.title || n.kind || "Update"}</div>{n.body && <div className="text-[11px] text-ink-secondary mt-0.5 line-clamp-2">{n.body}</div>}<div className="text-[11px] text-ink-tertiary mt-1">{n.created_at ? new Date(n.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}</div></div>
               </button>
               <button onClick={(e) => dismiss(n, e)} title={t("Dismiss")} aria-label={t("Dismiss")}
                 className="absolute top-2 right-2 w-6 h-6 rounded-md flex items-center justify-center text-ink-placeholder hover:text-rose-600 hover:bg-rose-50 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity">
@@ -576,13 +622,13 @@ function ScanBox() {
       <button onClick={() => setOpen((o) => !o)} title="Scan (barcode / IMEI / order)" aria-label="Scan"
         className="w-8 h-8 rounded-full border border-slate-200 bg-white flex items-center justify-center text-ink-secondary hover:text-ink-primary shadow-xs"><M n="qr_code_scanner" c="text-sm" /></button>
       {open && (
-        <div className="absolute right-0 mt-2 w-64 bg-white dark:bg-[#151b2e] rounded-xl border border-slate-200/80 shadow-clay-card z-50 p-2.5">
-          <div className="text-[10px] font-bold uppercase tracking-wide text-ink-tertiary mb-1.5">Scan or type a code</div>
+        <div className="absolute right-0 mt-2 w-64 bg-raised rounded-xl border border-slate-200/80 shadow-clay-card z-50 p-2.5">
+          <div className="text-[11px] font-bold text-ink-tertiary mb-1.5">Scan or type a code</div>
           <input ref={ref} value={val} onChange={(e) => { setVal(e.target.value); setMsg(null); }}
             onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") setOpen(false); }}
             placeholder="WO-00042, IMEI, SKU…" className="glass-input rounded-lg px-3 py-2 text-sm w-full font-mono" />
           {msg && <div className="text-[11px] text-rose-600 mt-1.5">{msg} — try the ⌘K search.</div>}
-          <div className="text-[10px] text-ink-tertiary mt-1.5">Jumps to the work order, product, or asset.</div>
+          <div className="text-[11px] text-ink-tertiary mt-1.5">Jumps to the work order, product, or asset.</div>
         </div>
       )}
     </div>
@@ -601,7 +647,7 @@ function TimeClockChip({ me }: { me: any }) {
     if (attendance) api.get<any>("/timeclock/shift/active").then((r) => setShift(r.shift || null)).catch(() => {});
     if (woClock) api.get<any>("/timeclock/active").then((r) => setJob(r.active || null)).catch(() => {});
   };
-  useEffect(() => { load(); const id = setInterval(load, 30000); return () => clearInterval(id); }, []);
+  useVisibleInterval(load, 30000);
   useEffect(() => { const id = setInterval(() => setTick((t) => t + 1), 1000); return () => clearInterval(id); }, []);
   // base elapsed + local ticks since last fetch (approx live display)
   const shiftSec = shift?.open ? (shift.elapsed_sec || 0) + tick : 0;
@@ -620,15 +666,15 @@ function TimeClockChip({ me }: { me: any }) {
   // status (what you're timing + live elapsed).
   return (
     <div className="relative">
-      <button onClick={() => setOpen((o) => !o)} title={jobName ? `Timing: ${jobName}` : t("Time clock")}
+      <button onClick={() => setOpen((o) => !o)} title={jobName ? `Timing: ${jobName}` : t("Time clock")} aria-label={running ? (jobName ? `Timing: ${jobName}` : t("Time clock")) : t("Clock in")}
         className={`flex items-center gap-1.5 h-8 px-2.5 rounded-full border text-xs font-semibold shadow-xs max-w-[220px] ${running ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-white border-slate-200 text-ink-secondary hover:text-ink-primary"}`}>
         {running
           ? <>
               <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-500" />
-              {jobName && <span className="truncate max-w-[96px]">{jobName}</span>}
-              <span className="font-mono shrink-0">{job ? fmtHMS(jobSec) : fmtHMS(shiftSec)}</span>
+              {jobName && <span className="hidden sm:inline truncate max-w-[96px]">{jobName}</span>}
+              <span className="tabular-nums shrink-0">{job ? fmtHMS(jobSec) : fmtHMS(shiftSec)}</span>
             </>
-          : <><M n="play_arrow" c="text-sm" />{t("Clock in")}</>}
+          : <><M n="play_arrow" c="text-sm" /><span className="hidden sm:inline">{t("Clock in")}</span></>}
       </button>
       {open && (
         <>
@@ -636,10 +682,10 @@ function TimeClockChip({ me }: { me: any }) {
           <div className="absolute right-0 mt-2 w-64 bg-white rounded-xl border border-slate-200 shadow-drawer z-50 p-3 space-y-3">
             {woClock && (
               <div className="rounded-lg bg-slate-50 border border-slate-200 p-2.5">
-                <div className="text-[10px] font-bold text-ink-tertiary uppercase tracking-wide mb-1">Job timer</div>
+                <div className="text-[11px] font-bold text-ink-tertiary mb-1">Job timer</div>
                 {job ? (
                   <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-emerald-700 truncate mr-2">{jobName} · <span className="font-mono">{fmtHMS(jobSec)}</span></span>
+                    <span className="text-sm font-semibold text-emerald-700 truncate mr-2">{jobName} · <span className="tabular-nums">{fmtHMS(jobSec)}</span></span>
                     <button onClick={stopJob} disabled={busy} className="px-2.5 py-1 rounded-lg bg-rose-600 text-white text-[11px] font-semibold disabled:opacity-60">Stop</button>
                   </div>
                 ) : (
@@ -652,10 +698,10 @@ function TimeClockChip({ me }: { me: any }) {
             )}
             {attendance && (
               <div className="rounded-lg bg-slate-50 border border-slate-200 p-2.5">
-                <div className="text-[10px] font-bold text-ink-tertiary uppercase tracking-wide mb-1">Shop attendance</div>
+                <div className="text-[11px] font-bold text-ink-tertiary mb-1">Shop attendance</div>
                 {onShift ? (
                   <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-emerald-700 font-mono">{fmtHMS(shiftSec)}</span>
+                    <span className="text-sm font-semibold text-emerald-700 tabular-nums">{fmtHMS(shiftSec)}</span>
                     <button onClick={clockOut} disabled={busy} className="px-2.5 py-1 rounded-lg bg-rose-600 text-white text-[11px] font-semibold disabled:opacity-60">Clock out</button>
                   </div>
                 ) : (
@@ -672,14 +718,24 @@ function TimeClockChip({ me }: { me: any }) {
 
 /* ── Top-bar branch switcher (legacy App.mountLocationSwitcher). Sets the global
    API location scope; changing it reloads so every list re-fetches scoped. ── */
-function LocationSwitcher() {
+function LocationSwitcher({ block = false }: { block?: boolean }) {
   const [locs, setLocs] = useState<{ id: string; name: string }[]>([]);
   const [sel, setSel] = useState<string>(getLocationScope());
-  useEffect(() => { api.get<any>("/staff/locations").then((r) => setLocs((r.items || r || []).filter((l: any) => l.active !== false))).catch(() => {}); }, []);
+  useEffect(() => {
+    api.get<any>("/staff/locations").then((r) => {
+      const active = (r.items || r || []).filter((l: any) => l.active !== false);
+      setLocs(active);
+      // A remembered branch that no longer exists for this account (deleted, deactivated, or a
+      // different login on this browser) silently filtered every list to nothing while the
+      // switcher read "All locations" — and single-branch shops have no switcher to undo it.
+      const cur = getLocationScope();
+      if (cur && !active.some((l: any) => l.id === cur)) { setLocationScope(""); window.location.reload(); }
+    }).catch(() => {});
+  }, []);
   if (locs.length < 2) return null; // single branch: no switcher needed
   return (
     <select value={sel} onChange={(e) => { setSel(e.target.value); setLocationScope(e.target.value); window.location.reload(); }}
-      title="Location" className="h-8 rounded-full border border-slate-200 bg-white text-xs font-semibold text-ink-secondary px-2 shadow-xs max-w-[140px]">
+      title="Location" aria-label={t("Location")} className={`rounded-full border border-slate-200 bg-white text-xs font-semibold text-ink-secondary px-2 shadow-xs ${block ? "h-10 w-full" : "h-8 max-w-[140px]"}`}>
       <option value="">All locations</option>
       {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
     </select>

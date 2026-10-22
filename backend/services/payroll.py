@@ -1,15 +1,19 @@
 """Payroll & commission engine (Mandate 1).
 
 Event-driven accruals posted to an append-only EmployeeBalanceLedger. All money
-math uses Decimal with explicit quantization to 4 dp (no float drift). Idempotency
-keys make every accrual exactly-once, so re-firing an event can't double-dip.
-Claw-backs post deterministic negative mirrors that reference the original entry.
+math uses Decimal with explicit quantization to 4 dp (no float drift).
+
+Every commission belongs to an accrual group (`accrual_key`: event + line/order + rule +
+employee). A group's net is what is still owed for it. Accruing posts only when nothing is
+open, under a per-cycle idempotency key, so re-firing an event can't double-dip but a
+reopened-and-re-closed order pays again. Claw-backs post the negative of what is still open
+(or a refunded share of it), so two reversals of the same order can never take it twice.
 """
 from decimal import ROUND_HALF_UP, Decimal
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +24,7 @@ from backend.models import (
     Order,
     OrderLine,
     Part,
+    Refund,
 )
 
 Q = Decimal("0.0001")  # 4-dp quantum
@@ -30,6 +35,18 @@ def _money(x) -> Decimal:
     if x is None:
         return Decimal("0")
     return Decimal(str(x)).quantize(Q, rounding=ROUND_HALF_UP)
+
+
+def _line_net(line) -> Decimal:
+    """Price × qty after the line discount, before tax — what the shop actually sells the line
+    for. A company-paid discount is the shop's promotion, not the technician's, so it is ignored
+    (the same rule the commission basis uses)."""
+    gross = _money(line.unit_price) * _money(line.qty)
+    if getattr(line, "discount_paid_by", "client") == "company" or not line.discount:
+        return _money(gross)
+    if (getattr(line, "discount_type", None) or "pct") == "fixed":
+        return _money(max(gross - _money(line.discount), Decimal("0")))
+    return _money(gross * (Decimal("1") - _money(line.discount) / Decimal("100")))
 
 
 def _line_splits(line, *, fallback=None):
@@ -98,10 +115,10 @@ class CommissionEngine:
             if term == "overdue" and on_time:
                 continue
             amt = self.compute_amount(r, line_total=_money(0), margin=_money(0))
-            await self._post(
-                employee_id=task.assigned_to_id, entry_type="commission", amount=amt,
+            await self._accrue_once(
+                employee_id=task.assigned_to_id, amount=amt,
                 event="task_closed", rule_id=r.id, ref_type="task", ref_id=task.id,
-                idempotency_key=f"task:{task.id}:{r.id}",
+                base_key=f"task:{task.id}:{r.id}",
                 note=f"Task closed: {task.title}")
         await self.db.commit()
 
@@ -191,7 +208,8 @@ class CommissionEngine:
     # ── ledger posting (idempotent) ──────────────────────────────────────────
     async def _post(self, *, employee_id: str, entry_type: str, amount: Decimal,
                     event: Optional[str], rule_id: Optional[str], ref_type: str,
-                    ref_id: str, idempotency_key: str, note: str = "") -> bool:
+                    ref_id: str, idempotency_key: str, note: str = "",
+                    accrual_key: Optional[str] = None) -> bool:
         """Insert a ledger row unless the idempotency key already exists.
         Returns True if posted, False if it was a duplicate (already accrued)."""
         if amount == 0:
@@ -203,13 +221,56 @@ class CommissionEngine:
         self.db.add(EmployeeBalanceLedger(
             org_id=self.org_id, employee_id=employee_id, entry_type=entry_type,
             amount=amount, event=event, rule_id=rule_id, ref_type=ref_type,
-            ref_id=ref_id, idempotency_key=idempotency_key, note=note))
+            ref_id=ref_id, idempotency_key=idempotency_key, note=note,
+            accrual_key=accrual_key))
         try:
             await self.db.flush()
         except IntegrityError:
             await self.db.rollback()
             return False
         return True
+
+    async def _group_state(self, accrual_key: str) -> tuple[Decimal, int, int]:
+        """(net still open, accruals posted, rows) for one accrual group."""
+        L = EmployeeBalanceLedger
+        net, accruals, rows = (await self.db.execute(select(
+            func.coalesce(func.sum(L.amount), 0),
+            func.coalesce(func.sum(case((L.entry_type == "commission", 1), else_=0)), 0),
+            func.count(L.id),
+        ).where(L.org_id == self.org_id, L.accrual_key == accrual_key))).one()
+        return _money(net), int(accruals or 0), int(rows or 0)
+
+    async def _accrue_once(self, *, employee_id: str, amount: Decimal, event: str,
+                           rule_id: Optional[str], ref_type: str, ref_id: str,
+                           base_key: str, note: str) -> bool:
+        """Post a commission unless this group already has one open. The first accrual keeps
+        the plain key; after a full reversal (reopen, archive) the next close posts under
+        `<key>@<n>`, so it pays again instead of colliding with the reversed entry."""
+        if amount == 0:
+            return False
+        key = EmployeeBalanceLedger.normalize_key(base_key)
+        net, accruals, _ = await self._group_state(key)
+        if net != 0 and (net > 0) == (amount > 0):
+            return False
+        return await self._post(
+            employee_id=employee_id, entry_type="commission", amount=amount, event=event,
+            rule_id=rule_id, ref_type=ref_type, ref_id=ref_id,
+            idempotency_key=key if accruals == 0 else f"{key}@{accruals}",
+            accrual_key=key, note=note)
+
+    async def refunded_fraction(self, order: Order, *, exclude_refund_id: Optional[str] = None) -> Decimal:
+        """Share of the order's total that has been refunded (0–1)."""
+        q = select(func.coalesce(func.sum(Refund.amount), 0)).where(
+            Refund.org_id == self.org_id, Refund.order_id == order.id, Refund.voided_at.is_(None))
+        if exclude_refund_id:
+            q = q.where(Refund.id != exclude_refund_id)
+        refunded = _money((await self.db.execute(q)).scalar())
+        total = _money(order.total)
+        if refunded <= 0:
+            return Decimal("0")
+        if total <= 0:
+            return Decimal("1")
+        return min(Decimal("1"), refunded / total)
 
     # ── public events ─────────────────────────────────────────────────────────
     async def accrue_for_order_close(self, order: Order):
@@ -223,6 +284,12 @@ class CommissionEngine:
         await self._accrue(order, status_key=status_key, is_close=False)
 
     async def _accrue(self, order: Order, *, status_key: Optional[str], is_close: bool):
+        # Money already refunded on this order doesn't earn commission (a re-close after a
+        # partial refund pays on what the shop kept).
+        keep = Decimal("1") - await self.refunded_fraction(order)
+        if keep <= 0:
+            await self.db.commit()
+            return
         if order.assigned_to_id:
             order_total = _money(order.total)
             # Build 144ds — commission by close outcome. The general `order_closed`
@@ -243,11 +310,11 @@ class CommissionEngine:
             for ev in [e for e in ("order_closed", outcome_event) if e]:
                 for r in await self._rules_for(ev, order.assigned_to_id, None,
                                                order=order, status_key=status_key, is_close=is_close):
-                    amt = self.compute_amount(r, line_total=order_total, margin=order_total)
-                    await self._post(
-                        employee_id=order.assigned_to_id, entry_type="commission", amount=amt,
+                    amt = _money(self.compute_amount(r, line_total=order_total, margin=order_total) * keep)
+                    await self._accrue_once(
+                        employee_id=order.assigned_to_id, amount=amt,
                         event=ev, rule_id=r.id, ref_type="order", ref_id=order.id,
-                        idempotency_key=f"{ev}:{order.id}:{r.id}",
+                        base_key=f"{ev}:{order.id}:{r.id}",
                         note=f"Closing commission for {order.order_number}")
 
         for line in (order.lines or []):
@@ -259,7 +326,8 @@ class CommissionEngine:
                 line_total = _money(_money(line.unit_price) * _money(line.qty))
             if line.kind == "product":
                 mac = await self._mac_for_part(line.ref_id)
-                margin = _money((_money(line.unit_price) - mac) * _money(line.qty))
+                # Margin on what the line actually sold for: a discount comes out of margin.
+                margin = _money(_line_net(line) - mac * _money(line.qty))
                 deducted = not getattr(line, "no_deduction", False)
                 event = "product_sold" if deducted else "product_sold_no_deduction"
                 category = await self._part_category(line.ref_id)
@@ -276,15 +344,15 @@ class CommissionEngine:
             splits = _line_splits(line, fallback=tech_id)
             for emp_id, share in splits:
                 sh = _money(share)
-                await self._pay_line(event, emp_id, line, order, _money(line_total) * sh,
-                                     _money(margin) * sh, category, is_service,
+                await self._pay_line(event, emp_id, line, order, _money(line_total) * sh * keep,
+                                     _money(margin) * sh * keep, category, is_service,
                                      status_key=status_key, is_close=is_close)
             # Manager/assignee override is paid once on the whole line, not per split.
             assignee = order.assigned_to_id
             if assignee and assignee not in [e for e, _ in splits]:
                 a_event = "assignee_labor" if event == "labor_performed" else "assignee_product"
-                await self._pay_line(a_event, assignee, line, order, line_total, margin, category, is_service,
-                                     status_key=status_key, is_close=is_close)
+                await self._pay_line(a_event, assignee, line, order, line_total * keep, margin * keep,
+                                     category, is_service, status_key=status_key, is_close=is_close)
         await self.db.commit()
 
     async def _pay_line(self, event, employee_id, line, order, line_total, margin, category, is_service,
@@ -300,10 +368,10 @@ class CommissionEngine:
             employee_id, part_id=line.ref_id, category=category, scope_service=is_service)
         for r in rules:
             amt = _money(self.compute_amount(r, line_total=line_total, margin=margin) * coeff)
-            await self._post(
-                employee_id=employee_id, entry_type="commission", amount=amt,
+            await self._accrue_once(
+                employee_id=employee_id, amount=amt,
                 event=event, rule_id=r.id, ref_type="order_line", ref_id=line.id,
-                idempotency_key=f"{event}:{line.id}:{r.id}:{employee_id}",
+                base_key=f"{event}:{line.id}:{r.id}:{employee_id}",
                 note=f"{event} on {order.order_number}")
 
     async def commissions_for_order_create(self, order: Order, creator_id: str):
@@ -312,45 +380,92 @@ class CommissionEngine:
         for r in await self._rules_for("order_created", creator_id, None,
                                        order=order, check_timing=False):
             amt = self.compute_amount(r, line_total=_money(order.total or 0), margin=_money(0))
-            await self._post(
-                employee_id=creator_id, entry_type="commission", amount=amt,
+            await self._accrue_once(
+                employee_id=creator_id, amount=amt,
                 event="order_created", rule_id=r.id, ref_type="order", ref_id=order.id,
-                idempotency_key=f"create:{order.id}:{r.id}",
+                base_key=f"create:{order.id}:{r.id}",
                 note=f"Creation commission for {order.order_number}")
         await self.db.commit()
 
     async def clawback_for_order_reopen(self, order: Order):
-        """Order left a closed state (or refunded): post negative mirrors of every
-        commission accrued for this order."""
-        await self._reverse(order, prefix="clawback", tag="reopen", respect_cancel_flag=False)
+        """Order left a closed state: reverse what is still open of every commission earned by
+        working or closing it. Creation commission is not tied to closing, so it stays; the
+        next close accrues a fresh cycle."""
+        await self._reverse(order, tag="reopen", key_prefix="reopen", skip_events=("order_created",))
+
+    async def clawback_for_refund(self, order: Order, refund_id: str, amount):
+        """A refund takes back the refunded share of what is still open on the order. The share
+        is of what was not refunded before, so successive partial refunds add up to the whole
+        commission when the whole order is refunded."""
+        prior = await self.refunded_fraction(order, exclude_refund_id=refund_id)
+        total = _money(order.total)
+        remaining = total * (Decimal("1") - prior)
+        share = Decimal("1") if remaining <= 0 else min(Decimal("1"), _money(amount) / remaining)
+        await self._reverse(order, tag="refund", key_prefix=f"refund:{refund_id}", share=share,
+                            per_refund=True)
+
+    async def restore_refund_clawback(self, order: Order, refund_id: str):
+        """A deleted refund gives back what its claw-back took: a positive entry in the same
+        accrual group for every "refund:<refund_id>:<accrual_key>" row. The claw-back stays."""
+        L = EmployeeBalanceLedger
+        rows = (await self.db.execute(select(L).where(
+            L.org_id == self.org_id, L.entry_type == "clawback", L.ref_type == "refund",
+            L.ref_id == order.id, L.accrual_key.isnot(None)))).scalars().all()
+        for e in rows:
+            if e.idempotency_key != L.normalize_key(f"refund:{refund_id}:{e.accrual_key}"):
+                continue                      # another refund's claw-back on the same order
+            await self._post(
+                employee_id=e.employee_id, entry_type="clawback", amount=-_money(e.amount),
+                event=e.event, rule_id=e.rule_id, ref_type="refund_void", ref_id=order.id,
+                idempotency_key=f"refund-void:{refund_id}:{e.accrual_key}", accrual_key=e.accrual_key,
+                note=f"Refund deleted: {e.note or ''}".strip())
 
     async def reverse_for_deletion(self, order: Order):
-        """Build 70 — order deleted/archived: reverse commissions whose rule has
-        cancel_if_deleted (default), as a current-period adjustment."""
-        await self._reverse(order, prefix="del-clawback", tag="deletion", respect_cancel_flag=True)
+        """Build 70 — order deleted/archived: reverse what is still open of commissions whose
+        rule has cancel_if_deleted (default), as a current-period adjustment."""
+        await self._reverse(order, tag="deletion", key_prefix="deletion", respect_cancel_flag=True)
 
     async def _order_refs_async(self, order_id: str) -> list[str]:
         line_ids = (await self.db.execute(select(OrderLine.id).where(
             OrderLine.order_id == order_id))).scalars().all()
         return [order_id, *line_ids]
 
-    async def _reverse(self, order: Order, *, prefix: str, tag: str, respect_cancel_flag: bool):
+    async def _reverse(self, order: Order, *, tag: str, key_prefix: str,
+                       share: Decimal = Decimal("1"), respect_cancel_flag: bool = False,
+                       skip_events: tuple = (), per_refund: bool = False):
         refs = await self._order_refs_async(order.id)
-        entries = (await self.db.execute(select(EmployeeBalanceLedger).where(
+        rows = (await self.db.execute(select(EmployeeBalanceLedger).where(
             EmployeeBalanceLedger.org_id == self.org_id,
-            EmployeeBalanceLedger.entry_type == "commission",
-            EmployeeBalanceLedger.ref_id.in_(refs)))).scalars().all()
-        for e in entries:
-            if respect_cancel_flag and e.rule_id:
+            EmployeeBalanceLedger.entry_type.in_(("commission", "clawback")),
+            EmployeeBalanceLedger.accrual_key.isnot(None),
+            EmployeeBalanceLedger.ref_id.in_(refs))
+            .order_by(EmployeeBalanceLedger.created_at))).scalars().all()
+        groups: dict[str, list] = {}
+        for e in rows:
+            groups.setdefault(e.accrual_key, []).append(e)
+        for key, entries in groups.items():
+            first = next((e for e in entries if e.entry_type == "commission"), None)
+            if first is None or first.event in skip_events:
+                continue
+            if respect_cancel_flag and first.rule_id:
                 flag = (await self.db.execute(select(CommissionRule.cancel_if_deleted).where(
-                    CommissionRule.id == e.rule_id))).scalar_one_or_none()
+                    CommissionRule.id == first.rule_id))).scalar_one_or_none()
                 if flag is False:
                     continue
+            # The group's net is read fresh, so a claw-back posted by an earlier reversal of
+            # this order (refund, then archive) is never taken again.
+            net, _, n_rows = await self._group_state(key)
+            if net == 0 or (net > 0) != (_money(first.amount) > 0):
+                continue
+            amt = _money(net * share)
+            if amt == 0:
+                continue
             await self._post(
-                employee_id=e.employee_id, entry_type="clawback", amount=-_money(e.amount),
-                event=e.event, rule_id=e.rule_id, ref_type=tag, ref_id=order.id,
-                idempotency_key=f"{prefix}:{e.id}",
-                note=f"{tag.capitalize()} reversal of {e.idempotency_key} ({order.order_number})")
+                employee_id=first.employee_id, entry_type="clawback", amount=-amt,
+                event=first.event, rule_id=first.rule_id, ref_type=tag, ref_id=order.id,
+                idempotency_key=f"{key_prefix}:{key}" if per_refund else f"{key_prefix}:{key}@{n_rows}",
+                accrual_key=key,
+                note=f"{tag.capitalize()} reversal of {first.event} ({order.order_number})")
         await self.db.commit()
 
     # ── helpers ───────────────────────────────────────────────────────────────

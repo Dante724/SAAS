@@ -8,7 +8,8 @@ from datetime import datetime, timedelta
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError as JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -68,7 +69,7 @@ async def ensure_seed_admin(db: AsyncSession) -> None:
     pw = getattr(settings, "PLATFORM_ADMIN_PASSWORD", "") or ""
     if not email or not pw:
         if settings.is_deployed:
-            logging.getLogger("repairos").warning(
+            logging.getLogger("tekly").warning(
                 "No platform admin seeded: set PLATFORM_ADMIN_EMAIL and PLATFORM_ADMIN_PASSWORD.")
             return
         email = email or "admin@platform.local"

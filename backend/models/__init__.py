@@ -1,5 +1,5 @@
 """
-RepairOS — all database models.
+Tekly — all database models.
 31 tables covering the full Orderry feature set.
 """
 import secrets
@@ -47,6 +47,10 @@ class Organisation(Base):
     brand_email_from: Mapped[Optional[str]] = mapped_column(String(160))      # "Acme <no-reply@acme.com>"
     brand_hide_powered_by: Mapped[bool] = mapped_column(Boolean, default=False)
     subdomain: Mapped[Optional[str]] = mapped_column(String(100), unique=True)
+    # The employee who created the shop. Only they can change their own account (password,
+    # 2-step, email, role, access) — a teammate with equal permissions cannot. Not a foreign
+    # key: organisations <-> employees would otherwise reference each other.
+    owner_id: Mapped[Optional[str]] = mapped_column(String)
     # General / company profile (Settings > General > Company info)
     company_email: Mapped[Optional[str]] = mapped_column(String(150))
     company_phone: Mapped[Optional[str]] = mapped_column(String(50))
@@ -60,6 +64,7 @@ class Organisation(Base):
     inv_enable_bins: Mapped[Optional[bool]] = mapped_column(Boolean)
     inv_unique_identifier: Mapped[Optional[str]] = mapped_column(String(10))   # name|sku|barcode|code
     inv_enable_reservations: Mapped[Optional[bool]] = mapped_column(Boolean)
+    inv_po_to_job: Mapped[Optional[str]] = mapped_column(String(10))   # ADR-144po: "auto" (default) | "manual" — parts arriving on a job's PO
     inv_reservation_max_days: Mapped[Optional[int]] = mapped_column(Integer)
     inv_product_serial_template: Mapped[Optional[str]] = mapped_column(String(40))
     inv_asset_serial_template: Mapped[Optional[str]] = mapped_column(String(40))
@@ -103,6 +108,8 @@ class Organisation(Base):
     default_file_visibility: Mapped[str] = mapped_column(String(10), default="private")
     warranty_count_from: Mapped[str] = mapped_column(String(10), default="closure")  # closure|created
     asset_one_open_ticket: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Several items per job (tools / equipment / device shops only — see services/multi_asset.py).
+    multi_asset_jobs: Mapped[bool] = mapped_column(Boolean, default=False)
     rounding_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     currency_display_style: Mapped[str] = mapped_column(String(10), default="symbol")  # symbol|code|iso
     currency_position: Mapped[str] = mapped_column(String(10), default="before")  # before|after
@@ -150,6 +157,7 @@ class Organisation(Base):
     # 144bb — public-page feature switches (estimate approval, customer messaging)
     oe_allow_approval: Mapped[bool] = mapped_column(Boolean, default=True)
     oe_allow_messages: Mapped[bool] = mapped_column(Boolean, default=True)
+    oe_msg_days_after_close: Mapped[int] = mapped_column(Integer, default=14)  # customer messages stay open N days after closing
     oe_allow_recommend: Mapped[bool] = mapped_column(Boolean, default=True)  # 144bd: customer approves recommended services
     oe_allow_staff_reply: Mapped[bool] = mapped_column(Boolean, default=True)  # 144be: staff can reply to customers on the public page
     oe_show_scheduled: Mapped[bool] = mapped_column(Boolean, default=False)  # 144dr: show "Scheduled for" on the track page
@@ -227,6 +235,10 @@ class Role(Base):
     home_feed_sources: Mapped[Optional[dict]] = mapped_column(JSON)   # list of feed signal keys this role sees on Home (null/empty = all)
     home_route: Mapped[Optional[str]] = mapped_column(String(40))     # landing page for this role (e.g. "/my-work"); null = Home ("/")
     permissions: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
+    # True once every permission is written out explicitly (allow-list). Explicit roles are
+    # default-deny: a permission added to the catalogue later stays off until someone turns
+    # it on. Legacy roles (False) keep default-allow until snapshotted (services/permissions).
+    perms_explicit: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     employees: Mapped[list["Employee"]] = relationship(back_populates="role")
 
 
@@ -273,6 +285,7 @@ class Employee(Base):
     public_name: Mapped[Optional[str]] = mapped_column(String(200))  # name shown on public documents
     note: Mapped[Optional[str]] = mapped_column(Text)              # internal note
     token_version: Mapped[int] = mapped_column(Integer, default=0)
+    must_reset_password: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))  # H1: still on the old default password
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     mfa_secret: Mapped[Optional[str]] = mapped_column(String(64))          # base32 TOTP secret
     mfa_recovery_codes: Mapped[Optional[str]] = mapped_column(Text)        # JSON list of hashed single-use codes
@@ -368,6 +381,14 @@ class Client(Base):
 
 class Device(Base):
     __tablename__ = "devices"
+    # Intake / scan look a device up by identifier within the shop (values stored normalized,
+    # see services/identifiers.py).
+    __table_args__ = (
+        Index("ix_devices_org_serial", "org_id", "serial"),
+        Index("ix_devices_org_imei", "org_id", "imei"),
+        Index("ix_devices_org_vin", "org_id", "vin"),
+        Index("ix_devices_org_hin", "org_id", "hin"),
+    )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     # Build 144do (security): devices are now tenant-anchored directly. Previously
     # tenancy was inferred via client_id -> Client.org_id, which left company-owned
@@ -414,6 +435,9 @@ class OrderStatus(Base):
     pending/ready/closed/dropped), which is what reports and triggers key off.
     Per-status automation: auto-invoice, auto-notify, request payment, lock edits."""
     __tablename__ = "order_statuses"
+    # Launch QA B2: one row per key in each pipeline. Without it, parallel first-load requests
+    # each seeded a copy and bare-key lookups raised MultipleResultsFound (estimates 500'd).
+    __table_args__ = (Index("uq_order_statuses_org_rt_key", "org_id", "record_type", "key", unique=True),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("organisations.id"))
     location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"))
@@ -442,6 +466,9 @@ class OrderStatus(Base):
     require_comment: Mapped[bool] = mapped_column(Boolean, default=False)     # a comment must exist on the order
     require_payment: Mapped[bool] = mapped_column(Boolean, default=False)     # order must be fully paid (balance <= 0)
     require_checklist: Mapped[bool] = mapped_column(Boolean, default=False)   # every checklist item must be filled
+    # Can the customer message the shop while an order is in this status? None = automatic:
+    # open statuses yes, closed ones for Organisation.oe_msg_days_after_close days (services/messaging_rule).
+    allow_messages: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     location: Mapped["Location"] = relationship(back_populates="order_statuses")
 
@@ -479,6 +506,9 @@ class Order(Base):
     complaint: Mapped[Optional[str]] = mapped_column(Text)
     diagnosis: Mapped[Optional[str]] = mapped_column(Text)
     internal_notes: Mapped[Optional[str]] = mapped_column(Text)
+    # Why a job was cancelled (a value from the "Cancellation reasons" directory), set when the
+    # order enters a dropped-group status. Feeds the cancellations-by-reason report.
+    cancel_reason: Mapped[Optional[str]] = mapped_column(String(120))
     tech_notes: Mapped[Optional[str]] = mapped_column(Text)   # 144bj: technician's working notes
     conclusion: Mapped[Optional[str]] = mapped_column(Text)   # 144bj: conclusion / client recommendations
     labour_total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
@@ -518,6 +548,8 @@ class Order(Base):
     archive_reason: Mapped[Optional[str]] = mapped_column(Text)
     archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     archived_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    # Several items per job: the job an item was split off from ("Split into its own job").
+    split_from_order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     client: Mapped[Optional["Client"]] = relationship(back_populates="orders")
     device: Mapped[Optional["Device"]] = relationship(back_populates="orders")
     location: Mapped["Location"] = relationship(back_populates="orders")
@@ -557,6 +589,31 @@ class OrderLine(Base):
     tax_mode: Mapped[str] = mapped_column(String(10), default="imposed")  # included|imposed
     total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     order: Mapped["Order"] = relationship(back_populates="lines")
+    # Several items per job: which of the job's items this line is for (null = the whole job).
+    order_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("order_items.id"), index=True)
+
+
+class OrderItem(Base):
+    """Several items per job (multi-asset). One row per item the customer left on this job.
+
+    Tenant-scoped twice over: org_id on every row, and every read/write also matches order_id,
+    so an item can never be read or attached across shops or jobs. The job's own device stays
+    on orders.device_id (item #1 is created for it) so everything that knows one item still works.
+
+    outcome: open | fixed | cant_fix | declined
+    """
+    __tablename__ = "order_items"
+    __table_args__ = (UniqueConstraint("order_id", "asset_id", name="uq_order_items_order_asset"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"), index=True)
+    asset_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("devices.id"), index=True)
+    label: Mapped[Optional[str]] = mapped_column(String(200))     # for items with no asset record
+    complaint: Mapped[Optional[str]] = mapped_column(Text)
+    outcome: Mapped[str] = mapped_column(String(20), default="open")
+    collected_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 # 144df — the legacy JSON JobKit model was retired; the Bundle engine (relabelled "Job Kit" in the UI)
 # is now the single job-kit concept. Its table is dropped by migration jk144df01.
@@ -857,6 +914,7 @@ class Tax(Base):
 
 class StockLevel(Base):
     __tablename__ = "stock_levels"
+    __table_args__ = (Index("ix_stock_levels_part_location", "part_id", "location_id"),)   # phase 4 perf: hot lookup path
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
@@ -869,6 +927,7 @@ class StockLevel(Base):
 
 class StockMovement(Base):
     __tablename__ = "stock_movements"
+    __table_args__ = (Index("ix_stock_movements_part_created", "part_id", "created_at"),)   # phase 4 perf: hot lookup path
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
@@ -1072,6 +1131,7 @@ class InvoiceOrder(Base):
 
 class Payment(Base):
     __tablename__ = "payments"
+    __table_args__ = (Index("ix_payments_paid_at", "paid_at"),)   # phase 4 perf: hot lookup path
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     invoice_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("invoices.id"), index=True)
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
@@ -1394,6 +1454,9 @@ class CustomField(Base):
     lock_after_create: Mapped[bool] = mapped_column(Boolean, default=False)
     # 144gp Phase C — surface this field's value on printouts / the customer portal
     show_on_print: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Forms step 2 — "Shows on": the work order screen (job card) and the customer portal / tracking page
+    show_on_job_card: Mapped[bool] = mapped_column(Boolean, default=True)
+    show_in_portal: Mapped[bool] = mapped_column(Boolean, default=False)
     # 144gq — auto-fill source: "asset.<attr>" (from the linked device) or
     # "last_order.<field_key>" (from the client's most recent order). Pre-fills on open.
     autofill_source: Mapped[Optional[str]] = mapped_column(String(80))
@@ -1434,6 +1497,7 @@ class FormLayout(Base):
 
 class AuditLog(Base):
     __tablename__ = "audit_log"
+    __table_args__ = (Index("ix_audit_log_org_created", "org_id", "created_at"),)   # phase 4 perf: hot lookup path
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     actor_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
@@ -1480,6 +1544,7 @@ class Recommendation(Base):
     kind:    service | product | custom   (drives the created OrderLine's type)
     """
     __tablename__ = "recommendations"
+    __table_args__ = (Index("ix_recommendations_org_remind_after", "org_id", "remind_after"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"), index=True)
@@ -1492,6 +1557,12 @@ class Recommendation(Base):
     media_data: Mapped[Optional[str]] = mapped_column(Text)    # inline photo proof (data URL)
     status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
     order_line_id: Mapped[Optional[str]] = mapped_column(String)  # set once approved
+    # Several items per job: which of the job's items this is for (null = the whole job).
+    order_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("order_items.id"), index=True)
+    urgency: Mapped[Optional[str]] = mapped_column(String(10))          # now | soon | None (plain words on the page)
+    decline_reason: Mapped[Optional[str]] = mapped_column(String(20))   # not_now (deferred, raise again later) | not_needed
+    remind_after: Mapped[Optional[date]] = mapped_column(Date)          # set when the customer says "not now"
+    decided_by_name: Mapped[Optional[str]] = mapped_column(String(200)) # name typed when confirming
     source: Mapped[str] = mapped_column(String(20), default="manual")  # manual | checklist
     source_ref_id: Mapped[Optional[str]] = mapped_column(String)  # e.g. order_checklist_item id (idempotency + attribution)
     author_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
@@ -1572,7 +1643,7 @@ class StockReservation(Base):
 class Warehouse(Base):
     """Build 84 — a warehouse is a first-class entity (Settings → Warehouses).
 
-    Orderry separates two parallel worlds and RepairOS now does the same:
+    Orderry separates two parallel worlds and Tekly now does the same:
       * `kind="product"` — shop inventory (parts, materials, goods for sale).
       * `kind="asset"`   — the physical items being serviced/tracked. Every client
         and employee gets one automatically; the company gets a global one plus
@@ -1718,6 +1789,10 @@ class EmployeeBalanceLedger(Base):
     ref_type: Mapped[Optional[str]] = mapped_column(String(40))  # order|order_line|refund|payroll_run
     ref_id: Mapped[Optional[str]] = mapped_column(String, index=True)
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(120), unique=True, index=True)
+    # Groups a commission with its reversals across close/reopen cycles: every accrual of the
+    # same (event, line/order, rule, employee) and every claw-back of it share this key, so the
+    # engine can see what is still open (the group's net) instead of trusting one fixed key.
+    accrual_key: Mapped[Optional[str]] = mapped_column(String(120), index=True)
     note: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
@@ -1734,7 +1809,7 @@ class EmployeeBalanceLedger(Base):
         import hashlib
         return f"{raw[:60]}#sha256:{hashlib.sha256(raw.encode()).hexdigest()}"[:EmployeeBalanceLedger.KEY_MAX]
 
-    @validates("idempotency_key")
+    @validates("idempotency_key", "accrual_key")
     def _fit_key(self, _key, value):
         return EmployeeBalanceLedger.normalize_key(value)
 
@@ -1754,9 +1829,15 @@ class PayrollRun(Base):
     bonuses_total: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)
     penalties_total: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)
     gross_total: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)
-    status: Mapped[str] = mapped_column(String(20), default="draft")  # draft|accrued|paid
+    status: Mapped[str] = mapped_column(String(20), default="draft")  # draft|accrued|paid|void
     accrued_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # The cashbox the pay came out of and the expense transaction posted there (P&L opex).
+    account_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("accounts.id"))
+    cash_txn_id: Mapped[Optional[str]] = mapped_column(String)
+    voided_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    voided_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    void_reason: Mapped[Optional[str]] = mapped_column(String(300))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
@@ -1832,6 +1913,7 @@ class NotificationLog(Base):
     """Every notification the system rendered + attempted to deliver. This is the
     communication history shown on the order and the client profile."""
     __tablename__ = "notification_logs"
+    __table_args__ = (Index("ix_notification_logs_org_created", "org_id", "created_at"),)   # phase 4 perf: hot lookup path
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     scope: Mapped[str] = mapped_column(String(12), default="client")  # client|employee
@@ -1989,6 +2071,10 @@ class Sale(Base):
     discount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # whole-sale discount amount
     paid: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    coupon_id: Mapped[Optional[str]] = mapped_column(String)          # the coupon used, so a void can give the use back
+    voided_at: Mapped[Optional[datetime]] = mapped_column(DateTime)   # deleted ("Delete sales"): kept, but reversed
+    voided_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    void_reason: Mapped[Optional[str]] = mapped_column(String(300))
 
 
 class SaleLine(Base):
@@ -2003,6 +2089,9 @@ class SaleLine(Base):
     cost_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # exact FIFO COGS for products
     discount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)    # pct
     total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    # What the line drew, so a void puts it back exactly: {"layers": [{batch_id, qty}],
+    # "holds": [{hold_id, qty}]} — FIFO cost layers and other jobs' reservations (override).
+    stock_draws: Mapped[Optional[dict]] = mapped_column(JSON)
 
 
 class Stocktake(Base):
@@ -2069,6 +2158,10 @@ class Refund(Base):
     amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     reason: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    payment_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("payments.id"))  # the refund Payment
+    voided_at: Mapped[Optional[datetime]] = mapped_column(DateTime)   # deleted ("Delete refunds"): kept, but reversed
+    voided_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    void_reason: Mapped[Optional[str]] = mapped_column(String(300))
 
 
 class StockTransfer(Base):
@@ -2222,6 +2315,7 @@ class PaymentIntent(Base):
     currency: Mapped[str] = mapped_column(String(8), default="usd")
     status: Mapped[str] = mapped_column(String(16), default="created")  # created|pending|succeeded|failed|canceled
     checkout_url: Mapped[Optional[str]] = mapped_column(String(600))
+    provider_link_id: Mapped[Optional[str]] = mapped_column(String(120))   # the link itself (Square needs it to delete one)
     payment_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("payments.id"))
     error: Mapped[Optional[str]] = mapped_column(Text)
     viewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)  # A2: first time the client opened the link
@@ -2854,7 +2948,7 @@ class AutomationRule(Base):
 
 all_models = [
     Organisation, Location, Role, Employee, Shift, WageRecord,
-    Client, Device, OrderStatus, Order, OrderLine, OrderStatusLog, OrderComment,
+    Client, Device, OrderStatus, Order, OrderLine, OrderItem, OrderStatusLog, OrderComment,
     LegalEntity, NumberSequence,
     Part, StockLevel, StockMovement, Supplier, PurchaseOrder, POLine, Service, SavedFilter, Tax,
     Invoice, InvoiceLine, Payment, CashShift, Expense, Account, CashFlowItem, Transaction,
@@ -3098,7 +3192,7 @@ class EcommerceIntegration(Base):
 
 
 class EcommerceOrderMap(Base):
-    """Build 107 — maps an external store order to a RepairOS order, so re-syncing the
+    """Build 107 — maps an external store order to a Tekly order, so re-syncing the
     same store order updates rather than duplicates."""
     __tablename__ = "ecommerce_order_maps"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)

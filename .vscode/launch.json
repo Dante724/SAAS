@@ -1,7 +1,7 @@
 {
   "version": "0.2.0",
   "configurations": [{
-    "name": "Run RepairOS",
+    "name": "Run Tekly",
     "type": "debugpy",
     "request": "launch",
     "module": "uvicorn",

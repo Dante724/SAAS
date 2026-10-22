@@ -33,12 +33,20 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # -- Core --
-    APP_NAME: str = "RepairOS"
+    APP_NAME: str = "Tekly"
     ENVIRONMENT: str = "development"          # development|staging|production|test
     SECRET_KEY: str = "dev-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     DATABASE_URL: str = "sqlite+aiosqlite:///./repairos.db"
+    # Postgres pool + guards (per worker process: pool_size + max_overflow connections at most,
+    # so workers x that must stay under the server's max_connections).
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_TIMEOUT_S: int = 10                # wait this long for a free connection, then error (not hang)
+    DB_POOL_RECYCLE_S: int = 1800
+    DB_STATEMENT_TIMEOUT_MS: int = 15000       # Postgres cancels any single statement running longer; 0 = off
+    DB_IDLE_IN_TX_TIMEOUT_MS: int = 60000      # ends a session left idle inside a transaction; 0 = off
 
     # -- Operational toggles --
     SEED_DEMO: bool = False                    # seed demo data on startup (dev only)
@@ -51,6 +59,10 @@ class Settings(BaseSettings):
     # address appended by the N-th proxy from the right. Alternatively run uvicorn with
     # --proxy-headers --forwarded-allow-ips=<proxy ip> and leave this at 0.
     TRUSTED_PROXY_HOPS: int = 0
+    # Global request ceilings per minute (core.observability.RateLimitMiddleware). Static files are
+    # never counted. Signed-in requests count per user; anonymous ones per client IP.
+    RATE_LIMIT_USER_PER_MIN: int = 600
+    RATE_LIMIT_IP_PER_MIN: int = 600
     LOG_JSON: bool = False                      # structured JSON logs (recommended in prod)
 
     # -- Notification providers (absent keys -> simulated/logged) --
@@ -103,6 +115,8 @@ class Settings(BaseSettings):
     # ── B3: media storage ─────────────────────────────────────────────────
     MEDIA_BACKEND: str = "db"          # db | local | s3  (db = legacy inline; local/s3 = offloaded)
     MEDIA_MAX_BYTES: int = 8 * 1024 * 1024   # Build 144cq: hard cap on any single upload (8 MB)
+    # Whole request body cap (base64 of an 8 MB upload is ~11 MB of JSON). 0 disables.
+    MAX_REQUEST_BYTES: int = 16 * 1024 * 1024
     MEDIA_LOCAL_DIR: str = "/tmp/repairos-media"
     MEDIA_S3_BUCKET: str = ""
     MEDIA_S3_REGION: str = ""
@@ -130,6 +144,14 @@ class Settings(BaseSettings):
     # -- Identifier lookups (VIN is free via NHTSA; IMEI TAC needs a provider) --
     VIN_LOOKUP_LIVE: bool = True          # attempt NHTSA vPIC enrichment (keyless, best-effort)
     IMEI_LOOKUP_API_KEY: str = ""         # absent -> structural validation only
+
+    # -- Error tracking (Sentry protocol). Empty DSN = off. --
+    SENTRY_DSN: str = ""
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.0
+    RELEASE: str = ""                       # e.g. the git SHA, set by the deploy
+
+    # -- Prometheus scrape token for /metrics (required to expose it when deployed) --
+    METRICS_TOKEN: str = ""
 
     # -- Auth refresh --
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 43200   # 30 days

@@ -17,4 +17,4 @@ export type Bundle = { id: string; name?: string; price_mode?: string; price?: n
 export type Asset = { id: string; owner_type?: string; owner_name?: string; asset_type?: string; asset_label?: string; template_key?: string; brand?: string; model?: string; serial?: string; imei?: string; condition?: string; asset_status?: string; order_count?: number; image_data?: string | null };
 
 // Re-export the currency-aware canonical helper so existing inventory importers keep resolving.
-export { money } from "../orders/types";
+export { currencySymbol, money } from "../orders/types";

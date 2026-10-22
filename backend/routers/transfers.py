@@ -31,7 +31,7 @@ from backend.models import (
 )
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.numbering import next_number
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 router = APIRouter(prefix="/api/transfers", tags=["transfers"])
 
@@ -188,7 +188,7 @@ async def change_status(
             for l in lines:
                 sl = await _level(db, l.part_id, t.from_location_id)
                 sl.qty_reserved = max((sl.qty_reserved or 0) - l.qty, 0)
-                sl.qty_available = (sl.qty_available or 0) + l.qty
+                await _atomic_add(db, sl, "qty_available", l.qty, round_to=None)   # atomic
         elif t.status in ("in_transit", "received"):
             # goods already left the source — caller names the receiving warehouse
             back = data.return_location_id
@@ -196,7 +196,7 @@ async def change_status(
                 raise HTTPException(400, "Goods already shipped: pass return_location_id to choose the warehouse taking them back")
             for l in lines:
                 sl = await _level(db, l.part_id, back)
-                sl.qty_available = (sl.qty_available or 0) + l.qty
+                await _atomic_add(db, sl, "qty_available", l.qty, round_to=None)   # atomic
                 db.add(StockMovement(part_id=l.part_id, location_id=back,
                                      movement_type="receive", qty=l.qty,
                                      ref_type="transfer_cancel", ref_id=t.id))
@@ -246,7 +246,7 @@ async def change_status(
             if not qty_in:
                 continue
             sl = await _level(db, l.part_id, t.to_location_id)
-            sl.qty_available = (sl.qty_available or 0) + qty_in
+            await _atomic_add(db, sl, "qty_available", qty_in, round_to=None)   # atomic
             db.add(StockMovement(part_id=l.part_id, location_id=t.to_location_id,
                                  warehouse_id=t.to_warehouse_id,
                                  movement_type="transfer_in", qty=qty_in,
@@ -360,3 +360,8 @@ async def scan_transfer_line(
     await db.commit()
     await db.refresh(ln)
     return {"ok": True, "part_id": part.id, "part_name": part.name, "qty": ln.qty}
+
+
+async def _atomic_add(db, obj, attr, delta, *, round_to=None):
+    from backend.services.money import add_to_column
+    return await add_to_column(db, obj, attr, delta, round_to=round_to)

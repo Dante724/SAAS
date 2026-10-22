@@ -1,4 +1,4 @@
-# RepairOS — Build Roadmap: Orderry-Parity Settings Batch
+# Tekly — Build Roadmap: Orderry-Parity Settings Batch
 
 **Scope.** This is the *execution* plan for the gaps surfaced in
 `docs/ORDERRY_UI_RESEARCH.md`, grounded in the actual codebase (repairos-38: 43

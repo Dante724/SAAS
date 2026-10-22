@@ -25,7 +25,7 @@ GMAIL_SEND = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 GMAIL_LIST = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
 GMAIL_USERINFO = "https://www.googleapis.com/oauth2/v2/userinfo"
 # gmail.readonly is added (build 144ae) so the shop's inbox can be polled into
-# RepairOS. Note: a *restricted* scope — production use needs Google verification
+# Tekly. Note: a *restricted* scope — production use needs Google verification
 # (CASA). Send-only shops that don't grant it simply can't be polled (handled).
 GMAIL_SCOPE = ("https://www.googleapis.com/auth/gmail.send "
                "https://www.googleapis.com/auth/gmail.readonly "

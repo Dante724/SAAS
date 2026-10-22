@@ -68,13 +68,13 @@ export default function BulkPrintDialog({ open, onClose, ids, noun, endpoint, id
           <button aria-label="Close" onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary"><M n="close" c="text-base" /></button>
         </div>
         <p className="text-xs text-ink-tertiary mb-3">{ids.length} {noun}{ids.length === 1 ? "" : "s"} selected. Each prints at the template's exact size.</p>
-        <label className="block text-[11px] font-semibold text-ink-tertiary uppercase mb-1">Template</label>
+        <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Template</label>
         <select value={tplId} onChange={(e) => setTplId(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2 mb-3">
           {tpls.length === 0 && <option value="">No matching templates — create one in Settings</option>}
           {tpls.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
         </select>
         {copies && (<>
-          <label className="block text-[11px] font-semibold text-ink-tertiary uppercase mb-1">Copies each</label>
+          <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Copies each</label>
           <input type="number" min={1} max={500} value={nCopies} onChange={(e) => setNCopies(Math.max(1, +e.target.value || 1))} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2 mb-4" />
         </>)}
         <div className="flex justify-end gap-2">

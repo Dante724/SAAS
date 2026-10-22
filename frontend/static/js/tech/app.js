@@ -1,4 +1,4 @@
-/* RepairOS Technician app controller. Hash-routed, offline-aware.
+/* Tekly Technician app controller. Hash-routed, offline-aware.
    Reuses core.js (Auth, apiLogin, get, Toast, icon) and RosPWA (offline queue). */
 (function () {
   const view = () => document.getElementById('view');
@@ -7,26 +7,43 @@
   // ── Auth / boot ──
   document.getElementById('t-login').addEventListener('click', doLogin);
   document.getElementById('t-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+  document.getElementById('t-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+
+  // Second sign-in step: shown once the server says this account has 2-step verification on.
+  let needCode = false;
+  function askForCode() {
+    needCode = true;
+    document.getElementById('t-code-hint').classList.remove('hidden');
+    const c = document.getElementById('t-code');
+    c.classList.remove('hidden'); c.value = ''; c.focus();
+  }
 
   async function doLogin() {
     const email = document.getElementById('t-email').value.trim();
     const pass = document.getElementById('t-pass').value;
+    const code = needCode ? document.getElementById('t-code').value.replace(/\s+/g, '') : '';
     const btn = document.getElementById('t-login');
+    if (!email || !pass) { Toast.error('Enter your email and password'); return; }
+    if (needCode && !code) { Toast.error('Enter the code from your authenticator app'); return; }
     btn.textContent = 'Signing in…'; btn.disabled = true;
     try {
-      const d = await apiLogin(email, pass);
-      if (!d || !d.access_token) throw new Error('Invalid credentials');
+      const d = await apiLogin(email, pass, code);
+      if (!d || !d.access_token) throw new Error('Could not sign in');
       Auth.token = d.access_token;
       showApp();
-    } catch (e) { Toast && Toast.error ? Toast.error(e.message || 'Login failed') : alert(e.message); }
-    finally { btn.textContent = 'Sign in'; btn.disabled = false; }
+    } catch (e) {
+      if (e.mfaRequired) { const retry = needCode; askForCode(); if (!retry) return; }
+      Toast && Toast.error ? Toast.error(e.message || 'Could not sign in') : alert(e.message);
+    }
+    finally { btn.textContent = needCode ? 'Verify' : 'Sign in'; btn.disabled = false; }
   }
 
   async function showApp() {
     document.getElementById('login').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
     // Sliding-session refresh (keeps the on-device session alive across launches).
-    try { const r = await get('/api/auth/refresh'); if (r && r.access_token) Auth.token = r.access_token; } catch (e) {}
+    // POST — the endpoint never accepted GET, so this refresh silently 405'd on every launch.
+    try { const r = await post('/api/auth/refresh'); if (r && r.access_token) Auth.token = r.access_token; } catch (e) {}
     // Best-effort push enrolment (no-op unless VAPID configured + permission granted).
     if (window.RosPWA) RosPWA.enablePush().catch(() => {});
     if (!location.hash) location.hash = '#/dashboard';
@@ -129,7 +146,9 @@
   if (window.RosPWA) {
     paintConn(navigator.onLine);
     RosPWA.on('connectivity', (d) => paintConn(d.online));
-    RosPWA.on('sync', (st) => { paintSync(st); if (st && st.justFlushed) { route(); refreshUnread(); } });
+    // Only refresh views when signed in: the boot-time flush runs on the sign-in screen too, and a
+    // 401 there reloads the page (signedOut), which looped and wiped the form every couple of seconds.
+    RosPWA.on('sync', (st) => { paintSync(st); if (st && st.justFlushed && Auth.token) { route(); refreshUnread(); } });
     RosPWA.on('conflict', () => Toast && Toast.error && Toast.error('A change conflicted with a newer update and was skipped.'));
     RosPWA.on('update-available', showUpdateBanner);
     RosPWA.on('installable', () => { const f = document.getElementById('install-fab'); f.classList.remove('hidden'); });

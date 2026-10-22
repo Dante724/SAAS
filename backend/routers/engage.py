@@ -28,7 +28,7 @@ from backend.models import (
     Organisation,
 )
 from backend.services.auth import get_current_employee, require_perm, record_scope
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 router = APIRouter(prefix="/api", tags=["engage"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -235,7 +235,7 @@ async def generate_client_coupon(
     client_id: str,
     data: ClientCouponIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_set_discount")),   # same gate as the other coupon routes
 ):
     """144bi — mint a coupon issued to a specific returning client. Auto-codes so the
     front desk can generate one in a click and offer it now; it's redeemed on the
@@ -247,6 +247,10 @@ async def generate_client_coupon(
         raise HTTPException(404, "Client not found")
     if data.kind not in ("pct", "fixed") or data.value <= 0:
         raise HTTPException(422, "kind must be pct|fixed with a positive value")
+    if data.kind == "pct" and data.value > 100:
+        raise HTTPException(422, "A percentage coupon can't be more than 100%")
+    if not 1 <= data.max_uses <= 100:
+        raise HTTPException(422, "A returning-customer coupon can be used 1 to 100 times")
     import random
     import string
     # unique short code for this org
@@ -312,7 +316,14 @@ async def apply_coupon(
     if already:
         raise HTTPException(400, "Coupon already applied to this order")
     discount = q2((order.total or 0) * c.value / 100.0) if c.kind == "pct" else q2(c.value)
-    discount = min(discount, q2(order.total or 0))
+    # Cap at what's still owed, not the order total: a coupon on an order that's already
+    # (partly) paid would otherwise leave it "overpaid", and that overpayment can be refunded
+    # from the till — a coupon turned into cash (B12).
+    from backend.services.order_money import balance_due
+    owed = await balance_due(db, order)
+    if owed <= 0:
+        raise HTTPException(400, "Nothing is owed on this order, so a coupon can't be applied")
+    discount = min(discount, owed)
     # Guarded atomic increment: `c.uses += 1` let concurrent redemptions both pass the
     # max_uses check above and overshoot the limit.
     res = await db.execute(sa_update(type(c)).where(

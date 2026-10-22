@@ -1,16 +1,26 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 import bcrypt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError as JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
 from backend.db.database import get_db
 from backend.models import Employee
+
+# The password every staff account created from the React screen used to get (H1), and the demo
+# seed's old passwords that the README published (launch QA F10). They're public knowledge, so they
+# can never be set again and never open a session.
+OLD_DEFAULT_PASSWORDS = frozenset({"changeme123", "admin123", "tech123"})
+
+
+def is_old_default_password(password: str | None) -> bool:
+    return (password or "") in OLD_DEFAULT_PASSWORDS
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token")
 
@@ -39,14 +49,41 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """`auth_time` is when the user actually signed in. /refresh carries it forward, so a
+    session can slide for at most REFRESH_TOKEN_EXPIRE_MINUTES — before, refreshing every day
+    kept one sign-in (or one stolen token) alive forever."""
+    import time
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode.update({"exp": expire})
+    now = int(time.time())        # epoch seconds — JWT NumericDate, timezone-free
+    auth_time = int(to_encode.setdefault("auth_time", now))
+    ttl = int((expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)).total_seconds())
+    session_end = auth_time + settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60
+    to_encode.update({"exp": min(now + ttl, session_end)})
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+def session_expired(auth_time: Optional[int]) -> bool:
+    import time
+    if auth_time is None:
+        return False
+    return time.time() >= int(auth_time) + settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60
 
 # While a user owes 2FA enrollment (their org requires it), only these API paths answer:
 # enough to load who they are, enroll, refresh and sign out.
 MFA_ENROLLMENT_PATHS = ("/api/mfa/", "/api/auth/me", "/api/auth/refresh", "/api/auth/logout")
+
+
+def assert_org_active(org, today=None) -> None:
+    """Suspended or lapsed orgs are locked out of every credential they hold — staff tokens
+    and public-API keys alike."""
+    from datetime import date as _date
+    if org is None:
+        return
+    today = today or _date.today()
+    if org.sub_status == "suspended":
+        raise HTTPException(status_code=403, detail="This account is suspended. Please contact support.")
+    if getattr(org, "sub_end", None) and org.sub_end < today:
+        raise HTTPException(status_code=403, detail="Your subscription has ended. Please contact support to renew.")
 
 
 async def get_current_employee(
@@ -66,10 +103,21 @@ async def get_current_employee(
             raise credentials_exception
     except JWTError:
         raise credentials_exception
-    result = await db.execute(select(Employee).where(Employee.id == employee_id))
-    employee = result.scalar_one_or_none()
+    # The role rides along in the same query so the cost-redaction decision is made here, once,
+    # instead of by the middleware opening a second session after the endpoint.
+    from backend.models import Role
+    row = (await db.execute(select(Employee, Role).outerjoin(Role, Role.id == Employee.role_id)
+                            .where(Employee.id == employee_id))).first()
+    employee, role = (row[0], row[1]) if row else (None, None)
     if employee is None or not employee.active:
         raise credentials_exception
+    # Remembered for response-level rules (cost redaction in main.py) without re-reading the token.
+    request.state.employee_id = employee.id
+    request.state.employee_role_id = employee.role_id
+    if employee.role_id:
+        from backend.services.permissions import role_allows
+        from backend.services.redact import COST_PERM
+        request.state.can_see_costs = role is not None and role_allows(role, COST_PERM)
     # Lost-device logout: a token carrying a stale version is rejected. Tokens
     # minted before this feature have no "tv" claim and stay valid until expiry.
     tv = payload.get("tv")
@@ -86,11 +134,7 @@ async def get_current_employee(
     today = _date.today()
     org = (await db.execute(select(Organisation).where(
         Organisation.id == employee.org_id))).scalar_one_or_none()
-    if org is not None:
-        if org.sub_status == "suspended":
-            raise HTTPException(status_code=403, detail="This account is suspended. Please contact support.")
-        if getattr(org, "sub_end", None) and org.sub_end < today:
-            raise HTTPException(status_code=403, detail="Your subscription has ended. Please contact support to renew.")
+    assert_org_active(org, today)
     if (employee.access_start and employee.access_start > today) or \
        (employee.access_end and employee.access_end < today):
         raise HTTPException(status_code=403, detail="Your access is outside its allowed dates.")
@@ -103,14 +147,33 @@ async def get_current_employee(
     return employee
 
 
+async def is_shop_owner(db: AsyncSession, employee: Employee) -> bool:
+    """The shop's creator (organisations.owner_id). Their sign-up role is an explicit
+    allow-list, so without this a permission added later would lock the owner out of it."""
+    from backend.models import Organisation
+    owner_id = (await db.execute(select(Organisation.owner_id).where(
+        Organisation.id == employee.org_id))).scalar_one_or_none()
+    return bool(owner_id) and owner_id == employee.id
+
+
+async def assert_not_self(db: AsyncSession, current: Employee, employee_id: str, what: str) -> None:
+    """Separation of duties for pay: nobody approves, rewards or pays themself — except the
+    owner, who answers to no one in their own shop."""
+    if employee_id == current.id and current.role_id and not await is_shop_owner(db, current):
+        raise HTTPException(403, f"You can't {what}. Ask the owner or another manager.")
+
+
 async def has_perm(db: AsyncSession, employee: Employee, perm_key: str) -> bool:
-    """Default-allow: False only when the employee's role explicitly sets the permission to
-    False. Employees with no role (org owners) have every permission."""
-    if not employee.role_id:
+    """Does this person's role grant the permission? (services/permissions.role_allows.)
+    Employees with no role (org owners) have every permission."""
+    if not employee.role_id or await is_shop_owner(db, employee):
         return True
     from backend.models import Role
+    from backend.services.permissions import role_allows
     role = (await db.execute(select(Role).where(Role.id == employee.role_id))).scalar_one_or_none()
-    return ((role.permissions or {}) if role else {}).get(perm_key) is not False
+    if role is None:
+        return False          # a dangling role id never fails open
+    return role_allows(role, perm_key)
 
 
 async def assert_perm(db: AsyncSession, employee: Employee, perm_key: str) -> None:
@@ -121,10 +184,8 @@ async def assert_perm(db: AsyncSession, employee: Employee, perm_key: str) -> No
 
 
 def require_perm(perm_key: str):
-    """Dependency factory for role-based gating. Default-allow (matching the
-    existing can_add_without_stock semantics): the action is blocked only when
-    the employee's role explicitly sets the permission to False. Employees with
-    no role (org owners) are always allowed."""
+    """Dependency factory for role-based gating (see has_perm). Employees with no role
+    (org owners) are always allowed."""
     async def _checker(
         db: AsyncSession = Depends(get_db),
         current: Employee = Depends(get_current_employee),

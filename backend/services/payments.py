@@ -10,6 +10,7 @@ When STRIPE_SECRET_KEY is set the StripeGateway creates a real Checkout Session;
 otherwise the SimulatedGateway returns a local confirm URL so the whole flow is
 testable end-to-end without keys. Real charges go live the moment the key is set.
 """
+import logging
 from datetime import datetime
 from typing import Optional
 
@@ -19,7 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import settings
 from backend.models import Account, Invoice, Order, Payment, PaymentIntent
 from backend.services.numbering import next_number
-from backend.services.money import minor_units, q2, q4
+from backend.services.money import minor_units, q2
+
+log = logging.getLogger("tekly.payments")
 
 
 # ── Gateways ─────────────────────────────────────────────────────────────────
@@ -109,6 +112,7 @@ class SquareGateway(PaymentGateway):
             raise RuntimeError(f"Square {resp.status_code}: {resp.text[:200]}")
         link = resp.json().get("payment_link") or {}
         return {"provider_ref": link.get("order_id") or link.get("id"),
+                "provider_link_id": link.get("id"),     # needed to delete the link later
                 "checkout_url": link.get("url"), "status": "pending"}
 
 
@@ -211,7 +215,7 @@ async def create_intent(db: AsyncSession, *, org_id: str, order_id: Optional[str
         currency = ((org.currency_code if org else None) or "usd")
     currency = currency.lower()
     invoice_id = None
-    description = "RepairOS payment"
+    description = "Tekly payment"
     if order_id:
         o = (await db.execute(select(Order).where(
             Order.id == order_id, Order.org_id == org_id))).scalar_one_or_none()
@@ -230,6 +234,7 @@ async def create_intent(db: AsyncSession, *, org_id: str, order_id: Optional[str
     await db.flush()
     res = await gw.create_checkout(intent=intent, description=description)
     intent.provider_ref = res["provider_ref"]
+    intent.provider_link_id = res.get("provider_link_id")
     intent.checkout_url = res["checkout_url"]
     intent.status = res["status"]
     await db.commit()
@@ -286,10 +291,17 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
         from backend.routers.cash import post_transaction
         sales = (await db.execute(select(CashFlowItem).where(
             CashFlowItem.org_id == intent.org_id, CashFlowItem.name == "Sales"))).scalar_one_or_none()
+        # The provider has already captured this money, so it is never refused here. A till held
+        # in another currency is a setup mistake that staff paths now reject; flag it loudly.
+        from backend.routers.cash import _org_base_code
+        base = await _org_base_code(db, intent.org_id)
+        if account.currency_code and account.currency_code.upper() != base.upper():
+            log.warning("online payment %s posted to %s account %s (org base %s) — check the till",
+                        intent.id, account.currency_code, account.id, base)
         await post_transaction(db, intent.org_id, account.id, "invoice_payment", abs(intent.amount),
                                cash_flow_item_id=sales.id if sales else None,
                                comment=f"Online payment ({intent.provider})",
-                               ref_type="order", ref_id=intent.order_id)
+                               ref_type="order", ref_id=intent.order_id, native_amount=True)
 
     pay = Payment(invoice_id=inv.id if inv else None, order_id=intent.order_id,
                   client_id=inv.client_id if inv else None, method="online",

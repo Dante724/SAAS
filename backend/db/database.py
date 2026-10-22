@@ -14,6 +14,21 @@ _NAMING_CONVENTION = {
     "pk": "pk_%(table_name)s",
 }
 
+def pg_connect_args(cfg) -> dict:
+    """asyncpg session settings: a statement_timeout so one runaway query can't hold a pooled
+    connection (and a worker) indefinitely, and an idle-in-transaction timeout so a leaked
+    transaction can't hold locks. Set either to 0 to leave it to the server (e.g. behind a
+    PgBouncer that rejects startup parameters — then set them on the database role instead)."""
+    if "asyncpg" not in (cfg.DATABASE_URL or ""):
+        return {}
+    server_settings = {}
+    if cfg.DB_STATEMENT_TIMEOUT_MS:
+        server_settings["statement_timeout"] = str(int(cfg.DB_STATEMENT_TIMEOUT_MS))
+    if cfg.DB_IDLE_IN_TX_TIMEOUT_MS:
+        server_settings["idle_in_transaction_session_timeout"] = str(int(cfg.DB_IDLE_IN_TX_TIMEOUT_MS))
+    return {"server_settings": server_settings} if server_settings else {}
+
+
 # SQLite needs check_same_thread=False; Postgres/asyncpg must NOT receive it.
 _connect_args = {"check_same_thread": False} if settings.is_sqlite else {}
 _engine_kwargs = dict(echo=False, connect_args=_connect_args)
@@ -27,8 +42,12 @@ if not settings.is_sqlite:
 
         _engine_kwargs["poolclass"] = NullPool
     else:
-        # Sensible pool defaults for a pooled server driver (asyncpg).
-        _engine_kwargs.update(pool_size=10, max_overflow=20, pool_pre_ping=True, pool_recycle=1800)
+        # Bounded pool per worker; a request that can't get a connection within the timeout fails
+        # fast instead of queueing forever behind a stuck query. All tunable from settings.
+        _engine_kwargs.update(pool_size=settings.DB_POOL_SIZE, max_overflow=settings.DB_MAX_OVERFLOW,
+                              pool_timeout=settings.DB_POOL_TIMEOUT_S, pool_pre_ping=True,
+                              pool_recycle=settings.DB_POOL_RECYCLE_S)
+    _connect_args.update(pg_connect_args(settings))
 
 engine = create_async_engine(settings.DATABASE_URL, **_engine_kwargs)
 
@@ -114,7 +133,7 @@ async def init_db():
     import logging
 
     from backend.models import all_models  # noqa: F401 – import triggers registration
-    log = logging.getLogger("repairos.db")
+    log = logging.getLogger("tekly.db")
 
     if settings.is_deployed and not settings.RUN_MIGRATIONS_ON_STARTUP:
         log.info("Production mode: skipping runtime DDL; schema is managed by Alembic.")
@@ -189,6 +208,28 @@ async def init_db():
         for oid in org_ids:
             made += await _seed_rules(session, oid)
         if made:
+            await session.commit()
+
+    # Retire OrderStatus.triggers_notification: turn flagged statuses into equivalent
+    # per-status rules (only where no rule already fires) and clear the flag. Runs after the
+    # starter-rule seed above so "covered" sees those rules. Idempotent. In production the
+    # equivalent runs inside Alembic migration nt144p4.
+    from backend.services import legacy_status_notifs as _legacy
+    async with AsyncSessionLocal() as session:
+        for oid in org_ids:
+            await _legacy.convert(session, oid)
+        await session.commit()
+
+    # Roles become explicit allow-lists (new permissions start off). Snapshot any legacy role
+    # so it grants exactly what it granted before. Idempotent. In production the equivalent
+    # runs inside Alembic migration rp144p8.
+    from sqlalchemy import select as _sel
+
+    from backend.models import Role as _Role
+    from backend.services.permissions import make_explicit as _make_explicit
+    async with AsyncSessionLocal() as session:
+        changed = [r for r in (await session.execute(_sel(_Role))).scalars().all() if _make_explicit(r)]
+        if changed:
             await session.commit()
 
     # 144an — seed the manual workflow stage for POs created before the field existed, mapping

@@ -4,7 +4,7 @@
 Settings → Public pages, Finance, Prices & discounts, Integrations, General, and
 Employees (Roles + Payroll calculation rules). This is a **living document** — further
 screenshot batches will extend it. Every gap claim below is verified against the
-RepairOS codebase (repairos-38), not guessed.
+Tekly codebase (repairos-38), not guessed.
 
 ---
 
@@ -241,7 +241,7 @@ Our RBAC-v2 (Roadmap B1) matrix should adopt this verb×module granularity and t
 - **Payrolls:** summary table of base salaries + configured commissions per
   employee.
 
-**Mapping to RepairOS:** we implement order_created / order_closed /
+**Mapping to Tekly:** we implement order_created / order_closed /
 labor_performed / product_sold keyed to the per-line technician with assigned-tech
 fallback. Orderry splits **performer vs assignee** into *separate rule events* and
 distinguishes **deducted vs non-deducted product** commissions, plus **booking**
@@ -266,9 +266,9 @@ templates, or diff view (→ RBAC v2 matrix with search + role templates).
 
 ---
 
-## 9. Gap analysis vs RepairOS (verified against code)
+## 9. Gap analysis vs Tekly (verified against code)
 
-| Feature (from screenshots) | RepairOS status | Notes / priority |
+| Feature (from screenshots) | Tekly status | Notes / priority |
 |---|---|---|
 | Public booking page appearance (color/radius/logo/lang, slot, multi-service, consider-orders) | ✅ have | `Organisation.page_*`, `booking_*` fields already mirror 1a |
 | Public order/estimate accept-decline as status transitions + signature | ✅ have | `OrderStatus.shows_accept`, public.py apply-decision, `requires_signature` |
