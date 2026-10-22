@@ -7,6 +7,8 @@ import { alertDialog } from "../../lib/dialog";
 import { useMe } from "../../context/Me";
 import { money } from "../orders/types";
 import EarningsBreakdown, { type BreakdownRule } from "./EarningsBreakdown";
+import { Avatar } from "../orders/look";
+import { btnGhost } from "../invoices/billing";
 
 /* Finance › Payroll calculation: the month's live pay per person, narrowed by location, role
    and employee. A row opens to the commissions behind it (rule → job → line item) plus the
@@ -28,6 +30,13 @@ export function filterQuery(month: string, f: PayrollFilters) {
 }
 
 const WAGE: Record<string, string> = { fixed: "Fixed", hourly: "Hourly", commission: "Commission only" };
+
+/* Money cells stay neutral; a column only takes its colour when there is something in it,
+   so a row of zeros reads as quiet rather than a wall of green and red. */
+export function amountTone(v: number | null | undefined, tone: "gain" | "loss"): string {
+  if (!Number(v)) return "text-ink-tertiary";
+  return tone === "gain" ? "text-emerald-700" : "text-rose-600";
+}
 
 const ACCRUAL: Record<string, [string, string]> = {
   accrued: ["Accrued", "bg-blue-50 text-primary"], paid: ["Paid", "bg-emerald-50 text-emerald-700"],
@@ -94,12 +103,12 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">
-          <h3 className="text-sm font-bold text-ink-primary">Payroll calculation</h3>
+          <h3 className="text-sm font-semibold text-ink-primary">Payroll calculation</h3>
           <input type="month" value={month} onChange={(e) => e.target.value && onMonth(e.target.value)} aria-label="Month" className={sel} />
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {can("can_view_own_payroll") && can("can_view_own_compensation") && <Link to="/my-earnings" className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-ink-secondary hover:bg-slate-50 text-xs font-bold flex items-center gap-1"><M n="payments" c="text-xs" />My earnings</Link>}
-          {can("can_export_payroll") && <button onClick={exportCsv} disabled={exporting || !rows?.length} className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-ink-secondary hover:bg-slate-50 text-xs font-bold flex items-center gap-1 disabled:opacity-50"><M n="download" c="text-xs" />{exporting ? "Exporting…" : "Export"}</button>}
+          {can("can_view_own_payroll") && can("can_view_own_compensation") && <Link to="/my-earnings" className={`${btnGhost} bg-white`}><M n="payments" c="text-sm" />My earnings</Link>}
+          {can("can_export_payroll") && <button onClick={exportCsv} disabled={exporting || !rows?.length} className={`${btnGhost} bg-white`}><M n="download" c="text-sm" />{exporting ? "Exporting…" : "Export"}</button>}
           {headerAction}
         </div>
       </div>
@@ -124,9 +133,9 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
         {rows && rows.length > 0 && <span className="ml-auto text-xs text-ink-tertiary">{rows.length} {rows.length === 1 ? "person" : "people"} · <span className="font-semibold text-ink-primary tabular-nums">{money(total)}</span></span>}
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-x-auto">
+      <div className="bg-white rounded-2xl border border-slate-200/90 overflow-x-auto">
         <table className="w-full min-w-[840px] text-left border-collapse text-xs">
-          <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
+          <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-xs font-semibold">
             <th className="py-3 pl-3 pr-1 w-8"></th><th className="py-3 px-3">Employee</th><th className="py-3 px-3">Position</th><th className="py-3 px-3">Wage type</th>
             <th className="py-3 px-3 text-right">Base</th><th className="py-3 px-3 text-right">Hourly</th><th className="py-3 px-3 text-right">Commission</th>
             <th className="py-3 px-3 text-right">Bonus</th><th className="py-3 px-3 text-right">Penalty</th><th className="py-3 px-3 text-right">Total</th><th className="py-3 px-3"></th>
@@ -142,17 +151,17 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
               return (
                 <Fragment key={p.employee_id}>
                   <tr className={`hover:bg-blue-50/30 cursor-pointer ${isOpen ? "bg-blue-50/40" : ""}`} onClick={() => toggle(p.employee_id)}>
-                    <td className="py-2.5 pl-3 pr-1"><button type="button" aria-expanded={isOpen} aria-label={`${isOpen ? "Hide" : "Show"} breakdown for ${p.name || "employee"}`} onClick={(e) => { e.stopPropagation(); toggle(p.employee_id); }} className="w-6 h-6 rounded-md grid place-items-center text-ink-tertiary hover:bg-slate-100"><M n={isOpen ? "expand_more" : "chevron_right"} c="text-sm" /></button></td>
-                    <td className="py-2.5 px-3 font-bold text-ink-primary">{p.name || "—"}{acc && <span className={`ml-2 px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${acc[1]}`}>{acc[0]}</span>}</td>
+                    <td className="py-2 pl-3 pr-1"><button type="button" aria-expanded={isOpen} aria-label={`${isOpen ? "Hide" : "Show"} breakdown for ${p.name || "employee"}`} onClick={(e) => { e.stopPropagation(); toggle(p.employee_id); }} className="w-7 h-7 rounded-md grid place-items-center text-ink-tertiary hover:bg-slate-100"><M n={isOpen ? "expand_more" : "chevron_right"} c="text-sm" /></button></td>
+                    <td className="py-2 px-3"><span className="flex items-center gap-2.5 min-w-0"><Avatar name={p.name} size={26} /><span className="font-semibold text-ink-primary truncate">{p.name || "—"}</span>{acc && <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${acc[1]}`}>{acc[0]}</span>}</span></td>
                     <td className="py-2.5 px-3">{p.position || "—"}</td>
                     <td className="py-2.5 px-3">{WAGE[p.wage_type || ""] || "—"}</td>
-                    <td className="py-2.5 px-3 text-right tabular-nums">{money(p.base_salary)}</td>
-                    <td className="py-2.5 px-3 text-right tabular-nums">{money(p.hourly_total)}</td>
-                    <td className="py-2.5 px-3 text-right tabular-nums text-emerald-600">{money(p.commissions_total)}</td>
-                    <td className="py-2.5 px-3 text-right tabular-nums text-emerald-600">{money(p.bonuses_total)}</td>
-                    <td className="py-2.5 px-3 text-right tabular-nums text-rose-600">{money(p.penalties_total)}</td>
-                    <td className="py-2.5 px-3 text-right tabular-nums font-bold text-ink-primary">{money(p.computed_total)}</td>
-                    <td className="py-2.5 px-3 text-right"><button aria-label="Print payslip" onClick={(e) => { e.stopPropagation(); openAuthedDoc(`/print/payroll-statement/${p.employee_id}`).catch(() => alertDialog("Could not open payslip")); }} title="Print payslip" className="p-1.5 rounded-lg text-ink-tertiary hover:text-primary hover:bg-slate-100"><M n="print" c="text-base" /></button></td>
+                    <td className={`py-2.5 px-3 text-right tabular-nums ${Number(p.base_salary) ? "" : "text-ink-tertiary"}`}>{money(p.base_salary)}</td>
+                    <td className={`py-2.5 px-3 text-right tabular-nums ${Number(p.hourly_total) ? "" : "text-ink-tertiary"}`}>{money(p.hourly_total)}</td>
+                    <td data-col="commission" className={`py-2.5 px-3 text-right tabular-nums ${amountTone(p.commissions_total, "gain")}`}>{money(p.commissions_total)}</td>
+                    <td data-col="bonus" className={`py-2.5 px-3 text-right tabular-nums ${amountTone(p.bonuses_total, "gain")}`}>{money(p.bonuses_total)}</td>
+                    <td data-col="penalty" className={`py-2.5 px-3 text-right tabular-nums ${amountTone(p.penalties_total, "loss")}`}>{money(p.penalties_total)}</td>
+                    <td className="py-2.5 px-3 text-right tabular-nums font-semibold text-ink-primary">{money(p.computed_total)}</td>
+                    <td className="py-1.5 px-3 text-right"><button aria-label="Print payslip" onClick={(e) => { e.stopPropagation(); openAuthedDoc(`/print/payroll-statement/${p.employee_id}`).catch(() => alertDialog("Could not open payslip")); }} title="Print payslip" className="w-8 h-8 inline-grid place-items-center rounded-lg text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="print" c="text-base" /></button></td>
                   </tr>
                   {isOpen && (
                     <tr className="bg-slate-50/50">
@@ -161,9 +170,9 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
                         {d === "error" && <div className="px-12 py-4 text-xs text-rose-600" role="alert">Couldn't load the breakdown. <button className="font-semibold underline" onClick={() => loadDetail(p.employee_id)}>Try again</button></div>}
                         {d && d !== "error" && (
                           <div className="grid lg:grid-cols-[2fr_1fr] gap-0 lg:divide-x divide-slate-100 border-t border-slate-100">
-                            <div><div className="px-4 pt-3 text-[11px] font-semibold text-ink-tertiary">Commissions</div><EarningsBreakdown rules={d.breakdown} /></div>
+                            <div><div className="px-4 pt-3 text-xs font-semibold text-ink-secondary">Commissions</div><EarningsBreakdown rules={d.breakdown} /></div>
                             <div className="px-4 py-3">
-                              <div className="text-[11px] font-semibold text-ink-tertiary mb-1.5">Bonuses and penalties</div>
+                              <div className="text-xs font-semibold text-ink-secondary mb-1.5">Bonuses and penalties</div>
                               {d.bonuses.length + d.penalties.length === 0 ? <div className="text-xs text-ink-tertiary">None this month.</div> : (
                                 <ul className="space-y-1">
                                   {d.bonuses.map((b) => <li key={b.id} className="flex justify-between gap-2"><span className="truncate">{b.note || "Bonus"}</span><span className="tabular-nums text-emerald-700">+{money(b.amount)}</span></li>)}

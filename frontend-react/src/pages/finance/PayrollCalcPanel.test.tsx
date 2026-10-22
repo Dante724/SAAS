@@ -12,7 +12,7 @@ vi.mock("../../api/client", async (orig) => {
   return { ...real, openAuthedDoc: async (p: string) => { opened.push(p); } };
 });
 
-import PayrollCalcPanel, { filterQuery } from "./PayrollCalcPanel";
+import PayrollCalcPanel, { amountTone, filterQuery } from "./PayrollCalcPanel";
 
 let urls: string[] = [];
 const reply = (status: number, body: unknown) => ({ ok: status < 400, status, statusText: "", headers: new Headers(), json: async () => body, text: async () => JSON.stringify(body) }) as Response;
@@ -76,5 +76,20 @@ describe("Payroll calculation panel", () => {
     await screen.findByRole("button", { name: "Show breakdown for Ann" });
     await u.selectOptions(screen.getByLabelText("Role"), "r1");
     expect(await screen.findByText("Nobody matches these filters.")).toBeInTheDocument();
+  });
+
+  it("keeps money columns neutral and colours them only when non-zero", async () => {
+    expect(amountTone(0, "gain")).toBe("text-ink-tertiary");
+    expect(amountTone(undefined, "loss")).toBe("text-ink-tertiary");
+    expect(amountTone(15, "gain")).toBe("text-emerald-700");
+    expect(amountTone(-10, "loss")).toBe("text-rose-600");
+    const { container } = renderPanel();
+    await screen.findByRole("button", { name: "Show breakdown for Ann" });
+    const cell = (row: number, col: string) => container.querySelectorAll("tbody tr")[row].querySelector(`[data-col="${col}"]`)!;
+    expect(cell(0, "commission").className).toContain("text-emerald-700");   // Ann earned commission
+    expect(cell(1, "commission").className).toContain("text-ink-tertiary");  // Ben has none
+    expect(cell(1, "commission").className).not.toContain("emerald");
+    expect(cell(0, "penalty").className).toContain("text-ink-tertiary");
+    expect(cell(0, "bonus").className).not.toContain("emerald");
   });
 });

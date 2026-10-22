@@ -102,7 +102,9 @@ test.describe("Checklist auto-attach", () => {
     // And the job shows it.
     await page.goto(`/orders?open=${order.id}`);
     await page.getByRole("button", { name: /^Checklists/ }).first().click();
-    await expect(page.getByText(`${name} (0 of 1)`)).toBeVisible();   // the checklist card, not the template picker
+    // the checklist card (title + "0 of 1 done"), not the template picker
+    await expect(page.getByRole("heading", { name })).toBeVisible();
+    await expect(page.getByText("0 of 1 done")).toBeVisible();
 
     // Clean up the template so later runs start from the same shop state.
     await ok(api.delete(`/api/checklist-templates/${tpl.id}`, { headers: H }));

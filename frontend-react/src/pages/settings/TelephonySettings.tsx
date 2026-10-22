@@ -7,12 +7,15 @@ import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
+import { btnGhost, btnPrimary, inputCls, labelCls } from "../invoices/billing";
+import ModePill from "./ModePill";
 
-const lbl = "block text-[11px] font-bold text-ink-tertiary mb-1";
-const field = "glass-input w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg";
-const btn = "px-3 py-2 rounded-lg text-xs font-semibold disabled:opacity-60";
-const primary = `${btn} bg-primary text-white hover:brightness-110`;
-const ghost = `${btn} border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50`;
+const lbl = labelCls;
+const field = `${inputCls} text-ink-primary disabled:opacity-60`;
+const primary = btnPrimary;
+const ghost = `${btnGhost} bg-white`;
+const hint = "text-xs text-ink-tertiary leading-relaxed";
+const heading = "text-sm font-semibold text-ink-primary";
 
 export type TwilioState = { connected: boolean; mode: "test" | "live" | null; test_mode: boolean; live_allowed: boolean; voice_url: string; status_url: string; test_number: string };
 export type Destinations = { default: string[]; override: string[] | null; effective: string[] };
@@ -28,7 +31,7 @@ export function statusBadge(c: TelConfig | null): { text: string; tone: "on" | "
   return { text: c.provider, tone: "on" };
 }
 
-const TONE = { on: "bg-emerald-50 text-emerald-700 border-emerald-200", off: "bg-slate-100 text-ink-tertiary border-slate-200", test: "bg-amber-50 text-amber-800 border-amber-200" };
+const MODE = { on: "live", off: "off", test: "test" } as const;
 
 function Note({ kind, children }: { kind: "ok" | "err" | "info"; children: React.ReactNode }) {
   const c = kind === "ok" ? "bg-emerald-50 border-emerald-200 text-emerald-800" : kind === "err" ? "bg-rose-50 border-rose-200 text-rose-700" : "bg-slate-50 border-slate-200 text-ink-secondary";
@@ -41,8 +44,8 @@ function CopyRow({ label, value }: { label: string; value: string }) {
     <div>
       <div className={lbl}>{label}</div>
       <div className="flex items-center gap-2 min-w-0">
-        <code className="flex-1 min-w-0 truncate rounded-lg bg-slate-50 border border-slate-200 px-2.5 py-2 text-[11px] text-ink-secondary">{value}</code>
-        <button type="button" aria-label={`Copy ${label}`} className={ghost} onClick={() => { navigator.clipboard?.writeText(value).then(() => { setDone(true); setTimeout(() => setDone(false), 1500); }).catch(() => {}); }}>
+        <code className="flex-1 min-w-0 truncate rounded-lg bg-slate-50 border border-slate-200 px-2.5 py-2 text-xs text-ink-secondary">{value}</code>
+        <button type="button" aria-label={`Copy ${label}`} className="w-9 h-9 flex-shrink-0 rounded-lg border border-slate-200 bg-white grid place-items-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-50" onClick={() => { navigator.clipboard?.writeText(value).then(() => { setDone(true); setTimeout(() => setDone(false), 1500); }).catch(() => {}); }}>
           <M n={done ? "check" : "content_copy"} c="text-sm" />
         </button>
       </div>
@@ -116,8 +119,8 @@ export default function TelephonySettings() {
   return (
     <section aria-labelledby="tel-title" className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
       <div className="p-3.5 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
-        <h3 id="tel-title" className="text-xs font-bold text-ink-primary flex items-center gap-1.5"><M n="smartphone" c="text-sm" />Calls & telephony</h3>
-        {cfg && <span data-testid="tel-badge" className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${TONE[badge.tone]}`}>{badge.text}</span>}
+        <h3 id="tel-title" className={`${heading} flex items-center gap-1.5`}><M n="call" c="text-sm text-ink-tertiary" />Calls & telephony</h3>
+        {cfg && <ModePill testId="tel-badge" mode={MODE[badge.tone]}>{badge.text}</ModePill>}
       </div>
 
       {loadErr && <div className="p-4 space-y-2"><Note kind="err">{loadErr}</Note><button className={ghost} onClick={load}>Try again</button></div>}
@@ -153,10 +156,10 @@ export default function TelephonySettings() {
                 <label htmlFor="tel-allowed" className={lbl}>Countries staff can call</label>
                 <input id="tel-allowed" className={field} value={form.allowed} onChange={(e) => setForm({ ...form, allowed: e.target.value })}
                   placeholder={cfg.destinations?.default.length ? `Your country only (${codes(cfg.destinations.default)})` : "Calling codes, e.g. +1, +44"} />
-                <p className="mt-1 text-[11px] text-ink-tertiary">Calling codes separated by commas. Leave empty to allow only your own country{cfg.destinations?.default.length ? ` (${codes(cfg.destinations.default)})` : ""}. This guards against toll fraud; in Twilio also limit Voice Geo Permissions to the same countries.</p>
+                <p className={`mt-1 ${hint}`}>Calling codes separated by commas. Leave empty to allow only your own country{cfg.destinations?.default.length ? ` (${codes(cfg.destinations.default)})` : ""}. This guards against toll fraud; in Twilio also limit Voice Geo Permissions to the same countries.</p>
               </div>
             </div>
-            {form.provider === "twilio" && <p className="text-[11px] text-ink-tertiary">Click-to-call rings the phone number on your own profile first, then connects the customer. With no number to ring, callers hear that you'll call them back.</p>}
+            {form.provider === "twilio" && <p className={hint}>Click-to-call rings the phone number on your own profile first, then connects the customer. With no number to ring, callers hear that you'll call them back.</p>}
             {note("config")}
             <div><button className={primary} disabled={busy === "config"} onClick={saveConfig}>Save</button></div>
           </div>
@@ -165,9 +168,8 @@ export default function TelephonySettings() {
           {form.provider === "twilio" && tw && (
             <div className="p-4 space-y-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs font-bold text-ink-primary">Twilio account</span>
-                {tw.connected && tw.test_mode && <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full border bg-amber-50 text-amber-800 border-amber-200">Test mode</span>}
-                {tw.connected && !tw.test_mode && <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200">Live</span>}
+                <span className={heading}>Twilio account</span>
+                {tw.connected && <ModePill mode={tw.test_mode ? "test" : "live"} />}
               </div>
               {tw.connected ? (
                 <>
@@ -189,7 +191,7 @@ export default function TelephonySettings() {
               )}
               {note("twilio")}
               <div className="space-y-2 pt-1">
-                <p className="text-[11px] text-ink-tertiary">In Twilio, open your phone number and paste these in its voice settings:</p>
+                <p className={hint}>In Twilio, open your phone number and paste these in its voice settings:</p>
                 <CopyRow label="A call comes in (webhook, POST)" value={tw.voice_url} />
                 <CopyRow label="Call status changes (POST)" value={tw.status_url} />
               </div>
@@ -198,10 +200,10 @@ export default function TelephonySettings() {
 
           {/* D2: contacts from calls */}
           <div className="p-4 space-y-3">
-            <label className="flex items-center gap-2 text-xs font-bold text-ink-primary">
+            <label className={`flex items-center gap-2 ${heading}`}>
               <input type="checkbox" className="accent-primary" checked={auto.enabled} onChange={(e) => setAuto({ ...auto, enabled: e.target.checked })} />Create contacts from calls
             </label>
-            <p className="text-[11px] text-ink-tertiary">When an unknown number calls, Tekly adds a contact named after the number and marks it "Created from call". Known numbers are matched, never duplicated.</p>
+            <p className={hint}>When an unknown number calls, Tekly adds a contact named after the number and marks it "Created from call". Known numbers are matched, never duplicated.</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label htmlFor="auto-dir" className={lbl}>Which calls</label>
@@ -214,18 +216,18 @@ export default function TelephonySettings() {
                 <input type="checkbox" className="accent-primary" disabled={!auto.enabled} checked={auto.config.assign_manager} onChange={(e) => setAuto({ ...auto, config: { ...auto.config, assign_manager: e.target.checked } })} />Assign a manager
               </label>
             </div>
-            {auto.config.assign_manager && auto.enabled && <p className="text-[11px] text-ink-tertiary">The manager is the person who placed the call, or else whoever owns the extension that was dialled.</p>}
+            {auto.config.assign_manager && auto.enabled && <p className={hint}>The manager is the person who placed the call, or else whoever owns the extension that was dialled.</p>}
             <div>
               <div className={lbl}>Tags for new contacts</div>
               {tags.length === 0
-                ? <p className="text-[11px] text-ink-tertiary">No tags yet. Tags you create for contacts show up here.</p>
+                ? <p className={hint}>No tags yet. Tags you create for contacts show up here.</p>
                 : <div className="flex flex-wrap gap-1.5" role="group" aria-label="Tags for new contacts">
                     {tags.map((t) => {
                       const on = auto.config.tag_ids.includes(t.id);
                       return (
                         <button key={t.id} type="button" aria-pressed={on} disabled={!auto.enabled}
                           onClick={() => setAuto({ ...auto, config: { ...auto.config, tag_ids: on ? auto.config.tag_ids.filter((x) => x !== t.id) : [...auto.config.tag_ids, t.id] } })}
-                          className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border disabled:opacity-50 ${on ? "bg-primary text-white border-primary" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`}>
+                          className={`px-2.5 py-1 rounded-full text-xs font-semibold border disabled:opacity-50 ${on ? "bg-primary text-white border-primary" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`}>
                           <span className="inline-block w-1.5 h-1.5 rounded-full mr-1 align-middle" style={{ background: t.color }} />{t.name}
                         </button>
                       );
@@ -239,12 +241,12 @@ export default function TelephonySettings() {
           {/* Try it: simulated inbound call */}
           {(savedProvider === null || savedProvider === "simulated") && (
             <div className="p-4 space-y-3">
-              <div className="text-xs font-bold text-ink-primary">Try it</div>
-              <p className="text-[11px] text-ink-tertiary">Simulate an incoming call. Nothing is dialled; the call shows up in the call log (Marketing → Call log).</p>
+              <div className={heading}>Try it</div>
+              <p className={hint}>Simulate an incoming call. Nothing is dialled; the call shows up in the call log (Marketing → Call log).</p>
               <div className="grid grid-cols-1 sm:grid-cols-[1fr_8rem_auto] gap-2 items-end">
                 <div><label htmlFor="sim-from" className={lbl}>Caller's number</label><input id="sim-from" className={field} inputMode="tel" value={sim.from_number} onChange={(e) => setSim({ ...sim, from_number: e.target.value })} placeholder="+1 415 555 0100" /></div>
                 <div><label htmlFor="sim-ext" className={lbl}>Extension</label><input id="sim-ext" className={field} value={sim.extension} onChange={(e) => setSim({ ...sim, extension: e.target.value })} placeholder="Optional" /></div>
-                <button className={`${ghost} flex items-center justify-center gap-1.5 whitespace-nowrap`} disabled={busy === "sim" || !sim.from_number.trim()} onClick={simulate}><M n="smartphone" c="text-sm" />Simulate call</button>
+                <button className={`${ghost} justify-center whitespace-nowrap h-[38px]`} disabled={busy === "sim" || !sim.from_number.trim()} onClick={simulate}><M n="call_received" c="text-sm" />Simulate call</button>
               </div>
               {note("sim")}
             </div>

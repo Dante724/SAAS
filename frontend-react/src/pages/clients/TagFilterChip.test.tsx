@@ -21,7 +21,8 @@ describe("TagFilterChip", () => {
     render(<Host onPick={onPick} />);
     await u.selectOptions(await screen.findByLabelText("Filter by tag"), "t2");
     expect(onPick).toHaveBeenLastCalledWith("t2");
-    expect(screen.getByText("Tag: VIP")).toBeInTheDocument();
+    expect(screen.getByText("VIP")).toBeInTheDocument();
+    expect(screen.queryByText(/Tag:/)).toBeNull();
     await u.click(screen.getByRole("button", { name: "Clear tag filter" }));
     expect(onPick).toHaveBeenLastCalledWith(null);
     expect(await screen.findByLabelText("Filter by tag")).toBeInTheDocument();

@@ -254,7 +254,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
         {tab === "payroll" && (
           <div className="space-y-3">
             <PayrollCalcPanel month={month} onMonth={setMonth}
-              headerAction={can("can_accrue_payroll") && <button onClick={runPayroll} disabled={runBusy} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-60 flex items-center gap-1"><M n="save" c="text-xs" />{runBusy ? "Running…" : "Run payroll (draft)"}</button>} />
+              headerAction={can("can_accrue_payroll") && <button onClick={runPayroll} disabled={runBusy} className="h-9 px-3 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-60 flex items-center gap-1.5"><M n="save" c="text-sm" />{runBusy ? "Running…" : "Run payroll (draft)"}</button>} />
 
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
               <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary ">Payroll runs</div>

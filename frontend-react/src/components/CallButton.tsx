@@ -35,10 +35,11 @@ export default function CallButton({ phone, clientId }: { phone?: string | null;
       await alertDialog(e?.message || "Couldn't place the call", "Call");
     } finally { setBusy(false); }
   }
+  // A quiet outline button, 32px tall, with an invisible hit area that reaches 44px for touch.
   return (
     <button type="button" onClick={call} disabled={busy} aria-label={`Call ${phone}`}
-      className="px-2.5 py-1 rounded-full text-[11px] font-bold border border-primary/30 bg-primary/5 text-primary hover:bg-primary/10 disabled:opacity-60 flex items-center gap-1">
-      <M n="smartphone" c="text-[13px]" />{busy ? "Calling…" : "Call"}
+      className="relative h-8 px-3 rounded-lg text-xs font-semibold border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 hover:text-ink-primary disabled:opacity-60 inline-flex items-center gap-1.5 after:absolute after:-inset-x-1 after:-inset-y-1.5 after:content-['']">
+      <M n="call" c="text-sm" />{busy ? "Calling…" : "Call"}
     </button>
   );
 }

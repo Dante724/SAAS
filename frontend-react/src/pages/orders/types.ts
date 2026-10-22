@@ -35,5 +35,7 @@ export function setCurrencySymbol(sym?: string) {
 export function money(n?: number, sym?: string, cents = false) {
   let loc = "en-US";
   try { const l = localStorage.getItem("ros_lang"); loc = l === "es" ? "es-ES" : l === "ar" ? "ar" : "en-US"; } catch { /* ignore */ }
-  return `${sym ?? _sym}${(n ?? 0).toLocaleString(loc, cents ? { minimumFractionDigits: 2, maximumFractionDigits: 2 } : undefined)}`;
+  const v = n ?? 0;
+  // The sign goes before the symbol: "−₹135", never "₹-135".
+  return `${v < 0 ? "−" : ""}${sym ?? _sym}${Math.abs(v).toLocaleString(loc, cents ? { minimumFractionDigits: 2, maximumFractionDigits: 2 } : undefined)}`;
 }

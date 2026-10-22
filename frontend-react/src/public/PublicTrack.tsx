@@ -69,7 +69,7 @@ function todayHours(h?: Track["shop_hours"]) {
 export const money = (n: number, sym = "$") => {
   const v = Number(n || 0);
   const whole = Math.abs(v - Math.round(v)) < 0.005;
-  return sym + v.toLocaleString(undefined, { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: whole ? 0 : 2 });
+  return (v < 0 ? "−" : "") + sym + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: whole ? 0 : 2 });
 };
 const docTotal = (d: Track) => (d?.fx_rate && Number(d.fx_rate) !== 1
   ? (d.total_converted != null ? d.total_converted : (d.total || 0) * d.fx_rate) : (d?.total || 0));

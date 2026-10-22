@@ -45,7 +45,8 @@ test("a simulated inbound call creates a tagged contact", async ({ page }) => {
   // the contact is in Contacts, found by the tag filter, and says where it came from
   await page.goto("/clients");
   await page.getByLabel("Filter by tag").selectOption({ label: tagName });
-  await expect(page.getByText(`Tag: ${tagName}`)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Clear tag filter" })).toBeVisible();
+  await expect(page.getByText(tagName, { exact: true })).toBeVisible();
   const row = page.getByRole("row", { name: new RegExp(stamp.slice(-4)) });
   await expect(row).toHaveCount(1);
   await row.click();

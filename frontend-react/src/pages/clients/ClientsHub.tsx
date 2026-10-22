@@ -16,9 +16,22 @@ import { useDebounced, useServerPage } from "../../hooks/useServerPage";
 import { confirmDialog, alertDialog } from "../../lib/dialog";
 import TagFilterChip from "./TagFilterChip";
 import { useMe } from "../../context/Me";
+import { Avatar } from "../orders/look";
+import { MoreMenu, btnGhost, btnPrimary } from "../invoices/billing";
+import { hueText, tint } from "../../lib/tint";
 
 type Client = { id: string; name?: string; phone?: string; email?: string; loyalty_tier?: string; balance?: number; devices?: any[]; order_count?: number };
 type Tab = "clients" | "suppliers";
+
+/* Tier is an exception worth seeing (VIP, gold, silver), so it only shows when a client has
+   one; "standard" or no tier reads as a quiet dash. */
+const TIER_HUE: Record<string, string> = { vip: "#7F77DD", gold: "#BA7517", silver: "#64748b" };
+export function TierPill({ tier }: { tier?: string | null }) {
+  const k = (tier || "").trim().toLowerCase();
+  if (!k || k === "standard") return <span className="text-ink-placeholder">—</span>;
+  const hue = TIER_HUE[k] || "#378ADD";
+  return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap" style={{ background: tint(hue), color: hueText(hue) }}>{k === "vip" ? "VIP" : humanize(tier)}</span>;
+}
 
 export default function ClientsHub() {
   const term = useTerminology();
@@ -34,6 +47,7 @@ export default function ClientsHub() {
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [printDlg, setPrintDlg] = useState(false);
+  const [printIds, setPrintIds] = useState<string[] | null>(null);   // one row's "Print label", else the selection
   const [mergePrev, setMergePrev] = useState<any>(null);
   const [merged, setMerged] = useState<{ logId: string; targetName: string; count: number } | null>(null);
 
@@ -70,6 +84,11 @@ export default function ClientsHub() {
     try { for (const id of sel) await api.del(`/clients/${id}`); clearSel(); loadClients(); }
     catch (e: any) { setErr(e.message || "Bulk delete failed"); }
     finally { setBulkBusy(false); }
+  }
+  async function deleteOne(c: Client) {
+    if (!(await confirmDialog(`Delete ${c.name || "this contact"}? This cannot be undone.`, { danger: true, confirmLabel: "Delete" }))) return;
+    try { await api.del(`/clients/${c.id}`); const n = new Set(sel); n.delete(c.id); setSel(n); loadClients(); }
+    catch (e: any) { setErr(e.message || "Delete failed"); }
   }
   async function bulkMerge() {
     const ids = [...sel];
@@ -141,14 +160,14 @@ export default function ClientsHub() {
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 flex flex-wrap items-center justify-between gap-3">
             {tab === "clients"
               ? <div className="flex items-center gap-2">
-                  {can("can_create_clients") && <button onClick={() => setNewClient(true)} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New client</button>}
-                  <label className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 text-xs font-semibold shadow-clay-sm flex items-center gap-1.5 cursor-pointer"><M n="open_in_new" c="text-sm" />Import CSV
+                  {can("can_create_clients") && <button onClick={() => setNewClient(true)} className={btnPrimary}><M n="add" c="text-sm" />New client</button>}
+                  <label className={`${btnGhost} bg-white cursor-pointer`}><M n="upload" c="text-sm" />Import CSV
                     <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) importCsv(f); e.target.value = ""; }} /></label>
                 </div>
-              : <button onClick={() => setNewSupplier(true)} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New supplier</button>}
+              : <button onClick={() => setNewSupplier(true)} className={btnPrimary}><M n="add" c="text-sm" />New supplier</button>}
             <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
               {tab === "clients" && <TagFilterChip value={tagId} onChange={(id) => { setTagId(id); clearSel(); }} />}
-              <div className="relative w-full sm:w-72"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" /><input value={q} onChange={(e) => setQ(e.target.value)} className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg font-medium" placeholder="Search name, phone or email…" /></div>
+              <div className="relative w-full sm:w-72"><M n="search" c="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" /><input value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search contacts" className="w-full h-9 bg-white border border-slate-200 rounded-lg pl-8 pr-3 text-xs text-ink-primary placeholder:text-ink-placeholder outline-none focus:border-primary focus:ring-2 focus:ring-primary/10" placeholder="Search name, phone or email…" /></div>
             </div>
           </div>
 
@@ -166,7 +185,7 @@ export default function ClientsHub() {
             <div className="bg-primary/5 rounded-2xl border border-primary/30 shadow-clay-sm px-4 py-2.5 flex flex-wrap items-center gap-2 text-xs font-semibold">
               <span className="text-primary">{sel.size} selected</span>
               <div className="flex-1" />
-              <button onClick={() => setPrintDlg(true)} disabled={bulkBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="print" c="text-sm" />Print</button>
+              <button onClick={() => { setPrintIds(null); setPrintDlg(true); }} disabled={bulkBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="print" c="text-sm" />Print</button>
               <button onClick={bulkExport} disabled={bulkBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="download" c="text-sm" />Export CSV</button>
               <button onClick={bulkMerge} disabled={bulkBusy || sel.size < 2} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 disabled:opacity-40 flex items-center gap-1"><M n="merge" c="text-sm" />Merge</button>
               <button onClick={bulkDelete} disabled={bulkBusy} className="px-3 py-1.5 rounded-lg bg-rose-600 text-white hover:bg-rose-700 flex items-center gap-1"><M n="delete" c="text-sm" />Delete</button>
@@ -176,39 +195,57 @@ export default function ClientsHub() {
 
           {tab === "clients" && (
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
+              <div className="overflow-x-auto">
+              <table className="w-full min-w-[860px] text-left border-collapse text-xs">
+                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-xs font-semibold">
                   <th className="py-3 pl-4 pr-1 w-8"><input type="checkbox" aria-label="Select all" checked={allSel} onChange={toggleAll} className="accent-primary cursor-pointer" /></th>
                   <th className="py-3 px-4">Client</th><th className="py-3 px-4">Phone</th><th className="py-3 px-4">Email</th>
-                  <th className="py-3 px-4">Tier</th><th className="py-3 px-4 text-right">Balance</th><th className="py-3 px-4">{term.assets}</th><th className="py-3 px-4">Orders</th><th className="py-3 px-4 w-12 text-center">Action</th>
+                  <th className="py-3 px-4">Tier</th><th className="py-3 px-4 text-right">Balance</th><th className="py-3 px-4">{term.assets}</th><th className="py-3 px-4">Orders</th><th className="py-3 pl-2 pr-3 w-12"><span className="sr-only">Actions</span></th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
                   {err && <tr><td colSpan={9} className="py-6 px-4 text-status-overdue-ink">Error: {err}</td></tr>}
                   {!rows && !err && <SkeletonRows cols={9} />}
-                  {rows && !err && cRows.length === 0 && <tr><td colSpan={9} className="py-6 px-4 text-ink-tertiary">{tagId ? "No clients with this tag." : "No clients found."}</td></tr>}
+                  {rows && !err && cRows.length === 0 && (
+                    <tr><td colSpan={9} className="py-10 px-4 text-center">
+                      {tagId || dq ? <p className="text-ink-tertiary">{tagId ? "No clients with this tag." : "No clients found."}</p> : (
+                        <div className="space-y-3">
+                          <p className="text-ink-secondary">No clients yet. Add one or import a CSV to start.</p>
+                          {can("can_create_clients") && <button onClick={() => setNewClient(true)} className={btnPrimary}><M n="add" c="text-sm" />New client</button>}
+                        </div>
+                      )}
+                    </td></tr>
+                  )}
                   {pageC.map((c) => (
-                    <tr key={c.id} className={`hover:bg-blue-50/40 cursor-pointer transition-colors ${sel.has(c.id) ? "bg-primary/5" : ""}`} onClick={() => setOpenClient(c.id)}>
+                    <tr key={c.id} className={`hover:bg-slate-50 cursor-pointer ${sel.has(c.id) ? "bg-primary/5" : ""}`} onClick={() => setOpenClient(c.id)}>
                       <td className="py-3 pl-4 pr-1" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label="Select row" checked={sel.has(c.id)} onChange={() => toggle(c.id)} className="accent-primary cursor-pointer" /></td>
-                      <td className="py-3 px-4 font-bold text-ink-primary">{c.name || "—"}</td>
-                      <td className="py-3 px-4 tabular-nums">{c.phone || "—"}</td>
+                      <td className="py-2.5 px-4"><span className="flex items-center gap-2.5 min-w-0"><Avatar name={/\p{L}/u.test(c.name || "") ? c.name : null} size={26} /><span className="font-semibold text-ink-primary truncate">{c.name || "—"}</span></span></td>
+                      <td className="py-3 px-4 tabular-nums whitespace-nowrap">{c.phone || "—"}</td>
                       <td className="py-3 px-4 text-ink-tertiary">{c.email || "—"}</td>
-                      <td className="py-3 px-4"><span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-purple-100 text-purple-800 border border-purple-200">{c.loyalty_tier?.toLowerCase() === "vip" ? "VIP" : humanize(c.loyalty_tier) || "Standard"}</span></td>
-                      <td className="py-3 px-4 text-right tabular-nums font-bold text-ink-primary">{money(c.balance ?? 0)}</td>
+                      <td className="py-3 px-4"><TierPill tier={c.loyalty_tier} /></td>
+                      <td className="py-3 px-4 text-right tabular-nums font-semibold text-ink-primary">{money(c.balance ?? 0)}</td>
                       <td className="py-3 px-4 tabular-nums font-semibold text-ink-primary">{c.devices?.length ?? 0}</td>
                       <td className="py-3 px-4 tabular-nums font-semibold text-ink-primary">{c.order_count ?? 0}</td>
-                      <td className="py-3 px-4 text-center"><M n="chevron_right" c="text-sm text-ink-tertiary" /></td>
+                      <td className="py-1.5 pl-2 pr-3" onClick={(e) => e.stopPropagation()}>
+                        <MoreMenu label={`More actions for ${c.name || "client"}`} items={[
+                          { label: "Open", icon: "open_in_new", onClick: () => setOpenClient(c.id) },
+                          { label: "Print label", icon: "print", onClick: () => { setPrintIds([c.id]); setPrintDlg(true); } },
+                          { label: "Delete", icon: "delete", danger: true, onClick: () => deleteOne(c) },
+                        ]} />
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              </div>
               {rows && cRows.length > 0 && <Pager total={cp.total} page={cp.page} pageSize={cp.pageSize} onPage={cp.setPage} noun="clients" />}
             </div>
           )}
 
           {tab === "suppliers" && (
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
+              <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-left border-collapse text-xs">
+                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-xs font-semibold">
                   <th className="py-3 px-4">Supplier</th><th className="py-3 px-4">Contact</th><th className="py-3 px-4">Phone</th><th className="py-3 px-4">Email</th>
                   <th className="py-3 px-4 text-right">Lead days</th><th className="py-3 px-4 text-right">Balance</th>
                 </tr></thead>
@@ -216,17 +253,18 @@ export default function ClientsHub() {
                   {!suppliers && <SkeletonRows cols={6} />}
                   {suppliers && sRows.length === 0 && <tr><td colSpan={6} className="py-6 px-4 text-ink-tertiary">No suppliers yet.</td></tr>}
                   {pageS.map((s) => (
-                    <tr key={s.id} onClick={() => s.client_id ? setOpenClient(s.client_id) : setOpenSupplier(s)} className="hover:bg-blue-50/40 transition-colors cursor-pointer">
-                      <td className="py-3 px-4 font-bold text-ink-primary">{s.name || "—"}</td>
+                    <tr key={s.id} onClick={() => s.client_id ? setOpenClient(s.client_id) : setOpenSupplier(s)} className="hover:bg-slate-50 cursor-pointer">
+                      <td className="py-3 px-4 font-semibold text-ink-primary">{s.name || "—"}</td>
                       <td className="py-3 px-4">{s.contact_name || "—"}</td>
                       <td className="py-3 px-4 tabular-nums">{s.phone || "—"}</td>
                       <td className="py-3 px-4 text-ink-tertiary">{s.email || "—"}</td>
                       <td className="py-3 px-4 text-right tabular-nums">{s.lead_days ?? "—"}</td>
-                      <td className="py-3 px-4 text-right tabular-nums font-bold text-ink-primary">{money(s.balance ?? 0)}</td>
+                      <td className="py-3 px-4 text-right tabular-nums font-semibold text-ink-primary">{money(s.balance ?? 0)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              </div>
               {suppliers && sRows.length > 0 && <Pager total={sRows.length} page={Math.min(listPage, sPages)} pageSize={PAGE_SIZE} onPage={setListPage} noun="suppliers" />}
             </div>
           )}
@@ -237,7 +275,7 @@ export default function ClientsHub() {
       {newClient && <NewClientDrawer onClose={() => setNewClient(false)} onCreated={() => { setNewClient(false); loadClients(); }} />}
       {newSupplier && <NewSupplierDrawer onClose={() => setNewSupplier(false)} onCreated={() => { setNewSupplier(false); loadSuppliers(); }} />}
       {openSupplier && <SupplierDrawer supplier={openSupplier} onClose={() => setOpenSupplier(null)} onSaved={loadSuppliers} />}
-      <BulkPrintDialog open={printDlg} onClose={() => setPrintDlg(false)} ids={[...sel]} noun="client"
+      <BulkPrintDialog open={printDlg} onClose={() => { setPrintDlg(false); setPrintIds(null); }} ids={printIds ?? [...sel]} noun="client"
         endpoint="/documents/render-client-labels" idKey="client_ids"
         docTypes={["client_label", "label", "contact_card"]} />
       {mergePrev && <MergePreviewDialog preview={mergePrev} busy={bulkBusy} onCancel={() => setMergePrev(null)} onConfirm={confirmMerge} />}
