@@ -15,7 +15,9 @@ const primary = `${btn} bg-primary text-white hover:brightness-110`;
 const ghost = `${btn} border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50`;
 
 export type TwilioState = { connected: boolean; mode: "test" | "live" | null; test_mode: boolean; live_allowed: boolean; voice_url: string; status_url: string; test_number: string };
-export type TelConfig = { provider: string; enabled: boolean; caller_id_number: string | null; forward_to: string | null; twilio: TwilioState };
+export type Destinations = { default: string[]; override: string[] | null; effective: string[] };
+export type TelConfig = { provider: string; enabled: boolean; caller_id_number: string | null; forward_to: string | null; destinations?: Destinations; twilio: TwilioState };
+const codes = (list: string[] | null | undefined) => (list || []).map((p) => `+${p}`).join(", ");
 export type ContactAuto = { enabled: boolean; config: { direction: "incoming" | "all"; tag_ids: string[]; assign_manager: boolean } };
 type Tag = { id: string; name: string; color: string };
 
@@ -54,7 +56,7 @@ export default function TelephonySettings() {
   const [tags, setTags] = useState<Tag[]>([]);
   const [loadErr, setLoadErr] = useState<string | null>(null);
 
-  const [form, setForm] = useState({ provider: "simulated", enabled: false, caller_id_number: "", forward_to: "" });
+  const [form, setForm] = useState({ provider: "simulated", enabled: false, caller_id_number: "", forward_to: "", allowed: "" });
   const [creds, setCreds] = useState({ account_sid: "", auth_token: "" });
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string; where: string } | null>(null);
@@ -62,7 +64,7 @@ export default function TelephonySettings() {
 
   function apply(c: TelConfig) {
     setCfg(c);
-    setForm({ provider: c.provider, enabled: c.enabled, caller_id_number: c.caller_id_number || "", forward_to: c.forward_to || "" });
+    setForm({ provider: c.provider, enabled: c.enabled, caller_id_number: c.caller_id_number || "", forward_to: c.forward_to || "", allowed: codes(c.destinations?.override) });
   }
   function load() {
     setLoadErr(null);
@@ -80,7 +82,7 @@ export default function TelephonySettings() {
   }
 
   const saveConfig = () => run("config", async () => {
-    apply(await api.put<TelConfig>("/telephony/config", { provider: form.provider, enabled: form.enabled, caller_id_number: form.caller_id_number.trim() || null, forward_to: form.forward_to.trim() || null }));
+    apply(await api.put<TelConfig>("/telephony/config", { provider: form.provider, enabled: form.enabled, caller_id_number: form.caller_id_number.trim() || null, forward_to: form.forward_to.trim() || null, allowed_prefixes: form.allowed.split(/[,\s]+/).filter(Boolean) }));
     return "Saved.";
   });
   const connect = () => run("twilio", async () => {
@@ -147,6 +149,12 @@ export default function TelephonySettings() {
                   <input id="tel-forward" className={field} inputMode="tel" value={form.forward_to} onChange={(e) => setForm({ ...form, forward_to: e.target.value })} placeholder="Front desk phone" />
                 </div>
               )}
+              <div className="sm:col-span-2">
+                <label htmlFor="tel-allowed" className={lbl}>Countries staff can call</label>
+                <input id="tel-allowed" className={field} value={form.allowed} onChange={(e) => setForm({ ...form, allowed: e.target.value })}
+                  placeholder={cfg.destinations?.default.length ? `Your country only (${codes(cfg.destinations.default)})` : "Calling codes, e.g. +1, +44"} />
+                <p className="mt-1 text-[11px] text-ink-tertiary">Calling codes separated by commas. Leave empty to allow only your own country{cfg.destinations?.default.length ? ` (${codes(cfg.destinations.default)})` : ""}. This guards against toll fraud; in Twilio also limit Voice Geo Permissions to the same countries.</p>
+              </div>
             </div>
             {form.provider === "twilio" && <p className="text-[11px] text-ink-tertiary">Click-to-call rings the phone number on your own profile first, then connects the customer. With no number to ring, callers hear that you'll call them back.</p>}
             {note("config")}

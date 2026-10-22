@@ -1,10 +1,11 @@
 // D1 — click-to-call. Shown only when the shop has calling turned on (Settings → Integrations →
-// Calls & telephony). With Twilio it rings the employee's own phone first, then connects the
+// Calls & telephony) and the person's role has "Place phone calls". With Twilio it rings the employee's own phone first, then connects the
 // customer; with the simulated provider it just logs the call.
 import { useEffect, useState } from "react";
 import { M } from "./Shell";
 import { api } from "../api/client";
 import { alertDialog } from "../lib/dialog";
+import { useMe } from "../context/Me";
 
 let enabledOnce: Promise<boolean> | null = null;   // one config read per page load
 function callingEnabled(): Promise<boolean> {
@@ -14,10 +15,15 @@ function callingEnabled(): Promise<boolean> {
 export function _resetCallingCache() { enabledOnce = null; }   // tests
 
 export default function CallButton({ phone, clientId }: { phone?: string | null; clientId?: string }) {
+  const { can } = useMe();
+  const allowed = can("can_make_calls");
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
-  useEffect(() => { let live = true; callingEnabled().then((v) => live && setOn(v)); return () => { live = false; }; }, []);
-  if (!on || !(phone || "").trim()) return null;
+  useEffect(() => {
+    if (!allowed) return;
+    let live = true; callingEnabled().then((v) => live && setOn(v)); return () => { live = false; };
+  }, [allowed]);
+  if (!allowed || !on || !(phone || "").trim()) return null;
   async function call() {
     setBusy(true);
     try {

@@ -260,7 +260,7 @@ async def test_simulated_provider_still_works(client, tenant):
 async def test_click_to_call_other_orgs_client_is_404(client, tenant):
     other = await second_tenant(client)
     cid = (await client.post("/api/clients", json={"name": "B", "phone": "+15551112222"}, headers=other)).json()["id"]
-    await client.put("/api/telephony/config", json={"provider": "simulated", "enabled": True}, headers=tenant)
+    await client.put("/api/telephony/config", json={"provider": "simulated", "enabled": True, "caller_id_number": "+15550000000"}, headers=tenant)
     r = await client.post("/api/telephony/call", json={"to_number": "+15551112222", "client_id": cid}, headers=tenant)
     assert r.status_code == 404
 
@@ -395,7 +395,7 @@ async def test_unknown_caller_becomes_tagged_contact_with_manager(client, tenant
 
 @pytest.mark.asyncio
 async def test_existing_contact_matched_by_normalised_phone(client, tenant):
-    await client.put("/api/telephony/config", json={"provider": "simulated", "enabled": True}, headers=tenant)
+    await client.put("/api/telephony/config", json={"provider": "simulated", "enabled": True, "caller_id_number": "+15550000000"}, headers=tenant)
     await enable_contacts(client, tenant)
     cid = (await client.post("/api/clients", json={"name": "Dana", "phone": "(415) 555-0100"}, headers=tenant)).json()["id"]
     for num in ("+1 415 555 0100", "+14155550100", "4155550100"):
@@ -407,7 +407,7 @@ async def test_existing_contact_matched_by_normalised_phone(client, tenant):
 
 @pytest.mark.asyncio
 async def test_repeat_unknown_caller_never_duplicates(client, tenant):
-    await client.put("/api/telephony/config", json={"provider": "simulated", "enabled": True}, headers=tenant)
+    await client.put("/api/telephony/config", json={"provider": "simulated", "enabled": True, "caller_id_number": "+15550000000"}, headers=tenant)
     await enable_contacts(client, tenant)
     first = (await client.post("/api/telephony/simulate/inbound", json={"from_number": "+447700900123"}, headers=tenant)).json()
     again = (await client.post("/api/telephony/simulate/inbound", json={"from_number": "07700 900123"}, headers=tenant)).json()
@@ -417,7 +417,7 @@ async def test_repeat_unknown_caller_never_duplicates(client, tenant):
 
 @pytest.mark.asyncio
 async def test_automation_off_or_direction_incoming_only(client, tenant):
-    await client.put("/api/telephony/config", json={"provider": "simulated", "enabled": True}, headers=tenant)
+    await client.put("/api/telephony/config", json={"provider": "simulated", "enabled": True, "caller_id_number": "+15550000000"}, headers=tenant)
     r = (await client.post("/api/telephony/simulate/inbound", json={"from_number": "+14155550100"}, headers=tenant)).json()
     assert r["client_id"] is None                       # off by default
     await enable_contacts(client, tenant, direction="incoming")
@@ -430,7 +430,7 @@ async def test_automation_off_or_direction_incoming_only(client, tenant):
 
 @pytest.mark.asyncio
 async def test_manager_is_caller_for_outbound_else_extension_owner(client, tenant, db):
-    await client.put("/api/telephony/config", json={"provider": "simulated", "enabled": True}, headers=tenant)
+    await client.put("/api/telephony/config", json={"provider": "simulated", "enabled": True, "caller_id_number": "+15550000000"}, headers=tenant)
     await enable_contacts(client, tenant, direction="all")
     me = (await client.get("/api/auth/me", headers=tenant)).json()
     out = (await client.post("/api/telephony/call", json={"to_number": "+14155550177"}, headers=tenant)).json()
@@ -526,7 +526,7 @@ def test_number_matching_rules():
 
 @pytest.mark.asyncio
 async def test_match_survives_formatting_that_splits_the_last_digits(client, tenant):
-    await client.put("/api/telephony/config", json={"provider": "simulated", "enabled": True}, headers=tenant)
+    await client.put("/api/telephony/config", json={"provider": "simulated", "enabled": True, "caller_id_number": "+15550000000"}, headers=tenant)
     await enable_contacts(client, tenant)
     cid = (await client.post("/api/clients", json={"name": "Jonas", "phone": "+49 30 12 34 56"}, headers=tenant)).json()["id"]
     r = (await client.post("/api/telephony/simulate/inbound", json={"from_number": "+4930123456"}, headers=tenant)).json()
@@ -539,7 +539,7 @@ async def test_status_callbacks_still_land_after_switching_provider(client, tena
     org = await org_of(client, tenant)
     await post_signed(client, f"/api/comms/twilio/voice?org_id={org}", inbound())
     call = (await db.execute(select(Call).where(Call.org_id == org))).scalar_one()
-    await client.put("/api/telephony/config", json={"provider": "simulated", "enabled": True}, headers=tenant)
+    await client.put("/api/telephony/config", json={"provider": "simulated", "enabled": True, "caller_id_number": "+15550000000"}, headers=tenant)
     # new calls are refused, but the in-flight call still gets its outcome
     assert (await post_signed(client, f"/api/comms/twilio/voice?org_id={org}", inbound(sid="CA" + "2" * 32))).status_code == 404
     r = await post_signed(client, f"/api/comms/twilio/status?org_id={org}&call_id={call.id}", inbound(DialCallStatus="completed"))
@@ -614,3 +614,121 @@ async def test_rejected_twilio_call_creates_no_contact(client, tenant, fake_twil
     assert r.status_code == 502 and "21211" in r.json()["detail"]
     org = await org_of(client, tenant)
     assert not (await db.execute(select(Client).where(Client.org_id == org))).scalars().all()
+
+
+# ── Integration review S3: click-to-call toll-fraud guards ───────────────────
+async def sim_on(client, h, **extra):
+    r = await client.put("/api/telephony/config", json={
+        "provider": "simulated", "enabled": True, "caller_id_number": "+15550000000", **extra}, headers=h)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+@pytest.mark.asyncio
+async def test_click_to_call_needs_can_make_calls(client, tenant):
+    await sim_on(client, tenant)
+    h = await limited(client, tenant, "nocalls@test.dev", deny=("can_make_calls",))
+    r = await client.post("/api/telephony/call", json={"to_number": "+14155550100"}, headers=h)
+    assert r.status_code == 403
+
+
+def test_partner_template_cannot_call_and_new_roles_can():
+    from backend.services.permissions import new_role_permissions
+    assert new_role_permissions("Partner")["can_make_calls"] is False
+    assert new_role_permissions("Specialist")["can_make_calls"] is True
+    assert new_role_permissions()["can_create_clients"] is True
+
+
+@pytest.mark.asyncio
+async def test_destinations_default_to_the_shops_country(client, tenant, db):
+    from backend.models import Organisation
+    await sim_on(client, tenant)
+    body = (await client.get("/api/telephony/config", headers=tenant)).json()
+    assert body["destinations"] == {"default": ["1"], "override": None, "effective": ["1"]}
+    assert (await client.post("/api/telephony/call", json={"to_number": "+14155550100"}, headers=tenant)).status_code == 201
+    r = await client.post("/api/telephony/call", json={"to_number": "+882 1234 5678"}, headers=tenant)   # satellite / premium
+    assert r.status_code == 403 and "+1" in r.json()["detail"]
+    assert (await client.post("/api/telephony/call", json={"to_number": "+44 20 7946 0958"}, headers=tenant)).status_code == 403
+    # the company country wins over the caller ID
+    org = await db.get(Organisation, await org_of(client, tenant))
+    org.country = "GB"
+    await db.commit()
+    assert (await client.post("/api/telephony/call", json={"to_number": "+44 20 7946 0958"}, headers=tenant)).status_code == 201
+    assert (await client.post("/api/telephony/call", json={"to_number": "+14155550100"}, headers=tenant)).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_destination_override_set_in_settings(client, tenant):
+    body = await sim_on(client, tenant, allowed_prefixes=["+1", "0044"])
+    assert body["destinations"]["effective"] == ["1", "44"]
+    assert (await client.post("/api/telephony/call", json={"to_number": "+44 20 7946 0958"}, headers=tenant)).status_code == 201
+    assert (await client.put("/api/telephony/config", json={"provider": "simulated", "enabled": True,
+            "allowed_prefixes": ["UK"]}, headers=tenant)).status_code == 422
+    # saving without the field keeps the override; [] goes back to the default
+    assert (await sim_on(client, tenant))["destinations"]["override"] == ["1", "44"]
+    assert (await sim_on(client, tenant, allowed_prefixes=[]))["destinations"]["override"] is None
+
+
+@pytest.mark.asyncio
+async def test_click_to_call_is_rate_limited_per_employee(client, tenant):
+    await sim_on(client, tenant)
+    codes = [(await client.post("/api/telephony/call", json={"to_number": f"+1415555{i:04d}"}, headers=tenant)).status_code
+             for i in range(8)]
+    assert codes[:6] == [201] * 6 and codes[6] == 429
+
+
+@pytest.mark.asyncio
+async def test_click_to_call_is_rate_limited_per_shop(client, tenant, monkeypatch):
+    from backend.routers import telephony
+    monkeypatch.setattr(telephony, "ORG_CALL_LIMIT", ("call-org-hour", 2, 3600))
+    await sim_on(client, tenant)
+    other = await limited(client, tenant, "caller2@test.dev", deny=())
+    assert (await client.post("/api/telephony/call", json={"to_number": "+14155550001"}, headers=tenant)).status_code == 201
+    assert (await client.post("/api/telephony/call", json={"to_number": "+14155550002"}, headers=other)).status_code == 201
+    assert (await client.post("/api/telephony/call", json={"to_number": "+14155550003"}, headers=other)).status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_outbound_auto_create_respects_can_create_clients(client, tenant, db):
+    await sim_on(client, tenant)
+    await enable_contacts(client, tenant, direction="all")
+    h = await limited(client, tenant, "nocreate@test.dev", deny=("can_create_clients",))
+    r = (await client.post("/api/telephony/call", json={"to_number": "+14155550123"}, headers=h)).json()
+    assert r["client_id"] is None and r["client_created"] is False
+    assert (await client.post("/api/clients", json={"name": "X", "phone": "1"}, headers=h)).status_code == 403
+    # an existing contact is still matched
+    cid = (await client.post("/api/clients", json={"name": "Known", "phone": "+14155550124"}, headers=tenant)).json()["id"]
+    r = (await client.post("/api/telephony/call", json={"to_number": "+14155550124"}, headers=h)).json()
+    assert r["client_id"] == cid
+
+
+def _opd1():
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        "opd1", Path(__file__).resolve().parents[1] / "migrations/versions/opd1_twilio_voice.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_opd1_grants_calls_only_to_roles_that_reply_to_customers(monkeypatch):
+    import sqlalchemy as sa
+    eng = sa.create_engine("sqlite://")
+    with eng.begin() as conn:
+        conn.execute(sa.text("CREATE TABLE roles (id TEXT, permissions JSON, perms_explicit BOOLEAN)"))
+        rows = [("desk", {"can_reply_customer": True}, True), ("tech", {"can_reply_customer": False}, True),
+                ("legacy", {}, False), ("legacy-mute", {"can_reply_customer": False}, False),
+                ("admin", {"all": "write"}, False)]
+        for rid, p, ex in rows:
+            conn.execute(sa.text("INSERT INTO roles VALUES (:i, :p, :e)").bindparams(sa.bindparam("p", type_=sa.JSON())),
+                         {"i": rid, "p": p, "e": ex})
+        mod = _opd1()
+        monkeypatch.setattr(mod.op, "get_bind", lambda: conn, raising=False)
+        mod._grant_role_perms()
+        got = {r[0]: json.loads(r[1]) for r in conn.execute(sa.text("SELECT id, permissions FROM roles"))}
+    assert got["desk"]["can_make_calls"] is True and got["desk"]["can_create_clients"] is True
+    assert got["tech"]["can_make_calls"] is False and got["tech"]["can_create_clients"] is True
+    assert "can_make_calls" not in got["legacy"]                 # legacy deny-list: absent = allowed
+    assert got["legacy-mute"]["can_make_calls"] is False
+    assert got["admin"] == {"all": "write"}

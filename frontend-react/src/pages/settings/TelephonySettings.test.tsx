@@ -103,6 +103,22 @@ describe("TelephonySettings", () => {
       .toEqual({ enabled: true, direction: "all", tag_ids: ["t2"], assign_manager: true }));
   });
 
+  it("saves the countries staff can call, defaulting to the shop's own code", async () => {
+    const u = userEvent.setup();
+    serve(base((m, url, b) => {
+      if (url.endsWith("/telephony/config") && m === "GET") return cfg({ destinations: { default: ["1"], override: null, effective: ["1"] } });
+      if (m === "PUT" && url.endsWith("/telephony/config")) return cfg({ destinations: { default: ["1"], override: b.allowed_prefixes.map((p: string) => p.replace("+", "")), effective: ["1", "44"] } });
+      return undefined;
+    }));
+    render(<TelephonySettings />);
+    const input = await screen.findByLabelText("Countries staff can call");
+    expect(input).toHaveAttribute("placeholder", "Your country only (+1)");
+    await u.type(input, "+1, +44");
+    await u.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls.find((c) => c.method === "PUT" && c.url.endsWith("/telephony/config"))?.body.allowed_prefixes).toEqual(["+1", "+44"]));
+    expect(await screen.findByDisplayValue("+1, +44")).toBeInTheDocument();
+  });
+
   it("simulates an inbound call and says a contact was created", async () => {
     const u = userEvent.setup();
     serve(base((m, url) => (m === "POST" && url.endsWith("/simulate/inbound") ? { id: "c1", client_id: "x", client_created: true, matched: false } : undefined)));

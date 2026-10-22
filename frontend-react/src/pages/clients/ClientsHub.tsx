@@ -15,12 +15,14 @@ import Pager from "../../components/Pager";
 import { useDebounced, useServerPage } from "../../hooks/useServerPage";
 import { confirmDialog, alertDialog } from "../../lib/dialog";
 import TagFilterChip from "./TagFilterChip";
+import { useMe } from "../../context/Me";
 
 type Client = { id: string; name?: string; phone?: string; email?: string; loyalty_tier?: string; balance?: number; devices?: any[]; order_count?: number };
 type Tab = "clients" | "suppliers";
 
 export default function ClientsHub() {
   const term = useTerminology();
+  const { can } = useMe();
   const [tab, setTab] = useState<Tab>("clients");
   const [suppliers, setSuppliers] = useState<Supplier[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -139,7 +141,7 @@ export default function ClientsHub() {
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 flex flex-wrap items-center justify-between gap-3">
             {tab === "clients"
               ? <div className="flex items-center gap-2">
-                  <button onClick={() => setNewClient(true)} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New client</button>
+                  {can("can_create_clients") && <button onClick={() => setNewClient(true)} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New client</button>}
                   <label className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 text-xs font-semibold shadow-clay-sm flex items-center gap-1.5 cursor-pointer"><M n="open_in_new" c="text-sm" />Import CSV
                     <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) importCsv(f); e.target.value = ""; }} /></label>
                 </div>

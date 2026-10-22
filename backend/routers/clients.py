@@ -150,7 +150,7 @@ async def list_clients(
 async def create_client(
     data: ClientIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_clients")),
 ):
     from backend.models import Organisation
     org = (await db.execute(select(Organisation).where(

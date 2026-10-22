@@ -62,6 +62,57 @@ def format_phone(number: str) -> str:
     return (number or "").strip() or "Unknown caller"
 
 
+# ── Outbound destinations (integration review S3: toll fraud) ────────────────
+# Country → international calling code. Click-to-call only reaches the shop's own country by
+# default; a shop adds others in Settings → Calls & telephony.
+CALLING_CODES = {
+    "US": "1", "CA": "1", "PR": "1", "GB": "44", "IE": "353", "AU": "61", "NZ": "64", "IN": "91",
+    "AE": "971", "SA": "966", "QA": "974", "KW": "965", "BH": "973", "OM": "968", "EG": "20",
+    "ZA": "27", "NG": "234", "KE": "254", "DE": "49", "FR": "33", "ES": "34", "IT": "39",
+    "PT": "351", "NL": "31", "BE": "32", "LU": "352", "CH": "41", "AT": "43", "DK": "45",
+    "SE": "46", "NO": "47", "FI": "358", "IS": "354", "PL": "48", "CZ": "420", "SK": "421",
+    "HU": "36", "RO": "40", "BG": "359", "GR": "30", "HR": "385", "SI": "386", "RS": "381",
+    "UA": "380", "TR": "90", "IL": "972", "JO": "962", "LB": "961", "PK": "92", "BD": "880",
+    "LK": "94", "NP": "977", "SG": "65", "MY": "60", "TH": "66", "VN": "84", "PH": "63",
+    "ID": "62", "HK": "852", "TW": "886", "JP": "81", "KR": "82", "CN": "86", "MX": "52",
+    "BR": "55", "AR": "54", "CL": "56", "CO": "57", "PE": "51",
+}
+_KNOWN_CODES = sorted(set(CALLING_CODES.values()), key=len, reverse=True)
+
+
+def code_for_number(number: Optional[str]) -> Optional[str]:
+    """The calling code an international-format number starts with (longest known match)."""
+    if not _intl(number):
+        return None
+    d = digits(number)
+    return next((c for c in _KNOWN_CODES if d.startswith(c)), None)
+
+
+def clean_prefixes(values) -> list[str]:
+    """'+44', '44 ', '0044' → '44'; drops anything that isn't 1–4 digits."""
+    out = []
+    for v in values or []:
+        d = re.sub(r"\D", "", str(v))
+        d = d[2:] if str(v).strip().startswith("00") else d
+        if 1 <= len(d) <= 4 and d not in out:
+            out.append(d)
+    return out
+
+
+def default_prefixes(country: Optional[str], caller_id: Optional[str]) -> list[str]:
+    code = CALLING_CODES.get((country or "").upper()) or code_for_number(caller_id)
+    return [code] if code else []
+
+
+def destination_allowed(number: str, prefixes: list[str]) -> bool:
+    """National-format numbers stay inside the shop's own country; an international number
+    must start with one of the allowed calling codes."""
+    if not _intl(number):
+        return True
+    d = digits(number)
+    return any(d.startswith(p) for p in prefixes)
+
+
 async def find_client(db: AsyncSession, org_id: str, number: Optional[str], *,
                       newest: bool = False) -> Optional[Client]:
     d = digits(number)
@@ -125,9 +176,11 @@ async def _lock_number(db: AsyncSession, org_id: str, number: Optional[str]) -> 
     await db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": key})
 
 
-async def link_call(db: AsyncSession, call: Call, *, extension: Optional[str] = None) -> dict:
+async def link_call(db: AsyncSession, call: Call, *, extension: Optional[str] = None,
+                    may_create: bool = True) -> dict:
     """Set call.client_id from the caller/callee number, creating the contact when the
-    automation allows it. Flushes but does not commit. Returns {"client_id", "created"}."""
+    automation allows it (and may_create: the caller's role may create contacts).
+    Flushes but does not commit. Returns {"client_id", "created"}."""
     number = call.from_number if call.direction == "inbound" else call.to_number
     await _lock_number(db, call.org_id, number)
     existing = await find_client(db, call.org_id, number)
@@ -138,7 +191,7 @@ async def link_call(db: AsyncSession, call: Call, *, extension: Optional[str] = 
         return {"client_id": None, "created": False}
     auto = await settings_for(db, call.org_id)
     cfg = auto["config"]
-    if not auto["enabled"] or (call.direction != "inbound" and cfg["direction"] != "all"):
+    if not may_create or not auto["enabled"] or (call.direction != "inbound" and cfg["direction"] != "all"):
         return {"client_id": None, "created": False}
 
     manager_id = None

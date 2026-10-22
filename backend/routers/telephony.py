@@ -16,9 +16,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
-from backend.models import AutomationSetting, Call, Client, Employee, Tag, TelephonyConfig
-from backend.services import call_contacts, org_creds, twilio_voice
-from backend.services.auth import get_current_employee, require_perm
+from backend.models import AutomationSetting, Call, Client, Employee, Organisation, Tag, TelephonyConfig
+from backend.services import call_contacts, org_creds, ratelimit, twilio_voice
+from backend.services.auth import get_current_employee, has_perm, require_perm
 
 router = APIRouter(prefix="/api/telephony", tags=["telephony"])
 
@@ -43,11 +43,23 @@ async def twilio_status(db: AsyncSession, org_id: str) -> dict:
             "test_number": twilio_voice.TEST_FROM_NUMBER}
 
 
+async def allowed_prefixes(db: AsyncSession, org_id: str, c: Optional[TelephonyConfig]) -> dict:
+    """Calling codes click-to-call may reach: the shop's override, else its own country's code
+    (from the company country, else the caller-ID number)."""
+    country = (await db.execute(select(Organisation.country).where(
+        Organisation.id == org_id))).scalar_one_or_none()
+    default = call_contacts.default_prefixes(country, c.caller_id_number if c else None)
+    override = (c.config or {}).get("allowed_prefixes") if c else None
+    override = call_contacts.clean_prefixes(override) if override else None
+    return {"default": default, "override": override, "effective": override or default}
+
+
 async def _ser_cfg(db: AsyncSession, org_id: str, c: Optional[TelephonyConfig]) -> dict:
     cfg = (c.config or {}) if c else {}
     return {"provider": c.provider if c else "simulated", "enabled": bool(c and c.enabled),
             "caller_id_number": c.caller_id_number if c else None,
             "forward_to": cfg.get("forward_to"),
+            "destinations": await allowed_prefixes(db, org_id, c),
             "twilio": await twilio_status(db, org_id)}
 
 
@@ -63,6 +75,9 @@ class ConfigIn(BaseModel):
     caller_id_number: Optional[str] = Field(None, max_length=40)
     forward_to: Optional[str] = Field(None, max_length=40)   # where inbound Twilio calls ring
     config: Optional[dict] = None                          # legacy; only forward_to is kept
+    # S3: international calling codes click-to-call may reach ("+44"). None keeps the current
+    # setting; [] goes back to the default (the shop's own country only).
+    allowed_prefixes: Optional[list[str]] = Field(None, max_length=30)
 
 
 @router.put("/config")
@@ -88,8 +103,15 @@ async def set_config(data: ConfigIn, db: AsyncSession = Depends(get_db),
     c.provider = data.provider
     c.enabled = data.enabled
     c.caller_id_number = number
-    kept = {k: v for k, v in (c.config or {}).items() if k != "forward_to"}   # other providers' keys
-    c.config = {**kept, **({"forward_to": forward} if forward else {})}
+    prefixes = (c.config or {}).get("allowed_prefixes")
+    if data.allowed_prefixes is not None:
+        prefixes = call_contacts.clean_prefixes(data.allowed_prefixes)
+        if len(prefixes) != len([p for p in data.allowed_prefixes if str(p).strip()]):
+            raise HTTPException(422, "Enter calling codes like +1 or +44")
+    kept = {k: v for k, v in (c.config or {}).items()
+            if k not in ("forward_to", "allowed_prefixes")}            # other providers' keys
+    c.config = {**kept, **({"forward_to": forward} if forward else {}),
+                **({"allowed_prefixes": prefixes} if prefixes else {})}
     await db.commit()
     return await _ser_cfg(db, current.org_id, c)
 
@@ -160,25 +182,40 @@ class CallOut(BaseModel):
     client_id: Optional[str] = None
 
 
+# S3: toll-fraud brakes. A person can't burst-dial, and a whole shop has a ceiling too.
+CALL_LIMITS = (("call-emp-min", 6, 60), ("call-emp-hour", 60, 3600))
+ORG_CALL_LIMIT = ("call-org-hour", 300, 3600)
+
+
 @router.post("/call", status_code=201)
 async def click_to_call(data: CallOut, db: AsyncSession = Depends(get_db),
-                        current: Employee = Depends(get_current_employee)):
+                        current: Employee = Depends(require_perm("can_make_calls"))):
     """Place an outbound call. Simulated: logs a completed Call. Twilio: rings the
     employee's own phone first, then connects them to the customer (the voice webhook
-    returns the <Dial>). Matches — or, per the automation, creates — the contact."""
+    returns the <Dial>). Matches — or, per the automation, creates — the contact.
+    Guarded against toll fraud: can_make_calls, destinations limited to the shop's allowed
+    calling codes, and per-employee / per-shop rate limits."""
     to = (data.to_number or "").strip()
-    if not to:
+    if len(call_contacts.digits(to)) < 3:
         raise HTTPException(400, "A number is required")
     cfg = await _cfg(db, current.org_id)
     if not (cfg and cfg.enabled):
         raise HTTPException(409, "Telephony is not enabled for this company")
     provider = cfg.provider
-
     if data.client_id:
         cl = (await db.execute(select(Client).where(
             Client.id == data.client_id, Client.org_id == current.org_id))).scalar_one_or_none()
         if not cl:
             raise HTTPException(404, "Client not found")
+    dest = await allowed_prefixes(db, current.org_id, cfg)
+    if not call_contacts.destination_allowed(to, dest["effective"]):
+        allowed = ", ".join(f"+{p}" for p in dest["effective"]) or "none"
+        raise HTTPException(403, f"Calls to this country aren't allowed (allowed: {allowed}). "
+                                 "An admin can add it in Settings → Integrations → Calls & telephony.")
+    for bucket, limit, window in CALL_LIMITS:
+        await ratelimit.aenforce(bucket, current.id, limit, window)
+    await ratelimit.aenforce(ORG_CALL_LIMIT[0], current.org_id, ORG_CALL_LIMIT[1], ORG_CALL_LIMIT[2])
+
 
     creds = {}
     if provider == "twilio":
@@ -204,7 +241,8 @@ async def click_to_call(data: CallOut, db: AsyncSession = Depends(get_db),
         if data.client_id:
             call.client_id = data.client_id
         else:
-            created = (await call_contacts.link_call(db, call))["created"]
+            created = (await call_contacts.link_call(
+                db, call, may_create=await has_perm(db, current, "can_create_clients")))["created"]
 
     if provider != "twilio":
         await link()

@@ -19,6 +19,7 @@ CATALOG = {
         ("display_in_managers", "Display in the Managers list"),
         ("display_in_assignees", "Display in the Assignee list"),
         ("can_send_sms", "Send SMS"),
+        ("can_make_calls", "Place phone calls (click-to-call)"),
         ("can_see_asset_cost", "See an asset cost"),
         ("can_config_exceptional_commissions", "Configure exceptional commissions"),
         ("can_view_own_compensation", "View their own compensation"),
@@ -30,6 +31,7 @@ CATALOG = {
         ("can_transfer_tickets", "Transfer tickets"),
         ("can_delete_tickets", "Delete tickets"),
         ("can_assign_staff", "Assign managers and technicians"),
+        ("can_create_clients", "Create contacts (incl. from outbound calls)"),
         ("can_view_client_info", "View the client info"),
         ("can_view_asset_info", "View the asset info"),
         ("can_view_item_prices", "View prices of labors, services, products"),
@@ -169,7 +171,7 @@ TEMPLATES = {
     "Full access": {},                       # nothing denied
     "Manager": {"can_delete_transactions": False, "can_manage_roles": False},
     "Partner": {"can_manage_settings": False, "can_manage_roles": False,
-                "can_manage_employees": False, **_NOT_FOR_STAFF},
+                "can_manage_employees": False, "can_make_calls": False, **_NOT_FOR_STAFF},
     "Specialist": {"can_manage_settings": False, "can_manage_roles": False,
                    "can_manage_employees": False, **_NOT_FOR_STAFF},
 }
