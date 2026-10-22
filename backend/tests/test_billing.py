@@ -376,7 +376,8 @@ async def test_qbo_autosync_stops_below_pro(db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_solo_gets_no_automatic_customer_notifications(client, db):
-    from backend.services import automation, notification_rules as nr
+    from backend.services import automation
+    from backend.services import notification_rules as nr
     hdr, org_id = await _signup(client)          # signup seeds the default rules
     oid = (await client.post("/api/orders", json={}, headers=hdr)).json()["id"]
     await _set(db, org_id, sub_status="active", plan="solo")
