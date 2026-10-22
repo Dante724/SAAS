@@ -14,7 +14,6 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.config import settings
 from backend.core.webhook_security import verify_org_webhook
 from backend.db.database import get_db
 from backend.models import Call, Campaign, Client, Employee
@@ -120,8 +119,7 @@ async def _twilio_request(request: Request, db, org_id: str, *, status_only: boo
         raise HTTPException(404, "Twilio voice is not set up for this shop")
     form = await request.form()
     params = [(k, str(v)) for k, v in form.multi_items()]
-    path_q = request.url.path + (f"?{request.url.query}" if request.url.query else "")
-    urls = list(dict.fromkeys([str(request.url), settings.public_base + path_q]))
+    urls = twilio_voice.request_urls(request)
     if not twilio_voice.signature_ok(creds["auth_token"], request.headers.get("X-Twilio-Signature", ""),
                                      urls, params):
         raise HTTPException(403, "Invalid Twilio signature")

@@ -67,6 +67,10 @@ PROVIDER_FIELDS: dict[str, list[dict]] = {
         {"key": "ig_token", "label": "Instagram token", "secret": True, "env": "META_IG_TOKEN"},
         {"key": "whatsapp_phone_id", "label": "WhatsApp phone ID", "env": "WHATSAPP_PHONE_ID"},
         {"key": "whatsapp_token", "label": "WhatsApp token", "secret": True, "env": "WHATSAPP_TOKEN"},
+        # S2: the shop's own Meta ids. Inbound webhooks only accept events for these, and the
+        # operator-wide app secret is only trusted for shops that registered them.
+        {"key": "page_id", "label": "Facebook Page ID"},
+        {"key": "ig_account_id", "label": "Instagram account ID"},
     ],
 }
 
@@ -139,6 +143,12 @@ async def _row(db: AsyncSession, org_id: str, provider: str) -> Optional[OrgInte
     return (await db.execute(select(OrgIntegrationCredential).where(
         OrgIntegrationCredential.org_id == org_id,
         OrgIntegrationCredential.provider == provider))).scalar_one_or_none()
+
+
+async def own(db: AsyncSession, org_id: str, provider: str) -> dict:
+    """Only this shop's saved keys, with no operator env fallback (empty when none)."""
+    row = await _row(db, org_id, provider)
+    return _decrypt(row.data_enc) if (row and row.active) else {}
 
 
 async def effective(db: AsyncSession, org_id: str, provider: str, *, read_only: bool = False,

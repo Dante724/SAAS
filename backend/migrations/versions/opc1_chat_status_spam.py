@@ -9,7 +9,8 @@ and a status: never answered → new, customer wrote last → reply_needed, shop
 (the 24h job then completes the old replied ones).
 
 Roles: the new can_manage_chats permission (status / spam changes) is on in every built-in
-role template, so existing explicit roles get it too instead of silently losing the action.
+role template. Existing explicit roles get it only if they can already reply to customers
+(can_reply_customer); others stay off until someone grants it.
 
 Revision ID: opc1
 Revises: ope1
@@ -58,7 +59,9 @@ def upgrade() -> None:
     conn = op.get_bind()
     for rid, raw in conn.execute(sa.text("SELECT id, permissions FROM roles WHERE perms_explicit")).fetchall():
         perms = raw if isinstance(raw, dict) else (json.loads(raw) if raw else {})
-        if "can_manage_chats" in (perms or {}):
+        # Only roles that already answer customers (P9): a role that can't reply to a chat
+        # shouldn't start triaging or spam-binning them.
+        if "can_manage_chats" in (perms or {}) or (perms or {}).get("can_reply_customer") is not True:
             continue
         perms = {**(perms or {}), "can_manage_chats": True}
         conn.execute(sa.text("UPDATE roles SET permissions = :p WHERE id = :i").bindparams(

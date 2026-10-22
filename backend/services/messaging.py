@@ -61,6 +61,10 @@ async def _twilio_send(to: str, body: str, *, whatsapp: bool, creds: dict) -> di
     token = creds.get("auth_token") or settings.TWILIO_AUTH_TOKEN
     if not (sid and token):
         return {"status": "simulated", "error": None}
+    from backend.services.twilio_voice import sms_refusal
+    refused = sms_refusal(creds, whatsapp=whatsapp)
+    if refused:
+        return {"status": "failed", "error": refused}
     frm = (creds.get("whatsapp_from") or settings.TWILIO_WHATSAPP_FROM) if whatsapp else (creds.get("from") or settings.TWILIO_FROM)
     to_addr = f"whatsapp:{to}" if whatsapp and not to.startswith("whatsapp:") else to
     url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
@@ -88,20 +92,30 @@ async def creds_for(db, org_id: str) -> dict:
     return {**meta, **tw}
 
 
-def verify_subscription(mode: Optional[str], token: Optional[str], challenge: Optional[str]):
-    """Meta webhook subscription handshake (GET). Returns the challenge string to
-    echo back when the verify token matches, else None."""
-    if mode == "subscribe" and token and settings.META_VERIFY_TOKEN and token == settings.META_VERIFY_TOKEN:
+def verify_subscription(mode: Optional[str], token: Optional[str], challenge: Optional[str],
+                        expected: list[str]):
+    """Meta webhook subscription handshake (GET). Returns the challenge string to echo back
+    when the verify token matches one of `expected` (the shop's own token), else None."""
+    import hmac
+    if mode == "subscribe" and token and any(hmac.compare_digest(token, e) for e in expected if e):
         return challenge
     return None
+
+
+def meta_account_ids(creds: dict) -> set[str]:
+    """The Meta ids a shop registered: its Page, Instagram account and WhatsApp number id."""
+    return {str(creds[k]).strip() for k in ("page_id", "ig_account_id", "whatsapp_phone_id")
+            if str(creds.get(k) or "").strip()}
 
 
 def parse_meta_webhook(payload: dict) -> list[dict]:
     """Normalise a Meta webhook body into inbox messages. Handles Messenger &
     Instagram (`messaging` entries) and WhatsApp Cloud (`changes[].value.messages`).
-    Returns [{channel, handle, external_thread_id, external_message_id, subject, body}]."""
+    Returns [{channel, handle, external_thread_id, external_message_id, subject, body,
+    account_id}] where account_id is the receiving Page / IG account / WhatsApp number id."""
     out = []
     for entry in (payload.get("entry") or []):
+        entry_id = str(entry.get("id") or "")
         # Messenger / Instagram
         for m in (entry.get("messaging") or []):
             sender = (m.get("sender") or {}).get("id")
@@ -110,14 +124,17 @@ def parse_meta_webhook(payload: dict) -> list[dict]:
             if sender and text:
                 channel = "instagram" if payload.get("object") == "instagram" else "facebook"
                 out.append({"channel": channel, "handle": sender, "external_thread_id": sender,
-                            "external_message_id": mid, "subject": None, "body": text})
+                            "external_message_id": mid, "subject": None, "body": text,
+                            "account_id": str((m.get("recipient") or {}).get("id") or entry_id)})
         # WhatsApp Cloud
         for ch in (entry.get("changes") or []):
             value = ch.get("value") or {}
+            phone_id = str((value.get("metadata") or {}).get("phone_number_id") or "")
             for msg in (value.get("messages") or []):
                 frm = msg.get("from")
                 text = (msg.get("text") or {}).get("body")
                 if frm and text:
                     out.append({"channel": "whatsapp", "handle": frm, "external_thread_id": frm,
-                                "external_message_id": msg.get("id"), "subject": None, "body": text})
+                                "external_message_id": msg.get("id"), "subject": None, "body": text,
+                                "account_id": phone_id})
     return out

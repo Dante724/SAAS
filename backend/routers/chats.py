@@ -233,11 +233,12 @@ async def twilio_inbound(request: Request, db: AsyncSession = Depends(get_db),
     # token at all, unsigned posts are accepted only in development/test.
     from backend.config import settings as _settings
     from backend.core.webhook_security import provider_secrets, require_signature
-    from backend.services.twilio_voice import signature_ok
+    from backend.services.twilio_voice import request_urls, signature_ok
     secrets = await provider_secrets(db, org_id, "twilio", "auth_token", _settings.TWILIO_AUTH_TOKEN)
     params = [(k, str(v)) for k, v in form.multi_items()]
     presented = request.headers.get("X-Twilio-Signature", "")
-    verified = any(signature_ok(s, presented, [str(request.url)], params) for s in secrets)
+    urls = request_urls(request)       # S4: also the public URL Twilio signed behind a proxy
+    verified = any(signature_ok(s, presented, urls, params) for s in secrets)
     require_signature(secrets, verified, "Twilio", status=403)
     twiml = Response(content="<?xml version='1.0' encoding='UTF-8'?><Response></Response>",
                      media_type="application/xml")
@@ -268,13 +269,18 @@ async def twilio_inbound(request: Request, db: AsyncSession = Depends(get_db),
 
 
 @router.get("/webhook/meta/{org_id}", include_in_schema=False)
-async def meta_verify(org_id: str, request: Request):
-    """Meta subscription handshake: echo hub.challenge when the verify token matches."""
+async def meta_verify(org_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Meta subscription handshake: echo hub.challenge when the verify token matches THIS
+    shop's own token. The operator-wide token only counts for a shop without its own."""
     from fastapi.responses import PlainTextResponse
 
+    from backend.config import settings
+    from backend.services import org_creds
     from backend.services.messaging import verify_subscription
+    own = (await org_creds.own(db, org_id, "meta")).get("verify_token")
     q = request.query_params
-    challenge = verify_subscription(q.get("hub.mode"), q.get("hub.verify_token"), q.get("hub.challenge"))
+    challenge = verify_subscription(q.get("hub.mode"), q.get("hub.verify_token"), q.get("hub.challenge"),
+                                    [own] if own else [settings.META_VERIFY_TOKEN])
     if challenge is None:
         raise HTTPException(403, "verification failed")
     return PlainTextResponse(challenge)
@@ -282,23 +288,37 @@ async def meta_verify(org_id: str, request: Request):
 
 @router.post("/webhook/meta/{org_id}", status_code=201)
 async def meta_inbound(org_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-    """Inbound Messenger / Instagram / WhatsApp Cloud events → chat threads.
-    De-duped by provider message id. Authenticated via the X-Hub-Signature-256 header
-    using this shop's Meta app secret (or the operator-wide one); with no secret at all,
-    unsigned posts are accepted only in development/test."""
+    """Inbound Messenger / Instagram / WhatsApp Cloud events → chat threads, de-duped by
+    provider message id. Authenticated via X-Hub-Signature-256.
+
+    S2 — the URL names the org, so the signature alone can't prove the tenant: one Meta app
+    (the operator's) signs events for every shop it serves. So:
+      * the shop's own app secret is always accepted; the operator-wide META_APP_SECRET only
+        for a shop that registered its Page / Instagram / WhatsApp ids;
+      * when ids are registered, only events addressed to them are ingested, so a delivery
+        signed for one shop and replayed at another shop's URL stores nothing.
+    With no secret at all, unsigned posts are accepted only in development/test."""
     import hashlib
     import hmac
     import json
 
     from backend.config import settings
-    from backend.core.webhook_security import provider_secrets, require_signature
-    from backend.services.messaging import parse_meta_webhook
+    from backend.core.webhook_security import require_signature
+    from backend.services import org_creds
+    from backend.services.messaging import meta_account_ids, parse_meta_webhook
 
     raw = await request.body()       # needed for both the signature and parsing
-    secrets = await provider_secrets(db, org_id, "meta", "app_secret", settings.META_APP_SECRET)
+    own = await org_creds.own(db, org_id, "meta")
+    ids = meta_account_ids(own)
+    secrets = [s for s in dict.fromkeys([own.get("app_secret"),
+                                         settings.META_APP_SECRET if ids else None]) if s]
     presented = request.headers.get("X-Hub-Signature-256", "")
     verified = bool(presented) and any(hmac.compare_digest(
         presented, "sha256=" + hmac.new(s.encode(), raw, hashlib.sha256).hexdigest()) for s in secrets)
+    if not secrets and settings.META_APP_SECRET:
+        # The operator app is configured but this shop never registered its ids: refuse rather
+        # than trust a delivery that could belong to any shop.
+        raise HTTPException(403, "Register this shop's Meta Page / Instagram / WhatsApp ids first")
     require_signature(secrets, verified, "Meta", status=403)
     try:
         payload = json.loads(raw.decode() or "{}")
@@ -306,6 +326,8 @@ async def meta_inbound(org_id: str, request: Request, db: AsyncSession = Depends
         payload = {}
     stored = []
     for m in parse_meta_webhook(payload):
+        if ids and m.get("account_id") not in ids:
+            continue                   # addressed to another shop's Page / number
         thread, msg = await cs.ingest_inbound(db, org_id, channel=m["channel"], handle=m["handle"],
                                               body=m.get("body") or "",
                                               external_id=m.get("external_message_id"))
