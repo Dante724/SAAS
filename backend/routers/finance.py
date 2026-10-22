@@ -1,16 +1,19 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, date
 from backend.db.database import get_db
 from backend.models import Invoice, Payment, CashShift, CashDrawerMovement, Expense, Order, Employee, Location
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import assert_perm, get_current_employee, require_perm, record_scope
+from backend.core import paging as _paging
 from backend.services.money import q2, q4, msum  # noqa: F401 — money quantizers used module-wide
+from backend.core.spreadsheet import safe_row
 
-router = APIRouter(prefix="/api/finance", tags=["finance"])
+router = APIRouter(prefix="/api/finance", tags=["finance"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 class InvoiceLineIn(BaseModel):
     kind: str = "custom"                            # service|product|labor|custom
@@ -63,9 +66,6 @@ class ExpenseIn(BaseModel):
     location_id: Optional[str] = None
     expense_date: Optional[str] = None
 
-def _inv_number(seq: int) -> str:
-    return f"INV-{seq:05d}"
-
 def _ser_invoice(inv: Invoice) -> dict:
     return {
         "id": inv.id, "invoice_number": inv.invoice_number,
@@ -110,11 +110,14 @@ async def _invoice_detail(db, inv) -> dict:
 
 @router.get("/invoices")
 async def list_invoices(
-    status: Optional[str] = None, location_id: Optional[str] = None, skip: int = 0, limit: int = 50,
+    status: Optional[str] = None, location_id: Optional[str] = None,
+    search: Optional[str] = None,     # invoice number, order number or customer name
+    skip: int = _paging.skip_query(), limit: int = _paging.limit_query(50),
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_invoices")),
 ):
     from backend.models import Order
+    limit = _paging.clamp(limit)
     q = (select(Invoice).where(Invoice.org_id == current.org_id)
          .options(selectinload(Invoice.payments))
          .order_by(Invoice.created_at.desc()))
@@ -127,6 +130,17 @@ async def list_invoices(
         _oids = select(Order.id).where(Order.org_id == current.org_id, Order.location_id == location_id)
         q = q.where(Invoice.order_id.in_(_oids))
         cq = cq.where(Invoice.order_id.in_(_oids))
+    if (search or "").strip():
+        from sqlalchemy import or_
+
+        from backend.models import Client as _C
+        s = search.strip()
+        cond = or_(Invoice.invoice_number.icontains(s),
+                   Invoice.order_id.in_(select(Order.id).where(Order.org_id == current.org_id,
+                                                               Order.order_number.icontains(s))),
+                   Invoice.client_id.in_(select(_C.id).where(_C.org_id == current.org_id,
+                                                             _C.name.icontains(s))))
+        q, cq = q.where(cond), cq.where(cond)
     result = await db.execute(q.offset(skip).limit(limit))
     invs = result.scalars().all()
     total = (await db.execute(cq)).scalar()
@@ -137,18 +151,26 @@ async def list_invoices(
     if oids:
         rows = (await db.execute(select(Order.id, Order.order_number).where(Order.id.in_(oids)))).all()
         numbers = {oid: num for oid, num in rows}
+    # Customer name and date for each row (this shop's clients only), so the list tells
+    # invoices apart without opening them.
+    from backend.models import Client
+    cids = {i.client_id for i in invs if i.client_id}
+    names = dict((await db.execute(select(Client.id, Client.name).where(
+        Client.org_id == current.org_id, Client.id.in_(cids)))).all()) if cids else {}
     items = []
     for i in invs:
         d = _ser_invoice(i)
         d["order_number"] = numbers.get(i.order_id)
+        d["client_name"] = names.get(i.client_id)
+        d["created_at"] = i.created_at.isoformat() if getattr(i, "created_at", None) else None
         items.append(d)
-    return {"total": total, "items": items}
+    return {"total": total, "items": items, "skip": skip, "limit": limit}
 
 @router.get("/invoices/{invoice_id}")
 async def get_invoice(
     invoice_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_invoices")),
 ):
     """Build 144dt — single invoice with its lines resolved through the
     Order-display mode (detailed / simplified / one_line). Lines are computed
@@ -196,7 +218,7 @@ async def _next_einvoice_number(db, org_id: str) -> str:
 async def issue_einvoice(
     invoice_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_invoices")),
 ):
     """Generate the UBL 2.1 e-invoice, assign a fiscal number, store the XML, mark issued.
     Idempotent-ish: re-issuing regenerates the XML but keeps the existing fiscal number."""
@@ -222,7 +244,7 @@ async def set_einvoice_status(
     invoice_id: str,
     data: EInvoiceStatusIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_invoices")),
 ):
     """Record the clearance outcome manually (no live authority connection in-house)."""
     if data.status not in _EINV_STATUSES:
@@ -241,7 +263,7 @@ async def set_einvoice_status(
 async def download_einvoice(
     invoice_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_invoices")),
 ):
     from fastapi import Response
     inv = await _load_invoice(db, invoice_id, current.org_id)
@@ -252,11 +274,42 @@ async def download_einvoice(
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
+async def _assert_invoice_editable(db, current, inv) -> None:
+    """A draft is anyone's to edit (with Edit invoices); once issued it needs "Edit issued invoices"."""
+    if (inv.status or "draft") != "draft":
+        await assert_perm(db, current, "can_edit_issued_invoices")
+
+
+@router.delete("/invoices/{invoice_id}")
+async def delete_invoice(
+    invoice_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_delete_invoices")),
+):
+    """Cancel an invoice nothing has been paid on. The row stays (numbering has no gaps, the
+    audit trail keeps it) but it no longer counts as owed anywhere."""
+    inv = (await db.execute(select(Invoice).where(
+        Invoice.id == invoice_id, Invoice.org_id == current.org_id))).scalar_one_or_none()
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    if inv.status in ("cancelled", "canceled"):
+        return {"ok": True, "status": inv.status}
+    if float(inv.amount_paid or 0) > 0:
+        raise HTTPException(409, "This invoice has payments on it. Refund them first, then delete it.")
+    await _assert_invoice_editable(db, current, inv)
+    inv.status = "cancelled"
+    from backend.services import audit
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="invoice.delete",
+                       entity_type="invoice", entity_id=inv.id, diff={"invoice_number": inv.invoice_number})
+    await db.commit()
+    return {"ok": True, "status": inv.status}
+
+
 @router.patch("/invoices/{invoice_id}")
 async def update_invoice(
     invoice_id: str, data: dict,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_invoices")),
 ):
     """Build 144dt/144dw — change an invoice's Order-display mode and/or its payer
     (bill-to). Lines re-resolve on the next GET; stored line data is never rewritten."""
@@ -267,6 +320,7 @@ async def update_invoice(
     )).scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    await _assert_invoice_editable(db, current, inv)
     mode = data.get("display_mode")
     if mode in ("detailed", "simplified", "one_line"):
         inv.display_mode = mode
@@ -287,12 +341,10 @@ async def update_invoice(
 async def create_invoice(
     data: InvoiceIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_invoices")),
 ):
     from backend.models import InvoiceOrder, InvoiceLine, Order
-    count = (await db.execute(
-        select(func.count()).select_from(Invoice).where(Invoice.org_id == current.org_id)
-    )).scalar() or 0
+    from backend.services.numbering import next_number
 
     # 144ed — the order list: explicit order_ids, with the legacy single order_id
     # folded in first and de-duped while preserving order.
@@ -328,7 +380,8 @@ async def create_invoice(
             return None
 
     inv = Invoice(
-        invoice_number=_inv_number(count + 1),
+        # One numbering path for every invoice (was count+1 here, a sequence elsewhere → duplicates)
+        invoice_number=await next_number(db, current.org_id, "invoice"),
         org_id=current.org_id,
         order_id=order_ids[0] if order_ids else None,
         client_id=data.client_id,
@@ -366,7 +419,7 @@ async def create_invoice(
 async def attach_order(
     invoice_id: str, data: dict,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_invoices")),
 ):
     """Build 144du — bill another work order on this invoice (Orderry parity)."""
     from backend.models import InvoiceOrder, Order
@@ -374,6 +427,7 @@ async def attach_order(
         Invoice.id == invoice_id, Invoice.org_id == current.org_id))).scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    await _assert_invoice_editable(db, current, inv)
     order_id = data.get("order_id")
     order = (await db.execute(select(Order).where(
         Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
@@ -397,7 +451,7 @@ async def attach_order(
 async def detach_order(
     invoice_id: str, order_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_invoices")),
 ):
     """Build 144du — stop billing a work order on this invoice."""
     from backend.models import InvoiceOrder
@@ -405,6 +459,7 @@ async def detach_order(
         Invoice.id == invoice_id, Invoice.org_id == current.org_id))).scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    await _assert_invoice_editable(db, current, inv)
     link = (await db.execute(select(InvoiceOrder).where(
         InvoiceOrder.invoice_id == invoice_id, InvoiceOrder.order_id == order_id))).scalar_one_or_none()
     if link:
@@ -426,7 +481,7 @@ class SendInvoiceIn(BaseModel):
 async def send_invoice_email(
     invoice_id: str, data: SendInvoiceIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_finance")),
 ):
     """Build 144dw — email the invoice PDF to the client (Orderry's envelope button).
     Uses the org's connected email account; if none is connected the send is
@@ -494,7 +549,7 @@ async def send_invoice_email(
 async def record_payment(
     invoice_id: str, data: PaymentIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_finance")),
 ):
     # Lock the invoice row so concurrent payments serialize (Postgres) — prevents a double-click /
     # retry from double-posting. No-op on SQLite, which serializes writes anyway.
@@ -505,13 +560,34 @@ async def record_payment(
     inv = result.scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    if inv.status in ("cancelled", "canceled"):
+        raise HTTPException(409, "This invoice was deleted and can't take payments")
+    # Negative amounts used to post +|amount| into the cashbox while reducing amount_paid; an
+    # amount above the balance silently over-collected.
+    if data.amount is None or data.amount <= 0:
+        raise HTTPException(400, "Payment amount must be positive")
+    remaining = q2(float(inv.total or 0) - float(inv.amount_paid or 0))
+    if data.amount > remaining + 0.005:
+        raise HTTPException(400, f"Payment exceeds the invoice balance ({remaining:g})")
+    # B10: cash taken against an invoice belongs to the open drawer shift, like order payments,
+    # or the till close never counts it. A shift sent by the client must be this shop's.
+    shift_id = data.shift_id
+    if shift_id:
+        await _shift_or_404(db, current.org_id, shift_id)
+    elif data.method == "cash" and data.account_id:
+        from backend.models import Account
+        from backend.routers.cash import open_drawer_shift
+        _acc = (await db.execute(select(Account).where(
+            Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
+        shift_id = await open_drawer_shift(db, current.org_id, _acc)
     payment = Payment(
         invoice_id=invoice_id,
+        order_id=inv.order_id,          # so the order's own paid/balance math sees invoice payments
         client_id=inv.client_id,
         method=data.method,
         amount=data.amount,
         reference=data.reference,
-        shift_id=data.shift_id,
+        shift_id=shift_id,
         account_id=data.account_id,
         received_by_id=current.id,
     )
@@ -536,6 +612,12 @@ async def record_payment(
         await post_contact_ledger(db, current.org_id, inv.client_id, "income", -abs(data.amount),
                                   note=f"Payment for invoice {inv.invoice_number or invoice_id}",
                                   ref_type="payment", ref_id=payment.id, created_by_id=current.id)
+    if inv.order_id:
+        from backend.services.order_money import cancel_open_pay_links
+        order = (await db.execute(select(Order).where(Order.id == inv.order_id))).scalar_one_or_none()
+        if order:
+            await db.flush()
+            await cancel_open_pay_links(db, order)
     await db.commit()
     return {"ok": True, "amount_paid": inv.amount_paid, "status": inv.status}
 
@@ -566,8 +648,11 @@ async def _expected_cash(db, shift: CashShift) -> dict:
     can explain a discrepancy."""
     cash_in = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0.0)).where(
         Payment.shift_id == shift.id, Payment.method == "cash", Payment.kind != "refund"))).scalar() or 0.0
+    # Refunds paid out of this drawer: cash refunds, and archive refunds (method "refund"),
+    # which carry the shift only when they went back through a cash till (B10).
     cash_refunds = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0.0)).where(
-        Payment.shift_id == shift.id, Payment.method == "cash", Payment.kind == "refund"))).scalar() or 0.0
+        Payment.shift_id == shift.id, Payment.method.in_(("cash", "refund")),
+        Payment.kind == "refund"))).scalar() or 0.0
     pay_in = (await db.execute(select(func.coalesce(func.sum(CashDrawerMovement.amount), 0.0)).where(
         CashDrawerMovement.shift_id == shift.id, CashDrawerMovement.direction == "in"))).scalar() or 0.0
     pay_out = (await db.execute(select(func.coalesce(func.sum(CashDrawerMovement.amount), 0.0)).where(
@@ -721,7 +806,7 @@ async def list_payouts(
 async def open_shift(
     data: ShiftOpen,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_cashbox")),
 ):
     loc = (await db.execute(select(Location).where(
         Location.id == data.location_id, Location.org_id == current.org_id))).scalar_one_or_none()
@@ -785,7 +870,7 @@ async def list_shifts(
 async def drawer_movement(
     shift_id: str, data: DrawerMoveIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_cashbox")),
 ):
     """Record a manual cash pay-in / pay-out on the open drawer (note required)."""
     shift = await _shift_or_404(db, current.org_id, shift_id)
@@ -811,7 +896,7 @@ async def close_shift(
     closing_float: Optional[float] = Query(None),   # back-compat; or send a body with denoms
     data: Optional[ShiftCloseIn] = Body(None),
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_cashbox")),
 ):
     shift = await _shift_or_404(db, current.org_id, shift_id)
     if shift.closed_at is not None:
@@ -863,7 +948,7 @@ async def close_shift(
 async def add_expense(
     data: ExpenseIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_expenses")),
 ):
     expense = Expense(
         org_id=current.org_id,
@@ -884,17 +969,19 @@ async def profit_and_loss(
     date_to: Optional[str] = None,
     location_id: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_see_profit")),
 ):
     """Owner P&L: net revenue − parts COGS − operating expenses, org-scoped."""
+    from backend.services.auth import check_location_access
     from backend.services.finance_pnl import compute_pnl
+    await check_location_access(db, current, location_id)
     return await compute_pnl(db, current.org_id, date_from, date_to, location_id)
 
 
 @router.get("/reports/summary")
 async def finance_summary(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_finance")),
 ):
     total_revenue = (await db.execute(
         select(func.sum(Invoice.total)).where(Invoice.org_id == current.org_id, Invoice.status == "paid")
@@ -965,7 +1052,7 @@ async def accountant_export(
     w = csv.writer(buf)
     w.writerow(["Date", "Account", "Type", "Category", "Comment", "Income", "Expense", "Balance after"])
     for _d, cells in lines:
-        w.writerow(cells)
+        w.writerow(safe_row(cells))
     buf.seek(0)
     from fastapi.responses import StreamingResponse
     fname = f"accountant_{df.strftime('%Y%m%d')}_{dt.strftime('%Y%m%d')}.csv"

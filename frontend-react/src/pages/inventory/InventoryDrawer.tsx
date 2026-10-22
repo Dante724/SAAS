@@ -1,11 +1,13 @@
 import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
+import { useMe, hasFeature } from "../../context/Me";
 import { api } from "../../api/client";
-import { Product, money } from "./types";
+import { Product, currencySymbol, money } from "./types";
 import CustomFields from "../../components/CustomFields";
 import CategoryPicker from "../../components/CategoryPicker";
 import CatalogPicker, { CatalogItem } from "../../components/CatalogPicker";
+import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../../lib/formLayout";
 
 export type DrawerKind = "product" | "service" | "asset" | "bundle";
 type Props = { kind: DrawerKind; id?: string | null; initial?: any; onClose: () => void; onSaved?: () => void };
@@ -36,6 +38,8 @@ function CodeSvg({ data, type }: { data: string; type: "code128" | "qr" }) {
 }
 
 export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }: Props) {
+  const { can, me } = useMe();
+  const stockTabs = hasFeature(me, "inventory");   // stock, batches, movements, purchasing: Shop plan
   const [p, setP] = useState<any>(initial || {});
   const [compKind, setCompKind] = useState<"service" | "product">("service");  // 144cz — job-kit component picker tab
   const [toast, setToast] = useState<string | null>(null);
@@ -107,9 +111,13 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
   const set = (k: string, v: any) => setP((s: any) => ({ ...s, [k]: v }));
   const margin = (() => { const sell = Number(p.sell_price ?? p.price ?? 0), cost = Number(p.cost_price ?? p.avg_cost ?? 0); return sell > 0 ? Math.round((sell - cost) / sell * 100) : 0; })();
 
+  const layout = useFormLayout("product", kind === "product");
+  const star = (k: string) => reqStar(layout, k);
   async function save() {
     try {
       if (kind === "product") {
+        const m = missingRequired(layout, { category: has(p.category_id), description: has(p.description), code: has(p.code), sku: has(p.sku) }, p.custom_data);
+        if (m) { flash(m); return; }
         const body = { name: p.name, code: p.code, sku: p.sku, barcode: p.barcode, brand: p.brand, description: p.description,
           category_id: p.category_id || null, uom: p.uom || "pcs", cost_price: Number(p.cost_price) || 0, sell_price: Number(p.sell_price) || 0,
           min_stock: p.min_stock ?? 0, serialized: !!p.serialized, expiry_tracking: !!p.expiry_tracking, warranty_days: p.warranty_days ?? 0,
@@ -120,6 +128,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
           unit: p.unit || "pc", price: Number(p.price) || 0, cost_price: Number(p.cost_price) || 0, duration_min: Number(p.duration_min) || 0, flat_rate: !!p.flat_rate };
         if (editing) await api.put(`/catalog/services/${id}`, body); else await api.post("/catalog/services", body);
       } else if (kind === "bundle") {
+        if (!can("can_manage_bundles")) { flash("Your role can't change job kits"); return; }
         const components = (p.components || []).map((c: any) => ({ ref_type: c.ref_type, ref_id: c.ref_id, qty: Number(c.qty) || 1, device_variant: !!c.device_variant }));
         if (components.length === 0) { flash("Add at least one service or product"); return; }
         const body = { name: p.name, price_mode: p.price_mode || "sum", price: Number(p.price) || 0, category_id: p.category_id || null, components };
@@ -147,20 +156,20 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                 : <div className="w-10 h-10 rounded-xl bg-blue-50 text-primary flex items-center justify-center border border-blue-100 shrink-0"><M n="inventory_2" c="text-xl" /></div>
             )}
             <div className="min-w-0">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-primary block">{BREADCRUMB[kind]}</span>
+              <span className="text-[11px] font-bold text-primary block">{BREADCRUMB[kind]}</span>
               <h3 className="text-base font-bold text-ink-primary truncate">{p.name || (editing ? "Edit item" : `New ${kind === "bundle" ? "job kit" : kind}`)}</h3>
               {kind === "product" && editing && (p.sku || p.code || p.barcode) && (
                 <p className="text-[11px] text-ink-tertiary font-mono truncate">{p.sku || p.code}{p.barcode ? ` · ${p.barcode}` : ""}</p>
               )}
             </div>
-            {kind === "product" && editing && p.low_stock && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200 shrink-0">Low stock</span>}
+            {kind === "product" && editing && p.low_stock && <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-200 shrink-0">Low stock</span>}
           </div>
           <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary hover:text-ink-primary shrink-0"><M n="close" c="text-base" /></button>
         </div>
 
         {kind === "product" && editing && (
           <nav className="px-6 border-b border-slate-200 flex gap-6 text-xs font-semibold bg-slate-50/70">
-            {([["details", "Details"], ["stock", "Stock"], ["batches", "Batches"], ["movements", "Movements"], ["purchasing", "Purchasing"]] as [ProdTab, string][]).map(([t, label]) => (
+            {(([["details", "Details"], ["stock", "Stock"], ["batches", "Batches"], ["movements", "Movements"], ["purchasing", "Purchasing"]] as [ProdTab, string][]).filter(([t]) => stockTabs || t === "details")).map(([t, label]) => (
               <button key={t} onClick={() => setPtab(t)} className={`py-3 border-b-2 transition-colors ${ptab === t ? "text-primary border-primary font-bold" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{label}</button>
             ))}
           </nav>
@@ -174,8 +183,8 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                 ["Avg cost", money(p.avg_cost ?? p.cost_price ?? 0), "text-ink-primary"],
                 ["Stock value", money((p.qty_available ?? 0) * Number(p.avg_cost ?? p.cost_price ?? 0)), "text-emerald-600"]].map(([l, v, c]) => (
                 <div key={l as string} className="bg-white rounded-xl p-3 border border-slate-200/90 shadow-sm">
-                  <span className="text-[9px] font-bold uppercase tracking-wider text-ink-tertiary block">{l}</span>
-                  <p className={`text-lg font-black font-mono truncate ${c}`}>{v}</p>
+                  <span className="text-[11px] font-bold text-ink-tertiary block">{l}</span>
+                  <p className={`text-lg font-bold tabular-nums truncate ${c}`}>{v}</p>
                 </div>
               ))}
             </div>
@@ -184,22 +193,16 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
             <div className="border-2 border-dashed border-slate-200 hover:border-primary/50 rounded-2xl p-5 text-center cursor-pointer bg-slate-50/40 hover:bg-blue-50/20 transition-all">
               <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 text-primary flex items-center justify-center mx-auto mb-2"><M n="add_a_photo" c="text-xl" /></div>
               <span className="text-xs font-semibold text-ink-secondary block">Drop image or browse, or take a photo</span>
-              <span className="text-[10px] text-ink-tertiary">PNG, JPG, WebP up to 5MB</span>
+              <span className="text-[11px] text-ink-tertiary">PNG, JPG, WebP up to 5MB</span>
             </div>
           )}
 
           {kind === "product" && ptab === "details" && (<>
             <div className="space-y-3.5">
+              <div><label className={lbl}>Name <span className="text-rose-500">*</span></label><input value={p.name || ""} onChange={(e) => set("name", e.target.value)} className={field} /></div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className={lbl}>Type</label><select value={p.type || "Part"} onChange={(e) => set("type", e.target.value)} className={`${field} appearance-none`}><option>Part</option><option>Accessory</option><option>Consumable</option></select></div>
-                <div><label className={lbl}>Category</label><CategoryPicker entity="product" value={p.category_id} onChange={(id) => set("category_id", id)} /></div>
-              </div>
-              <div><label className={lbl}>Name <span className="text-rose-500">*</span></label><input value={p.name || ""} onChange={(e) => set("name", e.target.value)} className={field} /></div>
-              <div><label className={lbl}>Description</label><textarea value={p.description || ""} onChange={(e) => set("description", e.target.value)} className={`${field} h-20 resize-none`} placeholder="Optional details..." /></div>
-              <div className="grid grid-cols-3 gap-3">
                 <div><label className={lbl}>Unit <span className="text-rose-500">*</span></label><input value={p.uom || "pcs"} onChange={(e) => set("uom", e.target.value)} className={field} /></div>
-                <div><label className={lbl}>Code</label><input value={p.code || ""} onChange={(e) => set("code", e.target.value)} className={`${field} font-mono`} /></div>
-                <div><label className={lbl}>SKU</label><input value={p.sku || ""} onChange={(e) => set("sku", e.target.value)} className={`${field} font-mono`} /></div>
               </div>
               <div className="pt-1 flex items-center gap-2 flex-wrap">
                 <button type="button" onClick={() => setShowCode((v) => !v)} disabled={!p.barcode}
@@ -217,63 +220,75 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                 </div>
               )}
             </div>
-            <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-3">
-              <div className="text-[11px] font-bold text-ink-primary uppercase tracking-wider">Stock tracking & policies</div>
-              <label className="flex items-center justify-between cursor-pointer"><span className="text-ink-secondary font-medium">Expiration tracking</span><input type="checkbox" checked={!!p.expiry_tracking} onChange={(e) => set("expiry_tracking", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
-              <label className="flex items-center justify-between cursor-pointer"><span className="text-ink-secondary font-medium">Enable serial-number tracking <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">one-way</span></span><input type="checkbox" checked={!!p.serialized} onChange={(e) => set("serialized", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
-              <div className="flex items-center justify-between"><span className="text-ink-secondary font-medium">Min stock (reorder at)</span><input type="number" value={p.min_stock ?? 0} onChange={(e) => set("min_stock", Number(e.target.value))} className="glass-input w-20 px-2 py-1 rounded-lg text-xs text-right font-mono" /></div>
-            </div>
-            <div className="p-4 rounded-xl bg-blue-50/50 border border-blue-100 space-y-3">
-              <div className="flex items-center justify-between"><span className="text-[11px] font-bold text-primary uppercase tracking-wider">Pricing & margin</span><span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800">Margin: {margin}%</span></div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className={lbl}>Cost price (₹)</label><input type="number" value={p.cost_price ?? 0} onChange={(e) => set("cost_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>
-                <div><label className={lbl}>Store price (₹)</label><input type="number" value={p.sell_price ?? 0} onChange={(e) => set("sell_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>
-              </div>
-              <div className="text-[11px] text-ink-tertiary flex items-center justify-between pt-1"><span>Repair price (on work orders):</span><span className="font-semibold text-ink-secondary">= store price ({money(Number(p.sell_price) || 0)})</span></div>
-            </div>
-            <CustomFields entity="product" value={p.custom_data || {}} onChange={(cd) => set("custom_data", cd)} creating={!editing} />
-            {(() => {
-              const compat = p.compatibility_json || {};
-              const fits: { brand?: string; model?: string }[] = Array.isArray(compat.fits) ? compat.fits : [];
-              const setFits = (next: any[]) => set("compatibility_json", { ...compat, fits: next });
-              return (
-                <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] font-bold text-ink-primary uppercase tracking-wider">Compatible devices</span>
-                    <button type="button" onClick={() => setFits([...fits, { brand: "", model: "" }])} className="text-[11px] font-bold text-primary hover:underline">+ Add</button>
-                  </div>
-                  <p className="text-[10px] text-ink-tertiary">Flagged as “Fits” when adding parts on a matching device. Blank model = any model of that brand.</p>
-                  {fits.length === 0 && <p className="text-[11px] text-ink-tertiary">None yet.</p>}
-                  {fits.map((f, i) => (
-                    <div key={i} className="flex items-center gap-1.5">
-                      <input className={field} placeholder="Brand (e.g. Apple)" value={f.brand || ""} onChange={(e) => setFits(fits.map((x, j) => j === i ? { ...x, brand: e.target.value } : x))} />
-                      <input className={field} placeholder="Model (blank = any)" value={f.model || ""} onChange={(e) => setFits(fits.map((x, j) => j === i ? { ...x, model: e.target.value } : x))} />
-                      <button aria-label="Close" type="button" onClick={() => setFits(fits.filter((_, j) => j !== i))} className="text-ink-tertiary hover:text-rose-500 shrink-0"><M n="close" c="text-sm" /></button>
-                    </div>
-                  ))}
+            {/* Built-in and custom fields in the order set in Settings → Forms → Customize. */}
+            <LayoutFields layout={layout} gap="gap-x-3 gap-y-4" blocks={{
+              category: { half: true, el: <div><label className={lbl}>Category{star("category")}</label><CategoryPicker entity="product" value={p.category_id} onChange={(id) => set("category_id", id)} /></div> },
+              description: { el: <div><label className={lbl}>Description{star("description")}</label><textarea value={p.description || ""} onChange={(e) => set("description", e.target.value)} className={`${field} h-20 resize-none`} placeholder="Optional details..." /></div> },
+              code: { half: true, el: <div><label className={lbl}>Code{star("code")}</label><input value={p.code || ""} onChange={(e) => set("code", e.target.value)} className={`${field} font-mono`} /></div> },
+              sku: { half: true, el: <div><label className={lbl}>SKU{star("sku")}</label><input value={p.sku || ""} onChange={(e) => set("sku", e.target.value)} className={`${field} font-mono`} /></div> },
+              stock_policy: { el: <>
+                <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-3">
+                  <div className="text-[11px] font-bold text-ink-primary ">Stock tracking & policies</div>
+                  <label className="flex items-center justify-between cursor-pointer"><span className="text-ink-secondary font-medium">Expiration tracking</span><input type="checkbox" checked={!!p.expiry_tracking} onChange={(e) => set("expiry_tracking", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
+                  <label className="flex items-center justify-between cursor-pointer"><span className="text-ink-secondary font-medium">Enable serial-number tracking <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-800">one-way</span></span><input type="checkbox" checked={!!p.serialized} disabled={!p.serialized && !can("can_track_serials")} onChange={(e) => set("serialized", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
+                  <div className="flex items-center justify-between"><span className="text-ink-secondary font-medium">Min stock (reorder at)</span><input type="number" value={p.min_stock ?? 0} onChange={(e) => set("min_stock", Number(e.target.value))} className="glass-input w-20 px-2 py-1 rounded-lg text-xs text-right font-mono" /></div>
                 </div>
-              );
-            })()}
+              </> },
+              pricing: { el: <>
+                <div className="p-4 rounded-xl bg-blue-50/50 border border-blue-100 space-y-3">
+                  <div className="flex items-center justify-between"><span className="text-[11px] font-bold text-primary ">Pricing & margin</span><span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800">Margin: {margin}%</span></div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className={lbl}>Cost price ({currencySymbol()})</label><input type="number" value={p.cost_price ?? 0} onChange={(e) => set("cost_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>
+                    <div><label className={lbl}>Store price ({currencySymbol()})</label><input type="number" value={p.sell_price ?? 0} onChange={(e) => set("sell_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>
+                  </div>
+                  <div className="text-[11px] text-ink-tertiary flex items-center justify-between pt-1"><span>Repair price (on work orders):</span><span className="font-semibold text-ink-secondary">= store price ({money(Number(p.sell_price) || 0)})</span></div>
+                </div>
+              </> },
+              compatibility: { el: <>
+                {(() => {
+                  const compat = p.compatibility_json || {};
+                  const fits: { brand?: string; model?: string }[] = Array.isArray(compat.fits) ? compat.fits : [];
+                  const setFits = (next: any[]) => set("compatibility_json", { ...compat, fits: next });
+                  return (
+                    <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] font-bold text-ink-primary ">Compatible devices</span>
+                        <button type="button" onClick={() => setFits([...fits, { brand: "", model: "" }])} className="text-[11px] font-bold text-primary hover:underline">+ Add</button>
+                      </div>
+                      <p className="text-[11px] text-ink-tertiary">Flagged as “Fits” when adding parts on a matching device. Blank model = any model of that brand.</p>
+                      {fits.length === 0 && <p className="text-[11px] text-ink-tertiary">None yet.</p>}
+                      {fits.map((f, i) => (
+                        <div key={i} className="flex items-center gap-1.5">
+                          <input className={field} placeholder="Brand (e.g. Apple)" value={f.brand || ""} onChange={(e) => setFits(fits.map((x, j) => j === i ? { ...x, brand: e.target.value } : x))} />
+                          <input className={field} placeholder="Model (blank = any)" value={f.model || ""} onChange={(e) => setFits(fits.map((x, j) => j === i ? { ...x, model: e.target.value } : x))} />
+                          <button aria-label="Close" type="button" onClick={() => setFits(fits.filter((_, j) => j !== i))} className="text-ink-tertiary hover:text-rose-500 shrink-0"><M n="close" c="text-sm" /></button>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </> },
+            }} custom={(ids) => <CustomFields entity="product" only={ids} bare={!!ids} value={p.custom_data || {}} onChange={(cd) => set("custom_data", cd)} creating={!editing} />} />
           </>)}
 
           {kind === "product" && ptab === "stock" && (<>
             <div className="flex items-center justify-between mb-3">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-ink-tertiary">Stock by location</span>
+              <span className="text-[11px] font-bold text-ink-tertiary">Stock by location</span>
               <button type="button" onClick={() => setAdjOpen((o) => !o)} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-50 text-primary border border-blue-100 text-[11px] font-bold hover:bg-blue-100 transition-colors"><M n={adjOpen ? "close" : "tune"} c="text-sm" />{adjOpen ? "Cancel" : "Adjust stock"}</button>
             </div>
             {adjOpen && (
               <div className="mb-3 rounded-2xl bg-slate-50/70 border border-slate-200/80 p-3.5 space-y-3">
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1"><label className="block text-[10px] font-bold uppercase text-ink-tertiary">Location</label>
+                  <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Location</label>
                     <div className="relative"><select value={adjLoc} onChange={(e) => setAdjLoc(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg appearance-none">{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select><M n="expand_more" c="absolute right-2 top-2 text-ink-tertiary pointer-events-none text-xs" /></div></div>
-                  <div className="space-y-1"><label className="block text-[10px] font-bold uppercase text-ink-tertiary">Type</label>
+                  <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Type</label>
                     <div className="relative"><select value={adjType} onChange={(e) => setAdjType(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg appearance-none"><option value="receive">Receive (+)</option><option value="writeoff">Write-off (−)</option><option value="adjust">Correction</option></select><M n="expand_more" c="absolute right-2 top-2 text-ink-tertiary pointer-events-none text-xs" /></div></div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1"><label className="block text-[10px] font-bold uppercase text-ink-tertiary">Quantity</label><input type="number" value={adjQty} onChange={(e) => setAdjQty(e.target.value)} className="glass-input font-mono block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="0" /></div>
-                  <div className="space-y-1"><label className="block text-[10px] font-bold uppercase text-ink-tertiary">Note</label><input value={adjNote} onChange={(e) => setAdjNote(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="Reason (optional)" /></div>
+                  <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Quantity</label><input type="number" value={adjQty} onChange={(e) => setAdjQty(e.target.value)} className="glass-input font-mono block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="0" /></div>
+                  <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Note</label><input value={adjNote} onChange={(e) => setAdjNote(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="Reason (optional)" /></div>
                 </div>
-                <div className="flex justify-end"><button type="button" onClick={submitAdjust} disabled={adjBusy} className="px-4 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{adjBusy ? "Saving…" : "Apply adjustment"}</button></div>
+                <div className="flex justify-end"><button type="button" onClick={submitAdjust} disabled={adjBusy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{adjBusy ? "Saving…" : "Apply adjustment"}</button></div>
               </div>
             )}
             {stock === null
@@ -281,22 +296,22 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
               : stock.items.length === 0
                 ? <p className="text-ink-tertiary">No stock at any location yet.</p>
                 : <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
-                    <div className="grid grid-cols-[1fr_auto_auto_auto] gap-3 px-4 py-2.5 border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary"><span>Location</span><span className="text-right">Reserved</span><span className="text-right">In stock</span><span className="text-right">Value</span></div>
+                    <div className="grid grid-cols-[1fr_auto_auto_auto] gap-3 px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold text-ink-tertiary"><span>Location</span><span className="text-right">Reserved</span><span className="text-right">In stock</span><span className="text-right">Value</span></div>
                     <div className="divide-y divide-slate-100">
                       {stock.items.map((s, i) => (
                         <div key={i} className="grid grid-cols-[1fr_auto_auto_auto] gap-3 px-4 py-2.5 items-center">
                           <span className="font-semibold text-ink-primary truncate">{s.location}</span>
-                          <span className="text-right font-mono text-ink-secondary">{s.reserved}</span>
-                          <span className="text-right font-mono font-bold text-ink-primary">{s.available}</span>
-                          <span className="text-right font-mono text-ink-secondary">{money(s.value ?? 0)}</span>
+                          <span className="text-right tabular-nums text-ink-secondary">{s.reserved}</span>
+                          <span className="text-right tabular-nums font-bold text-ink-primary">{s.available}</span>
+                          <span className="text-right tabular-nums text-ink-secondary">{money(s.value ?? 0)}</span>
                         </div>
                       ))}
                     </div>
-                    <div className="grid grid-cols-[1fr_auto_auto_auto] gap-3 px-4 py-2.5 bg-slate-50 border-t border-slate-200 text-xs font-black">
-                      <span className="uppercase tracking-wider text-ink-tertiary text-[10px] self-center">Total</span>
-                      <span className="text-right font-mono">{stock.total_reserved ?? 0}</span>
-                      <span className="text-right font-mono">{stock.total_available}</span>
-                      <span className="text-right font-mono text-emerald-600">{money(stock.total_value ?? 0)}</span>
+                    <div className="grid grid-cols-[1fr_auto_auto_auto] gap-3 px-4 py-2.5 bg-slate-50 border-t border-slate-200 text-xs font-bold">
+                      <span className="text-ink-tertiary text-[11px] self-center">Total</span>
+                      <span className="text-right tabular-nums">{stock.total_reserved ?? 0}</span>
+                      <span className="text-right tabular-nums">{stock.total_available}</span>
+                      <span className="text-right tabular-nums text-emerald-600">{money(stock.total_value ?? 0)}</span>
                     </div>
                   </div>}
           </>)}
@@ -307,14 +322,14 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
               : batches.length === 0
                 ? <p className="text-ink-tertiary">No cost/stock layers recorded yet. Batches appear as stock is received against purchase orders.</p>
                 : <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
-                    <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-3 px-4 py-2.5 border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary"><span>Document · Supplier</span><span className="text-right">Unit cost</span><span className="text-right">Remaining</span><span className="text-right">Amount</span><span className="text-right">Expiry</span></div>
+                    <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-3 px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold text-ink-tertiary"><span>Document · Supplier</span><span className="text-right">Unit cost</span><span className="text-right">Remaining</span><span className="text-right">Amount</span><span className="text-right">Expiry</span></div>
                     <div className="divide-y divide-slate-100">
                       {batches.map((b) => (
                         <div key={b.id} className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-3 px-4 py-2.5 items-center text-xs">
-                          <div className="min-w-0"><span className="font-bold text-ink-primary font-mono">{b.document || "—"}</span>{b.supplier && <span className="ml-2 text-ink-tertiary">{b.supplier}</span>}<div className="text-[10px] text-ink-tertiary">{[b.warehouse, b.location].filter(Boolean).join(" · ") || "—"} · {fmtDate(b.received_at || undefined)}</div></div>
-                          <span className="text-right font-mono text-ink-secondary">{money(b.unit_cost ?? 0)}</span>
-                          <span className="text-right font-mono font-bold text-ink-primary">{b.qty_remaining ?? 0}<span className="text-ink-tertiary font-normal">/{b.qty_received ?? 0}</span></span>
-                          <span className="text-right font-mono text-emerald-600">{money(b.amount ?? 0)}</span>
+                          <div className="min-w-0"><span className="font-bold text-ink-primary tabular-nums">{b.document || "—"}</span>{b.supplier && <span className="ml-2 text-ink-tertiary">{b.supplier}</span>}<div className="text-[11px] text-ink-tertiary">{[b.warehouse, b.location].filter(Boolean).join(" · ") || "—"} · {fmtDate(b.received_at || undefined)}</div></div>
+                          <span className="text-right tabular-nums text-ink-secondary">{money(b.unit_cost ?? 0)}</span>
+                          <span className="text-right tabular-nums font-bold text-ink-primary">{b.qty_remaining ?? 0}<span className="text-ink-tertiary font-normal">/{b.qty_received ?? 0}</span></span>
+                          <span className="text-right tabular-nums text-emerald-600">{money(b.amount ?? 0)}</span>
                           <span className="text-right text-ink-tertiary whitespace-nowrap">{b.expiry_date ? fmtDate(b.expiry_date) : "—"}</span>
                         </div>
                       ))}
@@ -336,7 +351,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                         ))}
                       </div>
                       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden mt-3">
-                    <div className="grid grid-cols-[1fr_auto_auto] gap-3 px-4 py-2.5 border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary"><span>Type · reference</span><span className="text-right">Qty</span><span className="text-right">When</span></div>
+                    <div className="grid grid-cols-[1fr_auto_auto] gap-3 px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold text-ink-tertiary"><span>Type · reference</span><span className="text-right">Qty</span><span className="text-right">When</span></div>
                     <div className="divide-y divide-slate-100">
                       {shown.map((m, i) => (
                         <div key={i} className="grid grid-cols-[1fr_auto_auto] gap-3 px-4 py-2.5 items-center">
@@ -345,7 +360,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                             {m.location && <span className="text-ink-tertiary"> · {m.location}</span>}
                             {m.ref_type && <div className="text-[11px] text-ink-tertiary font-mono">{humanize(m.ref_type)}{m.ref_id ? ` #${String(m.ref_id).slice(0, 8)}` : ""}{m.unit_cost ? ` · ${money(m.unit_cost)}` : ""}</div>}
                           </div>
-                          <span className={`text-right font-mono font-bold ${m.qty >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{m.qty >= 0 ? "+" : ""}{m.qty}</span>
+                          <span className={`text-right tabular-nums font-bold ${m.qty >= 0 ? "text-emerald-600" : "text-rose-600"}`}>{m.qty >= 0 ? "+" : ""}{m.qty}</span>
                           <span className="text-right text-ink-tertiary whitespace-nowrap">{fmtDate(m.at)}</span>
                         </div>
                       ))}
@@ -358,20 +373,20 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
 
           {kind === "product" && ptab === "purchasing" && (<>
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
-              <div className="p-3.5 border-b border-slate-100 text-[11px] font-bold text-ink-primary uppercase tracking-wider">Purchase orders{pos ? ` (${pos.length})` : ""}</div>
+              <div className="p-3.5 border-b border-slate-100 text-[11px] font-bold text-ink-primary ">Purchase orders{pos ? ` (${pos.length})` : ""}</div>
               {pos === null ? <p className="text-ink-tertiary p-4">Loading…</p>
                 : pos.length === 0 ? <p className="text-ink-tertiary p-4">No purchase orders reference this product.</p>
                 : <div className="divide-y divide-slate-100">
                     {pos.map((o) => (
                       <div key={o.id} className="px-4 py-2.5 flex items-center justify-between">
-                        <div><span className="font-bold text-ink-primary font-mono">{o.po_number || o.id.slice(0, 8)}</span><span className="ml-2 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-ink-secondary capitalize">{(o.status || "").replace(/_/g, " ")}</span></div>
-                        <div className="text-right text-ink-secondary"><span className="font-mono font-semibold">{o.qty_received ?? 0}/{o.qty_ordered ?? 0}</span><span className="text-ink-tertiary"> · exp {fmtDate(o.expected_at)}</span></div>
+                        <div><span className="font-bold text-ink-primary font-mono">{o.po_number || o.id.slice(0, 8)}</span><span className="ml-2 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-ink-secondary capitalize">{(o.status || "").replace(/_/g, " ")}</span></div>
+                        <div className="text-right text-ink-secondary"><span className="tabular-nums font-semibold">{o.qty_received ?? 0}/{o.qty_ordered ?? 0}</span><span className="text-ink-tertiary"> · exp {fmtDate(o.expected_at)}</span></div>
                       </div>
                     ))}
                   </div>}
             </div>
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
-              <div className="p-3.5 border-b border-slate-100 text-[11px] font-bold text-ink-primary uppercase tracking-wider">Reservations{resv ? ` (${resv.length})` : ""}</div>
+              <div className="p-3.5 border-b border-slate-100 text-[11px] font-bold text-ink-primary ">Reservations{resv ? ` (${resv.length})` : ""}</div>
               {resv === null ? <p className="text-ink-tertiary p-4">Loading…</p>
                 : resv.length === 0 ? <p className="text-ink-tertiary p-4">No open reservations against this product.</p>
                 : <div className="divide-y divide-slate-100">
@@ -391,8 +406,8 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                 <div><label className={lbl}>Standard duration (min)</label><input type="number" value={p.duration_min ?? 60} onChange={(e) => set("duration_min", e.target.value)} className={`${field} font-mono`} /></div>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div><label className={lbl}>Base labor fee (₹)</label><input type="number" value={p.price ?? 0} onChange={(e) => set("price", e.target.value)} className={`${field} font-mono font-bold`} /></div>
-                <div><label className={lbl}>Cost (₹)</label><input type="number" value={p.cost_price ?? 0} onChange={(e) => set("cost_price", e.target.value)} className={`${field} font-mono`} /></div>
+                <div><label className={lbl}>Labor price ({currencySymbol()})</label><input type="number" value={p.price ?? 0} onChange={(e) => set("price", e.target.value)} className={`${field} font-mono font-bold`} /></div>
+                <div><label className={lbl}>Cost ({currencySymbol()})</label><input type="number" value={p.cost_price ?? 0} onChange={(e) => set("cost_price", e.target.value)} className={`${field} font-mono`} /></div>
               </div>
               <label className="flex items-center justify-between cursor-pointer p-3 rounded-xl bg-slate-50/90 border border-slate-200/80"><span className="text-ink-secondary font-medium">This is a labor operation</span><input type="checkbox" checked={!!p.is_labor} onChange={(e) => set("is_labor", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
               {/* 144ax G3 — flat-rate labour: bill the standard duration × the fee as an hourly rate */}
@@ -430,19 +445,19 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
             <div className="space-y-3.5">
               <div><label className={lbl}>Job kit name <span className="text-rose-500">*</span></label><input value={p.name || ""} onChange={(e) => set("name", e.target.value)} className={field} /></div>
               <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-2.5">
-                <div className="text-[11px] font-bold text-ink-primary uppercase tracking-wider">Services & products</div>
+                <div className="text-[11px] font-bold text-ink-primary ">Services & products</div>
                 {comps.length === 0 && <p className="text-[11px] text-ink-tertiary">No items yet — search below to add services and products.</p>}
                 {comps.map((c: any, idx: number) => (
                   <div key={c.ref_id + idx} className="bg-white rounded-lg border border-slate-200/80 px-2.5 py-1.5 space-y-1">
                     <div className="flex items-center gap-2">
-                      <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${c.ref_type === "service" ? "bg-emerald-100 text-emerald-700" : "bg-blue-100 text-primary"}`}>{c.ref_type === "service" ? "svc" : "prod"}</span>
-                      <span className="flex-1 text-xs font-semibold text-ink-primary truncate">{c.name || c.ref_id}{c.missing && <span className="ml-1 text-[9px] uppercase font-bold text-amber-700">missing</span>}</span>
+                      <span className={`text-[11px]  font-bold px-1.5 py-0.5 rounded ${c.ref_type === "service" ? "bg-emerald-100 text-emerald-700" : "bg-blue-100 text-primary"}`}>{c.ref_type === "service" ? "svc" : "prod"}</span>
+                      <span className="flex-1 text-xs font-semibold text-ink-primary truncate">{c.name || c.ref_id}{c.missing && <span className="ml-1 text-[11px] font-bold text-amber-700">missing</span>}</span>
                       <input type="number" min={1} value={c.qty} onChange={(e) => setQty(idx, Number(e.target.value))} className="w-14 glass-input px-2 py-1 text-xs rounded-lg text-center" aria-label="Quantity" />
-                      <span className="w-16 text-right font-mono text-[11px] text-ink-tertiary">{money((c.std_price || 0) * (c.qty || 1))}</span>
+                      <span className="w-16 text-right tabular-nums text-[11px] text-ink-tertiary">{money((c.std_price || 0) * (c.qty || 1))}</span>
                       <button type="button" onClick={() => removeComp(idx)} aria-label="Remove" className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>
                     </div>
                     {c.ref_type === "product" && (
-                      <button type="button" onClick={() => toggleVariant(idx)} className="flex items-center gap-1.5 text-[10px] font-semibold text-ink-tertiary hover:text-primary pl-0.5" title="At apply-time, swap this part for the one in its category that fits the work order's device">
+                      <button type="button" onClick={() => toggleVariant(idx)} className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-tertiary hover:text-primary pl-0.5" title="At apply-time, swap this part for the one in its category that fits the work order's device">
                         <M n={c.device_variant ? "check_box" : "check_box_outline_blank"} c={`text-[15px] ${c.device_variant ? "text-primary" : ""}`} />
                         Auto-pick the part that fits the device
                       </button>
@@ -460,7 +475,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                   </div>
                   <CatalogPicker key={compKind} type={compKind} openOnFocus placeholder={`Choose a ${compKind}…`} onPick={addComp} />
                 </div>
-                <div className="text-[11px] text-ink-tertiary text-right">Components total <span className="font-mono font-semibold text-ink-secondary">{money(stdTotal)}</span></div>
+                <div className="text-[11px] text-ink-tertiary text-right">Components total <span className="tabular-nums font-semibold text-ink-secondary">{money(stdTotal)}</span></div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -471,7 +486,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                   </select>
                 </div>
                 <div>
-                  <label className={lbl}>{(p.price_mode || "sum") === "fixed" ? "Kit price (₹)" : "Price (auto)"}</label>
+                  <label className={lbl}>{(p.price_mode || "sum") === "fixed" ? `Kit price (${currencySymbol()})` : "Price (auto)"}</label>
                   <input type="number" value={(p.price_mode || "sum") === "fixed" ? (p.price ?? 0) : stdTotal} disabled={(p.price_mode || "sum") !== "fixed"} onChange={(e) => set("price", e.target.value)} className={`${field} font-mono font-bold disabled:opacity-60`} />
                 </div>
               </div>
@@ -482,7 +497,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
 
         <div className="p-4 border-t border-slate-100 flex items-center justify-between bg-slate-50/70">
           <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
-          <button onClick={save} className="px-5 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white font-bold text-xs shadow-clay-sm hover:brightness-110">{footerLabel}</button>
+          <button onClick={save} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm hover:brightness-110">{footerLabel}</button>
         </div>
         {toast && <div className="absolute bottom-20 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2 rounded-xl shadow-clay-drawer z-20">{toast}</div>}
       </div>

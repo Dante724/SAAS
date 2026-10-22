@@ -6,8 +6,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Bundle, BundleComponent, Part, Service, Employee
-from backend.services.auth import get_current_employee, require_perm
-from backend.services.money import q2, q4
+from backend.services.auth import assert_perm, get_current_employee, require_perm
+from backend.services.money import q2
 
 router = APIRouter(prefix="/api/bundles", tags=["bundles"])
 
@@ -97,6 +97,7 @@ async def create_bundle(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
+    await assert_perm(db, current, "can_manage_bundles")
     if not data.components:
         raise HTTPException(400, "A bundle needs at least one component")
     await _validate_components(db, current.org_id, data.components)
@@ -117,6 +118,7 @@ async def update_bundle(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
+    await assert_perm(db, current, "can_manage_bundles")
     b = (await db.execute(select(Bundle).where(
         Bundle.id == bundle_id, Bundle.org_id == current.org_id))).scalar_one_or_none()
     if not b:
@@ -139,6 +141,7 @@ async def delete_bundle(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
+    await assert_perm(db, current, "can_manage_bundles")
     b = (await db.execute(select(Bundle).where(
         Bundle.id == bundle_id, Bundle.org_id == current.org_id))).scalar_one_or_none()
     if b:

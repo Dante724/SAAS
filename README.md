@@ -1,4 +1,4 @@
-# RepairOS — Orderry-style Repair Shop Manager
+# Tekly — Orderry-style Repair Shop Manager
 
 Full-stack repair shop management app. Python/FastAPI backend + Liquid-Glass × Claymorphism frontend (no build step).
 
@@ -28,7 +28,7 @@ Open **http://localhost:8000**
 The database (`repairos.db`) auto-creates and seeds demo data on first launch.
 
 ## VS Code
-Open the folder, press **F5**, choose "Run RepairOS". Install the Python extension if prompted.
+Open the folder, press **F5**, choose "Run Tekly". Install the Python extension if prompted.
 
 ## API docs
 Interactive Swagger UI at **http://localhost:8000/docs**

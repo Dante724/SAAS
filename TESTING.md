@@ -1,4 +1,4 @@
-# Testing — RepairOS
+# Testing — Tekly
 
 How the test build is put together, how to run every layer, what each one guarantees, and where the
 gaps are (ranked by business risk). Production runs **Postgres 16**; tests default to SQLite for speed,

@@ -131,7 +131,7 @@ async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
     verb = "accepted" if decision == "accept" else "declined"
     db.add(EventFeedItem(
         org_id=order.org_id, entity_type="order", entity_id=order.id,
-        item_type="comment", body=f"Customer {verb} the estimate of \u20b9{int(order.total or 0)}",
+        item_type="comment", body=f"Customer {verb} the estimate",
         visibility="client", author_name=who,
     ))
     if signature:
@@ -229,7 +229,12 @@ async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
 @router.get("/track/{token}")
 async def track(token: str, db: AsyncSession = Depends(get_db)):
     order = await _load(db, token)
+    return await _track_payload(db, order)
 
+
+async def _track_payload(db: AsyncSession, order: "Order") -> dict:
+    """Everything the customer sees for one job. The track page and the customer portal's job
+    view both show this, so the two pages never drift apart."""
     client = (await db.execute(select(Client).where(Client.id == order.client_id))).scalar_one_or_none() if order.client_id else None
     device = (await db.execute(select(Device).where(Device.id == order.device_id))).scalar_one_or_none() if order.device_id else None
     org = (await db.execute(select(Organisation).where(Organisation.id == order.org_id))).scalar_one_or_none()
@@ -260,10 +265,23 @@ async def track(token: str, db: AsyncSession = Depends(get_db)):
         ).order_by(desc(OrderComment.created_at))
     )).scalars().all()
 
+    # The shop's own status names; any status outside the six-step flow is placed by its group,
+    # and a dropped job ("Not collected", "Cancelled") stops the progress bar instead of
+    # pretending it's back at "Received".
+    from backend.models import OrderStatus as _OS
+    _sts = {s.key: s for s in (await db.execute(select(_OS).where(
+        _OS.org_id == order.org_id,
+        _OS.record_type == ("estimate" if getattr(order, "is_estimate", False) else "work_order")))).scalars().all()}
+    _cur_st = _sts.get(order.status)
+    _group = getattr(_cur_st, "status_group", None)
+    stopped = _group == "dropped"
     try:
         stage_index = STAGE_FLOW.index(order.status)
     except ValueError:
-        stage_index = 0
+        stage_index = {"new": 0, "pending": 2, "in_progress": 3, "ready": 4, "closed": 5}.get(_group or "", 0)
+
+    def _label(key):
+        return STAGE_LABEL.get(key) or (_sts[key].name if key in _sts else (key or "").replace("_", " ").capitalize())
 
     # Display currency for the public page: order snapshot → client pref → base.
     from backend.services import currency as _cur
@@ -278,9 +296,15 @@ async def track(token: str, db: AsyncSession = Depends(get_db)):
         base = (l.unit_price or 0) * (l.qty or 1)
         disc = base * (l.discount or 0) / 100 if (l.discount_type or "pct") == "pct" else (l.discount or 0)
         return q2((base - disc) * (_fx or 1))
+    # Several items per job: each line says which item it's for; item by item, whole job last.
+    from backend.services import multi_asset as _ma
+    _inames = await _ma.item_names(db, order.org_id, [l.order_item_id for l in _lines])
+    if _inames:
+        _lines = _ma.sort_by_item(_lines, _inames, key=lambda l: l.order_item_id)
     lines_pub = [{"label": l.description or (l.kind or l.line_type or "Item").title(),
                   "qty": l.qty or 1, "kind": l.kind or l.line_type,
-                  "amount": _line_amt(l)} for l in _lines]
+                  "amount": _line_amt(l),
+                  **({"item": (_inames.get(l.order_item_id) or (None,))[0]} if _inames else {})} for l in _lines]
 
     # 144ix — customer review capture: expose active feedback settings + whether this
     # order already has a submitted rating. Actual submit is token-gated below.
@@ -308,8 +332,13 @@ async def track(token: str, db: AsyncSession = Depends(get_db)):
     shop_address = (loc.address if (loc and getattr(loc, "address", None)) else getattr(org, "company_address", None))
     shop_phone = (loc.phone if (loc and getattr(loc, "phone", None)) else getattr(org, "company_phone", None))
 
+    # Forms → Customize → "Shows on: Customer portal" — only fields the shop ticked, never the rest.
+    from backend.routers.forms import shown_values
+    custom_fields = await shown_values(db, order.org_id, "show_in_portal", order=order, device=device, client=client)
+
     return {
         "lines": lines_pub,
+        "custom_fields": custom_fields,
         "logo_data": (org.logo_data if (org and _show_logo) else None),
         "brand_color": brand_color,
         "website": getattr(org, "website", None) if org else None,
@@ -323,8 +352,10 @@ async def track(token: str, db: AsyncSession = Depends(get_db)):
         "fx_rate": _fx,
         "total_converted": q2((order.total or 0) * _fx) if _fx else order.total,
         "status": order.status,
-        "stage_label": STAGE_LABEL.get(order.status, order.status.replace("_", " ").title()),
+        "is_estimate": bool(getattr(order, "is_estimate", False)),
+        "stage_label": _label(order.status),
         "stage_index": stage_index,
+        "stopped": stopped,
         "stages": [{"key": s, "label": STAGE_LABEL[s]} for s in STAGE_FLOW],
         "shop_name": org.name if org else "Repair shop",
         "shop_phone": shop_phone,
@@ -339,8 +370,9 @@ async def track(token: str, db: AsyncSession = Depends(get_db)):
         "scheduled_for": (order.scheduled_for.isoformat() if order.scheduled_for else None) if getattr(org, "oe_show_scheduled", False) else None,
         "scheduled_to": (order.scheduled_to.isoformat() if getattr(order, "scheduled_to", None) else None) if getattr(org, "oe_show_scheduled", False) else None,
         "awaiting_approval": await _can_sign(db, order),
-        # 144cv — messaging is off once the order is closed (box hidden client-side, enforced server-side)
-        "allow_messages": getattr(org, "oe_allow_messages", True) and not await _order_is_closed(db, order),
+        # Per-status messaging rule (services/messaging_rule): box hidden client-side, enforced
+        # server-side. When it's closed for this order, the page offers "Start a new request".
+        **(await _message_fields(db, order, org)),
         "allow_recommend": getattr(org, "oe_allow_recommend", True),
         "recommendations": await _public_recommendations(db, order),
         "checklist": await _public_checklist(db, order),
@@ -348,7 +380,7 @@ async def track(token: str, db: AsyncSession = Depends(get_db)):
         "has_signature": bool((await db.execute(select(DocumentSignature.id).where(
             DocumentSignature.order_id == order.id).limit(1))).first()),
         "timeline": [
-            {"to": l.to_status, "label": STAGE_LABEL.get(l.to_status, l.to_status),
+            {"to": l.to_status, "label": _label(l.to_status),
              "at": l.changed_at.isoformat() if l.changed_at else None}
             for l in logs
         ],
@@ -459,11 +491,51 @@ async def portal_home(token: str, db: AsyncSession = Depends(get_db)):
     orders = (await db.execute(
         select(Order).where(Order.client_id == client.id).order_by(desc(Order.created_at))
     )).scalars().all()
-    work_orders = [_order_card(o) for o in orders if not o.is_estimate]
-    estimates = [_order_card(o) for o in orders if o.is_estimate]
+
+    # What the job list shows beside each card: the item, the total in the customer's currency,
+    # and whether the customer has something to do (approve, or choose recommended work).
+    from backend.models import Recommendation as _R
+    from backend.services import currency as _cur
+    dev_ids = {o.device_id for o in orders if o.device_id}
+    devices = {d.id: d for d in (await db.execute(select(Device).where(Device.id.in_(dev_ids)))).scalars().all()} if dev_ids else {}
+    open_recs: dict = {}
+    if orders and getattr(org, "oe_allow_recommend", True):
+        for oid in (await db.execute(select(_R.order_id).where(
+                _R.order_id.in_([o.id for o in orders]), _R.status == "sent"))).scalars().all():
+            open_recs[oid] = open_recs.get(oid, 0) + 1
+    ci = await _cur.resolve_for_client(db, client.org_id, client.id, None)
+    # The shop's own status names, as the job page shows them.
+    from backend.models import OrderStatus as _OS
+    names = {(s.record_type, s.key): s.name for s in (await db.execute(
+        select(_OS).where(_OS.org_id == client.org_id))).scalars().all()}
+
+    async def card(o: "Order") -> dict:
+        c = _order_card(o)
+        c["stage_label"] = STAGE_LABEL.get(o.status) or names.get(
+            ("estimate" if o.is_estimate else "work_order", o.status)) or c["stage_label"]
+        d = devices.get(o.device_id)
+        # Same currency rule as the job page: the order's own currency wins over the client's.
+        oci = ci if not o.currency_code or o.currency_code == ci["code"] else \
+            await _cur.resolve_for_client(db, client.org_id, client.id, o.currency_code)
+        fx = o.fx_rate or oci["rate"] or 1
+        c.update({
+            "device": (" ".join(p for p in [d.brand, d.model] if p) or None) if d else None,
+            "total_converted": q2((o.total or 0) * fx),
+            "currency_symbol": oci["symbol"],
+            "awaiting_approval": await _can_sign(db, o),
+            "open_recommendations": open_recs.get(o.id, 0),
+        })
+        return c
+
+    work_orders = [await card(o) for o in orders if not o.is_estimate]
+    estimates = [await card(o) for o in orders if o.is_estimate]
+    _show_logo = getattr(org, "page_show_logo", True) or getattr(org, "oe_show_logo", True)
     return {
         "shop_name": org.name if org else "Repair shop",
         "client_name": client.name,
+        "logo_data": (org.logo_data if (org and _show_logo) else None),
+        "brand_color": (getattr(org, "page_color", None) or getattr(org, "brand_primary_color", None)) if org else None,
+        "currency_symbol": ci["symbol"],
         "work_orders": work_orders,
         "estimates": estimates,
         "counts": {
@@ -476,42 +548,24 @@ async def portal_home(token: str, db: AsyncSession = Depends(get_db)):
 
 @router.get("/portal/{token}/order/{order_id}")
 async def portal_order(token: str, order_id: str, db: AsyncSession = Depends(get_db)):
+    """One job in the portal: the same payload as the track page, plus the portal's own fields.
+    `public_token` lets the portal reach the per-job extras (rating, new request, signed PDF,
+    e-invoice) — the portal holder is the job's own customer, who already gets that link."""
     client = await _client_by_portal(db, token)
-    from backend.models import OrderLine
     order = (await db.execute(
         select(Order).where(Order.id == order_id, Order.client_id == client.id)
     )).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
-    lines = (await db.execute(
-        select(OrderLine).where(OrderLine.order_id == order.id).order_by(OrderLine.id)
-    )).scalars().all()
-    logs = (await db.execute(
-        select(OrderStatusLog).where(OrderStatusLog.order_id == order.id).order_by(OrderStatusLog.changed_at)
-    )).scalars().all()
-    feed = (await db.execute(
-        select(EventFeedItem).where(
-            EventFeedItem.entity_type == "order", EventFeedItem.entity_id == order.id,
-            EventFeedItem.visibility == "client").order_by(desc(EventFeedItem.created_at))
-    )).scalars().all()
-    card = _order_card(order)
-    card.update({
+    payload = await _track_payload(db, order)
+    payload.update({
+        "id": order.id,
+        "public_token": order.public_token,
         "diagnosis": order.diagnosis,
-        "lines": [{"description": ln.description, "qty": ln.qty,
-                   "unit_price": ln.unit_price, "line_type": ln.line_type} for ln in lines],
-        "can_approve": bool(order.is_estimate) and await _approval_enabled(db, client.org_id),
-        "allow_messages": await _messages_enabled(db, client.org_id),
-        "allow_recommend": await _recommend_enabled(db, client.org_id),
-        "recommendations": await _public_recommendations(db, order),
-        "timeline": [{"to": lg.to_status,
-                      "label": STAGE_LABEL.get(lg.to_status, lg.to_status.replace("_", " ").title()),
-                      "at": lg.changed_at.isoformat() if lg.changed_at else None} for lg in logs],
-        "updates": [{"type": f.item_type, "body": f.body,
-                     "media_data": f.media_data if f.item_type in ("photo", "signature", "file") else None,
-                     "media_name": f.media_name, "media_mime": getattr(f, "media_mime", None),
-                     "at": f.created_at.isoformat() if f.created_at else None} for f in feed],
+        "warranty_until": order.warranty_until.isoformat() if order.warranty_until else None,
+        "can_approve": payload["awaiting_approval"],
     })
-    return card
+    return payload
 
 
 @router.post("/portal/{token}/order/{order_id}/respond")
@@ -537,18 +591,6 @@ async def portal_respond(token: str, order_id: str, data: AcceptIn, request: Req
 class MessageIn(BaseModel):
     body: str
     name: Optional[str] = None
-
-
-async def _messages_enabled(db: AsyncSession, org_id: str) -> bool:
-    from backend.models import Organisation as _O
-    org = (await db.execute(select(_O).where(_O.id == org_id))).scalar_one_or_none()
-    return getattr(org, "oe_allow_messages", True) if org else True
-
-
-async def _approval_enabled(db: AsyncSession, org_id: str) -> bool:
-    from backend.models import Organisation as _O
-    org = (await db.execute(select(_O).where(_O.id == org_id))).scalar_one_or_none()
-    return getattr(org, "oe_allow_approval", True) if org else True
 
 
 async def _can_sign(db: AsyncSession, order: "Order") -> bool:
@@ -604,67 +646,122 @@ async def _public_recommendations(db: AsyncSession, order: "Order") -> list[dict
     rows = (await db.execute(select(_R).where(
         _R.order_id == order.id, _R.status.in_(("sent", "approved", "declined")))
         .order_by(_R.created_at))).scalars().all()
+    # Several items per job: say which item each one is for, so the customer decides per item.
+    from backend.services.multi_asset import item_names
+    names = await item_names(db, order.org_id, [r.order_item_id for r in rows])
     return [{
         "id": r.id, "title": r.title, "note": r.note,
         "qty": r.qty, "unit_price": r.unit_price,
         "line_total": q2((r.qty or 0) * (r.unit_price or 0)),
         "media_data": r.media_data, "status": r.status,
+        "kind": r.kind, "urgency": r.urgency, "decline_reason": r.decline_reason,
+        "decided_by_name": r.decided_by_name,
+        "decided_at": r.decided_at.isoformat() if r.decided_at else None,
+        "item": (names[r.order_item_id][0] if r.order_item_id in names else None),
+        "item_order": (names[r.order_item_id][1] if r.order_item_id in names else None),
     } for r in rows]
 
 
 class RecDecideIn(BaseModel):
     approve_ids: list[str] = []
-    decline_ids: list[str] = []
+    decline_ids: list[str] = []          # older pages: "Decline all"
+    later_ids: list[str] = []            # "Not now": saved for later, the shop can raise it again
+    name: Optional[str] = None           # the name the customer typed when confirming
 
 
-async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDecideIn") -> dict:
-    """Customer approves and/or declines recommended items. Approved items become
-    order lines (via the shared money seam); every decision bumps the staff dot."""
+REMIND_AFTER_DAYS = 90
+
+
+async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDecideIn",
+                                  request: Optional[Request] = None) -> dict:
+    """The customer chooses which recommended items to add. Only what they tick is approved;
+    anything they don't touch stays open (nothing is declined silently). "Not now" saves an
+    item for later (declined + not_now + a reminder date). An item saved for later can still be
+    added while the job is open. Approved items become order lines through the shared money
+    seam; the rows are locked so a double tap can't add the same work twice."""
     if not await _recommend_enabled(db, order.org_id):
         raise HTTPException(403, "Recommendations are turned off for this shop")
+    from datetime import date as _date
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+
     from backend.models import Recommendation as _R
     from backend.routers.recommendations import approve_recommendation
-    ids = list(dict.fromkeys((data.approve_ids or []) + (data.decline_ids or [])))
+    approve = list(dict.fromkeys(data.approve_ids or []))
+    later = list(dict.fromkeys((data.later_ids or []) + (data.decline_ids or [])))
+    if set(approve) & set(later):
+        raise HTTPException(400, "An item can't be both added and saved for later")
+    ids = approve + later
     if not ids:
         raise HTTPException(400, "Nothing selected")
+    name = (data.name or "").strip()[:200] or None
     rows = {r.id: r for r in (await db.execute(select(_R).where(
-        _R.order_id == order.id, _R.id.in_(ids), _R.status == "sent"))).scalars().all()}
-    approved = declined = 0
-    for rid in (data.approve_ids or []):
+        _R.order_id == order.id, _R.org_id == order.org_id, _R.id.in_(ids))
+        .with_for_update())).scalars().all()}
+    approved = later_n = 0
+    added = 0.0
+    skipped: list[str] = []
+    for rid in approve:
         r = rows.get(rid)
-        if r:
-            await approve_recommendation(db, r)
-            approved += 1
-    for rid in (data.decline_ids or []):
+        # Open items, and items saved for later (the customer changed their mind) can be added.
+        if not r or r.status not in ("sent", "declined"):
+            skipped.append(rid)
+            continue
+        line = await approve_recommendation(db, r)
+        r.decline_reason = None
+        r.remind_after = None
+        r.decided_by_name = name
+        added += float(line.total or 0)
+        approved += 1
+    for rid in later:
         r = rows.get(rid)
-        if r and r.status == "sent":
-            from datetime import datetime as _dtnow
-            r.status = "declined"
-            r.decided_at = _dtnow.utcnow()
-            declined += 1
-    decided = approved + declined
+        if not r or r.status != "sent":
+            skipped.append(rid)
+            continue
+        r.status = "declined"
+        r.decline_reason = "not_now"
+        r.decided_at = _dt.utcnow()
+        r.remind_after = _date.today() + _td(days=REMIND_AFTER_DAYS)
+        r.decided_by_name = name
+        later_n += 1
+    decided = approved + later_n
     if decided:
         order.rec_unread = (order.rec_unread or 0) + decided
-    return {"approved": approved, "declined": declined}
+        # Add the chosen work to the job's total (a job priced at check-in may have no lines
+        # yet, so recomputing from lines would wipe its quoted price).
+        order.total = q2(float(order.total or 0) + added)
+        parts = []
+        if approved:
+            parts.append(f"added {approved} recommended item{'s' if approved != 1 else ''}")
+        if later_n:
+            parts.append(f"saved {later_n} for later")
+        db.add(EventFeedItem(org_id=order.org_id, entity_type="order", entity_id=order.id,
+                             item_type="status", visibility="internal",
+                             body=f"{name or 'The customer'} {' and '.join(parts)}."))
+        # Who confirmed and when is kept on each item (decided_by_name / decided_at); the signed
+        # estimate/work-order record is left alone, so adding an extra never reads as "signed".
+    return {"approved": approved, "saved_for_later": later_n, "declined": later_n, "skipped": skipped,
+            "total": q2(float(order.total or 0))}
 
 
-async def _order_is_closed(db: AsyncSession, order: "Order") -> bool:
-    """144cv — is this order in a terminal (closed) status right now? Resolved from the org's
-    configurable status table (is_terminal); falls back to the built-in terminal keys when the
-    status row isn't found. Based on CURRENT status so a reopened order is messageable again."""
-    from backend.models import OrderStatus
-    s = (await db.execute(select(OrderStatus).where(
-        OrderStatus.org_id == order.org_id, OrderStatus.key == order.status,
-        OrderStatus.record_type == "work_order"))).scalars().first()
-    if s is not None:
-        return bool(s.is_terminal)
-    return order.status in ("done", "delivered", "dropped", "closed", "canceled")
+async def _org(db: AsyncSession, org_id: str):
+    return (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
+
+
+async def _message_fields(db: AsyncSession, order: "Order", org) -> dict:
+    from backend.services.messaging_rule import messaging_state
+    st = await messaging_state(db, order, org)
+    return {"allow_messages": st["open"], "messages_until": st["until"],
+            # closed for this order (not switched off shop-wide) → offer a new request instead
+            "can_new_request": st["reason"] in ("status", "expired")}
 
 
 async def _post_client_message(db: AsyncSession, order: "Order", body: str, who: str):
-    if not await _messages_enabled(db, order.org_id):
+    from backend.services.messaging_rule import messaging_state
+    st = await messaging_state(db, order, await _org(db, order.org_id))
+    if st["reason"] == "off":
         raise HTTPException(403, "Messaging is turned off for this shop")
-    if await _order_is_closed(db, order):
+    if not st["open"]:
         raise HTTPException(403, "This order is closed — messaging is no longer available.")
     body = (body or "").strip()
     if not body:
@@ -684,6 +781,46 @@ async def track_message(token: str, data: MessageIn, db: AsyncSession = Depends(
         (await db.execute(select(Client).where(Client.id == order.client_id))).scalar_one_or_none().name
         if order.client_id else "Customer")
     await _post_client_message(db, order, data.body, who)
+    await db.commit()
+    return {"ok": True}
+
+
+class NewRequestIn(BaseModel):
+    body: str
+
+
+@router.post("/track/{token}/new-request", status_code=201)
+async def track_new_request(token: str, data: NewRequestIn, request: Request, db: AsyncSession = Depends(get_db)):
+    """Messaging closed on a finished order → the customer files a new request instead. It
+    lands as an inquiry linked to the same customer and naming the same device, so staff can
+    turn it into a work order in one click."""
+    from datetime import timedelta as _td
+
+    from backend.models import Lead
+    from backend.routers.feed import log_system_event
+    from backend.services.messaging_rule import messaging_state
+    from backend.services.ratelimit import client_ip as _ip
+    from backend.services.ratelimit import aenforce as _rate
+    await _rate("track_new_req", f"{_ip(request)}:{token}", limit=3, window_sec=3600)
+    order = await _load(db, token)
+    st = await messaging_state(db, order, await _org(db, order.org_id))
+    if st["reason"] not in ("status", "expired"):
+        raise HTTPException(409, "Send a message on this order instead")
+    body = (data.body or "").strip()[:2000]
+    if not body:
+        raise HTTPException(400, "Tell the shop what you need")
+    client = (await db.execute(select(Client).where(Client.id == order.client_id))).scalar_one_or_none() if order.client_id else None
+    device = (await db.execute(select(Device).where(Device.id == order.device_id))).scalar_one_or_none() if order.device_id else None
+    dev = " ".join(p for p in [getattr(device, "brand", None), getattr(device, "model", None)] if p)
+    ref = f"Follow-up to {order.order_number or 'a previous order'}" + (f" ({dev})" if dev else "")
+    lead = Lead(org_id=order.org_id, location_id=order.location_id,
+                name=(client.name if client else "Customer")[:200],
+                phone=(client.phone if client else None), email=(client.email if client else None),
+                client_id=client.id if client else None, source="web",
+                inquiry=f"{ref}: {body}"[:2000], sla_due_at=_dt.utcnow() + _td(minutes=60))
+    db.add(lead)
+    await db.flush()
+    await log_system_event(db, order.org_id, "lead", lead.id, f"New request from the track page — {ref}")
     await db.commit()
     return {"ok": True}
 
@@ -738,31 +875,23 @@ async def portal_message(token: str, order_id: str, data: MessageIn, db: AsyncSe
     return {"ok": True}
 
 
-async def _recompute_order_total(db: AsyncSession, order: "Order"):
-    from backend.models import OrderLine as _OL
-    lines = (await db.execute(select(_OL).where(_OL.order_id == order.id))).scalars().all()
-    order.total = q2(sum(ln.total or 0 for ln in lines))
-
-
 @router.post("/track/{token}/recommendations/decide")
-async def track_decide_recs(token: str, data: RecDecideIn, db: AsyncSession = Depends(get_db)):
+async def track_decide_recs(token: str, data: RecDecideIn, request: Request, db: AsyncSession = Depends(get_db)):
     order = await _load(db, token)
-    result = await _decide_recommendations(db, order, data)
-    await _recompute_order_total(db, order)
+    result = await _decide_recommendations(db, order, data, request)
     await db.commit()
     return {"ok": True, **result}
 
 
 @router.post("/portal/{token}/order/{order_id}/recommendations/decide")
-async def portal_decide_recs(token: str, order_id: str, data: RecDecideIn,
+async def portal_decide_recs(token: str, order_id: str, data: RecDecideIn, request: Request,
                              db: AsyncSession = Depends(get_db)):
     client = await _client_by_portal(db, token)
     order = (await db.execute(select(Order).where(
         Order.id == order_id, Order.client_id == client.id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
-    result = await _decide_recommendations(db, order, data)
-    await _recompute_order_total(db, order)
+    result = await _decide_recommendations(db, order, data, request)
     await db.commit()
     return {"ok": True, **result}
 
@@ -774,7 +903,7 @@ async def portal_decide_recs(token: str, order_id: str, data: RecDecideIn,
 # ════════════════════════════════════════════════════════════
 from datetime import datetime, timedelta, time as dt_time
 from backend.models import Organisation as _Org, Service, Employee, Appointment, Client, Order
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 
 async def _org_by_slug(db: AsyncSession, slug: str) -> _Org:
@@ -922,6 +1051,9 @@ async def appointment_config(slug: str, response: Response, db: AsyncSession = D
         Location.org_id == org.id, Location.active == True))).scalars().all()  # noqa: E712
     return {
         "shop_name": org.name,
+        "currency": getattr(org, "currency", None) or "$",
+        # The item the customer brings, in the shop's industry wording, and the ID to ask for.
+        **_booking_asset(org),
         "logo_data": org.logo_data if org.page_show_logo else None,
         "color": org.page_color, "radius": org.page_radius,
         "show_language": org.page_show_language,
@@ -947,6 +1079,37 @@ async def appointment_config(slug: str, response: Response, db: AsyncSession = D
                        "address": l.address, "phone": l.phone,
                        "working_hours": l.working_hours or {}} for l in locs],
     }
+
+
+# Booking asks for the one ID a customer can find on their item: VIN for vehicles, HIN for
+# boats, a serial number for everything else.
+_BOOKING_ID = {
+    "vin": ("VIN", "17 characters. On the dashboard by the windshield, or the driver's door frame."),
+    "hin": ("HIN (hull ID)", "12 characters. Usually on the back of the hull, top right of the transom."),
+    "serial": ("Serial number", "Usually on a label underneath or on the back, or in the settings."),
+}
+
+
+def _booking_id_kind(org) -> str:
+    from backend.services import industry as _ind
+    primary = (_ind.identifier_rule(_ind.normalize_template_key(getattr(org, "industry_template", None))) or {}).get("primary")
+    return primary if primary in ("vin", "hin") else "serial"
+
+
+def _booking_asset(org) -> dict:
+    from backend.services import industry as _ind
+    d = _ind.describe(getattr(org, "industry_template", None))
+    kind = _booking_id_kind(org)
+    label, hint = _BOOKING_ID[kind]
+    return {"asset_label": d.get("asset_label") or "Item", "identifier": {"kind": kind, "label": label, "hint": hint}}
+
+
+def _booking_id_note(org, raw: Optional[str]) -> Optional[str]:
+    """'VIN: 1HGCM82633A004352' for the appointment note, tidied the same way assets are."""
+    from backend.services.identifiers import normalize
+    kind = _booking_id_kind(org)
+    v = normalize(kind, (raw or "")[:40])
+    return f"{_BOOKING_ID[kind][0].split(' (')[0]}: {v}" if v else None
 
 
 async def _service_duration(db, org, service_id):
@@ -1043,13 +1206,14 @@ class PublicAppointmentIn(BaseModel):
     date: str          # YYYY-MM-DD
     time: str          # HH:MM
     note: Optional[str] = None
+    identifier: Optional[str] = None   # VIN / HIN / serial, per the shop's industry
 
 
 @router.post("/appointment/{slug}", status_code=201)
 async def create_public_appointment(slug: str, data: PublicAppointmentIn, request: Request,
                                 db: AsyncSession = Depends(get_db)):
-    from backend.services.ratelimit import enforce as _rate, client_ip as _ip
-    _rate("book", f"{_ip(request)}:{slug}", limit=8, window_sec=300)   # Build 144bz: anti-spam
+    from backend.services.ratelimit import aenforce as _rate, client_ip as _ip
+    await _rate("book", f"{_ip(request)}:{slug}", limit=8, window_sec=300)   # Build 144bz: anti-spam
     org = await _org_by_slug(db, slug)
     if not org.appointment_enabled:
         raise HTTPException(404, "Online appointment is disabled")
@@ -1131,7 +1295,8 @@ async def create_public_appointment(slug: str, data: PublicAppointmentIn, reques
                 client_id=client_id, client_name=data.name.strip(),
                 service_id=data.service_id, employee_id=emp_id,
                 scheduled_for=start, duration_min=dur,
-                note=(data.note or "") + (f" | contact: {data.phone or data.email or ''}".rstrip()))
+                note=" | ".join(p for p in [data.note or None, _booking_id_note(org, data.identifier),
+                                            f"contact: {data.phone or data.email or ''}".rstrip()] if p))
     db.add(b)
     from backend.routers.feed import log_system_event
     from sqlalchemy.exc import IntegrityError
@@ -1163,13 +1328,14 @@ class AppointmentRequestIn(BaseModel):
     email: Optional[str] = None
     issue: Optional[str] = None
     service_name: Optional[str] = None
+    identifier: Optional[str] = None
 
 
 @router.post("/appointment/{slug}/request", status_code=201)
 async def appointment_request(slug: str, data: AppointmentRequestIn, request: Request,
                           db: AsyncSession = Depends(get_db)):
-    from backend.services.ratelimit import enforce as _rate, client_ip as _ip
-    _rate("book_req", f"{_ip(request)}:{slug}", limit=6, window_sec=300)
+    from backend.services.ratelimit import aenforce as _rate, client_ip as _ip
+    await _rate("book_req", f"{_ip(request)}:{slug}", limit=6, window_sec=300)
     org = await _org_by_slug(db, slug)
     if not org.appointment_enabled:
         raise HTTPException(404, "Online appointment is disabled")
@@ -1181,7 +1347,7 @@ async def appointment_request(slug: str, data: AppointmentRequestIn, request: Re
     from datetime import timedelta as _td
     inquiry = " · ".join(p for p in [
         (f"Service: {data.service_name.strip()}" if data.service_name else None),
-        (data.issue or "").strip() or None] if p) or "Online appointment request"
+        (data.issue or "").strip() or None, _booking_id_note(org, data.identifier)] if p) or "Online appointment request"
     lead = Lead(org_id=org.id, name=data.name.strip()[:200],
                 phone=(data.phone or "")[:40] or None, email=(data.email or "")[:200] or None,
                 source="web", inquiry=inquiry[:2000],
@@ -1326,7 +1492,7 @@ async def status_widget_js():
     js = r"""(function(){
   var API = (document.currentScript && document.currentScript.dataset.api) || '';
   var SHOP = (document.currentScript && document.currentScript.dataset.shop) || '';
-  var mount = document.getElementById('repairos-status') ||
+  var mount = document.getElementById('tekly-status') || document.getElementById('repairos-status') ||
     (function(){var d=document.createElement('div');
       (document.currentScript||document.body).parentNode.insertBefore(d,document.currentScript);return d;})();
   mount.innerHTML =

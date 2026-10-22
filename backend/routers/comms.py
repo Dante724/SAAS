@@ -64,7 +64,7 @@ async def call_webhook(
     org_id: str = Query(..., description="org the VoIP number belongs to"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Provider → RepairOS call event. Token-gated (Build 110): the provider must
+    """Provider → Tekly call event. Token-gated (Build 110): the provider must
     present the org's X-Webhook-Token; records the call and matches a client
     by phone so an incoming call can pop the client's record."""
     await verify_org_webhook(db, org_id, request)

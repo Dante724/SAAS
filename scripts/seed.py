@@ -6,12 +6,12 @@ from sqlalchemy import select
 from backend.db.database import AsyncSessionLocal
 from backend.models import (
     Organisation, Location, Role, Employee, Client, Device,
-    Order, OrderLine, OrderStatusLog, Part, StockLevel, Task, Invoice,
+    Order, OrderStatusLog, Part, StockLevel, Task, Invoice,
     WorkOrderType, CustomField, NotificationTemplate, Service, Tax, Account, CashFlowItem
 )
 from backend.services.auth import hash_password
 import uuid
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 
 def uid(): return str(uuid.uuid4())
 def now(): return datetime.utcnow()
@@ -396,6 +396,7 @@ async def seed_demo_data():
         pt_retail = _PT(id=uid(), org_id=org.id, name="Retail", markup_pct=100.0, is_default=True)
         pt_whole = _PT(id=uid(), org_id=org.id, name="Wholesale", markup_pct=60.0)
         db.add(pt_retail); db.add(pt_whole)
+        await db.flush()   # price types must exist before a client references one (FK)
         # Neha gets 10% off materials; Vikram buys at Wholesale prices for materials
         clients[0].disc_materials_mode = "percent"; clients[0].disc_materials_value = 10.0
         clients[1].disc_materials_mode = "price_type"; clients[1].disc_materials_price_type_id = pt_whole.id
@@ -414,6 +415,7 @@ async def seed_demo_data():
         th = _CT(id=uid(), org_id=org.id, channel="whatsapp", contact_phone=clients[0].phone,
                  contact_name=clients[0].name, client_id=clients[0].id, last_message_at=now())
         db.add(th)
+        await db.flush()   # thread row must exist before its messages (FK)
         db.add(_CM(id=uid(), thread_id=th.id, direction="in", body="Hi! My MacBook screen is flickering, can you take a look this week?", status="received"))
         db.add(_CM(id=uid(), thread_id=th.id, direction="out", body="Of course! Bring it in any day before 6pm, diagnostics are free.", status="sent"))
         await db.commit()

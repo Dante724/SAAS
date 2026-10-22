@@ -1,9 +1,12 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
+import { useVisibleInterval } from "../hooks/useVisibleInterval";
+import { toAppPath } from "../lib/deepLink";
+import { TeklyMark } from "./brand/TeklyLogo";
 import { NavLink, useNavigate } from "react-router-dom";
 import { api, getLocationScope, setLocationScope } from "../api/client";
 import { alertDialog } from "../lib/dialog";
 import { t, getLang, setLang, applyDir } from "../i18n";
-import { useMe, NAV_PERM } from "../context/Me";
+import { useMe, NAV_PERM, NAV_FEATURE, hasFeature, type Billing } from "../context/Me";
 import {
   Wrench, Mail, MessageSquare, MessageCircle, Calendar, CalendarRange, Users, User,
   UserPlus, ShoppingCart, Package, Boxes, Landmark, Wallet, BarChart3, Settings as SettingsIcon,
@@ -24,7 +27,9 @@ import {
   Ban, CircleX, ListChecks, Pipette, ScanText, CheckCheck, Download, FilePen, CalendarCheck,
   History, Hourglass, LineChart, Lightbulb, Unlink, Truck, Lock, LockOpen, Merge,
   CircleDollarSign, Percent, ShieldAlert, Globe, Gift, RotateCcw, SearchCheck, VideoOff,
-  ShieldCheck, Target,
+  ShieldCheck, Target, EyeOff, Car, Sailboat, Bike, Laptop, Cog, Upload,
+  ShoppingBag, Split,
+  LogOut,
 } from "lucide-react";
 
 // Map the old Material-Symbols ligature names to bundled Lucide icons (no web font,
@@ -34,7 +39,7 @@ const ICONS: Record<string, any> = {
   task_alt: CheckCircle2, mail: Mail, chat: MessageSquare, chat_bubble: MessageCircle,
   calendar_month: Calendar, calendar_view_week: CalendarRange, schedule: Clock, timer: Timer,
   contacts: Contact, group: Users, person: User, person_add: UserPlus, contact_support: LifeBuoy,
-  point_of_sale: ShoppingCart, shopping_cart: ShoppingCart,
+  point_of_sale: ShoppingCart, shopping_cart: ShoppingCart, shopping_bag: ShoppingBag, call_split: Split,
   inventory_2: Package, inventory: Boxes, warehouse: Warehouse,
   account_balance: Landmark, payments: Wallet, account_balance_wallet: Wallet, savings: PiggyBank,
   credit_card: CreditCard, request_quote: ReceiptText, receipt_long: Receipt, description: FileText,
@@ -68,9 +73,9 @@ const ICONS: Record<string, any> = {
   print: Printer, save: Save, send: Send, campaign: Send, smartphone: Smartphone,
   photo_camera: Camera, add_a_photo: Camera, image: ImageIcon,
   barcode: Barcode, qr_code_scanner: QrCode, scan: ScanLine,
-  dashboard: LayoutDashboard, light_mode: Sun, dark_mode: Moon, language: Languages,
+  dashboard: LayoutDashboard, light_mode: Sun, dark_mode: Moon, language: Languages, logout: LogOut,
   // 144hx — document editor icons (were falling back to Circle)
-  edit: Pencil, visibility: Eye, data_object: Braces, expand_less: ChevronUp,
+  edit: Pencil, visibility: Eye, directions_car: Car, sailing: Sailboat, pedal_bike: Bike, laptop: Laptop, settings_suggest: Cog, upload: Upload, visibility_off: EyeOff, data_object: Braces, expand_less: ChevronUp,
   format_bold: Bold, format_italic: Italic, format_underlined: Underline,
   title: Heading1, text_fields: Heading2, format_list_bulleted: List,
   format_align_left: AlignLeft, format_align_center: AlignCenter, format_align_right: AlignRight,
@@ -134,12 +139,51 @@ const NAV_GROUPS: { name: string; items: NavItem[] }[] = [
 ];
 const NAV: NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 
+// Subscription notice under the top bar: read-only, a failed payment, or the last week of the trial.
+export function billingNotice(b?: Billing | null): { tone: "bad" | "warn" | "info"; text: string; cta: string } | null {
+  if (!b) return null;
+  if (b.read_only) return { tone: "bad", text: `${b.read_only_reason || ""} Your shop is read-only: you can view and export everything.`.trim(), cta: "Choose a plan" };
+  if (b.status === "past_due") return { tone: "warn", text: "Your last Tekly payment didn't go through.", cta: "Update card" };
+  if (b.status === "trial" && b.trial_days_left != null && b.trial_days_left <= 7) {
+    const n = b.trial_days_left;
+    const fit = b.suggested_plan ? ` ${PLAN_LABEL[b.suggested_plan]} fits your shop.` : "";
+    return { tone: n <= 3 ? "warn" : "info", text: `${n} ${n === 1 ? "day" : "days"} left in your free trial.${fit}`, cta: "Choose a plan" };
+  }
+  return null;
+}
+
+const PLAN_LABEL = { solo: "Solo", shop: "Shop", pro: "Pro" } as const;
+
+// Next to the logo: the plan the shop is on (TRIAL while trialling). Nothing until /me loads.
+export function planBadge(b?: Billing | null): string | null {
+  if (!b) return null;
+  if (b.status === "trial" && !b.read_only) return "TRIAL";
+  return (PLAN_LABEL[b.plan] || "Solo").toUpperCase();
+}
+
+function BillingBanner({ billing }: { billing?: Billing | null }) {
+  const n = billingNotice(billing);
+  if (!n) return null;
+  const cls = { bad: "bg-rose-50 border-rose-200 text-rose-800 hover:bg-rose-100", warn: "bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100",
+    info: "bg-indigo-50 border-indigo-200 text-indigo-800 hover:bg-indigo-100" }[n.tone];
+  return (
+    <a href="/settings?section=billing" className={`w-full text-left border-b text-xs font-semibold px-6 py-2 flex items-center gap-2 ${cls}`}>
+      <M n={n.tone === "bad" ? "lock" : "credit_card"} c="text-sm" />{n.text} <span className="underline">{n.cta}</span>
+    </a>
+  );
+}
+
 export default function Shell({ title, children }: { title: string; children: ReactNode }) {
   const { can, me, refresh } = useMe();
   const initials = ((me?.name || "").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("") || "?").toUpperCase();
   const [palette, setPalette] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [secOpen, setSecOpen] = useState(false);
+  // Org requires 2FA and this user hasn't enrolled: the API refuses everything except enrollment,
+  // so show a setup screen that can't be dismissed. Sticky until the page reloads, so the
+  // recovery codes stay on screen after `me` refreshes to enabled.
+  const [mfaGate, setMfaGate] = useState(false);
+  useEffect(() => { if (me?.mfa_required && !me?.mfa_enabled) setMfaGate(true); }, [me?.mfa_required, me?.mfa_enabled]);
   const [avatarOpen, setAvatarOpen] = useState(false);
   const [unread, setUnread] = useState(0);
   const [dark, setDark] = useState(() => { try { return localStorage.getItem("ros_theme") === "dark"; } catch { return false; } });
@@ -161,37 +205,35 @@ export default function Shell({ title, children }: { title: string; children: Re
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  useEffect(() => {
-    let live = true;
-    const poll = () => api.get<{ items: any[] }>("/tech/notifications?only_unread=true")
-      .then((r) => { if (live) setUnread((r.items || []).length); }).catch(() => {});
-    poll();
-    const id = setInterval(poll, 60000);
-    return () => { live = false; clearInterval(id); };
-  }, []);
+  const liveRef = useRef(true);
+  useEffect(() => { liveRef.current = true; return () => { liveRef.current = false; }; }, []);
+  useVisibleInterval(() => {
+    api.get<{ items: any[] }>("/tech/notifications?only_unread=true")
+      .then((r) => { if (liveRef.current) setUnread((r.items || []).length); }).catch(() => {});
+  }, 60000);
 
   return (
     <div className="bg-surface text-ink-primary antialiased h-screen w-screen overflow-hidden select-none flex flex-col font-sans">
       <div className="flex flex-1 overflow-hidden relative">
         {/* SIDEBAR */}
-        <aside className={`${railCollapsed ? "w-[64px]" : "w-[200px]"} flex-shrink-0 bg-white/70 backdrop-blur-xl border-r border-slate-200/80 flex flex-col justify-between z-10 transition-[width] duration-200`}>
+        <aside className={`${railCollapsed ? "w-[64px]" : "w-[200px]"} flex-shrink-0 bg-sidebar border-r border-slate-200/80 flex flex-col justify-between z-10 transition-[width] duration-200`}>
           <div className="p-3 space-y-0.5 overflow-y-auto">
             <div className={`flex items-center gap-2.5 px-2 pt-1 pb-3 ${railCollapsed ? "justify-center" : ""}`}>
-              <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-primary to-primary-container flex items-center justify-center text-white shadow-clay-sm shrink-0"><M n="build" c="text-lg" /></div>
+              <TeklyMark size={32} />
               {!railCollapsed && (
                 <div>
-                  <div className="font-extrabold text-sm tracking-tight text-ink-primary flex items-center gap-1">RepairOS <span className="text-[9px] px-1 rounded bg-blue-100 text-primary font-bold">PRO</span></div>
-                  <p className="text-[10px] text-ink-tertiary font-medium">{t("Workshop Central")}</p>
+                  <div className="font-bold text-[17px] leading-none tracking-[-0.05em] text-ink-primary flex items-center gap-1.5" aria-label="Tekly">tekly {planBadge(me?.billing) && <span className="text-[10px] tracking-normal px-1 py-px rounded bg-blue-100 text-primary font-bold">{planBadge(me?.billing)}</span>}</div>
+                  <p className="text-[11px] text-ink-tertiary font-medium">{t("Workshop Central")}</p>
                 </div>
               )}
             </div>
             {NAV_GROUPS.map((group) => {
-              const visible = group.items.filter((it) => can(NAV_PERM[it.to]));
+              const visible = group.items.filter((it) => can(NAV_PERM[it.to]) && (!NAV_FEATURE[it.to] || hasFeature(me, NAV_FEATURE[it.to])));
               if (visible.length === 0) return null;
               return (
                 <div key={group.name || "home"} className="pb-1">
                   {group.name && !railCollapsed && (
-                    <div className="px-2.5 pt-2.5 pb-1 text-[9px] font-bold uppercase tracking-wider text-ink-tertiary/80">{t(group.name)}</div>
+                    <div className="px-2.5 pt-2.5 pb-1 text-[11px] font-bold text-ink-tertiary/80">{t(group.name)}</div>
                   )}
                   {group.name && railCollapsed && <div className="my-1.5 mx-2 border-t border-slate-200/70" />}
                   {visible.map((it) => (
@@ -225,33 +267,24 @@ export default function Shell({ title, children }: { title: string; children: Re
               {!railCollapsed && <span>{t("Collapse")}</span>}
             </button>
           </div>
-          <div className="p-3 border-t border-slate-200/80 bg-slate-50/50">
-            <div className={`flex items-center gap-2 px-1 ${railCollapsed ? "justify-center" : ""}`} title={railCollapsed ? (me?.name || "") : undefined}>
-              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-bold flex items-center justify-center text-xs ring-2 ring-white shadow-sm shrink-0">{initials}</div>
-              {!railCollapsed && <>
-                <div className="flex-1 min-w-0"><p className="text-xs font-bold text-ink-primary truncate">{me?.name || "—"}</p><p className="text-[10px] text-ink-tertiary truncate">{me?.role || me?.email || ""}</p></div>
-                <M n="more_vert" c="text-ink-tertiary text-sm cursor-pointer hover:text-ink-primary" />
-              </>}
-            </div>
-          </div>
         </aside>
 
         {/* MAIN */}
-        <main className="flex-1 flex flex-col min-w-0 bg-[#f7f8fd] overflow-hidden">
+        <main className="flex-1 flex flex-col min-w-0 bg-canvas overflow-hidden">
           <header className="h-[52px] bg-white/80 backdrop-blur-md border-b border-slate-200/80 px-6 flex items-center justify-between flex-shrink-0 z-10">
             <div className="flex items-center gap-4">
-              <h1 className="text-base font-bold text-ink-primary tracking-tight">{t(title)}</h1>
-              <button onClick={() => setPalette(true)} className="relative w-64 text-left group">
+              <h1 className="text-base font-bold text-ink-primary tracking-tight whitespace-nowrap">{t(title)}</h1>
+              <button onClick={() => setPalette(true)} className="relative w-64 flex-shrink-0 text-left group">
                 <M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" />
-                <div className="w-full bg-slate-100/80 group-hover:bg-white text-xs pl-8 pr-12 py-1.5 rounded-lg border border-slate-200/70 font-medium text-ink-placeholder">{t("Search orders, clients, serials…")}</div>
-                <span className="absolute right-2 top-1.5 text-[10px] bg-white border border-slate-200 text-ink-tertiary font-mono px-1 rounded shadow-2xs">⌘K</span>
+                <div className="w-full bg-slate-100/80 group-hover:bg-white text-xs pl-8 pr-12 py-1.5 rounded-lg border border-slate-200/70 font-medium text-ink-placeholder whitespace-nowrap overflow-hidden text-ellipsis">{t("Search jobs, customers…")}</div>
+                <span className="absolute right-2 top-1.5 text-[11px] bg-white border border-slate-200 text-ink-tertiary font-mono px-1 rounded shadow-2xs">⌘K</span>
               </button>
             </div>
             <div className="flex items-center gap-3">
               <LocationSwitcher />
-              <ScanBox />
-              {(me?.clock_attendance_enabled || me?.clock_wo_enabled) && <TimeClockChip me={me} />}
-              <button onClick={() => setNotifOpen((o) => !o)} aria-label="Notifications" className="w-8 h-8 rounded-full border border-slate-200 bg-white flex items-center justify-center text-ink-secondary hover:text-ink-primary shadow-xs relative"><M n="notifications" c="text-sm" />{unread > 0 && <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-primary text-white text-[9px] font-bold flex items-center justify-center border-2 border-white">{unread > 9 ? "9+" : unread}</span>}</button>
+              {hasFeature(me, "labels") && <ScanBox />}
+              {(me?.clock_attendance_enabled || me?.clock_wo_enabled) && hasFeature(me, "time_clock") && <TimeClockChip me={me} />}
+              <button onClick={() => setNotifOpen((o) => !o)} aria-label="Notifications" className="w-8 h-8 rounded-full border border-slate-200 bg-white flex items-center justify-center text-ink-secondary hover:text-ink-primary shadow-xs relative"><M n="notifications" c="text-sm" />{unread > 0 && <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-primary text-white text-[11px] font-bold flex items-center justify-center border-2 border-white">{unread > 9 ? "9+" : unread}</span>}</button>
               <div className="relative">
                 <button onClick={() => setAvatarOpen((o) => !o)} aria-label={t("Account menu")} className="w-8 h-8 rounded-full bg-primary text-white font-semibold text-xs flex items-center justify-center shadow-xs hover:brightness-110 relative">{initials}{me?.mfa_required && !me?.mfa_enabled && <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-amber-400 border-2 border-white" />}</button>
                 {avatarOpen && (
@@ -267,11 +300,15 @@ export default function Shell({ title, children }: { title: string; children: Re
                       </button>
                       <button onClick={() => setLang(lang === "en" ? "es" : lang === "es" ? "ar" : "en")} className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-ink-secondary hover:bg-slate-100 hover:text-ink-primary">
                         <span className="flex items-center gap-2.5"><M n="language" c="text-base" />{t("Language")}</span>
-                        <span className="text-[10px] font-bold bg-slate-100 text-ink-tertiary rounded px-1 uppercase">{lang}</span>
+                        <span className="text-[11px] font-bold bg-slate-100 text-ink-tertiary rounded px-1 ">{lang}</span>
                       </button>
                       <button onClick={() => { setAvatarOpen(false); setSecOpen(true); }} className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-ink-secondary hover:bg-slate-100 hover:text-ink-primary">
                         <span className="flex items-center gap-2.5"><M n="lock" c="text-base" />{t("Security & two-factor")}</span>
                         {me?.mfa_required && !me?.mfa_enabled && <span className="w-2 h-2 rounded-full bg-amber-400" />}
+                      </button>
+                      <div className="my-1 border-t border-slate-100" />
+                      <button onClick={() => { setAvatarOpen(false); signOut(); }} className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-ink-secondary hover:bg-slate-100 hover:text-ink-primary">
+                        <M n="logout" c="text-base" />{t("Sign out")}
                       </button>
                     </div>
                   </>
@@ -284,12 +321,14 @@ export default function Shell({ title, children }: { title: string; children: Re
               <M n="lock" c="text-sm" />Your organization requires two-factor authentication. <span className="underline">Set it up now</span> to keep access.
             </button>
           )}
+          <BillingBanner billing={me?.billing} />
           {children}
         </main>
       </div>
       {palette && <CommandPalette onClose={() => setPalette(false)} />}
       {notifOpen && <NotificationsPanel onClose={() => setNotifOpen(false)} onChanged={setUnread} />}
-      {secOpen && <SecurityModal me={me} onClose={() => setSecOpen(false)} onChanged={refresh} />}
+      {(secOpen || mfaGate) && <SecurityModal me={me} forced={mfaGate} onChanged={refresh}
+        onClose={() => (mfaGate ? window.location.reload() : setSecOpen(false))} />}
     </div>
   );
 }
@@ -305,8 +344,19 @@ function QrSvg({ data }: { data: string }) {
   return <div className="w-44 h-44 bg-white rounded-xl border border-slate-200 p-2 flex items-center justify-center [&>svg]:w-full [&>svg]:h-full" dangerouslySetInnerHTML={{ __html: svg || "" }} />;
 }
 
+// Sign out: tell the server first (it records the sign-out), then drop the token whatever it answers.
+async function signOut() {
+  let tok = ""; try { tok = localStorage.getItem("ros_tok") || ""; } catch { /* ignore */ }
+  if (tok) {
+    try { await fetch("/api/auth/logout", { method: "POST", headers: { Authorization: `Bearer ${tok}` } }); }
+    catch { /* offline: still sign out here */ }
+  }
+  try { localStorage.removeItem("ros_tok"); } catch { /* ignore */ }
+  window.location.replace("/login");
+}
+
 // Two-factor enrollment / management. Reached from the top-bar avatar and the org-required banner.
-function SecurityModal({ me, onClose, onChanged }: { me: any; onClose: () => void; onChanged: () => void }) {
+function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; onClose: () => void; onChanged: () => void; forced?: boolean }) {
   const [enabled, setEnabled] = useState<boolean>(!!me?.mfa_enabled);
   const [step, setStep] = useState<"idle" | "enroll" | "done">("idle");
   const [enroll, setEnroll] = useState<{ secret: string; otpauth_uri: string } | null>(null);
@@ -334,11 +384,13 @@ function SecurityModal({ me, onClose, onChanged }: { me: any; onClose: () => voi
   const inp = "glass-input w-full px-3 py-2 rounded-lg text-sm font-semibold text-ink-primary";
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={forced ? undefined : onClose} />
       <div className="relative w-full max-w-md bg-white rounded-2xl shadow-clay-drawer border border-slate-200/90 overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
           <h3 className="text-sm font-bold text-ink-primary flex items-center gap-2"><M n="lock" c="text-base" />Security · Two-factor authentication</h3>
-          <button aria-label="Close" onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
+          {forced
+            ? <button onClick={signOut} className="text-[11px] font-semibold text-ink-tertiary hover:text-ink-primary">Sign out</button>
+            : <button aria-label="Close" onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>}
         </div>
         <div className="p-5 space-y-4 text-sm">
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
@@ -349,7 +401,7 @@ function SecurityModal({ me, onClose, onChanged }: { me: any; onClose: () => voi
               {me?.mfa_required
                 ? <div className="text-xs text-ink-tertiary">Your organization requires 2FA, so it can't be turned off.</div>
                 : <div className="space-y-2">
-                    <label className="block text-[11px] font-bold uppercase text-ink-tertiary">Disable (confirm password)</label>
+                    <label className="block text-[11px] font-bold text-ink-tertiary">Disable (confirm password)</label>
                     <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="Account password" className={inp} />
                     <button onClick={disable} disabled={busy || !pw} className="px-3 py-2 rounded-lg bg-rose-600 text-white text-xs font-bold disabled:opacity-50">Turn off 2FA</button>
                   </div>}
@@ -358,8 +410,9 @@ function SecurityModal({ me, onClose, onChanged }: { me: any; onClose: () => voi
 
           {!enabled && step === "idle" && (
             <>
+              {forced && <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2">Your organization requires two-factor authentication. Set it up to continue.</div>}
               <p className="text-ink-secondary text-xs">Protect your account with an authenticator app (Google Authenticator, Authy, 1Password…). You'll enter a 6-digit code at sign-in.</p>
-              <button onClick={startEnroll} disabled={busy} className="px-4 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm disabled:opacity-50">{busy ? "…" : "Enable two-factor"}</button>
+              <button onClick={startEnroll} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm disabled:opacity-50">{busy ? "…" : "Enable two-factor"}</button>
             </>
           )}
 
@@ -371,8 +424,8 @@ function SecurityModal({ me, onClose, onChanged }: { me: any; onClose: () => voi
                 <code className="text-[11px] font-mono bg-slate-100 rounded px-2 py-1 break-all text-ink-secondary">{enroll.secret}</code>
               </div>
               <p className="text-ink-secondary text-xs">2. Enter the 6-digit code it shows:</p>
-              <input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="123456" className={`${inp} font-mono tracking-widest text-center`} />
-              <button onClick={activate} disabled={busy || code.length < 6} className="w-full px-4 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm disabled:opacity-50">{busy ? "Verifying…" : "Verify & turn on"}</button>
+              <input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="123456" className={`${inp} font-mono  text-center`} />
+              <button onClick={activate} disabled={busy || code.length < 6} className="w-full px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm disabled:opacity-50">{busy ? "Verifying…" : "Verify & turn on"}</button>
             </>
           )}
 
@@ -382,7 +435,7 @@ function SecurityModal({ me, onClose, onChanged }: { me: any; onClose: () => voi
               {recovery.length > 0 && (
                 <div>
                   <p className="text-xs text-ink-secondary mb-1">Save these recovery codes somewhere safe — they're shown once and let you back in if you lose your device:</p>
-                  <div className="grid grid-cols-2 gap-1.5 bg-slate-50 rounded-lg border border-slate-200 p-3 font-mono text-xs">
+                  <div className="grid grid-cols-2 gap-1.5 bg-slate-50 rounded-lg border border-slate-200 p-3 tabular-nums text-xs">
                     {recovery.map((c) => <span key={c} className="text-ink-primary">{c}</span>)}
                   </div>
                 </div>
@@ -399,14 +452,14 @@ function SecurityModal({ me, onClose, onChanged }: { me: any; onClose: () => voi
 /* ── ⌘K command palette: jump to modules + live order/client search ───────── */
 function CommandPalette({ onClose }: { onClose: () => void }) {
   const nav = useNavigate();
-  const { can } = useMe();
+  const { can, me } = useMe();
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<{ label: string; sub: string; to: string; icon: string }[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { inputRef.current?.focus(); }, []);
 
   // Respect permissions like the sidebar — don't offer jumps to modules the user can't see.
-  const commands = NAV.filter((n) => can(NAV_PERM[n.to])).map((n) => ({ label: n.l, sub: "Go to " + n.l, to: n.to, icon: n.i }));
+  const commands = NAV.filter((n) => can(NAV_PERM[n.to]) && (!NAV_FEATURE[n.to] || hasFeature(me, NAV_FEATURE[n.to]))).map((n) => ({ label: n.l, sub: "Go to " + n.l, to: n.to, icon: n.i }));
   const filteredCmds = commands.filter((c) => !q || c.label.toLowerCase().includes(q.toLowerCase()));
 
   useEffect(() => {
@@ -436,12 +489,12 @@ function CommandPalette({ onClose }: { onClose: () => void }) {
         <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100">
           <M n="search" c="text-ink-tertiary text-base" />
           <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("Search or jump to…")} className="flex-1 text-sm outline-none bg-transparent placeholder-ink-placeholder" />
-          <span className="text-[10px] text-ink-tertiary font-mono border border-slate-200 rounded px-1">Esc</span>
+          <span className="text-[11px] text-ink-tertiary tabular-nums border border-slate-200 rounded px-1">Esc</span>
         </div>
         <div className="max-h-[52vh] overflow-y-auto p-2">
           {hits.length > 0 && (
             <div className="mb-2">
-              <div className="px-2 py-1 text-[10px] font-bold text-ink-tertiary uppercase tracking-wider">{t("Results")}</div>
+              <div className="px-2 py-1 text-[11px] font-bold text-ink-tertiary ">{t("Results")}</div>
               {hits.map((h, i) => (
                 <button key={i} onClick={() => go(h.to)} className="w-full flex items-center gap-3 px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-left">
                   <M n={h.icon} c="text-sm text-primary" /><div className="min-w-0"><div className="text-sm font-semibold text-ink-primary truncate">{h.label}</div><div className="text-[11px] text-ink-tertiary truncate">{h.sub}</div></div>
@@ -449,7 +502,7 @@ function CommandPalette({ onClose }: { onClose: () => void }) {
               ))}
             </div>
           )}
-          <div className="px-2 py-1 text-[10px] font-bold text-ink-tertiary uppercase tracking-wider">{t("Navigate")}</div>
+          <div className="px-2 py-1 text-[11px] font-bold text-ink-tertiary ">{t("Navigate")}</div>
           {filteredCmds.map((c) => (
             <button key={c.to} onClick={() => go(c.to)} className="w-full flex items-center gap-3 px-2.5 py-2 rounded-lg hover:bg-slate-100 text-left">
               <M n={c.icon} c="text-sm text-ink-tertiary" /><span className="text-sm font-medium text-ink-primary">{c.label}</span>
@@ -481,7 +534,7 @@ function NotificationsPanel({ onClose, onChanged }: { onClose: () => void; onCha
   async function open(n: any) {
     if (!n.read) { try { await api.post(`/tech/notifications/${n.id}/read`, {}); } catch { /* ignore */ } }
     onClose();
-    if (n.deep_link) { const path = n.deep_link.replace(/^https?:\/\/[^/]+/, ""); nav(path.startsWith("/") ? path : "/" + path); }
+    if (n.deep_link) nav(toAppPath(n.deep_link));
   }
 
   async function enablePush() {
@@ -489,6 +542,10 @@ function NotificationsPanel({ onClose, onChanged }: { onClose: () => void; onCha
       const cfg = await api.get<any>("/push/vapid-public-key");
       if (!cfg.enabled || !cfg.public_key) { await alertDialog("Push isn't configured on this server."); return; }
       if (Notification.permission !== "granted") { const p = await Notification.requestPermission(); if (p !== "granted") { await alertDialog("Notifications were blocked."); return; } }
+      // The site's service worker only handles push here (it leaves the main app's pages and API
+      // alone); register it if this browser never has, or `ready` would wait forever.
+      if (!("serviceWorker" in navigator)) { await alertDialog("This browser can't receive push notifications."); return; }
+      if (!(await navigator.serviceWorker.getRegistration("/"))) await navigator.serviceWorker.register("/sw.js");
       const reg = await navigator.serviceWorker.ready;
       const b64 = (s: string) => { const pad = "=".repeat((4 - (s.length % 4)) % 4); const r = (s + pad).replace(/-/g, "+").replace(/_/g, "/"); const raw = atob(r); return Uint8Array.from([...raw].map((c) => c.charCodeAt(0))); };
       const sub: any = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(cfg.public_key) });
@@ -510,12 +567,12 @@ function NotificationsPanel({ onClose, onChanged }: { onClose: () => void; onCha
         </div>
         <div className="max-h-[60vh] overflow-y-auto divide-y divide-slate-100">
           {items == null && <div className="px-4 py-6 text-xs text-ink-tertiary">Loading…</div>}
-          {items?.length === 0 && <div className="px-4 py-10 text-center"><M n="notifications" c="text-2xl text-ink-placeholder" /><div className="text-xs text-ink-tertiary mt-2">{t("You're all caught up.")}</div></div>}
+          {items?.length === 0 && <div className="px-4 py-10 text-center"><M n="notifications" c="mx-auto mb-2 text-2xl text-ink-placeholder" /><div className="text-xs text-ink-tertiary mt-2">{t("You're all caught up.")}</div></div>}
           {items?.map((n) => (
             <div key={n.id} className={`group relative w-full hover:bg-blue-50/50 ${n.read ? "" : "bg-blue-50/30"}`}>
               <button onClick={() => open(n)} className="w-full text-left px-4 py-3 pr-9 flex gap-3">
                 <span className={`mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0 ${n.read ? "bg-transparent" : "bg-primary"}`} />
-                <div className="min-w-0"><div className="text-xs font-bold text-ink-primary">{n.title || n.kind || "Update"}</div>{n.body && <div className="text-[11px] text-ink-secondary mt-0.5 line-clamp-2">{n.body}</div>}<div className="text-[10px] text-ink-tertiary mt-1">{n.created_at ? new Date(n.created_at).toLocaleString([], { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : ""}</div></div>
+                <div className="min-w-0"><div className="text-xs font-bold text-ink-primary">{n.title || n.kind || "Update"}</div>{n.body && <div className="text-[11px] text-ink-secondary mt-0.5 line-clamp-2">{n.body}</div>}<div className="text-[11px] text-ink-tertiary mt-1">{n.created_at ? new Date(n.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}</div></div>
               </button>
               <button onClick={(e) => dismiss(n, e)} title={t("Dismiss")} aria-label={t("Dismiss")}
                 className="absolute top-2 right-2 w-6 h-6 rounded-md flex items-center justify-center text-ink-placeholder hover:text-rose-600 hover:bg-rose-50 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity">
@@ -563,13 +620,13 @@ function ScanBox() {
       <button onClick={() => setOpen((o) => !o)} title="Scan (barcode / IMEI / order)" aria-label="Scan"
         className="w-8 h-8 rounded-full border border-slate-200 bg-white flex items-center justify-center text-ink-secondary hover:text-ink-primary shadow-xs"><M n="qr_code_scanner" c="text-sm" /></button>
       {open && (
-        <div className="absolute right-0 mt-2 w-64 bg-white dark:bg-[#151b2e] rounded-xl border border-slate-200/80 shadow-clay-card z-50 p-2.5">
-          <div className="text-[10px] font-bold uppercase tracking-wide text-ink-tertiary mb-1.5">Scan or type a code</div>
+        <div className="absolute right-0 mt-2 w-64 bg-raised rounded-xl border border-slate-200/80 shadow-clay-card z-50 p-2.5">
+          <div className="text-[11px] font-bold text-ink-tertiary mb-1.5">Scan or type a code</div>
           <input ref={ref} value={val} onChange={(e) => { setVal(e.target.value); setMsg(null); }}
             onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") setOpen(false); }}
             placeholder="WO-00042, IMEI, SKU…" className="glass-input rounded-lg px-3 py-2 text-sm w-full font-mono" />
           {msg && <div className="text-[11px] text-rose-600 mt-1.5">{msg} — try the ⌘K search.</div>}
-          <div className="text-[10px] text-ink-tertiary mt-1.5">Jumps to the work order, product, or asset.</div>
+          <div className="text-[11px] text-ink-tertiary mt-1.5">Jumps to the work order, product, or asset.</div>
         </div>
       )}
     </div>
@@ -588,7 +645,7 @@ function TimeClockChip({ me }: { me: any }) {
     if (attendance) api.get<any>("/timeclock/shift/active").then((r) => setShift(r.shift || null)).catch(() => {});
     if (woClock) api.get<any>("/timeclock/active").then((r) => setJob(r.active || null)).catch(() => {});
   };
-  useEffect(() => { load(); const id = setInterval(load, 30000); return () => clearInterval(id); }, []);
+  useVisibleInterval(load, 30000);
   useEffect(() => { const id = setInterval(() => setTick((t) => t + 1), 1000); return () => clearInterval(id); }, []);
   // base elapsed + local ticks since last fetch (approx live display)
   const shiftSec = shift?.open ? (shift.elapsed_sec || 0) + tick : 0;
@@ -613,7 +670,7 @@ function TimeClockChip({ me }: { me: any }) {
           ? <>
               <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-500" />
               {jobName && <span className="truncate max-w-[96px]">{jobName}</span>}
-              <span className="font-mono shrink-0">{job ? fmtHMS(jobSec) : fmtHMS(shiftSec)}</span>
+              <span className="tabular-nums shrink-0">{job ? fmtHMS(jobSec) : fmtHMS(shiftSec)}</span>
             </>
           : <><M n="play_arrow" c="text-sm" />{t("Clock in")}</>}
       </button>
@@ -623,10 +680,10 @@ function TimeClockChip({ me }: { me: any }) {
           <div className="absolute right-0 mt-2 w-64 bg-white rounded-xl border border-slate-200 shadow-drawer z-50 p-3 space-y-3">
             {woClock && (
               <div className="rounded-lg bg-slate-50 border border-slate-200 p-2.5">
-                <div className="text-[10px] font-bold text-ink-tertiary uppercase tracking-wide mb-1">Job timer</div>
+                <div className="text-[11px] font-bold text-ink-tertiary mb-1">Job timer</div>
                 {job ? (
                   <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-emerald-700 truncate mr-2">{jobName} · <span className="font-mono">{fmtHMS(jobSec)}</span></span>
+                    <span className="text-sm font-semibold text-emerald-700 truncate mr-2">{jobName} · <span className="tabular-nums">{fmtHMS(jobSec)}</span></span>
                     <button onClick={stopJob} disabled={busy} className="px-2.5 py-1 rounded-lg bg-rose-600 text-white text-[11px] font-semibold disabled:opacity-60">Stop</button>
                   </div>
                 ) : (
@@ -639,10 +696,10 @@ function TimeClockChip({ me }: { me: any }) {
             )}
             {attendance && (
               <div className="rounded-lg bg-slate-50 border border-slate-200 p-2.5">
-                <div className="text-[10px] font-bold text-ink-tertiary uppercase tracking-wide mb-1">Shop attendance</div>
+                <div className="text-[11px] font-bold text-ink-tertiary mb-1">Shop attendance</div>
                 {onShift ? (
                   <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-emerald-700 font-mono">{fmtHMS(shiftSec)}</span>
+                    <span className="text-sm font-semibold text-emerald-700 tabular-nums">{fmtHMS(shiftSec)}</span>
                     <button onClick={clockOut} disabled={busy} className="px-2.5 py-1 rounded-lg bg-rose-600 text-white text-[11px] font-semibold disabled:opacity-60">Clock out</button>
                   </div>
                 ) : (
@@ -662,7 +719,17 @@ function TimeClockChip({ me }: { me: any }) {
 function LocationSwitcher() {
   const [locs, setLocs] = useState<{ id: string; name: string }[]>([]);
   const [sel, setSel] = useState<string>(getLocationScope());
-  useEffect(() => { api.get<any>("/staff/locations").then((r) => setLocs((r.items || r || []).filter((l: any) => l.active !== false))).catch(() => {}); }, []);
+  useEffect(() => {
+    api.get<any>("/staff/locations").then((r) => {
+      const active = (r.items || r || []).filter((l: any) => l.active !== false);
+      setLocs(active);
+      // A remembered branch that no longer exists for this account (deleted, deactivated, or a
+      // different login on this browser) silently filtered every list to nothing while the
+      // switcher read "All locations" — and single-branch shops have no switcher to undo it.
+      const cur = getLocationScope();
+      if (cur && !active.some((l: any) => l.id === cur)) { setLocationScope(""); window.location.reload(); }
+    }).catch(() => {});
+  }, []);
   if (locs.length < 2) return null; // single branch: no switcher needed
   return (
     <select value={sel} onChange={(e) => { setSel(e.target.value); setLocationScope(e.target.value); window.location.reload(); }}

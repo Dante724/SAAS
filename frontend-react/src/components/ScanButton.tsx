@@ -86,7 +86,7 @@ export default function ScanButton({
 
       {open && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-ink-primary/50 backdrop-blur-[2px]" onClick={close}>
-          <div className="relative w-[320px] bg-white dark:bg-[#151b2e] rounded-2xl shadow-clay-card border border-slate-200/80 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+          <div className="relative w-[320px] bg-raised rounded-2xl shadow-clay-card border border-slate-200/80 overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
               <span className="text-sm font-bold text-ink-primary">{title}</span>
               <button aria-label="Close" type="button" onClick={close} className="w-7 h-7 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary"><M n="close" c="text-base" /></button>

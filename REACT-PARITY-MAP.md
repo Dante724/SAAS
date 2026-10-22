@@ -1,4 +1,4 @@
-# RepairOS — React redesign parity map (vs previous build)
+# Tekly — React redesign parity map (vs previous build)
 
 Legend: ✅ done · ◑ partial (present but shallow / read-only / missing sub-features) · ❌ missing
 

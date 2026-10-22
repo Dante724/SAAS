@@ -3,7 +3,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#6366f1">
-<title>Pay — RepairOS</title>
+<title>Pay — Tekly</title>
+<link rel="icon" type="image/svg+xml" href="/static/icons/tekly-mark.svg">
 <style>
   html,body{height:100%;margin:0;background:#0f1020;color:#e9e9f2;
     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center}
@@ -38,7 +39,7 @@
         `<div class="row"><span class="d">${(l.description || '').replace(/[<>&]/g, '')}${l.qty > 1 ? ' × ' + l.qty : ''}</span><span class="t">${money(l.total, d.currency)}</span></div>`).join('')}</div>` : '';
     const ref = d.invoice_number ? 'Invoice ' + d.invoice_number : (d.order_number ? 'Order ' + d.order_number : '');
     card.innerHTML = `<div class="logo"></div><h1>Payment request</h1>
-      <div class="sub">RepairOS</div>
+      <div class="sub">Tekly</div>
       <div class="amt">${money(d.amount, d.currency)}</div>
       <div class="ord">${ref}</div>
       ${items}

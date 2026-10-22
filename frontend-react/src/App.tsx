@@ -1,22 +1,27 @@
+import { lazy, Suspense } from "react";
 import { Routes, Route } from "react-router-dom";
-import CompanyHub from "./pages/company/CompanyHub";
-import CatalogHub from "./pages/catalog/CatalogHub";
-import WorkOrdersHub from "./pages/orders/WorkOrdersHub";
-import ClientsHub from "./pages/clients/ClientsHub";
-import AssetsHub from "./pages/assets/AssetsHub";
-import InventoryHub from "./pages/inventory/InventoryHub";
-import SalesPOS from "./pages/sales/SalesPOS";
-import FinanceHub from "./pages/finance/FinanceHub";
-import CashHub from "./pages/cash/CashHub";
-import ReportsHub from "./pages/reports/ReportsHub";
-import SettingsHub from "./pages/settings/SettingsHub";
-import TasksHub from "./pages/tasks/TasksHub";
-import TimesheetsHub from "./pages/timesheets/TimesheetsHub";
-import MyWorkHub from "./pages/timesheets/MyWorkHub";
-import InquiriesHub from "./pages/inbox/InquiriesHub";
-import ChatsHub from "./pages/chats/ChatsHub";
-import AppointmentsHub from "./pages/appointments/AppointmentsHub";
-import MarketingHub from "./pages/marketing/MarketingHub";
+
+// Each hub is its own chunk: the first page load no longer downloads every screen (the single
+// bundle was ~1.3 MB of JS before any route rendered).
+const CompanyHub = lazy(() => import("./pages/company/CompanyHub"));
+const CatalogHub = lazy(() => import("./pages/catalog/CatalogHub"));
+const WorkOrdersHub = lazy(() => import("./pages/orders/WorkOrdersHub"));
+const ClientsHub = lazy(() => import("./pages/clients/ClientsHub"));
+const AssetsHub = lazy(() => import("./pages/assets/AssetsHub"));
+const InventoryHub = lazy(() => import("./pages/inventory/InventoryHub"));
+const SalesPOS = lazy(() => import("./pages/sales/SalesPOS"));
+const FinanceHub = lazy(() => import("./pages/finance/FinanceHub"));
+const InvoicesHub = lazy(() => import("./pages/invoices/InvoicesHub"));
+const CashHub = lazy(() => import("./pages/cash/CashHub"));
+const ReportsHub = lazy(() => import("./pages/reports/ReportsHub"));
+const SettingsHub = lazy(() => import("./pages/settings/SettingsHub"));
+const TasksHub = lazy(() => import("./pages/tasks/TasksHub"));
+const TimesheetsHub = lazy(() => import("./pages/timesheets/TimesheetsHub"));
+const MyWorkHub = lazy(() => import("./pages/timesheets/MyWorkHub"));
+const InquiriesHub = lazy(() => import("./pages/inbox/InquiriesHub"));
+const ChatsHub = lazy(() => import("./pages/chats/ChatsHub"));
+const AppointmentsHub = lazy(() => import("./pages/appointments/AppointmentsHub"));
+const MarketingHub = lazy(() => import("./pages/marketing/MarketingHub"));
 
 // ── Route-ownership table (Strangler Fig) ─────────────────────────────
 // Flip a module from "legacy" to "react" once it passes the parity gate.
@@ -39,11 +44,12 @@ export const ROUTE_OWNERS: Record<string, "legacy" | "react"> = {
 export default function App() {
   return (
     <div className="min-h-screen">
+      <Suspense fallback={<div className="p-10 text-ink-tertiary text-sm">Loading…</div>}>
       <Routes>
         <Route path="/" element={<CompanyHub />} />
         <Route path="/catalog" element={<CatalogHub />} />
         <Route path="/orders" element={<WorkOrdersHub />} />
-        <Route path="/invoices" element={<FinanceHub initialTab="invoices" />} />
+        <Route path="/invoices" element={<InvoicesHub />} />
         <Route path="/clients" element={<ClientsHub />} />
         <Route path="/assets" element={<AssetsHub />} />
         <Route path="/inventory" element={<InventoryHub />} />
@@ -59,8 +65,22 @@ export default function App() {
         <Route path="/chats" element={<ChatsHub />} />
         <Route path="/appointments" element={<AppointmentsHub />} />
         <Route path="/marketing" element={<MarketingHub />} />
-        <Route path="*" element={<div className="p-10 text-ink-tertiary">This route is still served by the legacy app.</div>} />
+        <Route path="*" element={<NotFound />} />
       </Routes>
+      </Suspense>
+    </div>
+  );
+}
+
+// Any address the app doesn't know (an old bookmark, a mistyped link).
+function NotFound() {
+  return (
+    <div className="min-h-[60vh] grid place-items-center p-10 text-center">
+      <div>
+        <div className="text-sm font-semibold text-ink-primary">This page doesn't exist</div>
+        <div className="text-xs text-ink-tertiary mt-1">The link may be old or mistyped.</div>
+        <a href="/" className="inline-block mt-4 px-3.5 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container">Go to Home</a>
+      </div>
     </div>
   );
 }

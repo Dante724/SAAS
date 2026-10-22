@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { tint } from "../lib/tint";
 import { M } from "./Shell";
 
 // 144ik/il — status UI, split into two pieces so neither is cramped:
@@ -37,7 +38,6 @@ function hint(s: FullStatus, isEstimate?: boolean): string {
   if (s.converts_to_order) parts.push("converts to work order");
   if (s.triggers_invoice) parts.push("invoices");
   if (s.triggers_payment) parts.push("needs payment");
-  if (s.triggers_notification) parts.push("notifies client");
   if (s.shows_accept) parts.push(isEstimate ? "client sign-off" : "client accept");
   if (s.moves_asset_to) parts.push("moves asset");
   if (s.locks_edits) parts.push("locks edits");
@@ -74,11 +74,11 @@ export function StatusStepper({ statuses, currentKey }: { statuses: FullStatus[]
                 style={{ width: "50%", background: gi < curGroupIdx ? groupColor(GROUP_ORDER[gi + 1] || g) : "#e2e8f0" }} />}
               <span className="relative z-10 rounded-full flex items-center justify-center transition-all"
                 style={current
-                  ? { width: 18, height: 18, background: `${col}26`, border: `2px solid ${col}` }
+                  ? { width: 18, height: 18, background: tint(col, 15), border: `2px solid ${col}` }
                   : done
                   ? { width: 16, height: 16, background: col, color: "#fff" }
                   : { width: 12, height: 12, background: "var(--surface-2, #fff)", border: "1.5px solid #cbd5e1" }}>
-                {done && <M n="check" c="text-[10px] leading-none" />}
+                {done && <M n="check" c="text-[11px] leading-none" />}
                 {current && <span className="rounded-full" style={{ width: 6, height: 6, background: col }} />}
               </span>
             </div>
@@ -138,9 +138,9 @@ export default function StatusControl({
         <span className="flex items-center gap-2 min-w-0">
           <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: s.color || DEFAULT_COLOR }} />
           <span className="text-xs font-semibold text-ink-primary truncate">{s.name}</span>
-          {recommended && <span className="text-[10px] font-bold uppercase tracking-wide" style={{ color: s.color || DEFAULT_COLOR }}>next</span>}
+          {recommended && <span className="text-[11px] font-bold " style={{ color: s.color || DEFAULT_COLOR }}>next</span>}
         </span>
-        {h && <span className="text-[10px] text-ink-tertiary whitespace-nowrap flex-shrink-0">{h}</span>}
+        {h && <span className="text-[11px] text-ink-tertiary whitespace-nowrap flex-shrink-0">{h}</span>}
       </button>
     );
   };
@@ -175,7 +175,7 @@ export default function StatusControl({
             {nextRec && !q && <Row s={nextRec} recommended />}
             {grouped.map(({ g, items }) => (
               <div key={g}>
-                <p className="text-[10px] font-bold uppercase tracking-wide text-ink-tertiary px-2.5 pt-2 pb-0.5">{GROUP_LABEL[g]}</p>
+                <p className="text-[11px] font-bold text-ink-tertiary px-2.5 pt-2 pb-0.5">{GROUP_LABEL[g]}</p>
                 {items.map((s) => <Row key={s.id} s={s} />)}
               </div>
             ))}

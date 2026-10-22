@@ -7,14 +7,15 @@ Closed/dropped groups are terminal and open the payment window.
 """
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func, delete, update
 from pydantic import BaseModel
 from typing import Optional
 from backend.db.database import get_db
-from backend.models import OrderStatus, Employee
-from backend.services.auth import get_current_employee, require_perm
+from backend.models import OrderStatus, Employee, NotificationRule
+from backend.services.auth import get_current_employee, require_perm, record_scope
 
-router = APIRouter(prefix="/api/statuses", tags=["statuses"])
+router = APIRouter(prefix="/api/statuses", tags=["statuses"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 GROUPS = ["new", "in_progress", "pending", "ready", "closed", "dropped"]
 TERMINAL_GROUPS = {"closed", "dropped"}
@@ -23,6 +24,7 @@ TERMINAL_GROUPS = {"closed", "dropped"}
 # now configurable). key, name, group, color, default, triggers...
 DEFAULT_STATUSES = [
     # key, name, group, color, is_default, t_invoice, t_notify, t_payment, terminal
+    # (t_notify is historical: customer messages are notification rules now, so it's unused)
     ("new",            "New",            "new",         "#4f8ef7", True,  False, True,  False, False),
     ("diagnosed",      "Diagnosed",      "in_progress", "#f5a623", False, False, True,  False, False),
     ("waiting_parts",  "Waiting parts",  "pending",     "#f06daa", False, False, True,  False, False),
@@ -109,6 +111,7 @@ def _ser(s: OrderStatus) -> dict:
         "record_type": s.record_type, "converts_to_order": s.converts_to_order,
         "require_comment": s.require_comment, "require_payment": s.require_payment,
         "require_checklist": s.require_checklist,
+        "allow_messages": s.allow_messages,
     }
 
 
@@ -132,7 +135,7 @@ async def ensure_seeded(db: AsyncSession, org_id: str):
             db.add(OrderStatus(
                 org_id=org_id, key=key, name=name, status_group=grp, color=color,
                 sort_order=i, is_default=dflt, triggers_invoice=t_inv,
-                triggers_notification=t_not, triggers_payment=t_pay, is_terminal=term,
+                triggers_notification=False, triggers_payment=t_pay, is_terminal=term,
                 record_type="work_order",
             ))
         await db.commit()
@@ -148,7 +151,6 @@ async def ensure_seeded(db: AsyncSession, org_id: str):
                 sort_order=i, is_estimate=True, record_type="estimate",
                 shows_accept=accept, converts_to_order=conv,
                 is_terminal=grp in ("closed", "dropped"),
-                triggers_notification=(key == "est_sent"),
             ))
         await db.commit()
     # 144ij — seed the three newer Orderry pipelines, each independently.
@@ -183,7 +185,29 @@ async def list_statuses(
                                   OrderStatus.record_type == rt)
         .order_by(OrderStatus.sort_order)
     )).scalars().all()
-    return {"groups": GROUPS, "record_types": RECORD_TYPES, "items": [_ser(s) for s in rows]}
+    counts = await _job_counts(db, current.org_id, rt) if rt in ("work_order", "estimate") else None
+    items = []
+    for s in rows:
+        d = _ser(s)
+        if counts is not None:
+            cur, recent = counts
+            # Open statuses: jobs in them now. Closed ones: jobs that closed there in the last 30 days.
+            d["job_count"] = recent.get(s.key, 0) if s.is_terminal else cur.get(s.key, 0)
+            d["in_use"] = cur.get(s.key, 0)
+        items.append(d)
+    return {"groups": GROUPS, "record_types": RECORD_TYPES, "items": items}
+
+
+async def _job_counts(db: AsyncSession, org_id: str, rt: str) -> tuple[dict, dict]:
+    from datetime import datetime, timedelta
+
+    from backend.models import Order
+    base = (Order.org_id == org_id, Order.archived == False, Order.is_estimate == (rt == "estimate"))  # noqa: E712
+    cur = dict((await db.execute(select(Order.status, func.count()).where(*base).group_by(Order.status))).all())
+    since = datetime.utcnow() - timedelta(days=30)
+    recent = dict((await db.execute(select(Order.status, func.count()).where(
+        *base, Order.closed_at >= since).group_by(Order.status))).all())
+    return cur, recent
 
 
 class StatusIn(BaseModel):
@@ -193,6 +217,8 @@ class StatusIn(BaseModel):
     color: str = "#888888"
     is_default: bool = False
     triggers_invoice: bool = False
+    # Deprecated: customer messages are notification rules. True is still accepted from old
+    # clients and converted into an equivalent per-status rule (services/legacy_status_notifs).
     triggers_notification: bool = False
     triggers_payment: bool = False
     locks_edits: bool = False
@@ -205,6 +231,7 @@ class StatusIn(BaseModel):
     require_comment: bool = False
     require_payment: bool = False
     require_checklist: bool = False
+    allow_messages: Optional[bool] = None   # None = automatic (see services/messaging_rule)
 
 
 def _resolve_rt(data: "StatusIn") -> str:
@@ -248,9 +275,11 @@ async def create_status(
         triggers_payment=data.triggers_payment, locks_edits=data.locks_edits,
         time_limit_min=data.time_limit_min, moves_asset_to=data.moves_asset_to,
         require_comment=data.require_comment, require_payment=data.require_payment,
-        require_checklist=data.require_checklist,
+        require_checklist=data.require_checklist, allow_messages=data.allow_messages,
     )
     db.add(s)
+    await db.flush()
+    await _legacy_flag_to_rules(db, current.org_id)
     await db.commit()
     await db.refresh(s)
     return _ser(s)
@@ -272,7 +301,15 @@ async def update_status(
     s.status_group = data.status_group
     s.color = data.color
     s.is_default = data.is_default
+    was_terminal = bool(s.is_terminal)
     s.is_terminal = data.status_group in TERMINAL_GROUPS
+    if was_terminal != s.is_terminal:
+        # A status's own rules fire on the event its change evaluates (closed for a
+        # finishing status, else status_changed); keep them firing when the stage flips.
+        await db.execute(update(NotificationRule).where(
+            NotificationRule.org_id == current.org_id, NotificationRule.trigger_status_key == s.key,
+            NotificationRule.event == ("status_changed" if s.is_terminal else "closed"))
+            .values(event="closed" if s.is_terminal else "status_changed"))
     s.triggers_invoice = data.triggers_invoice
     s.triggers_notification = data.triggers_notification
     s.triggers_payment = data.triggers_payment
@@ -284,8 +321,18 @@ async def update_status(
     s.require_comment = data.require_comment
     s.require_payment = data.require_payment
     s.require_checklist = data.require_checklist
+    if "allow_messages" in data.model_fields_set:
+        s.allow_messages = data.allow_messages
+    await db.flush()
+    await _legacy_flag_to_rules(db, current.org_id)
     await db.commit()
     return _ser(s)
+
+
+async def _legacy_flag_to_rules(db: AsyncSession, org_id: str) -> None:
+    """An old client sending triggers_notification=True gets the per-status rule it meant."""
+    from backend.services.legacy_status_notifs import convert
+    await convert(db, org_id)
 
 
 class ReorderIn(BaseModel):
@@ -296,7 +343,7 @@ class ReorderIn(BaseModel):
 async def reorder_statuses(
     data: ReorderIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     for i, sid in enumerate(data.ordered_ids):
         s = (await db.execute(select(OrderStatus).where(OrderStatus.id == sid, OrderStatus.org_id == current.org_id))).scalar_one_or_none()
@@ -309,14 +356,39 @@ async def reorder_statuses(
 @router.delete("/{status_id}")
 async def delete_status(
     status_id: str,
+    move_to: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
+    """Retire a status. With ``move_to`` (another status key of the same type), jobs currently
+    in it move there first — a plain status change: it's logged, but no automations run."""
     s = (await db.execute(select(OrderStatus).where(OrderStatus.id == status_id, OrderStatus.org_id == current.org_id))).scalar_one_or_none()
     if not s:
         raise HTTPException(404, "Status not found")
     if s.is_default:
         raise HTTPException(400, "Cannot delete the default status")
+    if move_to:
+        if s.record_type not in ("work_order", "estimate"):
+            raise HTTPException(400, "Only work order and estimate statuses hold jobs")
+        target = (await db.execute(select(OrderStatus).where(
+            OrderStatus.org_id == current.org_id, OrderStatus.key == move_to, OrderStatus.active == True,  # noqa: E712
+            OrderStatus.record_type == s.record_type, OrderStatus.id != s.id))).scalars().first()
+        if not target:
+            raise HTTPException(400, "Pick another active status to move the jobs to")
+        from datetime import datetime
+
+        from backend.models import Order, OrderStatusLog
+        now = datetime.utcnow()
+        orders = (await db.execute(select(Order).where(
+            Order.org_id == current.org_id, Order.status == s.key,
+            Order.is_estimate == (s.record_type == "estimate")))).scalars().all()
+        for o in orders:
+            o.status = target.key
+            o.status_entered_at = now
+            if target.is_terminal and not o.closed_at:
+                o.closed_at = now
+            db.add(OrderStatusLog(order_id=o.id, from_status=s.key, to_status=target.key,
+                                  changed_by_id=current.id, note=f"Status \"{s.name}\" was removed"))
     s.active = False
     await db.commit()
     return {"ok": True}
@@ -346,7 +418,7 @@ class TransitionIn(BaseModel):
 async def create_transition(
     data: TransitionIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     t = StatusTransition(org_id=current.org_id, from_status_id=data.from_status_id,
                          to_status_id=data.to_status_id, role_id=data.role_id)
@@ -360,7 +432,7 @@ async def create_transition(
 async def delete_transition(
     tid: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     t = (await db.execute(select(StatusTransition).where(StatusTransition.id == tid, StatusTransition.org_id == current.org_id))).scalar_one_or_none()
     if t:

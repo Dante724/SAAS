@@ -16,16 +16,37 @@ _PLACEHOLDER_SECRETS = {
 }
 
 
+def _valid_fernet_keys(raw: str) -> bool:
+    keys = [k.strip() for k in (raw or "").split(",") if k.strip()]
+    if not keys:
+        return False
+    try:
+        from cryptography.fernet import Fernet
+        for k in keys:
+            Fernet(k.encode())
+    except Exception:
+        return False
+    return True
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # -- Core --
-    APP_NAME: str = "RepairOS"
+    APP_NAME: str = "Tekly"
     ENVIRONMENT: str = "development"          # development|staging|production|test
     SECRET_KEY: str = "dev-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     DATABASE_URL: str = "sqlite+aiosqlite:///./repairos.db"
+    # Postgres pool + guards (per worker process: pool_size + max_overflow connections at most,
+    # so workers x that must stay under the server's max_connections).
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_TIMEOUT_S: int = 10                # wait this long for a free connection, then error (not hang)
+    DB_POOL_RECYCLE_S: int = 1800
+    DB_STATEMENT_TIMEOUT_MS: int = 15000       # Postgres cancels any single statement running longer; 0 = off
+    DB_IDLE_IN_TX_TIMEOUT_MS: int = 60000      # ends a session left idle inside a transaction; 0 = off
 
     # -- Operational toggles --
     SEED_DEMO: bool = False                    # seed demo data on startup (dev only)
@@ -33,6 +54,11 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "*"                     # csv allowlist; "*" disallowed in production
     LOG_LEVEL: str = "INFO"
     REDIS_URL: str = ""                        # set -> shared rate-limit store across instances (else in-process)
+    # How many reverse proxies (load balancer, CDN…) sit in front of the app. 0 = clients connect
+    # directly, so X-Forwarded-For is ignored (a client could write anything there). N = trust the
+    # address appended by the N-th proxy from the right. Alternatively run uvicorn with
+    # --proxy-headers --forwarded-allow-ips=<proxy ip> and leave this at 0.
+    TRUSTED_PROXY_HOPS: int = 0
     LOG_JSON: bool = False                      # structured JSON logs (recommended in prod)
 
     # -- Notification providers (absent keys -> simulated/logged) --
@@ -62,6 +88,23 @@ class Settings(BaseSettings):
     STRIPE_SUCCESS_URL: str = "https://app.repairos.dev/pay/success"
     STRIPE_CANCEL_URL: str = "https://app.repairos.dev/pay/cancel"
 
+    # -- Tekly subscription billing: Tekly's OWN Stripe account, which bills shops for Tekly.
+    # Separate from STRIPE_SECRET_KEY above and from each shop's own keys (org_creds), which
+    # take payments from the shop's customers. Required in production; test-mode keys only on
+    # staging. One USD price list worldwide (yearly = 10 x monthly); Pro is a graduated tiered
+    # price per location. See .env.example for what to create in Stripe.
+    STRIPE_BILLING_SECRET_KEY: str = ""
+    STRIPE_BILLING_WEBHOOK_SECRET: str = ""
+    STRIPE_BILLING_PRICE_SOLO_MONTH: str = ""
+    STRIPE_BILLING_PRICE_SOLO_YEAR: str = ""
+    STRIPE_BILLING_PRICE_SHOP_MONTH: str = ""
+    STRIPE_BILLING_PRICE_SHOP_YEAR: str = ""
+    STRIPE_BILLING_PRICE_PRO_MONTH: str = ""
+    STRIPE_BILLING_PRICE_PRO_YEAR: str = ""
+    # Shop's extra team members (beyond the 8 included), a per-seat price.
+    STRIPE_BILLING_PRICE_SHOP_SEAT_MONTH: str = ""
+    STRIPE_BILLING_PRICE_SHOP_SEAT_YEAR: str = ""
+
     # -- Square (absent -> not selectable; per-org provider chooses at runtime) --
     SQUARE_ACCESS_TOKEN: str = ""
     SQUARE_LOCATION_ID: str = ""
@@ -85,6 +128,8 @@ class Settings(BaseSettings):
     # ── B3: media storage ─────────────────────────────────────────────────
     MEDIA_BACKEND: str = "db"          # db | local | s3  (db = legacy inline; local/s3 = offloaded)
     MEDIA_MAX_BYTES: int = 8 * 1024 * 1024   # Build 144cq: hard cap on any single upload (8 MB)
+    # Whole request body cap (base64 of an 8 MB upload is ~11 MB of JSON). 0 disables.
+    MAX_REQUEST_BYTES: int = 16 * 1024 * 1024
     MEDIA_LOCAL_DIR: str = "/tmp/repairos-media"
     MEDIA_S3_BUCKET: str = ""
     MEDIA_S3_REGION: str = ""
@@ -113,6 +158,14 @@ class Settings(BaseSettings):
     VIN_LOOKUP_LIVE: bool = True          # attempt NHTSA vPIC enrichment (keyless, best-effort)
     IMEI_LOOKUP_API_KEY: str = ""         # absent -> structural validation only
 
+    # -- Error tracking (Sentry protocol). Empty DSN = off. --
+    SENTRY_DSN: str = ""
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.0
+    RELEASE: str = ""                       # e.g. the git SHA, set by the deploy
+
+    # -- Prometheus scrape token for /metrics (required to expose it when deployed) --
+    METRICS_TOKEN: str = ""
+
     # -- Auth refresh --
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 43200   # 30 days
 
@@ -129,8 +182,28 @@ class Settings(BaseSettings):
         return self.ENVIRONMENT.lower() == "production"
 
     @property
+    def is_deployed(self) -> bool:
+        """Production *and* staging: anything reachable by real users gets the fail-closed
+        config checks and hardening (no demo seed, no simulated payments, no default admin,
+        no runtime DDL, hidden API docs). Only development and test are relaxed."""
+        return self.ENVIRONMENT.lower() in ("production", "staging")
+
+    @property
     def is_sqlite(self) -> bool:
         return self.DATABASE_URL.startswith("sqlite")
+
+    @property
+    def billing_prices(self) -> dict[tuple[str, str], str]:
+        """(plan, period) -> Stripe price id, for the prices that are set."""
+        raw = {(plan, period): getattr(self, f"STRIPE_BILLING_PRICE_{plan.upper()}_{period.upper()}")
+               for plan in ("solo", "shop", "pro") for period in ("month", "year")}
+        return {k: v.strip() for k, v in raw.items() if v and v.strip()}
+
+    @property
+    def billing_seat_prices(self) -> dict[str, str]:
+        """period -> Stripe price id for Shop's extra team members, for the ones that are set."""
+        raw = {"month": self.STRIPE_BILLING_PRICE_SHOP_SEAT_MONTH, "year": self.STRIPE_BILLING_PRICE_SHOP_SEAT_YEAR}
+        return {k: v.strip() for k, v in raw.items() if v and v.strip()}
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -147,8 +220,9 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _fail_closed_in_prod(self) -> "Settings":
-        """Refuse to run production with a placeholder secret or wildcard CORS."""
-        if self.is_production:
+        """Refuse to run production or staging with placeholder secrets, wildcard CORS, or
+        secrets-at-rest left unencrypted."""
+        if self.is_deployed:
             if self.SECRET_KEY in _PLACEHOLDER_SECRETS or len(self.SECRET_KEY) < 32:
                 raise ValueError(
                     "SECRET_KEY must be a strong (>=32 char) value in production. "
@@ -156,6 +230,15 @@ class Settings(BaseSettings):
                 )
             if "*" in self.cors_origin_list:
                 raise ValueError("CORS_ORIGINS must be an explicit allowlist in production (no '*').")
+            # OAuth tokens and shop integration credentials are encrypted with this key. Without
+            # it, OAuth tokens were stored in plaintext and shop credentials fell back to a key
+            # derived from SECRET_KEY (the JWT signing key).
+            if not _valid_fernet_keys(self.TOKEN_ENCRYPTION_KEY):
+                raise ValueError(
+                    "TOKEN_ENCRYPTION_KEY must be set in production/staging (comma-separated Fernet "
+                    "keys, newest first). Generate: python -c \"from cryptography.fernet import "
+                    "Fernet; print(Fernet.generate_key().decode())\""
+                )
             # Webhook signing secrets must be set for any payment provider actually in
             # use, so inbound provider callbacks can't be forged. Gate each only on its
             # provider being configured — don't break shops that don't use it.
@@ -164,6 +247,7 @@ class Settings(BaseSettings):
                     "STRIPE_WEBHOOK_SECRET must be set in production when Stripe is "
                     "configured (STRIPE_SECRET_KEY present), to verify webhook signatures."
                 )
+            self._check_billing()
             if self.SQUARE_ACCESS_TOKEN and not self.SQUARE_WEBHOOK_SIGNATURE_KEY:
                 raise ValueError(
                     "SQUARE_WEBHOOK_SIGNATURE_KEY must be set in production when Square is "
@@ -184,6 +268,28 @@ class Settings(BaseSettings):
                     "posts. Set META_APP_SECRET to enable X-Hub-Signature-256 verification."
                 )
         return self
+
+
+    def _check_billing(self) -> None:
+        """Subscription billing must be complete wherever it's switched on, and switched on in
+        production: without it trials end with no way to pay, and every shop goes read-only."""
+        key = self.STRIPE_BILLING_SECRET_KEY.strip()
+        if not key:
+            if self.is_production:
+                raise ValueError(
+                    "STRIPE_BILLING_SECRET_KEY must be set in production: shops can't subscribe "
+                    "to Tekly without it. See .env.example (Tekly subscription billing).")
+            return
+        missing = [n for n in ("STRIPE_BILLING_WEBHOOK_SECRET", "PUBLIC_BASE_URL",
+                               *(f"STRIPE_BILLING_PRICE_{p}_{t}" for p in ("SOLO", "SHOP", "PRO", "SHOP_SEAT")
+                                 for t in ("MONTH", "YEAR")))
+                   if not str(getattr(self, n) or "").strip()]
+        if missing:
+            raise ValueError("Subscription billing is configured (STRIPE_BILLING_SECRET_KEY) but "
+                             f"these are not set: {', '.join(missing)}")
+        if not self.is_production and "_live_" in key:
+            raise ValueError("STRIPE_BILLING_SECRET_KEY is a live key outside production; "
+                             "staging must use a Stripe test-mode key (sk_test_…).")
 
 
 settings = Settings()

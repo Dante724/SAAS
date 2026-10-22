@@ -1,5 +1,67 @@
 # Changelog
 
+## bl144s1 — Subscription billing: one global price list, plans enforced (launch audit C13)
+
+- **Plans (USD, yearly = 10 × monthly):** Solo $29 (2 active team members, 1 location, 150 new
+  jobs a month); Shop $69 for the first location + $49 each extra, 8 team members shared across
+  its locations + $4 a month per extra member (a second, per-seat subscription item kept in sync
+  as people are added or removed; the app confirms before adding a paid seat); Pro $129 for the
+  first location + $79 each extra, unlimited people. Shop and Pro are Stripe graduated tiered
+  prices with quantity = active locations. Stock transfers between locations stay Pro. Every plan: work orders, estimates,
+  invoices, POS, customer portal and booking, the Tekly Go phone app, one-tap messaging. Shop adds
+  inventory, labels and scanning, the time clock, reports and automatic customer notifications. Pro
+  adds purchase orders, payroll and commissions, multiple locations and transfers, AI estimate
+  drafting and parts recognition, QuickBooks/Xero, SSO and API keys. Old `starter` maps to `shop`.
+- **One gate:** `services/billing.enforce_request` (inside `get_current_employee`) checks every
+  staff route against a route→feature table (403 + `X-Plan-Required: shop|pro`); a few reads that
+  core screens need stay open. API keys (`enforce_api_key`), the notification rules engine,
+  automations and QuickBooks auto-sync check the plan too. Limits are enforced where team members,
+  locations and jobs are created (estimates aren't capped; customer-accepted estimates still convert).
+- **Trial:** 14 days, every Pro feature, no card. In the last week the app suggests the plan that
+  fits the shop's team and locations. **Read-only, never deleted** after the trial, a cancellation
+  or `unpaid`; a failed renewal (`past_due`) keeps full access for 14 days.
+- **Stripe Billing on Tekly's own account:** Checkout with Stripe Tax and tax-ID collection (local
+  currency via Adaptive Pricing, a Dashboard setting), prorated in-place plan change, Customer
+  Portal, and a signed, idempotent webhook (`billing_events` keyed by event id; older events can't
+  undo newer ones). Pro's quantity follows active locations.
+- **Custom pricing** (India now, large deals later): `organisations.billing_mode = custom`, set
+  with the plan, term end and agreed-price note in the /admin portal. These shops never reach
+  Stripe; the Billing page says the plan is managed by Tekly; past the term end they're read-only.
+- **Founding-customer price lock:** `price_locked_until`. Tekly never re-prices an existing
+  subscription (quantity syncs send quantity only; old price ids still map via metadata).
+- **Config:** six `STRIPE_BILLING_PRICE_{SOLO,SHOP,PRO}_{MONTH,YEAR}`, two
+  `STRIPE_BILLING_PRICE_SHOP_SEAT_{MONTH,YEAR}`, plus key, webhook secret and
+  `PUBLIC_BASE_URL`; production refuses to boot without them, staging refuses a live key.
+- **App:** Settings › Billing & plan; trial / failed-payment / read-only notice; the logo badge
+  shows the plan; nav, tabs and buttons for features the plan lacks are hidden (React app and the
+  technician app's clock).
+- Stripe signature check accepts any of several `v1` signatures (secret roll-over).
+
+## phase 4 — Customer status messages: the notification rules are the one source of truth
+
+- **Problem:** two settings disagreed. The status editor's "Text the customer" switch
+  (`OrderStatus.triggers_notification`) drove a legacy template send that ran only when **no**
+  notification rule matched; every new shop is seeded with an "email on every status change" rule,
+  so the switch was nearly always ignored and owners couldn't tell which setting was real.
+- **Decision:** rules win, everywhere. The legacy fallback in `_apply_status_change` is **removed**
+  (not merely unreachable). `triggers_notification` stays as a column so old clients don't break, but
+  nothing reads it: a `true` from the API is converted into a rule and the flag cleared.
+- **No behaviour change for existing shops** (`services/legacy_status_notifs.py`, shared by
+  migration `nt144p4` and the dev startup self-heal): each flagged status becomes one active
+  per-status rule per status-change template the fallback would have sent (that template's channel,
+  event `closed` for a finishing status), **only** when no rule already fires for it (the fallback
+  never ran then) and only when such a template exists (it sent nothing otherwise). A
+  location-scoped rule counts as covering (can't double-send). Statuses not in the status table
+  (hard-coded `done/closed/delivered`) no longer get the template fallback.
+- **Status editor:** the switch is replaced by a live read-out from the rules ("Email · via Every
+  status change", "Text"), Text/Email(/WhatsApp) quick switches that create or turn off this
+  status's own rule (the same `toggleCell` the Notifications table uses, `src/lib/notifRules.ts`), and
+  "Edit message" → Settings › Notifications. The summary sentence and the list badge read the rules.
+- Changing a status between open and finishing stages moves its own rules between `status_changed`
+  and `closed`, so they keep firing. New shops no longer seed the flag.
+- Known gap (unchanged, follow-up): rule-engine email doesn't use the shop's connected Gmail/Outlook
+  the way the old template path did (`try_oauth_email`); it goes through SMTP / simulated.
+
 ## build 144ep — Enforce the last 11 foreign keys; fix checklist orphans; repair dev DB
 
 - **Root cause, checklist orphans:** `_write_structure` (template save) deleted steps and relied on the

@@ -12,7 +12,9 @@ from sqlalchemy.orm import selectinload
 
 from backend.db.database import get_db
 from backend.models import Employee, Part, Service
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, has_perm, require_perm
+from backend.core import paging as _paging
+from backend.services.redact import can_see_costs
 
 router = APIRouter(prefix="/api/catalog", tags=["catalog"])
 
@@ -87,10 +89,12 @@ async def list_services(
     search: Optional[str] = None,
     category: Optional[str] = None,
     category_id: Optional[str] = None,
-    limit: int = 200,
+    skip: int = _paging.skip_query(),
+    limit: int = _paging.limit_query(200),
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_labors")),
 ):
+    limit = _paging.clamp(limit)
     q = select(Service).where(Service.org_id == current.org_id, Service.active == True)  # noqa: E712
     if search:
         q = q.where(Service.name.ilike(f"%{search}%"))
@@ -98,20 +102,17 @@ async def list_services(
         q = q.where(Service.category == category)
     if category_id:
         q = q.where(Service.category_id == category_id)
-    q = q.order_by(Service.name).limit(limit)
-    rows = (await db.execute(q)).scalars().all()
-    total = (await db.execute(
-        select(func.count()).select_from(Service).where(Service.org_id == current.org_id, Service.active == True)  # noqa: E712
-    )).scalar() or 0
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
+    rows = (await db.execute(q.order_by(Service.name, Service.id).offset(skip).limit(limit))).scalars().all()
     names = await _service_cat_names(db, current.org_id)
-    return {"total": total, "items": [_ser(s, names) for s in rows]}
+    return {"total": total, "items": [_ser(s, names) for s in rows], "skip": skip, "limit": limit}
 
 
 @router.post("/services", status_code=201)
 async def create_service(
     data: ServiceIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_labors")),
 ):
     if not data.name.strip():
         raise HTTPException(400, "Name is required")
@@ -119,7 +120,7 @@ async def create_service(
         org_id=current.org_id, name=data.name, description=(data.description or "")[:2000],
         category=data.category, category_id=data.category_id,
         is_labor=data.is_labor, unit=(data.unit or "pc")[:24],
-        price=data.price, cost_price=data.cost_price,
+        price=data.price, cost_price=data.cost_price if await can_see_costs(db, current) else 0,
         duration_min=max(0, data.duration_min or 0), flat_rate=data.flat_rate,
         warranty_days=data.warranty_days, barcode=data.barcode,
         bookable=data.bookable,
@@ -136,7 +137,7 @@ async def create_service(
 async def update_service(
     service_id: str, data: ServiceIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_labors")),
 ):
     s = (await db.execute(select(Service).where(Service.id == service_id, Service.org_id == current.org_id))).scalar_one_or_none()
     if not s:
@@ -148,7 +149,8 @@ async def update_service(
     s.is_labor = data.is_labor
     s.unit = (data.unit or "pc")[:24]
     s.price = data.price
-    s.cost_price = data.cost_price
+    if "cost_price" in data.model_fields_set and await can_see_costs(db, current):
+        s.cost_price = data.cost_price
     s.duration_min = max(0, data.duration_min or 0)
     s.flat_rate = data.flat_rate
     s.warranty_days = data.warranty_days
@@ -164,7 +166,7 @@ async def update_service(
 async def delete_service(
     service_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_delete_labors")),
 ):
     s = (await db.execute(select(Service).where(Service.id == service_id, Service.org_id == current.org_id))).scalar_one_or_none()
     if not s:
@@ -214,7 +216,7 @@ async def list_service_commissions(
 async def add_service_commission(
     service_id: str, data: ServiceCommissionIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_config_exceptional_commissions")),
 ):
     from decimal import Decimal
     from backend.models import CommissionRule
@@ -238,7 +240,7 @@ async def add_service_commission(
 async def delete_service_commission(
     service_id: str, rule_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_config_exceptional_commissions")),
 ):
     from backend.models import CommissionRule
     r = (await db.execute(select(CommissionRule).where(
@@ -328,12 +330,16 @@ async def catalog_search(
                         "category": "Job Kit", "price": price, "cost_price": 0,
                         "available": None, "components": len(comps)})
 
+    if not await has_perm(db, current, "can_view_item_prices"):
+        for it in out:          # the line takes the catalog price server-side (orders.add_line)
+            for k in ("price", "repair_price"):
+                it.pop(k, None)
     return {"items": out}
 
 
 # ── Taxes (named, reusable rates) ────────────────────
 from backend.models import Tax
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 
 class TaxIn(BaseModel):
@@ -369,7 +375,7 @@ async def list_taxes(
 async def create_tax(
     data: TaxIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     if not data.name.strip():
         raise HTTPException(400, "Name is required")
@@ -393,7 +399,7 @@ async def create_tax(
 async def update_tax(
     tax_id: str, data: TaxIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     t = (await db.execute(select(Tax).where(Tax.id == tax_id, Tax.org_id == current.org_id))).scalar_one_or_none()
     if not t:
@@ -413,7 +419,7 @@ async def update_tax(
 async def delete_tax(
     tax_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     t = (await db.execute(select(Tax).where(Tax.id == tax_id, Tax.org_id == current.org_id))).scalar_one_or_none()
     if not t:

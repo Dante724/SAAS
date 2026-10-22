@@ -27,9 +27,10 @@ from backend.models import (
     Payment,
     Transaction,
 )
-from backend.services.auth import require_perm
+from backend.services.auth import assert_perm, has_perm, require_perm, record_scope
+from backend.core import paging as _paging
 from backend.services.numbering import next_number
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 
 async def _check_backdating(db, org_id):
@@ -42,7 +43,8 @@ async def _check_backdating(db, org_id):
         if last and last.issued_at and datetime.utcnow() < last.issued_at:
             raise HTTPException(422, "Backdating invoices is not allowed")
 
-router = APIRouter(prefix="/api/cash", tags=["cash"])
+router = APIRouter(prefix="/api/cash", tags=["cash"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 
 # ── helpers ──────────────────────────────────────────
@@ -50,8 +52,16 @@ router = APIRouter(prefix="/api/cash", tags=["cash"])
 async def post_transaction(db, org_id, account_id, txn_type, amount, *,
                            cash_flow_item_id=None, comment=None, ref_type=None,
                            ref_id=None, employee_id=None, transfer_pair_id=None,
-                           fx_rate=None, is_retroactive=False, actual_date=None):
-    """Create a transaction and update the account balance in one step."""
+                           fx_rate=None, is_retroactive=False, actual_date=None,
+                           native_amount=False):
+    """Create a transaction and update the account balance in one step.
+
+    Documents (orders, invoices, sales, postings, refunds, client/supplier settlements) are
+    priced in the org's base currency. Posting such an amount into a till held in another
+    currency added e.g. 100 GBP-worth of order money as 100 USD, so a document leg must hit a
+    base-currency account. Manual entries and transfers (which carry fx_rate) are native already;
+    corrections pass native_amount=True because their delta is typed against the account itself.
+    """
     txn = Transaction(
         org_id=org_id, account_id=account_id, txn_type=txn_type, amount=amount,
         cash_flow_item_id=cash_flow_item_id, comment=comment, ref_type=ref_type,
@@ -64,23 +74,37 @@ async def post_transaction(db, org_id, account_id, txn_type, amount, *,
     # tenant's balance (the transaction row is org-stamped, but the balance mutation wasn't scoped).
     acc = (await db.execute(select(Account).where(
         Account.id == account_id, Account.org_id == org_id))).scalar_one_or_none()
+    if acc and acc.currency_code and ref_type not in (None, "manual") and fx_rate is None \
+            and not native_amount:
+        base = await _org_base_code(db, org_id)
+        if acc.currency_code.upper() != base.upper():
+            raise HTTPException(422, f"“{acc.name}” holds {acc.currency_code}, but this document is in "
+                                     f"{base}. Take the payment into a {base} account, then transfer "
+                                     "between accounts if the money is held in another currency.")
     if acc:
-        acc.balance = (acc.balance or 0) + amount
-        txn.balance_after = q2(acc.balance)  # A1: frozen running-balance snapshot
+        from backend.services.money import add_to_column
+        txn.balance_after = q2(await add_to_column(db, acc, "balance", amount))  # A1: running-balance snapshot
         # 144bh: manual cash income/expense on a till feeds the open drawer so the blind-count close
         # agrees with the cashbox balance (sales go via Payment.shift_id). Link only when it's
         # unambiguous: for a location-scoped till, that location's open shift; for a company-wide
         # till, the single org-wide open shift. 2+ candidate drawers → leave unlinked.
-        if txn_type in ("income", "expense") and acc.payment_option == "cash":
-            from backend.models import CashShift
-            q = (select(CashShift).join(Location, CashShift.location_id == Location.id)
-                 .where(Location.org_id == org_id, CashShift.closed_at.is_(None)))
-            if acc.location_id:
-                q = q.where(CashShift.location_id == acc.location_id)
-            shifts = (await db.execute(q)).scalars().all()
-            if len(shifts) == 1:
-                txn.shift_id = shifts[0].id
+        if txn_type in ("income", "expense"):
+            txn.shift_id = await open_drawer_shift(db, org_id, acc)
     return txn
+
+
+async def open_drawer_shift(db, org_id, acc) -> Optional[str]:
+    """The open cash shift a cash till belongs to, when unambiguous: for a location-scoped till,
+    that location's open shift; for a company-wide till, the single org-wide open shift."""
+    if not acc or acc.payment_option != "cash":
+        return None
+    from backend.models import CashShift
+    q = (select(CashShift).join(Location, CashShift.location_id == Location.id)
+         .where(Location.org_id == org_id, CashShift.closed_at.is_(None)))
+    if acc.location_id:
+        q = q.where(CashShift.location_id == acc.location_id)
+    shifts = (await db.execute(q)).scalars().all()
+    return shifts[0].id if len(shifts) == 1 else None
 
 
 def _ser_account(a: Account) -> dict:
@@ -161,7 +185,7 @@ async def total_money(
 async def create_account(
     data: AccountIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
+    current: Employee = Depends(require_perm("can_manage_accounts")),
 ):
     if not data.name.strip():
         raise HTTPException(400, "Name is required")
@@ -198,7 +222,7 @@ async def update_account(
 async def delete_account(
     account_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
+    current: Employee = Depends(require_perm("can_manage_accounts")),
 ):
     a = (await db.execute(select(Account).where(Account.id == account_id, Account.org_id == current.org_id))).scalar_one_or_none()
     if not a:
@@ -259,12 +283,15 @@ async def create_transaction(
 ):
     if data.txn_type not in ("income", "expense"):
         raise HTTPException(400, "Use income or expense (transfer has its own endpoint)")
+    await assert_perm(db, current, "can_create_incomes" if data.txn_type == "income" else "can_create_expenses")
     amt = abs(data.amount) * (1 if data.txn_type == "income" else -1)
     retro = False
     actual = None
     if data.actual_date:
         actual = parse_dt(data.actual_date, "actual_date")
         retro = actual.date() < datetime.utcnow().date()
+        if retro:
+            await assert_perm(db, current, "can_retroactive_cash")
     await post_transaction(
         db, current.org_id, data.account_id, data.txn_type, amt,
         cash_flow_item_id=data.cash_flow_item_id, comment=data.comment,
@@ -290,6 +317,18 @@ async def _get_txn(db, org_id, txn_id) -> Transaction:
     return t
 
 
+# Cash legs posted by a payment document. Voiding/correcting only the cash row reversed the till
+# while the Payment, invoice.amount_paid, client ledger and sale.paid stayed as they were.
+_DOCUMENT_LEGS = {"order": "work order payment", "invoice": "invoice payment", "sale": "sale",
+                  "payroll_run": "payroll run"}
+
+
+def _guard_document_leg(t) -> None:
+    if t.ref_type in _DOCUMENT_LEGS:
+        raise HTTPException(409, f"This transaction is the cash side of a {_DOCUMENT_LEGS[t.ref_type]}. "
+                                 "Refund or void it from that document so everything stays in sync.")
+
+
 @router.post("/transactions/{txn_id}/correct", status_code=201)
 async def correct_transaction(
     txn_id: str,
@@ -303,6 +342,7 @@ async def correct_transaction(
     orig = await _get_txn(db, current.org_id, txn_id)
     if orig.status == "deleted":
         raise HTTPException(400, "Cannot correct a deleted transaction")
+    _guard_document_leg(orig)
     if not (data.reason or "").strip():
         raise HTTPException(400, "A reason is required")
     if data.delta == 0:
@@ -312,6 +352,7 @@ async def correct_transaction(
         cash_flow_item_id=orig.cash_flow_item_id,
         comment=f"Correction: {data.reason.strip()}",
         ref_type=orig.ref_type, ref_id=orig.ref_id, employee_id=current.id,
+        native_amount=True,
     )
     corr.reverses_txn_id = orig.id       # link the delta row to the original
     orig.status = "corrected"            # original stays intact, just flagged
@@ -338,6 +379,7 @@ async def delete_transaction(
     if t.ref_type in ("refund", "client_return", "purchase_return"):
         raise HTTPException(409, f"This transaction settles a {t.ref_type.replace('_', ' ')}. "
                                  "Delete the return/refund document instead.")
+    _guard_document_leg(t)
     legs = [t]
     if t.transfer_pair_id:
         legs = (await db.execute(select(Transaction).where(
@@ -366,6 +408,8 @@ async def restore_transaction(
     t = await _get_txn(db, current.org_id, txn_id)
     if t.status != "deleted":
         raise HTTPException(400, "Transaction is not deleted")
+    if t.ref_type == "payroll_run":   # voided with its run; reviving it alone would pay twice
+        raise HTTPException(409, "This was the payout of a voided payroll run. Accrue and pay the period again instead.")
     legs = [t]
     if t.transfer_pair_id:
         legs = (await db.execute(select(Transaction).where(
@@ -520,12 +564,9 @@ async def pay_order(
         Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
-    # remaining = total minus everything already paid (incl. prepayments)
-    already = (await db.execute(
-        select(func.coalesce(func.sum(Payment.amount), 0)).select_from(Payment)
-        .where(Payment.order_id == order_id, Payment.kind != "refund")
-    )).scalar() or 0
-    remaining = q2((o.total or 0) - already)
+    # remaining = total minus everything already paid, net of refunds (shared definition)
+    from backend.services.order_money import balance_due, cancel_open_pay_links
+    remaining = await balance_due(db, o)
     amount = data.amount if data.amount is not None else max(remaining, 0)
     # Guard: positive amounts only, and don't let a "pay the balance" tap double-post once the
     # order is already settled (double-click / retry → remaining 0 → amount 0 → rejected here).
@@ -533,7 +574,8 @@ async def pay_order(
         raise HTTPException(400, "Nothing to pay — this order is already settled" if remaining <= 0 else "Payment amount must be positive")
 
     # ensure an invoice exists for this order
-    inv = (await db.execute(select(Invoice).where(Invoice.order_id == order_id))).scalar_one_or_none()
+    from backend.services.order_money import primary_invoice
+    inv = await primary_invoice(db, order_id)
     if not inv:
         await _check_backdating(db, current.org_id)
         inv = Invoice(invoice_number=await next_number(db, current.org_id, "invoice"), org_id=current.org_id,
@@ -557,10 +599,12 @@ async def pay_order(
             await post_contact_ledger(db, current.org_id, o.client_id, "income", -abs(amount),
                                       note=f"Payment for {o.order_number}", ref_type="payment",
                                       ref_id=pay.id, created_by_id=current.id)
-        inv.amount_paid = (inv.amount_paid or 0) + amount
-        inv.status = "paid" if inv.amount_paid >= inv.total else "partial"
+        inv.amount_paid = q2((inv.amount_paid or 0) + amount)   # quantize: float sums left paid invoices "partial"
+        inv.status = "paid" if inv.amount_paid >= q2(inv.total) else "partial"
         await log_system_event(db, current.org_id, "order", order_id,
                                f"Closed on client balance: {amount}")
+        await db.flush()
+        await cancel_open_pay_links(db, o)
         await db.commit()
         return {"ok": True, "method": "balance", "amount": amount}
 
@@ -602,7 +646,10 @@ async def pay_order(
                                    ref_id=order_id, employee_id=current.id)
 
     pay = Payment(invoice_id=inv.id, order_id=order_id, client_id=o.client_id, method=data.method,
-                  kind="payment", account_id=acc.id, amount=amount, received_by_id=current.id)
+                  kind="payment", account_id=acc.id, amount=amount, received_by_id=current.id,
+                  # cash into a till counts toward that drawer's close (was never linked → a short
+                  # drawer looked balanced or "over")
+                  shift_id=await open_drawer_shift(db, current.org_id, acc) if data.method == "cash" else None)
     db.add(pay)
     if o.client_id:
         await db.flush()
@@ -610,10 +657,12 @@ async def pay_order(
         await post_contact_ledger(db, current.org_id, o.client_id, "income", -abs(amount),
                                   note=f"Payment for {o.order_number}", ref_type="payment",
                                   ref_id=pay.id, created_by_id=current.id)
-    inv.amount_paid = (inv.amount_paid or 0) + amount
-    inv.status = "paid" if inv.amount_paid >= inv.total else "partial"
+    inv.amount_paid = q2((inv.amount_paid or 0) + amount)   # quantize: float sums left paid invoices "partial"
+    inv.status = "paid" if inv.amount_paid >= q2(inv.total) else "partial"
     await log_system_event(db, current.org_id, "order", order_id,
                            f"Payment {amount} via {data.method} to {acc.name}")
+    await db.flush()
+    await cancel_open_pay_links(db, o)   # a link sent earlier must not charge the customer again
     await db.commit()
     # 144jc: payment_received notifications (client receipt + staff), best-effort.
     try:
@@ -656,7 +705,8 @@ async def prepay_order(
                            ref_id=order_id, employee_id=current.id)
     pay = Payment(invoice_id=None, order_id=order_id, client_id=o.client_id, method=data.method,
                   kind="prepayment", account_id=acc.id, amount=data.amount, received_by_id=current.id,
-                  reference="Prepayment")
+                  reference="Prepayment",
+                  shift_id=await open_drawer_shift(db, current.org_id, acc) if data.method == "cash" else None)
     db.add(pay)
     if o.client_id:
         await db.flush()
@@ -667,6 +717,9 @@ async def prepay_order(
     o.prepayment_total = (o.prepayment_total or 0) + data.amount
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order_id, f"Prepayment {data.amount} to {acc.name}")
+    from backend.services.order_money import cancel_open_pay_links
+    await db.flush()
+    await cancel_open_pay_links(db, o)
     await db.commit()
     return {"ok": True, "prepaid": o.prepayment_total}
 
@@ -679,12 +732,23 @@ async def refund_overpayment(
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
     """Refund an overpayment (prepayments exceeded the order total) from a cashbox."""
-    o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    await assert_perm(db, current, "can_create_returns")   # paying money back, not just seeing it
+    # Row lock (B11): two refunds at once both read the same overpayment and paid it out twice.
+    o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
+                          .with_for_update())).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
     acc = (await db.execute(select(Account).where(Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
     if not acc:
         raise HTTPException(404, "Account not found")
+    # Only money actually received beyond the total can go back out — this endpoint used to pay
+    # any amount (or a negative one) out of the till.
+    from backend.services.order_money import overpaid
+    excess = await overpaid(db, o)
+    if data.amount is None or data.amount <= 0:
+        raise HTTPException(400, "Refund amount must be positive")
+    if data.amount > excess + 0.005:
+        raise HTTPException(400, f"Only the overpayment can be refunded here ({excess:g})")
     await post_transaction(db, current.org_id, acc.id, "expense", -abs(data.amount),
                            comment=f"Refund overpayment {o.order_number}", ref_type="order",
                            ref_id=order_id, employee_id=current.id)
@@ -741,6 +805,7 @@ async def list_order_invoices(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
+    await assert_perm(db, current, "can_view_invoices_tab")   # the work order's Invoices and payments tab
     invs = (await db.execute(select(Invoice).where(Invoice.order_id == order_id, Invoice.org_id == current.org_id))).scalars().all()
     pays = (await db.execute(select(Payment).where(Payment.order_id == order_id))).scalars().all()
     return {
@@ -753,18 +818,53 @@ async def list_order_invoices(
 
 # ── Account report / ledger ──────────────────────────
 
+async def void_document_legs(db, org_id, ref_type, ref_id, reason, actor_id) -> int:
+    """Soft-delete the cash legs a document posted (a sale's takings, a refund's payout) when
+    the document itself is voided: each leg's amount comes back out of its account balance and
+    the row stays, struck through. The document-side caller has already undone everything else."""
+    legs = (await db.execute(select(Transaction).where(
+        Transaction.org_id == org_id, Transaction.ref_type == ref_type, Transaction.ref_id == ref_id,
+        func.coalesce(Transaction.status, "active") != "deleted"))).scalars().all()
+    for leg in legs:
+        acc = (await db.execute(select(Account).where(
+            Account.id == leg.account_id, Account.org_id == org_id))).scalar_one_or_none()
+        if acc:
+            acc.balance = q2((acc.balance or 0) - leg.amount)
+        leg.status = "deleted"
+        leg.void_reason = reason
+        leg.voided_by_id = actor_id
+    return len(legs)
+
+
+async def cash_flow_floor(db, current) -> Optional[datetime]:
+    """Without "View the cash flow for any period" a role sees today's money movements only:
+    the start of today (UTC) to filter from, or None when every period is open to them."""
+    if await has_perm(db, current, "can_view_cashflow_any_period"):
+        return None
+    return datetime.combine(datetime.utcnow().date(), datetime.min.time())
+
+
 
 @router.get("/transactions")
 async def list_transactions(
     account_id: Optional[str] = None,
-    limit: int = 100,
+    skip: int = _paging.skip_query(),
+    limit: int = _paging.limit_query(100),
+    summary: bool = False,          # also return totals over every matching row (not just this page)
+    day: Optional[str] = None,      # YYYY-MM-DD for the summary's "today" in/out
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
+    limit = _paging.clamp(limit)
     q = select(Transaction).where(Transaction.org_id == current.org_id)
     if account_id:
         q = q.where(Transaction.account_id == account_id)
-    q = q.order_by(desc(Transaction.actual_date)).limit(limit)
+    since = await cash_flow_floor(db, current)
+    if since:
+        q = q.where(Transaction.actual_date >= since)
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
+    extra = {"summary": await _txn_summary(db, q, day)} if summary else {}
+    q = q.order_by(desc(Transaction.actual_date), desc(Transaction.id)).offset(skip).limit(limit)
     rows = (await db.execute(q)).scalars().all()
 
     # name lookups
@@ -782,7 +882,35 @@ async def list_transactions(
         # A1: append-only ledger fields
         "status": t.status, "balance_after": t.balance_after,
         "reverses_txn_id": t.reverses_txn_id, "void_reason": t.void_reason,
-    } for t in rows]}
+    } for t in rows], "total": total, "skip": skip, "limit": limit, **extra}
+
+
+async def _txn_summary(db, q, day: Optional[str]) -> dict:
+    """Totals the cash panel shows under a paged ledger, computed in SQL over all matching
+    rows: live (not deleted) count, money in, money out, and in/out on `day`."""
+    from datetime import date as _date
+    from datetime import timedelta
+
+    from sqlalchemy import case
+    sub = q.where(func.coalesce(Transaction.status, "") != "deleted").subquery()
+    absamt = func.abs(sub.c.amount)
+    cols = [func.count(),
+            func.coalesce(func.sum(case((sub.c.txn_type == "income", sub.c.amount), else_=0)), 0),
+            func.coalesce(func.sum(case((sub.c.txn_type == "expense", absamt), else_=0)), 0)]
+    if day:
+        try:
+            d0 = datetime.combine(_date.fromisoformat(day), datetime.min.time())
+        except ValueError:
+            raise HTTPException(422, "day must be YYYY-MM-DD")
+        on_day = (sub.c.actual_date >= d0) & (sub.c.actual_date < d0 + timedelta(days=1))
+        cols += [func.coalesce(func.sum(case((on_day & (sub.c.txn_type == "income"), absamt), else_=0)), 0),
+                 func.coalesce(func.sum(case((on_day & (sub.c.txn_type == "expense"), absamt), else_=0)), 0)]
+    r = (await db.execute(select(*cols).select_from(sub))).one()
+    out = {"count": r[0], "income": float(r[1] or 0), "expense": float(r[2] or 0)}
+    if day:
+        out["today_in"], out["today_out"] = float(r[3] or 0), float(r[4] or 0)
+        out["today_net"] = out["today_in"] - out["today_out"]
+    return out
 
 
 @router.get("/balances")

@@ -25,10 +25,10 @@ def _hash(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-async def issue(db: AsyncSession, *, employee_id: str, kind: str) -> str:
+async def issue(db: AsyncSession, *, employee_id: str, kind: str, ttl_min: int | None = None) -> str:
     """Create a token row and return the RAW token (show once, never stored)."""
     raw = secrets.token_urlsafe(32)
-    ttl = RESET_TTL_MIN if kind == "reset" else VERIFY_TTL_MIN
+    ttl = ttl_min or (RESET_TTL_MIN if kind == "reset" else VERIFY_TTL_MIN)
     db.add(AuthToken(
         kind=kind, employee_id=employee_id, token_hash=_hash(raw),
         expires_at=datetime.utcnow() + timedelta(minutes=ttl)))

@@ -140,8 +140,8 @@ async def email_disconnect(
 
 class TestSendIn(BaseModel):
     to: str
-    subject: str = "RepairOS test email"
-    body: str = "This is a test message sent from your connected account via RepairOS."
+    subject: str = "Tekly test email"
+    body: str = "This is a test message sent from your connected account via Tekly."
 
 
 @router.post("/{conn_id}/test")
@@ -165,10 +165,10 @@ async def email_test_send(
 @router.post("/poll")
 async def email_poll(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     """Build 144ae: pull recent messages from the org's connected Gmail inbox(es)
-    into the RepairOS inbox as threads. Idempotent (de-duped by Gmail message id).
+    into the Tekly inbox as threads. Idempotent (de-duped by Gmail message id).
     Intended for a scheduled task. No-op unless a Gmail account granted read access."""
     from sqlalchemy import or_ as _or
 

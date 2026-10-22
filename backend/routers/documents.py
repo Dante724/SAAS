@@ -8,6 +8,7 @@ Finance, Date, Other), per-row product variables that repeat inside a
 products table, pre-built table blocks ({Products Table} etc.), and
 Orderry-exact default Estimate + Price-tag templates seeded for new orgs.
 """
+import html as _html_mod
 import re
 import json
 from fastapi import APIRouter, Depends, HTTPException
@@ -17,17 +18,33 @@ from datetime import datetime
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from backend.services.html_clean import clean_template_html
 from backend.db.database import get_db
 from backend.models import (
     DocumentTemplate, GeneratedDocument, Order, OrderLine, Client,
     Employee, Organisation, Invoice, LegalEntity, Location, Part,
     CustomField, WorkOrderType, Device,
 )
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, require_perm, record_scope
 from backend.services.codes import code128_svg, qr_svg
 from backend.config import settings
 
-router = APIRouter(prefix="/api/documents", tags=["documents"])
+
+class _Html(str):
+    """A variable value that is deliberate, already-safe markup (tables, logo, QR/barcode
+    SVG, buttons). Every other value is HTML-escaped when substituted into a document, so
+    client names, complaints, notes etc. can never inject script into a printed page."""
+
+
+def _esc(v) -> str:
+    return _html_mod.escape(str(v), quote=True)
+
+
+def _sub(v) -> str:
+    return v if isinstance(v, _Html) else _esc(v)
+
+router = APIRouter(prefix="/api/documents", tags=["documents"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 # ── Variable catalog (Orderry-style), grouped for the editor side-panel. ──────
 # Every code here is resolved in _resolve() (document-level) or _row_vars()
@@ -70,7 +87,7 @@ VARIABLE_GROUPS = [
                 # Orderry-exact names
                 "{Order Malfunction}", "{Order Comment}", "{Order Address}", "{Order Duration}",
                 "{Order Resource}", "{Order Scheduled For}", "{Order Scheduled To}",
-                "{Urgent}", "{Order Type}"]),
+                "{Urgent}", "{Order Type}", "{Custom Fields}"]),
     ("Device", ["{Asset Owner}", "{Asset Warehouse}", "{Asset Type}", "{Asset Brand}",
                 "{Asset Model}", "{Asset Modification}", "{Asset Color}", "{Asset Year}",
                 "{Asset Cost}", "{Asset Serial Number}", "{Asset Description}",
@@ -140,6 +157,18 @@ async def _custom_field_defs(db, org_id):
 
 def _cf_varname(f) -> str:
     return "{%s %s}" % (_CF_PREFIX.get(f.entity_type, "Order"), f.field_label)
+
+
+async def _custom_fields_block(db, org_id, order=None, device=None, client=None):
+    """{Custom Fields} — every custom field set to show on the printed receipt (Settings → Forms →
+    Customize → Shows on), as a label/value table. Empty when none apply."""
+    from backend.routers.forms import shown_values
+    rows = await shown_values(db, org_id, "show_on_print", order=order, device=device, client=client)
+    if not rows:
+        return ""
+    return _Html("<table style='width:100%;border-collapse:collapse;margin:6px 0'><tbody>" + "".join(
+        f"<tr><td style='padding:3px 8px 3px 0;color:#555;white-space:nowrap;vertical-align:top'>{_esc(r['label'])}</td>"
+        f"<td style='padding:3px 0;font-weight:600'>{_esc(r['value'])}</td></tr>" for r in rows) + "</tbody></table>")
 
 
 def _fmt_cf(val) -> str:
@@ -351,10 +380,10 @@ class TemplateIn(BaseModel):
 async def create_template(
     data: TemplateIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     t = DocumentTemplate(org_id=current.org_id, name=data.name, doc_type=data.doc_type,
-                         body_html=data.body_html, auto_print_on=data.auto_print_on,
+                         body_html=clean_template_html(data.body_html), auto_print_on=data.auto_print_on,
                          is_default=data.is_default,
                          page_size=data.page_size or "a4",
                          page_w_mm=data.page_w_mm, page_h_mm=data.page_h_mm, margin_mm=data.margin_mm,
@@ -371,7 +400,7 @@ async def update_template(
     tid: str,
     data: TemplateIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     t = (await db.execute(select(DocumentTemplate).where(
         DocumentTemplate.id == tid, DocumentTemplate.org_id == current.org_id))).scalar_one_or_none()
@@ -379,7 +408,7 @@ async def update_template(
         raise HTTPException(404, "Template not found")
     t.name = data.name
     t.doc_type = data.doc_type
-    t.body_html = data.body_html
+    t.body_html = clean_template_html(data.body_html)
     t.auto_print_on = data.auto_print_on
     t.is_default = data.is_default
     t.page_size = data.page_size or "a4"
@@ -394,7 +423,7 @@ async def update_template(
 async def delete_template(
     tid: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     t = (await db.execute(select(DocumentTemplate).where(
         DocumentTemplate.id == tid, DocumentTemplate.org_id == current.org_id))).scalar_one_or_none()
@@ -511,13 +540,24 @@ def _row_vars(i: int, line: OrderLine, part, tech) -> dict:
 
 
 def _table_block(headers, rows, title=None):
-    head = "".join(f"<th style='text-align:left;padding:6px;border-bottom:1px solid #ccc'>{h}</th>" for h in headers)
-    body = "".join(
-        "<tr>" + "".join(f"<td style='padding:6px;border-bottom:1px solid #eee'>{c}</td>" for c in r) + "</tr>"
-        for r in rows) or f"<tr><td colspan='{len(headers)}' style='padding:6px;color:#999'>No items</td></tr>"
-    cap = f"<caption style='text-align:left;font-weight:bold;padding:4px 0'>{title}</caption>" if title else ""
-    return (f"<table style='width:100%;border-collapse:collapse'>{cap}"
-            f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
+    """Rows are lists of cells; several items per job adds two kinds of dict row:
+    {"group": name} (an item heading) and {"subtotal": name, "amount": "1.00"}."""
+    n = len(headers)
+    head = "".join(f"<th style='text-align:left;padding:6px;border-bottom:1px solid #ccc'>{_esc(h)}</th>" for h in headers)
+
+    def _tr(r):
+        if isinstance(r, dict) and "group" in r:
+            return (f"<tr><td colspan='{n}' style='padding:10px 6px 4px;font-weight:700;"
+                    f"border-bottom:1px solid #ccc'>{_esc(r['group'])}</td></tr>")
+        if isinstance(r, dict) and "subtotal" in r:
+            return (f"<tr><td colspan='{n - 1}' style='padding:4px 6px 8px;text-align:right;color:#555'>"
+                    f"{_esc(r['subtotal'])} subtotal</td><td style='padding:4px 6px 8px;font-weight:700'>"
+                    f"{_esc(r['amount'])}</td></tr>")
+        return "<tr>" + "".join(f"<td style='padding:6px;border-bottom:1px solid #eee'>{_esc(c)}</td>" for c in r) + "</tr>"
+    body = "".join(_tr(r) for r in rows) or f"<tr><td colspan='{n}' style='padding:6px;color:#999'>No items</td></tr>"
+    cap = f"<caption style='text-align:left;font-weight:bold;padding:4px 0'>{_esc(title)}</caption>" if title else ""
+    return _Html(f"<table style='width:100%;border-collapse:collapse'>{cap}"
+                 f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
 
 
 def _track_url(order: Order, suffix: str = "") -> str:
@@ -529,6 +569,16 @@ def _track_url(order: Order, suffix: str = "") -> str:
     return f"{base}/track/{token}{suffix}"
 
 
+async def _status_name(db, org_id, order: Order) -> str:
+    """The shop's name for the order's status ("Waiting parts"), never the internal key."""
+    from backend.models import OrderStatus
+    rt = "estimate" if order.is_estimate else "work_order"
+    name = (await db.execute(select(OrderStatus.name).where(
+        OrderStatus.org_id == org_id, OrderStatus.key == order.status,
+        OrderStatus.record_type == rt))).scalars().first()
+    return name or (order.status or "").replace("_", " ").capitalize()
+
+
 async def _resolve(db, org_id, order: Order, current=None):
     """Return (doc_map, rows) — document-level variables and per-line row maps."""
     org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
@@ -536,6 +586,11 @@ async def _resolve(db, org_id, order: Order, current=None):
     dev = order.device
     tech = order.assigned_to
     lines = list(order.lines or [])
+    # Several items per job: print item by item (job's item order), whole-job lines last.
+    from backend.services import multi_asset as _ma
+    _inames = await _ma.item_names(db, org_id, [getattr(l, "order_item_id", None) for l in lines])
+    if _inames:
+        lines = _ma.sort_by_item(lines, _inames, key=lambda l: getattr(l, "order_item_id", None))
 
     # Multi-currency: resolve the document's display currency (order snapshot → client → base).
     # Shadow `_money` locally so every amount in this document renders in the display currency.
@@ -551,7 +606,7 @@ async def _resolve(db, org_id, order: Order, current=None):
         return f"{float(n or 0) * _fx:,.2f}"
 
     # resolve referenced catalog parts (for product-row attributes) & line techs
-    # RepairOS line types: "part" (product), "labour"/"fee" (service).
+    # Tekly line types: "part" (product), "labour"/"fee" (service).
     part_ids = [l.ref_id for l in lines if l.ref_id and (l.line_type or "") == "part"]
     parts = {}
     if part_ids:
@@ -594,6 +649,19 @@ async def _resolve(db, org_id, order: Order, current=None):
     products_table = _table_block(hdr, prod_rows)
     services_table = _table_block(hdr, serv_rows)
     all_items_table = _table_block(hdr, prod_rows + serv_rows)
+    if _inames:
+        _grouped, _rowno = [], {id(l): n for n, l in enumerate(lines, start=1)}
+        for g in _ma.group_rows([{"item": (_inames.get(getattr(l, "order_item_id", None)) or (None,))[0],
+                                  "total": _line_numbers(l)["amount"], "_l": l} for l in lines]):
+            if g["row"] == "group":
+                _grouped.append({"group": g["item"]})
+            elif g["row"] == "subtotal":
+                _grouped.append({"subtotal": g["item"], "amount": _money(g["total"])})
+            else:
+                l, n = g["_l"], _line_numbers(g["_l"])
+                _grouped.append([_rowno[id(l)], l.description or "", f"{n['qty']:g}", _money(n["unit_ex"]),
+                                 _money(n["tax"]), _money(n["amount"])])
+        all_items_table = _table_block(hdr, _grouped)
 
     # dominant tax (name/rate) for the document-level total line
     tax_name = tax_rate = ""
@@ -611,8 +679,8 @@ async def _resolve(db, org_id, order: Order, current=None):
 
     # real, scannable vector codes from the order's barcode value
     code = order.barcode or order.order_number
-    barcode_svg = code128_svg(code)
-    qr_code_svg = qr_svg(code)
+    barcode_svg = _Html(code128_svg(code))
+    qr_code_svg = _Html(qr_svg(code))
 
     # Payer: client's designated payer, else the client.
     payer = client
@@ -639,18 +707,18 @@ async def _resolve(db, org_id, order: Order, current=None):
 
     # ── 144hk: branding, interactive CTAs, work summary ──────────────────────
     _logo = (getattr(org, "logo_data", None) if org else None) or ""
-    logo_html = (f'<img src="{_logo}" alt="{org.name if org else ""}" '
-                 f'style="max-height:64px;max-width:220px;object-fit:contain;" />') if _logo else ""
+    logo_html = _Html(f'<img src="{_esc(_logo)}" alt="{_esc(org.name if org else "")}" '
+                      f'style="max-height:64px;max-width:220px;object-fit:contain;" />') if _logo else ""
     accent = (getattr(org, "brand_primary_color", None) if org else None) or "#2563eb"
     track = _track_url(order)
-    track_qr = qr_svg(track)
+    track_qr = _Html(qr_svg(track))
 
     def _cta(title: str, sub: str) -> str:
-        return (f'<table style="border-collapse:collapse;margin:8px 0;"><tr>'
-                f'<td style="border:1.5px solid {accent};border-radius:8px;padding:10px 14px;">'
-                f'<div style="font-weight:700;color:{accent};font-size:13px;">{title}</div>'
+        return _Html(f'<table style="border-collapse:collapse;margin:8px 0;"><tr>'
+                f'<td style="border:1.5px solid {_esc(accent)};border-radius:8px;padding:10px 14px;">'
+                f'<div style="font-weight:700;color:{_esc(accent)};font-size:13px;">{title}</div>'
                 f'<div style="font-size:11px;color:#444;margin-top:2px;">{sub}</div>'
-                f'<div style="font-size:11px;margin-top:2px;">{track}</div></td>'
+                f'<div style="font-size:11px;margin-top:2px;">{_esc(track)}</div></td>'
                 f'<td style="width:76px;padding-left:10px;vertical-align:middle;">'
                 f'<div style="width:72px;height:72px;">{track_qr}</div></td></tr></table>')
 
@@ -688,17 +756,17 @@ async def _resolve(db, org_id, order: Order, current=None):
     def _fmt_dt(d):
         return d.strftime("%Y-%m-%d %H:%M") if d else "—"
 
-    sign_here = ('<div style="margin-top:24px;">'
+    sign_here = _Html('<div style="margin-top:24px;">'
                  '<div style="border-bottom:1px solid #333;width:260px;height:28px;"></div>'
                  '<div style="font-size:11px;color:#555;margin-top:3px;">Signature / Date</div></div>')
-    verify_badge = (f'<table style="border-collapse:collapse;"><tr>'
+    verify_badge = _Html(f'<table style="border-collapse:collapse;"><tr>'
                     f'<td style="width:64px;"><div style="width:60px;height:60px;">{track_qr}</div></td>'
                     f'<td style="font-size:10px;color:#555;padding-left:6px;vertical-align:middle;">'
                     f'Scan to verify this<br/>document is genuine</td></tr></table>')
 
     doc = {
         # Company
-        "{Company Name}": org.name if org else "RepairOS",
+        "{Company Name}": org.name if org else "Tekly",
         "{Company Address}": g(org, "company_address"),
         "{Company Phone}": g(org, "company_phone"),
         "{Company Email}": g(org, "company_email"),
@@ -744,7 +812,7 @@ async def _resolve(db, org_id, order: Order, current=None):
         "{Payer Address}": g(payer, "address"),
         # Ticket
         "{Order Number}": order.order_number,
-        "{Order Status}": order.status,
+        "{Order Status}": await _status_name(db, org_id, order),
         "{Order Created Date}": _fmt_date(order.created_at),
         "{Order Done Date}": _fmt_date(order.closed_at),
         "{Order Due Date}": _fmt_date(order.due_at),
@@ -835,7 +903,7 @@ async def _resolve(db, org_id, order: Order, current=None):
     }
 
     # ── 144ho: Orderry-exact variable names ──────────────────────────────────
-    # Existing RepairOS names are kept; these resolve to the SAME values so a
+    # Existing Tekly names are kept; these resolve to the SAME values so a
     # template authored against Orderry's catalog prints without leftover tokens.
     _feedback = _track_url(order, suffix="#feedback")
     _disc_pct = (f"{(total_disc / base_no_disc_total * 100):g}%" if base_no_disc_total else "")
@@ -894,7 +962,7 @@ async def _resolve(db, org_id, order: Order, current=None):
         "{Public Page URL}": track,
         "{Order URL}": track,
         "{Public Page QR Code}": track_qr,
-        "{Client Feedback QR Code}": qr_svg(_feedback),
+        "{Client Feedback QR Code}": _Html(qr_svg(_feedback)),
         "{Order Payment QR}": track_qr,
     })
 
@@ -904,12 +972,16 @@ async def _resolve(db, org_id, order: Order, current=None):
         src = {"order": order, "client": client, "device": dev}.get(f.entity_type)
         val = (getattr(src, "custom_data", None) or {}).get(f.field_key) if src else None
         doc.setdefault(_cf_varname(f), _fmt_cf(val))
+    doc["{Custom Fields}"] = await _custom_fields_block(db, org_id, order=order, device=dev, client=client)
 
     return doc, rows
 
 
 def _render(body: str, doc: dict, rows: list) -> str:
     """Expand repeating product rows, then substitute document-level variables."""
+    # Every print / preview / PDF goes through here, so templates saved before server-side
+    # cleaning existed (and bodies sent straight to /preview) are cleaned too (H5).
+    body = clean_template_html(body)
     def repeat(m):
         open_tag, inner, close_tag = m.group(1), m.group(2), m.group(3)
         if not _ROW_MARKER_RE.search(inner):
@@ -923,7 +995,7 @@ def _render(body: str, doc: dict, rows: list) -> str:
         for r in rows:
             c = inner
             for k, v in r.items():
-                c = c.replace(k, str(v))
+                c = c.replace(k, _sub(v))
             chunks.append(c)
         if not rows:
             chunks.append(_ROW_VAR_RE.sub("", inner))
@@ -932,7 +1004,7 @@ def _render(body: str, doc: dict, rows: list) -> str:
     body = _conditionals(body, doc)    # 144id — resolve {#if}/{#unless} before expansion
     body = _TBODY_RE.sub(repeat, body)
     for k, v in doc.items():
-        body = body.replace(k, str(v))
+        body = body.replace(k, _sub(v))
     body = _ROW_VAR_RE.sub("", body)   # strip any row vars used outside a table
     return body
 
@@ -1036,7 +1108,7 @@ class AiGenIn(BaseModel):
 
 @router.get("/smart-presets")
 async def smart_presets(current: Employee = Depends(get_current_employee)):
-    """144ht — RepairOS's own document presets (offline, no third-party service)."""
+    """144ht — Tekly's own document presets (offline, no third-party service)."""
     from backend.services import ai as _ai
     return {"items": [{"key": k, "label": v["label"], "doc_type": v["doc_type"]}
                       for k, v in _ai.DOC_PRESETS.items()]}
@@ -1047,7 +1119,7 @@ async def ai_generate_template(
     data: AiGenIn,
     current: Employee = Depends(get_current_employee),
 ):
-    """144ht — RepairOS's built-in document builder. Fully in-house and deterministic:
+    """144ht — Tekly's built-in document builder. Fully in-house and deterministic:
     expands a named preset, or maps a plain-English description to the block library.
     No external API is ever called."""
     if not data.preset and not (data.prompt or "").strip():
@@ -1148,10 +1220,19 @@ async def _resolve_invoice(db, org_id, inv: Invoice):
     def g(o, a):
         return (getattr(o, a, None) if o else "") or "—"
 
+    from backend.services.multi_asset import group_rows
     dl = await _inv_display(db, inv)
     hdr = ["#", "Description", "Qty", "Unit Price", "Amount"]
     rows, table_rows = [], []
-    for i, l in enumerate(dl, start=1):
+    i = 0
+    for l in group_rows(dl):      # several items per job: item headings + subtotals, whole job last
+        if l["row"] == "group":
+            table_rows.append({"group": l["item"]})
+            continue
+        if l["row"] == "subtotal":
+            table_rows.append({"subtotal": l["item"], "amount": m(l["total"])})
+            continue
+        i += 1
         rows.append({"{Row Number}": i, "{Product Name}": l["description"] or "—",
                      "{Product Qty}": f"{float(l.get('qty') or 0):g}",
                      "{Product Price}": m(l["unit_price"]), "{Product Amount}": m(l["total"])})
@@ -1160,11 +1241,11 @@ async def _resolve_invoice(db, org_id, inv: Invoice):
     paid = inv.amount_paid or 0
     bal = max((inv.total or 0) - paid, 0)
     logo = (getattr(org, "logo_data", None) if org else None) or ""
-    logo_html = (f'<img src="{logo}" style="max-height:64px;max-width:220px;object-fit:contain;" />') if logo else ""
+    logo_html = _Html(f'<img src="{_esc(logo)}" style="max-height:64px;max-width:220px;object-fit:contain;" />') if logo else ""
     order = (await db.execute(select(Order).where(Order.id == inv.order_id))).scalar_one_or_none() if inv.order_id else None
     pay_url = _track_url(order) if order else ""
     doc = {
-        "{Company Name}": org.name if org else "RepairOS", "{Company Logo}": logo_html,
+        "{Company Name}": org.name if org else "Tekly", "{Company Logo}": logo_html,
         "{Company Address}": g(org, "company_address"), "{Company Phone}": g(org, "company_phone"),
         "{Company Email}": g(org, "company_email"), "{Company Website}": g(org, "website"),
         "{Brand Color}": (getattr(org, "brand_primary_color", None) if org else None) or "#2563eb",
@@ -1206,6 +1287,10 @@ async def _resolve_invoice(db, org_id, inv: Invoice):
             continue
         val = (getattr(client, "custom_data", None) or {}).get(f.field_key) if client else None
         doc.setdefault(_cf_varname(f), _fmt_cf(val))
+    _inv_order = (await db.execute(select(Order).where(Order.id == inv.order_id, Order.org_id == org_id)
+                                   .options(selectinload(Order.device)))).scalar_one_or_none() if getattr(inv, "order_id", None) else None
+    doc["{Custom Fields}"] = await _custom_fields_block(db, org_id, order=_inv_order,
+                                                      device=_inv_order.device if _inv_order else None, client=client)
     return doc, rows
 
 
@@ -1246,11 +1331,11 @@ async def _resolve_part(org, part: Part, price) -> dict:
         "{Product Price}": _money(price),
         "{Product Price Without Taxes}": _money(price),
         "{Currency}": cur,
-        "{Company Name}": org.name if org else "RepairOS",
+        "{Company Name}": org.name if org else "Tekly",
         "{Today Date}": _fmt_date(datetime.utcnow()),
         "{Current Date}": _fmt_date(datetime.utcnow()),
-        "{Barcode}": code128_svg(code_val),
-        "{QR Code}": qr_svg(code_val),
+        "{Barcode}": _Html(code128_svg(code_val)),
+        "{QR Code}": _Html(qr_svg(code_val)),
     }
 
 
@@ -1327,9 +1412,9 @@ async def _resolve_asset(db, org, asset: Device) -> dict:
         "{Asset Cost}": _money(getattr(asset, "purchase_price", 0)),
         "{Asset Description}": g(asset, "asset_type"), "{Asset Address}": g(client, "address"),
         "{Client Name}": g(client, "name"), "{Client Phone}": g(client, "phone"),
-        "{Company Name}": org.name if org else "RepairOS",
+        "{Company Name}": org.name if org else "Tekly",
         "{Today Date}": _fmt_date(datetime.utcnow()), "{Current Date}": _fmt_date(datetime.utcnow()),
-        "{Barcode}": code128_svg(code_val), "{QR Code}": qr_svg(code_val),
+        "{Barcode}": _Html(code128_svg(code_val)), "{QR Code}": _Html(qr_svg(code_val)),
     }
 
 
@@ -1379,9 +1464,9 @@ async def _resolve_client(db, org, client: Client) -> dict:
         "{Client Billing Address}": (getattr(client, "billing_address", None) or None) or g(client, "address"),
         "{Client Tax ID}": g(client, "tax_id"), "{Client Registration No}": g(client, "reg_no"),
         "{Client Tax Identification Number}": g(client, "tax_id"),
-        "{Company Name}": org.name if org else "RepairOS",
+        "{Company Name}": org.name if org else "Tekly",
         "{Today Date}": _fmt_date(datetime.utcnow()), "{Current Date}": _fmt_date(datetime.utcnow()),
-        "{Barcode}": code128_svg(code_val), "{QR Code}": qr_svg(code_val),
+        "{Barcode}": _Html(code128_svg(code_val)), "{QR Code}": _Html(qr_svg(code_val)),
     }
 
 
@@ -1429,7 +1514,7 @@ class InvoiceBatchIn(BaseModel):
 async def render_invoice_batch(
     data: InvoiceBatchIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_invoices")),
 ):
     """144ie — print anything: render a full invoice template against many INVOICES at once,
     one invoice per physical page. Unlike labels these are full documents with line rows —

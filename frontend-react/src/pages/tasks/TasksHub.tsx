@@ -1,18 +1,21 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
+import { useMe, hasFeature } from "../../context/Me";
 import Pager from "../../components/Pager";
 
 type Task = { id: string; title?: string; description?: string; status?: string; priority?: number; assigned_to_id?: string | null; assignee_name?: string; assignee_ids?: string[]; assignee_names?: string[]; due_at?: string | null; completed_at?: string | null; overdue?: boolean; order_id?: string | null; order_number?: string | null; client_name?: string };
 type Emp = { id: string; name: string };
 type Feed = { id: string; body?: string; kind?: string; author_name?: string; created_at?: string };
 
-const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString([], { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—");
+const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—");
 const STATUS_LABEL: Record<string, string> = { todo: "To do", in_progress: "In progress", done: "Done" };
 
 export default function TasksHub() {
+  const clockOk = hasFeature(useMe().me, "time_clock");   // task timer: Shop plan
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [statuses, setStatuses] = useState<string[]>([]);
   const [filter, setFilter] = useState("all");
@@ -70,16 +73,16 @@ export default function TasksHub() {
     <Shell title="Tasks">
       <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
         <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={() => setCreate(true)} className="h-[38px] px-4 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New task</button>
+          <button onClick={() => setCreate(true)} className="h-[38px] px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New task</button>
           <div className="flex items-center gap-1.5 ml-1">
-            {[["all", "All"], ["overdue", "Overdue"], ["done", "Completed"], ...statuses.map((s) => [s, STATUS_LABEL[s] || s] as [string, string])].map(([id, label]) => (
+            {[["all", "All"], ...statuses.filter((s) => s !== "done").map((s) => [s, STATUS_LABEL[s] || humanize(s)] as [string, string]), ["done", "Done"], ["overdue", "Late"]].map(([id, label]) => (
               <button key={id} onClick={() => setFilter(id)} className={`px-3 py-1.5 rounded-full text-[11px] font-semibold ${filter === id ? "bg-primary text-white shadow-xs" : "bg-slate-100 text-ink-secondary hover:bg-slate-200"}`}>{label}</button>
             ))}
           </div>
         </div>
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
           <table className="w-full text-left border-collapse text-xs">
-            <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[10px] font-bold uppercase tracking-wider">
+            <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
               <th className="py-3 pl-5 pr-2 w-10"></th><th className="py-3 px-3">Task</th><th className="py-3 px-3">Status</th><th className="py-3 px-3">Links</th><th className="py-3 px-3">Assigned to</th><th className="py-3 px-3">Due</th>
             </tr></thead>
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
@@ -89,8 +92,8 @@ export default function TasksHub() {
                 <tr key={t.id} className="hover:bg-blue-50/30 cursor-pointer" onClick={() => openTask(t)}>
                   <td className="py-3 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><button onClick={() => toggleDone(t)} className={`w-5 h-5 rounded-md border-2 flex items-center justify-center ${t.completed_at ? "bg-emerald-500 border-emerald-500 text-white" : "border-slate-300 hover:border-primary"}`}>{t.completed_at && <M n="check" c="text-xs" />}</button></td>
                   <td className="py-3 px-3"><span className={`font-bold ${t.completed_at ? "text-ink-tertiary line-through" : "text-ink-primary"}`}>{t.title}</span></td>
-                  <td className="py-3 px-3"><span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${t.completed_at ? "bg-emerald-100 text-emerald-800" : t.status === "in_progress" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"}`}>{t.completed_at ? "Done" : STATUS_LABEL[t.status || "todo"]}</span></td>
-                  <td className="py-3 px-3">{t.order_id ? <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 inline-flex items-center gap-1"><M n="handyman" c="text-[11px]" />{t.order_number || "WO"}</span> : "—"}</td>
+                  <td className="py-3 px-3"><span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${t.completed_at ? "bg-emerald-100 text-emerald-800" : t.status === "in_progress" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"}`}>{t.completed_at ? "Done" : STATUS_LABEL[t.status || "todo"]}</span></td>
+                  <td className="py-3 px-3">{t.order_id ? <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-blue-100 text-blue-800 inline-flex items-center gap-1"><M n="handyman" c="text-[11px]" />{t.order_number || "WO"}</span> : "—"}</td>
                   <td className="py-3 px-3">{(t.assignee_names && t.assignee_names.length) ? (t.assignee_names.length > 2 ? `${t.assignee_names.slice(0, 2).join(", ")} +${t.assignee_names.length - 2}` : t.assignee_names.join(", ")) : (t.assignee_name || "—")}</td>
                   <td className={`py-3 px-3 ${t.overdue ? "text-rose-600 font-bold" : ""}`}>{fmt(t.due_at)}</td>
                 </tr>
@@ -117,11 +120,11 @@ export default function TasksHub() {
                 {["todo", "in_progress", "done"].map((s) => (
                   <button key={s} onClick={() => patch(sel.id, { status: s }, `Marked ${STATUS_LABEL[s]}`)} className={`px-3 py-1.5 rounded-lg text-[11px] font-bold ${(sel.completed_at ? "done" : sel.status) === s ? "bg-primary text-white shadow-clay-sm" : "bg-slate-100 text-ink-secondary hover:bg-slate-200"}`}>{STATUS_LABEL[s]}</button>
                 ))}
-                <button onClick={() => startTimer(sel.id)} className="ml-auto px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold flex items-center gap-1 hover:bg-emerald-100"><M n="play_arrow" c="text-sm" />Start timer</button>
+                {clockOk && <button onClick={() => startTimer(sel.id)} className="ml-auto px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold flex items-center gap-1 hover:bg-emerald-100"><M n="play_arrow" c="text-sm" />Start timer</button>}
               </div>
               {sel.description && <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200 text-xs leading-relaxed text-ink-primary">{sel.description}</div>}
               <div>
-                <label className="block font-semibold text-ink-tertiary uppercase mb-1">Assigned technicians</label>
+                <label className="block font-semibold text-ink-tertiary mb-1">Assigned technicians</label>
                 <div className="flex flex-wrap gap-1.5 mb-2">
                   {selIds.length === 0 && <span className="text-ink-tertiary">Unassigned</span>}
                   {selIds.map((id) => { const e = emps.find((x) => x.id === id); return <span key={id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-primary border border-blue-200 text-[11px] font-semibold">{e?.name || "?"}<button aria-label="Close" onClick={() => toggleAssignee(id)} className="hover:text-rose-600"><M n="close" c="text-[11px]" /></button></span>; })}
@@ -135,7 +138,7 @@ export default function TasksHub() {
                   ))}
                 </div>
               </div>
-              <div><label className="block font-semibold text-ink-tertiary uppercase mb-1">Linked work order</label>
+              <div><label className="block font-semibold text-ink-tertiary mb-1">Linked work order</label>
                 <div className="flex items-center gap-2">
                   <input defaultValue={sel.order_id || ""} onBlur={(e) => { if (e.target.value !== (sel.order_id || "")) patch(sel.id, { order_id: e.target.value || null }, "Work order linked"); }} className={`${inp} font-mono`} placeholder="Work order id" />
                   {sel.order_number && <span className="px-2 py-1 rounded-lg bg-blue-100 text-blue-800 text-[11px] font-bold whitespace-nowrap">{sel.order_number}</span>}
@@ -145,7 +148,7 @@ export default function TasksHub() {
 
               {/* activity + comments */}
               <div className="pt-2 border-t border-slate-100">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-ink-tertiary mb-2">Activity &amp; comments</div>
+                <div className="text-[11px] font-bold text-ink-tertiary mb-2">Activity &amp; comments</div>
                 <div className="flex items-center gap-2 mb-3">
                   <input value={comment} onChange={(e) => setComment(e.target.value)} onKeyDown={(e) => e.key === "Enter" && postComment(sel.id)} className={inp} placeholder="Add a comment…" />
                   <button onClick={() => postComment(sel.id)} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:brightness-110">Post</button>
@@ -154,8 +157,8 @@ export default function TasksHub() {
                   {feed.length === 0 && <p className="text-[11px] text-ink-tertiary">No activity yet.</p>}
                   {feed.map((f) => (
                     <div key={f.id} className="flex gap-2.5">
-                      <div className={`w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-white text-[10px] font-bold ${f.kind === "comment" ? "bg-primary" : "bg-slate-400"}`}>{f.kind === "comment" ? (f.author_name || "?").slice(0, 1).toUpperCase() : <M n="bolt" c="text-xs" />}</div>
-                      <div className="flex-1 min-w-0"><div className="text-xs text-ink-primary">{f.body}</div><div className="text-[10px] text-ink-tertiary">{f.author_name || "System"}{f.kind !== "comment" ? " · system" : ""} · {fmt(f.created_at)}</div></div>
+                      <div className={`w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-white text-[11px] font-bold ${f.kind === "comment" ? "bg-primary" : "bg-slate-400"}`}>{f.kind === "comment" ? (f.author_name || "?").slice(0, 1).toUpperCase() : <M n="bolt" c="text-xs" />}</div>
+                      <div className="flex-1 min-w-0"><div className="text-xs text-ink-primary">{f.body}</div><div className="text-[11px] text-ink-tertiary">{f.author_name || "System"}{f.kind !== "comment" ? " · system" : ""} · {fmt(f.created_at)}</div></div>
                     </div>
                   ))}
                 </div>
@@ -192,7 +195,7 @@ export default function TasksHub() {
               <div><label className="block font-semibold text-ink-secondary mb-1">Link to work order <span className="text-ink-tertiary font-normal">(optional)</span></label><input value={form.order_id} onChange={(e) => setForm({ ...form, order_id: e.target.value })} className={`${inp} font-mono`} placeholder="Work order id" /></div>
               <div><label className="block font-semibold text-ink-secondary mb-1">Due</label><DateField mode="datetime" value={form.due_at} onChange={(v) => setForm({ ...form, due_at: v })} /></div>
             </div>
-            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center justify-end gap-2"><button onClick={() => setCreate(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button><button onClick={createTask} className="px-5 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white font-bold text-xs shadow-clay-sm">Create task</button></div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center justify-end gap-2"><button onClick={() => setCreate(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button><button onClick={createTask} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm">Create task</button></div>
           </div>
         </div>
       )}

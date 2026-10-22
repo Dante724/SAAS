@@ -1,3 +1,4 @@
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -10,10 +11,12 @@ from backend.config import settings
 from backend.db.database import get_db
 from backend.models import Employee, Location, Organisation, Role
 from backend.services import tokens as _tok
-from backend.services.auth import create_access_token, get_current_employee, hash_password, verify_password
+from backend.services.audit import record as _audit
+from backend.services.auth import (create_access_token, get_current_employee, hash_password,
+                                   is_old_default_password, verify_password)
 from backend.services.notifications import send_direct_email
 from backend.services.ratelimit import client_ip as _ip
-from backend.services.ratelimit import enforce as _rate
+from backend.services.ratelimit import aenforce as _rate
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -30,8 +33,8 @@ async def _send_verification(db: AsyncSession, employee: "Employee") -> str:
     await db.commit()
     url = _link(f"/verify-email?token={raw}")
     await send_direct_email(
-        employee.email, "Verify your RepairOS email",
-        f"Welcome to RepairOS. Confirm this address to secure your account:\n\n{url}\n\n"
+        employee.email, "Verify your Tekly email",
+        f"Welcome to Tekly. Confirm this address to secure your account:\n\n{url}\n\n"
         f"This link expires in 48 hours. If you didn't sign up, ignore this email.")
     return raw
 
@@ -51,6 +54,7 @@ class RegisterRequest(BaseModel):
     document_language: Optional[str] = None
     company_phone: Optional[str] = None
     employee_count: Optional[str] = None
+    plan: Optional[str] = None            # solo | shop | pro, from the pricing page (default pro)
 
 
 # Common ISO-4217 code → display symbol, so the sign-up form can send a plain
@@ -187,8 +191,13 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
 
     import secrets as _sec
     from datetime import date as _date
+    from datetime import timedelta as _td
+
+    from backend.models import TRIAL_DAYS
     org = Organisation(name=data.org_name, webhook_secret=_sec.token_urlsafe(24),
-                       sub_status="trial", sub_start=_date.today())   # build 144ce
+                       sub_status="trial", sub_start=_date.today(),   # build 144ce
+                       trial_ends_at=_date.today() + _td(days=TRIAL_DAYS),
+                       plan=data.plan if data.plan in ("solo", "shop", "pro") else "pro")
     # Build 144cg — apply onboarding choices with region-based defaults.
     if data.region:
         org.region = data.region
@@ -235,7 +244,8 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
         allowed_actions=list(_WH_ACTIONS)))
     await db.flush()
 
-    admin_role = Role(org_id=org.id, name="admin", permissions={"all": "write"})
+    from backend.services.permissions import full_access_permissions
+    admin_role = Role(org_id=org.id, name="admin", permissions=full_access_permissions(), perms_explicit=True)
     db.add(admin_role)
     await db.flush()
 
@@ -253,9 +263,11 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
         role_id=admin_role.id,
         name=data.name,
         email=data.email,
-        password_hash=hash_password(data.password),
+        password_hash=await asyncio.to_thread(hash_password, data.password),
     )
     db.add(employee)
+    await db.flush()
+    org.owner_id = employee.id   # the shop's creator: only they can change their own account
 
     # Build 144ah: give the new org a starter set of client-facing order notifications
     # (received / status changed / completed) so customers hear something out of the box.
@@ -276,16 +288,41 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
         role="admin",
     )
 
+_DUMMY_HASH = hash_password("timing-equaliser-not-a-real-password")
+
+
 @router.post("/token", response_model=TokenResponse)
 async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
-    # Build 144bz: throttle brute-force — 10 attempts / 5 min per IP+username
-    _rate("login", f"{_ip(request)}:{(form.username or '').lower()}", limit=10, window_sec=300)
+    # Build 144bz: throttle brute-force — 10 attempts / 5 min per IP+username, plus a per-account
+    # ceiling that no choice of source IP can reset (distributed guessing).
+    _user = (form.username or "").strip().lower()
+    await _rate("login", f"{_ip(request)}:{_user}", limit=10, window_sec=300)
+    await _rate("login_acct", _user, limit=30, window_sec=900)
     result = await db.execute(select(Employee).where(Employee.email == form.username))
     employee = result.scalar_one_or_none()
-    if not employee or not verify_password(form.password, employee.password_hash):
+    # Unknown emails pay the same bcrypt cost as wrong passwords, so response time doesn't
+    # reveal which addresses have accounts.
+    if not employee:
+        await asyncio.to_thread(verify_password, form.password, _DUMMY_HASH)
+    if not employee or not await asyncio.to_thread(verify_password, form.password, employee.password_hash):
+        if employee:   # unknown emails have no org to file the event under
+            await _login_failed(db, employee, "password")
         raise HTTPException(status_code=401, detail="Incorrect email or password")
     if not employee.active:
+        await _login_failed(db, employee, "disabled")
         raise HTTPException(status_code=403, detail="Account disabled")
+    # H1: an account still on the old default password (flagged by migration dp144q1, or simply
+    # signing in with it) gets no session: the password is public, so whoever typed it may not be
+    # the owner. A reset link goes to the account's own email instead.
+    if employee.must_reset_password or is_old_default_password(form.password):
+        if not employee.must_reset_password:
+            employee.must_reset_password = True
+            employee.token_version = (employee.token_version or 0) + 1
+        await _email_reset_link(db, employee, quiet_limit=True)
+        await db.commit()
+        raise HTTPException(status_code=403, detail=(
+            "For your security this password has to be changed. We've emailed you a link to set "
+            "a new one."), headers={"X-Password-Reset-Required": "1"})
 
     # Build 144ce: account-level lifecycle gate. A suspended org or one past its
     # term end date can't sign in — the platform admin controls these dates.
@@ -306,16 +343,26 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
     # B1: MFA gate — when enabled, a valid TOTP or recovery code is required.
     if employee.mfa_enabled and employee.mfa_secret:
         from backend.services.mfa import consume_recovery_code
-        from backend.services.mfa import verify as _mfa_verify
+        from backend.services.mfa import verify_step as _mfa_step
         code = (getattr(form, "client_secret", None) or "").strip()  # OAuth2 form carries it
-        ok = bool(code) and _mfa_verify(employee.mfa_secret, code)
+        step = _mfa_step(employee.mfa_secret, code) if code else None
+        # Each TOTP code works once: refuse a step at or before the last one accepted.
+        if step is not None and employee.mfa_last_step is not None and step <= employee.mfa_last_step:
+            step = None
+        ok = step is not None
+        if ok:
+            employee.mfa_last_step = step
+            await db.commit()
         if not ok and code:
-            used, remaining = consume_recovery_code(employee.mfa_recovery_codes, code)
+            used, remaining = await asyncio.to_thread(consume_recovery_code, employee.mfa_recovery_codes, code)
             if used:
                 employee.mfa_recovery_codes = remaining
                 await db.commit()
                 ok = True
         if not ok:
+            if code:   # a wrong second factor after a correct password: cap guesses per account
+                await _login_failed(db, employee, "mfa_code")
+                await _rate("mfa_fail", employee.id, limit=5, window_sec=900)
             raise HTTPException(status_code=401, detail="MFA code required or invalid",
                                 headers={"X-MFA-Required": "1"})
 
@@ -328,6 +375,11 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
         Organisation.id == employee.org_id))).scalar_one_or_none()
     enroll_needed = bool(org and org.require_mfa) and not employee.mfa_enabled
 
+    await _audit(db, org_id=employee.org_id, actor_id=employee.id, action="auth.login",
+                 entity_type="employee", entity_id=employee.id,
+                 diff={"ip": _ip(request), "mfa": bool(employee.mfa_enabled)})
+    await db.commit()
+
     token = create_access_token({"sub": employee.id, "org_id": employee.org_id, "tv": employee.token_version or 0})
     return TokenResponse(
         access_token=token,
@@ -338,15 +390,48 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
         mfa_enrollment_required=enroll_needed,
     )
 
+async def _login_failed(db: AsyncSession, employee: Employee, reason: str) -> None:
+    await _audit(db, org_id=employee.org_id, actor_id=employee.id, action="auth.login_failed",
+                 entity_type="employee", entity_id=employee.id, diff={"reason": reason})
+    await db.commit()
+
+
+@router.post("/logout", status_code=204)
+async def logout(
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Sign out of this device. Tokens are stateless JWTs, so nothing server-side is
+    revoked here: the client drops its token, and we only record the event. Bumping
+    token_version would sign the user out everywhere (that is /logout-all-devices);
+    per-session revoke needs a session table and is left for later."""
+    await _audit(db, org_id=current.org_id, actor_id=current.id, action="auth.logout",
+                 entity_type="employee", entity_id=current.id)
+    await db.commit()
+
+
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
     """Exchange a still-valid token for a fresh one (sliding session for the
-    PWA, which keeps a long-lived session on-device and refreshes on launch)."""
+    PWA, which keeps a long-lived session on-device and refreshes on launch).
+    The original sign-in time travels with it, capping the whole session."""
+    import jwt as _jwt
+    from backend.services.auth import session_expired
+    presented = (request.headers.get("authorization") or "").split(" ", 1)[-1]
+    claims = _jwt.decode(presented, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    auth_time = claims.get("auth_time")
+    if session_expired(auth_time):
+        raise HTTPException(status_code=401, detail="Session expired. Please sign in again.",
+                            headers={"WWW-Authenticate": "Bearer"})
     role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-    token = create_access_token({"sub": current.id, "org_id": current.org_id, "tv": current.token_version or 0})
+    data = {"sub": current.id, "org_id": current.org_id, "tv": current.token_version or 0}
+    if auth_time is not None:
+        data["auth_time"] = int(auth_time)
+    token = create_access_token(data)
     return TokenResponse(
         access_token=token, employee_id=current.id, org_id=current.org_id,
         name=current.name, role=role.name if role else "staff",
@@ -371,18 +456,33 @@ async def logout_all_devices(
 async def password_forgot(data: ForgotRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """Start a reset. Always returns 200 with the same message whether or not the
     email exists — never leak which addresses are registered. Rate-limited."""
-    _rate("forgot", f"{_ip(request)}:{(data.email or '').lower()}", limit=5, window_sec=900)
+    await _rate("forgot", f"{_ip(request)}:{(data.email or '').lower()}", limit=5, window_sec=900)
+    await _rate("forgot_acct", (data.email or "").strip().lower(), limit=10, window_sec=3600)
     emp = (await db.execute(select(Employee).where(Employee.email == data.email))).scalar_one_or_none()
     if emp and emp.active:
-        await _tok.invalidate_all(db, employee_id=emp.id, kind="reset")
-        raw = await _tok.issue(db, employee_id=emp.id, kind="reset")
-        await db.commit()
-        url = _link(f"/reset-password?token={raw}")
-        await send_direct_email(
-            emp.email, "Reset your RepairOS password",
-            f"Someone asked to reset your password. If it was you, open this link:\n\n{url}\n\n"
-            f"It expires in 1 hour and can be used once. If it wasn't you, ignore this email.")
+        await _audit(db, org_id=emp.org_id, actor_id=emp.id, action="auth.password_reset_requested",
+                     entity_type="employee", entity_id=emp.id)
+        await _email_reset_link(db, emp)
     return {"ok": True, "message": "If that email is registered, a reset link is on its way."}
+
+
+async def _email_reset_link(db, emp, *, quiet_limit: bool = False) -> None:
+    """Issue a fresh one-hour reset token and email it. With quiet_limit (the sign-in path),
+    at most a few emails per hour per account are sent and going over is silent, so repeated
+    sign-in attempts can't be used to flood someone's inbox."""
+    if quiet_limit:
+        try:
+            await _rate("reset_mail", emp.id, limit=3, window_sec=3600)
+        except HTTPException:
+            return
+    await _tok.invalidate_all(db, employee_id=emp.id, kind="reset")
+    raw = await _tok.issue(db, employee_id=emp.id, kind="reset")
+    await db.commit()
+    url = _link(f"/reset-password?token={raw}")
+    await send_direct_email(
+        emp.email, "Reset your Tekly password",
+        f"Someone asked to reset your password. If it was you, open this link:\n\n{url}\n\n"
+        f"It expires in 1 hour and can be used once. If it wasn't you, ignore this email.")
 
 
 @router.post("/password/reset")
@@ -391,12 +491,17 @@ async def password_reset(data: ResetRequest, db: AsyncSession = Depends(get_db))
     existing sessions so a stolen token can't leave a live session behind."""
     if not data.new_password or len(data.new_password) < 8:
         raise HTTPException(400, "Password must be at least 8 characters")
+    if is_old_default_password(data.new_password):
+        raise HTTPException(400, "Choose a different password")
     emp = await _tok.redeem(db, raw=data.token, kind="reset")
     if not emp:
         raise HTTPException(400, "This reset link is invalid or has expired")
-    emp.password_hash = hash_password(data.new_password)
+    emp.password_hash = await asyncio.to_thread(hash_password, data.new_password)
     emp.token_version = (emp.token_version or 0) + 1   # log out everywhere
     emp.email_verified = True                           # proving email access verifies it
+    emp.must_reset_password = False
+    await _audit(db, org_id=emp.org_id, actor_id=emp.id, action="auth.password_reset",
+                 entity_type="employee", entity_id=emp.id)
     await db.commit()
     return {"ok": True}
 
@@ -461,6 +566,8 @@ async def invite_accept(data: InviteAccept, db: AsyncSession = Depends(get_db)):
     from datetime import datetime as _dt
 
     from backend.models import Invite
+    if is_old_default_password(data.password):
+        raise HTTPException(400, "Choose a different password")
     if not data.password or len(data.password) < 8:
         raise HTTPException(400, "Password must be at least 8 characters")
     inv = (await db.execute(select(Invite).where(
@@ -471,18 +578,27 @@ async def invite_accept(data: InviteAccept, db: AsyncSession = Depends(get_db)):
     if (await db.execute(select(Employee).where(
             Employee.email == inv.email, Employee.org_id == inv.org_id))).scalar_one_or_none():
         raise HTTPException(400, "An account with this email already exists")
+    # The invite was sent earlier; the shop's plan decides now (unauthenticated route, so the
+    # staff-request gate in get_current_employee doesn't cover it).
+    from backend.services import billing as _billing
+    _org = (await db.execute(select(Organisation).where(Organisation.id == inv.org_id))).scalar_one_or_none()
+    if _org is not None and _billing.state(_org).read_only:
+        raise HTTPException(402, "This shop's Tekly plan has lapsed. Ask the owner to renew, then accept again.")
+    await _billing.assert_can_add(db, inv.org_id, "team_members")
     emp = Employee(
         org_id=inv.org_id, location_id=inv.location_id, role_id=inv.role_id,
         name=(data.name or inv.name or inv.email.split("@")[0]),
-        email=inv.email, password_hash=hash_password(data.password),
+        email=inv.email, password_hash=await asyncio.to_thread(hash_password, data.password),
         email_verified=True)
     db.add(emp)
     inv.accepted_at = _dt.utcnow()
     await db.commit()
     role = (await db.execute(select(Role).where(Role.id == emp.role_id))).scalar_one_or_none()
     token = create_access_token({"sub": emp.id, "org_id": emp.org_id, "tv": 0})
-    return TokenResponse(access_token=token, employee_id=emp.id, org_id=emp.org_id,
-                         name=emp.name, role=role.name if role else "staff")
+    out = TokenResponse(access_token=token, employee_id=emp.id, org_id=emp.org_id,
+                        name=emp.name, role=role.name if role else "staff")
+    await _billing.sync_seats(db, inv.org_id)   # Shop bills members beyond 8 as seats
+    return out
 
 
 @router.get("/me")
@@ -501,7 +617,8 @@ async def me(current: Employee = Depends(get_current_employee),
             Role.id == current.role_id))).scalar_one_or_none()
         if role:
             role_name = role.name
-            permissions = role.permissions or {}
+            from backend.services.permissions import effective_permissions
+            permissions = effective_permissions(role)
             home_route = getattr(role, "home_route", None) or None
     return {
         "id": current.id,
@@ -527,4 +644,12 @@ async def me(current: Employee = Depends(get_current_employee),
         # build 144x: org master switches — effective clock = org ON *and* employee tracks it
         "clock_wo_enabled": (org.clock_wo_enabled if org and org.clock_wo_enabled is not None else True),
         "clock_attendance_enabled": (org.clock_attendance_enabled if org and org.clock_attendance_enabled is not None else True),
+        # Subscription: plan, trial, read-only state and the Pro features unlocked, so the app
+        # hides what the plan lacks (the server enforces the same in services/billing.py).
+        "billing": await _billing_summary(db, org),
     }
+
+
+async def _billing_summary(db, org):
+    from backend.services.billing import summary_with_usage
+    return await summary_with_usage(db, org)

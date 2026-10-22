@@ -1,4 +1,4 @@
-# Git & GitHub setup — RepairOS
+# Git & GitHub setup — Tekly
 
 The repo is already initialised and has one clean commit on branch `main`. These are the exact
 steps to back it up / share it on GitHub. **Use a PRIVATE repo — this is production code.**

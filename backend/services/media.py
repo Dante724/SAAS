@@ -102,6 +102,30 @@ async def load(blob: MediaBlob) -> Tuple[bytes, str]:
     return raw, mime
 
 
+async def erase(db, blobs: list[MediaBlob]) -> int:
+    """Destroy the bytes behind these blobs (GDPR erasure) and empty their rows. Files are
+    content-addressed per shop, so an object another surviving blob still points at is kept.
+    Returns how many blobs were emptied."""
+    from sqlalchemy import select
+    ids = {b.id for b in blobs}
+    for b in blobs:
+        if b.storage_key:
+            shared = (await db.execute(select(MediaBlob.id).where(
+                MediaBlob.storage_key == b.storage_key, MediaBlob.id.notin_(ids)).limit(1))).first()
+            if not shared:
+                try:
+                    if b.backend == "local":
+                        os.remove(os.path.join(settings.MEDIA_LOCAL_DIR, b.storage_key))
+                    elif b.backend == "s3":
+                        import boto3
+                        boto3.client("s3", region_name=settings.MEDIA_S3_REGION).delete_object(
+                            Bucket=settings.MEDIA_S3_BUCKET, Key=b.storage_key)
+                except FileNotFoundError:
+                    pass
+        b.inline_data, b.storage_key, b.name, b.size_bytes = None, None, None, 0
+    return len(blobs)
+
+
 def public_ref(blob: MediaBlob) -> str:
     """A stable URL the client can fetch (always via our serving endpoint, which
     streams from whichever backend holds the bytes)."""

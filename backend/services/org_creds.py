@@ -19,7 +19,7 @@ import hashlib
 import json
 from typing import Optional
 
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,6 +40,7 @@ PROVIDER_FIELDS: dict[str, list[dict]] = {
         {"key": "access_token", "label": "Access token", "secret": True, "env": "SQUARE_ACCESS_TOKEN"},
         {"key": "location_id", "label": "Location ID", "env": "SQUARE_LOCATION_ID"},
         {"key": "env", "label": "Environment (sandbox/production)", "env": "SQUARE_ENV"},
+        {"key": "webhook_signature_key", "label": "Webhook signature key", "secret": True, "env": "SQUARE_WEBHOOK_SIGNATURE_KEY"},
     ],
     "sumup": [
         {"key": "api_key", "label": "API key", "secret": True, "env": "SUMUP_API_KEY"},
@@ -73,9 +74,13 @@ PROVIDERS = tuple(PROVIDER_FIELDS.keys())
 
 
 # ── Encryption ───────────────────────────────────────────────────────────────
-def _fernet() -> Fernet:
+def _fernet() -> MultiFernet:
+    """Encrypt with TOKEN_ENCRYPTION_KEY (required when deployed) when set. The legacy key
+    derived from SECRET_KEY stays in the ring for decryption, so credentials saved before
+    this change still read back — and are written under the new key on their next save."""
+    from backend.services.crypto import fernet_keys
     digest = hashlib.sha256((settings.SECRET_KEY or "").encode("utf-8")).digest()
-    return Fernet(base64.urlsafe_b64encode(digest))
+    return MultiFernet(fernet_keys() + [Fernet(base64.urlsafe_b64encode(digest))])
 
 
 def _encrypt(data: dict) -> str:

@@ -29,9 +29,10 @@ from backend.models import (
     OrderChecklist,
     OrderChecklistItem,
 )
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import get_current_employee, require_perm, record_scope
 
-router = APIRouter(prefix="/api", tags=["checklists"])
+router = APIRouter(prefix="/api", tags=["checklists"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 FIELD_KINDS = {"check_result", "yes_no", "text", "textarea", "dropdown",
                "multiselect", "date", "file", "catalog_pick"}
@@ -219,6 +220,20 @@ async def get_template(
     return await _tpl(db, t)
 
 
+def _require_fields(data: TemplateIn) -> None:
+    """A template with nothing to fill in saved "successfully" but every attempt to apply it to a
+    work order failed with "This template has no fields". Refuse it up front instead, and name
+    any field the user added but left without a label (those used to be dropped silently)."""
+    for step in data.steps:
+        for sec in step.sections:
+            if any(not (it.label or "").strip() for it in sec.items):
+                raise HTTPException(422, f"Every item in “{step.title or 'Step'}” needs a label")
+    has = any(it.label.strip() for st in data.steps for sec in st.sections for it in sec.items) or \
+        any(it.label.strip() for it in data.items)
+    if not has:
+        raise HTTPException(422, "Add at least one item to the checklist")
+
+
 @router.post("/checklist-templates", status_code=201)
 async def create_template(
     data: TemplateIn,
@@ -230,6 +245,7 @@ async def create_template(
         ChecklistTemplate.active == True))).scalar_one_or_none()  # noqa: E712
     if dupe:
         raise HTTPException(409, "A template with this name already exists")
+    _require_fields(data)
     t = ChecklistTemplate(org_id=current.org_id, name=data.name)
     db.add(t)
     await db.flush()
@@ -250,6 +266,7 @@ async def update_template(
         ChecklistTemplate.id == tid, ChecklistTemplate.org_id == current.org_id))).scalar_one_or_none()
     if not t:
         raise HTTPException(404, "Template not found")
+    _require_fields(data)
     await _write_structure(db, current.org_id, t, data)
     await db.commit()
     await db.refresh(t)

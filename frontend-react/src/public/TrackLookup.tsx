@@ -41,14 +41,14 @@ export default function TrackLookup() {
       <div className="mx-auto grid min-h-screen max-w-md place-items-center px-5">
         <div className="w-full">
           <div className="mb-6 flex items-center gap-3">
-            <div className="grid h-12 w-12 place-items-center rounded-2xl text-lg font-extrabold text-white" style={{ background: GRAD }}>R</div>
+            <div className="grid h-12 w-12 place-items-center rounded-2xl text-lg font-bold text-white" style={{ background: GRAD }}>R</div>
             <div>
-              <div className="text-xl font-extrabold tracking-[-.3px]">Track your repair</div>
+              <div className="text-xl font-bold tracking-[-.3px]">Track your repair</div>
               <div className="text-xs font-semibold text-ink-tertiary">Look it up with your details</div>
             </div>
           </div>
           <form onSubmit={submit} className="rounded-2xl border border-slate-200 bg-white p-6 sm:p-7">
-            <h1 className="text-lg font-extrabold text-ink-primary">Find my repair</h1>
+            <h1 className="text-lg font-bold text-ink-primary">Find my repair</h1>
             <p className="mt-1 text-[13px] text-ink-tertiary">Enter the order number and the phone number on file.</p>
 
             <label className="mt-5 block text-[13px] font-bold text-ink-secondary">Order number</label>
@@ -65,7 +65,7 @@ export default function TrackLookup() {
               {busy ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}{busy ? "Searching…" : "Find my repair"}
             </button>
           </form>
-          <div className="mt-6 text-center text-[11.5px] text-ink-tertiary">RepairOS</div>
+          <div className="mt-6 text-center text-[11.5px] text-ink-tertiary">Tekly</div>
         </div>
       </div>
     </div>

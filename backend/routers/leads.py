@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -127,6 +127,9 @@ async def convert_lead(
         raise HTTPException(404, "Lead not found")
     if lead.converted_order_id:
         raise HTTPException(409, "Lead is already converted")
+    if not is_estimate:
+        from backend.services.billing import assert_can_add_job
+        await assert_can_add_job(db, current.org_id)
 
     # 1) Resolve the client: linked > phone match > create new.
     client = None

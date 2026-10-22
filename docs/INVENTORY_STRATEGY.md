@@ -1,4 +1,4 @@
-# RepairOS Inventory — how Orderry does it, what we have, what to build
+# Tekly Inventory — how Orderry does it, what we have, what to build
 
 *Research + council review (product brainstorm · tech-PM · senior-architect). Market: US · LATAM · EU repair shops. Pre-launch, multi-tenant.*
 
@@ -24,11 +24,11 @@ Orderry's inventory is a **document-driven stock ledger**. Nothing changes a qua
 
 ---
 
-## 2. What RepairOS has today (verified in code)
+## 2. What Tekly has today (verified in code)
 
 We are **at or above Orderry parity** on the core. Our inventory is the same document-driven ledger:
 
-| Orderry capability | RepairOS | Where |
+| Orderry capability | Tekly | Where |
 |---|---|---|
 | Postings (goods-in, cost, tax) | ✅ postings + receive | `inventory.py /postings`, `/po/{id}/receive` |
 | Write-offs with reasons | ✅ | `stock_docs.py /write-offs` (+ suggestions) |

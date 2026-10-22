@@ -23,7 +23,7 @@ def build_certificate(sig, order, org) -> bytes:
     x = 20 * mm
     y = H - 25 * mm
 
-    shop = (org.name if org else "") or "RepairOS"
+    shop = (org.name if org else "") or "Tekly"
     c.setFont("Helvetica-Bold", 18)
     c.drawString(x, y, "Signed Approval Certificate")
     y -= 8 * mm

@@ -1,4 +1,4 @@
-# RepairOS — Product Blueprint 2026
+# Tekly — Product Blueprint 2026
 ### A complete IA, UX, and workflow redesign for a premium repair & service SaaS
 
 **Grounding.** This blueprint audits the *actual* shipped codebase (43 routers, 86 tables, ~343

@@ -4,13 +4,14 @@
 // and so the one data model drives nav + search without duplication.
 
 export type SectionId =
-  | "general" | "team" | "locations" | "statuses" | "checklists" | "forms"
+  | "general" | "billing" | "team" | "locations" | "statuses" | "checklists" | "forms"
   | "industry" | "pricing" | "finance" | "warehouses" | "directories"
   | "templates" | "feedback" | "public" | "notifications" | "integrations"
   | "ecommerce" | "sso" | "approvals";
 
 export const NAV: { id: SectionId; label: string; icon: string }[] = [
   { id: "general", label: "General", icon: "tune" },
+  { id: "billing", label: "Billing & plan", icon: "credit_card" },
   { id: "team", label: "Team & roles", icon: "group" },
   { id: "locations", label: "Locations", icon: "storefront" },
   { id: "statuses", label: "Statuses", icon: "flag" },
@@ -41,7 +42,7 @@ export const CATS: { id: string; label: string; icon: string }[] = [
 ];
 
 export const SEC_CAT: Record<SectionId, string> = {
-  general: "workspace", team: "workspace", locations: "workspace", sso: "workspace",
+  general: "workspace", billing: "workspace", team: "workspace", locations: "workspace", sso: "workspace",
   statuses: "workorders", checklists: "workorders", forms: "workorders", industry: "workorders", approvals: "workorders",
   pricing: "money", finance: "money",
   warehouses: "inventory",
@@ -52,6 +53,7 @@ export const SEC_CAT: Record<SectionId, string> = {
 // keywords power search (so "invoice number", "reminder", "add tech" all land)
 export const SEC_KW: Record<SectionId, string> = {
   general: "name timezone currency language region industry logo profile",
+  billing: "billing plan subscription trial upgrade starter pro invoice card payment tekly",
   team: "staff employee invite role permission rbac mobile access payroll add tech person",
   locations: "branch address hours location shop",
   sso: "sso saml oauth login security 2fa session single sign on",
@@ -72,13 +74,23 @@ export const SEC_KW: Record<SectionId, string> = {
   ecommerce: "ecommerce shop product sync online store shopify",
 };
 
-export const SETUP: { id: SectionId; t: string; d: string }[] = [
-  { id: "general", t: "Name your shop & set currency", d: "General" },
-  { id: "team", t: "Invite your team", d: "Team & roles" },
-  { id: "statuses", t: "Set up your repair statuses", d: "Statuses" },
-  { id: "finance", t: "Set invoice numbering & payments", d: "Finance & numbering" },
-  { id: "public", t: "Brand your online appointment page", d: "Public pages" },
-  { id: "integrations", t: "Connect payments & accounting", d: "Integrations" },
+// Sections that only exist on a plan feature (hidden from nav and search otherwise; the server
+// refuses the API anyway). Values are ProFeature codes from context/Me.
+export const SEC_FEATURE: Partial<Record<SectionId, "sso" | "inventory" | "notification_rules">> = {
+  sso: "sso", warehouses: "inventory", notifications: "notification_rules",
+};
+
+// Setup guide: each step is checked against real data (SetupChecklist loadSetupState), with a
+// rough time to finish. `go` is the settings section to open, or an app route for actions.
+export type SetupStep = { id: string; t: string; d: string; min: number; go: SectionId | `/${string}`; skippable?: boolean };
+export const SETUP: SetupStep[] = [
+  { id: "shop", t: "Add your shop details", d: "Name, phone and address for receipts and texts", min: 2, go: "general" },
+  { id: "tax", t: "Set up sales tax", d: "So invoices charge the right tax", min: 2, go: "finance", skippable: true },
+  { id: "team", t: "Invite your team", d: "Give each tech their own sign-in", min: 2, go: "team", skippable: true },
+  { id: "payments", t: "Get paid online", d: "Card payments on invoices and the tracking page", min: 5, go: "integrations", skippable: true },
+  { id: "texts", t: "Turn on text messages", d: "Customers get updates by text, not just email", min: 5, go: "integrations", skippable: true },
+  { id: "booking", t: "Take bookings online", d: "Share a link customers can book from", min: 3, go: "public", skippable: true },
+  { id: "first", t: "Check in your first repair", d: "Try the whole flow with a real job", min: 3, go: "/orders" },
 ];
 
 /** Search the settings index by label + keywords. Empty query → no results. */

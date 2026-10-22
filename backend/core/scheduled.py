@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from backend.core.jobs import job_runner
 
-log = logging.getLogger("repairos.jobs")
+log = logging.getLogger("tekly.jobs")
 
 _MAX_ATTEMPTS = 5
 
@@ -98,7 +98,7 @@ async def retry_failed_webhooks() -> None:
     """
     from backend.db.database import AsyncSessionLocal
     from backend.models import WebhookDelivery, WebhookEndpoint
-    from backend.services.webhooks import _attempt
+    from backend.services.webhooks import _attempt, claim_delivery
 
     async with AsyncSessionLocal() as db:
         rows = (await db.execute(
@@ -117,7 +117,10 @@ async def retry_failed_webhooks() -> None:
             if not ep or not ep.active:
                 d.status = "abandoned"
                 continue
+            if not await claim_delivery(db, d, ("failed", "pending")):
+                continue      # another worker (or the post-commit outbox) is on it
             await _attempt(d, ep.url, ep.secret, d.payload)
+            await db.commit()
             retried += 1
         await db.commit()
         log.info("webhook-retry-sweep: re-attempted %d delivery(ies)", retried)

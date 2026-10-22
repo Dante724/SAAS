@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════
-   RepairOS — Core utilities & API client
+   Tekly — Core utilities & API client
 ════════════════════════════════════════════════════ */
 
 const API = window.location.origin;
@@ -24,11 +24,20 @@ const Auth = {
   clear() { localStorage.removeItem('ros_tok'); },
 };
 
+/* Session ended (expired, revoked, or the account was suspended). The legacy admin shell defined
+   App.logout; the technician PWA — the only page still on this file — never did, so a 401 there
+   threw "App is not defined" and stranded the user on an error instead of the sign-in screen. */
+function signedOut() {
+  Auth.clear();
+  if (typeof App !== 'undefined' && App.logout) { App.logout(); return; }
+  location.reload();   // with no token the page boots to its sign-in form
+}
+
 /* ── HTTP CLIENT ── */
 async function req(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${Auth.token}`, ...(opts.headers || {}) };
   const r = await fetch(API + path, { ...opts, headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
-  if (r.status === 401) { App.logout(); return null; }
+  if (r.status === 401) { signedOut(); return null; }
   const json = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(errMessage(json, r.status));
   return json;
@@ -73,13 +82,23 @@ async function put(path, body) { return req(path, { method: 'PUT', body }); }
 async function patch(path, body) { return req(path, { method: 'PATCH', body }); }
 async function del(path) { return req(path, { method: 'DELETE' }); }
 
-/* auth-form login */
-async function apiLogin(username, password) {
+/* auth-form login. With 2-step verification on, the server answers 401 + X-MFA-Required
+   until the form carries the authenticator (or recovery) code in client_secret; the error
+   then has .mfaRequired so the caller can ask for the code and call again with it. */
+async function apiLogin(username, password, code) {
   const fd = new FormData();
   fd.append('username', username); fd.append('password', password);
+  if (code) fd.append('client_secret', code);
   const r = await fetch(API + '/api/auth/token', { method: 'POST', body: fd });
-  const json = await r.json();
-  if (!r.ok) throw new Error(json.detail || 'Login failed');
+  const json = await r.json().catch(() => ({}));
+  if (r.status === 401 && r.headers.get('X-MFA-Required') === '1') {
+    const e = new Error(code ? "That code didn't work. Try the newest code, or a recovery code."
+                             : 'Enter the code from your authenticator app');
+    e.mfaRequired = true;
+    throw e;
+  }
+  if (r.status === 429) throw new Error('Too many attempts. Wait a few minutes and try again.');
+  if (!r.ok) throw new Error(typeof json.detail === 'string' ? json.detail : 'Could not sign in');
   return json;
 }
 

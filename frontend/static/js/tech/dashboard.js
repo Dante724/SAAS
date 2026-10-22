@@ -32,8 +32,8 @@ window.TechDashboard = (function () {
         <div class="stat ${s.overdue ? 'alert' : ''}"><div class="n">${s.overdue}</div><div class="l">Overdue</div></div>
         <div class="stat"><div class="n">${s.completed}</div><div class="l">Completed</div></div>
       </div>
-      <a class="job" href="#/clock"><div class="row"><span class="num">${clockTxt}</span>
-        <span class="st">${d.clock.clocked_in ? 'Tap to manage' : 'Tap to clock in'}</span></div></a>
+      ${(window.TechPlan || {}).clock === false ? '' : `<a class="job" href="#/clock"><div class="row"><span class="num">${clockTxt}</span>
+        <span class="st">${d.clock.clocked_in ? 'Tap to manage' : 'Tap to clock in'}</span></div></a>`}
       <div id="dash-sections"></div>`;
     const sec = el.querySelector('#dash-sections');
     sec.innerHTML =

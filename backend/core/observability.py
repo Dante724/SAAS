@@ -6,7 +6,7 @@
   Prometheus text format at /metrics — no prometheus_client dependency.
 """
 import time
-from collections import defaultdict, deque
+from collections import defaultdict
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
@@ -80,33 +80,36 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         for k, v in _SECURITY_HEADERS.items():
             response.headers.setdefault(k, v)
+        # Deployed behind TLS: pin HTTPS so a first plain-http visit can't be downgraded.
+        # (Browsers ignore HSTS on http responses, so local dev over http is unaffected.)
+        from backend.config import settings
+        if settings.is_deployed:
+            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         return response
 
 
 # ── rate limiter ─────────────────────────────────────────────────────────────
 class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Global per-IP ceiling. Counts through services.ratelimit, so with REDIS_URL set every
+    worker and instance shares one counter (it used to be a per-process dict: N workers
+    allowed N x limit, and every IP ever seen stayed in memory)."""
     def __init__(self, app, *, limit: int = 300, window_s: int = 60,
                  exempt_prefixes=("/metrics", "/health", "/api/health")):
         super().__init__(app)
         self.limit = limit
         self.window = window_s
         self.exempt = exempt_prefixes
-        self._hits: dict = defaultdict(deque)
 
     async def dispatch(self, request, call_next):
+        from fastapi import HTTPException
+
+        from backend.services import ratelimit
         path = request.url.path
         if any(path.startswith(p) for p in self.exempt):
             return await call_next(request)
-        ip = request.client.host if request.client else "anon"
-        key = f"{ip}"
-        now = time.time()
-        dq = self._hits[key]
-        while dq and dq[0] <= now - self.window:
-            dq.popleft()
-        if len(dq) >= self.limit:
-            retry = int(self.window - (now - dq[0])) + 1
-            return JSONResponse(status_code=429,
-                                content={"detail": "Rate limit exceeded"},
-                                headers={"Retry-After": str(retry)})
-        dq.append(now)
+        try:
+            await ratelimit.aenforce("global", ratelimit.client_ip(request), self.limit, self.window)
+        except HTTPException as e:
+            return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"},
+                                headers=e.headers or {})
         return await call_next(request)

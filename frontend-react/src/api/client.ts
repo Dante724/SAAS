@@ -1,4 +1,4 @@
-// RepairOS API client — reuses the EXISTING session (same-origin cookie/token).
+// Tekly API client — reuses the EXISTING session (same-origin cookie/token).
 // No auth redesign, no CORS: the React bundle is served from the same origin as
 // the live app, so the browser sends the logged-in session automatically.
 // Endpoints are the existing FastAPI ones (see inventory/endpoints.txt).
@@ -45,16 +45,15 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     body: body != null ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
-    // Guarded cutover: an expired/invalid session bounces back to the legacy
-    // login page (the redesign has no login screen of its own).
+    // An expired or invalid session goes back to the sign-in page.
     if (res.status === 401) {
       try {
         localStorage.removeItem("ros_tok");
       } catch {
         /* ignore */
       }
-      if (typeof window !== "undefined" && window.location.pathname !== "/legacy.html") {
-        window.location.replace("/legacy.html");
+      if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+        window.location.replace("/login");
       }
     }
     const text = await res.text().catch(() => "");
@@ -64,11 +63,26 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return (await res.json()) as T;
 }
 
+// The server answers errors as {"detail": "..."} (or a list of field problems). Show the
+// sentence, not the JSON; the raw body stays on `.body` for anything that needs it.
+export function readableError(raw: string): string {
+  try {
+    const j = JSON.parse(raw);
+    const d = j?.detail ?? j?.message ?? j?.error;
+    if (typeof d === "string") return d;
+    if (Array.isArray(d)) return d.map((x: any) => x?.msg || String(x)).join("; ");
+    if (d && typeof d === "object" && typeof d.message === "string") return d.message;
+  } catch { /* not JSON */ }
+  return raw;
+}
+
 export class ApiError extends Error {
   status: number;
+  body: string;
   constructor(status: number, message: string) {
-    super(message);
+    super(readableError(message));
     this.status = status;
+    this.body = message;
   }
 }
 
@@ -79,9 +93,31 @@ export async function openAuthedDoc(path: string): Promise<void> {
   const res = await fetch(BASE + path, { credentials: "include", headers: { ...authHeader() } });
   if (!res.ok) throw new ApiError(res.status, (await res.text().catch(() => "")) || res.statusText);
   const blob = await res.blob();
+  // A blob URL runs with this app's origin, so only open types that can't execute script;
+  // anything else (HTML, SVG, XML, unknown) is downloaded as an opaque file instead.
+  if (!isInlineSafeType(blob.type)) {
+    const url = URL.createObjectURL(new Blob([blob], { type: "application/octet-stream" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = downloadName(res.headers.get("content-disposition"));
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    return;
+  }
   const url = URL.createObjectURL(blob);
   window.open(url, "_blank");
   setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+const INLINE_SAFE = /^(application\/pdf|image\/(png|jpeg|gif|webp|heic|heif)|audio\/[\w.+-]+|video\/[\w.+-]+|text\/plain)(;|$)/i;
+
+export function isInlineSafeType(type: string): boolean {
+  return INLINE_SAFE.test((type || "").trim());
+}
+
+function downloadName(disposition: string | null): string {
+  const m = /filename\*=UTF-8''([^;]+)/i.exec(disposition || "");
+  try { return m ? decodeURIComponent(m[1]) : "download"; } catch { return "download"; }
 }
 
 // Multipart upload (no JSON Content-Type → browser sets the boundary). Reuses the session.

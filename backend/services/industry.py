@@ -230,31 +230,82 @@ LEGACY_ALIASES = {
     "small_engine": "small_engine",
 }
 
-# Starter brand data (system rows). Deliberately small — the real catalog comes
-# from CSV import / owner curation. Chosen to prove isolation: the same brand
-# name recurs across templates as SEPARATE rows.
+# Starter brand/model data (system rows), focused on what US/CA shops see every day so the
+# brand/model pickers are useful on day one. Shops add anything else just by typing it at intake
+# (services/asset_catalog.py remembers it). The same brand recurs across templates as separate rows.
+_PHONE_BRANDS = ["Apple", "Samsung", "Google", "Motorola", "OnePlus", "LG", "TCL", "Nokia", "Xiaomi"]
+_COMPUTER_BRANDS = ["Apple", "Dell", "HP", "Lenovo", "Asus", "Acer", "Microsoft", "MSI", "Razer", "Samsung"]
+_CONSOLE_BRANDS = ["Sony", "Microsoft", "Nintendo", "Valve"]
 STARTER_BRANDS: dict[str, list[str]] = {
-    "mobile_phone": ["Apple", "Samsung", "Google", "OnePlus", "Xiaomi"],
-    "computer":     ["Apple", "Dell", "HP", "Lenovo", "Asus"],
-    "tools":        ["DeWalt", "Makita", "Bosch", "Milwaukee"],
-    "small_engine": ["Honda", "Briggs & Stratton", "Yamaha", "Kohler"],
-    "powersports":  ["Yamaha", "Honda", "Polaris", "Kawasaki", "Can-Am"],
-    "auto":         ["Toyota", "Honda", "Ford", "Chevrolet", "BMW"],
-    "bike":         ["Trek", "Giant", "Yamaha", "Honda", "Specialized"],
-    "marine":       ["Yamaha", "Mercury", "Boston Whaler", "Sea Ray"],
-    "fleet_truck":  ["Freightliner", "Volvo", "Peterbilt", "Kenworth", "International"],
-    "general":      [],
+    "mobile_phone": _PHONE_BRANDS,
+    "computer":     _COMPUTER_BRANDS,
+    "tools":        ["DeWalt", "Makita", "Milwaukee", "Bosch", "Ryobi", "Ridgid", "Craftsman", "Black+Decker", "Metabo HPT", "Hilti"],
+    "small_engine": ["Honda", "Briggs & Stratton", "Kohler", "Kawasaki", "Yamaha", "Toro", "Husqvarna", "Stihl", "Echo", "John Deere", "Cub Cadet", "Troy-Bilt", "Generac"],
+    "powersports":  ["Polaris", "Can-Am", "Honda", "Yamaha", "Kawasaki", "Suzuki", "Arctic Cat", "Ski-Doo", "Sea-Doo", "Harley-Davidson"],
+    "auto":         ["Ford", "Chevrolet", "Toyota", "Honda", "Nissan", "Jeep", "Ram", "GMC", "Hyundai", "Kia", "Subaru", "Volkswagen", "BMW", "Mercedes-Benz", "Tesla"],
+    "bike":         ["Trek", "Specialized", "Giant", "Yamaha", "Cannondale", "Santa Cruz", "Rad Power Bikes", "Aventon", "Brompton"],
+    "marine":       ["Mercury", "Yamaha", "Suzuki", "Evinrude", "Honda Marine", "Boston Whaler", "Sea Ray", "Bayliner"],
+    "fleet_truck":  ["Freightliner", "Peterbilt", "Kenworth", "International", "Volvo", "Mack", "Isuzu", "Hino"],
+    "general":      sorted(set(_PHONE_BRANDS + _COMPUTER_BRANDS + _CONSOLE_BRANDS), key=str.lower),
 }
 
-# A few starter models to prove the brand->model chain (template + brand scoped).
+_PHONE_MODELS = {
+    "Apple": ["iPhone 16 Pro Max", "iPhone 16 Pro", "iPhone 16 Plus", "iPhone 16", "iPhone 16e",
+              "iPhone 15 Pro Max", "iPhone 15 Pro", "iPhone 15 Plus", "iPhone 15",
+              "iPhone 14 Pro Max", "iPhone 14 Pro", "iPhone 14 Plus", "iPhone 14",
+              "iPhone 13 Pro Max", "iPhone 13 Pro", "iPhone 13", "iPhone 13 mini",
+              "iPhone 12 Pro Max", "iPhone 12 Pro", "iPhone 12", "iPhone 12 mini",
+              "iPhone 11 Pro Max", "iPhone 11 Pro", "iPhone 11", "iPhone SE (3rd gen)", "iPhone SE (2nd gen)",
+              "iPhone XR", "iPhone XS Max", "iPhone XS", "iPhone X",
+              "iPad Pro 13-inch (M4)", "iPad Pro 11-inch (M4)", "iPad Air (M2)", "iPad (10th gen)", "iPad mini (6th gen)",
+              "Apple Watch Series 10", "Apple Watch Series 9", "Apple Watch Ultra 2", "Apple Watch SE"],
+    "Samsung": ["Galaxy S25 Ultra", "Galaxy S25+", "Galaxy S25", "Galaxy S24 Ultra", "Galaxy S24+", "Galaxy S24", "Galaxy S24 FE",
+                "Galaxy S23 Ultra", "Galaxy S23+", "Galaxy S23", "Galaxy S23 FE", "Galaxy S22 Ultra", "Galaxy S22", "Galaxy S21",
+                "Galaxy Z Fold6", "Galaxy Z Flip6", "Galaxy Z Fold5", "Galaxy Z Flip5",
+                "Galaxy A55", "Galaxy A54", "Galaxy A35", "Galaxy A25", "Galaxy A15", "Galaxy Tab S9", "Galaxy Tab A9"],
+    "Google": ["Pixel 9 Pro XL", "Pixel 9 Pro", "Pixel 9", "Pixel 9 Pro Fold", "Pixel 8 Pro", "Pixel 8", "Pixel 8a",
+               "Pixel 7 Pro", "Pixel 7", "Pixel 7a", "Pixel 6 Pro", "Pixel 6", "Pixel 6a"],
+    "Motorola": ["moto g Power", "moto g Stylus", "moto g play", "razr+", "razr", "edge"],
+    "OnePlus": ["OnePlus 13", "OnePlus 12", "OnePlus 11", "OnePlus Nord N30"],
+}
+_COMPUTER_MODELS = {
+    "Apple": ["MacBook Air 13-inch (M3)", "MacBook Air 15-inch (M3)", "MacBook Air 13-inch (M2)", "MacBook Air (M1)",
+              "MacBook Pro 14-inch (M4)", "MacBook Pro 16-inch (M4)", "MacBook Pro 14-inch (M3)", "MacBook Pro 13-inch (M2)",
+              "iMac 24-inch (M4)", "iMac 24-inch (M3)", "Mac mini (M4)", "Mac Studio"],
+    "Dell": ["XPS 13", "XPS 15", "XPS 16", "Inspiron 14", "Inspiron 15", "Inspiron 16", "Latitude 5440", "Latitude 7440",
+             "Vostro 15", "Alienware m16", "OptiPlex 7010"],
+    "HP": ["Pavilion 15", "Pavilion x360", "Envy x360", "Spectre x360", "EliteBook 840", "ProBook 450", "Victus 15", "OMEN 16", "HP 15 Laptop"],
+    "Lenovo": ["ThinkPad X1 Carbon", "ThinkPad T14", "ThinkPad E14", "IdeaPad 3", "IdeaPad 5", "IdeaPad Flex 5", "Yoga 7", "Legion 5", "ThinkCentre M70"],
+    "Asus": ["Zenbook 14", "Vivobook 15", "ROG Zephyrus G14", "ROG Strix G16", "TUF Gaming A15"],
+    "Acer": ["Aspire 5", "Swift 3", "Nitro 5", "Predator Helios 16", "Chromebook 314"],
+    "Microsoft": ["Surface Laptop 7", "Surface Laptop 5", "Surface Pro 11", "Surface Pro 9", "Surface Go 4"],
+}
+_CONSOLE_MODELS = {
+    "Sony": ["PlayStation 5 Pro", "PlayStation 5", "PlayStation 5 Digital", "PlayStation 4 Pro", "PlayStation 4", "DualSense Controller"],
+    "Microsoft": ["Xbox Series X", "Xbox Series S", "Xbox One X", "Xbox One S", "Xbox Wireless Controller"],
+    "Nintendo": ["Switch OLED", "Switch", "Switch Lite", "Joy-Con"],
+    "Valve": ["Steam Deck OLED", "Steam Deck"],
+}
+
+
+def _merge_models(*parts: dict) -> dict:
+    out: dict[str, list[str]] = {}
+    for p in parts:
+        for b, ms in p.items():
+            out.setdefault(b, [])
+            out[b] += [m for m in ms if m not in out[b]]
+    return out
+
+
 STARTER_MODELS: dict[str, dict[str, list[str]]] = {
-    "mobile_phone": {
-        "Apple": ["iPhone 14 Pro", "iPhone 15", "iPhone SE"],
-        "Samsung": ["Galaxy S23", "Galaxy A54"],
-    },
+    "mobile_phone": _PHONE_MODELS,
+    "computer": _merge_models(_COMPUTER_MODELS, {"Samsung": ["Galaxy Book4", "Galaxy Book3"]}),
+    "general": _merge_models(_PHONE_MODELS, _COMPUTER_MODELS, _CONSOLE_MODELS),
     "auto": {
-        "Toyota": ["Corolla", "Camry", "RAV4"],
-        "Honda": ["Civic", "Accord", "CR-V"],
+        "Toyota": ["Corolla", "Camry", "RAV4", "Tacoma", "Highlander", "Tundra"],
+        "Honda": ["Civic", "Accord", "CR-V", "Pilot", "HR-V"],
+        "Ford": ["F-150", "Escape", "Explorer", "Mustang", "Bronco", "Ranger"],
+        "Chevrolet": ["Silverado 1500", "Equinox", "Malibu", "Tahoe", "Traverse"],
     },
 }
 
@@ -273,10 +324,11 @@ def template(key: Optional[str]) -> dict:
 
 
 def template_list() -> list[dict]:
-    """[{key, label, asset_label, wo_button, group_count}] for the settings picker."""
+    """[{key, label, asset_label, asset_label_plural, wo_button, group_count}] for the settings picker."""
     out = []
     for k, t in TEMPLATES.items():
         out.append({"key": k, "label": t["label"], "asset_label": t["asset_label"],
+                    "asset_label_plural": t.get("asset_label_plural") or t["asset_label"] + "s",
                     "wo_button": t["wo_button"], "group_count": len(t["groups"])})
     return out
 
@@ -347,11 +399,31 @@ def describe(key: Optional[str]) -> dict:
 
 
 # ── Seeding ──────────────────────────────────────────────────────────────────
+async def _insert_ignore(db: AsyncSession, model, **values) -> bool:
+    """INSERT … ON CONFLICT DO NOTHING. Opening Settings › Industry & assets fires
+    several GET /api/settings/asset-* at once and each one seeds, so two seeds can
+    both see "row missing" and race to insert it; the loser must quietly skip
+    rather than 500 on the unique constraint. Returns True if this call inserted."""
+    if db.bind.dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert
+    res = await db.execute(insert(model).values(**values).on_conflict_do_nothing())
+    return res.rowcount == 1
+
+
 async def ensure_industry_seed(db: AsyncSession, org_id: str,
                                only_template: Optional[str] = None) -> dict:
     """Materialise default groups, identifier rules and starter brands/models for
-    an org. Idempotent — safe to call repeatedly. Never touches another template's
-    rows. Returns a small summary of what was created.
+    an org. Idempotent — safe to call repeatedly, and concurrently: every insert is
+    insert-or-ignore and ids are re-read afterwards, so a seed that lost the race
+    to another request reuses the winner's rows. Never touches another template's
+    rows. Returns a small summary of what this call created.
+
+    Groups are written before identifier rules are read, so a racing seed waits on
+    the winner's group rows (Postgres row lock / SQLite write lock) and then reads
+    the winner's committed rules — that is what keeps the template-wide rule
+    (asset_group_id NULL, which no unique constraint covers) single.
 
     Import models lazily to avoid a circular import at module load."""
     from backend.models import AssetBrand, AssetGroup, AssetIdentifierRule, AssetModel
@@ -359,66 +431,61 @@ async def ensure_industry_seed(db: AsyncSession, org_id: str,
     keys = [normalize_template_key(only_template)] if only_template else TEMPLATE_KEYS
     created = {"groups": 0, "rules": 0, "brands": 0, "models": 0}
 
+    async def group_ids(tk: str) -> dict:
+        return dict((await db.execute(select(AssetGroup.key, AssetGroup.id).where(
+            AssetGroup.org_id == org_id, AssetGroup.template_key == tk))).all())
+
+    async def brand_ids(tk: str) -> dict:
+        return dict((await db.execute(select(AssetBrand.name, AssetBrand.id).where(
+            AssetBrand.org_id == org_id, AssetBrand.template_key == tk,
+            AssetBrand.asset_group_id.is_(None)))).all())
+
     for tk in keys:
         t = TEMPLATES[tk]
 
-        # existing rows for this org+template (scoped — never cross-template)
-        existing_groups = {g.key: g for g in (await db.execute(select(AssetGroup).where(
-            AssetGroup.org_id == org_id, AssetGroup.template_key == tk))).scalars().all()}
-
-        # 1) groups
-        for i, g in enumerate(t["groups"]):
-            if g["key"] not in existing_groups:
-                row = AssetGroup(org_id=org_id, template_key=tk, key=g["key"],
-                                 label=g["label"], sort_order=i, is_system=True)
-                db.add(row)
-                await db.flush()
-                existing_groups[g["key"]] = row
+        # 1) groups (scoped by org+template — never cross-template)
+        existing_groups = await group_ids(tk)
+        missing = [(i, g) for i, g in enumerate(t["groups"]) if g["key"] not in existing_groups]
+        for i, g in missing:
+            if await _insert_ignore(db, AssetGroup, org_id=org_id, template_key=tk, key=g["key"],
+                                    label=g["label"], sort_order=i, is_system=True):
                 created["groups"] += 1
+        if missing:
+            existing_groups = await group_ids(tk)
 
         # 2) identifier rules — template default (asset_group_id null) + per-group
-        have_rules = {(r.asset_group_id) for r in (await db.execute(select(AssetIdentifierRule).where(
-            AssetIdentifierRule.org_id == org_id, AssetIdentifierRule.template_key == tk))).scalars().all()}
-        if None not in have_rules:
-            db.add(AssetIdentifierRule(org_id=org_id, template_key=tk, asset_group_id=None,
-                                       primary_kind=t["identifier"]["primary"],
-                                       allowed_kinds=list(t["identifier"]["allowed"]), is_system=True))
-            created["rules"] += 1
-        for g in t["groups"]:
-            if "identifier" not in g:
-                continue
-            gid = existing_groups[g["key"]].id
-            if gid not in have_rules:
-                db.add(AssetIdentifierRule(org_id=org_id, template_key=tk, asset_group_id=gid,
-                                           primary_kind=g["identifier"]["primary"],
-                                           allowed_kinds=list(g["identifier"]["allowed"]), is_system=True))
+        have_rules = set((await db.execute(select(AssetIdentifierRule.asset_group_id).where(
+            AssetIdentifierRule.org_id == org_id, AssetIdentifierRule.template_key == tk))).scalars().all())
+        wanted = [(None, t["identifier"])] + [(existing_groups[g["key"]], g["identifier"])
+                                              for g in t["groups"] if "identifier" in g]
+        for gid, rule in wanted:
+            if gid not in have_rules and await _insert_ignore(
+                    db, AssetIdentifierRule, org_id=org_id, template_key=tk, asset_group_id=gid,
+                    primary_kind=rule["primary"], allowed_kinds=list(rule["allowed"]), is_system=True):
                 created["rules"] += 1
 
         # 3) starter brands (template-wide: asset_group_id null)
-        existing_brands = {b.name: b for b in (await db.execute(select(AssetBrand).where(
-            AssetBrand.org_id == org_id, AssetBrand.template_key == tk,
-            AssetBrand.asset_group_id.is_(None)))).scalars().all()}
-        for i, name in enumerate(STARTER_BRANDS.get(tk, [])):
-            if name not in existing_brands:
-                b = AssetBrand(org_id=org_id, template_key=tk, asset_group_id=None,
-                               name=name, sort_order=i, is_system=True)
-                db.add(b)
-                await db.flush()
-                existing_brands[name] = b
+        existing_brands = await brand_ids(tk)
+        missing = [(i, n) for i, n in enumerate(STARTER_BRANDS.get(tk, [])) if n not in existing_brands]
+        for i, name in missing:
+            if await _insert_ignore(db, AssetBrand, org_id=org_id, template_key=tk, asset_group_id=None,
+                                    name=name, sort_order=i, is_system=True):
                 created["brands"] += 1
+        if missing:
+            existing_brands = await brand_ids(tk)
 
         # 4) starter models under those brands
         for brand_name, models in STARTER_MODELS.get(tk, {}).items():
-            brand = existing_brands.get(brand_name)
-            if not brand:
+            brand_id = existing_brands.get(brand_name)
+            if not brand_id:
                 continue
-            have_models = {m.name for m in (await db.execute(select(AssetModel).where(
+            have_models = set((await db.execute(select(AssetModel.name).where(
                 AssetModel.org_id == org_id, AssetModel.template_key == tk,
-                AssetModel.brand_id == brand.id))).scalars().all()}
+                AssetModel.brand_id == brand_id))).scalars().all())
             for i, mname in enumerate(models):
-                if mname not in have_models:
-                    db.add(AssetModel(org_id=org_id, template_key=tk, brand_id=brand.id,
-                                      name=mname, sort_order=i, is_system=True))
+                if mname not in have_models and await _insert_ignore(
+                        db, AssetModel, org_id=org_id, template_key=tk, brand_id=brand_id,
+                        name=mname, sort_order=i, is_system=True):
                     created["models"] += 1
 
     await db.commit()

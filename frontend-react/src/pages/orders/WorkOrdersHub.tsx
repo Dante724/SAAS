@@ -1,3 +1,6 @@
+import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
+import { tint } from "../../lib/tint";
+import PageSummary, { type SummaryStat } from "../../components/PageSummary";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
@@ -9,15 +12,20 @@ import CreateOrderDrawer from "./CreateOrderDrawer";
 import Pager from "../../components/Pager";
 import { Gate } from "../../context/Me";
 
-const KPIS = [
-  { l: "Incomplete", v: "9", icon: "pending_actions", tint: "bg-blue-50 text-primary", vc: "text-ink-primary" },
-  { l: "My Work Orders", v: "2", icon: "person", tint: "bg-indigo-50 text-indigo-600", vc: "text-primary" },
-  { l: "Urgent Priority", v: "1", icon: "priority_high", tint: "bg-amber-50 text-amber-600", vc: "text-ink-primary" },
-  { l: "Overdue", v: "0", icon: "warning", tint: "bg-rose-50 text-rose-600", vc: "text-status-overdue-ink" },
-  { l: "Receivables", v: "₹14,200", icon: "attach_money", tint: "bg-emerald-50 text-emerald-600", vc: "text-ink-primary font-mono" },
-];
-type Status = { id: string; name?: string; key?: string; status_group?: string };
+type Kpis = { new?: number; urgent?: number; overdue?: number; receivables?: number };
+type Status = { id: string; name?: string; key?: string; status_group?: string; color?: string };
 type SavedView = { id: string; name: string; params: any; is_shared?: boolean; mine?: boolean };
+type Facets = { status_counts: Record<string, number>; assignees: { id: string; name: string }[]; open_jobs: number };
+type BoardCard = { id: string; order_number?: string; status?: string; priority?: number; total?: number; client_id?: string | null; client_name?: string | null; device?: string | null; assigned_to_id?: string | null; assigned_to_name?: string | null; scheduled_for?: string | null };
+// Board cards are a slimmer shape than list rows; map them onto Order so one card renderer serves both.
+const cardToOrder = (c: BoardCard): Order => ({
+  id: c.id, order_number: c.order_number, status: c.status, priority: c.priority, total: c.total, is_estimate: false,
+  client: c.client_name ? { id: c.client_id || undefined, name: c.client_name } : null,
+  device: c.device ? { brand: c.device } : null,
+  assigned_to: c.assigned_to_name ? { name: c.assigned_to_name } : null,
+  scheduled_for: c.scheduled_for,
+});
+const WO_PAGE_SIZE = 50;
 
 // Toggleable table columns (checkbox + action columns are always shown)
 const COLS: { key: string; label: string }[] = [
@@ -39,32 +47,49 @@ const PILL: Record<string, [string, string]> = {
   done: ["bg-green-100 text-green-800 border-green-200", "bg-green-600"],
   delivered: ["bg-slate-100 text-slate-700 border-slate-200", "bg-slate-500"],
 };
-function pill(status?: string) {
+// The status's own name and colour from Settings › Statuses; the key is only a fallback.
+function pill(status?: string, st?: Status) {
   const key = (status || "").toLowerCase().replace(/\s+/g, "_");
+  const label = st?.name || (status || "—").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  if (st?.color) {
+    return (
+      <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold inline-flex items-center gap-1.5 text-ink-primary whitespace-nowrap"
+        style={{ background: tint(st.color), boxShadow: `inset 0 0 0 1px ${tint(st.color, 25)}` }}>
+        <span className="w-1.5 h-1.5 rounded-full" style={{ background: st.color }} />{label}
+      </span>
+    );
+  }
   const [cls, dot] = PILL[key] || ["bg-slate-100 text-slate-700 border-slate-200", "bg-slate-500"];
-  const label = (status || "—").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
   return (
-    <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border inline-flex items-center gap-1 ${cls}`}>
+    <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border inline-flex items-center gap-1.5 ${cls}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />{label}
     </span>
   );
 }
 
 export default function WorkOrdersHub() {
-  const [orders, setOrders] = useState<Order[] | null>(null);
+  const [orders, setOrders] = useState<Order[] | null>(null);   // the current table page, or the board's cards
+  const [total, setTotal] = useState(0);                         // rows matching the filters (server count)
+  const [facets, setFacets] = useState<Facets | null>(null);
+  const [boardCounts, setBoardCounts] = useState<Record<string, number>>({});
+  const [tick, setTick] = useState(0);
   const [flags, setFlags] = useState<Record<string, { stalled: boolean; predicted_ready_at: string | null; over_by_min: number | null }>>({});
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<Order | null>(null);
   const [create, setCreate] = useState<null | "order" | "estimate">(null);
   const [statuses, setStatuses] = useState<Status[]>([]);
+  const [estStatuses, setEstStatuses] = useState<Status[]>([]);
   const [filter, setFilter] = useState<string | null>(null);   // status key
-  // Multi-facet filter panel (client-side over the loaded set, same as status + text).
+  // Multi-facet filter panel — sent to the server with status + text, so paging stays exact.
   const [fltOpen, setFltOpen] = useState(false);
-  const [fAssignee, setFAssignee] = useState("");              // "" any · "__none" unassigned · else name
-  const [fPriority, setFPriority] = useState("");              // "" any · "0"|"1"|"2"
+  const [fAssignee, setFAssignee] = useState("");              // "" any · "__none" unassigned · else employee id
+  const [fPriority, setFPriority] = useState("");              // "" any · "0"|"1"|"2" · "urgent" = 1 or 2
+  const [kpis, setKpis] = useState<Kpis | null>(null);
   const [fScheduled, setFScheduled] = useState<"" | "yes" | "no">("");
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [q, setQ] = useState("");
+  const [dq, setDq] = useState("");   // debounced search text sent to the server
+  useEffect(() => { const t = setTimeout(() => setDq(q.trim()), 300); return () => clearTimeout(t); }, [q]);
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState<"table" | "board" | "scheduler">("table");
   const [woPage, setWoPage] = useState(1);   // table-view pagination
@@ -114,7 +139,9 @@ export default function WorkOrdersHub() {
   function applyView(v: SavedView) {
     const p = v.params || {};
     if (p.q != null) setQ(p.q); setFilter(p.filter ?? null);
-    setFAssignee(p.fAssignee ?? ""); setFPriority(p.fPriority ?? ""); setFScheduled(p.fScheduled ?? "");
+    // Views saved before server paging stored the assignee's name; map it to the id.
+    const a = p.fAssignee ?? "";
+    setFAssignee(a && a !== "__none" ? (facets?.assignees.find((x) => x.id === a || x.name === a)?.id ?? a) : a); setFPriority(p.fPriority ?? ""); setFScheduled(p.fScheduled ?? "");
     if (p.view) setView(p.view);
     if (Array.isArray(p.cols)) { const n = new Set<string>(p.cols); setCols(n); try { localStorage.setItem(COLS_KEY, JSON.stringify([...n])); } catch { /* ignore */ } }
     setViewsOpen(false);
@@ -126,22 +153,72 @@ export default function WorkOrdersHub() {
   const colSpan = 2 + [...cols].length;
   async function moveTo(id: string, key: string) {
     const o = (orders || []).find((x) => x.id === id); if (!o || norm(o.status) === key) return;
+    let reason: string | null = null;
+    { const ds = droppedStatus(statuses, key); if (ds) { reason = await askCancelReason(ds.name); if (reason === null) return; } }
     setOrders((cur) => (cur || []).map((x) => x.id === id ? { ...x, status: key } : x)); // optimistic
-    try { await api.patch(`/orders/${id}/status`, { status: key }); } catch { refetch(); }
+    try { await api.patch(`/orders/${id}/status`, { status: key, reason: reason || undefined }); } catch { refetch(); }
   }
 
-  function refetch() {
-    api.get<{ items: Order[] }>("/orders?limit=1000").then((r) => setOrders(r.items || [])).catch((e) => setErr(String(e.message || e)));
-    api.get<{ items: Record<string, { stalled: boolean; predicted_ready_at: string | null; over_by_min: number | null }> }>("/orders/timing/flags")
-      .then((r) => setFlags(r.items || {})).catch(() => setFlags({}));
+  // Filters go to the server: the table fetches one page plus facet counts; the board fetches
+  // capped open-order columns. Neither loads the whole shop any more.
+  function filterParams() {
+    const p = new URLSearchParams();
+    if (dq) p.set("search", dq);
+    if (fAssignee) p.set("assigned_to_id", fAssignee);
+    if (fPriority === "urgent") p.set("priority_min", "1"); else if (fPriority) p.set("priority", fPriority);
+    if (fScheduled) p.set("scheduled", fScheduled);
+    return p;
   }
-  useEffect(() => { refetch(); api.get<any>("/statuses").then((r) => setStatuses(r.items || r || [])).catch(() => {}); }, []);
+  useEffect(() => {
+    if (view === "scheduler") return;
+    let live = true;
+    const p = filterParams();
+    if (view === "board") {
+      p.set("per_column", "50");
+      api.get<{ columns: { cards: BoardCard[] }[]; status_counts?: Record<string, number> }>(`/orders/board?${p}`)
+        .then((r) => { if (!live) return; setOrders(r.columns.flatMap((c) => c.cards || []).map(cardToOrder)); setBoardCounts(r.status_counts || {}); setErr(null); })
+        .catch((e) => live && setErr(String(e.message || e)));
+    } else {
+      if (filter) p.set("status", filter);
+      p.set("skip", String((woPage - 1) * WO_PAGE_SIZE)); p.set("limit", String(WO_PAGE_SIZE)); p.set("facets", "true");
+      api.get<{ items: Order[]; total: number } & Partial<Facets>>(`/orders?${p}`)
+        .then((r) => {
+          if (!live) return;
+          setOrders(r.items || []); setTotal(r.total || 0); setErr(null);
+          setFacets({ status_counts: r.status_counts || {}, assignees: r.assignees || [], open_jobs: r.open_jobs ?? 0 });
+        })
+        .catch((e) => live && setErr(String(e.message || e)));
+    }
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, woPage, dq, filter, fAssignee, fPriority, fScheduled, tick]);
+  // Stall badges only for the rows on screen (the endpoint otherwise walks every open order).
+  const flagIds = view === "table" ? (orders || []).map((o) => o.id).join(",") : "";
+  useEffect(() => {
+    if (!flagIds) { setFlags({}); return; }
+    api.get<{ items: Record<string, { stalled: boolean; predicted_ready_at: string | null; over_by_min: number | null }> }>(`/orders/timing/flags?ids=${encodeURIComponent(flagIds)}`)
+      .then((r) => setFlags(r.items || {})).catch(() => setFlags({}));
+  }, [flagIds]);
+  function refetch() {
+    setTick((t) => t + 1);
+    // Same numbers as the Home dashboard (one server-side definition of urgent/overdue).
+    api.get<{ kpis?: Kpis }>("/reports/company-dashboard").then((r) => setKpis(r.kpis || {})).catch(() => setKpis(null));
+  }
+  useEffect(() => {
+    refetch(); api.get<any>("/statuses").then((r) => setStatuses(r.items || r || [])).catch(() => {});
+    api.get<any>("/statuses?record_type=estimate").then((r) => setEstStatuses(r.items || r || [])).catch(() => {});
+  }, []);
+  const stOf = (o: Order) => (o.is_estimate ? estStatuses : statuses).find((x) => norm(x.key || x.name) === norm(o.status))
+    || [...statuses, ...estStatuses].find((x) => norm(x.key || x.name) === norm(o.status));
   // Deep-open from a scan (?open=<id>): open the WO drawer straight away, then clear the param.
   const [sp, setSp] = useSearchParams();
+  const openParam = sp.get("open");
   useEffect(() => {
-    const id = sp.get("open");
-    if (id) { setOpen({ id } as any); setSp((p) => { p.delete("open"); return p; }, { replace: true }); }
-    // Deep-link filters from Home KPI cards (?status=new, ?priority=2). Applied once,
+    if (openParam) { setOpen({ id: openParam } as any); setSp((p) => { p.delete("open"); return p; }, { replace: true }); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openParam]);
+  useEffect(() => {
+    // Deep-link filters from Home KPI cards (?status=new, ?priority=urgent). Applied once,
     // then cleared so the URL stays clean and the user can change filters freely.
     const st = sp.get("status"), pr = sp.get("priority");
     if (st) setFilter(st.toLowerCase().replace(/\s+/g, "_"));
@@ -152,27 +229,36 @@ export default function WorkOrdersHub() {
 
   const norm = (s?: string) => (s || "").toLowerCase().replace(/\s+/g, "_");
   const all = orders || [];
-  const rows = all.filter((o) => (!filter || norm(o.status) === filter) &&
-    (!q || [o.order_number, o.client?.name, deviceName(o.device)].some((v) => (v || "").toLowerCase().includes(q.toLowerCase()))) &&
-    (!fAssignee || (fAssignee === "__none" ? !o.assigned_to?.name : o.assigned_to?.name === fAssignee)) &&
-    (!fPriority || String(o.priority ?? 0) === fPriority) &&
-    (!fScheduled || (fScheduled === "yes" ? !!o.scheduled_for : !o.scheduled_for)));
-  const assignees = [...new Set(all.map((o) => o.assigned_to?.name).filter(Boolean) as string[])].sort();
+  // Rows are already filtered by the server; the board's status chip narrows its cards locally.
+  const rows = view === "board" && filter ? all.filter((o) => norm(o.status) === filter) : all;
+  const dash = (n?: number) => (kpis && n != null ? String(n) : "—");
+  const kpiStats: SummaryStat[] = [
+    { label: "Open jobs", value: facets ? String(facets.open_jobs) : "—", onClick: () => { setFilter(null); setFPriority(""); }, active: !filter && !fPriority },
+    { label: "Waiting to start", value: dash(kpis?.new), onClick: () => setFilter(filter === "new" ? null : "new"), active: filter === "new" },
+    { label: "Urgent", value: dash(kpis?.urgent), onClick: () => setFPriority(fPriority === "urgent" ? "" : "urgent"), active: fPriority === "urgent" },
+    { label: "Late", value: dash(kpis?.overdue), tone: "bad", zero: !kpis?.overdue },
+    { label: "To collect", value: kpis?.receivables != null ? money(kpis.receivables) : "—" },
+  ];
+  const assignees = facets?.assignees || [];
   const activeFacets = (fAssignee ? 1 : 0) + (fPriority ? 1 : 0) + (fScheduled ? 1 : 0);
-  const countFor = (key: string) => all.filter((o) => norm(o.status) === key).length;
+  const statusCounts = view === "board" ? boardCounts : (facets?.status_counts || {});
+  const countFor = (key: string) => Object.entries(statusCounts).reduce((n, [k, v]) => n + (norm(k) === key ? v : 0), 0);
+  const countAll = Object.values(statusCounts).reduce((n, v) => n + v, 0);
   // Numbered pagination — table view only (board = kanban columns, scheduler = calendar).
-  const WO_PAGE_SIZE = 50;
-  const woPages = Math.max(1, Math.ceil(rows.length / WO_PAGE_SIZE));
-  const pageRows = rows.slice((Math.min(woPage, woPages) - 1) * WO_PAGE_SIZE, Math.min(woPage, woPages) * WO_PAGE_SIZE);
+  const woPages = Math.max(1, Math.ceil(total / WO_PAGE_SIZE));
+  const pageRows = rows;
   useEffect(() => { setWoPage(1); }, [q, filter, view, fAssignee, fPriority, fScheduled]);  // reset to page 1 when the filtered set or view changes
 
   function toggle(id: string) { setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); }
   function toggleAll() { setSel((s) => s.size === rows.length && rows.length > 0 ? new Set() : new Set(rows.map((o) => o.id))); }
   async function bulkStatus(key: string) {
-    if (!key || sel.size === 0) return; setBusy(true);
+    if (!key || sel.size === 0) return;
+    let reason: string | null = null;
+    { const ds = droppedStatus(statuses, key); if (ds) { reason = await askCancelReason(ds.name, sel.size); if (reason === null) return; } }
+    setBusy(true);
     // Single atomic call (was N per-row PATCHes). action=set_status.
-    try { await api.post("/orders/bulk", { order_ids: [...sel], action: "set_status", value: key }); setSel(new Set()); refetch(); }
-    catch { for (const id of sel) { await api.patch(`/orders/${id}/status`, { status: key }).catch(() => {}); } setSel(new Set()); refetch(); }
+    try { await api.post("/orders/bulk", { order_ids: [...sel], action: "set_status", value: key, reason: reason || undefined }); setSel(new Set()); refetch(); }
+    catch { for (const id of sel) { await api.patch(`/orders/${id}/status`, { status: key, reason: reason || undefined }).catch(() => {}); } setSel(new Set()); refetch(); }
     finally { setBusy(false); }
   }
   // 144-G: bulk archive (soft-delete, reversible). Orders carrying unrefunded payments are
@@ -200,38 +286,30 @@ export default function WorkOrdersHub() {
   return (
     <Shell title="Work orders">
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
-        {/* KPIs */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-          {KPIS.map((k) => (
-            <div key={k.l} className="bg-white rounded-xl p-3 border border-slate-200/80 shadow-clay-sm flex items-center justify-between">
-              <div><span className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">{k.l}</span><p className={`text-xl font-black ${k.vc}`}>{k.v}</p></div>
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${k.tint}`}><M n={k.icon} c="text-base" /></div>
-            </div>
-          ))}
-        </div>
+        <PageSummary stats={kpiStats} />
 
         {/* Toolbar */}
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 space-y-3">
+        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 space-y-3.5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <Gate perm="can_create_tickets"><button onClick={() => setCreate("order")} className="px-4 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="add" c="text-sm font-bold" />Order</button></Gate>
-              <Gate perm="can_create_estimates"><button onClick={() => setCreate("estimate")} className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200/80 text-ink-secondary hover:text-ink-primary text-xs font-semibold border border-slate-200/70 transition-all flex items-center gap-1.5"><M n="request_quote" c="text-sm" />+ Estimate</button></Gate>
+              <Gate perm="can_create_tickets"><button onClick={() => setCreate("order")} className="px-4 py-2.5 rounded-xl bg-primary text-white text-sm font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="add" c="text-sm font-bold" />Order</button></Gate>
+              <Gate perm="can_create_estimates"><button onClick={() => setCreate("estimate")} className="px-3.5 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-ink-secondary hover:text-ink-primary text-sm font-semibold border border-slate-200 transition-all flex items-center gap-1.5"><M n="request_quote" c="text-sm" />+ Estimate</button></Gate>
               <div className="h-5 w-[1px] bg-slate-200 mx-1" />
               <div className="relative">
-                <button onClick={() => { setFltOpen((o) => !o); setColsOpen(false); setViewsOpen(false); }} className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1 border ${activeFacets ? "bg-primary/10 text-primary border-primary/30" : "text-ink-secondary hover:bg-slate-100 border-slate-200"}`}><M n="filter_list" c="text-xs" />Filter{activeFacets ? <span className="ml-0.5 px-1.5 rounded-full bg-primary text-white text-[10px] font-bold">{activeFacets}</span> : null}</button>
+                <button onClick={() => { setFltOpen((o) => !o); setColsOpen(false); setViewsOpen(false); }} className={`px-3 py-2 rounded-xl text-xs font-medium flex items-center gap-1 border ${activeFacets ? "bg-primary/10 text-primary border-primary/30" : "text-ink-secondary hover:bg-slate-100 border-slate-200"}`}><M n="filter_list" c="text-xs" />Filter{activeFacets ? <span className="ml-0.5 px-1.5 rounded-full bg-primary text-white text-[11px] font-bold">{activeFacets}</span> : null}</button>
                 {fltOpen && (
                   <div className="absolute left-0 top-9 z-30 w-64 bg-white border border-slate-200 rounded-xl shadow-drawer p-3 space-y-3" onMouseLeave={() => setFltOpen(false)}>
-                    <div className="flex items-center justify-between"><span className="text-[10px] font-bold text-ink-tertiary uppercase tracking-wider">Filter work orders</span>{activeFacets ? <button onClick={() => { setFAssignee(""); setFPriority(""); setFScheduled(""); }} className="text-[11px] font-semibold text-primary">Clear</button> : null}</div>
+                    <div className="flex items-center justify-between"><span className="text-[11px] font-bold text-ink-tertiary ">Filter work orders</span>{activeFacets ? <button onClick={() => { setFAssignee(""); setFPriority(""); setFScheduled(""); }} className="text-[11px] font-semibold text-primary">Clear</button> : null}</div>
                     <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Assignee</span>
-                      <select value={fAssignee} onChange={(e) => setFAssignee(e.target.value)} className="w-full text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-medium"><option value="">Any</option><option value="__none">Unassigned</option>{assignees.map((a) => <option key={a} value={a}>{a}</option>)}</select></label>
+                      <select value={fAssignee} onChange={(e) => setFAssignee(e.target.value)} className="w-full text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-medium"><option value="">Any</option><option value="__none">Unassigned</option>{assignees.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
                     <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Priority</span>
-                      <select value={fPriority} onChange={(e) => setFPriority(e.target.value)} className="w-full text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-medium"><option value="">Any</option><option value="0">Normal</option><option value="1">High</option><option value="2">Urgent</option></select></label>
+                      <select value={fPriority} onChange={(e) => setFPriority(e.target.value)} className="w-full text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-medium"><option value="">Any</option><option value="0">Normal</option><option value="1">High</option><option value="2">Urgent</option><option value="urgent">High or urgent</option></select></label>
                     <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Scheduling</span>
                       <select value={fScheduled} onChange={(e) => setFScheduled(e.target.value as "" | "yes" | "no")} className="w-full text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-medium"><option value="">Any</option><option value="yes">Scheduled</option><option value="no">Unscheduled</option></select></label>
                   </div>
                 )}
               </div>
-              <button onClick={openArchived} className="px-3 py-1.5 rounded-lg text-xs font-medium text-ink-secondary hover:bg-slate-100 flex items-center gap-1 border border-slate-200"><M n="inventory" c="text-xs" />Archived</button>
+              <button onClick={openArchived} className="px-3 py-2 rounded-xl text-xs font-medium text-ink-secondary hover:bg-slate-100 flex items-center gap-1 border border-slate-200"><M n="inventory" c="text-xs" />Archived</button>
             </div>
             <div className="flex items-center gap-2">
               <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200/70 text-xs">
@@ -241,10 +319,10 @@ export default function WorkOrdersHub() {
               </div>
               <div className="relative"><M n="filter_alt" c="absolute left-2.5 top-1.5 text-ink-tertiary text-xs" /><input value={q} onChange={(e) => setQ(e.target.value)} className="text-xs pl-7 pr-3 py-1 rounded-lg border border-slate-200 bg-slate-50 font-medium focus:bg-white focus:outline-none" placeholder="Filter rows..." /></div>
               <div className="relative">
-                <button onClick={() => { setColsOpen((o) => !o); setViewsOpen(false); }} className="px-3 py-1.5 rounded-lg text-xs font-medium text-ink-secondary hover:bg-slate-100 border border-slate-200 flex items-center gap-1"><M n="view_column" c="text-xs" />Columns</button>
+                <button onClick={() => { setColsOpen((o) => !o); setViewsOpen(false); }} className="px-3 py-2 rounded-xl text-xs font-medium text-ink-secondary hover:bg-slate-100 border border-slate-200 flex items-center gap-1"><M n="view_column" c="text-xs" />Columns</button>
                 {colsOpen && (
                   <div className="absolute right-0 top-9 z-30 w-52 bg-white border border-slate-200 rounded-xl shadow-drawer p-2" onMouseLeave={() => setColsOpen(false)}>
-                    <div className="px-2 py-1 text-[10px] font-bold text-ink-tertiary uppercase tracking-wider">Visible columns</div>
+                    <div className="px-2 py-1 text-[11px] font-bold text-ink-tertiary ">Visible columns</div>
                     {COLS.map((c) => (
                       <label key={c.key} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer text-xs font-medium text-ink-primary">
                         <input type="checkbox" checked={showCol(c.key)} onChange={() => toggleCol(c.key)} className="accent-primary" />{c.label}
@@ -254,7 +332,7 @@ export default function WorkOrdersHub() {
                 )}
               </div>
               <div className="relative">
-                <button onClick={() => { setViewsOpen((o) => !o); setColsOpen(false); }} className="px-3 py-1.5 rounded-lg text-xs font-medium text-ink-secondary hover:bg-slate-100 border border-slate-200 flex items-center gap-1"><M n="bookmark" c="text-xs" />Saved views</button>
+                <button onClick={() => { setViewsOpen((o) => !o); setColsOpen(false); }} className="px-3 py-2 rounded-xl text-xs font-medium text-ink-secondary hover:bg-slate-100 border border-slate-200 flex items-center gap-1"><M n="bookmark" c="text-xs" />Saved views</button>
                 {viewsOpen && (
                   <div className="absolute right-0 top-9 z-30 w-60 bg-white border border-slate-200 rounded-xl shadow-drawer p-2" onMouseLeave={() => setViewsOpen(false)}>
                     <button onClick={saveView} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-blue-50/60 text-primary text-xs font-semibold"><M n="add" c="text-sm" />Save current view</button>
@@ -271,10 +349,10 @@ export default function WorkOrdersHub() {
               </div>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-1.5 pt-1 text-xs border-t border-slate-100">
-            <button onClick={() => setFilter(null)} className={!filter ? "px-3 py-1 rounded-full font-semibold bg-primary text-white text-[11px] shadow-xs" : "px-2.5 py-1 rounded-full font-medium bg-slate-100 text-ink-secondary hover:bg-slate-200 text-[11px]"}>All ({all.length})</button>
+          <div className="flex flex-wrap items-center gap-2 pt-3.5 text-xs border-t border-slate-100">
+            <button onClick={() => setFilter(null)} className={!filter ? "px-3.5 py-1.5 rounded-full font-semibold bg-primary text-white text-xs shadow-clay-sm" : "px-3.5 py-1.5 rounded-full font-medium bg-slate-50 text-ink-secondary ring-1 ring-inset ring-slate-200 hover:bg-white hover:text-ink-primary hover:ring-slate-300 text-xs transition-colors"}>All ({countAll})</button>
             {statuses.map((s) => { const k = s.key || norm(s.name); const n = countFor(k); return (
-              <button key={s.id} onClick={() => setFilter(k)} className={filter === k ? "px-3 py-1 rounded-full font-semibold bg-primary text-white text-[11px] shadow-xs" : "px-2.5 py-1 rounded-full font-medium bg-slate-100 text-ink-secondary hover:bg-slate-200 text-[11px]"}>{s.name} ({n})</button>
+              <button key={s.id} onClick={() => setFilter(k)} className={filter === k ? "px-3.5 py-1.5 rounded-full font-semibold bg-primary text-white text-xs shadow-clay-sm" : "px-3.5 py-1.5 rounded-full font-medium bg-slate-50 text-ink-secondary ring-1 ring-inset ring-slate-200 hover:bg-white hover:text-ink-primary hover:ring-slate-300 text-xs transition-colors"}>{s.name} ({n})</button>
             ); })}
           </div>
         </div>
@@ -290,17 +368,17 @@ export default function WorkOrdersHub() {
               {statuses.map((s) => <option key={s.id} value={s.key || norm(s.name)} className="text-ink-primary">{s.name}</option>)}
             </select>
             <div className="h-4 w-px bg-white/30" />
-            <button disabled={busy} onClick={bulkArchive} className="px-2.5 py-1 rounded-lg bg-white/15 hover:bg-white/25 flex items-center gap-1"><M n="archive" c="text-[13px]" />Archive</button>
+            <Gate perm="can_delete_orders"><Gate perm="can_delete_tickets"><button disabled={busy} onClick={bulkArchive} className="px-2.5 py-1 rounded-lg bg-white/15 hover:bg-white/25 flex items-center gap-1"><M n="archive" c="text-[13px]" />Archive</button></Gate></Gate>
             <button onClick={() => setSel(new Set())} className="ml-auto px-2.5 py-1 rounded-lg bg-white/15 hover:bg-white/25">Clear</button>
           </div>
         )}
 
         {/* Table */}
         {view === "table" && (
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
+        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[10px] font-bold uppercase tracking-wider">
+              <tr className="bg-slate-50/60 border-b border-slate-200/80 text-ink-tertiary text-[11px] font-semibold ">
                 <th className="py-3 px-4 w-10"><input className="rounded text-primary border-slate-300" type="checkbox" checked={rows.length > 0 && sel.size === rows.length} onChange={toggleAll} /></th>
                 {showCol("order_id") && <th className="py-3 px-4">Order ID</th>}
                 {showCol("client") && <th className="py-3 px-4">Client</th>}
@@ -317,23 +395,23 @@ export default function WorkOrdersHub() {
               {!orders && !err && <tr><td colSpan={colSpan} className="py-6 px-4 text-ink-tertiary">Loading orders…</td></tr>}
               {orders && rows.length === 0 && <tr><td colSpan={colSpan} className="py-6 px-4 text-ink-tertiary">No work orders match.</td></tr>}
               {pageRows.map((o) => (
-                <tr key={o.id} onClick={() => setOpen(o)} className={`hover:bg-blue-50/40 cursor-pointer transition-colors group ${sel.has(o.id) ? "bg-blue-50/40" : ""}`}>
-                  <td className="py-3 px-4" onClick={(e) => e.stopPropagation()}><input className="rounded text-primary border-slate-300" type="checkbox" checked={sel.has(o.id)} onChange={() => toggle(o.id)} /></td>
-                  {showCol("order_id") && <td className="py-3 px-4 font-mono font-bold text-primary"><span className="inline-flex items-center gap-1.5">{o.order_number || o.id}{!!(o.client_msg_unread && o.client_msg_unread > 0) && <span title={`${o.client_msg_unread} unread customer message(s)`} className="inline-flex items-center gap-0.5 text-[9px] font-bold bg-primary text-white px-1.5 py-0.5 rounded-full"><M n="forum" c="text-[10px]" />{o.client_msg_unread}</span>}{(o as any).checklists_pending && <span role="img" aria-label="Checklist incomplete" title="Checklist incomplete" className="w-2 h-2 rounded-full bg-amber-500" />}</span></td>}
-                  {showCol("client") && <td className="py-3 px-4"><span className="font-bold text-ink-primary">{o.client?.name || "Walk-in"}</span><span className="text-[10px] text-ink-tertiary block">{o.client?.phone || ""}</span></td>}
-                  {showCol("device") && <td className="py-3 px-4 text-ink-primary font-semibold">{deviceName(o.device)}</td>}
-                  {showCol("status") && <td className="py-3 px-4"><div className="flex items-center gap-1.5">{pill(o.status)}{flags[o.id]?.stalled && (
-                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-rose-100 text-rose-700 border border-rose-200" title={flags[o.id]?.over_by_min ? `~${Math.round(flags[o.id]!.over_by_min!)} min over typical` : "Running long"}><M n="schedule" c="text-[11px]" />Stalled</span>
+                <tr key={o.id} onClick={() => setOpen(o)} className={`hover:bg-slate-50/80 cursor-pointer transition-colors group ${sel.has(o.id) ? "bg-primary/5" : ""}`}>
+                  <td className="py-3.5 px-4" onClick={(e) => e.stopPropagation()}><input className="rounded text-primary border-slate-300" type="checkbox" checked={sel.has(o.id)} onChange={() => toggle(o.id)} /></td>
+                  {showCol("order_id") && <td className="py-3.5 px-4 font-mono font-bold text-primary"><span className="inline-flex items-center gap-1.5">{o.order_number || o.id}{!!(o.client_msg_unread && o.client_msg_unread > 0) && <span title={`${o.client_msg_unread} unread customer message(s)`} className="inline-flex items-center gap-0.5 text-[11px] font-bold bg-primary text-white px-1.5 py-0.5 rounded-full"><M n="forum" c="text-[11px]" />{o.client_msg_unread}</span>}{(o as any).checklists_pending && <span role="img" aria-label="Checklist incomplete" title="Checklist incomplete" className="w-2 h-2 rounded-full bg-amber-500" />}</span></td>}
+                  {showCol("client") && <td className="py-3.5 px-4"><span className="font-semibold text-[13px] text-ink-primary">{o.client?.name || "Walk-in"}</span><span className="text-[11px] font-normal text-ink-tertiary block">{o.client?.phone || ""}</span></td>}
+                  {showCol("device") && <td className="py-3.5 px-4 text-ink-primary font-semibold">{deviceName(o.device)}</td>}
+                  {showCol("status") && <td className="py-3.5 px-4"><div className="flex items-center gap-1.5">{pill(o.status, stOf(o))}{flags[o.id]?.stalled && (
+                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-700 border border-rose-200" title={flags[o.id]?.over_by_min ? `~${Math.round(flags[o.id]!.over_by_min!)} min over typical` : "Running long"}><M n="schedule" c="text-[11px]" />Stalled</span>
                   )}</div></td>}
-                  {showCol("assignee") && <td className="py-3 px-4">{o.assigned_to?.name || "—"}</td>}
-                  {showCol("scheduled") && <td className="py-3 px-4">{o.scheduled_for ? new Date(o.scheduled_for).toLocaleDateString() : "—"}</td>}
-                  {showCol("estimate") && <td className="py-3 px-4 text-right font-mono font-bold text-ink-primary">{money(o.total)}</td>}
-                  <td className="py-3 px-4 text-center"><button aria-label="Next" className="p-1 rounded text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="chevron_right" c="text-sm" /></button></td>
+                  {showCol("assignee") && <td className="py-3.5 px-4">{o.assigned_to?.name || "—"}</td>}
+                  {showCol("scheduled") && <td className="py-3.5 px-4">{o.scheduled_for ? new Date(o.scheduled_for).toLocaleDateString() : "—"}</td>}
+                  {showCol("estimate") && <td className="py-3.5 px-4 text-right tabular-nums font-bold text-ink-primary">{money(o.total)}</td>}
+                  <td className="py-3.5 px-4 text-center"><button aria-label="Next" className="p-1.5 rounded-lg text-ink-tertiary group-hover:text-primary group-hover:bg-primary/10 transition-colors"><M n="chevron_right" c="text-sm" /></button></td>
                 </tr>
               ))}
             </tbody>
           </table>
-          {orders && rows.length > 0 && <Pager total={rows.length} page={Math.min(woPage, woPages)} pageSize={WO_PAGE_SIZE} onPage={setWoPage} noun="work orders" />}
+          {orders && rows.length > 0 && <Pager total={total} page={Math.min(woPage, woPages)} pageSize={WO_PAGE_SIZE} onPage={setWoPage} noun="work orders" />}
         </div>
         )}
 
@@ -343,6 +421,7 @@ export default function WorkOrdersHub() {
             {statuses.map((s) => {
               const key = s.key || norm(s.name);
               const cards = rows.filter((o) => norm(o.status) === key);
+              const n = countFor(key);   // true count; the board only carries the newest open cards
               const [cls, dot] = PILL[key] || ["bg-slate-100 text-slate-700", "bg-slate-500"];
               return (
                 <div key={s.id}
@@ -351,7 +430,7 @@ export default function WorkOrdersHub() {
                   className="w-64 flex-shrink-0 bg-slate-50/70 rounded-2xl border border-slate-200/70 flex flex-col max-h-[calc(100vh-320px)]">
                   <div className="px-3 py-2.5 flex items-center justify-between border-b border-slate-200/70">
                     <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 ${cls}`}><span className={`w-1.5 h-1.5 rounded-full ${dot}`} />{s.name}</span>
-                    <span className="text-[11px] font-bold text-ink-tertiary">{cards.length}</span>
+                    <span className="text-[11px] font-bold text-ink-tertiary">{n}</span>
                   </div>
                   <div className="p-2 space-y-2 overflow-y-auto">
                     {cards.length === 0 && <div className="text-[11px] text-ink-tertiary px-2 py-4 text-center">Drop here</div>}
@@ -360,16 +439,17 @@ export default function WorkOrdersHub() {
                         className={`bg-white rounded-xl border border-slate-200/80 shadow-clay-sm p-3 cursor-grab active:cursor-grabbing hover:border-primary/40 transition-colors ${drag === o.id ? "opacity-50" : ""}`}>
                         <div className="flex items-center justify-between mb-1">
                           <span className="font-mono font-bold text-primary text-xs">{o.order_number || o.id}</span>
-                          <span className="text-[10px] text-ink-tertiary">{o.scheduled_for ? new Date(o.scheduled_for).toLocaleDateString() : ""}</span>
+                          <span className="text-[11px] text-ink-tertiary">{o.scheduled_for ? new Date(o.scheduled_for).toLocaleDateString() : ""}</span>
                         </div>
                         <div className="text-xs font-bold text-ink-primary truncate">{o.client?.name || "Walk-in"}</div>
                         <div className="text-[11px] text-ink-secondary truncate">{deviceName(o.device)}</div>
                         <div className="mt-1.5 flex items-center justify-between">
-                          <span className="text-[10px] text-ink-tertiary">{o.assigned_to?.name || "Unassigned"}</span>
-                          <span className="font-mono font-bold text-ink-primary text-xs">{money(o.total)}</span>
+                          <span className="text-[11px] text-ink-tertiary">{o.assigned_to?.name || "Unassigned"}</span>
+                          <span className="tabular-nums font-bold text-ink-primary text-xs">{money(o.total)}</span>
                         </div>
                       </div>
                     ))}
+                    {cards.length > 0 && cards.length < n && <div className="text-[11px] text-ink-tertiary px-2 py-1 text-center">Newest {cards.length} of {n}. The table shows them all.</div>}
                   </div>
                 </div>
               );
@@ -380,7 +460,7 @@ export default function WorkOrdersHub() {
         {view === "scheduler" && (() => {
           const list = sched || [];
           const sameDay = (iso: string, d: Date) => { const x = new Date(iso); return x.getFullYear() === d.getFullYear() && x.getMonth() === d.getMonth() && x.getDate() === d.getDate(); };
-          const hhmm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          const hhmm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
           const today = new Date(); today.setHours(0, 0, 0, 0);
           const step = (n: number) => setAnchor((a) => { const d = new Date(a); if (schedMode === "day") d.setDate(d.getDate() + n); else if (schedMode === "month") d.setMonth(d.getMonth() + n); else d.setDate(d.getDate() + n * 7); return d; });
           const dayItems = (d: Date) => list.filter((o) => o.scheduled_for && sameDay(o.scheduled_for, d)).sort((a, b) => a.scheduled_for.localeCompare(b.scheduled_for));
@@ -392,12 +472,12 @@ export default function WorkOrdersHub() {
               <button key={o.id} onClick={() => openCard(o)} className="w-full text-left bg-white rounded-lg border border-slate-200/80 shadow-clay-sm p-2 hover:border-primary/40 transition-colors">
                 <div className="flex items-center justify-between gap-1">
                   <span className="font-mono font-bold text-primary text-[11px] truncate">{o.order_number || o.id?.slice(0, 6)}</span>
-                  {showTime && <span className="text-[10px] font-semibold text-ink-tertiary flex-shrink-0">{hhmm(o.scheduled_for)}</span>}
+                  {showTime && <span className="text-[11px] font-semibold text-ink-tertiary flex-shrink-0">{hhmm(o.scheduled_for)}</span>}
                 </div>
                 <div className="text-[11px] font-bold text-ink-primary truncate">{o.client_name || "Walk-in"}</div>
                 <div className="mt-1 flex items-center justify-between gap-1">
-                  <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-semibold inline-flex items-center gap-1 ${cls}`}><span className={`w-1 h-1 rounded-full ${dot}`} />{(o.status || "").replace(/_/g, " ")}</span>
-                  {o.assigned_to_name && <span className="text-[9px] text-ink-tertiary truncate">{o.assigned_to_name}</span>}
+                  <span className={`px-1.5 py-0.5 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 ${cls}`}><span className={`w-1 h-1 rounded-full ${dot}`} />{stOf(o)?.name || (o.status || "").replace(/_/g, " ")}</span>
+                  {o.assigned_to_name && <span className="text-[11px] text-ink-tertiary truncate">{o.assigned_to_name}</span>}
                 </div>
               </button>
             );
@@ -428,7 +508,7 @@ export default function WorkOrdersHub() {
                   {dayItems(anchor).length === 0 && <div className="text-xs text-ink-tertiary py-8 text-center">Nothing scheduled this day.</div>}
                   {dayItems(anchor).map((o) => (
                     <div key={o.id} className="flex items-stretch gap-2">
-                      <div className="w-16 flex-shrink-0 text-right text-[11px] font-mono font-semibold text-ink-tertiary pt-2">{hhmm(o.scheduled_for)}</div>
+                      <div className="w-16 flex-shrink-0 text-right text-[11px] tabular-nums font-semibold text-ink-tertiary pt-2">{hhmm(o.scheduled_for)}</div>
                       <div className="flex-1">{Card(o, false)}</div>
                     </div>
                   ))}
@@ -443,11 +523,11 @@ export default function WorkOrdersHub() {
                     return (
                       <div key={d.toISOString()} className={`rounded-2xl border flex flex-col min-h-[200px] max-h-[calc(100vh-340px)] ${isToday ? "border-primary/40 bg-primary/5" : "border-slate-200/70 bg-slate-50/60"}`}>
                         <div className={`px-2.5 py-2 border-b text-center ${isToday ? "border-primary/30" : "border-slate-200/70"}`}>
-                          <div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">{d.toLocaleDateString([], { weekday: "short" })}</div>
-                          <div className={`text-sm font-black ${isToday ? "text-primary" : "text-ink-primary"}`}>{d.getDate()}</div>
+                          <div className="text-[11px] font-bold text-ink-tertiary">{d.toLocaleDateString([], { weekday: "short" })}</div>
+                          <div className={`text-sm font-bold ${isToday ? "text-primary" : "text-ink-primary"}`}>{d.getDate()}</div>
                         </div>
                         <div className="p-1.5 space-y-1.5 overflow-y-auto">
-                          {items.length === 0 && <div className="text-[10px] text-ink-tertiary text-center py-3">—</div>}
+                          {items.length === 0 && <div className="text-[11px] text-ink-tertiary text-center py-3">—</div>}
                           {items.map((o) => Card(o))}
                         </div>
                       </div>
@@ -460,20 +540,20 @@ export default function WorkOrdersHub() {
               {schedMode === "month" && (
                 <div>
                   <div className="grid grid-cols-7 gap-1 mb-1">
-                    {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((w) => <div key={w} className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary text-center py-1">{w}</div>)}
+                    {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((w) => <div key={w} className="text-[11px] font-bold text-ink-tertiary text-center py-1">{w}</div>)}
                   </div>
                   <div className="grid grid-cols-7 gap-1">
                     {Array.from({ length: 42 }, (_, i) => { const d = new Date(rFrom); d.setDate(d.getDate() + i); return d; }).map((d) => {
                       const items = dayItems(d); const inMonth = d.getMonth() === anchor.getMonth(); const isToday = d.getTime() === today.getTime();
                       return (
                         <div key={d.toISOString()} className={`rounded-lg border p-1 min-h-[92px] ${isToday ? "border-primary/40 bg-primary/5" : inMonth ? "border-slate-200/70 bg-white" : "border-slate-100 bg-slate-50/40"}`}>
-                          <div className={`text-[10px] font-bold mb-1 ${isToday ? "text-primary" : inMonth ? "text-ink-secondary" : "text-ink-tertiary"}`}>{d.getDate()}</div>
+                          <div className={`text-[11px] font-bold mb-1 ${isToday ? "text-primary" : inMonth ? "text-ink-secondary" : "text-ink-tertiary"}`}>{d.getDate()}</div>
                           <div className="space-y-0.5">
                             {items.slice(0, 3).map((o) => {
                               const key = norm(o.status); const [cls] = PILL[key] || ["bg-slate-100 text-slate-700"];
-                              return <button key={o.id} onClick={() => openCard(o)} className={`w-full text-left truncate rounded px-1 py-0.5 text-[9px] font-semibold ${cls}`}>{hhmm(o.scheduled_for)} {o.order_number || o.client_name || ""}</button>;
+                              return <button key={o.id} onClick={() => openCard(o)} className={`w-full text-left truncate rounded px-1 py-0.5 text-[11px] font-semibold ${cls}`}>{hhmm(o.scheduled_for)} {o.order_number || o.client_name || ""}</button>;
                             })}
-                            {items.length > 3 && <div className="text-[9px] text-ink-tertiary px-1">+{items.length - 3} more</div>}
+                            {items.length > 3 && <div className="text-[11px] text-ink-tertiary px-1">+{items.length - 3} more</div>}
                           </div>
                         </div>
                       );
@@ -492,12 +572,12 @@ export default function WorkOrdersHub() {
                   <div className="overflow-x-auto">
                     <div className="min-w-[900px]">
                       <div className="grid" style={{ gridTemplateColumns: `160px repeat(7, 1fr)` }}>
-                        <div className="px-2 py-2 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">Technician</div>
-                        {weekDays.map((d) => { const isToday = d.getTime() === today.getTime(); return <div key={d.toISOString()} className={`px-2 py-2 text-center border-l border-slate-200/60 ${isToday ? "bg-primary/5" : ""}`}><div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">{d.toLocaleDateString([], { weekday: "short" })}</div><div className={`text-xs font-black ${isToday ? "text-primary" : "text-ink-primary"}`}>{d.getDate()}</div></div>; })}
+                        <div className="px-2 py-2 text-[11px] font-bold text-ink-tertiary">Technician</div>
+                        {weekDays.map((d) => { const isToday = d.getTime() === today.getTime(); return <div key={d.toISOString()} className={`px-2 py-2 text-center border-l border-slate-200/60 ${isToday ? "bg-primary/5" : ""}`}><div className="text-[11px] font-bold text-ink-tertiary">{d.toLocaleDateString([], { weekday: "short" })}</div><div className={`text-xs font-bold ${isToday ? "text-primary" : "text-ink-primary"}`}>{d.getDate()}</div></div>; })}
                       </div>
                       {techs.map(([tid, tname]) => (
                         <div key={tid} className="grid border-t border-slate-200/60" style={{ gridTemplateColumns: `160px repeat(7, 1fr)` }}>
-                          <div className="px-2 py-2 text-xs font-bold text-ink-primary flex items-center gap-1.5"><span className="w-6 h-6 rounded-full bg-gradient-to-tr from-primary to-indigo-600 grid place-items-center text-white text-[9px] font-extrabold flex-shrink-0">{(tname || "?").slice(0, 2).toUpperCase()}</span><span className="truncate">{tname}</span></div>
+                          <div className="px-2 py-2 text-xs font-bold text-ink-primary flex items-center gap-1.5"><span className="w-6 h-6 rounded-full bg-primary grid place-items-center text-white text-[11px] font-bold flex-shrink-0">{(tname || "?").slice(0, 2).toUpperCase()}</span><span className="truncate">{tname}</span></div>
                           {weekDays.map((d) => {
                             const items = dayItems(d).filter((o) => (o.assigned_to_id || "__un") === tid);
                             const isToday = d.getTime() === today.getTime();
@@ -534,7 +614,7 @@ export default function WorkOrdersHub() {
                     <div key={o.id} className="px-4 py-2.5 flex items-center gap-3">
                       <span className="font-bold text-ink-primary font-mono">{o.order_number || o.id?.slice(0, 8)}</span>
                       <span className="flex-1 text-ink-secondary truncate">{o.client || "—"}{o.archive_reason ? ` · ${o.archive_reason}` : ""}</span>
-                      <span className="text-ink-tertiary capitalize">{(o.status || "").replace(/_/g, " ")}</span>
+                      <span className="text-ink-tertiary capitalize">{stOf(o)?.name || (o.status || "").replace(/_/g, " ")}</span>
                       <button onClick={() => restoreOne(o.id)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-primary border border-primary/30 hover:bg-primary/10"><M n="restore" c="text-[13px]" />Restore</button>
                     </div>
                   ))}

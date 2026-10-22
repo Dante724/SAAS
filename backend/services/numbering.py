@@ -112,11 +112,27 @@ async def next_number(
                              template=template, next_value=await _existing_count(db, org_id, doc_type) + 1)
         db.add(seq)
         await db.flush()
-    counter = seq.next_value
-    seq.next_value = counter + 1
-    seq.updated_at = datetime.utcnow()
-    await db.flush()
-    return render(seq.template, counter)
+    # Claim counters with an atomic UPDATE (row-locked on Postgres): reading next_value and writing
+    # +1 in Python let two concurrent documents take the same number.
+    from sqlalchemy import update
+    for _ in range(100):
+        await db.execute(update(NumberSequence).where(NumberSequence.id == seq.id)
+                         .values(next_value=NumberSequence.next_value + 1, updated_at=datetime.utcnow())
+                         .execution_options(synchronize_session=False))
+        await db.refresh(seq, attribute_names=["next_value"])
+        number = render(seq.template, seq.next_value - 1)
+        # Skip numbers already taken (legacy count-based invoices, a sequence reset in Settings).
+        if not await _number_taken(db, org_id, doc_type, number):
+            return number
+    raise RuntimeError(f"Could not find a free {doc_type} number — check the numbering settings")
+
+
+async def _number_taken(db: AsyncSession, org_id: str, doc_type: str, number: str) -> bool:
+    if doc_type != "invoice":
+        return False
+    from backend.models import Invoice
+    return (await db.execute(select(Invoice.id).where(
+        Invoice.org_id == org_id, Invoice.invoice_number == number).limit(1))).scalar_one_or_none() is not None
 
 
 async def peek_example(template: str, begins_from: int | None = None) -> str:

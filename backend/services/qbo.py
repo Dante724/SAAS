@@ -22,7 +22,7 @@ from backend.models import (
 )
 from backend.services.crypto import decrypt as _dec
 from backend.services.crypto import encrypt as _enc
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 AUTH_BASE = "https://appcenter.intuit.com/connect/oauth2"
 TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
@@ -204,6 +204,11 @@ async def autosync(db: AsyncSession, org_id: str, items: list[tuple]) -> None:
         conn = await get_connection(db, org_id)
         if not is_configured() or not conn or not conn.connected:
             return
+        from backend.models import Organisation
+        from backend.services.billing import has_feature
+        org = await db.get(Organisation, org_id)
+        if org is None or not has_feature(org, "accounting_sync"):   # a Pro feature
+            return
         for entity_type, local_id in items:
             if local_id:
                 await sync_entity(db, org_id, entity_type, local_id)
@@ -220,7 +225,7 @@ async def _remote_id(db, org_id, entity_type, local_id) -> Optional[str]:
 
 
 async def _build_payload(db, org_id, entity_type, local_id) -> Optional[dict]:
-    from backend.models import Order, OrderLine, Part
+    from backend.models import OrderLine, Part
 
     if entity_type == "contact":
         c = (await db.execute(select(Client).where(Client.id == local_id, Client.org_id == org_id))).scalar_one_or_none()
@@ -270,7 +275,8 @@ async def _build_payload(db, org_id, entity_type, local_id) -> Optional[dict]:
 
     if entity_type == "payment":
         p = (await db.execute(select(Payment).where(Payment.id == local_id))).scalar_one_or_none()
-        if not p:
+        # payments carry no org_id: only push one whose invoice, order or client is this org's
+        if not p or not await _payment_in_org(db, org_id, p):
             return None
         payload = {"TotalAmt": p.amount, "PaymentRefNum": p.reference or p.id[:8]}
         cust = await _remote_id(db, org_id, "contact", p.client_id)
@@ -278,6 +284,14 @@ async def _build_payload(db, org_id, entity_type, local_id) -> Optional[dict]:
             payload["CustomerRef"] = {"value": cust}
         return payload
     return None
+
+
+async def _payment_in_org(db: AsyncSession, org_id: str, p: Payment) -> bool:
+    from backend.models import Order
+    for model, ref in ((Invoice, p.invoice_id), (Order, p.order_id), (Client, p.client_id)):
+        if ref:
+            return (await db.execute(select(model.org_id).where(model.id == ref))).scalar_one_or_none() == org_id
+    return False
 
 
 async def _push(conn: QboConnection, entity_type: str, payload: dict, remote_id: Optional[str]) -> str:
@@ -317,7 +331,7 @@ async def _query(conn: QboConnection, sql: str) -> list[dict]:
 
 async def pull(db: AsyncSession, org_id: str, entity_type: str) -> dict:
     """Build 144ag — two-way: import existing QBO customers/items and link them to
-    RepairOS records by name/email, so future pushes *update* rather than duplicate.
+    Tekly records by name/email, so future pushes *update* rather than duplicate.
     Never creates local records; only fills the mapping table. Gated + best-effort.
     """
     from backend.models import Client, Part

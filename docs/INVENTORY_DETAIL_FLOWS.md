@@ -1,4 +1,4 @@
-# Inventory detail flows — Orderry vs RepairOS (stock · asset · PO · postings)
+# Inventory detail flows — Orderry vs Tekly (stock · asset · PO · postings)
 
 *Deep research (our Orderry screenshot/help corpus + code trace) + council brainstorm (product ×2 · tech-PM · senior-architect). Market: US · LATAM · EU. Note: live Orderry re-verification was blocked this session (help center is JS/login-gated, web-fetch timed out); Orderry facts below are from our prior primary-source capture in `docs/ORDERRY_UI_RESEARCH.md` + `PRODUCT_BLUEPRINT.md`.*
 
@@ -10,7 +10,7 @@ The scheme underneath all four is the same **document-driven stock ledger**: qua
 
 **Orderry — flow & scheme.** Click a product → card with: identity (name/SKU/barcode/category), **per-warehouse stock breakdown**, cost/price/markup, **serial-number list** (if serialized), **movement history** (every in/out with document link), **linked purchase orders**, reservations against open tickets, and "used in" (documents that consumed it). Serial tracking is per-item; money fields (cost/purchase price) are permission-scoped.
 
-**RepairOS — what we have.** `ProductDrawer` tabs: **General specs**, **Stock & pricing**, **Variants** — plus `serials_in_stock`, and now the **Compatible devices** editor (144jt). Backend already exposes far more than the drawer shows: `/parts/{id}/movements`, `/parts/{id}/batches`, `/parts/{id}/stock` (per-warehouse), `/parts/{id}/purchase-orders`, `/reservations`. We also have batch/expiry, moving-average cost, bins.
+**Tekly — what we have.** `ProductDrawer` tabs: **General specs**, **Stock & pricing**, **Variants** — plus `serials_in_stock`, and now the **Compatible devices** editor (144jt). Backend already exposes far more than the drawer shows: `/parts/{id}/movements`, `/parts/{id}/batches`, `/parts/{id}/stock` (per-warehouse), `/parts/{id}/purchase-orders`, `/reservations`. We also have batch/expiry, moving-average cost, bins.
 
 **Gap = surfacing, not capability.** The product drawer doesn't show the movement history, the linked-PO list, or reservations — all of which already exist as endpoints. Add two tabs — **Movements** (the audit trail) and **Purchasing & reservations** (linked POs + who's holding stock) — and the product card matches/beats Orderry with zero new backend.
 
@@ -20,7 +20,7 @@ The scheme underneath all four is the same **document-driven stock ledger**: qua
 
 **Orderry — flow & scheme.** Asset card = the item's life story: identity (type + VIN/IMEI/Serial), owner (client) with link, **full service-history timeline** (every ticket/visit), **warranty status**, custom fields, photos/files, prior-visit count.
 
-**RepairOS — what we have.** `assets/{id}` returns the asset + **owner + owner balance inline**, its **orders list**, and actions: `/movements`, `/transfer`, `/write-off`, `/convert-to-product`. Identifier-aware form (VIN/HIN/IMEI/Serial + lookup), per-asset noun by industry template, image, prior-visits badge on the WO.
+**Tekly — what we have.** `assets/{id}` returns the asset + **owner + owner balance inline**, its **orders list**, and actions: `/movements`, `/transfer`, `/write-off`, `/convert-to-product`. Identifier-aware form (VIN/HIN/IMEI/Serial + lookup), per-asset noun by industry template, image, prior-visits badge on the WO.
 
 **Gaps.**
 - **Warranty status** on the asset card — we store `warranty_days`/`supplier_warranty_days` on parts and capture serials, but the asset card doesn't compute "in/out of warranty" from the last qualifying repair. High-value, low effort.
@@ -34,7 +34,7 @@ The scheme underneath all four is the same **document-driven stock ledger**: qua
 
 **Orderry — flow & scheme.** Create PO (supplier + expected date + lines) → send → **receive (full or partial)** → stock posts in at cost. Reorder suggestions feed PO creation; supplier price lists; tax can apply.
 
-**RepairOS — what we have (strong, often ahead).** `PurchaseOrder` (supplier, location, po_number, status, `on_credit`, `received_cost`, `expected_at`/`ordered_at`/`received_at`, **supplier_invoice_no/date**, **charges** + **charges_to_cost** = landed cost, notes) with `POLine` carrying **qty_ordered/qty_received** (partial receive) and **reserved_order_id** (links a PO line to the WO waiting on it). Endpoints: create, **group POs**, send, receive (updates WO pending-stock + landed cost into avg cost), **reorder-list / reorder-forecast → auto-create POs / digest**. `Supplier` already has **`currency`** and **`lead_days`**.
+**Tekly — what we have (strong, often ahead).** `PurchaseOrder` (supplier, location, po_number, status, `on_credit`, `received_cost`, `expected_at`/`ordered_at`/`received_at`, **supplier_invoice_no/date**, **charges** + **charges_to_cost** = landed cost, notes) with `POLine` carrying **qty_ordered/qty_received** (partial receive) and **reserved_order_id** (links a PO line to the WO waiting on it). Endpoints: create, **group POs**, send, receive (updates WO pending-stock + landed cost into avg cost), **reorder-list / reorder-forecast → auto-create POs / digest**. `Supplier` already has **`currency`** and **`lead_days`**.
 
 **Gaps.**
 - **Multi-currency purchasing** — `Supplier.currency` exists but PO lines/receipt should price in the supplier's currency and convert to base at receipt (store base in `avg_cost`, keep original on the PO). The RegionPack currency layer (144jr) is the natural home. Global-market essential.
@@ -48,7 +48,7 @@ The scheme underneath all four is the same **document-driven stock ledger**: qua
 
 **Orderry — flow & scheme.** A posting is a stock-in document: pick warehouse + supplier + reference, add lines with purchase price; **tax applies to postings** (its own tax stack, separate from sales); posting raises quantity + sets cost, writes movements, and can carry a reason.
 
-**RepairOS — what we have.** `/inventory/postings` — bulk inflow with per-line purchase price + **optional markup% that auto-sets sell price**, updates **moving-average cost**, records a **movement per line**, ties to a supplier + note/reference. Plus `stock_docs`: **write-offs** (with reasons + suggestions), **returns**, and a separate postings surface.
+**Tekly — what we have.** `/inventory/postings` — bulk inflow with per-line purchase price + **optional markup% that auto-sets sell price**, updates **moving-average cost**, records a **movement per line**, ties to a supplier + note/reference. Plus `stock_docs`: **write-offs** (with reasons + suggestions), **returns**, and a separate postings surface.
 
 **Gaps.**
 - **Tax on postings** — the tax engine has a `posting` doc-family (per `BUILD_ROADMAP_PARITY.md` `TaxRule.doc_family=posting`), but the posting create path doesn't apply it. Wire posting tax so landed cost/valuation is tax-correct where postings are taxed (EU/LATAM).

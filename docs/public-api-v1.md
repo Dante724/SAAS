@@ -1,6 +1,6 @@
-# RepairOS Public API v1
+# Tekly Public API v1
 
-A token-authenticated REST API for integrating RepairOS with external systems
+A token-authenticated REST API for integrating Tekly with external systems
 (storefronts, BI tools, custom apps). Base path: `/api/v1`.
 
 Interactive OpenAPI docs are served at `/docs` (Swagger UI) and the raw schema at

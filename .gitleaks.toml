@@ -1,0 +1,12 @@
+# gitleaks configuration — the CI job scans the full history with these rules.
+# Keep every default rule; only exempt values that are fixtures by construction.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures and CI-only placeholder keys (never real credentials)"
+# Backend tests sign up throwaway users with literal passwords ("pw-…", "123…"); the
+# generic-api-key rule flags every `"password": "…"` in a request body.
+paths = ['''^backend/tests/''']
+# The e2e job boots the app with a fixed, CI-only SECRET_KEY (prefix ci-e2e-).
+regexes = ['''ci-e2e[A-Za-z0-9_-]*''']
