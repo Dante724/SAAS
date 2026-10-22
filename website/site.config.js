@@ -67,7 +67,7 @@ window.TEKLY_SITE = {
       seats: "8 team members shared across your locations · unlimited jobs",
       cta: "Start free trial",
       featured: true,
-      badge: "Most popular",
+      badge: "Best for most shops",
       features: [
         "Everything in Solo",
         "Inventory, stock and suppliers",
@@ -84,7 +84,7 @@ window.TEKLY_SITE = {
       monthly: 129,
       extraLocation: 79,
       unit: "for the first location, per month",
-      seats: "Unlimited team members, locations and jobs",
+      seats: "Unlimited team members and jobs",
       cta: "Start free trial",
       features: [
         "Everything in Shop",
