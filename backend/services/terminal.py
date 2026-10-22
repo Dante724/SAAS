@@ -83,13 +83,13 @@ async def provider_creds(db: AsyncSession, org_id: str, provider: str) -> dict:
         return {}
     from backend.services import org_creds
     try:
-        creds = await org_creds.effective(db, org_id, provider)
+        creds = await org_creds.effective(db, org_id, provider, own_only=True)   # review P8
     except payment_guard.LivePaymentsRefused as e:
         raise TerminalError(403, str(e)) from e
     if provider == "stripe" and not creds.get("secret_key"):
-        raise TerminalError(400, "Add your Stripe keys in Settings › Integrations first.")
+        raise TerminalError(400, "Add your own Stripe keys in Settings › Integrations first.")
     if provider == "square" and not creds.get("access_token"):
-        raise TerminalError(400, "Add your Square keys in Settings › Integrations first.")
+        raise TerminalError(400, "Add your own Square keys in Settings › Integrations first.")
     return creds
 
 
@@ -98,7 +98,7 @@ async def readiness(db: AsyncSession, org_id: str) -> dict:
     from backend.services import org_creds
     out = {}
     for p in ("stripe", "square"):
-        c = await org_creds.effective(db, org_id, p, read_only=True)
+        c = await org_creds.effective(db, org_id, p, read_only=True, own_only=True)
         configured = bool(c.get("secret_key") if p == "stripe" else c.get("access_token"))
         live = payment_guard.creds_are_live(p, c)
         out[p] = {"configured": configured, "test_mode": payment_guard.test_mode(p, c),
@@ -106,6 +106,9 @@ async def readiness(db: AsyncSession, org_id: str) -> dict:
     out["simulated"] = {"configured": not settings.is_deployed, "test_mode": True, "live_refused": False}
     live_any = any(v["configured"] and not v["test_mode"] for v in out.values())
     return {"providers": out, "test_mode": not live_any,
+            # Review S8: each shop registers its own webhook URL, verified before any lookup.
+            "webhook_paths": {"stripe": f"/api/payments/stripe/webhook/{org_id}",
+                              "square": f"/api/payments/square/webhook/{org_id}"},
             "square_sandbox_devices": SQUARE_SANDBOX_DEVICES,
             "stripe_test_registration_code": STRIPE_TEST_REGISTRATION_CODE}
 
@@ -217,6 +220,11 @@ async def register_reader(db: AsyncSession, org_id: str, *, provider: str, label
         PaymentTerminal.reader_id == reader_id))).scalar_one_or_none()
     if t and t.active:
         raise TerminalError(409, "That reader is already registered.")
+    if not test and (await db.execute(select(PaymentTerminal.id).where(
+            PaymentTerminal.provider == provider, PaymentTerminal.reader_id == reader_id,
+            PaymentTerminal.org_id != org_id, PaymentTerminal.test_mode == False))).first():  # noqa: E712
+        # Review P8: a real reader is one shop's (sandbox test devices are shared by design).
+        raise TerminalError(409, "That reader is registered to another shop.")
     if not t:
         t = PaymentTerminal(org_id=org_id, provider=provider, reader_id=reader_id)
         db.add(t)
@@ -498,6 +506,13 @@ async def settle_succeeded(db: AsyncSession, ch: TerminalCharge, *, provider_pay
     if ch.order_id:
         o = (await db.execute(select(Order).where(
             Order.id == ch.order_id, Order.org_id == ch.org_id).with_for_update())).scalar_one()
+        # Review M4b: the card may be approved after the order was paid another way (cash, a pay
+        # link, a credit note). The money was taken, so it is recorded, but staff must look.
+        from backend.services.order_money import balance_due
+        owed = await balance_due(db, o)
+        if ch.amount > owed + 0.005:
+            note = (f" This is {q2(ch.amount - owed):.2f} more than was still owed ({owed:.2f}): "
+                    "check for a double payment and refund if needed.")
         # Same poster as the Take payment dialog (routers/cash.post_order_payment). Captured money
         # is always recorded, so the backdating rule (a staff-entry check) doesn't apply here.
         from backend.routers.cash import post_order_payment
@@ -508,21 +523,26 @@ async def settle_succeeded(db: AsyncSession, ch: TerminalCharge, *, provider_pay
             comment=f"Card reader payment for {o.order_number}", check_backdating=False)
         ch.payment_id = pay.id
         if prior in FINAL_FAILED:
-            note = " It had been marked as " + prior + ": check for a double payment."
+            note += " It had been marked as " + prior + ": check for a double payment."
         await log_system_event(db, ch.org_id, "order", o.id,
                                f"Card reader payment {ch.amount:.2f}{tip_note} on {t.label}.{note}")
     else:
         s = (await db.execute(select(Sale).where(
             Sale.id == ch.sale_id, Sale.org_id == ch.org_id).with_for_update())).scalar_one()
-        if s.paid or s.voided_at or prior in FINAL_FAILED:
+        if s.voided_at:
+            # Review M6: the sale was deleted while the card was on the reader. Its books are
+            # already reversed, so nothing is posted; the money must go back to the card.
+            note = " The sale had already been deleted, so nothing was booked: refund this card payment."
+        elif s.paid or prior in FINAL_FAILED:
             note = " Check for a double payment and refund if needed."
-        if acc:
+        if acc and not s.voided_at:
             await post_transaction(db, ch.org_id, acc.id, "income", abs(ch.amount),
                                    comment=f"Sale {s.sale_number} (card reader)", ref_type="sale",
                                    ref_id=s.id, employee_id=ch.created_by_id)
             await _post_fee(db, ch, acc, "sale", s.id, s.sale_number)
             s.account_id = s.account_id or acc.id
-        s.paid = True
+        if not s.voided_at:
+            s.paid = True
         await log_system_event(db, ch.org_id, "sale", s.id,
                                f"Card reader payment {ch.amount:.2f}{tip_note} on {t.label}.{note}")
     ch.status = "succeeded"
@@ -588,9 +608,9 @@ async def cancel(db: AsyncSession, ch: TerminalCharge) -> TerminalCharge:
 
 
 async def simulate(db: AsyncSession, ch: TerminalCharge, outcome: str) -> TerminalCharge:
-    """QA helper (never in production): present a test card on a simulated reader."""
-    if settings.is_production:
-        raise TerminalError(403, "Simulated cards are disabled in production.")
+    """QA helper (local development and tests only): present a test card on the reader."""
+    if settings.is_deployed:   # review S5: same gate as the rest of the simulated flow
+        raise TerminalError(403, "Test cards can only be presented on a local development server.")
     if outcome not in ("approve", "decline"):
         raise TerminalError(422, "Outcome must be approve or decline.")
     if ch.status not in OPEN:
@@ -614,8 +634,6 @@ async def simulate(db: AsyncSession, ch: TerminalCharge, outcome: str) -> Termin
 async def refund(db: AsyncSession, ch: TerminalCharge, *, amount: Optional[float], actor_id: str) -> TerminalCharge:
     if ch.status != "succeeded":
         raise TerminalError(409, "Only an approved charge can be refunded.")
-    if ch.sale_id and (await db.execute(select(Sale.voided_at).where(Sale.id == ch.sale_id))).scalar():
-        raise TerminalError(409, "This sale was deleted, so its takings were already reversed.")
     left = q2((ch.amount or 0) - (ch.refunded_amount or 0))
     amount = q2(left if amount is None else amount)
     if amount <= 0:
@@ -686,11 +704,25 @@ async def _post_refund(db: AsyncSession, ch: TerminalCharge, amount: float, ref:
         await log_system_event(db, ch.org_id, "order", o.id, f"Card reader refund {amount:.2f}")
     else:
         s = (await db.execute(select(Sale).where(Sale.id == ch.sale_id))).scalar_one()
+        if s.voided_at:
+            # A deleted sale's books are reversed and a charge settled afterwards booked nothing
+            # (delete_sale refuses while card money is unrefunded or a charge is open), so only the
+            # card is refunded here (review M6).
+            await log_system_event(db, ch.org_id, "sale", s.id,
+                                   f"Card reader refund {amount:.2f} (sale was deleted; nothing to reverse)")
+            return
         if acc_id:
             await post_transaction(db, ch.org_id, acc_id, "expense", -abs(amount),
                                    comment=f"Card refund sale {s.sale_number}", ref_type="sale",
                                    ref_id=s.id, employee_id=actor_id)
         await log_system_event(db, ch.org_id, "sale", s.id, f"Card reader refund {amount:.2f}")
+
+
+async def open_sale_charge(db: AsyncSession, sale_id: str) -> bool:
+    """A reader charge for this sale is still waiting for the card (or being recorded)."""
+    return (await db.execute(select(TerminalCharge.id).where(
+        TerminalCharge.sale_id == sale_id,
+        TerminalCharge.status.in_(OPEN + ("processing",))))).first() is not None
 
 
 async def unrefunded_sale_card_payment(db: AsyncSession, sale_id: str) -> float:
@@ -701,11 +733,14 @@ async def unrefunded_sale_card_payment(db: AsyncSession, sale_id: str) -> float:
 
 
 # ── Webhooks ─────────────────────────────────────────────────────────────────
-async def find_charge(db: AsyncSession, provider: str, provider_ref: Optional[str]) -> Optional[TerminalCharge]:
+async def find_charge(db: AsyncSession, provider: str, provider_ref: Optional[str],
+                      org_id: Optional[str] = None) -> Optional[TerminalCharge]:
     if not provider_ref:
         return None
-    return (await db.execute(select(TerminalCharge).where(
-        TerminalCharge.provider == provider, TerminalCharge.provider_ref == provider_ref))).scalar_one_or_none()
+    q = select(TerminalCharge).where(TerminalCharge.provider == provider, TerminalCharge.provider_ref == provider_ref)
+    if org_id:
+        q = q.where(TerminalCharge.org_id == org_id)
+    return (await db.execute(q)).scalar_one_or_none()
 
 
 async def claim_event(db: AsyncSession, provider: str, event_id: str, org_id: str) -> bool:

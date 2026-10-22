@@ -4,6 +4,7 @@
 - terminal_charges: each charge attempt on a reader, settled once into the cash system.
 - payment_webhook_events: provider event ids already applied, so redeliveries are no-ops.
 - payments.provider_ref: the provider's id for a payment taken on a reader.
+- uq_payment_terminal_live_reader: a live reader belongs to one shop (sandbox devices are shared).
 
 Revision ID: opf1
 Revises: opb1
@@ -39,6 +40,8 @@ def upgrade() -> None:
     )
     op.create_index("ix_payment_terminals_org_id", "payment_terminals", ["org_id"])
     op.create_index("ix_payment_terminals_location_id", "payment_terminals", ["location_id"])
+    op.create_index("uq_payment_terminal_live_reader", "payment_terminals", ["provider", "reader_id"], unique=True,
+                    sqlite_where=sa.text("test_mode = 0"), postgresql_where=sa.text("NOT test_mode"))
 
     op.create_table(
         "terminal_charges",
@@ -99,6 +102,7 @@ def downgrade() -> None:
     for col in ("org_id", "terminal_id", "provider_ref", "order_id", "sale_id", "created_at"):
         op.drop_index(f"ix_terminal_charges_{col}", table_name="terminal_charges")
     op.drop_table("terminal_charges")
+    op.drop_index("uq_payment_terminal_live_reader", table_name="payment_terminals")
     op.drop_index("ix_payment_terminals_location_id", table_name="payment_terminals")
     op.drop_index("ix_payment_terminals_org_id", table_name="payment_terminals")
     op.drop_table("payment_terminals")

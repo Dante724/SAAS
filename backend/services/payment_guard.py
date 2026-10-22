@@ -29,11 +29,16 @@ def creds_are_live(provider: str, creds: dict) -> bool:
         return is_live_stripe_key(creds.get("secret_key"))
     if provider == "square":
         return is_live_square(creds)
+    if provider == "sumup":
+        # SumUp keys carry no test/live marker and sandbox merchants use the same API, so any
+        # SumUp key is treated as one that can take real money (review S1).
+        return bool((creds.get("api_key") or "").strip())
     return False
 
 
 def refusal_message(provider: str) -> str:
-    what = {"stripe": "Live Stripe keys", "square": "Square's production environment"}.get(provider, "Live keys")
+    what = {"stripe": "Live Stripe keys", "square": "Square's production environment",
+            "sumup": "SumUp keys (SumUp has no separate test keys)"}.get(provider, "Live keys")
     return (f"{what} can't be used here. This server only takes test payments. "
             "Live payments need ENVIRONMENT=production and ALLOW_LIVE_PAYMENTS=true.")
 

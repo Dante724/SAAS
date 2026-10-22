@@ -12,6 +12,7 @@ import uuid
 
 import httpx
 import pytest
+import pytest_asyncio
 from sqlalchemy import func, select
 
 from backend.config import settings
@@ -104,23 +105,30 @@ class FakeSquare:
         return httpx.Response(404, json={"errors": [{"detail": "unmocked"}]})
 
 
-@pytest.fixture
-def stripe(monkeypatch):
+async def _save_creds(client, h, provider, data):
+    r = await client.put("/api/integrations/credentials", json={"provider": provider, "data": data}, headers=h)
+    assert r.status_code == 200, r.text
+
+
+@pytest_asyncio.fixture
+async def stripe(monkeypatch, client, tenant):
+    """The shop's OWN Stripe test keys (card readers never use the operator env keys, review P8)."""
     fake = FakeStripe()
-    monkeypatch.setattr(settings, "STRIPE_SECRET_KEY", "sk_test_fake", raising=False)
     monkeypatch.setattr(settings, "STRIPE_WEBHOOK_SECRET", "whsec_fake", raising=False)
     monkeypatch.setattr(svc, "_TRANSPORT", httpx.MockTransport(fake))
+    await _save_creds(client, tenant, "stripe", {"secret_key": "sk_test_fake", "webhook_secret": "whsec_fake"})
     return fake
 
 
-@pytest.fixture
-def square(monkeypatch):
+@pytest_asyncio.fixture
+async def square(monkeypatch, client, tenant):
     fake = FakeSquare()
-    monkeypatch.setattr(settings, "SQUARE_ACCESS_TOKEN", "sq-sandbox-token", raising=False)
     monkeypatch.setattr(settings, "SQUARE_ENV", "sandbox", raising=False)
     monkeypatch.setattr(settings, "SQUARE_WEBHOOK_SIGNATURE_KEY", "sq-sig-key", raising=False)
     monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "https://shop.example", raising=False)
     monkeypatch.setattr(svc, "_TRANSPORT", httpx.MockTransport(fake))
+    await _save_creds(client, tenant, "square", {"access_token": "sq-sandbox-token", "env": "sandbox",
+                                                  "webhook_signature_key": "sq-sig-key"})
     return fake
 
 
@@ -284,7 +292,7 @@ async def test_webhook_signature_invalid_or_missing_is_rejected(client, tenant, 
     assert await _payments(db, oid) == []
     # An intent we never sent to a reader (e.g. behind a hosted checkout) is acknowledged and ignored.
     other = await _stripe_event(client, "payment_intent.succeeded", {"id": "pi_unknown", "status": "succeeded"})
-    assert other.status_code == 200 and other.json()["unmatched"]
+    assert other.status_code == 200 and other.json() == {"ok": True}
 
 
 @pytest.mark.asyncio
@@ -561,8 +569,17 @@ async def test_square_canceled_by_buyer_via_poll(client, tenant, square):
 
 # ── F4: guardrail ────────────────────────────────────────────────────────────
 @pytest.mark.asyncio
-async def test_live_stripe_key_refused_outside_production(client, tenant, stripe, monkeypatch):
+async def test_live_stripe_key_refused_outside_production(client, tenant, stripe, monkeypatch, db):
     monkeypatch.setattr(settings, "STRIPE_SECRET_KEY", "sk_live_real")
+    # A live key already stored for the shop (e.g. saved before the guard existed).
+    from backend.models import OrgIntegrationCredential
+    from backend.services import org_creds
+    me = (await client.get("/api/auth/me", headers=tenant)).json()
+    row = (await db.execute(select(OrgIntegrationCredential).where(
+        OrgIntegrationCredential.org_id == me["org_id"], OrgIntegrationCredential.provider == "stripe"))).scalar_one()
+    row.data_enc = org_creds._encrypt({"secret_key": "sk_live_real"})
+    await db.commit()
+    stripe.calls.clear()
     r = await client.post("/api/payments/terminal/readers", json={"provider": "stripe", "label": "x"}, headers=tenant)
     assert r.status_code == 403 and "ALLOW_LIVE_PAYMENTS" in r.json()["detail"]
     assert stripe.calls == []                                    # never reached Stripe
@@ -760,13 +777,248 @@ async def test_lookup_is_tenant_scoped_and_permissioned(client, tenant):
     assert (await client.get("/api/sales/lookup?code=ONLY-MINE", headers=cashier)).status_code == 403
 
 
+# ── Integration review fixes (M4b, M6, S1, S5, S6, S8, S9, P8) ───────────────
+@pytest.mark.asyncio
+async def test_m4b_settling_more_than_owed_is_flagged(client, tenant, stripe, db):
+    """The card is approved after the order was paid another way: recorded, but flagged."""
+    from backend.models import EventFeedItem, Order
+    await _card_account(client, tenant)
+    t = await _reader(client, tenant)
+    oid = await _order(client, tenant, 100)
+    ch = (await _charge(client, tenant, t["id"], order_id=oid)).json()
+    o = (await db.execute(select(Order).where(Order.id == oid))).scalar_one()
+    db.add(Payment(order_id=oid, client_id=o.client_id, method="cash", kind="payment", amount=100))
+    await db.commit()
+    pi = dict(stripe.pi[ch["provider_ref"]], status="succeeded", amount_received=10000)
+    assert (await _stripe_event(client, "payment_intent.succeeded", pi)).json()["status"] == "succeeded"
+    msgs = [e.body for e in (await db.execute(select(EventFeedItem).where(EventFeedItem.entity_id == oid))).scalars()]
+    assert any("more than was still owed" in (m or "") for m in msgs), msgs
+
+
+@pytest.mark.asyncio
+async def test_m6_sale_cannot_be_deleted_while_reader_waits(client, tenant):
+    await _card_account(client, tenant)
+    t = await _reader(client, tenant, provider="simulated")
+    sid = await _sale(client, tenant)
+    await _charge(client, tenant, t["id"], sale_id=sid)
+    r = await client.delete(f"/api/sales/{sid}", headers=tenant)
+    assert r.status_code == 409 and "waiting" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_m6_payment_after_sale_deletion_books_nothing_and_can_be_refunded(client, tenant, db):
+    from datetime import datetime as _dt
+    await _card_account(client, tenant)
+    t = await _reader(client, tenant, provider="simulated")
+    sid = await _sale(client, tenant)
+    ch = (await _charge(client, tenant, t["id"], sale_id=sid)).json()
+    sale = (await db.execute(select(Sale).where(Sale.id == sid))).scalar_one()
+    sale.voided_at = _dt.utcnow()            # deleted while the card was on the reader (race)
+    await db.commit()
+    r = await client.post(f"/api/payments/terminal/charges/{ch['id']}/simulate", json={"outcome": "approve"}, headers=tenant)
+    assert r.json()["status"] == "succeeded"
+    db.expire_all()
+    assert (await db.execute(select(Sale.paid).where(Sale.id == sid))).scalar() is False
+    txns = (await db.execute(select(Transaction).where(Transaction.ref_id == sid))).scalars().all()
+    assert txns == []                                                  # no income on a deleted sale
+    r = await client.post(f"/api/payments/terminal/charges/{ch['id']}/refund", json={}, headers=tenant)
+    assert r.status_code == 200 and r.json()["refunded_amount"] == 25
+    assert (await db.execute(select(Transaction).where(Transaction.ref_id == sid))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_s1_sumup_keys_are_treated_as_live(client, tenant, monkeypatch):
+    from backend.services import payment_guard as g
+    assert g.creds_are_live("sumup", {"api_key": "sup_sk_x"}) is True
+    r = await client.put("/api/integrations/credentials", json={
+        "provider": "sumup", "data": {"api_key": "sup_sk_x", "merchant_code": "M1"}}, headers=tenant)
+    assert r.status_code == 422
+    monkeypatch.setattr(settings, "SUMUP_API_KEY", "sup_sk_env")
+    monkeypatch.setattr(settings, "SUMUP_MERCHANT_CODE", "M1")
+    cfg = (await client.get("/api/payments/config", headers=tenant)).json()
+    assert cfg["available"]["sumup"] is False
+    oid = await _order(client, tenant, 10)
+    r = await client.post("/api/payments/checkout", json={"order_id": oid, "amount": 10}, headers=tenant)
+    assert r.status_code == 502 and "SumUp" in r.json()["detail"]
+    # With live payments switched on in production, SumUp works.
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ALLOW_LIVE_PAYMENTS", True)
+    g.assert_allowed("sumup", {"api_key": "sup_sk_x"})
+
+
+@pytest.mark.asyncio
+async def test_s5_test_cards_refused_on_staging(client, tenant, stripe, monkeypatch):
+    await _card_account(client, tenant)
+    t = await _reader(client, tenant)
+    oid = await _order(client, tenant, 100)
+    ch = (await _charge(client, tenant, t["id"], order_id=oid)).json()
+    monkeypatch.setattr(settings, "ENVIRONMENT", "staging")
+    r = await client.post(f"/api/payments/terminal/charges/{ch['id']}/simulate", json={"outcome": "approve"}, headers=tenant)
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_s6_env_fallback_key_goes_through_the_guard(monkeypatch, db, client, tenant):
+    """A shop row without a secret key used to fall back to settings.STRIPE_SECRET_KEY unchecked."""
+    from backend.models import PaymentIntent
+    from backend.services.payment_guard import LivePaymentsRefused
+    from backend.services.payments import StripeGateway
+    called = []
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: called.append(1))
+    monkeypatch.setattr(settings, "STRIPE_SECRET_KEY", "sk_live_env")
+    me = (await client.get("/api/auth/me", headers=tenant)).json()
+    intent = PaymentIntent(org_id=me["org_id"], provider="stripe", amount=5, currency="usd", status="created")
+    with pytest.raises(LivePaymentsRefused):
+        await StripeGateway({"success_url": "https://shop.example/ok"}).create_checkout(intent=intent, description="d")
+    assert called == []
+
+
+@pytest.mark.asyncio
+async def test_s8_unmatched_and_unsigned_look_the_same(client, tenant, stripe):
+    await _card_account(client, tenant)
+    t = await _reader(client, tenant)
+    oid = await _order(client, tenant, 100)
+    ch = (await _charge(client, tenant, t["id"], order_id=oid)).json()
+    known = dict(stripe.pi[ch["provider_ref"]], status="succeeded", amount_received=10000)
+    unknown = {"id": "pi_nope", "status": "succeeded"}
+    a = await _stripe_event(client, "payment_intent.succeeded", known, sig=False)
+    b = await _stripe_event(client, "payment_intent.succeeded", unknown, sig=False)
+    assert (a.status_code, a.json()) == (b.status_code, b.json()) == (400, {"detail": "Invalid signature"})
+    # A checkout for an unknown intent no longer answers 404.
+    raw = json.dumps({"type": "checkout.session.completed", "data": {"object": {"client_reference_id": "nope"}}}).encode()
+    r = await client.post("/api/payments/stripe/webhook", content=raw, headers={"content-type": "application/json"})
+    assert (r.status_code, r.json()) == (400, {"detail": "Invalid signature"})
+
+
+@pytest.mark.asyncio
+async def test_s8_shop_url_verifies_before_lookup_and_stays_in_the_shop(client, tenant, stripe, db, monkeypatch):
+    monkeypatch.setattr(settings, "STRIPE_WEBHOOK_SECRET", "")
+    await _card_account(client, tenant)
+    t = await _reader(client, tenant)
+    oid = await _order(client, tenant, 100)
+    ch = (await _charge(client, tenant, t["id"], order_id=oid)).json()
+    me = (await client.get("/api/auth/me", headers=tenant)).json()
+    other = await _tenant(client)
+    them = (await client.get("/api/auth/me", headers=other)).json()
+    await _save_creds(client, other, "stripe", {"secret_key": "sk_test_other", "webhook_secret": "whsec_other"})
+    pi = dict(stripe.pi[ch["provider_ref"]], status="succeeded", amount_received=10000)
+
+    async def post(org, secret):
+        raw = json.dumps({"id": f"evt_{uuid.uuid4().hex[:6]}", "type": "payment_intent.succeeded",
+                          "data": {"object": pi}}).encode()
+        return await client.post(f"/api/payments/stripe/webhook/{org}", content=raw,
+                                 headers={"content-type": "application/json", "stripe-signature": _stripe_sig(raw, secret)})
+    # Another shop's own secret on its own URL verifies, but cannot reach our charge.
+    r = await post(them["org_id"], "whsec_other")
+    assert r.json() == {"ok": True} and await _payments(db, oid) == []
+    # Unknown shop or wrong secret: same 400 as anything unsigned (as on staging/production, where
+    # a shop without a signing secret is never accepted unsigned).
+    from backend.core import webhook_security
+    monkeypatch.setattr(webhook_security, "unsigned_webhooks_allowed", lambda: False)
+    assert (await post("no-such-org", "whsec_fake")).json() == {"detail": "Invalid signature"}
+    assert (await post(me["org_id"], "whsec_other")).json() == {"detail": "Invalid signature"}
+    r = await post(me["org_id"], "whsec_fake")
+    assert r.json()["status"] == "succeeded" and len(await _payments(db, oid)) == 1
+    cfg = (await client.get("/api/payments/terminal/config", headers=tenant)).json()
+    assert cfg["webhook_paths"]["stripe"] == f"/api/payments/stripe/webhook/{me['org_id']}"
+
+
+@pytest.mark.asyncio
+async def test_s8_square_shop_url_signs_its_own_path(client, tenant, square, db):
+    await _card_account(client, tenant)
+    t = await _reader(client, tenant, provider="square", device_id=SQ_OK_DEVICE)
+    oid = await _order(client, tenant, 20)
+    ch = (await _charge(client, tenant, t["id"], order_id=oid)).json()
+    me = (await client.get("/api/auth/me", headers=tenant)).json()
+    path = f"/api/payments/square/webhook/{me['org_id']}"
+    done = dict(square.checkouts[ch["provider_ref"]], status="COMPLETED", payment_ids=["sqpay_1"])
+    raw = json.dumps({"event_id": "sq-x", "type": "terminal.checkout.updated",
+                      "data": {"object": {"checkout": done}}}).encode()
+    legacy_sig = _sq_sig(raw)                                    # signed for the old URL: wrong here
+    r = await client.post(path, content=raw, headers={"content-type": "application/json",
+                                                       "x-square-hmacsha256-signature": legacy_sig})
+    assert r.status_code == 400
+    sig = base64.b64encode(hmac.new(b"sq-sig-key", ("https://shop.example" + path).encode() + raw,
+                                     hashlib.sha256).digest()).decode()
+    r = await client.post(path, content=raw, headers={"content-type": "application/json",
+                                                       "x-square-hmacsha256-signature": sig})
+    assert r.json()["status"] == "succeeded" and len(await _payments(db, oid)) == 1
+
+
+@pytest.mark.asyncio
+async def test_s8_pay_page_refresh_polls_the_provider_at_most_every_few_seconds(client, tenant, db, monkeypatch):
+    from backend.models import PaymentIntent
+    from backend.services import payments as pay
+    me = (await client.get("/api/auth/me", headers=tenant)).json()
+    i = PaymentIntent(org_id=me["org_id"], provider="sumup", provider_ref="chk", amount=5, status="pending")
+    db.add(i)
+    await db.commit()
+    polls = []
+
+    async def fake_refresh(_db, intent):
+        polls.append(intent.id)
+        return intent
+    monkeypatch.setattr(pay, "refresh_intent", fake_refresh)
+    for _ in range(5):
+        assert (await client.post(f"/api/payments/intents/{i.id}/refresh")).status_code == 200
+    assert polls == [i.id]
+    codes = [(await client.post(f"/api/payments/intents/{i.id}/refresh")).status_code for _ in range(60)]
+    assert 429 in codes
+
+
+@pytest.mark.asyncio
+async def test_s9_any_v1_signature_may_match_during_secret_rotation():
+    from backend.routers.payments import _verify_stripe_sig
+    raw = b'{"id":"evt_1"}'
+    good = _stripe_sig(raw, "whsec_new").split(",")              # ["t=..", "v1=<new>"]
+    old = "v1=" + "0" * 64
+    assert _verify_stripe_sig(raw, ",".join([good[0], good[1], old]), "whsec_new")
+    assert _verify_stripe_sig(raw, ",".join([good[0], old, good[1]]), "whsec_new")
+    assert not _verify_stripe_sig(raw, ",".join([good[0], old]), "whsec_new")
+
+
+@pytest.mark.asyncio
+async def test_p8_readers_never_use_the_operator_env_keys(client, tenant, monkeypatch):
+    monkeypatch.setattr(settings, "STRIPE_SECRET_KEY", "sk_test_operator")
+    r = await client.post("/api/payments/terminal/readers", json={"provider": "stripe", "label": "x"}, headers=tenant)
+    assert r.status_code == 400 and "own Stripe keys" in r.json()["detail"]
+    cfg = (await client.get("/api/payments/terminal/config", headers=tenant)).json()
+    assert cfg["providers"]["stripe"]["configured"] is False
+
+
+@pytest.mark.asyncio
+async def test_p8_a_live_reader_belongs_to_one_shop(client, tenant, monkeypatch, db):
+    from sqlalchemy.exc import IntegrityError
+
+    from backend.models import PaymentTerminal
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ALLOW_LIVE_PAYMENTS", True)
+    other = await _tenant(client)
+    for h in (tenant, other):
+        await _save_creds(client, h, "square", {"access_token": "sq-live", "env": "production"})
+    body = {"provider": "square", "label": "Till", "device_id": "LIVE-DEVICE-1"}
+    assert (await client.post("/api/payments/terminal/readers", json=body, headers=tenant)).status_code == 201
+    r = await client.post("/api/payments/terminal/readers", json=body, headers=other)
+    assert r.status_code == 409 and "another shop" in r.json()["detail"]
+    # The database refuses it too; sandbox (test) devices may be shared.
+    them = (await client.get("/api/auth/me", headers=other)).json()
+    db.add(PaymentTerminal(org_id=them["org_id"], provider="square", reader_id="LIVE-DEVICE-1", label="x",
+                           test_mode=False))
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
+    for o in (them["org_id"], (await client.get("/api/auth/me", headers=tenant)).json()["org_id"]):
+        db.add(PaymentTerminal(org_id=o, provider="square", reader_id=SQ_OK_DEVICE, label="x", test_mode=True))
+    await db.commit()
+
+
 # ── Live sandbox smoke tests (skipped unless real test credentials are present) ──
 @pytest.mark.asyncio
 @pytest.mark.skipif(not os.environ.get("STRIPE_TEST_SECRET_KEY", "").startswith("sk_test_"),
                     reason="set STRIPE_TEST_SECRET_KEY=sk_test_… to run against Stripe's test mode")
 async def test_live_stripe_sandbox_simulated_reader_roundtrip(client, tenant, monkeypatch):
-    monkeypatch.setattr(settings, "STRIPE_SECRET_KEY", os.environ["STRIPE_TEST_SECRET_KEY"])
     monkeypatch.setattr(svc, "_TRANSPORT", None)
+    await _save_creds(client, tenant, "stripe", {"secret_key": os.environ["STRIPE_TEST_SECRET_KEY"]})
     await _card_account(client, tenant)
     t = await _reader(client, tenant)
     oid = await _order(client, tenant, 12)
@@ -785,9 +1037,8 @@ async def test_live_stripe_sandbox_simulated_reader_roundtrip(client, tenant, mo
 @pytest.mark.skipif(not os.environ.get("SQUARE_SANDBOX_TOKEN"),
                     reason="set SQUARE_SANDBOX_TOKEN to run against the Square sandbox")
 async def test_live_square_sandbox_checkout_roundtrip(client, tenant, monkeypatch):
-    monkeypatch.setattr(settings, "SQUARE_ACCESS_TOKEN", os.environ["SQUARE_SANDBOX_TOKEN"])
-    monkeypatch.setattr(settings, "SQUARE_ENV", "sandbox")
     monkeypatch.setattr(svc, "_TRANSPORT", None)
+    await _save_creds(client, tenant, "square", {"access_token": os.environ["SQUARE_SANDBOX_TOKEN"], "env": "sandbox"})
     r = await client.put("/api/staff/company", json={"currency_code": "USD"}, headers=tenant)  # sandbox is USD
     assert r.status_code == 200, r.text
     await _card_account(client, tenant)

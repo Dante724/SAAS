@@ -19,8 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
 from backend.models import Account, Invoice, Order, Payment, PaymentIntent
-from backend.services.numbering import next_number
 from backend.services.money import minor_units, q2
+from backend.services.numbering import next_number
+from backend.services.payment_guard import LivePaymentsRefused
 
 log = logging.getLogger("tekly.payments")
 
@@ -32,6 +33,12 @@ class PaymentGateway:
     def __init__(self, creds: Optional[dict] = None):
         # 144jn: per-shop credentials (Stripe/Square/SumUp keys of THIS org).
         self.creds = creds or {}
+
+    def keys(self) -> dict:
+        """The keys a call will actually send: the shop's, blanks filled from the operator env,
+        always through the live-money guard (review S6)."""
+        from backend.services import org_creds
+        return org_creds.with_env_defaults(self.name, self.creds)
 
     async def create_checkout(self, *, intent: PaymentIntent, description: str) -> dict:
         raise NotImplementedError
@@ -64,7 +71,7 @@ class StripeGateway(PaymentGateway):
         # and avoid a hard dependency. Amounts are in the smallest currency unit.
         import httpx
         amount_minor = minor_units(intent.amount, intent.currency)
-        c = self.creds
+        c = self.keys()
         data = {
             "mode": "payment",
             "success_url": _return_url(c.get("success_url") or settings.STRIPE_SUCCESS_URL, intent),
@@ -80,7 +87,7 @@ class StripeGateway(PaymentGateway):
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
                 "https://api.stripe.com/v1/checkout/sessions",
-                data=data, auth=(c.get("secret_key") or settings.STRIPE_SECRET_KEY, ""))
+                data=data, auth=(c.get("secret_key") or "", ""))
         if resp.status_code not in (200, 201):
             raise RuntimeError(f"Stripe {resp.status_code}: {resp.text[:200]}")
         body = resp.json()
@@ -100,21 +107,21 @@ class SquareGateway(PaymentGateway):
 
     async def create_checkout(self, *, intent: PaymentIntent, description: str) -> dict:
         import httpx
-        c = self.creds
+        c = self.keys()
         amount_minor = minor_units(intent.amount, intent.currency)
         payload = {
             "idempotency_key": intent.id,
             "quick_pay": {
                 "name": (description or "Payment")[:120],
                 "price_money": {"amount": amount_minor, "currency": intent.currency.upper()},
-                "location_id": c.get("location_id") or settings.SQUARE_LOCATION_ID,
+                "location_id": c.get("location_id"),
             },
         }
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
                 f"{self.base_url(c.get('env'))}/v2/online-checkout/payment-links",
                 json=payload,
-                headers={"Authorization": f"Bearer {c.get('access_token') or settings.SQUARE_ACCESS_TOKEN}",
+                headers={"Authorization": f"Bearer {c.get('access_token')}",
                          "Square-Version": "2024-06-04"})
         if resp.status_code not in (200, 201):
             raise RuntimeError(f"Square {resp.status_code}: {resp.text[:200]}")
@@ -131,18 +138,18 @@ class SumUpGateway(PaymentGateway):
 
     async def create_checkout(self, *, intent: PaymentIntent, description: str) -> dict:
         import httpx
-        c = self.creds
+        c = self.keys()
         payload = {
             "checkout_reference": intent.id,
             "amount": q2(intent.amount),
             "currency": intent.currency.upper(),
-            "merchant_code": c.get("merchant_code") or settings.SUMUP_MERCHANT_CODE,
+            "merchant_code": c.get("merchant_code"),
             "description": (description or "Payment")[:120],
             "hosted_checkout": {"enabled": True},
         }
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post("https://api.sumup.com/v0.1/checkouts", json=payload,
-                                     headers={"Authorization": f"Bearer {c.get('api_key') or settings.SUMUP_API_KEY}"})
+                                     headers={"Authorization": f"Bearer {c.get('api_key')}"})
         if resp.status_code not in (200, 201):
             raise RuntimeError(f"SumUp {resp.status_code}: {resp.text[:200]}")
         body = resp.json()
@@ -270,6 +277,8 @@ async def create_intent(db: AsyncSession, *, org_id: str, order_id: Optional[str
         # A timeout or dropped connection used to escape as a 500; the caller turns this into a 502.
         log.warning("checkout with %s failed: %s", gw.name, type(e).__name__)
         raise RuntimeError(f"Couldn't reach {gw.name.title()} right now. Try again in a minute.") from e
+    except LivePaymentsRefused as e:   # F4: an env default filled in a live key or production env
+        raise RuntimeError(str(e)) from e
     intent.provider_ref = res["provider_ref"]
     intent.provider_link_id = res.get("provider_link_id")
     intent.checkout_url = res["checkout_url"]

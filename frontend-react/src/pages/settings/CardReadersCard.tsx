@@ -13,6 +13,7 @@ type ProviderState = { configured: boolean; test_mode: boolean; live_refused: bo
 type Config = {
   providers: Record<"stripe" | "square" | "simulated", ProviderState>; test_mode: boolean;
   square_sandbox_devices: { id: string; label: string }[]; stripe_test_registration_code: string;
+  webhook_paths: { stripe: string; square: string };
 };
 type Reader = { id: string; provider: string; reader_id: string; label: string; location_id?: string | null; device_type?: string | null; test_mode: boolean };
 type Loc = { id: string; name: string };
@@ -97,8 +98,8 @@ export default function CardReadersCard() {
             <details className="text-[11px] text-ink-tertiary">
               <summary className="cursor-pointer font-semibold text-ink-secondary">Webhooks for instant results</summary>
               <div className="mt-1.5 space-y-1 break-all">
-                {cfg.providers.stripe.configured && <p>Stripe: <span className="font-mono">{origin}/api/payments/stripe/webhook</span>, events payment intent succeeded, payment failed and canceled.</p>}
-                {cfg.providers.square.configured && <p>Square: <span className="font-mono">{origin}/api/payments/square/webhook</span>, event terminal checkout updated.</p>}
+                {cfg.providers.stripe.configured && <p>Stripe: <span className="font-mono">{origin}{cfg.webhook_paths.stripe}</span>, events payment intent succeeded, payment failed and canceled.</p>}
+                {cfg.providers.square.configured && <p>Square: <span className="font-mono">{origin}{cfg.webhook_paths.square}</span>, event terminal checkout updated.</p>}
                 <p>Without webhooks the screen still checks the reader every few seconds.</p>
               </div>
             </details>

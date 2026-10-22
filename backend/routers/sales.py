@@ -246,7 +246,10 @@ async def delete_sale(
     if sale.voided_at:
         raise HTTPException(409, "This sale was already deleted")
     # F2: voiding only reverses the books; money taken on a card reader must go back to the card first.
-    from backend.services.terminal import unrefunded_sale_card_payment
+    from backend.services.terminal import open_sale_charge, unrefunded_sale_card_payment
+    if await open_sale_charge(db, sale.id):   # review M6
+        raise HTTPException(409, "A card reader is still waiting for this sale's payment. "
+                                 "Cancel that charge first, then delete the sale.")
     if await unrefunded_sale_card_payment(db, sale.id) > 0:
         raise HTTPException(409, "This sale was paid on a card reader. Refund the card payment first "
                                  "(Recent sales › Card reader payments), then delete the sale.")
