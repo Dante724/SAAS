@@ -53,7 +53,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
         /* ignore */
       }
       if (typeof window !== "undefined" && window.location.pathname !== "/login") {
-        window.location.replace("/login");
+        // Tekly Go comes back to itself after signing in; the web app lands on its home page.
+        const p = window.location.pathname;
+        window.location.replace(p === "/go" || p.startsWith("/go/") ? "/login?next=" + encodeURIComponent(p) : "/login");
       }
     }
     const text = await res.text().catch(() => "");
