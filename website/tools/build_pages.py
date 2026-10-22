@@ -297,7 +297,7 @@ def main():
             placeholders.append(doc["slug"])
     if placeholders:
         print("WARNING: fill in the [[…]] placeholders in tools/legal/ before launch:", ", ".join(placeholders))
-    urls = ([("/", "1.0")] + [(f"/{p['slug']}/", "0.8") for p in PAGES]
+    urls = ([("/", "1.0"), ("/changelog/", "0.6")] + [(f"/{p['slug']}/", "0.8") for p in PAGES]
             + [(f"/{d['slug']}/", "0.3") for d in LEGAL])
     (ROOT / "sitemap.xml").write_text(
         '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'

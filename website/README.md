@@ -16,19 +16,9 @@ python3 -m http.server 4321 --directory website
 | Copy and sections | `index.html` |
 
 ## Design system
-Follows `algolia.design.md`: a near-black hero washed with a violet-to-cobalt gradient and a
-stacked three-word Sora headline ("Diagnose. Approve. Get paid."), then a white editorial body
-with hairline (#e5e7eb) cards at 12px corners, and a deep-navy (#000033) product band ending in
-large Sora 900 proof numerals (honest product facts, no invented stats). Two typefaces only:
-Sora for display, headings and numbers; Inter for everything you read. Electric blue #003dff is
-held for pill CTAs and inline links; pills are used for buttons only.
-
-No animation libraries: reveal-on-scroll and the demos are plain JS with IntersectionObserver.
-Interactive pieces: the complaint → AI estimate card in the hero, the five job-stage tabs in the
-navy band, the phone approval demo, the pricing toggle and the demo / sign-up / sign-in panels.
-
-Measured (headless Chrome): scroll 60 fps, no horizontal overflow from 320px to 1440px;
-Lighthouse performance 94 mobile / 98 desktop, accessibility, best practices and SEO 100.
+The homepage (`index.html`) is one self-contained file: inline CSS and one ES module, Geist and
+the Tekly midnight-sapphire palette on a light page of rounded card sections (see "Homepage" below).
+The four landing pages, privacy and terms still use `styles.css` (Sora/Inter) and `page.js`.
 
 ## Visuals
 No photography. Every visual is a product screen built in HTML/CSS with sample data (labelled as
@@ -86,12 +76,12 @@ Events pushed to `dataLayer`: `assistant_open`, `assistant_message` (matched int
 `assistant_booking_start`, `assistant_recommend`, `generate_lead`. To edit answers, change the
 `KB` and `TRADES` lists at the top of `assistant.js` — keep them to facts that are true.
 
-## Homepage v2 preview (`/v2/`)
+## Homepage
 
-`v2/index.html` is a redesigned homepage, kept next to the live one until it's approved: one
+`index.html` is one
 self-contained file (inline CSS and an ES module; the only library is Lenis 1.1.18, self-hosted at
 `assets/vendor/`) with the same copy, plans (`site.config.js`), links, demo destination, FAQ,
-JSON-LD, attribution and assistant. It's `noindex` with a canonical to `/` while it's a preview.
+JSON-LD, attribution and assistant.  `/v2/` (its preview URL) forwards to `/`.
 
 - **Layout:** rounded "card" sections on a light page; a full-height photo hero with a navy scrim,
   a navy stats band and a navy CTA footer. Geist and Tekly sapphire.
@@ -121,7 +111,3 @@ JSON-LD, attribution and assistant. It's `noindex` with a canonical to `/` while
 - **Photos:** `assets/photos/` from Unsplash (Unsplash License) and Wikimedia Commons (public
   domain, CC BY 2.0, CC BY-SA 3.0/4.0). Credits are listed under "Photo credits" in the footer;
   keep them when you swap photos.
-
-To make it the homepage: move `v2/index.html` over `index.html`, change `robots` back to
-`index, follow, max-image-preview:large` (and on `changelog/`, then add it to `sitemap.xml`), and update `lastmod` for `/` in `sitemap.xml`. Keep
-`styles.css` (the landing pages still use it).
