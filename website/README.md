@@ -10,7 +10,7 @@ python3 -m http.server 4321 --directory website
 
 | Change | File |
 |---|---|
-| Prices ($49 Starter / $99 Pro), plan features, yearly discount, trial length | `site.config.js` → `plans`, `annualDiscount`, `trialDays` |
+| Plans (Solo $29, Shop $69 + $49/location + $4/extra person, Pro $129 + $79/location), features, yearly months, trial | `site.config.js` → `plans`, `yearlyMonths`, `trialDays` — keep in step with `backend/services/billing.py` |
 | App sign-in / sign-up URLs | `site.config.js` → `appUrl`, `signInPath`, `signUpPath` |
 | Where demo requests go | `site.config.js` → `demoEndpoint` (POST JSON) or `demoEmail` (mailto fallback) |
 | Copy and sections | `index.html` |
@@ -49,7 +49,7 @@ Trust content is factual: a "works with" strip lists integrations that exist in 
   also writes `sitemap.xml`, `robots.txt` and `site.webmanifest`. Edit copy in that script and rerun.
 - **On every page:** keyword title (< 60 chars), meta description (< 155), canonical URL, Open
   Graph + Twitter card (`assets/og.png`, 1200×630), favicon/app icons, one H1 with the main keyword.
-- **Structured data (JSON-LD):** Organization, WebSite, SoftwareApplication with both plan prices,
+- **Structured data (JSON-LD):** Organization, WebSite, SoftwareApplication with all three plan prices,
   and FAQPage on the homepage (generated from the visible FAQ); WebPage, BreadcrumbList and
   FAQPage on each landing page. No ratings or reviews are claimed.
 - **Attribution:** `marketing.js` keeps `utm_*`, `gclid`, `fbclid`, `msclkid` and `ref` for the
@@ -71,7 +71,7 @@ Then submit `https://YOUR-DOMAIN/sitemap.xml` in Google Search Console and Bing 
 `assistant.js` adds an "Ask Tekly" chat to every page. It runs entirely in the browser — no AI
 service is called and no API key is needed. It answers from a built-in knowledge base of facts
 that appear on the site (plans, templates, AI features, integrations, switching, data), with
-typo-tolerant matching; recommends Starter or Pro from three questions; and books demos.
+typo-tolerant matching; recommends Solo, Shop or Pro from a few questions (9+ people without Pro needs → Shop plus $4 seats, same rule as the app); and books demos.
 Off-topic questions get an honest "I'm not sure" and an offer to book a person.
 
 **Booking real times:** create a "Tekly Demos" shop in Tekly, turn on online appointments and
