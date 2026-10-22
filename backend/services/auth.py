@@ -144,6 +144,9 @@ async def get_current_employee(
         if not request.url.path.startswith(MFA_ENROLLMENT_PATHS):
             raise HTTPException(status_code=403, detail="Set up two-factor authentication to continue.",
                                 headers={"X-MFA-Enrollment-Required": "1"})
+    # Who is acting on this request's session: backend/db/actors.py stamps it on discounts,
+    # refunds and drawer closes, whichever route makes them.
+    db.info["actor_id"] = employee.id
     return employee
 
 

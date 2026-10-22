@@ -584,6 +584,8 @@ class OrderLine(Base):
     discount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     discount_type: Mapped[str] = mapped_column(String(10), default="pct")  # pct|fixed
     discount_paid_by: Mapped[str] = mapped_column(String(10), default="client")  # client|company
+    # Who set the discount (stamped by backend/db/actors.py on every path); feeds Tekly Sense Watchdog.
+    discount_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)
     tax_id: Mapped[Optional[str]] = mapped_column(String)
     tax_rate: Mapped[float] = mapped_column(Float, default=0.0)
     tax_mode: Mapped[str] = mapped_column(String(10), default="imposed")  # included|imposed
@@ -1156,6 +1158,7 @@ class CashShift(Base):
     expected_cash: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
     opened_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    closed_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)  # who closed (counted) the drawer
     # 144bc — optional denomination breakdowns {"100": 2, "20": 5, ...} captured on open/close.
     open_denoms: Mapped[Optional[dict]] = mapped_column(JSON)
     close_denoms: Mapped[Optional[dict]] = mapped_column(JSON)
@@ -2161,6 +2164,7 @@ class Refund(Base):
     payment_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("payments.id"))  # the refund Payment
     voided_at: Mapped[Optional[datetime]] = mapped_column(DateTime)   # deleted ("Delete refunds"): kept, but reversed
     voided_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)  # who made the refund
     void_reason: Mapped[Optional[str]] = mapped_column(String(300))
 
 

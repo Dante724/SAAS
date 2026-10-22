@@ -51,7 +51,7 @@ export const SEC_CAT: Record<SectionId, string> = {
 
 // keywords power search (so "invoice number", "reminder", "add tech" all land)
 export const SEC_KW: Record<SectionId, string> = {
-  general: "name timezone currency language region industry logo profile",
+  general: "name timezone currency language region industry logo profile sense tekly sense suggestions smart margin learning",
   team: "staff employee invite role permission rbac mobile access payroll add tech person",
   locations: "branch address hours location shop",
   sso: "sso saml oauth login security 2fa session single sign on",

@@ -22,6 +22,7 @@ if _xw:
         if _u and _u.startswith("sqlite") and _u.endswith(".db"):
             os.environ[_var] = _u[:-3] + f"_{_xw}.db"
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -75,6 +76,16 @@ async def _schema():
     yield
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_rate_limits():
+    """Each test starts with empty in-process rate-limit counters (every test client shares one
+    IP) and an empty Tekly Sense per-shop service-history cache."""
+    from backend.services import ratelimit, sense
+    ratelimit._HITS.clear()
+    sense._HISTORY_CACHE.clear()
+    yield
 
 
 @pytest_asyncio.fixture
