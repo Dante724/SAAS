@@ -89,21 +89,30 @@ Events pushed to `dataLayer`: `assistant_open`, `assistant_message` (matched int
 ## Homepage v2 preview (`/v2/`)
 
 `v2/index.html` is a redesigned homepage, kept next to the live one until it's approved: one
-self-contained file (inline CSS and an ES module; Lenis 1.1.18 from jsDelivr is the only library)
-with the same copy, plans (`site.config.js`), links, demo destination, FAQ, JSON-LD, attribution
-and assistant. It's `noindex` with a canonical to `/` while it's a preview.
+self-contained file (inline CSS and an ES module; the only library is Lenis 1.1.18, self-hosted at
+`assets/vendor/`) with the same copy, plans (`site.config.js`), links, demo destination, FAQ,
+JSON-LD, attribution and assistant. It's `noindex` with a canonical to `/` while it's a preview.
 
 - **Layout:** rounded "card" sections on a light page; a full-height photo hero with a navy scrim,
   a navy stats band and a navy CTA footer. Geist and Tekly sapphire.
-- **Motion:** a small rAF spring helper drives clip-mask word reveals, in-view rises, hover springs
-  (off at ≤768px), hero and About parallax, ghost-word drift, the hero estimate carousel
-  (auto, 3.8s), the templates carousel (arrows, dots, swipe), the loader, the menu and the demo
-  modal. `prefers-reduced-motion` skips Lenis and shows everything at once.
+- **Speed:** the loader shows once per visit for at most 1.2s; the hero photo is a 65KB 1600w
+  WebP (960/1600/2400 srcset, plus a portrait crop for phones); reveals run on the compositor
+  (Web Animations), scroll work is one rAF per frame with geometry measured on resize; the
+  assistant loads when the browser is idle.
+- **Motion:** a small rAF spring helper drives hovers (off at ≤768px), the templates carousel, the
+  menu and the demo modal. `prefers-reduced-motion` skips Lenis and shows everything at once.
+- **SEO:** one H1 with the keyword visible; job stages and the four template cards (with their
+  landing-page links) are in the HTML, not injected by JS. Pricing cards are still rendered from
+  `site.config.js` (prices are also in the FAQ and JSON-LD).
+- **Live tiles:** each template card cycles 2–3 photos while it's on screen.
 - **New sections:** What's new (from the Tekly Go / parity PRs; card readers and calling are
   marked "Rolling out" until live keys are set) and About us.
-- **Placeholders to fill before launch:** the founder note in About us and the three customer
-  quotes (`PLACEHOLDER` comments in the HTML).
-- **Photos:** `assets/photos/` from Unsplash (Unsplash License), self-hosted.
+- **Placeholders to fill before launch:** the founder note in About us; the customer-quotes
+  section is `hidden` until real quotes exist (`PLACEHOLDER` comments in the HTML).
+- **Photos:** `assets/photos/` from Unsplash (Unsplash License) and Wikimedia Commons (public
+  domain, CC BY 2.0, CC BY-SA 3.0/4.0). Credits are listed under "Photo credits" in the footer;
+  keep them when you swap photos.
 
-To make it the homepage: move `v2/index.html` over `index.html`, then change `robots` back to
-`index, follow`.
+To make it the homepage: move `v2/index.html` over `index.html`, change `robots` back to
+`index, follow, max-image-preview:large`, and update `lastmod` for `/` in `sitemap.xml`. Keep
+`styles.css` (the landing pages still use it).

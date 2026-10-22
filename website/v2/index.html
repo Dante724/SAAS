@@ -28,9 +28,13 @@
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
   <link rel="manifest" href="/site.webmanifest">
   <link rel="preload" href="/assets/fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="preload" href="/assets/photos/bench-hero.webp" as="image" type="image/webp">
+  <link rel="preload" as="image" type="image/webp" href="/assets/photos/bench-hero-1600.webp" imagesrcset="/assets/photos/bench-hero-960.webp 960w, /assets/photos/bench-hero-1600.webp 1600w, /assets/photos/bench-hero-2400.webp 2400w" imagesizes="100vw" media="(min-width: 640px)" fetchpriority="high">
+  <link rel="preload" as="image" type="image/webp" href="/assets/photos/bench-hero-tall-750.webp" media="(max-width: 639px)" fetchpriority="high">
+  <link rel="modulepreload" href="/assets/vendor/lenis-1.1.18.mjs">
   <script>
     document.documentElement.classList.add("js");
+    /* The loader is a first-impression thing: show it once per visit, never on repeat views. */
+    try { if (sessionStorage.getItem("tekly_seen")) document.documentElement.classList.add("no-loader"); } catch (e) {}
     /* Above 1920px the rem grid keeps growing (the CSS media queries cover everything below). */
     (function () {
       var fit = function () {
@@ -85,7 +89,13 @@
      "@type": "UnitPriceSpecification",
      "price": "29",
      "priceCurrency": "USD",
-     "unitText": "per month"
+     "unitText": "per month",
+     "unitCode": "MON",
+     "referenceQuantity": {
+      "@type": "QuantitativeValue",
+      "value": 1,
+      "unitCode": "MON"
+     }
     },
     "url": "https://tekly.app/#pricing"
    },
@@ -98,7 +108,13 @@
      "@type": "UnitPriceSpecification",
      "price": "69",
      "priceCurrency": "USD",
-     "unitText": "per month, first location"
+     "unitText": "per month, first location",
+     "unitCode": "MON",
+     "referenceQuantity": {
+      "@type": "QuantitativeValue",
+      "value": 1,
+      "unitCode": "MON"
+     }
     },
     "url": "https://tekly.app/#pricing"
    },
@@ -111,11 +127,19 @@
      "@type": "UnitPriceSpecification",
      "price": "129",
      "priceCurrency": "USD",
-     "unitText": "per month, first location"
+     "unitText": "per month, first location",
+     "unitCode": "MON",
+     "referenceQuantity": {
+      "@type": "QuantitativeValue",
+      "value": 1,
+      "unitCode": "MON"
+     }
     },
     "url": "https://tekly.app/#pricing"
    }
-  ]
+  ],
+  "image": "https://tekly.app/assets/og.png",
+  "screenshot": "https://tekly.app/assets/tech-job.webp"
  },
  {
   "@context": "https://schema.org",
@@ -215,7 +239,7 @@
   --ink: #0b1324;
   --ink-2: #26324a;
   --muted: #5a6680;
-  --faint: #8a94a8;
+  --faint: #69738a;
   --line: #e1e6ef;
   --line-2: #cfd7e4;
   --navy: #071633;
@@ -242,9 +266,9 @@
 
 /* Adaptive rem grid */
 html { font-size: 16px; }
-@media (max-width: 1920px) { html { font-size: 0.833333vw; } }
-@media (max-width: 1440px) { html { font-size: 1.111111vw; } }
-@media (max-width: 1024px) { html { font-size: 1.5625vw; } }
+@media (max-width: 1920px) { html { font-size: max(15px, 0.833333vw); } }
+@media (max-width: 1440px) { html { font-size: max(15px, 1.111111vw); } }
+@media (max-width: 1024px) { html { font-size: max(15px, 1.5625vw); } }
 @media (max-width: 640px)  { html { font-size: 4.444444vw; } }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -270,7 +294,7 @@ ul, ol { padding: 0; list-style: none; }
 /* ── Page frame: sections are rounded cards ── */
 main { padding: var(--pad); display: flex; flex-direction: column; gap: var(--gap); }
 @media (max-width: 639px) { :root { --pad: .5rem; } }
-.card-sec { position: relative; background: var(--card); border-radius: var(--r-lg); padding: 7.5rem 5rem; overflow: hidden; }
+.card-sec { position: relative; background: var(--card); border-radius: var(--r-lg); padding: 6rem 5rem; overflow: hidden; }
 .card-sec.tint { background: var(--card-2); }
 .card-sec.navy { background: var(--navy); color: #fff; }
 .card-sec.overlap { margin-top: -2.5rem; z-index: 2; }
@@ -286,7 +310,7 @@ main { padding: var(--pad); display: flex; flex-direction: column; gap: var(--ga
 .h3 { font-size: 2.5rem; line-height: 1.04; letter-spacing: -.035em; font-weight: 600; text-wrap: balance; }
 .lede { font-size: 1.1875rem; line-height: 1.55; color: var(--muted); max-width: 36rem; text-wrap: pretty; }
 .navy .lede { color: var(--on-navy); }
-.sec-head { display: grid; grid-template-columns: 1fr 1.6fr; gap: 3rem; align-items: end; margin-bottom: 4.5rem; }
+.sec-head { display: grid; grid-template-columns: 1fr 1.6fr; gap: 3rem; align-items: end; margin-bottom: 3.5rem; }
 .sec-head .eyebrow { align-self: start; padding-top: .9rem; }
 .sec-head > div:not(.bill) { display: grid; gap: 1.5rem; }
 .sec-head.center { grid-template-columns: 1fr; justify-items: center; text-align: center; }
@@ -298,9 +322,9 @@ main { padding: var(--pad); display: flex; flex-direction: column; gap: var(--ga
 /* ── Clip-mask reveals (word / line) ── */
 .w, .ln { display: inline-block; overflow: hidden; vertical-align: top; padding-bottom: .14em; margin-bottom: -.14em; }
 .ln { display: block; }
-.wi, .lni { display: inline-block; will-change: transform; }
+.wi, .lni { display: inline-block; }
 .js .wi, .js .lni { transform: translateY(115%); opacity: 0; }
-.js [data-rise] { opacity: 0; transform: translateY(1.75rem); }
+.js [data-rise] { opacity: 0; transform: translateY(1rem); }
 .reduced .wi, .reduced .lni, .reduced [data-rise] { transform: none !important; opacity: 1 !important; }
 
 /* ── Buttons ── */
@@ -345,7 +369,7 @@ main { padding: var(--pad); display: flex; flex-direction: column; gap: var(--ga
 .loader .wordmark { font-size: 2.5rem; }
 .loader-bar { width: 10rem; height: 1px; background: rgba(255,255,255,.18); overflow: hidden; }
 .loader-bar i { display: block; height: 100%; background: #fff; transform: scaleX(0); transform-origin: left; }
-html:not(.js) .loader { display: none; }
+html:not(.js) .loader, .no-loader .loader { display: none; }
 
 /* ── Wordmark ── */
 .wordmark { display: inline-flex; align-items: center; gap: .5rem; font-weight: 700; letter-spacing: -.055em; font-size: 1.75rem; line-height: 1; }
@@ -365,15 +389,17 @@ html:not(.js) .loader { display: none; }
 .hdr-nav a:hover { opacity: 1; }
 .hdr-right { display: flex; justify-content: flex-end; align-items: center; gap: 1.25rem; }
 .hdr .text-btn { color: #fff; }
-.glass { background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.22); -webkit-backdrop-filter: blur(18px) saturate(1.3); backdrop-filter: blur(18px) saturate(1.3); }
+.glass { background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.22); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
 .burger { width: 3.25rem; height: 3.25rem; border-radius: 50%; display: grid; place-items: center; cursor: pointer; color: #fff; padding: 0; }
 .burger-lines { display: grid; gap: .3rem; }
 .burger-lines > span { display: block; width: 1.125rem; height: 1.5px; background: currentColor; border-radius: 1px; }
 .hero-body { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 2rem 4.75rem; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 2rem; }
-.hero-kicker { font-size: .8125rem; letter-spacing: .22em; text-transform: uppercase; font-weight: 500; color: rgba(255,255,255,.82); margin-bottom: 1.5rem; display: flex; align-items: center; gap: .625rem; }
+.hero-kicker { display: flex; font-size: .8125rem; letter-spacing: .22em; text-transform: uppercase; font-weight: 500; color: rgba(255,255,255,.82); margin-bottom: 1.5rem; display: flex; align-items: center; gap: .625rem; }
 .hero-kicker::before { content: ""; width: .4375rem; height: .4375rem; border-radius: 50%; background: #7aa7ff; }
-.hero h1 { font-size: 11.25vw; line-height: .85; letter-spacing: -.055em; font-weight: 650; text-transform: uppercase; }
+.hero h1 { font-size: 9.6vw; line-height: .86; letter-spacing: -.055em; font-weight: 650; text-transform: uppercase; }
 .hero h1 .w { padding-right: .02em; }
+.hero-words { display: block; }
+.hero h1 .hero-kicker { line-height: 1.5; }
 .hero-foot { display: flex; align-items: flex-end; gap: 3rem; margin-top: 2rem; flex-wrap: wrap; }
 .hero-tag { font-size: 1.375rem; line-height: 1.3; letter-spacing: -.015em; font-weight: 500; }
 .hero-tag .ln:last-child { color: rgba(255,255,255,.7); }
@@ -405,7 +431,7 @@ html:not(.js) .loader { display: none; }
   .hero-body { grid-template-columns: 1fr; padding: 0 1.5rem 4.25rem; }
   .hero { height: auto; min-height: calc(100svh - 1.5rem); display: flex; flex-direction: column; justify-content: flex-end; }
   .hero-body { position: relative; padding-top: 8rem; }
-  .hero h1 { font-size: 13vw; }
+  .hero h1 { font-size: 11.25vw; }
   .gcar { width: 100%; max-width: 30rem; }
   .hero-plate { top: -6%; height: calc(100svh + 8rem); -webkit-mask-image: linear-gradient(#000 62%, transparent 96%); mask-image: linear-gradient(#000 62%, transparent 96%); }
   .hero-plate img { object-position: 62% 35%; }
@@ -416,7 +442,7 @@ html:not(.js) .loader { display: none; }
   .hdr .text-btn { display: none; }
   .burger { width: 3rem; height: 3rem; }
   .hero-body { position: relative; padding: 7rem 1.125rem 4rem; }
-  .hero h1 { font-size: 15.5vw; }
+  .hero h1 { font-size: 13.5vw; }
   .hero-kicker { font-size: .6875rem; letter-spacing: .16em; margin-bottom: 1rem; }
   .hero-foot { gap: 1.25rem; margin-top: 1.25rem; }
   .hero-tag { font-size: 1.1875rem; }
@@ -425,7 +451,7 @@ html:not(.js) .loader { display: none; }
 
 /* Floating mini bar once the hero has gone */
 .minibar { position: fixed; top: 1rem; right: 1rem; z-index: 60; display: flex; gap: .5rem; align-items: center; padding: .375rem; border-radius: var(--pill);
-  background: rgba(255,255,255,.82); border: 1px solid var(--line); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); box-shadow: 0 .75rem 2rem -1rem rgba(7,22,51,.35);
+  background: rgba(255,255,255,.95); border: 1px solid var(--line); box-shadow: 0 .75rem 2rem -1rem rgba(7,22,51,.35);
   transform: translateY(-150%); transition: transform .6s var(--ease-out-expo); }
 .minibar.show { transform: none; }
 .minibar .wordmark { font-size: 1.25rem; padding: 0 .75rem 0 .625rem; color: var(--ink); }
@@ -458,7 +484,11 @@ html:not(.js) .loader { display: none; }
 .row[aria-selected="false"] .t { color: var(--faint); }
 .row[aria-selected="false"] .d { display: none; }
 .row .bar { grid-column: 2 / -1; height: 2px; background: var(--line); border-radius: 2px; overflow: hidden; margin-top: .25rem; }
-.row .bar i { display: block; height: 100%; width: var(--p, 0%); background: var(--sapphire); }
+.row .bar i { display: block; height: 100%; width: 100%; background: var(--sapphire); transform-origin: left; transform: scaleX(0); }
+.row[aria-selected="true"] .bar i { animation: stageBar 6.5s linear forwards; }
+.rows.paused .bar i { animation-play-state: paused; }
+.rows.stopped .bar i { animation: none; transform: none; }
+@keyframes stageBar { to { transform: scaleX(1); } }
 .row[aria-selected="false"] .bar { display: none; }
 
 .flow { display: grid; grid-template-columns: 1fr 1.05fr; gap: 4rem; align-items: start; }
@@ -555,22 +585,22 @@ html:not(.js) .loader { display: none; }
 .go-grid { display: grid; grid-template-columns: 1fr 1.15fr; gap: 4rem; align-items: center; }
 .go-stage { position: relative; height: 44rem; }
 .tilt { position: absolute; width: 19rem; aspect-ratio: 390 / 844; }
-.tilt-lift { width: 100%; height: 100%; will-change: transform; }
+.tilt-lift { width: 100%; height: 100%; }
 .tilt-rot { width: 100%; height: 100%; border-radius: 2.5rem; padding: .5rem; background: #0b1324; box-shadow: 0 3rem 5rem -3rem rgba(7,22,51,.6); }
 .tilt img { width: 100%; height: 100%; object-fit: cover; object-position: top; border-radius: 2rem; }
 .tilt-a { left: 6%; top: 3.5rem; } .tilt-a .tilt-rot { transform: rotate(-6deg); }
 .tilt-b { left: 46%; top: 0; z-index: 2; } .tilt-b .tilt-rot { transform: rotate(5deg); }
 @media (max-width: 1024px) { .go-grid { grid-template-columns: 1fr; gap: 2rem; } .go-stage { height: 40rem; max-width: 40rem; margin: 0 auto; width: 100%; } }
-@media (max-width: 639px) { .go-stage { height: 27rem; } .tilt { width: 11.5rem; } .tilt-rot { border-radius: 1.75rem; padding: .375rem; } .tilt img { border-radius: 1.4rem; } .tilt-a { left: 2%; top: 2.5rem; } .tilt-b { left: 42%; } }
+@media (max-width: 639px) { .go-stage { height: 27rem; } .tilt { width: 10.5rem; } .tilt-rot { border-radius: 1.75rem; padding: .375rem; } .tilt img { border-radius: 1.4rem; } .tilt-a { left: 2%; top: 2.5rem; } .tilt-b { left: 38%; } }
 
 /* ── Stats band ── */
 .stats { display: grid; grid-template-columns: repeat(4, 1fr); }
 .stat { padding: 0 2rem; border-left: 1px solid rgba(255,255,255,.14); display: grid; gap: 1rem; align-content: start; }
 .stat:first-child { border-left: 0; padding-left: 0; }
-.stat b { font-size: 7rem; line-height: .9; font-weight: 600; letter-spacing: -.06em; font-variant-numeric: tabular-nums; }
+.stat b { font-size: 5.75rem; line-height: .9; font-weight: 600; letter-spacing: -.06em; font-variant-numeric: tabular-nums; }
 .stat span { color: var(--on-navy); font-size: 1rem; line-height: 1.45; max-width: 15rem; }
 .stats-head { display: flex; justify-content: space-between; align-items: end; gap: 2rem; margin-bottom: 4.5rem; flex-wrap: wrap; }
-@media (max-width: 1024px) { .stats { grid-template-columns: 1fr 1fr; row-gap: 3rem; } .stat:nth-child(3) { border-left: 0; padding-left: 0; } .stat b { font-size: 5.5rem; } }
+@media (max-width: 1024px) { .stats { grid-template-columns: 1fr 1fr; row-gap: 3rem; } .stat:nth-child(3) { border-left: 0; padding-left: 0; } .stat b { font-size: 4.75rem; } }
 @media (max-width: 639px) { .stat { padding: 0 1rem; } .stat b { font-size: 3.5rem; } .stat span { font-size: .875rem; } }
 
 /* ── AI rows ── */
@@ -599,8 +629,8 @@ html:not(.js) .loader { display: none; }
 
 /* ── What's new ── */
 .new-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--gap); }
-.new-card { background: #fff; border: 1px solid var(--line); border-radius: var(--r); padding: 1.75rem; display: grid; gap: .875rem; align-content: start; will-change: transform; }
-.new-card .ico { width: 2.75rem; height: 2.75rem; border-radius: .875rem; display: grid; place-items: center; background: var(--sky); color: var(--sapphire); will-change: transform; }
+.new-card { background: #fff; border: 1px solid var(--line); border-radius: var(--r); padding: 1.75rem; display: grid; gap: .875rem; align-content: start; }
+.new-card .ico { width: 2.75rem; height: 2.75rem; border-radius: .875rem; display: grid; place-items: center; background: var(--sky); color: var(--sapphire); }
 .new-card .ico svg { width: 1.375rem; height: 1.375rem; }
 .new-card .top { display: flex; justify-content: space-between; align-items: center; }
 .new-card h3 { font-size: 1.3125rem; font-weight: 600; letter-spacing: -.02em; line-height: 1.2; }
@@ -613,7 +643,7 @@ html:not(.js) .loader { display: none; }
 
 /* ── Industries: ghost words + manual carousel ── */
 .ghostwords { position: absolute; left: 0; right: 0; top: 4.5rem; pointer-events: none; user-select: none; display: grid; gap: 0; z-index: 0; }
-.ghostwords span { display: block; white-space: nowrap; font-size: 13rem; line-height: .85; font-weight: 700; letter-spacing: -.06em; text-transform: uppercase; color: transparent; -webkit-text-stroke: 1px var(--line-2); will-change: transform; }
+.ghostwords span { display: block; white-space: nowrap; font-size: 13rem; line-height: .85; font-weight: 700; letter-spacing: -.06em; text-transform: uppercase; color: transparent; -webkit-text-stroke: 1px var(--line-2); }
 .ghostwords span:nth-child(2) { padding-left: 18rem; }
 .ind-head { position: relative; z-index: 1; display: flex; justify-content: space-between; align-items: end; gap: 2rem; margin: 15rem 0 3rem; flex-wrap: wrap; }
 .ind-head > div:first-child { display: grid; gap: 1.25rem; max-width: 46rem; }
@@ -639,8 +669,15 @@ html:not(.js) .loader { display: none; }
 .mini-seg button { border: 0; background: none; padding: .125rem .625rem; border-radius: var(--pill); font-family: var(--sans); font-size: .75rem; cursor: pointer; color: var(--muted); }
 .mini-seg button.on { background: var(--ink); color: #fff; }
 .tpl-smart { font-size: .875rem; color: var(--ink-2); }
-.tpl-photo { border-radius: var(--r-sm); overflow: hidden; height: 9rem; }
-.tpl-photo img { width: 100%; height: 100%; object-fit: cover; }
+.tile { position: relative; border-radius: var(--r-sm); overflow: hidden; height: 11rem; background: var(--card-2); isolation: isolate; }
+.tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: translateY(100%); transition: transform .9s var(--ease-out-expo), filter .9s; }
+.tile img.on { transform: none; z-index: 1; }
+.tile img.out { transform: translateY(-28%); filter: brightness(.6); }
+.tile-dots { position: absolute; z-index: 2; right: .625rem; bottom: .625rem; display: flex; gap: .25rem; padding: .3rem .4rem; border-radius: var(--pill); background: rgba(7,22,51,.45); }
+.tile-dots i { width: .375rem; height: .375rem; border-radius: var(--pill); background: rgba(255,255,255,.5); transition: width .5s var(--ease-out-expo), background-color .3s; }
+.tile-dots i.on { width: 1rem; background: #fff; }
+.tile-live { position: absolute; z-index: 2; left: .625rem; top: .625rem; display: inline-flex; align-items: center; gap: .375rem; font-size: .6875rem; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: #fff; padding: .25rem .5rem; border-radius: var(--pill); background: rgba(7,22,51,.45); }
+.tile-live::before { content: ""; width: .375rem; height: .375rem; border-radius: 50%; background: #5ee0a0; }
 .car-foot { position: relative; z-index: 1; margin-top: 2rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; color: var(--muted); font-size: .9375rem; }
 @media (max-width: 1024px) { .ghostwords span { font-size: 10rem; } .ind-head { margin-top: 11rem; } .car { margin: 0 -3rem; padding: 0 3rem; } .tpl { flex-basis: 28rem; } }
 @media (max-width: 639px) { .ghostwords { top: 3rem; } .ghostwords span { font-size: 5.5rem; } .ghostwords span:nth-child(2) { padding-left: 4rem; } .ind-head { margin-top: 7rem; } .car { margin: 0 -1.25rem; padding: 0 1.25rem; } .tpl { flex-basis: calc(100vw - 3.5rem); padding: 1.25rem; } .tpl h3 { font-size: 1.5rem; } .car-ctrl .circ { width: 2.75rem; height: 2.75rem; } }
@@ -648,7 +685,7 @@ html:not(.js) .loader { display: none; }
 /* ── About / why we're different ── */
 .about-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4rem; align-items: start; }
 .about-photo { border-radius: var(--r); overflow: hidden; aspect-ratio: 4 / 5; position: relative; }
-.about-photo img { width: 100%; height: 115%; object-fit: cover; will-change: transform; }
+.about-photo img { width: 100%; height: 115%; object-fit: cover; }
 .about-photo figcaption { position: absolute; left: 1rem; bottom: 1rem; right: 1rem; color: #fff; font-size: .8125rem; padding: .625rem .875rem; border-radius: var(--r-xs); }
 .about-copy { display: grid; gap: 1.5rem; }
 .about-copy .big { font-size: 1.625rem; line-height: 1.35; letter-spacing: -.02em; font-weight: 500; text-wrap: pretty; }
@@ -705,7 +742,7 @@ html:not(.js) .loader { display: none; }
 .bill button.on { background: var(--ink); color: #fff; }
 .bill .save { font-size: .75rem; padding: .0625rem .5rem; border-radius: var(--pill); background: var(--sky); color: var(--sapphire-2); }
 .plans { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--gap); align-items: stretch; }
-.plan { background: #fff; border: 1px solid var(--line); border-radius: var(--r-lg); padding: 2.25rem; display: flex; flex-direction: column; gap: .875rem; will-change: transform; }
+.plan { background: #fff; border: 1px solid var(--line); border-radius: var(--r-lg); padding: 2.25rem; display: flex; flex-direction: column; gap: .875rem; }
 .plan.is-featured { background: var(--navy); color: #fff; border-color: var(--navy); }
 .plan-top { display: flex; justify-content: space-between; align-items: center; }
 .plan h3 { font-size: 1.75rem; font-weight: 600; letter-spacing: -.03em; }
@@ -773,12 +810,16 @@ html:not(.js) .loader { display: none; }
 .track-pay .btn { height: 2.5rem; }
 .foot { margin-top: 6rem; padding-top: 3rem; border-top: 1px solid rgba(255,255,255,.14); display: grid; grid-template-columns: 1.5fr repeat(4, 1fr); gap: 2rem; }
 .foot .about-f { color: var(--on-navy); margin-top: 1rem; max-width: 18rem; font-size: .9375rem; }
-.foot h2 { font-family: var(--mono); font-size: .6875rem; letter-spacing: .14em; text-transform: uppercase; color: #8d9bb8; font-weight: 400; margin-bottom: 1rem; }
+.foot .foot-h { font-family: var(--mono); font-size: .6875rem; letter-spacing: .14em; text-transform: uppercase; color: #8d9bb8; font-weight: 400; margin-bottom: 1rem; }
 .foot li + li { margin-top: .5rem; }
 .foot a { color: #e4e9f3; font-size: .9375rem; transition: color .2s; }
 .foot a:hover { color: #fff; }
 .legal { margin-top: 3rem; display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; font-family: var(--mono); font-size: .75rem; color: #8d9bb8; }
 .legal a { color: #8d9bb8; font-size: .75rem; margin-left: 1rem; }
+.credits { margin-top: 1.5rem; font-size: .75rem; color: #8d9bb8; }
+.credits summary { cursor: pointer; font-family: var(--mono); }
+.credits ul { margin-top: .75rem; display: grid; gap: .25rem; }
+.credits a { color: #c4cee2; text-decoration: underline; text-underline-offset: 2px; }
 .foot-word { margin-top: 3rem; font-size: 16vw; line-height: .78; font-weight: 700; letter-spacing: -.07em; color: rgba(255,255,255,.06); user-select: none; white-space: nowrap; overflow: hidden; }
 @media (max-width: 1024px) { .cta-grid { grid-template-columns: 1fr; gap: 3rem; } .cta-copy h2 { font-size: 4.5rem; } .foot { grid-template-columns: 1fr 1fr; } .foot > div:first-child { grid-column: 1 / -1; } }
 @media (max-width: 639px) { .cta-copy h2 { font-size: 3rem; } .cta-btns .btn { flex: 1 1 auto; } .foot { margin-top: 4rem; } .legal a { margin: 0 1rem 0 0; } }
@@ -790,7 +831,7 @@ html:not(.js) .loader { display: none; }
 .menu-in { position: relative; height: 100%; display: grid; grid-template-rows: auto 1fr auto; padding: 1.5rem 2rem 2rem; overflow-y: auto; }
 .menu-top { display: flex; justify-content: space-between; align-items: center; }
 .menu-x { width: 3.25rem; height: 3.25rem; border-radius: 50%; display: grid; place-items: center; cursor: pointer; color: #fff; padding: 0; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.2); }
-.menu-x svg { width: 1.125rem; height: 1.125rem; will-change: transform; }
+.menu-x svg { width: 1.125rem; height: 1.125rem; }
 .menu-links { align-self: center; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: repeat(5, auto); grid-auto-flow: column; gap: 0 4rem; padding: 3rem 0; }
 .menu-links a { display: flex; align-items: baseline; gap: 1.25rem; font-size: 4rem; line-height: 1.05; letter-spacing: -.045em; font-weight: 600; padding: .25rem 0; opacity: 0; transform: translateY(2rem); }
 .menu-links a .n { font-family: var(--mono); font-size: .8125rem; letter-spacing: 0; color: #7aa7ff; font-weight: 400; }
@@ -807,7 +848,7 @@ html:not(.js) .loader { display: none; }
 .modal-bg { position: absolute; inset: 0; background: rgba(7,22,51,.45); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); opacity: 0; }
 .modal-panel { position: relative; width: min(46rem, 100%); max-height: calc(100svh - 2rem); overflow-y: auto; overscroll-behavior: contain; background: #fff; border-radius: var(--r-lg); padding: 2.5rem; opacity: 0; box-shadow: 0 2.5rem 6rem -2rem rgba(7,22,51,.55); }
 .modal-x { position: absolute; top: 1.25rem; right: 1.25rem; width: 2.75rem; height: 2.75rem; border-radius: 50%; border: 1px solid var(--line); background: #fff; display: grid; place-items: center; cursor: pointer; }
-.modal-x svg { width: 1rem; height: 1rem; will-change: transform; }
+.modal-x svg { width: 1rem; height: 1rem; }
 .modal h2 { font-size: 2.25rem; letter-spacing: -.04em; font-weight: 600; line-height: 1.05; padding-right: 3rem; }
 .modal .lede { margin: .75rem 0 1.75rem; font-size: 1.0625rem; }
 .form { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
@@ -918,7 +959,10 @@ html.is-locked .ta { visibility: hidden; }
 
 <!-- ════════ HERO ════════ -->
 <section class="hero on-dark" id="top" aria-label="Tekly">
-  <div class="hero-plate" id="heroPlate"><img src="/assets/photos/bench-hero.webp" alt="" fetchpriority="high" decoding="async"></div>
+  <div class="hero-plate" id="heroPlate"><picture>
+    <source media="(max-width: 639px)" srcset="/assets/photos/bench-hero-tall-750.webp" width="750" height="1333">
+    <img src="/assets/photos/bench-hero-1600.webp" srcset="/assets/photos/bench-hero-960.webp 960w, /assets/photos/bench-hero-1600.webp 1600w, /assets/photos/bench-hero-2400.webp 2400w" sizes="100vw" width="1600" height="1000" alt="" fetchpriority="high">
+  </picture></div>
   <header class="hdr">
     <nav class="hdr-nav" aria-label="Primary">
       <a href="#product">Product</a>
@@ -936,8 +980,7 @@ html.is-locked .ta { visibility: hidden; }
 
   <div class="hero-body">
     <div>
-      <p class="hero-kicker" data-hero-fade aria-hidden="true">Repair shop software for electronics, vehicles, tools &amp; marine</p>
-      <h1 id="heroTitle"><span class="sr">Repair shop software for electronics, vehicles, tools &amp; marine: </span><span aria-hidden="true" data-hero-words>Diagnose.<br>Approve.<br>Get paid.</span><span class="sr">Diagnose. Approve. Get paid.</span></h1>
+      <h1 id="heroTitle"><span class="hero-kicker" data-hero-fade>Repair shop software for electronics, vehicles, tools &amp; marine</span><span class="sr">: </span><span class="hero-words" data-hero-words>Diagnose. <br>Approve. <br>Get paid.</span></h1>
       <div class="hero-foot">
         <p class="hero-tag" id="heroTag"><span class="ln"><span class="lni">From the first complaint</span></span><span class="ln"><span class="lni">to the final payment.</span></span></p>
         <div data-hero-fade>
@@ -967,7 +1010,7 @@ html.is-locked .ta { visibility: hidden; }
   <div class="intro-grid">
     <p class="eyebrow">What Tekly does</p>
     <div>
-      <h2 class="sr" id="introTitle">What Tekly does</h2>
+      <h2 class="sr" id="introTitle">Repair shop management software</h2>
       <p class="intro-statement" data-reveal="words">Repair shop software that drafts the estimate, gets the customer's yes on their phone, books the parts to the job and posts the payout <span class="dim">— for every bench from phones to fleets.</span></p>
     </div>
   </div>
@@ -991,7 +1034,13 @@ html.is-locked .ta { visibility: hidden; }
   </div>
 
   <div class="flow">
-    <div class="rows" id="steps" role="tablist" aria-label="Job stages" aria-orientation="vertical"></div>
+    <div class="rows" id="steps" role="tablist" aria-label="Job stages" aria-orientation="vertical">
+      <button class="row" role="tab" id="st-0" aria-controls="sc-0" aria-selected="true" tabindex="0" data-rise><span class="num">01</span><span><span class="t">Intake</span><span class="d">Intake asks for exactly what your trade needs — IMEI, VIN or HIN — with condition photos and passcodes stored encrypted.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
+      <button class="row" role="tab" id="st-1" aria-controls="sc-1" aria-selected="false" tabindex="-1" data-rise><span class="num">02</span><span><span class="t">Estimate</span><span class="d">Tekly AI drafts labour and parts from the customer's words, using your own catalog and prices. You review and send.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
+      <button class="row" role="tab" id="st-2" aria-controls="sc-2" aria-selected="false" tabindex="-1" data-rise><span class="num">03</span><span><span class="t">Approval</span><span class="d">The customer approves line by line on their phone and signs. Declined work is saved for next time.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
+      <button class="row" role="tab" id="st-3" aria-controls="sc-3" aria-selected="false" tabindex="-1" data-rise><span class="num">04</span><span><span class="t">Parts</span><span class="d">Scan the box when it arrives and the part is written off to the right job — and the customer's ready time updates.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
+      <button class="row" role="tab" id="st-4" aria-controls="sc-4" aria-selected="false" tabindex="-1" data-rise><span class="num">05</span><span><span class="t">Paid</span><span class="d">Payment at the counter or by link. Revenue, margin and the technician's commission post the moment the job closes.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
+    </div>
 
     <div class="flow-screen" data-rise>
       <div class="ui screen" aria-label="Product preview">
@@ -1354,7 +1403,48 @@ html.is-locked .ta { visibility: hidden; }
     </div>
   </div>
   <div class="car" id="car" aria-roledescription="carousel" aria-label="Templates">
-    <div class="car-track" id="tradesGrid"></div>
+    <div class="car-track" id="tradesGrid">
+    <article class="tpl" role="group" aria-roledescription="slide" aria-label="Electronics, 1 of 4">
+      <div class="tile" data-tile><span class="tile-live" aria-hidden="true">Live</span><img src="/assets/photos/iphone-mat-600.webp" srcset="/assets/photos/iphone-mat-600.webp 600w, /assets/photos/iphone-mat-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="An iPhone opened up for repair on a blue work mat" loading="lazy" decoding="async" draggable="false" class="on"><img src="/assets/photos/repair-lab-1-600.webp" srcset="/assets/photos/repair-lab-1-600.webp 600w, /assets/photos/repair-lab-1-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A technician replacing parts inside a smartphone" loading="lazy" decoding="async" draggable="false"><img src="/assets/photos/repair-lab-2-600.webp" srcset="/assets/photos/repair-lab-2-600.webp 600w, /assets/photos/repair-lab-2-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A technician repairing a phone at a workbench" loading="lazy" decoding="async" draggable="false"><span class="tile-dots" aria-hidden="true"><i class="on"></i><i></i><i></i></span></div>
+      <div class="tpl-icons"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></svg><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg></div>
+      <h3>Electronics</h3>
+      <p class="tpl-desc">One template for every device on the bench.</p>
+      <ul class="tpl-covers" aria-label="Covers"><li>Phones</li><li>Tablets</li><li>Laptops</li><li>Desktops</li></ul>
+      <div class="tpl-form" aria-label="Example intake"><div class="tpl-form-h"><span>New job · intake</span><span class="mini-seg" role="group" aria-label="Device type"><button type="button" class="on" aria-pressed="true" data-k="0">Phone</button><button type="button" aria-pressed="false" data-k="1">Computer</button></span></div><dl><div><dt>Device</dt><dd>iPhone 14 Pro</dd></div><div><dt>IMEI</dt><dd>35 291811 402177 3</dd></div><div><dt>Passcode</dt><dd>•••••• encrypted</dd></div><div><dt>Storage</dt><dd>256 GB</dd></div></dl></div>
+      <p class="tpl-smart">Asks for the IMEI on phones and tablets, and the serial number on computers.</p>
+      <a class="link" href="/phone-repair-software/" data-spring="nudge">Phone &amp; computer repair software <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
+    </article>
+    <article class="tpl" role="group" aria-roledescription="slide" aria-label="Vehicles, 2 of 4">
+      <div class="tile" data-tile><span class="tile-live" aria-hidden="true">Live</span><img src="/assets/photos/motorcycle-600.webp" srcset="/assets/photos/motorcycle-600.webp 600w, /assets/photos/motorcycle-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A mechanic working on a motorcycle in a garage" loading="lazy" decoding="async" draggable="false" class="on"><img src="/assets/photos/mechanic-stool-600.webp" srcset="/assets/photos/mechanic-stool-600.webp 600w, /assets/photos/mechanic-stool-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A mechanic working on the front suspension of a raised pickup truck" loading="lazy" decoding="async" draggable="false"><img src="/assets/photos/workshop-garage-600.webp" srcset="/assets/photos/workshop-garage-600.webp 600w, /assets/photos/workshop-garage-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A mechanic at work in a vehicle workshop" loading="lazy" decoding="async" draggable="false"><span class="tile-dots" aria-hidden="true"><i class="on"></i><i></i><i></i></span></div>
+      <div class="tpl-icons"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15l2-5a2 2 0 0 1 2-1.5h10a2 2 0 0 1 2 1.5l2 5v2H3z"/><circle cx="7.5" cy="18" r="1.8"/><circle cx="16.5" cy="18" r="1.8"/></svg><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="7" width="12" height="9" rx="1"/><path d="M14 10h4l3 3v3h-7"/><circle cx="6" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5.5" cy="16.5" r="3"/><circle cx="18.5" cy="16.5" r="3"/><path d="M5.5 16.5l4-6h4l2 3h3M13.5 10.5l-2-3h-2"/></svg></div>
+      <h3>Vehicles</h3>
+      <p class="tpl-desc">From a family hatchback to a fleet truck or an RV.</p>
+      <ul class="tpl-covers" aria-label="Covers"><li>Cars</li><li>Trucks</li><li>RVs</li><li>Bikes</li></ul>
+      <div class="tpl-form" aria-label="Example intake"><div class="tpl-form-h"><span>New job · intake</span></div><dl><div><dt>Vehicle</dt><dd>2019 Honda CR-V</dd></div><div><dt>VIN</dt><dd>2HKRW2H5…KH604117</dd></div><div><dt>Plate</dt><dd>8KXM 214</dd></div><div><dt>Mileage</dt><dd>61,240 mi</dd></div></dl></div>
+      <p class="tpl-smart">Every visit stays on the vehicle's history, found by VIN or plate.</p>
+      <a class="link" href="/auto-repair-shop-software/" data-spring="nudge">Auto repair shop software <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
+    </article>
+    <article class="tpl" role="group" aria-roledescription="slide" aria-label="Tools &amp; small engine, 3 of 4">
+      <div class="tile" data-tile><span class="tile-live" aria-hidden="true">Live</span><img src="/assets/photos/generator-red-600.webp" srcset="/assets/photos/generator-red-600.webp 600w, /assets/photos/generator-red-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A portable petrol generator" loading="lazy" decoding="async" draggable="false" class="on"><img src="/assets/photos/tools-wall-600.webp" srcset="/assets/photos/tools-wall-600.webp 600w, /assets/photos/tools-wall-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="Spanners and sockets hanging on a workshop wall" loading="lazy" decoding="async" draggable="false"><img src="/assets/photos/generator-yard-600.webp" srcset="/assets/photos/generator-yard-600.webp 600w, /assets/photos/generator-yard-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A small-engine generator outdoors" loading="lazy" decoding="async" draggable="false"><span class="tile-dots" aria-hidden="true"><i class="on"></i><i></i><i></i></span></div>
+      <div class="tpl-icons"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h11l3 2v2l-3 2H8z"/><path d="M8 14l-2 6h4l1-6M17 11h4"/></svg><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15h14l2-5h-5l-2 2H5z"/><circle cx="7" cy="18" r="2"/><circle cx="16" cy="18" r="2"/><path d="M19 10l2-6"/></svg></div>
+      <h3>Tools &amp; small engine</h3>
+      <p class="tpl-desc">Workshop gear and outdoor power equipment in one template.</p>
+      <ul class="tpl-covers" aria-label="Covers"><li>Power tools</li><li>Mowers</li><li>Saws</li><li>Generators</li></ul>
+      <div class="tpl-form" aria-label="Example intake"><div class="tpl-form-h"><span>New job · intake</span></div><dl><div><dt>Item</dt><dd>21-inch push mower</dd></div><div><dt>Serial</dt><dd>2214 0938 7712</dd></div><div><dt>Engine</dt><dd>OHV 163 cc</dd></div><div><dt>Hours</dt><dd>212</dd></div></dl></div>
+      <p class="tpl-smart">Captures voltage for tools and engine hours for small engines.</p>
+      <a class="link" href="/small-engine-repair-software/" data-spring="nudge">Small engine repair software <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
+    </article>
+    <article class="tpl" role="group" aria-roledescription="slide" aria-label="Marine, 4 of 4">
+      <div class="tile" data-tile><span class="tile-live" aria-hidden="true">Live</span><img src="/assets/photos/outboard-students-600.webp" srcset="/assets/photos/outboard-students-600.webp 600w, /assets/photos/outboard-students-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="Technicians servicing an outboard motor on a test stand" loading="lazy" decoding="async" draggable="false" class="on"><img src="/assets/photos/boat-engine-600.webp" srcset="/assets/photos/boat-engine-600.webp 600w, /assets/photos/boat-engine-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A mechanic working on a boat's outboard engine on the water" loading="lazy" decoding="async" draggable="false"><span class="tile-dots" aria-hidden="true"><i class="on"></i><i></i></span></div>
+      <div class="tpl-icons"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15h18l-2.5 4.5h-13z"/><path d="M12 15V4l6 9h-6"/></svg></div>
+      <h3>Marine</h3>
+      <p class="tpl-desc">Built for boatyards, from winterising to a full repower.</p>
+      <ul class="tpl-covers" aria-label="Covers"><li>Outboards</li><li>Inboards</li><li>Hulls</li><li>Trailers</li></ul>
+      <div class="tpl-form" aria-label="Example intake"><div class="tpl-form-h"><span>New job · intake</span></div><dl><div><dt>Vessel</dt><dd>19 ft centre console</dd></div><div><dt>HIN</dt><dd>ABC12345D707</dd></div><div><dt>Engine serial</dt><dd>1B3L-401229</dd></div><div><dt>Length</dt><dd>19 ft</dd></div></dl></div>
+      <p class="tpl-smart">Tracks the hull ID and each engine's serial separately.</p>
+      <a class="link" href="/marine-repair-software/" data-spring="nudge">Marine repair software <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
+    </article>
+    </div>
   </div>
   <div class="car-foot"><div class="dots" id="carDots" role="group" aria-label="Choose template"></div><span>Drag, swipe or use the arrows.</span></div>
 </section>
@@ -1363,7 +1453,7 @@ html.is-locked .ta { visibility: hidden; }
 <section class="card-sec" id="about" aria-labelledby="aboutTitle">
   <div class="about-grid">
     <figure class="about-photo" data-rise>
-      <img id="aboutImg" src="/assets/photos/screwdriver.webp" alt="A technician's hands opening a device with a precision screwdriver" loading="lazy" decoding="async">
+      <img id="aboutImg" src="/assets/photos/screwdriver-640.webp" srcset="/assets/photos/screwdriver-640.webp 640w, /assets/photos/screwdriver-1000.webp 1000w" sizes="(max-width: 1024px) 90vw, 40rem" width="1000" height="1250" alt="A technician's hands opening a device with a precision screwdriver" loading="lazy" decoding="async">
       <figcaption class="glass">The work we build for: careful, hands-on, someone else's things.</figcaption>
     </figure>
     <div class="about-copy">
@@ -1397,7 +1487,7 @@ html.is-locked .ta { visibility: hidden; }
 <!-- ════════ TESTIMONIALS (placeholders) ════════
      PLACEHOLDER: the live site has no customer quotes. Replace with real, permissioned quotes
      (name, shop, city) before launch, or delete this section. -->
-<section class="card-sec tint" aria-labelledby="quotesTitle">
+<section class="card-sec tint" aria-labelledby="quotesTitle" hidden>
   <div class="sec-head">
     <p class="eyebrow">From shops on Tekly</p>
     <div>
@@ -1550,12 +1640,13 @@ html.is-locked .ta { visibility: hidden; }
 
   <footer class="foot">
     <div><a href="#top" class="wordmark"><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#mark"/></svg>tekly</a><p class="about-f">Repair shop software, from the first complaint to the final payment.</p></div>
-    <div><h2>Product</h2><ul><li><a href="#product">How a job moves</a></li><li><a href="#ai">Tekly AI</a></li><li><a href="#new">What's new</a></li><li><a href="#industries">Industries</a></li><li><a href="#pricing">Pricing</a></li></ul></div>
-    <div><h2>Software for</h2><ul><li><a href="/phone-repair-software/">Phone &amp; computer repair</a></li><li><a href="/auto-repair-shop-software/">Auto repair shops</a></li><li><a href="/small-engine-repair-software/">Small engine &amp; tools</a></li><li><a href="/marine-repair-software/">Marine repair</a></li></ul></div>
-    <div><h2>Company</h2><ul><li><a href="#about">About us</a></li><li><a href="#start" data-open-demo>Book a demo</a></li><li><a data-mail href="#start">Contact</a></li><li><a href="#faq">FAQ</a></li></ul></div>
-    <div><h2>Account</h2><ul><li><a data-app="signin" href="#start">Sign in</a></li><li><a data-app="signup" href="#start">Start free trial</a></li></ul></div>
+    <div><p class="foot-h">Product</p><ul><li><a href="#product">How a job moves</a></li><li><a href="#ai">Tekly AI</a></li><li><a href="#new">What's new</a></li><li><a href="#industries">Industries</a></li><li><a href="#pricing">Pricing</a></li></ul></div>
+    <div><p class="foot-h">Software for</p><ul><li><a href="/phone-repair-software/">Phone &amp; computer repair</a></li><li><a href="/auto-repair-shop-software/">Auto repair shops</a></li><li><a href="/small-engine-repair-software/">Small engine &amp; tools</a></li><li><a href="/marine-repair-software/">Marine repair</a></li></ul></div>
+    <div><p class="foot-h">Company</p><ul><li><a href="#about">About us</a></li><li><a href="#start" data-open-demo>Book a demo</a></li><li><a data-mail href="#start">Contact</a></li><li><a href="#faq">FAQ</a></li></ul></div>
+    <div><p class="foot-h">Account</p><ul><li><a data-app="signin" href="#start">Sign in</a></li><li><a data-app="signup" href="#start">Start free trial</a></li></ul></div>
   </footer>
-  <div class="legal"><span>© <span id="yr">2026</span> Tekly</span><span><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a></span><span>Product screens show sample data. Photos: Unsplash.</span></div>
+  <div class="legal"><span>© <span id="yr">2026</span> Tekly</span><span><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a></span><span>Product screens show sample data.</span></div>
+  <details class="credits"><summary>Photo credits</summary><ul><li>Repair lab 1: <a href="https://commons.wikimedia.org/wiki/File:Repair_Lab_(48115787881).jpg" rel="noopener">Redaktion NdW</a>, CC BY 2.0 (<a href="https://creativecommons.org/licenses/by/2.0" rel="noopener license">licence</a>)</li><li>Repair lab 2: <a href="https://commons.wikimedia.org/wiki/File:Repair_Lab_(48115819418).jpg" rel="noopener">Redaktion NdW</a>, CC BY 2.0 (<a href="https://creativecommons.org/licenses/by/2.0" rel="noopener license">licence</a>)</li><li>Mechanic stool: <a href="https://commons.wikimedia.org/wiki/File:DSC_6745_A_mechanic_sitting_on_a_small_wooden_stool_working_on_the_front_suspension_of_a_raised_pickup_truck_in_a_garage.jpg" rel="noopener">PattayaPatrol</a>, CC BY-SA 4.0 (<a href="https://creativecommons.org/licenses/by-sa/4.0" rel="noopener license">licence</a>)</li><li>Generator red: <a href="https://commons.wikimedia.org/wiki/File:Portable_electrical_generator_side.jpg" rel="noopener">Wikimedia Commons</a>, CC BY-SA 3.0 (<a href="http://creativecommons.org/licenses/by-sa/3.0/" rel="noopener license">licence</a>)</li><li>Generator yard: <a href="https://commons.wikimedia.org/wiki/File:Let%27s_Generate!_(29004208321).jpg" rel="noopener">Alan Levine from Strawberry, United States</a>, CC BY 2.0 (<a href="https://creativecommons.org/licenses/by/2.0" rel="noopener license">licence</a>)</li><li>Outboard students: <a href="https://commons.wikimedia.org/wiki/File:Students_work_on_an_outboard_motor._(21258483309).jpg" rel="noopener">Official U.S. Navy Page from United States of America</a>, Public domain</li><li>Boat engine: <a href="https://commons.wikimedia.org/wiki/File:Engineer_person_working_on_boat_engine.jpg" rel="noopener">Hillebrand Steve, U.S. Fish and Wildlife Service</a>, Public domain</li><li>Hero, phone teardown, motorcycle, workshop, tool wall and screwdriver photos: Unsplash, <a href="https://unsplash.com/license" rel="noopener license">Unsplash License</a></li></ul></details>
   <div class="foot-word" aria-hidden="true">tekly</div>
 </section>
 
@@ -1623,14 +1714,13 @@ html.is-locked .ta { visibility: hidden; }
 
 <script defer src="/site.config.js"></script>
 <script defer src="/marketing.js"></script>
-<script defer src="/assistant.js"></script>
 <script type="importmap">
-  { "imports": { "lenis": "https://cdn.jsdelivr.net/npm/lenis@1.1.18/dist/lenis.mjs" } }
+  { "imports": { "lenis": "/assets/vendor/lenis-1.1.18.mjs" } }
 </script>
 <script type="module">
 /* ══════════════════════════════════════════════════════════════════════════
-   Motion: one tiny rAF spring helper, clip-mask reveals, in-view rises,
-   hover springs, parallax, carousels, loader, menu and modal.
+   Motion: a tiny rAF spring helper (hovers, menu, modal, carousel), compositor
+   (WAAPI) clip-mask and rise reveals, parallax, live tiles, loader.
    Content wiring (links, plans, demo form) mirrors main.js on the live page.
    ══════════════════════════════════════════════════════════════════════════ */
 const C = window.TEKLY_SITE || {};
@@ -1642,6 +1732,8 @@ const canHover = () => matchMedia("(min-width: 769px) and (hover: hover)").match
 if (REDUCED) root.classList.add("reduced");
 const cur = C.currency || "$";
 const money = (n, dp = 0) => cur + Number(n).toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+const EXPO = "cubic-bezier(.16, 1, .3, 1)";
+const SPRINGY = "cubic-bezier(.22, 1.2, .36, 1)";   // a settled spring, run on the compositor
 
 /* ── Spring: v += (-tension*(x-target) - friction*v)*dt ── */
 class Spring {
@@ -1678,23 +1770,20 @@ $$("[data-trial]").forEach(el => { el.textContent = C.trialDays ?? 14; if (el.da
 $$("[data-save]").forEach(el => { el.textContent = `${12 - (C.yearlyMonths ?? 10)} months free`; });
 $("#yr").textContent = new Date().getFullYear();
 
-/* ── Lenis smooth scroll + scroll lock ── */
-let lenis = null;
-if (!REDUCED) {
-  try {
-    const { default: Lenis } = await import("lenis");
-    lenis = new Lenis({ lerp: 0.1, smoothWheel: true });
-    const raf = t => { lenis.raf(t); requestAnimationFrame(raf); };
-    requestAnimationFrame(raf);
-  } catch { lenis = null; }   // CDN blocked → native scrolling still works
-}
-let locks = 0;
+/* ── Scroll lock (Lenis arrives a moment later and never blocks first paint) ── */
+let lenis = null, locks = 0;
 const lock = () => { if (locks++ === 0) { lenis?.stop(); root.classList.add("is-locked"); } };
 const unlock = () => { if (locks > 0 && --locks === 0) { lenis?.start(); root.classList.remove("is-locked"); } };
+if (!REDUCED) {
+  import("lenis").then(({ default: Lenis }) => {
+    lenis = new Lenis({ lerp: 0.15, smoothWheel: true, autoRaf: true });
+    if (locks) lenis.stop();
+  }).catch(() => {});   // blocked or offline → native scrolling
+}
 const scrollToHash = hash => {
   const el = hash === "#top" ? 0 : document.querySelector(hash);
   if (el === null) return;
-  if (lenis) lenis.scrollTo(el, { offset: el === 0 ? 0 : -12, duration: 1.4 });
+  if (lenis) lenis.scrollTo(el, { offset: el === 0 ? 0 : -12, duration: 0.9 });
   else if (el === 0) scrollTo({ top: 0, behavior: REDUCED ? "auto" : "smooth" });
   else el.scrollIntoView({ behavior: REDUCED ? "auto" : "smooth" });
 };
@@ -1704,17 +1793,16 @@ document.addEventListener("click", e => {
   const h = a.getAttribute("href"); if (h.length < 2) return;
   e.preventDefault();
   const go = () => { scrollToHash(h); history.replaceState(null, "", h); };
-  if (a.hasAttribute("data-close-menu") && menuOpen) { closeMenu(false); setTimeout(go, 420); } else go();
+  if (a.hasAttribute("data-close-menu") && menuOpen) { closeMenu(false); setTimeout(go, 320); } else go();
 });
 
-/* ── Word / line splitting for clip-mask reveals ── */
+/* ── Word splitting for clip-mask reveals (text stays in the DOM for SEO) ── */
 const splitWords = el => {
   const walk = node => {
     [...node.childNodes].forEach(n => {
       if (n.nodeType === 3) {
-        const parts = n.textContent.split(/(\s+)/);
         const frag = document.createDocumentFragment();
-        parts.forEach(p => {
+        n.textContent.split(/(\s+)/).forEach(p => {
           if (!p) return;
           if (/^\s+$/.test(p)) { frag.appendChild(document.createTextNode(" ")); return; }
           const w = document.createElement("span"); w.className = "w";
@@ -1722,45 +1810,43 @@ const splitWords = el => {
           w.appendChild(i); frag.appendChild(w);
         });
         n.replaceWith(frag);
-      } else if (n.nodeType === 1 && n.tagName !== "BR" && !n.classList.contains("w")) walk(n);
+      } else if (n.nodeType === 1 && n.tagName !== "BR" && !n.classList.contains("w") && !n.classList.contains("sr")) walk(n);
     });
   };
   walk(el);
   return $$(".wi", el);
 };
-const revealInners = (inners, { stagger = 45, duration = 1000, delay = 0 } = {}) =>
-  Promise.all(inners.map((s, i) => tween(duration, easeOutExpo, t => {
-    s.style.transform = `translateY(${(1 - t) * 115}%)`; s.style.opacity = Math.min(1, t * 1.6);
-  }, delay + i * stagger)));
-
-/* ── In-view reveals (once) ── */
-const rise = (el, delay) => {
-  const s = new Spring(0, { tension: 150, friction: 22 }, p => {
-    el.style.opacity = Math.min(1, Math.max(0, p));
-    el.style.transform = `translateY(${(1 - p) * 1.75}rem)`;
-    if (p === 1) el.style.transform = "none";
-  });
-  setTimeout(() => s.set(1), REDUCED ? 0 : delay);
+const revealInners = (inners, { stagger = 14, duration = 650, delay = 0, cap = 350 } = {}) => inners.forEach((s, i) => {
+  if (REDUCED) { s.style.transform = "none"; s.style.opacity = 1; return; }
+  s.animate([{ transform: "translateY(115%)", opacity: 0 }, { transform: "translateY(0)", opacity: 1 }],
+    { duration, delay: delay + Math.min(i * stagger, cap), easing: EXPO, fill: "both" });
+});
+const rise = (el, delay = 0) => {
+  if (REDUCED) { el.style.opacity = 1; el.style.transform = "none"; return; }
+  el.animate([{ opacity: 0, transform: "translateY(1rem)" }, { opacity: 1, transform: "none" }],
+    { duration: 650, delay, easing: SPRINGY, fill: "backwards" }).finished.then(() => { el.style.opacity = 1; el.style.transform = "none"; });
+  el.style.opacity = 1; el.style.transform = "none";
 };
+
+/* ── In-view reveals (once), started just before they enter the viewport ── */
 const io = new IntersectionObserver(entries => entries.forEach(e => {
   if (!e.isIntersecting) return;
   io.unobserve(e.target);
   const el = e.target;
-  if (el.matches("[data-reveal]")) revealInners(el._inners || [], { stagger: 38, duration: 1100 });
+  if (el.matches("[data-reveal]")) revealInners(el._inners || []);
   else {
     const sibs = [...el.parentElement.children].filter(c => c.hasAttribute("data-rise"));
-    const idx = Math.max(0, sibs.indexOf(el));
-    rise(el, Math.min(idx, 6) * 90);
+    rise(el, Math.min(Math.max(0, sibs.indexOf(el)), 4) * 50);
   }
-}), { rootMargin: "0px 0px -6% 0px", threshold: 0.01 });
+}), { rootMargin: "0px 0px 8% 0px" });
 $$("[data-reveal]").forEach(el => { el._inners = splitWords(el); io.observe(el); });
 $$("[data-rise]").forEach(el => io.observe(el));
 
 /* ── Hover springs (off at ≤768px) ── */
 const bindHover = el => {
   const kind = el.dataset.spring;
-  let target = el, apply;
-  if (kind === "nudge") { target = $(".arr", el); if (!target) return; const s = new Spring(0, { tension: 300, friction: 18 }, x => target.style.transform = `translateX(${x}px)`); apply = on => s.set(on ? 5 : 0); }
+  let apply;
+  if (kind === "nudge") { const t = $(".arr", el); if (!t) return; const s = new Spring(0, { tension: 300, friction: 18 }, x => t.style.transform = `translateX(${x}px)`); apply = on => s.set(on ? 5 : 0); }
   else if (kind === "lift") { const s = new Spring(0, { tension: 220, friction: 22 }, y => el.style.transform = `translateY(${y}px)`); apply = on => s.set(on ? -8 : 0); }
   else if (kind === "scale") { const s = new Spring(1, { tension: 240, friction: 22 }, v => el.style.transform = `scale(${v})`); apply = on => s.set(on ? 1.03 : 1); }
   else if (kind === "pop") { const svg = $("svg", el); const s = new Spring(0, { tension: 300, friction: 18 }, x => svg.style.transform = `translateX(${x * (el.id === "carPrev" ? -1 : 1)}px)`); apply = on => s.set(on ? 4 : 0); }
@@ -1773,7 +1859,6 @@ const bindHover = el => {
 };
 const bindHovers = (scope = document) => $$("[data-spring]", scope).forEach(el => { if (el._sp) return; el._sp = 1; bindHover(el); });
 bindHovers();
-// card icons scale up on card hover
 $$(".new-card").forEach(card => {
   const ico = $(".ico", card); const s = new Spring(1, { tension: 260, friction: 18 }, v => ico.style.transform = `scale(${v})`);
   card.addEventListener("pointerenter", () => canHover() && s.set(1.15)); card.addEventListener("pointerleave", () => s.set(1));
@@ -1805,64 +1890,56 @@ $("#gcar").addEventListener("pointerenter", () => { gPaused = true; clearInterva
 $("#gcar").addEventListener("pointerleave", () => { gPaused = false; gStart(); });
 $("#gcar").addEventListener("focusin", () => { gPaused = true; clearInterval(gTimer); });
 
-/* ── Hero parallax + ghost words + floating bar ── */
+/* ── Scroll: parallax + floating bar. Geometry is measured on resize, never per frame. ── */
 const hero = $("#top"), plate = $("#heroPlate"), ghostA = $("#ghostA"), ghostB = $("#ghostB"), ind = $("#industries"), minibar = $("#minibar");
 const aboutImg = $("#aboutImg"), about = $("#about");
-const onScroll = () => {
-  const y = scrollY, vh = innerHeight;
+let G = {}, barOn = null, ticking = false;
+const docTop = el => el.getBoundingClientRect().top + scrollY;
+const measure = () => { G = { vh: innerHeight, heroH: hero.offsetHeight, indT: docTop(ind), indH: ind.offsetHeight, abT: docTop(about), abH: about.offsetHeight }; };
+const frame = () => {
+  ticking = false;
+  const y = scrollY, { vh, heroH, indT, indH, abT, abH } = G;
   if (!REDUCED) {
-    const hp = Math.min(1, Math.max(0, y / hero.offsetHeight));
-    plate.style.transform = `translate3d(0, ${hp * 12}%, 0)`;
-    const r = ind.getBoundingClientRect(), ip = Math.min(1, Math.max(0, (vh - r.top) / (vh + r.height)));
-    ghostA.style.transform = `translate3d(${(ip - .5) * -12}rem, 0, 0)`;
-    ghostB.style.transform = `translate3d(${(ip - .5) * 12}rem, 0, 0)`;
-    const a = about.getBoundingClientRect(), ap = Math.min(1, Math.max(0, (vh - a.top) / (vh + a.height)));
-    aboutImg.style.transform = `translate3d(0, ${-ap * 13}%, 0)`;
+    if (y < heroH) plate.style.transform = `translate3d(0, ${(y / heroH) * 12}%, 0)`;
+    if (y + vh > indT && y < indT + indH) {
+      const ip = (y + vh - indT) / (vh + indH);
+      ghostA.style.transform = `translate3d(${(ip - .5) * -6}rem, 0, 0)`;
+      ghostB.style.transform = `translate3d(${(ip - .5) * 6}rem, 0, 0)`;
+    }
+    if (y + vh > abT && y < abT + abH) aboutImg.style.transform = `translate3d(0, ${-((y + vh - abT) / (vh + abH)) * 13}%, 0)`;
   }
-  minibar.classList.toggle("show", y > hero.offsetHeight - 80 && !menuOpen);
+  const on = y > heroH - 80 && !menuOpen;
+  if (on !== barOn) { barOn = on; minibar.classList.toggle("show", on); }
 };
-(lenis ? lenis.on("scroll", onScroll) : addEventListener("scroll", onScroll, { passive: true }));
-addEventListener("resize", onScroll);
+const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(frame); } };
+addEventListener("scroll", onScroll, { passive: true });
+addEventListener("resize", () => { measure(); onScroll(); }, { passive: true });
+addEventListener("load", () => { measure(); onScroll(); });
+measure();
 
-/* ── Job stages: numbered rows ↔ screen ── */
-const STAGES = [
-  ["Intake", "WO-1042 · Intake", "Intake asks for exactly what your trade needs — IMEI, VIN or HIN — with condition photos and passcodes stored encrypted."],
-  ["Estimate", "E-1042 · Estimate", "Tekly AI drafts labour and parts from the customer's words, using your own catalog and prices. You review and send."],
-  ["Approval", "E-1042 · Approval", "The customer approves line by line on their phone and signs. Declined work is saved for next time."],
-  ["Parts", "PO-2208 · Parts", "Scan the box when it arrives and the part is written off to the right job — and the customer's ready time updates."],
-  ["Paid", "Today · Paid", "Payment at the counter or by link. Revenue, margin and the technician's commission post the moment the job closes."],
-];
-const stepsBox = $("#steps");
-stepsBox.innerHTML = STAGES.map(([t, , d], i) => `<button class="row" role="tab" id="st-${i}" aria-controls="sc-${i}" aria-selected="${!i}" tabindex="${i ? -1 : 0}" data-rise>
-  <span class="num">${String(i + 1).padStart(2, "0")}</span><span><span class="t">${t}</span><span class="d">${d}</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>`).join("");
-$$(".row", stepsBox).forEach(r => io.observe(r));
-const steps = $$(".row", stepsBox), scenes = $$(".scene"), screenTitle = $("#screenTitle");
-let stage = 0, stageStopped = REDUCED, stageRaf = 0, t0 = 0;
-const STAGE_MS = 6500;
+/* ── Job stages: numbered rows ↔ screen; the progress bar is a CSS animation ── */
+const STAGE_TITLES = ["WO-1042 · Intake", "E-1042 · Estimate", "E-1042 · Approval", "PO-2208 · Parts", "Today · Paid"];
+const stepsBox = $("#steps"), steps = $$(".row", stepsBox), scenes = $$(".scene"), screenTitle = $("#screenTitle");
+let stage = 0;
 const showStage = (i, focus) => {
   stage = (i + steps.length) % steps.length;
-  steps.forEach((s, k) => { const on = k === stage; s.setAttribute("aria-selected", String(on)); s.tabIndex = on ? 0 : -1; s.style.setProperty("--p", on && !stageStopped ? "0%" : "100%"); });
-  scenes.forEach((s, k) => { const was = s.hidden; s.hidden = k !== stage; if (!s.hidden && was) { s.classList.remove("enter"); void s.offsetWidth; s.classList.add("enter"); } });
-  screenTitle.textContent = STAGES[stage][1];
+  steps.forEach((s, k) => { const on = k === stage; s.setAttribute("aria-selected", String(on)); s.tabIndex = on ? 0 : -1; });
+  scenes.forEach((s, k) => { const was = s.hidden; s.hidden = k !== stage; if (!s.hidden && was && !REDUCED) s.animate([{ opacity: 0, transform: "translateY(.75rem)" }, { opacity: 1, transform: "none" }], { duration: 500, easing: EXPO }); });
+  screenTitle.textContent = STAGE_TITLES[stage];
   if (focus) steps[stage].focus();
-  t0 = performance.now();
 };
-const stageTick = now => {
-  if (stageStopped) return;
-  const p = Math.min(1, (now - t0) / STAGE_MS);
-  steps[stage].style.setProperty("--p", (p * 100).toFixed(1) + "%");
-  if (p >= 1) showStage(stage + 1);
-  stageRaf = requestAnimationFrame(stageTick);
-};
-const stopStages = () => { stageStopped = true; cancelAnimationFrame(stageRaf); steps.forEach(s => s.style.setProperty("--p", "100%")); };
-steps.forEach((s, i) => s.addEventListener("click", () => { stopStages(); showStage(i); }));
+const stopStages = () => stepsBox.classList.add("stopped");
+if (REDUCED) stopStages();
+steps.forEach((s, i) => {
+  s.addEventListener("click", () => { stopStages(); showStage(i); });
+  $(".bar i", s).addEventListener("animationend", () => { if (!stepsBox.classList.contains("stopped")) showStage(stage + 1); });
+});
 stepsBox.addEventListener("keydown", e => {
   const d = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
   if (e.key === "Home" || e.key === "End") { e.preventDefault(); stopStages(); showStage(e.key === "Home" ? 0 : steps.length - 1, true); }
   else if (d) { e.preventDefault(); stopStages(); showStage(stage + d, true); }
 });
-showStage(0);
-new IntersectionObserver(([e]) => { cancelAnimationFrame(stageRaf); if (e.isIntersecting && !stageStopped) { t0 = performance.now(); stageRaf = requestAnimationFrame(stageTick); } }, { threshold: .3 }).observe($("#product"));
+new IntersectionObserver(([e]) => stepsBox.classList.toggle("paused", !e.isIntersecting), { threshold: .3 }).observe($("#product"));
 
 /* ── Phone approval demo ── */
 const pRows = $$("#heroPhone .p-row"), approveBtn = $("#approveBtn"), cap = $("#approveCap");
@@ -1888,108 +1965,73 @@ $$("[data-count]").forEach(el => {
   new IntersectionObserver(([e], obs) => {
     if (!e.isIntersecting) return; obs.disconnect();
     const to = +el.dataset.count, pre = el.dataset.prefix || "";
-    tween(1400, easeOutExpo, t => { el.textContent = pre + Math.round(to * t); }, 200);
+    tween(900, easeOutExpo, t => { el.textContent = pre + Math.round(to * t); }, 100);
   }, { threshold: .4 }).observe(el);
 });
 
-/* ── Industries: templates in a manual carousel ── */
-const I = {
-  phone: '<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M10.5 18.5h3"/>',
-  computer: '<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/>',
-  tools: '<path d="M3 8h11l3 2v2l-3 2H8z"/><path d="M8 14l-2 6h4l1-6M17 11h4"/>',
-  "small-engine": '<path d="M3 15h14l2-5h-5l-2 2H5z"/><circle cx="7" cy="18" r="2"/><circle cx="16" cy="18" r="2"/><path d="M19 10l2-6"/>',
-  auto: '<path d="M3 15l2-5a2 2 0 0 1 2-1.5h10a2 2 0 0 1 2 1.5l2 5v2H3z"/><circle cx="7.5" cy="18" r="1.8"/><circle cx="16.5" cy="18" r="1.8"/>',
-  motorcycle: '<circle cx="5.5" cy="16.5" r="3"/><circle cx="18.5" cy="16.5" r="3"/><path d="M5.5 16.5l4-6h4l2 3h3M13.5 10.5l-2-3h-2"/>',
-  marine: '<path d="M3 15h18l-2.5 4.5h-13z"/><path d="M12 15V4l6 9h-6"/>',
-  fleet: '<rect x="2" y="7" width="12" height="9" rx="1"/><path d="M14 10h4l3 3v3h-7"/><circle cx="6" cy="18" r="2"/><circle cx="17" cy="18" r="2"/>',
-};
-const TEMPLATES = [
-  { name: "Electronics", slug: "phone-repair-software", label: "Phone & computer repair software", icons: ["phone", "computer"], covers: ["Phones", "Tablets", "Laptops", "Desktops"], photo: "/assets/photos/iphone-mat.webp", photoAlt: "An iPhone opened up for repair on a blue work mat",
-    desc: "One template for every device on the bench.", smart: "Asks for the IMEI on phones and tablets, and the serial number on computers.",
-    fields: [["Device", "iPhone 14 Pro"], ["IMEI", "35 291811 402177 3"], ["Passcode", "•••••• encrypted"], ["Storage", "256 GB"]],
-    alt: { tabs: ["Phone", "Computer"], fields: [["Device", "MacBook Air M2"], ["Serial number", "C02FK3XYQ6L4"], ["Password", "•••••• encrypted"], ["Charger", "Received"]] } },
-  { name: "Vehicles", slug: "auto-repair-shop-software", label: "Auto repair shop software", icons: ["auto", "fleet", "motorcycle"], covers: ["Cars", "Trucks", "RVs", "Bikes"], photo: "/assets/photos/motorcycle.webp", photoAlt: "A mechanic working on a motorcycle in a garage",
-    desc: "From a family hatchback to a fleet truck or an RV.", smart: "Every visit stays on the vehicle's history, found by VIN or plate.",
-    fields: [["Vehicle", "2019 Honda CR-V"], ["VIN", "2HKRW2H5…KH604117"], ["Plate", "8KXM 214"], ["Mileage", "61,240 mi"]] },
-  { name: "Tools & small engine", slug: "small-engine-repair-software", label: "Small engine repair software", icons: ["tools", "small-engine"], covers: ["Power tools", "Mowers", "Saws", "Generators"], photo: "/assets/photos/workshop-garage.webp", photoAlt: "A workshop with tools and equipment",
-    desc: "Workshop gear and outdoor power equipment in one template.", smart: "Captures voltage for tools and engine hours for small engines.",
-    fields: [["Item", "21-inch push mower"], ["Serial", "2214 0938 7712"], ["Engine", "OHV 163 cc"], ["Hours", "212"]] },
-  { name: "Marine", slug: "marine-repair-software", label: "Marine repair software", icons: ["marine"], covers: ["Outboards", "Inboards", "Hulls", "Trailers"],
-    desc: "Built for boatyards, from winterising to a full repower.", smart: "Tracks the hull ID and each engine's serial separately.",
-    fields: [["Vessel", "19 ft centre console"], ["HIN", "ABC12345D707"], ["Engine serial", "1B3L-401229"], ["Length", "19 ft"]] },
-];
+/* ── Industries: Phone/Computer intake toggle ── */
+const ALT = [[["Device", "iPhone 14 Pro"], ["IMEI", "35 291811 402177 3"], ["Passcode", "•••••• encrypted"], ["Storage", "256 GB"]],
+             [["Device", "MacBook Air M2"], ["Serial number", "C02FK3XYQ6L4"], ["Password", "•••••• encrypted"], ["Charger", "Received"]]];
 const dl = f => f.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("");
-const ico = id => `<svg viewBox="0 0 24 24" aria-hidden="true">${I[id]}</svg>`;
-const track = $("#tradesGrid");
-track.innerHTML = TEMPLATES.map((t, i) => `<article class="tpl" role="group" aria-roledescription="slide" aria-label="${t.name}, ${i + 1} of ${TEMPLATES.length}">
-  ${t.photo ? `<div class="tpl-photo"><img src="${t.photo}" alt="${t.photoAlt}" loading="lazy" decoding="async" draggable="false"></div>` : ""}
-  <div class="tpl-icons">${t.icons.map(ico).join("")}</div>
-  <h3>${t.name}</h3>
-  <p class="tpl-desc">${t.desc}</p>
-  <ul class="tpl-covers" aria-label="Covers">${t.covers.map(c => `<li>${c}</li>`).join("")}</ul>
-  <div class="tpl-form" aria-label="Example intake">
-    <div class="tpl-form-h"><span>New job · intake</span>${t.alt ? `<span class="mini-seg" role="group" aria-label="Device type">${t.alt.tabs.map((x, k) => `<button type="button" class="${k ? "" : "on"}" aria-pressed="${!k}" data-k="${k}">${x}</button>`).join("")}</span>` : ""}</div>
-    <dl>${dl(t.fields)}</dl>
-  </div>
-  <p class="tpl-smart">${t.smart}</p>
-  <a class="link" href="/${t.slug}/" data-spring="nudge">${t.label} <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
-</article>`).join("");
-bindHovers(track);
 $$(".mini-seg").forEach(seg => seg.addEventListener("click", e => {
   const btn = e.target.closest("button"); if (!btn) return;
-  const t = TEMPLATES[0], k = +btn.dataset.k;
   $$("button", seg).forEach(x => { x.classList.toggle("on", x === btn); x.setAttribute("aria-pressed", String(x === btn)); });
   const box = seg.closest(".tpl-form").querySelector("dl");
-  box.classList.add("swap"); setTimeout(() => { box.innerHTML = dl(k ? t.alt.fields : t.fields); box.classList.remove("swap"); }, 140);
+  box.classList.add("swap"); setTimeout(() => { box.innerHTML = dl(ALT[+btn.dataset.k]); box.classList.remove("swap"); }, 140);
 }));
-$("#d-ind").insertAdjacentHTML("beforeend", TEMPLATES.map(t => `<option>${t.name}</option>`).join("") + "<option>More than one of these</option>");
+$("#d-ind").insertAdjacentHTML("beforeend", $$(".tpl h3").map(h => `<option>${h.textContent}</option>`).join("") + "<option>More than one of these</option>");
 
-const cards = $$(".tpl", track), carDots = $("#carDots"), prev = $("#carPrev"), next = $("#carNext");
+/* ── Live tiles: each trade's photos slide through while the card is on screen ── */
+$$("[data-tile]").forEach((tile, n) => {
+  const imgs = $$("img", tile), dots = $$(".tile-dots i", tile);
+  if (imgs.length < 2 || REDUCED) return;
+  let k = 0, timer = 0;
+  const step = () => {
+    const prev = imgs[k]; k = (k + 1) % imgs.length; const next = imgs[k];
+    prev.classList.remove("on"); prev.classList.add("out");
+    next.classList.remove("out"); next.classList.add("on");
+    dots.forEach((d, i) => d.classList.toggle("on", i === k));
+    setTimeout(() => prev.classList.remove("out"), 900);
+  };
+  new IntersectionObserver(([e]) => {
+    clearTimeout(timer); clearInterval(timer);
+    if (e.isIntersecting) timer = setTimeout(() => { step(); timer = setInterval(step, 3400); }, 1200 + n * 700);
+  }, { threshold: .4 }).observe(tile);
+});
+
+/* ── Industries carousel (arrows, dots, swipe) ── */
+const track = $("#tradesGrid"), cards = $$(".tpl", track), carDots = $("#carDots"), prev = $("#carPrev"), next = $("#carNext"), car = $("#car");
 let cIdx = 0;
-const trackSpring = new Spring(0, { tension: 170, friction: 26 }, x => { track.style.transform = `translate3d(${x}px,0,0)`; });
-const step = () => cards.length > 1 ? cards[1].offsetLeft - cards[0].offsetLeft : 0;
-const maxIdx = () => {
-  const vis = $("#car").clientWidth - parseFloat(getComputedStyle($("#car")).paddingLeft) * 2;
-  const s = step(); if (!s) return 0;
-  return Math.max(0, Math.ceil((track.scrollWidth - vis) / s - 0.05));
-};
+const trackSpring = new Spring(0, { tension: 190, friction: 26 }, x => { track.style.transform = `translate3d(${x}px,0,0)`; });
+const stepW = () => cards.length > 1 ? cards[1].offsetLeft - cards[0].offsetLeft : 0;
+const visW = () => car.clientWidth - parseFloat(getComputedStyle(car).paddingLeft) * 2;
+const maxIdx = () => { const s = stepW(); return s ? Math.max(0, Math.ceil((track.scrollWidth - visW()) / s - 0.05)) : 0; };
 const renderDots = () => {
-  const n = maxIdx() + 1;
-  carDots.innerHTML = Array.from({ length: n }, (_, i) => `<button type="button" aria-label="Go to ${TEMPLATES[i].name}"></button>`).join("");
+  carDots.innerHTML = Array.from({ length: maxIdx() + 1 }, (_, i) => `<button type="button" aria-label="Go to ${$("h3", cards[i]).textContent}"></button>`).join("");
   $$("button", carDots).forEach((b, i) => b.addEventListener("click", () => goTo(i)));
 };
 const goTo = (i, immediate) => {
   const m = maxIdx(); cIdx = Math.max(0, Math.min(m, i));
-  const vis = $("#car").clientWidth - parseFloat(getComputedStyle($("#car")).paddingLeft) * 2;
-  const x = -Math.min(cIdx * step(), Math.max(0, track.scrollWidth - vis));
-  trackSpring.set(x, { immediate });
+  trackSpring.set(-Math.min(cIdx * stepW(), Math.max(0, track.scrollWidth - visW())), { immediate });
   prev.disabled = cIdx === 0; next.disabled = cIdx === m;
   $$("button", carDots).forEach((b, k) => b.setAttribute("aria-current", String(k === cIdx)));
 };
 prev.addEventListener("click", () => goTo(cIdx - 1));
 next.addEventListener("click", () => goTo(cIdx + 1));
-$("#car").addEventListener("keydown", e => { if (e.target.closest("input,button.on")) return; if (e.key === "ArrowRight") goTo(cIdx + 1); if (e.key === "ArrowLeft") goTo(cIdx - 1); });
-// drag / swipe
+car.addEventListener("keydown", e => { if (e.target.closest("input,.mini-seg")) return; if (e.key === "ArrowRight") goTo(cIdx + 1); if (e.key === "ArrowLeft") goTo(cIdx - 1); });
 {
   let sx = 0, sy = 0, base = 0, dragging = false, axis = null;
-  const car = $("#car");
   car.addEventListener("pointerdown", e => { if (e.target.closest("a,button")) return; sx = e.clientX; sy = e.clientY; base = trackSpring.x; dragging = true; axis = null; });
   addEventListener("pointermove", e => {
     if (!dragging) return;
     const dx = e.clientX - sx, dy = e.clientY - sy;
     if (!axis) { if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return; axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y"; }
-    if (axis !== "x") return;
-    trackSpring.set(base + dx, { immediate: true });
-  });
-  addEventListener("pointerup", e => {
-    if (!dragging) return; dragging = false;
-    if (axis !== "x") return;
-    const dx = e.clientX - sx;
-    goTo(cIdx + (dx < -50 ? 1 : dx > 50 ? -1 : 0));
-  });
+    if (axis === "x") trackSpring.set(base + dx, { immediate: true });
+  }, { passive: true });
+  addEventListener("pointerup", e => { if (!dragging) return; dragging = false; if (axis !== "x") return; const dx = e.clientX - sx; goTo(cIdx + (dx < -50 ? 1 : dx > 50 ? -1 : 0)); });
 }
 renderDots(); goTo(0, true);
-addEventListener("resize", () => { renderDots(); goTo(cIdx, true); });
+addEventListener("resize", () => { renderDots(); goTo(cIdx, true); }, { passive: true });
 
 /* ── Pricing ── */
 let billing = "monthly";
@@ -2029,60 +2071,59 @@ document.dispatchEvent(new Event("tekly:links-ready"));
 /* ── Fullscreen menu ── */
 const menu = $("#menu"), menuBg = $(".menu-bg", menu), menuLinks = $$(".menu-links a", menu), menuBottom = $(".menu-bottom", menu);
 let menuOpen = false, menuOpener = null;
-const fade = (el, to, ms = 450) => { const from = +getComputedStyle(el).opacity; return tween(ms, easeOutExpo, t => { el.style.opacity = from + (to - from) * t; }); };
+const fade = (el, to, ms = 400) => { const from = +getComputedStyle(el).opacity; return tween(ms, easeOutExpo, t => { el.style.opacity = from + (to - from) * t; }); };
 const openMenu = opener => {
   if (menuOpen) return; menuOpen = true; menuOpener = opener; lock();
   menu.hidden = false; menu.classList.add("open");
   $$("[data-open-menu]").forEach(b => b.setAttribute("aria-expanded", "true"));
-  minibar.classList.remove("show");
-  fade(menuBg, 1, 500);
+  minibar.classList.remove("show"); barOn = false;
+  fade(menuBg, 1, 350);
   menuLinks.forEach((a, i) => { a.style.opacity = 0; a.style.transform = "translateY(2rem)";
-    const s = new Spring(0, { tension: 140, friction: 20 }, p => { a.style.opacity = Math.min(1, Math.max(0, p)); a.style.transform = `translateY(${(1 - p) * 2}rem)`; });
+    const s = new Spring(0, { tension: 200, friction: 22 }, p => { a.style.opacity = Math.min(1, Math.max(0, p)); a.style.transform = `translateY(${(1 - p) * 2}rem)`; });
     setTimeout(() => s.set(1), REDUCED ? 0 : 120 + i * 70); });
-  setTimeout(() => fade(menuBottom, 1, 600), REDUCED ? 0 : 120 + menuLinks.length * 70);
+  setTimeout(() => fade(menuBottom, 1, 450), REDUCED ? 0 : 120 + menuLinks.length * 50);
   setTimeout(() => $(".menu-x", menu).focus(), 50);
 };
 const closeMenu = (restoreFocus = true) => {
   if (!menuOpen) return; menuOpen = false;
   $$("[data-open-menu]").forEach(b => b.setAttribute("aria-expanded", "false"));
-  menuLinks.forEach(a => fade(a, 0, 250)); fade(menuBottom, 0, 250);
-  fade(menuBg, 0, 400).then(() => { menu.classList.remove("open"); menu.hidden = true; unlock(); onScroll(); });
+  menuLinks.forEach(a => fade(a, 0, 200)); fade(menuBottom, 0, 200);
+  fade(menuBg, 0, 300).then(() => { menu.classList.remove("open"); menu.hidden = true; unlock(); onScroll(); });
   if (restoreFocus) menuOpener?.focus();
 };
 $$("[data-open-menu]").forEach(b => b.addEventListener("click", () => openMenu(b)));
 $$("[data-close-menu]", menu).forEach(b => { if (!b.matches('a[href^="#"]')) b.addEventListener("click", () => closeMenu()); });
 $$("a:not([href^='#'])", menu).forEach(a => a.addEventListener("click", () => closeMenu(false)));
-$$("[data-open-demo]", menu).forEach(b => b.addEventListener("click", () => closeMenu(false), { capture: true }));
 
 /* ── Demo modal (portaled to <body>) ── */
 const modal = $("#demoModal"); document.body.appendChild(modal);
 const panel = $(".modal-panel", modal), modalBg = $(".modal-bg", modal);
 let modalOpen = false, modalOpener = null;
-const panelSpring = new Spring(0, { tension: 210, friction: 22 }, p => {
+const panelSpring = new Spring(0, { tension: 230, friction: 22 }, p => {
   panel.style.opacity = Math.min(1, Math.max(0, p));
   panel.style.transform = `translateY(${(1 - p) * 28}px) scale(${0.96 + 0.04 * p})`;
 });
 const openModal = opener => {
   if (modalOpen) return; modalOpen = true; modalOpener = opener; lock();
   modal.hidden = false; modal.classList.add("open");
-  panelSpring.set(0, { immediate: true }); fade(modalBg, 1, 400);
+  panelSpring.set(0, { immediate: true }); fade(modalBg, 1, 300);
   requestAnimationFrame(() => panelSpring.set(1));
-  setTimeout(() => (($("#demoForm").hidden ? $("#demoDone a") : $("#d-name")) || panel).focus(), 60);
+  setTimeout(() => (($("#demoBody").hidden ? $("#demoDone a") : $("#d-name")) || panel).focus(), 60);
 };
 const closeModal = () => {
   if (!modalOpen) return; modalOpen = false;
-  panelSpring.set(0); fade(modalBg, 0, 300).then(() => { modal.classList.remove("open"); modal.hidden = true; unlock(); });
+  panelSpring.set(0); fade(modalBg, 0, 250).then(() => { modal.classList.remove("open"); modal.hidden = true; unlock(); });
   modalOpener?.focus();
 };
 document.addEventListener("click", e => {
   const b = e.target.closest("[data-open-demo]"); if (!b) return;
   e.preventDefault();
-  if (menuOpen) { closeMenu(false); setTimeout(() => openModal(b), 300); } else openModal(b);
+  if (menuOpen) { closeMenu(false); setTimeout(() => openModal(b), 250); } else openModal(b);
 });
 $$("[data-close-modal]", modal).forEach(b => b.addEventListener("click", closeModal));
 addEventListener("keydown", e => {
   if (e.key === "Escape") { if (modalOpen) closeModal(); else if (menuOpen) closeMenu(); }
-  if (e.key === "Tab" && (modalOpen || menuOpen)) {   // keep focus inside the open layer
+  if (e.key === "Tab" && (modalOpen || menuOpen)) {
     const box = modalOpen ? panel : menu;
     const f = $$('a[href],button:not([disabled]),input,select,textarea', box).filter(x => x.offsetParent !== null);
     if (!f.length) return;
@@ -2125,32 +2166,41 @@ form.addEventListener("submit", async e => {
   }
 });
 
-/* ── Loader → ready → hero reveals ── */
-const loader = $("#loader"), fill = $("#loaderFill");
+/* ── Loader (first visit in a session only, ≤1.2s) → hero reveals ── */
+const loader = root.classList.contains("no-loader") ? ($("#loader")?.remove(), null) : $("#loader");
+const fill = $("#loaderFill");
 const heroWords = splitWords($("[data-hero-words]"));
 const heroLines = $$("#heroTag .lni");
-lock();
-const MIN_VISIBLE = REDUCED ? 200 : 1400;
-const start = performance.now();
-if (!REDUCED) tween(1280, easeInOutCubic, t => { fill.style.transform = `scaleX(${t})`; }, 120); else fill.style.transform = "scaleX(1)";
-const loaded = new Promise(r => (document.readyState === "complete" ? r() : addEventListener("load", r, { once: true })));
-const forced = new Promise(r => setTimeout(r, 2600));
-await Promise.race([loaded.then(() => new Promise(r => setTimeout(r, Math.max(0, MIN_VISIBLE - (performance.now() - start))))), forced]);
-
-let ready = true;
+const heroReveal = () => {
+  revealInners(heroWords, { stagger: 70, duration: 750, delay: 0, cap: 1000 });
+  revealInners(heroLines, { stagger: 60, duration: 750, delay: 150 });
+  $$("[data-hero-fade]").forEach((el, i) => rise(el, 200 + i * 80));
+  const gcar = $("#gcar");
+  if (REDUCED) { gcar.style.opacity = 1; gcar.style.transform = "none"; }
+  else gcar.animate([{ opacity: 0, transform: "translateY(1.5rem)" }, { opacity: 1, transform: "none" }], { duration: 700, delay: 300, easing: SPRINGY, fill: "both" });
+  setTimeout(gStart, 300);
+};
+if (!loader) heroReveal();   // repeat visit: no loader at all
+else {
+  lock();
+  const start = performance.now();
+  if (!REDUCED) tween(450, easeInOutCubic, t => { fill.style.transform = `scaleX(${t})`; }, 60); else fill.style.transform = "scaleX(1)";
+  const heroImg = $("#heroPlate img");
+  const imgReady = (heroImg.decode ? heroImg.decode() : Promise.resolve()).catch(() => {});
+  await Promise.race([imgReady.then(() => new Promise(r => setTimeout(r, Math.max(0, (REDUCED ? 150 : 500) - (performance.now() - start))))),
+                      new Promise(r => setTimeout(r, 1200))]);
+  try { sessionStorage.setItem("tekly_seen", "1"); } catch {}
+  unlock();
+  heroReveal();
+  if (REDUCED) loader.remove();
+  else tween(550, easeOutExpo, t => { loader.style.transform = `translate3d(0, ${-105 * t}%, 0)`; }).then(() => loader.remove());
+}
 root.classList.remove("is-loading");
-unlock();
-if (REDUCED) loader.remove();
-else tween(850, easeInOutCubic, t => { loader.style.transform = `translate3d(0, ${-105 * t}%, 0)`; }).then(() => loader.remove());
-
-// Hero reveals, gated on ready
-revealInners(heroWords, { stagger: 140, duration: 1100, delay: 150 });
-revealInners(heroLines, { stagger: 110, duration: 1100, delay: 350 });
-$$("[data-hero-fade]").forEach((el, i) => { el.style.opacity = 0; rise(el, 450 + i * 120); });
-const gcar = $("#gcar");
-const gs = new Spring(0, { tension: 120, friction: 20 }, p => { gcar.style.opacity = Math.min(1, Math.max(0, p)); gcar.style.transform = `translateY(${(1 - p) * 1.5}rem)`; });
-setTimeout(() => { gs.set(1); gStart(); }, REDUCED ? 0 : 700);
 onScroll();
+
+/* The on-page assistant isn't needed for first paint: load it when the browser is idle. */
+const loadAssistant = () => { const s = document.createElement("script"); s.src = "/assistant.js"; document.body.appendChild(s); };
+("requestIdleCallback" in window) ? requestIdleCallback(loadAssistant, { timeout: 3000 }) : setTimeout(loadAssistant, 1500);
 </script>
 </body>
 </html>
