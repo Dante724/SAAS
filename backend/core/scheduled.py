@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from backend.core.jobs import job_runner
 
-log = logging.getLogger("repairos.jobs")
+log = logging.getLogger("tekly.jobs")
 
 _MAX_ATTEMPTS = 5
 
@@ -98,7 +98,7 @@ async def retry_failed_webhooks() -> None:
     """
     from backend.db.database import AsyncSessionLocal
     from backend.models import WebhookDelivery, WebhookEndpoint
-    from backend.services.webhooks import _attempt
+    from backend.services.webhooks import _attempt, claim_delivery
 
     async with AsyncSessionLocal() as db:
         rows = (await db.execute(
@@ -117,7 +117,40 @@ async def retry_failed_webhooks() -> None:
             if not ep or not ep.active:
                 d.status = "abandoned"
                 continue
+            if not await claim_delivery(db, d, ("failed", "pending")):
+                continue      # another worker (or the post-commit outbox) is on it
             await _attempt(d, ep.url, ep.secret, d.payload)
+            await db.commit()
             retried += 1
         await db.commit()
         log.info("webhook-retry-sweep: re-attempted %d delivery(ies)", retried)
+
+
+@job_runner.every(3600, "revoked-session-sweep")
+async def sweep_revoked_sessions() -> None:
+    """Drop logout records whose sign-in has expired anyway: those tokens fail on exp alone."""
+    from datetime import datetime
+
+    from sqlalchemy import delete
+
+    from backend.db.database import AsyncSessionLocal
+    from backend.models import RevokedSession
+
+    async with AsyncSessionLocal() as db:
+        res = await db.execute(delete(RevokedSession).where(RevokedSession.expires_at < datetime.utcnow()))
+        await db.commit()
+        if res.rowcount:
+            log.info("revoked-session-sweep: removed %d expired record(s)", res.rowcount)
+
+
+@job_runner.every(900, "chat-autocomplete-sweep")
+async def autocomplete_replied_chats() -> None:
+    """C3 — a chat the shop answered and the customer hasn't written back to in 24h is done:
+    move it from Replied to Completed. A new customer message reopens it."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.services.chat_status import autocomplete_replied
+
+    async with AsyncSessionLocal() as db:
+        done = await autocomplete_replied(db)
+        if done:
+            log.info("chat-autocomplete-sweep: completed %d replied chat(s)", done)

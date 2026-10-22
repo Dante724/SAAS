@@ -19,10 +19,11 @@ from backend.models import (
     OrderLine,
     OrderStatus,
 )
-from backend.services.auth import get_current_employee
-from backend.services.money import q2, q4
+from backend.services.auth import record_scope, require_perm
+from backend.services.money import q2
 
-router = APIRouter(prefix="/api/analytics", tags=["analytics"])
+router = APIRouter(prefix="/api/analytics", tags=["analytics"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 
 def _window(days: int):
@@ -42,7 +43,7 @@ async def technician_productivity(
     days: int = Query(30, ge=1, le=365),
     location_id: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_reports")),
 ):
     """Per-technician: jobs closed, avg turnaround (hrs), labor revenue, throughput.
     Attribution is by the order's assignee for closed orders in the window."""
@@ -86,7 +87,7 @@ async def technician_productivity(
 async def location_comparison(
     days: int = Query(30, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_reports")),
 ):
     start, _ = _window(days)
     terminal = await _terminal_keys(db, current.org_id)
@@ -118,7 +119,7 @@ async def location_comparison(
 async def trends(
     days: int = Query(30, ge=7, le=180),
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_reports")),
 ):
     start, _ = _window(days)
     terminal = await _terminal_keys(db, current.org_id)
@@ -143,7 +144,7 @@ async def trends(
 @router.get("/fleet")
 async def fleet_overview(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_invoices")),
 ):
     """Company (fleet) clients with their asset counts + open-ticket counts."""
     companies = (await db.execute(select(Client).where(
@@ -171,7 +172,7 @@ async def fleet_overview(
 async def fleet_detail(
     client_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_invoices")),
 ):
     """Per-vehicle service history + a consolidated billing summary for a fleet
     account (B2B: one client, many vehicles, one rolled-up spend figure)."""
@@ -218,7 +219,7 @@ async def fleet_detail(
 async def business_insights(
     days: int = Query(30, ge=7, le=365),
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_reports")),
 ):
     """Owner-level KPI roll-up: revenue, ticket throughput, avg turnaround,
     top technicians and top services over the window."""
@@ -284,7 +285,7 @@ async def fleet_statement(
     client_id: str,
     days: int = Query(90, ge=7, le=365),
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_invoices")),
 ):
     """A single billable statement across a fleet account's vehicles: every
     closed order in the window with its vehicle, plus a total — what a B2B

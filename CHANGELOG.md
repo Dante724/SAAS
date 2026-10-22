@@ -1,5 +1,30 @@
 # Changelog
 
+## phase 4 — Customer status messages: the notification rules are the one source of truth
+
+- **Problem:** two settings disagreed. The status editor's "Text the customer" switch
+  (`OrderStatus.triggers_notification`) drove a legacy template send that ran only when **no**
+  notification rule matched; every new shop is seeded with an "email on every status change" rule,
+  so the switch was nearly always ignored and owners couldn't tell which setting was real.
+- **Decision:** rules win, everywhere. The legacy fallback in `_apply_status_change` is **removed**
+  (not merely unreachable). `triggers_notification` stays as a column so old clients don't break, but
+  nothing reads it: a `true` from the API is converted into a rule and the flag cleared.
+- **No behaviour change for existing shops** (`services/legacy_status_notifs.py`, shared by
+  migration `nt144p4` and the dev startup self-heal): each flagged status becomes one active
+  per-status rule per status-change template the fallback would have sent (that template's channel,
+  event `closed` for a finishing status), **only** when no rule already fires for it (the fallback
+  never ran then) and only when such a template exists (it sent nothing otherwise). A
+  location-scoped rule counts as covering (can't double-send). Statuses not in the status table
+  (hard-coded `done/closed/delivered`) no longer get the template fallback.
+- **Status editor:** the switch is replaced by a live read-out from the rules ("Email · via Every
+  status change", "Text"), Text/Email(/WhatsApp) quick switches that create or turn off this
+  status's own rule (the same `toggleCell` the Notifications table uses, `src/lib/notifRules.ts`), and
+  "Edit message" → Settings › Notifications. The summary sentence and the list badge read the rules.
+- Changing a status between open and finishing stages moves its own rules between `status_changed`
+  and `closed`, so they keep firing. New shops no longer seed the flag.
+- Known gap (unchanged, follow-up): rule-engine email doesn't use the shop's connected Gmail/Outlook
+  the way the old template path did (`try_oauth_email`); it goes through SMTP / simulated.
+
 ## build 144ep — Enforce the last 11 foreign keys; fix checklist orphans; repair dev DB
 
 - **Root cause, checklist orphans:** `_write_structure` (template save) deleted steps and relied on the

@@ -6,14 +6,14 @@ write-off (serial -> specific serials, non-serial -> qty with FEFO when expiry
 tracking is on), barcode generation, and Excel import/export. Stock *balances*
 and movements continue to live under /api/inventory.
 """
+import asyncio
 import io
-from datetime import datetime, date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from sqlalchemy import select, func, desc
+from pydantic import BaseModel, Field
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -21,9 +21,14 @@ from backend.models import (
     Part, StockLevel, StockMovement, StockItemBatch, SerializedItem,
     Category, Employee,
 )
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import assert_perm, get_current_employee, require_perm
 from backend.routers.forms import resolve_custom_data
-from backend.services.money import q2, q4
+from backend.services.codes import gtin_check_digit
+from backend.services.money import q2
+from backend.services.redact import can_see_costs, drop_cost_fields
+from backend.core.spreadsheet import (
+    MAX_IMPORT_ROWS, MAX_XLSX_BYTES, open_xlsx, safe_row, too_many_rows, unguard_cell,
+)
 
 router = APIRouter(prefix="/api/catalog", tags=["catalog-products"])
 
@@ -202,7 +207,7 @@ async def _resolve_category_path(db, org_id, path: str) -> Optional[str]:
 # ── Product master ───────────────────────────────────────────────────────────
 def _ser_product(p: Part, qty=0.0, reserved=0.0, variant_count=0) -> dict:
     margin = round((p.sell_price - p.avg_cost) / p.avg_cost * 100, 1) if p.avg_cost else None
-    return {"id": p.id, "name": p.name, "code": p.code, "sku": p.sku, "barcode": p.barcode,
+    return {"id": p.id, "name": p.name, "code": p.code, "sku": p.sku, "mpn": p.mpn, "barcode": p.barcode,
             "barcode_type": p.barcode_type, "brand": p.brand, "category_id": p.category_id,
             "description": p.description, "default_supplier_id": p.default_supplier_id,
             "uom": p.uom, "cost_price": p.cost_price, "avg_cost": p.avg_cost, "sell_price": p.sell_price,
@@ -239,7 +244,8 @@ async def list_products(search: Optional[str] = None, category_id: Optional[str]
         q = q.where(Part.parent_id.is_(None))  # base products only
     if search:
         like = f"%{search}%"
-        q = q.where((Part.name.ilike(like)) | (Part.sku.ilike(like)) | (Part.barcode.ilike(like)) | (Part.code.ilike(like)))
+        q = q.where((Part.name.ilike(like)) | (Part.sku.ilike(like)) | (Part.barcode.ilike(like))
+                    | (Part.code.ilike(like)) | (Part.mpn.ilike(like)))
     if category_id:
         q = q.where(Part.category_id == category_id)
     wh_location_id = None
@@ -248,21 +254,64 @@ async def list_products(search: Optional[str] = None, category_id: Optional[str]
         wh_location_id = (await db.execute(select(Warehouse.location_id).where(
             Warehouse.id == warehouse_id, Warehouse.org_id == current.org_id))).scalar_one_or_none()
     rows = (await db.execute(q.order_by(Part.name))).scalars().all()
+    # Stock and variant counts for the whole page in two grouped queries (this used to be two
+    # queries per product — ~2,000 round trips for a 1,000-item catalogue).
+    ids = [p.id for p in rows]
+    stock: dict = {}
+    variants: dict = {}
+    if ids:
+        sq = select(StockLevel.part_id, func.coalesce(func.sum(StockLevel.qty_available), 0),
+                    func.coalesce(func.sum(StockLevel.qty_reserved), 0)).where(StockLevel.part_id.in_(ids))
+        if warehouse_id:
+            cond = StockLevel.warehouse_id == warehouse_id
+            if wh_location_id:
+                cond = cond | ((StockLevel.warehouse_id.is_(None)) & (StockLevel.location_id == wh_location_id))
+            sq = sq.where(cond)
+        stock = {pid: (qty, res) for pid, qty, res in (await db.execute(sq.group_by(StockLevel.part_id))).all()}
+        variants = dict((await db.execute(select(Part.parent_id, func.count()).where(
+            Part.parent_id.in_(ids)).group_by(Part.parent_id))).all())
     out = []
     for p in rows:
         # warehouse_id scopes the stock figure to one warehouse; parts with no stock there drop out.
-        qty, res = await _stock_for(db, p.id, warehouse_id, wh_location_id)
+        qty, res = stock.get(p.id, (0, 0))
         if warehouse_id and qty == 0 and res == 0:
             continue
-        vc = (await db.execute(select(func.count()).select_from(Part).where(Part.parent_id == p.id))).scalar() or 0
-        out.append(_ser_product(p, qty, res, vc))
+        out.append(_ser_product(p, qty, res, variants.get(p.id, 0)))
     return {"items": out}
+
+
+async def _checked_mpn(db, org_id, mpn, exclude_id=None) -> Optional[str]:
+    """Normalise an MPN (trimmed, blank = none) and refuse one another active product of this
+    org already uses — two cards with one MPN make scans and supplier imports ambiguous."""
+    v = (mpn or "").strip()[:64] or None
+    if v:
+        q = select(Part).where(Part.org_id == org_id, Part.active == True,  # noqa: E712
+                               func.lower(Part.mpn) == v.lower())
+        if exclude_id:
+            q = q.where(Part.id != exclude_id)
+        clash = (await db.execute(q)).scalars().first()
+        if clash:
+            raise HTTPException(409, f"MPN {v} is already used by {clash.name}")
+    return v
+
+
+async def commit_mpn_safe(db) -> None:
+    """Commit; a concurrent save that slipped past _checked_mpn hits uq_parts_org_mpn_active → 409."""
+    from sqlalchemy.exc import IntegrityError
+    try:
+        await db.commit()
+    except IntegrityError as e:
+        await db.rollback()
+        if "uq_parts_org_mpn_active" in str(e.orig):
+            raise HTTPException(409, "That MPN is already used by another product")
+        raise
 
 
 class ProductIn(BaseModel):
     name: str
     code: Optional[str] = None
     sku: Optional[str] = None
+    mpn: Optional[str] = Field(None, max_length=64)   # opa: manufacturer part number
     barcode: Optional[str] = None
     barcode_type: str = "code128"
     brand: Optional[str] = None
@@ -290,13 +339,18 @@ async def create_product(data: ProductIn, db: AsyncSession = Depends(get_db),
     dup = (await db.execute(select(Part).where(Part.org_id == current.org_id, Part.name == data.name))).scalar_one_or_none()
     if dup:
         raise HTTPException(409, "A product with this name already exists (name is the unique identifier)")
+    from backend.routers.forms import check_entity_required
+    await check_entity_required(db, current.org_id, "product", data)   # built-ins the product form requires
     payload = data.model_dump()
+    payload["mpn"] = await _checked_mpn(db, current.org_id, data.mpn)
+    if not await can_see_costs(db, current):
+        drop_cost_fields(payload)          # can't see costs, can't set them
     # enforce required custom fields (Settings → Forms → Products) on create
     payload["custom_data"] = await resolve_custom_data(
         db, current.org_id, "product", payload.get("custom_data"), creating=True)
     p = Part(org_id=current.org_id, **payload)
     await _sync_part_category_name(db, current.org_id, p)
-    db.add(p); await db.commit(); await db.refresh(p)
+    db.add(p); await commit_mpn_safe(db); await db.refresh(p)
     return _ser_product(p)
 
 
@@ -315,6 +369,8 @@ async def bulk_products(data: BulkProductsIn, db: AsyncSession = Depends(get_db)
     adjust price, or soft-delete (write-off keeps history)."""
     if not data.ids:
         raise HTTPException(422, "No products selected")
+    if data.action == "delete":
+        await assert_perm(db, current, "can_delete_products")
     parts = (await db.execute(select(Part).where(
         Part.id.in_(data.ids), Part.org_id == current.org_id))).scalars().all()
     n = 0
@@ -343,8 +399,9 @@ async def bulk_products(data: BulkProductsIn, db: AsyncSession = Depends(get_db)
 
 
 # ── Excel export / import ────────────────────────────────────────────────────
+# MPN (opa) goes last so existing sheets keep their column positions; import matches by header.
 _COLS = ["Code", "SKU", "Barcode", "Name", "Category", "UoM", "Cost price",
-         "Sell price", "Min stock", "Client warranty (days)", "Serialized"]
+         "Sell price", "Min stock", "Client warranty (days)", "Serialized", "MPN"]
 
 
 @router.get("/products/export")
@@ -359,11 +416,12 @@ async def export_products(db: AsyncSession = Depends(get_db), current: Employee 
         while cid and cid in cats:
             names.append(cats[cid].name); cid = cats[cid].parent_id
         return " > ".join(reversed(names))
+    show_cost = await can_see_costs(db, current)     # the cost column stays empty otherwise
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Products"; ws.append(_COLS)
     for p in rows:
-        ws.append([p.code, p.sku, p.barcode, p.name, path(p.category_id), p.uom, p.cost_price,
-                   p.sell_price, p.min_stock, p.warranty_days, "yes" if p.serialized else "no"])
-    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+        ws.append(safe_row([p.code, p.sku, p.barcode, p.name, path(p.category_id), p.uom, p.cost_price if show_cost else None,
+                            p.sell_price, p.min_stock, p.warranty_days, "yes" if p.serialized else "no", p.mpn]))
+    buf = io.BytesIO(); await asyncio.to_thread(wb.save, buf); buf.seek(0)
     return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              headers={"Content-Disposition": 'attachment; filename="products.xlsx"'})
 
@@ -371,16 +429,18 @@ async def export_products(db: AsyncSession = Depends(get_db), current: Employee 
 @router.post("/products/import")
 async def import_products(file: UploadFile = File(...), db: AsyncSession = Depends(get_db),
                           current: Employee = Depends(require_perm("can_manage_inventory"))):
-    import openpyxl
-    wb = openpyxl.load_workbook(io.BytesIO(await file.read()), read_only=True)
+    wb = open_xlsx(await file.read(MAX_XLSX_BYTES + 1))
     ws = wb.active
+    if (ws.max_row or 0) - 1 > MAX_IMPORT_ROWS:
+        raise HTTPException(413, too_many_rows(ws.max_row - 1))
     header = [str(c.value).strip() if c.value is not None else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
     idx = {name: header.index(name) for name in _COLS if name in header}
     if "Name" not in idx:
         raise HTTPException(400, "Import file must have a 'Name' column")
     created = updated = 0
-    for row in ws.iter_rows(min_row=2):
-        cells = [c.value for c in row]
+    mpn_rows = []                       # (part, mpn, sheet row) — applied after every row is read
+    for rownum, row in enumerate(ws.iter_rows(min_row=2), start=2):
+        cells = [unguard_cell(c.value) for c in row]
         def g(col, cells=cells):
             i = idx.get(col)
             return cells[i] if i is not None and i < len(cells) else None
@@ -396,15 +456,42 @@ async def import_products(file: UploadFile = File(...), db: AsyncSession = Depen
                       sell_price=float(g("Sell price") or 0), min_stock=int(g("Min stock") or 0),
                       warranty_days=int(g("Client warranty (days)") or 0),
                       serialized=str(g("Serialized") or "no").strip().lower() in ("yes", "true", "1"))
+        mpn = None
+        if "MPN" in idx:          # an older sheet without the column leaves MPNs alone
+            raw = g("MPN")
+            mpn = str(raw).strip() if raw is not None else ""
+            if len(mpn) > 64:     # same limit as the drawer / API (422 there)
+                raise HTTPException(409, f"Row {rownum}: MPN is longer than 64 characters")
         if existing:
+            target = existing
             for k, v in fields.items():
                 if k == "serialized" and existing.serialized:
                     continue  # never un-serialize
                 setattr(existing, k, v)
             updated += 1
         else:
-            db.add(Part(org_id=current.org_id, name=name, **fields)); created += 1
-    await db.commit()
+            target = Part(org_id=current.org_id, name=name, **fields)
+            db.add(target); created += 1
+        if mpn is not None:
+            mpn_rows.append((target, mpn or None, rownum))
+    if mpn_rows:
+        # Checked against the sheet's end state, so swapping two products' MPNs in one import
+        # works: clear the touched MPNs first, then assign + check each (one active product per MPN).
+        for part, _v, _n in mpn_rows:
+            part.mpn = None
+        await db.flush()
+        seen: dict = {}
+        for part, v, n in mpn_rows:
+            if v:
+                if v.lower() in seen:
+                    raise HTTPException(409, f"Row {n}: MPN {v} is also on row {seen[v.lower()]}")
+                seen[v.lower()] = n
+                try:
+                    await _checked_mpn(db, current.org_id, v, exclude_id=part.id)
+                except HTTPException as e:
+                    raise HTTPException(409, f"Row {n}: {e.detail}")
+            part.mpn = v
+    await commit_mpn_safe(db)
     return {"ok": True, "created": created, "updated": updated}
 
 
@@ -434,25 +521,32 @@ async def update_product(pid: str, data: ProductIn, db: AsyncSession = Depends(g
     p = (await db.execute(select(Part).where(Part.id == pid, Part.org_id == current.org_id))).scalar_one_or_none()
     if not p:
         raise HTTPException(404, "Product not found")
-    payload = data.model_dump()
+    # A1: only fields the caller sent are written. A drawer that doesn't show weight, image or
+    # barcode type must not reset them to the defaults (a QR product silently becoming Code128,
+    # a product photo vanishing). The same goes for cost when it isn't sent.
+    payload = data.model_dump(exclude_unset=True)
+    payload["name"] = data.name
+    if "mpn" in payload:
+        payload["mpn"] = await _checked_mpn(db, current.org_id, data.mpn, exclude_id=p.id)
+    if not await can_see_costs(db, current):
+        drop_cost_fields(payload)
     # serialization is irreversible once enabled — cannot be turned off here
-    if p.serialized and not payload.get("serialized"):
+    if p.serialized and "serialized" in payload and not payload["serialized"]:
         raise HTTPException(409, "Serialization cannot be disabled once enabled (Orderry rule)")
+    if payload.get("serialized") and not p.serialized:
+        await assert_perm(db, current, "can_track_serials")
     # only touch custom_data when the caller explicitly sent it (avoid wiping on partial saves)
-    if "custom_data" not in data.model_fields_set:
-        payload.pop("custom_data", None)
-    else:
+    if "custom_data" in data.model_fields_set:
         # enforce required + lock_after_create against the stored values. (144aw: this resolve was
         # mistakenly nested under the compatibility_json branch below, so required/lock went
         # unenforced on edits unless compatibility_json also happened to be sent.)
         payload["custom_data"] = await resolve_custom_data(
             db, current.org_id, "product", payload.get("custom_data"), existing=p.custom_data or {})
-    if "compatibility_json" not in data.model_fields_set:   # 144jt: don't wipe compat on partial save
-        payload.pop("compatibility_json", None)
     for k, v in payload.items():
         setattr(p, k, v)
-    await _sync_part_category_name(db, current.org_id, p)
-    await db.commit(); await db.refresh(p)
+    if "category_id" in payload:
+        await _sync_part_category_name(db, current.org_id, p)
+    await commit_mpn_safe(db); await db.refresh(p)
     return _ser_product(p)
 
 
@@ -479,7 +573,8 @@ async def create_variant(pid: str, data: VariantIn, db: AsyncSession = Depends(g
     v = Part(org_id=current.org_id, parent_id=base.id, name=name,
              sku=data.sku, barcode=data.barcode, category_id=base.category_id,
              uom=base.uom, barcode_type=base.barcode_type, serialized=base.serialized,
-             cost_price=data.cost_price if data.cost_price is not None else base.cost_price,
+             cost_price=(data.cost_price if data.cost_price is not None and await can_see_costs(db, current)
+                         else base.cost_price),
              sell_price=data.sell_price if data.sell_price is not None else base.sell_price,
              variant_attrs=data.variant_attrs)
     db.add(v); await db.commit(); await db.refresh(v)
@@ -495,6 +590,7 @@ async def enable_serialization(pid: str, db: AsyncSession = Depends(get_db),
         raise HTTPException(404, "Product not found")
     if p.serialized:
         raise HTTPException(409, "Product is already serialized")
+    await assert_perm(db, current, "can_track_serials")
     p.serialized = True
     await db.commit()
     return {"ok": True, "serialized": True,
@@ -502,19 +598,14 @@ async def enable_serialization(pid: str, db: AsyncSession = Depends(get_db),
 
 
 # ── Barcode generator ────────────────────────────────────────────────────────
-def _ean_checksum(digits: str) -> str:
-    s = sum((3 if i % 2 else 1) * int(d) for i, d in enumerate(reversed(digits)))
-    return str((10 - s % 10) % 10)
-
-
 def _gen_barcode(btype: str) -> str:
     import random
     if btype == "ean13":
-        body = "".join(random.choices("0123456789", k=12)); return body + _ean_checksum(body)
+        body = "".join(random.choices("0123456789", k=12)); return body + gtin_check_digit(body)
     if btype == "ean8":
-        body = "".join(random.choices("0123456789", k=7)); return body + _ean_checksum(body)
+        body = "".join(random.choices("0123456789", k=7)); return body + gtin_check_digit(body)
     if btype == "upca":
-        body = "".join(random.choices("0123456789", k=11)); return body + _ean_checksum(body)
+        body = "".join(random.choices("0123456789", k=11)); return body + gtin_check_digit(body)
     # code128 / qr: free-form unique token
     return "RO" + "".join(random.choices("0123456789ABCDEFGHJKMNPQRSTUVWXYZ", k=10))
 
@@ -590,9 +681,14 @@ async def write_off(pid: str, data: WriteOffIn, db: AsyncSession = Depends(get_d
         take = min(float(b.qty_remaining), remaining)
         b.qty_remaining = float(b.qty_remaining) - take
         remaining -= take
-    sl.qty_available -= qty
+    await _atomic_add(db, sl, "qty_available", -(qty), round_to=None)   # atomic
     db.add(StockMovement(part_id=pid, location_id=data.location_id, movement_type="writeoff",
                          qty=qty, ref_type="writeoff", created_by_id=current.id))
     await db.commit()
     return {"ok": True, "qty": qty, "method": "FEFO" if p.expiry_tracking else "FIFO",
             "qty_available": sl.qty_available}
+
+
+async def _atomic_add(db, obj, attr, delta, *, round_to=None):
+    from backend.services.money import add_to_column
+    return await add_to_column(db, obj, attr, delta, round_to=round_to)

@@ -1,7 +1,7 @@
 # Spec — Smart Work Order: two differentiators beyond Orderry
 
 Status: Draft · Owner: Chomu · Target build: 144gn+
-Scope: two features that turn the RepairOS work order from a record-keeper into a system that *acts*. Both are wired into surfaces that already exist (checklist, Invoices tab, status graph); neither redesigns the WO or duplicates backend/auth.
+Scope: two features that turn the Tekly work order from a record-keeper into a system that *acts*. Both are wired into surfaces that already exist (checklist, Invoices tab, status graph); neither redesigns the WO or duplicates backend/auth.
 
 ---
 
@@ -57,7 +57,7 @@ Techs run a diagnostic checklist on nearly every job, but a failed or out-of-spe
 ## Feature 2 — Predicted ready-time + stall detection
 
 ### Problem statement
-The #1 status call a shop fields is "is it ready yet?" Today the answer is a status field and a track page with no time estimate, and jobs silently stall in a status with nobody noticing until the customer complains. Every status transition is already timestamped in RepairOS — the data to predict a ready-time and flag stalls exists and is unused. Orderry models neither, so this is pure differentiation from data we already have (no schema change, no tech behavior change).
+The #1 status call a shop fields is "is it ready yet?" Today the answer is a status field and a track page with no time estimate, and jobs silently stall in a status with nobody noticing until the customer complains. Every status transition is already timestamped in Tekly — the data to predict a ready-time and flag stalls exists and is unused. Orderry models neither, so this is pure differentiation from data we already have (no schema change, no tech behavior change).
 
 ### Goals
 - Give the customer track page a real predicted ready-time learned from the shop's own cycle times.

@@ -16,7 +16,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "Contacts": "Contactos", "Sales": "Ventas", "Invoices": "Facturas",
     "Inventory": "Inventario", "Finance": "Finanzas", "Reports": "Informes",
     "Settings": "Ajustes", "Workshop Central": "Central del taller",
-    "Search orders, clients, serials…": "Buscar órdenes, clientes, series…",
+    "Search jobs, customers…": "Buscar trabajos, clientes…",
     "Notifications": "Notificaciones", "You're all caught up.": "Estás al día.",
     "Mark all read": "Marcar todo leído", "Navigate": "Navegar", "Results": "Resultados",
     "Search or jump to…": "Buscar o ir a…", "Light": "Claro", "Dark": "Oscuro",
@@ -25,7 +25,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "Grow": "Crecimiento", "Admin": "Administración",
     "Home": "Inicio", "My work": "Mi trabajo", "Catalog": "Catálogo",
     "Collapse": "Contraer", "Light mode": "Modo claro", "Dark mode": "Modo oscuro",
-    "Clock in": "Fichar entrada", "Security & two-factor": "Seguridad y doble factor",
+    "Clock in": "Fichar entrada", "Security & two-factor": "Seguridad y doble factor", "Sign out": "Cerrar sesión", "My earnings": "Mis ganancias",
   },
   ar: {
     "My company": "شركتي", "Inquiries": "الاستفسارات", "Tasks": "المهام",
@@ -37,7 +37,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "Grow": "النمو", "Admin": "الإدارة", "Collapse": "طيّ",
     "Notifications": "الإشعارات", "Language": "اللغة",
     "Light mode": "الوضع الفاتح", "Dark mode": "الوضع الداكن",
-    "Clock in": "تسجيل الدخول", "Security & two-factor": "الأمان والتحقق بخطوتين",
+    "Clock in": "تسجيل الدخول", "Security & two-factor": "الأمان والتحقق بخطوتين", "Sign out": "تسجيل الخروج", "My earnings": "أرباحي",
   },
 };
 

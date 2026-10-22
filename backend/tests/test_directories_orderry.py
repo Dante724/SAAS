@@ -62,9 +62,9 @@ async def test_field_directory_binding_round_trips(client, tenant):
 
 async def test_inline_add_by_key(client, tenant):
     # any staff can extend a directory from a form dialog; dupes return existing
-    r = await client.post("/api/directories/by-key/manufacturer/items", json={"value": "Bosch"}, headers=tenant)
+    r = await client.post("/api/directories/by-key/lead_source/items", json={"value": "Nextdoor"}, headers=tenant)
     assert r.status_code == 201, r.text
-    again = await client.post("/api/directories/by-key/manufacturer/items", json={"value": "Bosch"}, headers=tenant)
+    again = await client.post("/api/directories/by-key/lead_source/items", json={"value": "nextdoor"}, headers=tenant)
     assert again.json().get("existing") is True
 
 

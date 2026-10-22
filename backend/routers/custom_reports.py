@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import CustomReport, Employee
 from backend.services import custom_reports as cr
-from backend.services.auth import get_current_employee
+from backend.services.auth import require_perm
 
 router = APIRouter(prefix="/api/custom-reports", tags=["reports"])
 
@@ -25,14 +25,21 @@ def _ser(r: CustomReport) -> dict:
             "created_at": r.created_at.isoformat() if r.created_at else None}
 
 
+async def _hidden(db: AsyncSession, current: Employee) -> set:
+    """Sensitive field classes this viewer can't see (costs, customer contact details)."""
+    from backend.services.auth import has_perm
+    return {sens for sens, perm in cr.SENSITIVE.items() if not await has_perm(db, current, perm)}
+
+
 @router.get("/sources")
-async def sources(current: Employee = Depends(get_current_employee)):
-    return cr.sources_meta()
+async def sources(db: AsyncSession = Depends(get_db),
+                  current: Employee = Depends(require_perm("can_view_reports"))):
+    return cr.sources_meta(await _hidden(db, current))
 
 
 @router.get("")
 async def list_reports(db: AsyncSession = Depends(get_db),
-                       current: Employee = Depends(get_current_employee)):
+                       current: Employee = Depends(require_perm("can_view_reports"))):
     rows = (await db.execute(select(CustomReport).where(CustomReport.org_id == current.org_id)
             .order_by(CustomReport.created_at.desc()))).scalars().all()
     return {"items": [_ser(r) for r in rows]}
@@ -52,16 +59,17 @@ class RunIn(BaseModel):
 
 @router.post("/run")
 async def run_adhoc(data: RunIn, db: AsyncSession = Depends(get_db),
-                    current: Employee = Depends(get_current_employee)):
+                    current: Employee = Depends(require_perm("can_view_reports"))):
     try:
-        return await cr.build_and_run(db, current.org_id, data.config, data.date_from, data.date_to, data.location_id)
+        return await cr.build_and_run(db, current.org_id, data.config, data.date_from, data.date_to, data.location_id,
+                                      hidden=await _hidden(db, current))
     except ValueError as e:
         raise HTTPException(422, str(e))
 
 
 @router.post("")
 async def create_report(data: ReportIn, db: AsyncSession = Depends(get_db),
-                        current: Employee = Depends(get_current_employee)):
+                        current: Employee = Depends(require_perm("can_view_reports"))):
     if (data.config or {}).get("source") not in cr.SOURCES:
         raise HTTPException(422, "Unknown or missing source")
     r = CustomReport(org_id=current.org_id, name=data.name.strip() or "Untitled report",
@@ -81,7 +89,7 @@ async def _owned(db, org_id, rid) -> CustomReport:
 
 @router.put("/{rid}")
 async def update_report(rid: str, data: ReportIn, db: AsyncSession = Depends(get_db),
-                        current: Employee = Depends(get_current_employee)):
+                        current: Employee = Depends(require_perm("can_view_reports"))):
     r = await _owned(db, current.org_id, rid)
     if (data.config or {}).get("source") not in cr.SOURCES:
         raise HTTPException(422, "Unknown or missing source")
@@ -93,7 +101,7 @@ async def update_report(rid: str, data: ReportIn, db: AsyncSession = Depends(get
 
 @router.delete("/{rid}")
 async def delete_report(rid: str, db: AsyncSession = Depends(get_db),
-                        current: Employee = Depends(get_current_employee)):
+                        current: Employee = Depends(require_perm("can_view_reports"))):
     r = await _owned(db, current.org_id, rid)
     await db.delete(r)
     await db.commit()
@@ -103,10 +111,11 @@ async def delete_report(rid: str, db: AsyncSession = Depends(get_db),
 @router.get("/{rid}/run")
 async def run_saved(rid: str, date_from: Optional[str] = None, date_to: Optional[str] = None,
                     location_id: Optional[str] = None, db: AsyncSession = Depends(get_db),
-                    current: Employee = Depends(get_current_employee)):
+                    current: Employee = Depends(require_perm("can_view_reports"))):
     r = await _owned(db, current.org_id, rid)
     try:
-        out = await cr.build_and_run(db, current.org_id, r.config, date_from, date_to, location_id)
+        out = await cr.build_and_run(db, current.org_id, r.config, date_from, date_to, location_id,
+                                     hidden=await _hidden(db, current))
     except ValueError as e:
         raise HTTPException(422, str(e))
     out["title"] = r.name

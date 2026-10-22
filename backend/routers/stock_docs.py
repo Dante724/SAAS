@@ -15,8 +15,8 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from sqlalchemy import func, or_, select
+from pydantic import BaseModel, field_validator
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -45,6 +45,21 @@ class DocLine(BaseModel):
     part_id: str
     qty: float = 1
     unit_cost: Optional[float] = None
+
+    @field_validator("qty")
+    @classmethod
+    def _qty_positive(cls, v):
+        # a negative qty passed _take_stock's "have < qty" check and ADDED stock
+        if v <= 0:
+            raise ValueError("Quantity must be greater than zero")
+        return v
+
+    @field_validator("unit_cost")
+    @classmethod
+    def _cost_non_negative(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("Cost can't be negative")
+        return v
     serialized_item_id: Optional[str] = None
     bin_id: Optional[str] = None
     comment: Optional[str] = None
@@ -73,7 +88,7 @@ async def _take_stock(db: AsyncSession, part_id: str, warehouse, qty: float, *,
         name = (await db.execute(select(Part.name).where(Part.id == part_id))).scalar_one_or_none()
         raise HTTPException(
             409, f"Only {have:g} of “{name}” in this warehouse — can't {doc} {qty:g}.")
-    sl.qty_available -= qty
+    await _atomic_add(db, sl, "qty_available", -(qty), round_to=None)   # atomic
     await _deplete_batches_fefo(db, part_id, warehouse, qty)
 
 
@@ -113,13 +128,15 @@ async def _give_stock(db: AsyncSession, part_id: str, warehouse, qty: float,
                       location_id: Optional[str]) -> None:
     sl = await _stock_row(db, part_id, warehouse)
     if sl:
-        sl.qty_available += qty
+        await _atomic_add(db, sl, "qty_available", qty, round_to=None)   # atomic
     else:
         db.add(StockLevel(part_id=part_id, location_id=location_id,
                           warehouse_id=warehouse.id, qty_available=qty, qty_reserved=0))
 
 
 async def _cost(db: AsyncSession, part_id: str, given: Optional[float]) -> Decimal:
+    # An explicit unit_cost is the credit agreed with the supplier (routes require
+    # can_manage_inventory); DocLine rejects negative values.
     if given is not None:
         return Decimal(str(given))
     p = (await db.execute(select(Part).where(Part.id == part_id))).scalar_one_or_none()
@@ -400,6 +417,13 @@ async def create_write_off(
 
 class WriteOffLinePatch(BaseModel):
     qty: Optional[float] = None
+
+    @field_validator("qty")
+    @classmethod
+    def _qty_positive(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError("Quantity must be greater than zero")
+        return v
     comment: Optional[str] = None
     comment_public: Optional[bool] = None
 
@@ -490,6 +514,20 @@ class PostLine(BaseModel):
     part_id: str
     qty: float
     unit_cost: float = 0.0
+
+    @field_validator("qty")
+    @classmethod
+    def _qty_positive(cls, v):
+        if v <= 0:
+            raise ValueError("Quantity must be greater than zero")
+        return v
+
+    @field_validator("unit_cost")
+    @classmethod
+    def _cost_non_negative(cls, v):
+        if v < 0:
+            raise ValueError("Cost can't be negative")
+        return v
     markup_pct: Optional[float] = None     # sets the sell price at posting time
     price_type_id: Optional[str] = None    # which price list the markup writes to
 
@@ -531,14 +569,18 @@ async def _apply_posting_line(db: AsyncSession, current: Employee, w, ln, *,
     if not part:
         raise HTTPException(404, f"Part {ln.part_id} not found")
 
-    sl = await _stock_row(db, ln.part_id, w)
     if sign > 0:
         cost = Decimal(str(ln.unit_cost or 0))
-        prev_qty = float(sl.qty_available or 0) if sl else 0.0
+        # Weight against GLOBAL on-hand at 4dp, exactly like stock_posting.apply_receipt_line:
+        # avg_cost is one per-part column, so averaging against a single warehouse's quantity
+        # (and rounding to 2dp) gave a different cost basis depending on which screen posted it.
+        from sqlalchemy import func as _func
+        prev_qty = float((await db.execute(select(_func.coalesce(_func.sum(StockLevel.qty_available), 0))
+                                           .where(StockLevel.part_id == part.id))).scalar() or 0)
         prev_cost = float(part.avg_cost or part.cost_price or 0)
         new_qty = prev_qty + ln.qty
         if new_qty > 0 and ln.unit_cost:
-            part.avg_cost = q2((prev_qty * prev_cost + ln.qty * float(ln.unit_cost)) / new_qty)
+            part.avg_cost = q4((prev_qty * prev_cost + ln.qty * float(ln.unit_cost)) / new_qty)
         if ln.unit_cost:
             part.cost_price = ln.unit_cost
         # markup prices the product at the moment it lands, from what it actually cost
@@ -560,6 +602,11 @@ async def _apply_posting_line(db: AsyncSession, current: Employee, w, ln, *,
             else:
                 part.sell_price = new_price
         await _give_stock(db, ln.part_id, w, ln.qty, w.location_id)
+        # FIFO cost layer, as every other receipt path creates (exact COGS on consumption).
+        from backend.models import StockItemBatch
+        db.add(StockItemBatch(org_id=current.org_id, part_id=part.id, location_id=w.location_id,
+                              unit_cost=cost, qty_received=Decimal(str(ln.qty)),
+                              qty_remaining=Decimal(str(ln.qty))))
     else:
         await _take_stock(db, ln.part_id, w, ln.qty, doc="un-post")
         cost = Decimal(str(ln.unit_cost or 0))
@@ -635,9 +682,15 @@ async def create_posting(
             price_type_id=ln.price_type_id, total=line_total))
 
     doc.total = total
+    if data.settlement == "cash" and data.account_id and total:
+        # Paid on the spot: the money leaves the chosen cashbox now (it used to post nothing).
+        from backend.routers.cash import post_transaction
+        await post_transaction(db, current.org_id, data.account_id, "expense", -float(total),
+                               comment=f"Posting {doc.number or ''} (cash)".strip(),
+                               ref_type="posting", ref_id=doc.id, employee_id=current.id)
     if data.settlement == "balance" and data.supplier_id:
         sup = (await db.execute(select(Supplier).where(
-            Supplier.id == data.supplier_id))).scalar_one_or_none()
+            Supplier.id == data.supplier_id, Supplier.org_id == current.org_id))).scalar_one_or_none()
         if sup:
             # 144ax: single write-path — goods received on credit, we now owe +total.
             from backend.services.ledger import adjust_supplier_ap
@@ -685,9 +738,14 @@ async def delete_posting(
     for ln in lines:
         await _apply_posting_line(db, current, w, ln, sign=-1)
     doc.status = "deleted"
+    if doc.settlement == "cash" and doc.account_id and doc.total:
+        from backend.routers.cash import post_transaction
+        await post_transaction(db, current.org_id, doc.account_id, "income", float(doc.total),
+                               comment=f"Posting {doc.number or ''} deleted (cash back)".strip(),
+                               ref_type="posting", ref_id=doc.id, employee_id=current.id)
     if doc.supplier_id:
         sup = (await db.execute(select(Supplier).where(
-            Supplier.id == doc.supplier_id))).scalar_one_or_none()
+            Supplier.id == doc.supplier_id, Supplier.org_id == current.org_id))).scalar_one_or_none()
         # Only balance-settled postings ever added to the supplier balance on create, so only
         # those reverse it here — a cash-settled posting never touched sup.balance (otherwise
         # deleting one wrongly drove the supplier negative by doc.total).
@@ -747,3 +805,8 @@ async def write_off_suggestions(
         })
     return {"items": items,
             "total_value": q2(sum(i["value_at_risk"] for i in items))}
+
+
+async def _atomic_add(db, obj, attr, delta, *, round_to=None):
+    from backend.services.money import add_to_column
+    return await add_to_column(db, obj, attr, delta, round_to=round_to)

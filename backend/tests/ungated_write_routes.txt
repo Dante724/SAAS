@@ -1,0 +1,215 @@
+# Write routes deliberately open without a role permission. Reviewed in security phase 2.
+# Every other POST/PUT/PATCH/DELETE route must use Depends(require_perm("<code>")).
+# backend/tests/test_route_permission_gate.py fails on new unlisted routes and on stale lines.
+# Format: METHOD PATH [staff|public]   — keep each group's reason accurate when adding lines.
+
+## Public — sign-in and account flows (rate-limited per IP and per account)
+POST /api/admin/login [public]
+POST /api/auth/email/verify [public]
+POST /api/auth/invite/accept [public]
+POST /api/auth/invite/preview [public]
+POST /api/auth/password/forgot [public]
+POST /api/auth/password/reset [public]
+POST /api/auth/register [public]
+POST /api/auth/token [public]
+
+## Public — provider webhooks (signature-verified per shop, fail closed outside dev/test)
+POST /api/chats/webhook/meta/{org_id} [public]
+POST /api/chats/webhook/twilio [public]
+POST /api/chats/webhook/{org_id} [public]
+POST /api/comms/calls/webhook [public]
+POST /api/comms/twilio/status [public]
+POST /api/comms/twilio/voice [public]
+POST /api/inbox/webhook/meta/{org_id} [public]
+POST /api/inbox/webhook/{org_id} [public]
+POST /api/payments/square/webhook [public]
+POST /api/payments/square/webhook/{org_id} [public]
+POST /api/payments/stripe/webhook [public]
+POST /api/payments/stripe/webhook/{org_id} [public]
+
+## Public — customer-facing pages, scoped by an unguessable token or shop slug (rate-limited)
+POST /api/feedback/public/{token} [public]
+POST /api/payments/intents/{intent_id}/refresh [public]
+POST /api/payments/intents/{intent_id}/simulate-pay [public]
+POST /api/payments/intents/{intent_id}/view [public]
+POST /api/public/appointment/{slug} [public]
+POST /api/public/appointment/{slug}/hello [public]
+POST /api/public/appointment/{slug}/request [public]
+POST /api/public/booking/{rest:path} [public]
+POST /api/public/lookup [public]
+POST /api/public/portal/{token}/order/{order_id}/message [public]
+POST /api/public/portal/{token}/order/{order_id}/recommendations/decide [public]
+POST /api/public/portal/{token}/order/{order_id}/respond [public]
+POST /api/public/track/{token}/feedback [public]
+POST /api/public/track/{token}/message [public]
+POST /api/public/track/{token}/new-request [public]
+POST /api/public/track/{token}/recommendations/decide [public]
+POST /api/public/track/{token}/respond [public]
+
+## Public API — authenticated by API key (services/apikeys.py), not by staff login
+POST /api/v1/appointments [public]
+POST /api/v1/contacts [public]
+POST /api/v1/orders [public]
+POST /api/v1/time-entries [public]
+
+## Public — always answers 405 (conversion documents are immutable)
+DELETE /api/conversions/{conversion_id} [public]
+
+## Staff — everyday work any employee does (orders, lines, notes, clock, chat, own prefs…).
+## Not yet mapped to a catalog permission; candidates for finer-grained codes later.
+
+# ai
+POST /api/ai/chat/{thread_id}/suggest [staff]
+POST /api/ai/estimate/draft [staff]
+POST /api/ai/orders/{order_id}/summary [staff]
+POST /api/ai/product-description [staff]
+POST /api/ai/recognize-items [staff]
+POST /api/ai/remove-background [staff]
+POST /api/ai/transcribe [staff]
+# appointments
+POST /api/appointments [staff]
+PATCH /api/appointments/{bid} [staff]
+POST /api/appointments/{bid}/to-order [staff]
+# approvals
+POST /api/approvals [staff]
+# assets
+POST /api/assets [staff]
+POST /api/assets/scan-resolve [staff]
+POST /api/assets/{asset_id}/transfer [staff]
+# auth
+POST /api/auth/email/resend [staff]
+POST /api/auth/logout [staff]
+POST /api/auth/logout-all-devices [staff]
+POST /api/auth/refresh [staff]
+# bins
+POST /api/bins/allocate-serial [staff]
+POST /api/bins/consume [staff]
+# chats
+POST /api/chats/threads [staff]
+POST /api/chats/threads/{tid}/inbound [staff]
+POST /api/chats/threads/{tid}/send [staff]
+POST /api/chats/threads/{tid}/to-lead [staff]
+POST /api/chats/threads/{tid}/to-order [staff]
+# clients
+POST /api/clients/merge/preview [staff]
+PATCH /api/clients/{client_id} [staff]
+PUT /api/clients/{client_id} [staff]
+POST /api/clients/{client_id}/communication [staff]
+POST /api/clients/{client_id}/communication/suggest [staff]
+POST /api/clients/{client_id}/devices [staff]
+POST /api/clients/{client_id}/portal-link [staff]
+# comms
+POST /api/comms/calls/{call_id}/ai [staff]
+# documents
+POST /api/documents/ai-generate [staff]
+POST /api/documents/preview [staff]
+POST /api/documents/print-view [staff]
+POST /api/documents/render-asset-labels [staff]
+POST /api/documents/render-client-labels [staff]
+POST /api/documents/render-labels [staff]
+# ecommerce
+POST /api/ecommerce/integrations/{integration_id}/sync-order [staff]
+# feed
+DELETE /api/feed/item/{item_id} [staff]
+POST /api/feed/{entity_type}/{entity_id} [staff]
+# finance
+# forms
+# inventory
+POST /api/inventory/reorder-digest [staff]
+# leads
+POST /api/leads [staff]
+PATCH /api/leads/{lead_id} [staff]
+POST /api/leads/{lead_id}/convert [staff]
+# media
+POST /api/media [staff]
+# mfa
+POST /api/mfa/activate [staff]
+POST /api/mfa/disable [staff]
+POST /api/mfa/enroll [staff]
+# notifications
+# orders
+POST /api/orders/bulk [staff]
+POST /api/orders/filters/saved [staff]
+DELETE /api/orders/filters/saved/{filter_id} [staff]
+POST /api/orders/{order_id}/checklist [staff]
+DELETE /api/orders/{order_id}/checklist/{item_id} [staff]
+PATCH /api/orders/{order_id}/checklist/{item_id} [staff]
+PATCH /api/orders/{order_id}/code [staff]
+POST /api/orders/{order_id}/comments [staff]
+POST /api/orders/{order_id}/complete [staff]
+POST /api/orders/{order_id}/convert [staff]
+PATCH /api/orders/{order_id}/currency [staff]
+PATCH /api/orders/{order_id}/custom-data [staff]
+PATCH /api/orders/{order_id}/deposit [staff]
+POST /api/orders/{order_id}/duplicate [staff]
+PATCH /api/orders/{order_id}/intake-markups [staff]
+PATCH /api/orders/{order_id}/intake-photos [staff]
+POST /api/orders/{order_id}/lines [staff]
+DELETE /api/orders/{order_id}/lines/{line_id} [staff]
+PATCH /api/orders/{order_id}/lines/{line_id} [staff]
+POST /api/orders/{order_id}/lines/{line_id}/receive-stock [staff]
+PATCH /api/orders/{order_id}/notes [staff]
+POST /api/orders/{order_id}/public-link [staff]
+POST /api/orders/{order_id}/public-link/revoke [staff]
+POST /api/orders/{order_id}/public-link/rotate [staff]
+POST /api/orders/{order_id}/recommendations/seen [staff]
+PATCH /api/orders/{order_id}/schedule [staff]
+POST /api/orders/{order_id}/signature [staff]
+PATCH /api/orders/{order_id}/status [staff]
+POST /api/orders/{order_id}/thread [staff]
+PATCH /api/orders/{order_id}/type [staff]
+# prefs
+PUT /api/prefs/{pref_key} [staff]
+# pricing
+POST /api/pricing/margin-check [staff]
+# print
+POST /api/print/labels [staff]
+# push
+POST /api/push/subscribe [staff]
+POST /api/push/unsubscribe [staff]
+# reports
+POST /api/reports/insights/cards [staff]
+PATCH /api/reports/insights/cards/reorder [staff]
+DELETE /api/reports/insights/cards/{cid} [staff]
+# scan
+POST /api/scan/resolve [staff]
+# settings
+POST /api/settings/numbering/preview [staff]
+# staff
+POST /api/staff/tasks [staff]
+PATCH /api/staff/tasks/{task_id} [staff]
+# tags
+POST /api/tags/attach [staff]
+POST /api/tags/detach [staff]
+# tasks
+POST /api/tasks [staff]
+DELETE /api/tasks/{task_id} [staff]
+PATCH /api/tasks/{task_id} [staff]
+POST /api/tasks/{task_id}/comments [staff]
+# tech
+POST /api/tech/notifications/dismiss-all [staff]
+POST /api/tech/notifications/read-all [staff]
+POST /api/tech/notifications/{nid}/dismiss [staff]
+POST /api/tech/notifications/{nid}/read [staff]
+PUT /api/tech/preferences [staff]
+# timeclock
+POST /api/timeclock/entries [staff]
+DELETE /api/timeclock/entries/{eid} [staff]
+PATCH /api/timeclock/entries/{eid} [staff]
+POST /api/timeclock/entries/{eid}/dispute [staff]
+POST /api/timeclock/entries/{entry_id}/stop [staff]
+POST /api/timeclock/order/{order_id}/bill [staff]
+POST /api/timeclock/shift/clock-in [staff]
+POST /api/timeclock/shift/clock-out [staff]
+POST /api/timeclock/start [staff]
+POST /api/timeclock/stop [staff]
+POST /api/timeclock/switch [staff]
+
+## Staff — inline "+ Add option" in a directory-backed dropdown (lead source, custom fields).
+## Adds one value to an existing list only (no rename/merge/delete); the front desk can't stop
+## for an admin. Managing lists stays behind can_manage_settings.
+POST /api/directories/by-key/{key}/items [staff]
+
+## Staff — intake lookup: POST only to carry the typed/scanned value in a body; it reads and
+## writes nothing (tidy + checksum + "seen before" within the shop).
+POST /api/assets/identify [staff]

@@ -15,14 +15,20 @@ Two small, self-contained defenses:
     in-process (a deque of timestamps per key) — the right tool for a single-node deploy
     and an honest placeholder for Redis when there are multiple nodes.
 """
+import hmac
+import logging
 import time
 from collections import defaultdict, deque
+from typing import Optional
 
 from fastapi import HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import settings
 from backend.models import Organisation
+
+log = logging.getLogger("tekly")
 
 
 async def verify_org_webhook(db: AsyncSession, org_id: str, request: Request) -> None:
@@ -37,8 +43,39 @@ async def verify_org_webhook(db: AsyncSession, org_id: str, request: Request) ->
         raise HTTPException(404, "Unknown organisation")
     if org.webhook_secret:  # fail-closed once a secret exists
         presented = request.headers.get("X-Webhook-Token", "")
-        if not presented or presented != org.webhook_secret:
+        if not presented or not hmac.compare_digest(presented, org.webhook_secret):
             raise HTTPException(401, "Invalid or missing X-Webhook-Token")
+
+
+# ── Provider-signed webhooks (Stripe, Square, Meta, Twilio) ──────────────────
+
+def unsigned_webhooks_allowed() -> bool:
+    """Only local development and the test suite may accept unsigned provider events.
+    Staging and production always fail closed, and so does a server where ENVIRONMENT was
+    never set (it defaults to "development", so a deploy that forgot it used to accept forged
+    webhooks; M4/M5)."""
+    return ("ENVIRONMENT" in settings.model_fields_set
+            and (settings.ENVIRONMENT or "").lower() in ("development", "test"))
+
+
+async def provider_secrets(db: AsyncSession, org_id: str, provider: str, field: str,
+                           global_secret: Optional[str]) -> list[str]:
+    """Signing secrets that may have signed an event for this org: the shop's own
+    (Settings → Integrations) first, then the operator-wide env value."""
+    from backend.services import org_creds
+    own = (await org_creds.effective(db, org_id, provider, read_only=True)).get(field)   # verify only
+    return [s for s in dict.fromkeys([own, global_secret]) if s]
+
+
+def require_signature(secrets: list[str], verified: bool, provider: str, status: int = 400) -> None:
+    """Enforce a provider signature: when any secret exists the event must verify against
+    one; with none configured, reject everywhere except development/test."""
+    if secrets:
+        if not verified:
+            raise HTTPException(status, "Invalid signature")
+    elif not unsigned_webhooks_allowed():
+        log.warning("%s webhook rejected: no signing secret configured for this shop", provider)
+        raise HTTPException(status, "Webhook signing secret not configured")
 
 
 class SlidingWindowLimiter:
@@ -75,7 +112,5 @@ def enforce_rate_limit(limiter: SlidingWindowLimiter, key: str) -> None:
 
 
 def client_ip(request: Request) -> str:
-    fwd = request.headers.get("X-Forwarded-For")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    from backend.services.ratelimit import client_ip as _client_ip
+    return _client_ip(request)

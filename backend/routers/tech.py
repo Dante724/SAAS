@@ -26,9 +26,10 @@ from backend.models import (
     StaffNotification,
     TimeEntry,
 )
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, record_scope
 
-router = APIRouter(prefix="/api/tech", tags=["technician"])
+router = APIRouter(prefix="/api/tech", tags=["technician"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 
 def _card(o: Order) -> dict:
@@ -213,7 +214,7 @@ async def dismiss_all_notifications(
 
 # ── Notification preferences (Part 9) ─────────────────────────────────────────
 from backend.services.push import VALID_KINDS  # noqa: E402
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 
 @router.get("/preferences")
@@ -254,14 +255,15 @@ async def set_preference(
 
 
 # ── Customer & device history (Part 7) ────────────────────────────────────────
-def _balance(o: Order) -> float:
-    return q2(max(0.0, (o.total or 0) - (o.prepayment_total or 0)))
+async def _balance(db: AsyncSession, o: Order) -> float:
+    from backend.services.order_money import balance_due
+    return await balance_due(db, o)
 
 
 async def _order_history_cards(db: AsyncSession, org_id: str, orders: list[Order]) -> tuple[list, float]:
     cards, outstanding = [], 0.0
     for o in orders:
-        bal = _balance(o)
+        bal = await _balance(db, o)
         if o.closed_at is None:
             outstanding += bal
         cards.append({
@@ -298,7 +300,7 @@ async def client_history(
         .order_by(Invoice.created_at.desc()))).scalars().all()
     inv_out = [{"id": i.id, "invoice_number": i.invoice_number, "status": i.status,
                 "total": i.total, "amount_paid": i.amount_paid,
-                "balance": q2((i.total or 0) - (i.amount_paid or 0)),
+                "balance": q2(max((i.total or 0) - (i.amount_paid or 0) - (i.credited or 0), 0)),
                 "issued_at": i.issued_at.isoformat() if i.issued_at else None} for i in invoices]
 
     devices = (await db.execute(select(Device).where(

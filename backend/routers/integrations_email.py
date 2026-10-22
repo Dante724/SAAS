@@ -140,8 +140,8 @@ async def email_disconnect(
 
 class TestSendIn(BaseModel):
     to: str
-    subject: str = "RepairOS test email"
-    body: str = "This is a test message sent from your connected account via RepairOS."
+    subject: str = "Tekly test email"
+    body: str = "This is a test message sent from your connected account via Tekly."
 
 
 @router.post("/{conn_id}/test")
@@ -165,46 +165,30 @@ async def email_test_send(
 @router.post("/poll")
 async def email_poll(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     """Build 144ae: pull recent messages from the org's connected Gmail inbox(es)
-    into the RepairOS inbox as threads. Idempotent (de-duped by Gmail message id).
-    Intended for a scheduled task. No-op unless a Gmail account granted read access."""
-    from sqlalchemy import or_ as _or
-
-    from backend.models import Client, InboxMessage, InboxThread
+    into Chats as email threads (C4: the old /api/inbox store had no screen). Idempotent
+    (de-duped by Gmail message id). Intended for a scheduled task. No-op unless a Gmail
+    account granted read access."""
+    from backend.services import chat_status as cs
     from backend.services.email_oauth import list_recent
-    from datetime import datetime as _dt
 
     conns = (await db.execute(select(EmailConnection).where(
         EmailConnection.org_id == current.org_id, EmailConnection.provider == "gmail",
         EmailConnection.connected == True))).scalars().all()  # noqa: E712
     ingested = 0
     for conn in conns:
+        stored = []
         for m in await list_recent(conn):
-            # de-dupe on the Gmail message id
-            dup = (await db.execute(select(InboxMessage).where(
-                InboxMessage.org_id == current.org_id, InboxMessage.external_id == m["message_id"]))).scalars().first()
-            if dup:
-                continue
-            addr = m["from"]
-            thread = (await db.execute(select(InboxThread).where(
-                InboxThread.org_id == current.org_id, InboxThread.channel == "email",
-                InboxThread.handle == addr).order_by(InboxThread.last_message_at.desc()))).scalars().first()
-            if not thread:
-                client = (await db.execute(select(Client).where(
-                    Client.org_id == current.org_id, _or(Client.email == addr, Client.phone == addr)))).scalars().first()
-                thread = InboxThread(org_id=current.org_id, channel="email", handle=addr,
-                                     subject=m.get("subject") or "(no subject)",
-                                     client_id=client.id if client else None)
-                db.add(thread)
-                await db.flush()
-            db.add(InboxMessage(org_id=current.org_id, thread_id=thread.id, direction="inbound",
-                                body=(m.get("subject", "") + "\n\n" + m.get("body", "")).strip(),
-                                external_id=m["message_id"]))
-            thread.unread = True
-            thread.status = "open"
-            thread.last_message_at = _dt.utcnow()
-            ingested += 1
+            name = (m.get("from_name") or "").split("<")[0].strip().strip('"') or None
+            body = (m.get("subject", "") + "\n\n" + m.get("body", "")).strip()
+            thread, msg = await cs.ingest_inbound(db, current.org_id, channel="email", handle=m["from"],
+                                                  body=body, name=name, external_id=m["message_id"])
+            if msg is not None:
+                stored.append((thread, body))
+                ingested += 1
         await db.commit()   # persist token refresh + threads per connection
+        for thread, body in stored:
+            await cs.notify_inbound(db, current.org_id, thread, body)
     return {"ingested": ingested}

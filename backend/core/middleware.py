@@ -2,6 +2,7 @@
 and converts unhandled exceptions into a clean 500 (no stack trace leakage).
 """
 import logging
+import re
 import time
 import uuid
 
@@ -9,12 +10,22 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-log = logging.getLogger("repairos.access")
+log = logging.getLogger("tekly.access")
+
+# A caller-supplied id is echoed into headers and every log line for the request, so it must
+# be short and inert (no newlines to forge log entries, no megabyte values).
+_SAFE_REQUEST_ID = re.compile(r"[A-Za-z0-9._\-]{1,64}")
+
+
+def _request_id(header: str | None) -> str:
+    if header and _SAFE_REQUEST_ID.fullmatch(header):
+        return header
+    return uuid.uuid4().hex[:12]
 
 
 class RequestContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
-        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
+        request_id = _request_id(request.headers.get("x-request-id"))
         request.state.request_id = request_id
         start = time.perf_counter()
         try:

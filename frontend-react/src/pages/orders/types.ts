@@ -13,6 +13,7 @@ export type Order = {
   assigned_to?: { name?: string } | null;
   created_at?: string;
   scheduled_for?: string | null;
+  due_at?: string | null;
 };
 
 export function deviceName(d: Order["device"]) {
@@ -21,16 +22,20 @@ export function deviceName(d: Order["device"]) {
 }
 // Org currency symbol — the React equivalent of legacy `fmt._sym`. MeProvider sets it
 // from /api/auth/me at boot; persisted so it's correct on the very first render too.
-let _sym = "₹";
+let _sym = "$";
 try { const s = localStorage.getItem("ros_cur_sym"); if (s) _sym = s; } catch { /* ignore */ }
+export const currencySymbol = () => _sym;
 export function setCurrencySymbol(sym?: string) {
-  _sym = sym || "₹";
+  _sym = sym || "$";
   try { localStorage.setItem("ros_cur_sym", _sym); } catch { /* ignore */ }
 }
 // `sym` overrides the org default — used for per-account multi-currency displays (e.g. CashHub).
 // Number grouping follows the user's locale (US/EU/Arabic), never a hardcoded region.
-export function money(n?: number, sym?: string) {
+// `cents` always shows two decimals (balances must read 50.50, not 50.5).
+export function money(n?: number, sym?: string, cents = false) {
   let loc = "en-US";
   try { const l = localStorage.getItem("ros_lang"); loc = l === "es" ? "es-ES" : l === "ar" ? "ar" : "en-US"; } catch { /* ignore */ }
-  return `${sym ?? _sym}${(n ?? 0).toLocaleString(loc)}`;
+  const v = n ?? 0;
+  // The sign goes before the symbol: "−₹135", never "₹-135".
+  return `${v < 0 ? "−" : ""}${sym ?? _sym}${Math.abs(v).toLocaleString(loc, cents ? { minimumFractionDigits: 2, maximumFractionDigits: 2 } : undefined)}`;
 }

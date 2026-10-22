@@ -29,9 +29,10 @@ from backend.models import (
     OrderChecklist,
     OrderChecklistItem,
 )
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import get_current_employee, require_perm, record_scope
 
-router = APIRouter(prefix="/api", tags=["checklists"])
+router = APIRouter(prefix="/api", tags=["checklists"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 FIELD_KINDS = {"check_result", "yes_no", "text", "textarea", "dropdown",
                "multiselect", "date", "file", "catalog_pick"}
@@ -89,6 +90,7 @@ async def _tpl(db: AsyncSession, t: ChecklistTemplate) -> dict:
     return {
         "id": t.id, "name": t.name, "type_id": t.type_id, "active": t.active,
         "scope": t.scope, "type_ids": _loads(t.type_ids, []),
+        "auto_status_keys": _auto_keys(t),
         "steps": await _steps_tree(db, t.id),
         "items": [{"id": i.id, "label": i.label, "required": i.required,
                    "sort_order": i.sort_order} for i in flat],
@@ -129,6 +131,11 @@ class TemplateItemIn(BaseModel):  # legacy flat
     required: bool = True
 
 
+class AutoStatusIn(BaseModel):
+    record_type: str = "work_order"    # work_order | estimate
+    key: str
+
+
 class TemplateIn(BaseModel):
     name: str
     type_id: Optional[str] = None
@@ -136,6 +143,31 @@ class TemplateIn(BaseModel):
     type_ids: list[str] = []
     steps: list[StepIn] = []
     items: list[TemplateItemIn] = []   # legacy flat fallback
+    # E4: attach automatically when an order enters one of these statuses. None = leave as is
+    # (a client that doesn't know the field never wipes it); [] = attach manually only.
+    auto_status_keys: Optional[list[AutoStatusIn]] = None
+
+
+def _auto_keys(t: ChecklistTemplate) -> list[dict]:
+    return [k for k in (t.auto_status_keys or []) if isinstance(k, dict) and k.get("key")]
+
+
+async def _validate_auto_keys(db: AsyncSession, org_id: str, keys: list[AutoStatusIn]) -> list[dict]:
+    """Every auto-attach status must be a real status of that record type in this shop."""
+    from backend.models import OrderStatus
+    out: list[dict] = []
+    for k in keys:
+        if k.record_type not in ("work_order", "estimate"):
+            raise HTTPException(422, "record_type must be work_order or estimate")
+        hit = (await db.execute(select(OrderStatus.id).where(
+            OrderStatus.org_id == org_id, OrderStatus.key == k.key,
+            OrderStatus.record_type == k.record_type))).scalars().first()
+        if not hit:
+            raise HTTPException(422, f"Unknown status “{k.key}”")
+        entry = {"record_type": k.record_type, "key": k.key}
+        if entry not in out:
+            out.append(entry)
+    return out
 
 
 async def _write_structure(db: AsyncSession, org_id: str, t: ChecklistTemplate, data: TemplateIn):
@@ -144,6 +176,8 @@ async def _write_structure(db: AsyncSession, org_id: str, t: ChecklistTemplate, 
     t.type_id = data.type_id
     t.scope = data.scope if data.scope in ("all", "selected") else "all"
     t.type_ids = json.dumps(data.type_ids or [])
+    if data.auto_status_keys is not None:
+        t.auto_status_keys = await _validate_auto_keys(db, org_id, data.auto_status_keys) or None
     # Wipe the existing structure CHILD-FIRST (items -> sections -> steps). Don't rely on the DB's
     # ON DELETE CASCADE: on any connection without FK enforcement it silently doesn't run and the
     # old sections are orphaned (found in a real DB — 144ep). Order checklists are snapshots, so
@@ -219,6 +253,20 @@ async def get_template(
     return await _tpl(db, t)
 
 
+def _require_fields(data: TemplateIn) -> None:
+    """A template with nothing to fill in saved "successfully" but every attempt to apply it to a
+    work order failed with "This template has no fields". Refuse it up front instead, and name
+    any field the user added but left without a label (those used to be dropped silently)."""
+    for step in data.steps:
+        for sec in step.sections:
+            if any(not (it.label or "").strip() for it in sec.items):
+                raise HTTPException(422, f"Every item in “{step.title or 'Step'}” needs a label")
+    has = any(it.label.strip() for st in data.steps for sec in st.sections for it in sec.items) or \
+        any(it.label.strip() for it in data.items)
+    if not has:
+        raise HTTPException(422, "Add at least one item to the checklist")
+
+
 @router.post("/checklist-templates", status_code=201)
 async def create_template(
     data: TemplateIn,
@@ -230,6 +278,7 @@ async def create_template(
         ChecklistTemplate.active == True))).scalar_one_or_none()  # noqa: E712
     if dupe:
         raise HTTPException(409, "A template with this name already exists")
+    _require_fields(data)
     t = ChecklistTemplate(org_id=current.org_id, name=data.name)
     db.add(t)
     await db.flush()
@@ -250,6 +299,7 @@ async def update_template(
         ChecklistTemplate.id == tid, ChecklistTemplate.org_id == current.org_id))).scalar_one_or_none()
     if not t:
         raise HTTPException(404, "Template not found")
+    _require_fields(data)
     await _write_structure(db, current.org_id, t, data)
     await db.commit()
     await db.refresh(t)
@@ -407,9 +457,23 @@ async def attach_checklist(
         ChecklistTemplate.id == data.template_id, ChecklistTemplate.org_id == current.org_id))).scalar_one_or_none()
     if not t:
         raise HTTPException(404, "Template not found")
+    cl = await instantiate_template(db, current.org_id, order_id, t, author_id=current.id)
+    if cl is None:
+        raise HTTPException(422, "This template has no fields")
+    await db.commit()
+    await db.refresh(cl)
+    return {"id": cl.id, "title": cl.title, **_summary(cl, await _cl_items(db, cl.id))}
+
+
+async def instantiate_template(db: AsyncSession, org_id: str, order_id: str, t: ChecklistTemplate,
+                              *, author_id: Optional[str]) -> Optional[OrderChecklist]:
+    """Snapshot a template's typed fields onto an order as a new OrderChecklist (not committed).
+    Returns None, adding nothing, when the template has no typed fields."""
     tree = await _steps_tree(db, t.id)
-    cl = OrderChecklist(org_id=current.org_id, order_id=order_id, template_id=t.id,
-                        title=t.name, status="in_progress", author_id=current.id)
+    if not any(sec["items"] for st in tree for sec in st["sections"]):
+        return None
+    cl = OrderChecklist(org_id=org_id, order_id=order_id, template_id=t.id,
+                        title=t.name, status="in_progress", author_id=author_id)
     db.add(cl)
     await db.flush()
     order_i = 0
@@ -417,7 +481,7 @@ async def attach_checklist(
         for sec in st["sections"]:
             for it in sec["items"]:
                 db.add(OrderChecklistItem(
-                    org_id=current.org_id, order_id=order_id, checklist_id=cl.id,
+                    org_id=org_id, order_id=order_id, checklist_id=cl.id,
                     step_title=st["title"], section_title=sec["title"], label=it["label"],
                     field_kind=it["field_kind"], options=json.dumps(it["options"]),
                     required=it["required"], client_visible=it["client_visible"],
@@ -426,11 +490,43 @@ async def attach_checklist(
                     upsell_price=it.get("upsell_price"), upsell_threshold=it.get("upsell_threshold"),
                     upsell_comparator=it.get("upsell_comparator")))
                 order_i += 1
-    if order_i == 0:
-        raise HTTPException(422, "This template has no fields")
-    await db.commit()
-    await db.refresh(cl)
-    return {"id": cl.id, "title": cl.title, **_summary(cl, await _cl_items(db, cl.id))}
+    await db.flush()
+    return cl
+
+
+def _applies_to_order(t: ChecklistTemplate, order: Order) -> bool:
+    """A template limited to some job types only attaches to orders of those types."""
+    if (t.scope or "all") != "selected":
+        return True
+    return bool(order.type_id) and (order.type_id in _loads(t.type_ids, []) or t.type_id == order.type_id)
+
+
+async def auto_attach_for_status(db: AsyncSession, order: Order, status_key: str,
+                                 *, author_id: Optional[str]) -> list[str]:
+    """E4 — the order just entered `status_key`: attach every active template set to attach
+    automatically on that status (for this record type and job type). Once per order: a template
+    already on the order (attached by hand or by an earlier visit to the status) is not added
+    again. Runs inside the caller's transaction, after the status gates, so a checklist attached
+    on entering a status never blocks entering it; the next gate (require_checklist, or the close
+    gate for required items) then waits for it to be filled in. Returns the new checklist titles."""
+    rt = "estimate" if order.is_estimate else "work_order"
+    tpls = (await db.execute(select(ChecklistTemplate).where(
+        ChecklistTemplate.org_id == order.org_id, ChecklistTemplate.active == True)  # noqa: E712
+        .order_by(ChecklistTemplate.name))).scalars().all()
+    wanted = [t for t in tpls
+              if {"record_type": rt, "key": status_key} in _auto_keys(t) and _applies_to_order(t, order)]
+    if not wanted:
+        return []
+    have = set((await db.execute(select(OrderChecklist.template_id).where(
+        OrderChecklist.order_id == order.id, OrderChecklist.org_id == order.org_id,
+        OrderChecklist.template_id.in_([t.id for t in wanted])))).scalars().all())
+    added = []
+    for t in wanted:
+        if t.id in have:
+            continue
+        if await instantiate_template(db, order.org_id, order.id, t, author_id=author_id):
+            added.append(t.name)
+    return added
 
 
 @router.get("/orders/{order_id}/checklists/{cid}")

@@ -122,7 +122,7 @@ export default function DateField({
       </button>
 
       {open && (
-        <div className="absolute z-50 mt-1 left-0 bg-white dark:bg-[#151b2e] rounded-xl shadow-clay-card border border-slate-200/80 p-2 w-[212px]">
+        <div className="absolute z-50 mt-1 left-0 bg-raised rounded-xl shadow-clay-card border border-slate-200/80 p-2 w-[212px]">
           {showCal && (
             <>
               <div className="flex items-center justify-between mb-1">
@@ -135,7 +135,7 @@ export default function DateField({
                 </button>
               </div>
               <div className="grid grid-cols-7 gap-px mb-0.5">
-                {DOW.map((d) => <div key={d} className="text-[9px] font-bold text-ink-tertiary text-center">{d}</div>)}
+                {DOW.map((d) => <div key={d} className="text-[11px] font-bold text-ink-tertiary text-center">{d}</div>)}
               </div>
               <div className="grid grid-cols-7 gap-px">
                 {cells.map((d, i) => {
@@ -170,7 +170,7 @@ export default function DateField({
               <select value={tm ?? "00"} onChange={(e) => pickTime(`${th ?? "09"}:${e.target.value}`)} className="glass-input rounded-md px-1.5 py-1 text-xs font-semibold text-ink-primary">
                 {Array.from({ length: 12 }, (_, i) => pad(i * 5)).map((m) => <option key={m} value={m}>{m}</option>)}
               </select>
-              <span className="text-[10px] text-ink-tertiary ml-auto">{fmtTime(`${th ?? "09"}:${tm ?? "00"}`)}</span>
+              <span className="text-[11px] text-ink-tertiary ml-auto">{fmtTime(`${th ?? "09"}:${tm ?? "00"}`)}</span>
             </div>
           )}
 

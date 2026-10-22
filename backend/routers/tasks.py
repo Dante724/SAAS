@@ -29,7 +29,8 @@ def _ser(t: Task, names: dict | None = None) -> dict:
     overdue = bool(t.due_at and not t.completed_at and t.due_at < datetime.utcnow())
     return {
         "id": t.id, "title": t.title, "description": t.description,
-        "status": t.status, "priority": t.priority,
+        "status": t.status,
+        "priority": int(t.priority) if str(t.priority or "").lstrip("-").isdigit() else t.priority,
         "assigned_to_id": t.assigned_to_id, "assignee_name": names.get(t.assigned_to_id),
         "assignee_ids": list(t.assignee_ids or []),
         "assignee_names": [names.get(i) for i in (t.assignee_ids or []) if names.get(i)],

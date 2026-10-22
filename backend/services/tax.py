@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import Tax, TaxException, TaxRule
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 
 def _in_scope(tax: Tax, location_id: str | None) -> bool:

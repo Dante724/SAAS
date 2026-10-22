@@ -27,7 +27,7 @@ technician push).
 ## In-person: Stripe Terminal (slice)
 `POST /api/payments/terminal/connection-token` (reader SDK token) and
 `POST /api/payments/terminal/create-intent` (`card_present` PaymentIntent for an
-existing RepairOS intent). Both `can_view_finance`, both **503** without Stripe
+existing Tekly intent). Both `can_view_finance`, both **503** without Stripe
 keys. Reader pairing/UX is the client-side SDK's job; this is the server half.
 
 ## Caveats (honest)

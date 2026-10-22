@@ -10,7 +10,7 @@ import { getLocale } from "../i18n";
 //   fmt()   — money formatting in the org currency
 //   refresh — re-pull after a role/currency change so the UI updates live
 export type Me = {
-  id?: string; name?: string; email?: string; role?: string | null;
+  id?: string; name?: string; email?: string; role?: string | null; org_name?: string | null;
   is_owner?: boolean; permissions?: Record<string, boolean>; home_route?: string | null;
   currency?: string; currency_code?: string;
   clock_wo_enabled?: boolean; clock_attendance_enabled?: boolean;
@@ -65,7 +65,7 @@ export function MeProvider({ children }: { children: ReactNode }) {
 
   // deny-wins, default-allow — identical rule to legacy App.can and the API's require_perm
   const can = (code?: string) => canPerm(me, code);
-  const fmt = (n?: number) => `${me?.currency || "₹"}${(n ?? 0).toLocaleString(getLocale(), { maximumFractionDigits: 0 })}`;
+  const fmt = (n?: number) => `${me?.currency || "$"}${(n ?? 0).toLocaleString(getLocale(), { maximumFractionDigits: 0 })}`;
 
   return <MeContext.Provider value={{ me, loading, can, fmt, refresh }}>{children}</MeContext.Provider>;
 }
@@ -74,7 +74,11 @@ export function MeProvider({ children }: { children: ReactNode }) {
 // Nav route → permission that grants access to that area (mirrors legacy App.NAV_PERM).
 export const NAV_PERM: Record<string, string> = {
   "/clients": "can_view_client_info",
-  "/finance": "can_view_cashflow",
-  "/cash": "can_view_cashflow",
+  "/assets": "can_view_asset_info",
+  // Same codes the API checks, so a page is never shown when its data is refused (or hidden while open).
+  "/finance": "can_view_finance",
+  "/invoices": "can_view_invoices",
+  "/cash": "can_view_finance",
+  "/reports": "can_view_reports",
   "/settings": "can_manage_settings",
 };

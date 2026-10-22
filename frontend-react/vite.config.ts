@@ -12,7 +12,8 @@ export default defineConfig({
   server: {
     port: 5175,
     proxy: {
-      "/api": { target: "http://localhost:8000", changeOrigin: true },
+      "/api": { target: process.env.API_TARGET || "http://localhost:8000", changeOrigin: true },
+      "/static": { target: process.env.API_TARGET || "http://localhost:8000", changeOrigin: true },
     },
   },
   build: {

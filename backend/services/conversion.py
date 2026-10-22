@@ -15,7 +15,6 @@ Rules (Orderry):
   * Conversion documents are never deleted. Reversal = the opposite conversion,
     which writes a second document and links the two.
 """
-from datetime import datetime
 from typing import Optional
 
 from fastapi import HTTPException
@@ -26,7 +25,6 @@ from backend.models import (
     AssetProductConversion,
     Device,
     Order,
-    OrderLine,
     OrderStatus,
     Part,
     SerializedItem,
@@ -44,7 +42,7 @@ async def _is_on_open_order(db: AsyncSession, org_id: str, unit: SerializedItem)
     if not order or order.archived:
         return False
     terminal = (await db.execute(select(OrderStatus.is_terminal).where(
-        OrderStatus.org_id == org_id, OrderStatus.key == order.status))).scalar_one_or_none()
+        OrderStatus.org_id == org_id, OrderStatus.key == order.status))).scalars().first()
     return not bool(terminal)
 
 
@@ -136,7 +134,7 @@ async def product_to_asset(db: AsyncSession, org_id: str, employee_id: str, *,
             StockLevel.part_id == part.id,
             StockLevel.location_id == unit.location_id))).scalar_one_or_none()
         if sl and sl.qty_available > 0:
-            sl.qty_available -= 1
+            await _atomic_add(db, sl, "qty_available", -(1), round_to=None)   # atomic
     unit.status = "converted_to_asset"
     unit.converted_asset_id = device.id
 
@@ -198,12 +196,14 @@ async def _load_device(db: AsyncSession, org_id: str, device_id: str) -> Device:
     device = (await db.execute(select(Device).where(Device.id == device_id))).scalar_one_or_none()
     if not device:
         raise HTTPException(404, "Asset not found")
-    # tenant check: company-owned assets carry no client, so verify via the client
-    if device.client_id:
+    # tenant check: assets carry org_id; rows not yet backfilled fall back to the owning
+    # client's org. A row with neither can't be proven ours, so it is not found.
+    owner_org = device.org_id
+    if not owner_org and device.client_id:
         owner_org = (await db.execute(select(Client.org_id).where(
             Client.id == device.client_id))).scalar_one_or_none()
-        if owner_org != org_id:
-            raise HTTPException(404, "Asset not found")
+    if owner_org != org_id:
+        raise HTTPException(404, "Asset not found")
     return device
 
 
@@ -225,7 +225,7 @@ async def asset_to_product(db: AsyncSession, org_id: str, employee_id: str, *,
         Order.archived == False))).scalars().all()  # noqa: E712
     for o in open_order:
         terminal = (await db.execute(select(OrderStatus.is_terminal).where(
-            OrderStatus.org_id == org_id, OrderStatus.key == o.status))).scalar_one_or_none()
+            OrderStatus.org_id == org_id, OrderStatus.key == o.status))).scalars().first()
         if not terminal:
             raise HTTPException(
                 409, f"This asset is on open work order {o.order_number}. Close it first.")
@@ -292,7 +292,7 @@ async def asset_to_product(db: AsyncSession, org_id: str, employee_id: str, *,
             sl = (await db.execute(select(StockLevel).where(
                 StockLevel.part_id == part.id, StockLevel.location_id == loc))).scalar_one_or_none()
             if sl:
-                sl.qty_available += 1
+                await _atomic_add(db, sl, "qty_available", 1, round_to=None)   # atomic
             else:
                 db.add(StockLevel(part_id=part.id, location_id=loc, qty_available=1, qty_reserved=0))
 
@@ -354,3 +354,8 @@ def serialize(c: AssetProductConversion) -> dict:
         "created_at": c.created_at.isoformat() if c.created_at else None,
         "metadata": c.metadata_json or {},
     }
+
+
+async def _atomic_add(db, obj, attr, delta, *, round_to=None):
+    from backend.services.money import add_to_column
+    return await add_to_column(db, obj, attr, delta, round_to=round_to)

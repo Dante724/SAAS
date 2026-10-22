@@ -19,7 +19,7 @@ import hashlib
 import json
 from typing import Optional
 
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,6 +40,7 @@ PROVIDER_FIELDS: dict[str, list[dict]] = {
         {"key": "access_token", "label": "Access token", "secret": True, "env": "SQUARE_ACCESS_TOKEN"},
         {"key": "location_id", "label": "Location ID", "env": "SQUARE_LOCATION_ID"},
         {"key": "env", "label": "Environment (sandbox/production)", "env": "SQUARE_ENV"},
+        {"key": "webhook_signature_key", "label": "Webhook signature key", "secret": True, "env": "SQUARE_WEBHOOK_SIGNATURE_KEY"},
     ],
     "sumup": [
         {"key": "api_key", "label": "API key", "secret": True, "env": "SUMUP_API_KEY"},
@@ -66,16 +67,41 @@ PROVIDER_FIELDS: dict[str, list[dict]] = {
         {"key": "ig_token", "label": "Instagram token", "secret": True, "env": "META_IG_TOKEN"},
         {"key": "whatsapp_phone_id", "label": "WhatsApp phone ID", "env": "WHATSAPP_PHONE_ID"},
         {"key": "whatsapp_token", "label": "WhatsApp token", "secret": True, "env": "WHATSAPP_TOKEN"},
+        # S2: the shop's own Meta ids. Inbound webhooks only accept events for these, and the
+        # operator-wide app secret is only trusted for shops that registered them.
+        {"key": "page_id", "label": "Facebook Page ID"},
+        {"key": "ig_account_id", "label": "Instagram account ID"},
     ],
 }
 
 PROVIDERS = tuple(PROVIDER_FIELDS.keys())
 
+# Credentials managed by their own feature screen rather than the generic Integrations
+# editor: not listed by status(), not writable through /api/integrations/credentials, and
+# never backed by a global env default (each shop's own account or nothing).
+# D1 — Twilio voice: written only by /api/telephony/twilio, which probes the keys first and
+# records whether they are test or live (`mode`), so the live-key guard can't be skipped.
+INTERNAL_PROVIDER_FIELDS: dict[str, list[dict]] = {
+    "twilio_voice": [
+        {"key": "account_sid", "label": "Account SID", "secret": True},
+        {"key": "auth_token", "label": "Auth token", "secret": True},
+        {"key": "mode", "label": "Mode (test/live, set by the server)"},
+    ],
+}
+
+
+def _fields(provider: str) -> list[dict]:
+    return PROVIDER_FIELDS.get(provider) or INTERNAL_PROVIDER_FIELDS.get(provider, [])
+
 
 # ── Encryption ───────────────────────────────────────────────────────────────
-def _fernet() -> Fernet:
+def _fernet() -> MultiFernet:
+    """Encrypt with TOKEN_ENCRYPTION_KEY (required when deployed) when set. The legacy key
+    derived from SECRET_KEY stays in the ring for decryption, so credentials saved before
+    this change still read back — and are written under the new key on their next save."""
+    from backend.services.crypto import fernet_keys
     digest = hashlib.sha256((settings.SECRET_KEY or "").encode("utf-8")).digest()
-    return Fernet(base64.urlsafe_b64encode(digest))
+    return MultiFernet(fernet_keys() + [Fernet(base64.urlsafe_b64encode(digest))])
 
 
 def _encrypt(data: dict) -> str:
@@ -92,9 +118,19 @@ def _decrypt(token: Optional[str]) -> dict:
 
 
 # ── Env fallback ─────────────────────────────────────────────────────────────
+def with_env_defaults(provider: str, creds: dict) -> dict:
+    """The shop's keys with any blank field filled from the operator env, then put through the
+    live-money guard (F4). For code that used to write `creds.get(k) or settings.X`, which skipped
+    the guard when the shop's row lacked that field (review S6)."""
+    merged = {**_env_creds(provider), **{k: v for k, v in (creds or {}).items() if v not in (None, "")}}
+    from backend.services.payment_guard import assert_allowed
+    assert_allowed(provider, merged)
+    return merged
+
+
 def _env_creds(provider: str) -> dict:
     out = {}
-    for f in PROVIDER_FIELDS.get(provider, []):
+    for f in _fields(provider):
         env = f.get("env")
         val = getattr(settings, env, None) if env else None
         if val not in (None, ""):
@@ -109,15 +145,35 @@ async def _row(db: AsyncSession, org_id: str, provider: str) -> Optional[OrgInte
         OrgIntegrationCredential.provider == provider))).scalar_one_or_none()
 
 
-async def effective(db: AsyncSession, org_id: str, provider: str) -> dict:
-    """The credentials to actually use for this shop: its own keys if configured
-    and active, otherwise the operator-wide env defaults (may be empty)."""
+async def own(db: AsyncSession, org_id: str, provider: str) -> dict:
+    """Only this shop's saved keys, with no operator env fallback (empty when none)."""
     row = await _row(db, org_id, provider)
+    return _decrypt(row.data_enc) if (row and row.active) else {}
+
+
+async def effective(db: AsyncSession, org_id: str, provider: str, *, read_only: bool = False,
+                    own_only: bool = False) -> dict:
+    """The credentials to actually use for this shop: its own keys if configured
+    and active, otherwise the operator-wide env defaults (may be empty).
+
+    F4: for payment providers this is also the live-money gate. Live Stripe keys or Square's
+    production env raise payment_guard.LivePaymentsRefused unless live payments are switched on,
+    so every caller that would move money is covered. Callers that only inspect the keys (status
+    badges, webhook signature lookup) pass read_only=True.
+
+    own_only=True skips the operator-wide env defaults: card readers (F2/F3) must be the shop's own
+    Stripe/Square account, never one shared by every shop on the server (review P8)."""
+    row = await _row(db, org_id, provider)
+    data = None
     if row and row.active:
         data = _decrypt(row.data_enc)
-        if any(v not in (None, "") for v in data.values()):
-            return data
-    return _env_creds(provider)
+        if not any(v not in (None, "") for v in data.values()):
+            data = None
+    creds = data if data is not None else ({} if own_only else _env_creds(provider))
+    if not read_only:
+        from backend.services.payment_guard import assert_allowed
+        assert_allowed(provider, creds)
+    return creds
 
 
 # The one field whose presence means "this provider is actually usable" — so an
@@ -125,7 +181,7 @@ async def effective(db: AsyncSession, org_id: str, provider: str) -> dict:
 # provider look configured.
 _ESSENTIAL = {
     "stripe": ("secret_key",), "square": ("access_token",), "sumup": ("api_key",),
-    "twilio": ("account_sid",), "smtp": ("host",),
+    "twilio": ("account_sid",), "smtp": ("host",), "twilio_voice": ("account_sid",),
     "meta": ("page_token", "ig_token", "whatsapp_token"),
 }
 
@@ -146,11 +202,14 @@ async def source(db: AsyncSession, org_id: str, provider: str) -> str:
 
 # ── Writes ───────────────────────────────────────────────────────────────────
 async def set_creds(db: AsyncSession, org_id: str, provider: str, data: dict) -> None:
-    if provider not in PROVIDER_FIELDS:
+    if not _fields(provider):
         raise ValueError(f"Unknown provider '{provider}'")
     # keep only known fields; drop blanks so a cleared field falls back to env
-    clean = {f["key"]: str(data[f["key"]]).strip() for f in PROVIDER_FIELDS[provider]
+    clean = {f["key"]: str(data[f["key"]]).strip() for f in _fields(provider)
              if f["key"] in data and str(data.get(f["key"]) or "").strip() != ""}
+    # F4: live payment credentials are refused unless live payments are switched on in production.
+    from backend.services.payment_guard import assert_allowed
+    assert_allowed(provider, clean)
     row = await _row(db, org_id, provider)
     if not row:
         row = OrgIntegrationCredential(org_id=org_id, provider=provider)

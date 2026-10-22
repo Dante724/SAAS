@@ -69,10 +69,10 @@ async def test_poll_ingests_gmail_into_inbox(monkeypatch, db, client, tenant):
     r = (await client.post("/api/integrations/email/poll", headers=tenant)).json()
     assert r["ingested"] == 2
 
-    threads = (await client.get("/api/inbox/threads", headers=tenant)).json()
-    items = threads.get("items", threads) if isinstance(threads, dict) else threads
+    items = (await client.get("/api/chats/threads", headers=tenant)).json()["items"]
     email_threads = [t for t in items if t.get("channel") == "email"]
-    assert len(email_threads) == 1                 # both messages land in one thread (same sender)
+    assert len(email_threads) == 1                 # both messages land in one Chats thread (same sender)
+    assert email_threads[0]["contact_name"] == "Ana" and email_threads[0]["status"] == "new"
 
     # polling again does not duplicate (de-dupe on Gmail message id)
     r2 = (await client.post("/api/integrations/email/poll", headers=tenant)).json()

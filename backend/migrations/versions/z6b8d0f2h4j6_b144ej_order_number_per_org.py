@@ -21,13 +21,15 @@ _NC = {"uq": "uq_%(table_name)s_%(column_0_name)s"}
 
 
 def upgrade() -> None:
+    # Batch ops run at context exit, so a try/except around drop_constraint never caught
+    # anything: look up which global-unique constraint actually exists first.
+    import sqlalchemy as _sa
+    existing = {u["name"] for u in _sa.inspect(op.get_bind()).get_unique_constraints("orders")}
     with op.batch_alter_table("orders", naming_convention=_NC) as b:
         for name in ("uq_orders_order_number", "orders_order_number_key"):
-            try:
+            if name in existing:
                 b.drop_constraint(name, type_="unique")
                 break
-            except Exception:
-                continue
         b.create_unique_constraint("uq_order_org_number", ["org_id", "order_number"])
 
 

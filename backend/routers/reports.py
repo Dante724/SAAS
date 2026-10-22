@@ -1,3 +1,4 @@
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends
@@ -10,12 +11,42 @@ from backend.services.auth import get_current_employee, require_perm
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
+# Short per-org cache for the dashboard tiles: every reports visit (and every tab) used to
+# re-run all of these aggregates. Shop-wide numbers, the same for everyone allowed to see
+# them, so a few seconds of staleness is harmless. In-process; bounded.
+_DASH_TTL_S = 30
+_dash_cache: dict = {}   # org_id -> (expires_at, payload)
+
+
+def low_stock_count_query(org_id: str):
+    """Parts at or under their minimum, counted in the database: one aggregate instead of
+    loading every part and every stock row into Python."""
+    on_hand = (select(StockLevel.part_id, func.sum(StockLevel.qty_available).label("qty"))
+               .join(Part, Part.id == StockLevel.part_id).where(Part.org_id == org_id)
+               .group_by(StockLevel.part_id).subquery())
+    return (select(func.count()).select_from(Part)
+            .outerjoin(on_hand, on_hand.c.part_id == Part.id)
+            .where(Part.org_id == org_id, func.coalesce(on_hand.c.qty, 0) <= Part.min_stock))
+
+
 @router.get("/dashboard")
 async def dashboard(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_reports")),
 ):
-    oid = current.org_id
+    import time
+    now = time.monotonic()
+    hit = _dash_cache.get(current.org_id)
+    if hit and hit[0] > now:
+        return hit[1]
+    out = await _dashboard(db, current.org_id)
+    if len(_dash_cache) > 5000:
+        _dash_cache.clear()
+    _dash_cache[current.org_id] = (now + _DASH_TTL_S, out)
+    return out
+
+
+async def _dashboard(db, oid: str) -> dict:
 
     total_orders = (await db.execute(
         select(func.count()).select_from(Order).where(Order.org_id == oid)
@@ -36,7 +67,7 @@ async def dashboard(
     )).scalar() or 0
 
     outstanding = (await db.execute(
-        select(func.sum(Invoice.total - Invoice.amount_paid))
+        select(func.sum(Invoice.total - Invoice.amount_paid - Invoice.credited))
         .where(Invoice.org_id == oid, Invoice.status.in_(["draft", "partial"]))
     )).scalar() or 0
 
@@ -60,16 +91,7 @@ async def dashboard(
     )
     by_status = {row[0]: row[1] for row in status_result.all()}
 
-    # Low stock count
-    all_parts = (await db.execute(select(Part).where(Part.org_id == oid))).scalars().all()
-    all_stock = (await db.execute(
-        select(StockLevel).where(StockLevel.part_id.in_([p.id for p in all_parts]))
-    )).scalars().all()
-    stock_by_part = {}
-    for s in all_stock:
-        stock_by_part.setdefault(s.part_id, 0)
-        stock_by_part[s.part_id] += s.qty_available
-    low_stock_count = sum(1 for p in all_parts if stock_by_part.get(p.id, 0) <= p.min_stock)
+    low_stock_count = (await db.execute(low_stock_count_query(oid))).scalar() or 0
 
     return {
         "stats": {
@@ -138,12 +160,12 @@ from datetime import datetime, timedelta
 from fastapi import Query
 from fastapi.responses import StreamingResponse
 import io
-from sqlalchemy import and_, or_, desc
 from backend.models import (
     OrderLine, OrderStatus, Transaction, Account, CashFlowItem,
-    StockMovement, Supplier, Payment, Device, EventFeedItem, WorkOrderType,
+    StockMovement, Supplier, Payment, EventFeedItem,
 )
-from backend.services.money import q2, q4
+from backend.services.money import q2
+from backend.core.spreadsheet import safe_row
 
 
 def _parse_range(date_from, date_to):
@@ -200,6 +222,54 @@ async def _rep_work_orders_closed(db, org, df, dt, **kw):
              o.client.name if o.client else "—",
              o.assigned_to.name if o.assigned_to else "—", q2(o.total or 0)] for o in rows]
     return cols, data
+
+
+async def _rep_lead_source_revenue(db, org, df, dt, **kw):
+    """Which lead sources bring paying customers: new clients, orders and money received in the
+    period, grouped by the client's lead source (Settings → Directories → Lead sources)."""
+    src = func.coalesce(func.nullif(Client.source, ""), "Not recorded")
+    new_clients = dict((await db.execute(select(src, func.count()).where(
+        Client.org_id == org, Client.created_at >= df, Client.created_at <= dt).group_by(src))).all())
+    oq = _loc_filter(select(src, func.count(Order.id), func.coalesce(func.sum(Order.total), 0))
+        .join(Client, Client.id == Order.client_id).where(
+        Order.org_id == org, Order.is_estimate == False,  # noqa: E712
+        Order.created_at >= df, Order.created_at <= dt), kw).group_by(src)
+    orders = {k: (n, t) for k, n, t in (await db.execute(oq)).all()}
+    # A payment names its client directly or only through its order — attribute either way.
+    pq = (select(src, func.coalesce(func.sum(Payment.amount), 0))
+          .select_from(Payment).outerjoin(Order, Order.id == Payment.order_id)
+          .join(Client, Client.id == func.coalesce(Payment.client_id, Order.client_id))
+          .where(Client.org_id == org, func.coalesce(Payment.kind, "payment") != "refund",
+                 Payment.paid_at >= df, Payment.paid_at <= dt).group_by(src))
+    paid = dict((await db.execute(pq)).all())
+    keys = sorted(set(new_clients) | set(orders) | set(paid), key=lambda k: -float(paid.get(k, 0) or 0))
+    cols = ["Lead source", "New clients", "Work orders", "Order value", "Paid", "Avg paid / new client"]
+    data = []
+    for k in keys:
+        n_new = new_clients.get(k, 0)
+        n_ord, val = orders.get(k, (0, 0))
+        p = float(paid.get(k, 0) or 0)
+        data.append([k, n_new, n_ord, q2(val), q2(p), q2(p / n_new) if n_new else "—"])
+    return cols, data
+
+
+async def _rep_cancellations(db, org, df, dt, **kw):
+    """Why jobs get cancelled: work orders that entered a dropped status in the period, by the
+    reason captured at cancellation (Settings → Directories → Cancellation reasons)."""
+    from backend.models import OrderStatus
+    dropped = [k for (k,) in (await db.execute(select(OrderStatus.key).where(
+        OrderStatus.org_id == org, OrderStatus.status_group == "dropped"))).all()]
+    if not dropped:
+        return ["Reason", "Work orders", "Share", "Lost value"], []
+    reason = func.coalesce(func.nullif(Order.cancel_reason, ""), "No reason given")
+    q = _loc_filter(select(reason, func.count(), func.coalesce(func.sum(Order.total), 0)).where(
+        Order.org_id == org, Order.status.in_(dropped), Order.is_estimate == False,  # noqa: E712
+        func.coalesce(Order.closed_at, Order.created_at) >= df,
+        func.coalesce(Order.closed_at, Order.created_at) <= dt), kw).group_by(reason)
+    rows = sorted((await db.execute(q)).all(), key=lambda r: -r[1])
+    total = sum(r[1] for r in rows) or 1
+    cols = ["Reason", "Work orders", "Share", "Lost value"]
+    return cols, [[r, n, f"{round(n * 100 / total)}%", q2(v)] for r, n, v in rows]
 
 
 async def _rep_wo_profit(db, org, df, dt, **kw):
@@ -362,6 +432,9 @@ async def _rep_labor_utilization(db, org, df, dt, **kw):
     rows = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == org, TimeEntry.state != "void",
         TimeEntry.started_at >= df, TimeEntry.started_at < dt))).scalars().all()
+    scope = kw.get("payroll_ids")          # E3: labour cost reveals pay rates
+    if scope is not None:
+        rows = [e for e in rows if e.employee_id in scope]
     emps = {e.id: e.name for e in (await db.execute(
         select(Employee).where(Employee.org_id == org))).scalars().all()}
     agg = {}
@@ -389,6 +462,9 @@ async def _rep_labor_by_job(db, org, df, dt, **kw):
     rows = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == org, TimeEntry.state != "void", TimeEntry.order_id.is_not(None),
         TimeEntry.started_at >= df, TimeEntry.started_at < dt))).scalars().all()
+    scope = kw.get("payroll_ids")          # E3: labour cost reveals pay rates
+    if scope is not None:
+        rows = [e for e in rows if e.employee_id in scope]
     by_order = {}
     for e in rows:
         a = by_order.setdefault(e.order_id, {"sec": 0, "cost": 0.0, "bill": 0.0})
@@ -453,6 +529,9 @@ async def _rep_labor_cost(db, org, df, dt, **kw):
     rows = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == org, TimeEntry.state != "void",
         TimeEntry.started_at >= df, TimeEntry.started_at < dt))).scalars().all()
+    scope = kw.get("payroll_ids")          # E3: only the people the caller's payroll scope covers
+    if scope is not None:
+        rows = [e for e in rows if e.employee_id in scope]
     total = sum(e.duration_sec for e in rows)
     billable = sum(e.duration_sec for e in rows if e.billable)
     cost = sum(e.duration_sec / 3600 * (e.cost_rate or 0) for e in rows)
@@ -506,7 +585,7 @@ async def _rep_purchase_list(db, org, df, dt, **kw):
     promised to a customer, falls below its minimum — reserved stock isn't really yours
     to sell. Anything already on order is netted off, so the same part isn't ordered
     twice while the first delivery is still in transit."""
-    from backend.models import POLine, PurchaseOrder, Supplier
+    from backend.models import POLine, PurchaseOrder
 
     parts = (await db.execute(select(Part).where(
         Part.org_id == org, Part.active == True)  # noqa: E712
@@ -578,10 +657,20 @@ async def _rep_expiration(db, org, df, dt, **kw):
 async def _rep_payroll(db, org, df, dt, **kw):
     """Per-employee compensation accrued in the window, straight from the payroll
     ledger: commissions, hourly wages (both the labour-hours and shop-attendance
-    clocks post here), manual bonuses/penalties, and accrued base salary."""
+    clocks post here), manual bonuses/penalties, and accrued base salary.
+    E2: narrowed by location, role (position) and employee; `payroll_ids` is the caller's
+    payroll scope (None = everyone)."""
     from backend.models import EmployeeBalanceLedger, Role
-    emps = (await db.execute(select(Employee).where(
-        Employee.org_id == org, Employee.active == True))).scalars().all()  # noqa: E712
+    q = select(Employee).where(Employee.org_id == org, Employee.active == True)  # noqa: E712
+    if kw.get("location_id"):
+        # no home location = not tied to a branch, so they count in every branch's report
+        q = q.where((Employee.location_id == kw["location_id"]) | Employee.location_id.is_(None))
+    if kw.get("role_id"):
+        q = q.where(Employee.role_id == kw["role_id"])
+    if kw.get("employee_id"):
+        q = q.where(Employee.id == kw["employee_id"])
+    scope = kw.get("payroll_ids")
+    emps = [e for e in (await db.execute(q)).scalars().all() if scope is None or e.id in scope]
     roles = {r.id: r.name for r in (await db.execute(
         select(Role).where(Role.org_id == org))).scalars().all()}
     led = (await db.execute(select(EmployeeBalanceLedger).where(
@@ -682,7 +771,7 @@ async def _rep_reorder_forecast(db, org, df, dt, **kw):
     days-of-cover and stockout date, then suggests an order quantity that covers the
     supplier's lead time plus a 14-day buffer — netting off what's already on order.
     Unlike the min-stock purchase list, this reacts to how fast things actually move."""
-    from backend.models import POLine, PurchaseOrder, Supplier
+    from backend.models import POLine, PurchaseOrder
     WINDOW, COVER = 28, 14
     since = datetime.utcnow() - timedelta(days=WINDOW)
     vel = {pid: float(q or 0) for pid, q in (await db.execute(
@@ -729,6 +818,58 @@ async def _rep_reorder_forecast(db, org, df, dt, **kw):
     return cols, data
 
 
+# Reports exposing sensitive figures need the matching permission on top of can_view_reports.
+REPORT_PERMS = {
+    "payroll": "can_view_payroll", "labor_cost": "can_view_payroll",
+    "labor_utilization": "can_view_payroll", "labor_by_job": "can_view_payroll",   # labour cost = pay rates
+    "wo_profit": "can_see_profit",
+    "cash_flow": "can_view_cashflow", "total_money": "can_view_balance",
+    "stock_valuation": "can_view_purchase_price",
+}
+
+
+# Downloading these as a file needs its own right on top of seeing them.
+EXPORT_PERMS = {
+    "sold_products": "can_export_sales", "provided_services": "can_export_sales",
+    "payroll": "can_export_payroll", "labor_cost": "can_export_payroll",
+    "labor_utilization": "can_export_payroll", "labor_by_job": "can_export_payroll",
+}
+
+
+async def _assert_report_access(db, current, report_key: str, export: bool = False) -> None:
+    from backend.services.auth import assert_perm
+    await assert_perm(db, current, "can_view_reports")
+    if report_key in REPORT_PERMS:
+        await assert_perm(db, current, REPORT_PERMS[report_key])
+    if export and report_key in EXPORT_PERMS:
+        await assert_perm(db, current, EXPORT_PERMS[report_key])
+
+
+PAYROLL_REPORTS = {"payroll", "labor_cost", "labor_utilization", "labor_by_job"}
+
+
+async def _builder_kw(db, current, report_key: str, location_id, role_id, employee_id) -> dict:
+    """Extra builder arguments: the branch, plus (payroll reports) the role/employee filters and
+    the caller's payroll scope, so the screen, the run and every export show the same rows."""
+    kw = {"location_id": location_id}
+    if report_key in PAYROLL_REPORTS:
+        from backend.services.payroll_views import assert_payroll_scope, payroll_scope_ids
+        if employee_id:
+            await assert_payroll_scope(db, current, employee_id)
+        kw.update(role_id=role_id, employee_id=employee_id,
+                  payroll_ids=await payroll_scope_ids(db, current))
+    return kw
+
+
+async def _report_from(db, current, report_key: str, df):
+    """The cash flow starts no earlier than today for a role without "any period"."""
+    if report_key != "cash_flow":
+        return df
+    from backend.routers.cash import cash_flow_floor
+    since = await cash_flow_floor(db, current)
+    return max(df, since) if since else df
+
+
 REPORTS = {
     "payroll":          ("Finance", "Payroll summary", _rep_payroll),
     "wo_created":       ("Work Orders", "Work orders created", _rep_work_orders_created),
@@ -738,6 +879,8 @@ REPORTS = {
     "labor_cost":       ("Labor", "Labor cost summary", _rep_labor_cost),
     "wo_closed":        ("Work Orders", "Work orders closed", _rep_work_orders_closed),
     "wo_profit":        ("Finance", "Work orders profit", _rep_wo_profit),
+    "lead_sources":     ("Customers", "Revenue by lead source", _rep_lead_source_revenue),
+    "cancellations":    ("Work Orders", "Cancellations by reason", _rep_cancellations),
     "technicians":      ("Work Orders", "Technicians performance", _rep_technicians),
     "provided_services":("Assortment", "Provided services (Ready+Closed)", _rep_provided_services),
     "sold_products":    ("Assortment", "Sold products (Ready+Closed)", _rep_sold_products),
@@ -771,15 +914,21 @@ async def run_report(
     date_from: str = Query(None),
     date_to: str = Query(None),
     location_id: str = Query(None),           # build 141: scope order-based reports to a branch
+    role_id: str = Query(None),               # E2: payroll reports — one role (position)
+    employee_id: str = Query(None),           # E2: payroll reports — one employee
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    await _assert_report_access(db, current, report_key)
     if report_key not in REPORTS:
         from fastapi import HTTPException
         raise HTTPException(404, "Unknown report")
     tab, title, builder = REPORTS[report_key]
     df, dt = _parse_range(date_from, date_to)
-    cols, rows = await builder(db, current.org_id, df, dt, location_id=location_id)
+    df = await _report_from(db, current, report_key, df)
+    location_id = await _scoped_location(db, current, location_id)
+    cols, rows = await builder(db, current.org_id, df, dt,
+                               **await _builder_kw(db, current, report_key, location_id, role_id, employee_id))
     # totals row for numeric columns
     return {"key": report_key, "title": title, "tab": tab,
             "columns": cols, "rows": rows, "row_count": len(rows)}
@@ -791,10 +940,13 @@ async def export_report(
     date_from: str = Query(None),
     date_to: str = Query(None),
     location_id: str = Query(None),
+    role_id: str = Query(None),
+    employee_id: str = Query(None),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
     """Stream the report as a styled .xlsx (Orderry: export carries the full data)."""
+    await _assert_report_access(db, current, report_key, export=True)
     if report_key not in REPORTS:
         from fastapi import HTTPException
         raise HTTPException(404, "Unknown report")
@@ -802,7 +954,10 @@ async def export_report(
     from openpyxl.styles import Font, PatternFill, Alignment
     tab, title, builder = REPORTS[report_key]
     df, dt = _parse_range(date_from, date_to)
-    cols, rows = await builder(db, current.org_id, df, dt, location_id=location_id)
+    df = await _report_from(db, current, report_key, df)
+    location_id = await _scoped_location(db, current, location_id)
+    cols, rows = await builder(db, current.org_id, df, dt,
+                               **await _builder_kw(db, current, report_key, location_id, role_id, employee_id))
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -820,11 +975,11 @@ async def export_report(
         cell.font = head_font
         cell.alignment = Alignment(horizontal="center")
     for r in rows:
-        ws.append(r)
+        ws.append(safe_row(r))
     for i, col in enumerate(cols, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = max(14, len(str(col)) + 4)
     buf = io.BytesIO()
-    wb.save(buf)
+    await asyncio.to_thread(wb.save, buf)
     buf.seek(0)
     fname = f"{report_key}_{df.strftime('%Y%m%d')}_{dt.strftime('%Y%m%d')}.xlsx"
     return StreamingResponse(
@@ -838,22 +993,28 @@ async def export_report_csv(
     date_from: str = Query(None),
     date_to: str = Query(None),
     location_id: str = Query(None),
+    role_id: str = Query(None),
+    employee_id: str = Query(None),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
     """Stream any registered report as CSV (BI-friendly, opens anywhere)."""
+    await _assert_report_access(db, current, report_key, export=True)
     if report_key not in REPORTS:
         from fastapi import HTTPException
         raise HTTPException(404, "Unknown report")
     import csv
     _tab, _title, builder = REPORTS[report_key]
     df, dt = _parse_range(date_from, date_to)
-    cols, rows = await builder(db, current.org_id, df, dt, location_id=location_id)
+    df = await _report_from(db, current, report_key, df)
+    location_id = await _scoped_location(db, current, location_id)
+    cols, rows = await builder(db, current.org_id, df, dt,
+                               **await _builder_kw(db, current, report_key, location_id, role_id, employee_id))
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(cols)
     for r in rows:
-        w.writerow(r)
+        w.writerow(safe_row(r))
     buf.seek(0)
     fname = f"{report_key}_{df.strftime('%Y%m%d')}_{dt.strftime('%Y%m%d')}.csv"
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
@@ -869,9 +1030,10 @@ async def company_dashboard(
     """Rich 'My company' dashboard matching Orderry: today metrics, status mix,
     orders-by-assignee, account balances, and monthly KPIs. Optionally scoped to a
     single location via ?location_id=."""
-    from datetime import datetime, timedelta
-    from backend.models import Account, Payment, OrderStatus
+    from datetime import datetime
+    from backend.models import Account, OrderStatus
     oid = current.org_id
+    location_id = await _scoped_location(db, current, location_id)
     now = datetime.utcnow()
     today0 = now.replace(hour=0, minute=0, second=0, microsecond=0)
     month0 = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -887,10 +1049,19 @@ async def company_dashboard(
     def is_open(o): return grp.get(o.status) not in closed_groups
 
     wo_today = sum(1 for o in orders if o.created_at >= today0)
+    # Payments carry no org_id: they belong to this shop through their job, invoice or account
+    # (one branch: through that branch's jobs). Every money total below uses the same scope.
+    from sqlalchemy import or_
+    if location_id:
+        mine = Payment.order_id.in_([o.id for o in orders] or ['_'])
+    else:
+        mine = or_(Payment.order_id.in_(select(Order.id).where(Order.org_id == oid)),
+                   Payment.invoice_id.in_(select(Invoice.id).where(Invoice.org_id == oid)),
+                   Payment.account_id.in_(select(Account.id).where(Account.org_id == oid)))
     revenue_today = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0))
-        .where(Payment.order_id.in_([o.id for o in orders] or ['_']), Payment.kind != "refund", Payment.paid_at >= today0))).scalar() or 0
+        .where(mine, Payment.kind != "refund", Payment.paid_at >= today0))).scalar() or 0
     refunds_today = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0))
-        .where(Payment.kind == "refund", Payment.paid_at >= today0))).scalar() or 0
+        .where(mine, Payment.kind == "refund", Payment.paid_at >= today0))).scalar() or 0
 
     new_count = sum(1 for o in orders if grp.get(o.status) == "new")
     urgent = sum(1 for o in orders if o.priority >= 1 and is_open(o))
@@ -935,33 +1106,38 @@ async def company_dashboard(
     wo_month = [o for o in orders if o.created_at >= month0]
     won_month = [o for o in wo_month if grp.get(o.status) in closed_groups]
     revenue_month = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0))
-        .where(Payment.kind != "refund", Payment.paid_at >= month0))).scalar() or 0
+        .where(mine, Payment.kind != "refund", Payment.paid_at >= month0))).scalar() or 0
     closed_total = sum((o.total or 0) for o in orders if grp.get(o.status) in closed_groups)
     closed_n = sum(1 for o in orders if grp.get(o.status) in closed_groups)
     avg_wo = q2(closed_total / closed_n) if closed_n else 0
     conversion = round(len(won_month) / len(wo_month) * 100, 0) if wo_month else 0
 
+    # Money on Home follows the role: balances need "see balance", takings and amounts owed
+    # need finance access. Counts stay visible to everyone.
+    from backend.services.auth import has_perm
+    see_bal = await has_perm(db, current, "can_view_balance")
+    see_fin = await has_perm(db, current, "can_view_finance")
     return {
         "today": {
             "work_orders": wo_today,
-            "revenue": q2(revenue_today),
-            "refunds": q2(refunds_today),
+            "revenue": q2(revenue_today) if see_fin else None,
+            "refunds": q2(refunds_today) if see_fin else None,
         },
         "kpis": {
             "new": new_count, "urgent": urgent, "overdue": overdue,
-            "receivables": q2(receivables),
-            "ar": q2(float(ar)), "ap": q2(float(ap)),
-            "total_money": q2(cash_bal + cashless_bal),
-            "cash": q2(cash_bal), "cashless": q2(cashless_bal),
+            "receivables": q2(receivables) if see_fin else None,
+            "ar": q2(float(ar)) if see_fin else None, "ap": q2(float(ap)) if see_fin else None,
+            "total_money": q2(cash_bal + cashless_bal) if see_bal else None,
+            "cash": q2(cash_bal) if see_bal else None, "cashless": q2(cashless_bal) if see_bal else None,
         },
         "status_mix": [{"group": g, "count": c} for g, c in mix.items()],
         "by_assignee": assignee_rows,
         "monthly": {
             "work_orders_created": len(wo_month),
             "work_orders_won": len(won_month),
-            "revenue": q2(revenue_month),
+            "revenue": q2(revenue_month) if see_fin else None,
             "conversion": conversion,
-            "avg_work_order": avg_wo,
+            "avg_work_order": avg_wo if see_fin else None,
         },
     }
 
@@ -972,7 +1148,28 @@ async def company_dashboard(
 #  stamped on the line) − labour cost (Σ TimeEntry duration × snapshot rate,
 #  timer AND manual). Rolled up per location. No schema, no WO-page changes.
 # ══════════════════════════════════════════════════════════════════════════
-from datetime import datetime, timedelta
+
+
+async def _scoped_location(db, current, location_id):
+    """The branch a report or dashboard may cover for this caller. A role limited to some
+    locations can only ask for one of them, and with no choice gets its only branch (or is
+    told to pick one) instead of the whole shop's figures."""
+    from fastapi import HTTPException
+
+    from backend.models import Role
+    from backend.services.auth import check_location_access, is_shop_owner
+    if not current.role_id or await is_shop_owner(db, current):
+        return location_id
+    if location_id:
+        await check_location_access(db, current, location_id)
+        return location_id
+    role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
+    allow = _allowed_location_ids(role)
+    if allow is None:
+        return None
+    if len(allow) == 1:
+        return next(iter(allow))
+    raise HTTPException(403, "Choose one of your locations to see this report")
 
 
 def _allowed_location_ids(role):
@@ -1142,7 +1339,7 @@ async def home_feed(
 
     unpaid_n = (await db.execute(select(func.count()).select_from(Invoice).where(
         Invoice.org_id == oid, Invoice.status.in_(["draft", "partial", "issued"]),
-        (Invoice.total - Invoice.amount_paid) > 0))).scalar() or 0
+        (Invoice.total - Invoice.amount_paid - Invoice.credited) > 0))).scalar() or 0
 
     parts = (await db.execute(select(Part).where(Part.org_id == oid, Part.active == True))).scalars().all()  # noqa: E712
     low = 0
@@ -1171,7 +1368,7 @@ async def home_feed(
     add("overdue", "danger", "warning", overdue, f"{overdue} work order{'s' if overdue != 1 else ''} overdue", "/orders")
     add("messages", "danger", "chat", unread, f"{unread} customer message{'s' if unread != 1 else ''} waiting", "/orders")
     add("ready", "success", "local_shipping", ready, f"{ready} order{'s' if ready != 1 else ''} ready for pickup", "/orders")
-    add("urgent", "warning", "priority_high", urgent, f"{urgent} urgent order{'s' if urgent != 1 else ''} open", "/orders?priority=2")
+    add("urgent", "warning", "priority_high", urgent, f"{urgent} urgent order{'s' if urgent != 1 else ''} open", "/orders?priority=urgent")
     add("unpaid", "info", "request_quote", unpaid_n, f"{unpaid_n} unpaid invoice{'s' if unpaid_n != 1 else ''}", "/invoices")
     add("lowstock", "warning", "inventory_2", low, f"{low} item{'s' if low != 1 else ''} low or out of stock", "/inventory")
     add("tasks", "info", "task_alt", open_tasks, f"{open_tasks} open task{'s' if open_tasks != 1 else ''}", "/tasks")
