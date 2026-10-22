@@ -129,13 +129,22 @@ async def _editor_role(db: AsyncSession, current: Employee) -> Optional[Role]:
     return role
 
 
-def _assert_scope_not_wider(editor: Role, data: "RoleIn") -> None:
-    for field in ("order_scope", "contact_scope", "warehouse_scope", "location_scope", "payroll_scope"):
+PAYROLL_ACCESS = ("can_view_payroll", "can_manage_payroll")
+
+
+def _assert_scope_not_wider(editor: Role, data: "RoleIn", *, grants_payroll: bool = True) -> None:
+    """`grants_payroll`: whether the role being given out can see anyone's payroll at all. A role
+    without payroll rights has nothing for its payroll scope to widen, so it isn't compared."""
+    fields = ["order_scope", "contact_scope", "warehouse_scope", "location_scope"]
+    if grants_payroll:
+        fields.append("payroll_scope")
+    for field in fields:
         if getattr(editor, field, "all") in _NARROW and getattr(data, field, "all") not in _NARROW:
             raise HTTPException(403, f"You can't give a role wider access than your own ({field.replace('_', ' ')})")
-    if getattr(editor, "payroll_scope", "all") == "own" and getattr(data, "payroll_scope", "all") != "own":
+    mine = getattr(editor, "payroll_scope", "all") if grants_payroll else "all"
+    if mine == "own" and getattr(data, "payroll_scope", "all") != "own":
         raise HTTPException(403, "You can't give a role wider access than your own (payroll scope)")
-    if getattr(editor, "payroll_scope", "all") == "selected":
+    if mine == "selected":
         if getattr(data, "payroll_scope", "all") != "selected":
             raise HTTPException(403, "You can only give a role payroll access to people your own role covers")
         if not set(data.payroll_employee_ids or []) <= set(editor.payroll_employee_ids or []):
@@ -165,7 +174,7 @@ async def guard_role_change(db: AsyncSession, current: Employee, role: Optional[
         if beyond:
             raise HTTPException(403, f"You can't grant permissions you don't have: {', '.join(beyond)}")
     if data is not None:
-        _assert_scope_not_wider(editor, data)
+        _assert_scope_not_wider(editor, data, grants_payroll=any(new_perms.get(c) for c in PAYROLL_ACCESS))
     return new_perms
 
 

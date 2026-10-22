@@ -228,6 +228,8 @@ async def my_earnings(
     period has been accrued or paid. Only ever the caller's own figures; the role's pay-history
     limit (payroll_visibility_days) still applies."""
     from backend.services import scoping
+    # Both rights: the older "see your own pay" switch still turns it off for a role.
+    await assert_perm(db, current, "can_view_own_compensation")
     today = date.today()
     ps = parse_date(date_from, "from") if date_from else today.replace(day=1)
     pe = parse_date(date_to, "to") if date_to else _month_bounds(today.strftime("%Y-%m"))[1]
@@ -300,7 +302,11 @@ async def create_payroll_run(
     Commissions are already in the ledger from order events."""
     await assert_perm(db, current, "can_accrue_payroll")
     await _assert_reward_rights(db, current, data.bonus, data.penalty)
+    if not (await db.execute(select(Employee.id).where(
+            Employee.id == data.employee_id, Employee.org_id == current.org_id))).scalar_one_or_none():
+        raise HTTPException(404, "Employee not found")
     await assert_payroll_scope(db, current, data.employee_id)
+    await assert_not_self(db, current, data.employee_id, "accrue your own pay")
     ps = parse_date(data.period_start, "period_start")
     pe = parse_date(data.period_end, "period_end")
     today = date.today()
@@ -421,9 +427,17 @@ async def create_payroll_runs_bulk(
         emps = [e for e in (await db.execute(select(Employee).where(
             Employee.org_id == current.org_id, Employee.active == True))).scalars().all()  # noqa: E712
             if in_scope(scope, e.id)]
+    # Nobody accrues their own pay (the owner excepted): they're skipped, and the result says so.
+    from backend.services.auth import is_shop_owner
+    skip_self = bool(current.role_id) and not await is_shop_owner(db, current)
 
     accrued, skipped, results = 0, 0, []
     for emp in emps:
+        if skip_self and emp.id == current.id:
+            skipped += 1
+            results.append({"employee_id": emp.id, "status": "skipped",
+                            "reason": "you can't accrue your own pay; ask the owner or another manager"})
+            continue
         # reuse the duplicate guard: skip anyone already accrued for this period
         if not data.draft:
             dupe = (await db.execute(select(PayrollRun).where(
@@ -828,6 +842,7 @@ async def accrue_calculation(
     if not emp:
         raise HTTPException(404, "Employee not found")
     await assert_payroll_scope(db, current, emp.id)
+    await assert_not_self(db, current, emp.id, "accrue your own pay")
     dupe = (await db.execute(select(PayrollRun).where(
         PayrollRun.org_id == current.org_id, PayrollRun.employee_id == data.employee_id,
         PayrollRun.status.notin_(_NOT_ACCRUED),

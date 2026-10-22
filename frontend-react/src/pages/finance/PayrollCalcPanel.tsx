@@ -98,7 +98,7 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
           <input type="month" value={month} onChange={(e) => e.target.value && onMonth(e.target.value)} aria-label="Month" className={sel} />
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {can("can_view_own_payroll") && <Link to="/my-earnings" className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-ink-secondary hover:bg-slate-50 text-xs font-bold flex items-center gap-1"><M n="payments" c="text-xs" />My earnings</Link>}
+          {can("can_view_own_payroll") && can("can_view_own_compensation") && <Link to="/my-earnings" className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-ink-secondary hover:bg-slate-50 text-xs font-bold flex items-center gap-1"><M n="payments" c="text-xs" />My earnings</Link>}
           {can("can_export_payroll") && <button onClick={exportCsv} disabled={exporting || !rows?.length} className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-ink-secondary hover:bg-slate-50 text-xs font-bold flex items-center gap-1 disabled:opacity-50"><M n="download" c="text-xs" />{exporting ? "Exporting…" : "Export"}</button>}
           {headerAction}
         </div>

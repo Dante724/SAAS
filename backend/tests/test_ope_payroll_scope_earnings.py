@@ -207,14 +207,15 @@ def test_migration_grants_own_payroll_to_existing_explicit_roles(tmp_path):
     con = sqlite3.connect(path)
     con.execute("INSERT INTO roles (id, org_id, name, permissions, perms_explicit, location_scope, contact_scope, "
                 "order_scope, warehouse_scope) VALUES ('r1', 'o1', 'tech', ?, 1, 'all', 'all', 'all', 'all')",
-                (json.dumps({"can_create_tickets": True}),))
+                (json.dumps({"can_create_tickets": True, "can_view_own_compensation": True}),))
     con.commit()
     con.close()
     alembic("ope1")
     con = sqlite3.connect(path)
     perms, scope = con.execute("SELECT permissions, payroll_scope FROM roles WHERE id = 'r1'").fetchone()
     con.close()
-    assert json.loads(perms) == {"can_create_tickets": True, "can_view_own_payroll": True}
+    assert json.loads(perms) == {"can_create_tickets": True, "can_view_own_compensation": True,
+                                 "can_view_own_payroll": True}
     assert scope == "all"
 
 
