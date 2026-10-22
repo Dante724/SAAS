@@ -300,15 +300,17 @@ def _verify_stripe_sig(payload: bytes, header: str, secret: str) -> bool:
     import hmac
     import time
     try:
-        parts = dict(p.split("=", 1) for p in header.split(",") if "=" in p)
-        ts, v1 = parts.get("t"), parts.get("v1")
-        if not ts or not v1:
+        pairs = [p.strip().split("=", 1) for p in header.split(",") if "=" in p]
+        ts = next((v for k, v in pairs if k == "t"), None)
+        # Stripe sends one v1 per active signing secret (two while a secret is being rolled).
+        sigs = [v for k, v in pairs if k == "v1"]
+        if not ts or not sigs:
             return False
         # Reject stale/replayed events: the signed timestamp must be within tolerance.
         if abs(time.time() - int(ts)) > 300:
             return False
         signed = f"{ts}.".encode() + payload
         expected = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
-        return hmac.compare_digest(expected, v1)
+        return any(hmac.compare_digest(expected, v) for v in sigs)
     except Exception:
         return False

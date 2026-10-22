@@ -170,6 +170,8 @@ class OrderIn(BaseModel):
 
 @router.post("/orders", status_code=201)
 async def create_order(data: OrderIn, db: AsyncSession = Depends(get_db), principal: ApiPrincipal = WRITE):
+    from backend.services.billing import assert_can_add_job
+    await assert_can_add_job(db, principal.org_id)
     o = Order(org_id=principal.org_id, order_number=await next_number(db, principal.org_id, "order"), client_id=data.client_id,
               location_id=data.location_id, complaint=data.complaint, assigned_to_id=data.assigned_to_id,
               duration_min=data.duration_min, status="new")

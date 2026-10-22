@@ -17,7 +17,7 @@ import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
 import AuthedImage from "../../components/AuthedImage";
 import ClientDrawer from "./ClientDrawer";
 import AssetDrawer from "./AssetDrawer";
-import { useMe } from "../../context/Me";
+import { useMe, hasFeature } from "../../context/Me";
 import { useCurrencies } from "../../hooks/useCurrencies";
 import CatalogPicker, { type CatalogItem } from "../../components/CatalogPicker";
 import StatusControl, { type FullStatus } from "../../components/StatusControl";
@@ -53,7 +53,7 @@ const fmtDur = (min?: number | null) => {
 };
 
 export default function WODrawer({ order, onClose, onChanged }: { order: Order; onClose: () => void; onChanged?: () => void }) {
-  const { can } = useMe();
+  const { can, me } = useMe();
   const [tab, setTab] = useState<Tab>("general");
   const [sub, setSub] = useState<null | "client" | "asset">(null);
   const [d, setD] = useState<Detail>(order as Detail);
@@ -66,7 +66,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   useEffect(() => { loadLabor(); /* eslint-disable-next-line */ }, [order.id]);
   // 144y/144as — procure the parts this WO needs: raise a PO for the shortfall, and/or
   // reserve on-hand stock for the job. Gated to staff with inventory access.
-  const canBuy = can("can_manage_inventory");
+  const canBuy = can("can_manage_inventory") && hasFeature(me, "purchase_orders");   // POs are Pro
   const [partsOpen, setPartsOpen] = useState(false);   // ADR-144po: the ⋯ → Parts & purchase orders panel
   const [menuOpen, setMenuOpen] = useState(false);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
@@ -216,7 +216,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
           </div>
           <div className="flex items-center gap-1.5">
             {/* 144au — job timer as a header pill: always reachable on every tab (Jobber pattern) */}
-            {!(order as any).is_estimate && (timerRunning ? (
+            {!(order as any).is_estimate && hasFeature(me, "time_clock") && (timerRunning ? (
               <button onClick={stopAllTimers} title="Stop the job timer"
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -240,14 +240,14 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               {menuOpen && (<>
                 <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(false)} />
                 <div role="menu" className="absolute right-0 top-full mt-1 z-40 w-64 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5">
-                  <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); setPartsOpen(true); }}
+                  {hasFeature(me, "inventory") && <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); setPartsOpen(true); }}
                     className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-50">
                     <M n="local_shipping" c="text-base text-ink-tertiary" />
                     <span className="flex-1 min-w-0">
                       <span className="block text-sm text-ink-primary">Parts &amp; purchase orders</span>
                       <span className="block text-[11px] text-ink-tertiary">{incomingPo.length ? `${incomingPo.length} on order` : "Order or hold parts for this job"}</span>
                     </span>
-                  </button>
+                  </button>}
                   <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); navigator.clipboard?.writeText(`${window.location.origin}/orders?open=${order.id}`).then(() => flash("Link copied")).catch(() => {}); }}
                     className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-50">
                     <M n="link" c="text-base text-ink-tertiary" /><span className="text-sm text-ink-primary">Copy link to this job</span>

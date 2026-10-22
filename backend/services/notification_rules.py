@@ -173,6 +173,9 @@ async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
                    status_key: Optional[str] = None, now: Optional[datetime] = None) -> dict:
     """Run every matching rule for an order event. Immediate sends go out now;
     delayed / out-of-hours sends are queued with a due time."""
+    from backend.services.billing import org_has_feature
+    if not await org_has_feature(db, org_id, "notification_rules"):   # Shop plan and up
+        return {"sent": 0, "scheduled": 0, "matched": 0}
     now = now or datetime.utcnow()
     rules = (await db.execute(select(NotificationRule).where(
         NotificationRule.org_id == org_id,
@@ -233,6 +236,9 @@ async def queue_reminders(db: AsyncSession, *, org_id: str,
     """For every `reminder` rule, queue a send for each order whose scheduled_for
     falls within the rule's lead time. Idempotent: an order already holding a
     scheduled/sent reminder for that rule is skipped."""
+    from backend.services.billing import org_has_feature
+    if not await org_has_feature(db, org_id, "notification_rules"):   # Shop plan and up
+        return 0
     now = now or datetime.utcnow()
     rules = (await db.execute(select(NotificationRule).where(
         NotificationRule.org_id == org_id, NotificationRule.event == "reminder",
@@ -316,6 +322,9 @@ async def evaluate_appointment(db: AsyncSession, *, org_id: str, appointment_id:
                            now: Optional[datetime] = None) -> dict:
     """Fire `module="appointment"` rules on create / status change. The appointment module
     was declared back in build 80 but nothing evaluated it — this closes that loop."""
+    from backend.services.billing import org_has_feature
+    if not await org_has_feature(db, org_id, "notification_rules"):   # Shop plan and up
+        return {"sent": 0, "scheduled": 0, "matched": 0}
     now = now or datetime.utcnow()
     rules = (await db.execute(select(NotificationRule).where(
         NotificationRule.org_id == org_id, NotificationRule.module == "appointment",
@@ -384,6 +393,9 @@ async def queue_appointment_reminders(db: AsyncSession, *, org_id: str,
                                   now: Optional[datetime] = None) -> int:
     """Appointment reminders: for each `reminder` appointment rule, queue a send for every
     appointment whose start is now inside the rule's lead time. Idempotent per rule+appointment."""
+    from backend.services.billing import org_has_feature
+    if not await org_has_feature(db, org_id, "notification_rules"):   # Shop plan and up
+        return 0
     now = now or datetime.utcnow()
     rules = (await db.execute(select(NotificationRule).where(
         NotificationRule.org_id == org_id, NotificationRule.module == "appointment",
@@ -502,6 +514,9 @@ async def notify_contact_birthdays(db: AsyncSession, *, org_id: str,
     Idempotent per client+rule+year: a client who already has a birthday send this
     calendar year is skipped, so the daily sweep never double-greets.
     """
+    from backend.services.billing import org_has_feature
+    if not await org_has_feature(db, org_id, "notification_rules"):   # Shop plan and up
+        return 0
     from backend.models import Client, NotificationTemplate
     now = now or datetime.utcnow()
     rules = (await db.execute(select(NotificationRule).where(

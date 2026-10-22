@@ -143,6 +143,9 @@ async def run(db: AsyncSession, org_id: str, event: str, *, order=None, part=Non
     """Fire every matching active rule for `event`. Caller owns the commit."""
     if event not in VALID_EVENTS:
         return {"matched": 0, "fired": 0}
+    from backend.services.billing import org_has_feature
+    if not await org_has_feature(db, org_id, "notification_rules"):   # Shop plan and up
+        return {"matched": 0, "fired": 0}
     rules = (await db.execute(select(AutomationRule).where(
         AutomationRule.org_id == org_id, AutomationRule.event == event,
         AutomationRule.active == True).order_by(AutomationRule.sort_order))).scalars().all()  # noqa: E712

@@ -20,6 +20,7 @@ POST /api/inbox/webhook/meta/{org_id} [public]
 POST /api/inbox/webhook/{org_id} [public]
 POST /api/payments/square/webhook [public]
 POST /api/payments/stripe/webhook [public]
+POST /api/billing/webhook [public]   # Stripe Billing (Tekly's own account): verified by Stripe signature, idempotent per event id
 
 ## Public — customer-facing pages, scoped by an unguessable token or shop slug (rate-limited)
 POST /api/feedback/public/{token} [public]

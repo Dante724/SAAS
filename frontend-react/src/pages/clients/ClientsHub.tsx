@@ -1,4 +1,5 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import { useMe, hasFeature } from "../../context/Me";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
@@ -19,6 +20,8 @@ type Client = { id: string; name?: string; phone?: string; email?: string; loyal
 type Tab = "clients" | "suppliers";
 
 export default function ClientsHub() {
+  const { me } = useMe();
+  const tabs: Tab[] = hasFeature(me, "inventory") ? ["clients", "suppliers"] : ["clients"];   // suppliers: Shop plan
   const term = useTerminology();
   const [tab, setTab] = useState<Tab>("clients");
   const [suppliers, setSuppliers] = useState<Supplier[] | null>(null);
@@ -125,7 +128,7 @@ export default function ClientsHub() {
     <Shell title="Contacts">
       <div className="flex-1 overflow-y-auto">
         <div className="px-6 pt-4 flex items-center gap-1 border-b border-slate-200/70">
-          {(["clients", "suppliers"] as Tab[]).map((t) => (
+          {tabs.map((t) => (
             <button key={t} onClick={() => { setTab(t); clearSel(); }}
               className={`px-3 py-2 text-sm font-semibold rounded-t-lg -mb-px border-b-2 capitalize ${tab === t ? "text-primary border-primary" : "text-ink-tertiary border-transparent hover:text-ink-primary"}`}>
               {t}

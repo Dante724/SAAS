@@ -116,7 +116,7 @@ async def test_coupon_create_and_apply(client):
 @pytest.mark.asyncio
 async def test_coupon_plan_scope_enforced(client):
     hdr = await _admin_hdr(client)
-    oid = await _tenant(client, "PlanCo", "plan@acme.dev")  # plan defaults to 'trial'
-    await client.post("/api/admin/coupons", json={"code": "PROONLY", "percent": 30, "plan": "pro"}, headers=hdr)
-    ap = await client.post(f"/api/admin/tenants/{oid}/apply-coupon", json={"code": "PROONLY"}, headers=hdr)
+    oid = await _tenant(client, "PlanCo", "plan@acme.dev")  # plan defaults to 'pro'
+    await client.post("/api/admin/coupons", json={"code": "STARTERONLY", "percent": 30, "plan": "starter"}, headers=hdr)
+    ap = await client.post(f"/api/admin/tenants/{oid}/apply-coupon", json={"code": "STARTERONLY"}, headers=hdr)
     assert ap.status_code == 400

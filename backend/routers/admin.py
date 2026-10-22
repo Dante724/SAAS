@@ -41,11 +41,11 @@ def _parse_date(s):
 def _segment(org: Organisation) -> str:
     """Map raw sub_status → the portal's lifecycle buckets."""
     st = org.sub_status or "trial"
-    if st == "active":
+    if st in ("active", "past_due"):
         return "paid"
-    if st == "churned":
+    if st in ("churned", "unpaid"):
         return "lost_paid"
-    if st == "trial_lost":
+    if st == "trial_lost" or (st == "trial" and org.trial_ends_at and org.trial_ends_at <= date.today()):
         return "lost_trial"
     if st == "suspended":
         return "suspended"
@@ -84,6 +84,13 @@ def _tenant_row(org: Organisation, emp_count: int) -> dict:
         "sub_status": org.sub_status, "segment": _segment(org),
         "sub_start": org.sub_start.isoformat() if org.sub_start else None,
         "sub_end": org.sub_end.isoformat() if org.sub_end else None,
+        "trial_ends_at": org.trial_ends_at.isoformat() if org.trial_ends_at else None,
+        "billing_period": org.billing_period,
+        "billing_mode": org.billing_mode or "stripe",
+        "billing_period_end": org.billing_period_end.isoformat() if org.billing_period_end else None,
+        "billing_note": org.billing_note,
+        "price_locked_until": org.price_locked_until.isoformat() if org.price_locked_until else None,
+        "stripe_customer_id": org.stripe_customer_id,
         "discount_pct": org.discount_pct or 0.0,
         "country": org.country, "employees": emp_count,
         "created_at": org.created_at.isoformat() if getattr(org, "created_at", None) else None,
@@ -141,6 +148,11 @@ class TenantPatch(BaseModel):
     sub_status: Optional[str] = None
     sub_start: Optional[str] = None
     sub_end: Optional[str] = None
+    trial_ends_at: Optional[str] = None
+    billing_mode: Optional[str] = None          # stripe | custom
+    billing_period_end: Optional[str] = None    # a custom shop's term end
+    billing_note: Optional[str] = None          # the agreed custom price (internal)
+    price_locked_until: Optional[str] = None    # founding-customer price lock
     discount_pct: Optional[float] = None
     admin_notes: Optional[str] = None
 
@@ -153,16 +165,32 @@ async def patch_tenant(org_id: str, data: TenantPatch, db: AsyncSession = Depend
         raise HTTPException(404, "Tenant not found")
     p = data.model_dump(exclude_unset=True)
     if "sub_status" in p:
-        valid = {"trial", "active", "trial_lost", "churned", "suspended"}
+        valid = {"trial", "active", "past_due", "unpaid", "trial_lost", "churned", "suspended"}
         if p["sub_status"] not in valid:
             raise HTTPException(422, f"sub_status must be one of {sorted(valid)}")
         org.sub_status = p["sub_status"]
     if "plan" in p:
+        if p["plan"] not in ("solo", "shop", "pro"):
+            raise HTTPException(422, "plan must be solo, shop or pro")
         org.plan = p["plan"]
     if "sub_start" in p:
         org.sub_start = _parse_date(p["sub_start"])
     if "sub_end" in p:
         org.sub_end = _parse_date(p["sub_end"])
+    if "trial_ends_at" in p:   # extend (or end) a trial by hand
+        org.trial_ends_at = _parse_date(p["trial_ends_at"])
+    if "billing_mode" in p:
+        if p["billing_mode"] not in ("stripe", "custom"):
+            raise HTTPException(422, "billing_mode must be stripe or custom")
+        if p["billing_mode"] == "custom" and org.stripe_subscription_id and org.sub_status in ("active", "past_due"):
+            raise HTTPException(409, "This shop pays through Stripe. Cancel that subscription first.")
+        org.billing_mode = p["billing_mode"]
+    if "billing_period_end" in p:
+        org.billing_period_end = _parse_date(p["billing_period_end"])
+    if "billing_note" in p:
+        org.billing_note = p["billing_note"]
+    if "price_locked_until" in p:
+        org.price_locked_until = _parse_date(p["price_locked_until"])
     if "discount_pct" in p:
         org.discount_pct = max(0.0, min(100.0, float(p["discount_pct"] or 0)))
     if "admin_notes" in p:

@@ -224,6 +224,8 @@ async def create_employee(
     if is_old_default_password(data.password):
         raise HTTPException(400, "Choose a different password")
     await _assert_can_assign_role(db, current, data.role_id)
+    from backend.services.billing import assert_can_add
+    await assert_can_add(db, current.org_id, "team_members")
     from backend.services.auth import has_perm
     if not await has_perm(db, current, "can_view_payroll"):
         defaults = EmployeeIn.model_fields
@@ -258,7 +260,10 @@ async def create_employee(
     if not data.password:
         await _send_set_password_email(db, emp, current.org_id)
         invite_sent = True
-    return {"id": emp.id, "name": emp.name, "invite_sent": invite_sent}
+    out = {"id": emp.id, "name": emp.name, "invite_sent": invite_sent}
+    from backend.services.billing import sync_seats
+    await sync_seats(db, current.org_id)   # Shop bills members beyond 8 as seats
+    return out
 
 
 MIN_PASSWORD_LEN = 8
@@ -307,6 +312,9 @@ async def update_employee(
             raise HTTPException(400, "Email already in use")
     if "hourly_basis" in payload and payload["hourly_basis"] not in ("labour", "attendance"):
         payload["hourly_basis"] = "labour"
+    if payload.get("active") and not emp.active:
+        from backend.services.billing import assert_can_add
+        await assert_can_add(db, current.org_id, "team_members")
     if "hired_at" in payload:
         payload["hired_at"] = _parse_date(payload["hired_at"])
     changes = {k: {"from": getattr(emp, k), "to": v} for k, v in payload.items()
@@ -320,6 +328,9 @@ async def update_employee(
                        entity_type="employee", entity_id=emp.id,
                        diff={"fields": sorted(payload), **changes})
     await db.commit()
+    if "active" in changes:
+        from backend.services.billing import sync_seats
+        await sync_seats(db, current.org_id)
     return {"ok": True}
 
 
@@ -434,6 +445,8 @@ async def create_invite(data: InviteIn, db: AsyncSession = Depends(get_db),
     if not email or "@" not in email:
         raise HTTPException(400, "A valid email is required")
     await _assert_can_assign_role(db, current, data.role_id)
+    from backend.services.billing import assert_can_add
+    await assert_can_add(db, current.org_id, "team_members")
     dupe = (await db.execute(select(Employee).where(
         Employee.email == email, Employee.org_id == current.org_id))).scalar_one_or_none()
     if dupe:
@@ -566,6 +579,8 @@ async def deactivate_employee(
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="employee.deactivate",
                        entity_type="employee", entity_id=emp.id)
     await db.commit()
+    from backend.services.billing import sync_seats
+    await sync_seats(db, current.org_id)   # Shop bills members beyond 8 as seats
     return {"ok": True}
 
 # ── Tasks ─────────────────────────────────────
@@ -665,6 +680,9 @@ async def create_location(
     from backend.models import Location
     if not data.name.strip():
         raise HTTPException(422, "Location name is required")
+    from backend.services import billing
+    if data.active is not False:
+        await billing.assert_can_add(db, current.org_id, "locations")
     ln = Location(org_id=current.org_id, name=data.name.strip(),
                   address=data.address, phone=data.phone,
                   timezone=data.timezone or "UTC",
@@ -674,6 +692,7 @@ async def create_location(
     db.add(ln)
     await db.commit()
     await db.refresh(ln)
+    await billing.sync_quantity(db, current.org_id)   # billed per active location
     return _ser_location(ln)
 
 
@@ -688,10 +707,17 @@ async def update_location(
         Location.id == location_id, Location.org_id == current.org_id))).scalar_one_or_none()
     if not ln:
         raise HTTPException(404, "Location not found")
-    for k, v in data.model_dump(exclude_unset=True).items():
+    from backend.services import billing
+    changes = data.model_dump(exclude_unset=True)
+    reactivating = changes.get("active") and not ln.active
+    if reactivating:
+        await billing.assert_can_add(db, current.org_id, "locations")
+    for k, v in changes.items():
         setattr(ln, k, v)
     await db.commit()
     await db.refresh(ln)
+    if "active" in changes:
+        await billing.sync_quantity(db, current.org_id)
     return _ser_location(ln)
 
 
@@ -714,6 +740,8 @@ async def deactivate_location(
         raise HTTPException(409, "You must keep at least one active location")
     ln.active = False
     await db.commit()
+    from backend.services.billing import sync_quantity
+    await sync_quantity(db, current.org_id)
     return {"ok": True}
 
 

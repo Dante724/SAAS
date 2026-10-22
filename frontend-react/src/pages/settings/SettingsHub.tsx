@@ -9,7 +9,9 @@ import DirectoriesManager from "./DirectoriesManager";
 import FormCustomizer, { type FormKey } from "../../components/FormCustomizer";
 import { resetTerminology } from "../../lib/useTerminology";
 import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
-import { NAV, CATS, SEC_CAT, searchSections, type SectionId } from "./settingsRegistry";
+import { NAV as ALL_NAV, CATS, SEC_CAT, SEC_FEATURE, searchSections, type SectionId } from "./settingsRegistry";
+import BillingPage from "./BillingPage";
+import { useMe, hasFeature, extraSeatPrompt, type Me } from "../../context/Me";
 import { SetupChecklist } from "./SetupChecklist";
 import { StatusList, StatusEditor } from "./StatusesSettings";
 import GeneralSettings from "./GeneralSettings";
@@ -96,8 +98,14 @@ const INDUSTRIES: [string, string][] = [["general", "Generic — Assets"], ["aut
   ["small_engine", "Small engine — Equipment (Serial)"], ["tools", "Tool repair — Tools (Serial)"],
   ["bike", "Bike / cycle — Bikes (Serial)"]];
 
+// Sections the shop's plan includes (Settings › Single sign-on is Pro).
+const sectionsFor = (me: Me | null) => ALL_NAV.filter((n) => !SEC_FEATURE[n.id] || hasFeature(me, SEC_FEATURE[n.id]!));
+
 export default function SettingsHub() {
   const navigate = useNavigate();
+  const { me } = useMe();
+  const NAV = sectionsFor(me);
+  const proOk = (f: Parameters<typeof hasFeature>[1]) => hasFeature(me, f);
   // ?section=… deep-links a section (e.g. "Manage options" in a directory dropdown).
   const [sec, setSec] = useState<Section>(() => (new URLSearchParams(window.location.search).get("section") as Section) || "overview");
   const [q, setQ] = useState("");
@@ -163,7 +171,8 @@ export default function SettingsHub() {
     if (sec === "team" && invites === null) reloadInvites();
     if (sec === "team" && rbacRoles === null) reloadRbac();
     if (sec === "team" && rbacCatalog === null) api.get<any>("/settings/rbac/catalog").then((r) => setRbacCatalog(r.catalog || {})).catch(() => setRbacCatalog({}));
-    if (sec === "team" && lists["payroll-rules"] === undefined) api.get<any>("/payroll/rules").then((r) => { const d = r?.items ?? r; setLists((s) => ({ ...s, "payroll-rules": Array.isArray(d) ? d : (d ? [d] : []) })); }).catch(() => setLists((s) => ({ ...s, "payroll-rules": [] })));
+    if (sec === "team" && lists["payroll-rules"] === undefined && proOk("payroll")) api.get<any>("/payroll/rules").then((r) => { const d = r?.items ?? r; setLists((s) => ({ ...s, "payroll-rules": Array.isArray(d) ? d : (d ? [d] : []) })); }).catch(() => setLists((s) => ({ ...s, "payroll-rules": [] })));
+    if (sec === "notifications" && !proOk("notification_rules")) return;
     if (sec === "notifications" && notifTemplates === null) reloadNotifTemplates();
     // 144jb: Automations now live inside the Notifications hub, so load them here too.
     if (sec === "notifications" && lists.automation === undefined) {
@@ -237,6 +246,10 @@ export default function SettingsHub() {
   }
   async function saveRow(v: any) {
     if (!editing) return; const cfg = EDITORS[editing.sec]; const id = editing.row?.id;
+    if (!id && editing?.sec === "invites") {   // an invite that's accepted fills a seat
+      const seat = extraSeatPrompt(me);
+      if (seat && !(await confirmDialog(seat, { confirmLabel: "Send invite" }))) return;
+    }
     if (id && cfg.upd) { if (cfg.updMethod === "patch") await api.patch(cfg.upd(id), v); else await api.put(cfg.upd(id), v); } else await api.post(cfg.create, v);
     flash("Saved"); setEditing(null); cfg.reload();
   }
@@ -284,7 +297,7 @@ export default function SettingsHub() {
           </div>
           <button onClick={() => { setSec("overview"); setQ(""); }} className={`w-full text-left px-2.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-2.5 mb-2 ${sec === "overview" && !q ? "bg-blue-50/80 text-primary" : "text-ink-secondary hover:bg-slate-100"}`}><M n="grid_view" c="text-base" />Overview</button>
           {q.trim() ? (() => {
-            const hits = searchSections(q);
+            const hits = searchSections(q).filter((n) => NAV.includes(n));
             if (!hits.length) return <div className="text-xs text-ink-tertiary px-2.5 py-3">No settings match “{q}”.</div>;
             return hits.map((n) => (
               <button key={n.id} onClick={() => { setSec(n.id); setQ(""); }} className="w-full text-left px-2.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-2.5 mb-0.5 text-ink-secondary hover:bg-slate-100"><M n={n.icon} c="text-base" />{n.label}<span className="ml-auto text-[11px] text-ink-tertiary font-medium">{CATS.find((c) => c.id === SEC_CAT[n.id])?.label}</span></button>
@@ -362,20 +375,20 @@ export default function SettingsHub() {
               payLabel={(r) => ({ event: PAYROLL_EVENT_LABELS[r?.event] || r?.event || "", amount: r?.calc_type === "flat" ? `${r?.amount}` : `${r?.amount}%${r?.percent_basis === "margin" ? " of margin" : ""}` })}
               onEditPerson={(e) => setEmpEdit(e)} onNewPerson={() => setEmpEdit("new")} onInvite={() => setEditing({ sec: "invites", row: null })}
               onEditRole={(r) => setRoleEdit(r)} onNewRole={() => setRoleEdit("new")} onEditRule={(r) => setPayrollEdit(r)} onNewRule={() => setPayrollEdit("new")}
-              onChanged={reloadInvites} onFlash={flash} />
+              onChanged={reloadInvites} onFlash={flash} showPay={proOk("payroll")} />
           )}
 
           {sec === "locations" && <LocationsPage companyTz={co?.timezone || undefined} />}
 
           {sec === "feedback" && <FeedbackSettingsEditor />}
 
-          {sec === "warehouses" && (
+          {sec === "warehouses" && proOk("inventory") && (
             <InventoryPage warehouses={lists.warehouses} currency={co?.currency || "$"} onAdd={() => setEditing({ sec: "warehouses", row: null })}
               onEdit={(r) => setEditing({ sec: "warehouses", row: r })} onDelete={(r) => delRow("warehouses", r)} />
           )}
 
 
-          {sec === "notifications" && (
+          {sec === "notifications" && proOk("notification_rules") && (
             <CustomerMessages rules={lists.notifications || []} templates={notifTemplates || []} shopName={co?.name || ""}
               statusesFor={(rt) => api.get<any>(`/statuses?record_type=${rt}`).then((r) => r.items || [])}
               reload={() => { reloadSec("notifications"); reloadNotifTemplates(); }} flash={flash}
@@ -400,7 +413,8 @@ export default function SettingsHub() {
 
           {sec === "finance" && <FinanceNumbering currency={co?.currency || "$"} shop={{ name: co?.name, address: co?.company_address, phone: co?.company_phone, email: co?.company_email, logo: co?.logo_data }} />}
           {sec === "ecommerce" && <EcommerceSettings />}
-          {sec === "sso" && <SsoSettings />}
+          {sec === "sso" && proOk("sso") && <SsoSettings />}
+          {sec === "billing" && <BillingPage />}
           {sec === "approvals" && <ApprovalsSettings />}
 
           {sec === "forms" && (
@@ -433,8 +447,8 @@ export default function SettingsHub() {
 
           {sec === "integrations" && (
             <div className="max-w-4xl space-y-5">
-              <IntegrationsHub data={integrations} goSection={setSec} reload={() => setIntegrations(null)} />
-              <ApiKeysCard />
+              <IntegrationsHub data={integrations} goSection={setSec} reload={() => setIntegrations(null)} pro={{ accounting: proOk("accounting_sync"), api: proOk("api_keys") }} />
+              {proOk("api_keys") && <ApiKeysCard />}
               <WebhooksCard />
             </div>
           )}
@@ -1051,7 +1065,7 @@ function FeedbackSettingsEditor() {
 /* ── Integrations hub — surfaces every connector already wired in the backend
    (credential-gated seams). Card grid like Orderry; badges read live status
    where an endpoint exists, else show the gated/available state honestly. ── */
-function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s: Section) => void; reload?: () => void }) {
+function IntegrationsHub({ data, goSection, reload, pro = { accounting: true, api: true } }: { data: any; goSection: (s: Section) => void; reload?: () => void; pro?: { accounting: boolean; api: boolean } }) {
   const [keyProv, setKeyProv] = useState<string | null>(null);
   if (!data) return <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-6 text-xs text-ink-tertiary">Loading integrations…</div>;
   const creds = data.creds || {};
@@ -1075,6 +1089,9 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
     catch { await promptDialog("Copy the embed snippet:", { defaultValue: snip }); }
   };
   type Badge = { text: string; tone: "on" | "off" | "neutral" };
+  // A Pro connector on Starter: say so and point at Billing instead of offering setup.
+  const proCard = { badge: { text: "Pro plan", tone: "neutral" } as Badge, hint: "Upgrade to Pro to use this",
+    action: { label: "See plans", onClick: () => goSection("billing") } };
   const B = { on: "bg-emerald-100 text-emerald-700", off: "bg-slate-100 text-ink-secondary", neutral: "bg-indigo-50 text-indigo-700" } as const;
   const groups: { group: string; cards: { name: string; desc: string; badge: Badge; hint?: string; action?: { label: string; onClick: () => void } }[] }[] = [
     { group: "Payments", cards: [
@@ -1089,10 +1106,10 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
     { group: "Accounting", cards: [
       { name: "QuickBooks Online", desc: "Two-way sync of invoices, payments and contacts.",
         badge: data.qbo?.connected ? { text: "Connected", tone: "on" } : { text: data.qbo?.configured ? "Not connected" : "Not configured", tone: "off" },
-        hint: data.qbo?.configured ? undefined : "Set QBO_CLIENT_ID / SECRET on the server" },
+        hint: data.qbo?.configured ? undefined : "Set QBO_CLIENT_ID / SECRET on the server", ...(pro.accounting ? {} : proCard) },
       { name: "Xero", desc: "Sync invoices, payments and clients both ways.",
         badge: data.xero?.connected ? { text: "Connected", tone: "on" } : { text: data.xero?.configured ? "Not connected" : "Not configured", tone: "off" },
-        hint: data.xero?.configured ? undefined : "Set XERO_CLIENT_ID / SECRET on the server" } ] },
+        hint: data.xero?.configured ? undefined : "Set XERO_CLIENT_ID / SECRET on the server", ...(pro.accounting ? {} : proCard) } ] },
     { group: "Communication", cards: [
       { name: "Email (Gmail / Outlook)", desc: "Send from your own mailbox (OAuth). SMTP fallback available.",
         badge: emailOn ? { text: "Connected", tone: "on" } : keyBadge("smtp"),
@@ -1112,7 +1129,7 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
       { name: "Zapier / Make / n8n", desc: "Trigger thousands of apps from Tekly events — no code.",
         badge: { text: "Available", tone: "on" }, hint: "Point them at your Webhooks (below)" },
       { name: "Public REST API", desc: "Build custom integrations against orders, contacts, inventory & more.",
-        badge: { text: "Available", tone: "on" }, hint: "Create an API key (below)" },
+        badge: { text: "Available", tone: "on" }, hint: "Create an API key (below)", ...(pro.api ? {} : proCard) },
       { name: "Workflow AI (Anthropic)", desc: "Order summaries, estimate drafting, reply suggestions.",
         badge: { text: "Server-keyed", tone: "neutral" }, hint: "Set ANTHROPIC_API_KEY on the server" } ] },
     { group: "On your website", cards: [
@@ -1277,6 +1294,7 @@ function SectionCard({ title, count, onAdd, children }: { title: string; count?:
 // ── RBAC role editor (permission matrix) ───────────────────────────────
 // ── Employee editor (Orderry-style) ────────────────────────────────────
 function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | null; roles: any[]; onClose: () => void; onSaved: (m?: string) => void }) {
+  const { me, refresh } = useMe();
   const isNew = !emp?.id;
   const [f, setF] = useState<any>(emp || { name: "", email: "", active: true, wage_type: "fixed", track_job_hours: true, track_attendance: true });
   const [tab, setTab] = useState<"general" | "access" | "payroll" | "security">("general");
@@ -1299,9 +1317,13 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
       hourly_basis: f.hourly_basis === "attendance" ? "attendance" : "labour",
       track_job_hours: f.track_job_hours !== false, track_attendance: f.track_attendance !== false,
     };
+    const reactivating = !isNew && emp?.active === false && f.active !== false;
+    const seat = (isNew || reactivating) ? extraSeatPrompt(me) : null;
+    if (seat && !(await confirmDialog(seat, { confirmLabel: "Add and pay" }))) { setBusy(false); return; }
     try {
       if (isNew) await api.post("/staff/employees", body);
       else await api.patch(`/staff/employees/${emp.id}`, { ...body, active: f.active !== false });
+      if (seat) refresh();
       onSaved(isNew ? "Employee added" : "Employee saved");
     } catch (e: any) { setErr(e?.message || "Could not save"); setBusy(false); }
   }

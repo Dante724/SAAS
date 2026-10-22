@@ -15,7 +15,7 @@ import CatalogPicker from "../../components/CatalogPicker";
 import { useCurrencies, type CurItem } from "../../hooks/useCurrencies";
 import { useTerminology } from "../../lib/useTerminology";
 import { identifierFields } from "../../lib/assetIdentifiers";
-import { useMe } from "../../context/Me";
+import { useMe, hasFeature } from "../../context/Me";
 import IdentifyHint, { type IdMatch } from "../../components/IdentifyHint";
 import NameSuggestInput from "../../components/NameSuggestInput";
 
@@ -34,7 +34,8 @@ const TYPES: { t: string; dot: string }[] = [
 
 export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillClient, onClose, onCreated }: { isEstimate?: boolean; prefillClient?: ClientLite | null; onClose: () => void; onCreated: () => void }) {
   const term = useTerminology();
-  const { can } = useMe();
+  const { can, me } = useMe();
+  const aiDraft = hasFeature(me, "ai_estimates");   // Pro plan
   const canCustomize = can("can_manage_settings");
   const [estimate, setEstimate] = useState(!!initEstimate);
   const [step, setStep] = useState<1 | 2>(1);
@@ -410,14 +411,14 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
               </div>
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-[11px] font-bold text-ink-tertiary">Line items</span>
-                <button type="button" onClick={async () => {
+                {aiDraft && <button type="button" onClick={async () => {
                   if (!complaint.trim()) { await alertDialog("Add a complaint/description first."); return; }
                   try {
                     const r = await api.post<any>("/ai/estimate/draft", { complaint, device: [brand, model].filter(Boolean).join(" ") });
                     const add = (r.lines || []).map((l: any) => ({ id: Math.random().toString(36).slice(2), description: l.description, kind: "service", price: l.unit_price || 0 }));
                     if (add.length) setLines((ls) => [...ls, ...add]);
                   } catch (e: any) { await alertDialog(e.message || "AI draft failed"); }
-                }} className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[11px] font-bold shadow-clay-sm flex items-center gap-1"><M n="auto_awesome" c="text-xs" />AI draft from complaint</button>
+                }} className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[11px] font-bold shadow-clay-sm flex items-center gap-1"><M n="auto_awesome" c="text-xs" />AI draft from complaint</button>}
               </div>
               <CatalogPicker placeholder="Search a service or product to add…" onPick={(i) => setLines((ls) => [...ls, { id: Math.random().toString(36).slice(2), description: i.name, kind: i.kind, price: i.price || 0 }])} />
 

@@ -1,7 +1,7 @@
 import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
-import { useMe } from "../../context/Me";
+import { useMe, hasFeature } from "../../context/Me";
 import { api } from "../../api/client";
 import { Product, currencySymbol, money } from "./types";
 import CustomFields from "../../components/CustomFields";
@@ -38,7 +38,8 @@ function CodeSvg({ data, type }: { data: string; type: "code128" | "qr" }) {
 }
 
 export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }: Props) {
-  const { can } = useMe();
+  const { can, me } = useMe();
+  const stockTabs = hasFeature(me, "inventory");   // stock, batches, movements, purchasing: Shop plan
   const [p, setP] = useState<any>(initial || {});
   const [compKind, setCompKind] = useState<"service" | "product">("service");  // 144cz — job-kit component picker tab
   const [toast, setToast] = useState<string | null>(null);
@@ -168,7 +169,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
 
         {kind === "product" && editing && (
           <nav className="px-6 border-b border-slate-200 flex gap-6 text-xs font-semibold bg-slate-50/70">
-            {([["details", "Details"], ["stock", "Stock"], ["batches", "Batches"], ["movements", "Movements"], ["purchasing", "Purchasing"]] as [ProdTab, string][]).map(([t, label]) => (
+            {(([["details", "Details"], ["stock", "Stock"], ["batches", "Batches"], ["movements", "Movements"], ["purchasing", "Purchasing"]] as [ProdTab, string][]).filter(([t]) => stockTabs || t === "details")).map(([t, label]) => (
               <button key={t} onClick={() => setPtab(t)} className={`py-3 border-b-2 transition-colors ${ptab === t ? "text-primary border-primary font-bold" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{label}</button>
             ))}
           </nav>

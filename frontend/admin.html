@@ -205,8 +205,11 @@ const Admin = {
 
   async open(id){
     const t = await api('/api/admin/tenants/'+id);
-    const statusOpts = ['trial','active','trial_lost','churned','suspended']
+    const statusOpts = ['trial','active','past_due','unpaid','trial_lost','churned','suspended']
       .map(s=>`<option value="${s}" ${t.sub_status===s?'selected':''}>${s}</option>`).join('');
+    const planOpts = ['solo','shop','pro']
+      .map(s=>`<option value="${s}" ${t.plan===s?'selected':''}>${s[0].toUpperCase()+s.slice(1)}</option>`).join('');
+    const custom = t.billing_mode === 'custom';
     const emps = (t.employees_detail||[]).map(e=>`
       <div class="emp">
         <div class="en">${esc(e.name)} ${e.active?'':'<span class="badge b-lost" style="margin-left:6px">inactive</span>'}</div>
@@ -229,13 +232,28 @@ const Admin = {
         <div class="db">
           <div class="grp"><h3>Subscription</h3>
             <div class="two">
-              <div><label class="muted" style="font-size:11px">Plan</label><input id="d-plan" value="${esc(t.plan||'')}" placeholder="trial / starter / pro"></div>
+              <div><label class="muted" style="font-size:11px">Plan</label><select id="d-plan">${planOpts}</select></div>
               <div><label class="muted" style="font-size:11px">Status</label><select id="d-status">${statusOpts}</select></div>
             </div>
             <div class="two" style="margin-top:12px">
               <div><label class="muted" style="font-size:11px">Term start</label><input type="date" id="d-start" value="${t.sub_start||''}"></div>
-              <div><label class="muted" style="font-size:11px">Term end</label><input type="date" id="d-end" value="${t.sub_end||''}"></div>
+              <div><label class="muted" style="font-size:11px">Hard stop (blocks sign-in)</label><input type="date" id="d-end" value="${t.sub_end||''}"></div>
             </div>
+            <div class="two" style="margin-top:12px">
+              <div><label class="muted" style="font-size:11px">Trial ends</label><input type="date" id="d-trial" value="${t.trial_ends_at||''}"></div>
+              <div><label class="muted" style="font-size:11px">Founding price locked until</label><input type="date" id="d-lock" value="${t.price_locked_until||''}"></div>
+            </div>
+          </div>
+          <div class="grp"><h3>Billing</h3>
+            <div class="two">
+              <div><label class="muted" style="font-size:11px">Billing mode</label><select id="d-mode">
+                <option value="stripe" ${custom?'':'selected'}>Stripe (self-serve)</option>
+                <option value="custom" ${custom?'selected':''}>Custom price (managed by Tekly)</option></select></div>
+              <div><label class="muted" style="font-size:11px">Custom term ends</label><input type="date" id="d-term" value="${t.billing_period_end||''}"></div>
+            </div>
+            <div style="margin-top:12px"><label class="muted" style="font-size:11px">Agreed price (custom shops; internal)</label>
+              <input id="d-bnote" value="${esc(t.billing_note||'')}" placeholder="e.g. ₹2,500 / month, invoiced quarterly"></div>
+            <div class="muted" style="font-size:11px;margin-top:6px">Custom shops never see Stripe Checkout. Set Status to active; past the term end the shop becomes read-only.${t.stripe_customer_id ? ' Stripe customer: '+esc(t.stripe_customer_id) : ''}</div>
             <div style="margin-top:12px"><label class="muted" style="font-size:11px">Discount %</label><input type="number" id="d-disc" min="0" max="100" value="${t.discount_pct||0}"></div>
             <div style="display:flex;gap:8px;margin-top:12px">
               <input id="d-coupon" placeholder="Apply coupon code…">
@@ -257,7 +275,12 @@ const Admin = {
 
   async saveTenant(id){
     const body = {
-      plan: document.getElementById('d-plan').value||null,
+      plan: document.getElementById('d-plan').value,
+      trial_ends_at: document.getElementById('d-trial').value||null,
+      price_locked_until: document.getElementById('d-lock').value||null,
+      billing_mode: document.getElementById('d-mode').value,
+      billing_period_end: document.getElementById('d-term').value||null,
+      billing_note: document.getElementById('d-bnote').value||null,
       sub_status: document.getElementById('d-status').value,
       sub_start: document.getElementById('d-start').value||null,
       sub_end: document.getElementById('d-end').value||null,

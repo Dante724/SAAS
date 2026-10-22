@@ -265,6 +265,8 @@ async def thread_to_order(
     t = await _load(db, current, thread_id)
     if t.order_id:
         raise HTTPException(409, "This conversation already has a work order")
+    from backend.services.billing import assert_can_add_job
+    await assert_can_add_job(db, current.org_id)
 
     client_id = t.client_id
     if not client_id:

@@ -18,7 +18,7 @@ import { assetStatusTone } from "./statusTone";
 import { cachedPref, loadPref, savePref } from "../../lib/userPref";
 import Pager from "../../components/Pager";
 import { useServerPage } from "../../hooks/useServerPage";
-import { useMe } from "../../context/Me";
+import { useMe, hasFeature } from "../../context/Me";
 import { alertDialog, confirmDialog, promptDialog } from "../../lib/dialog";
 import { printHtmlInFrame } from "../../lib/safeHtml";
 
@@ -57,7 +57,7 @@ function stockPill(p: Product): { cls: string; dot: string; label: string } | nu
 
 export default function InventoryHub() {
   const term = useTerminology();
-  const { can } = useMe();
+  const { can, me } = useMe();
   const [tab, setTab] = useState<Tab>("stock");
   const [products, setProducts] = useState<Product[] | null>(null);
   // Devices tab pages on the server (the API serves at most 200 rows per request).
@@ -154,7 +154,10 @@ export default function InventoryHub() {
   const visibleTabs = TABS.filter((t) =>
     (t.id !== "devices" || can("can_view_asset_info")) &&
     (t.id !== "reservations" || cfg.enable_reservations) &&
-    (t.id !== "bins" || cfg.enable_bins));
+    (t.id !== "bins" || cfg.enable_bins) &&
+    // Pro plan: purchase orders, and stock transfers between locations
+    (t.id !== "purchase-orders" || hasFeature(me, "purchase_orders")) &&
+    (t.id !== "transfers" || hasFeature(me, "multi_location")));
 
   function loadProducts() {
     const qs = new URLSearchParams();

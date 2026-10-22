@@ -22,6 +22,7 @@ from backend.routers import (
     assets,
     auth,
     automations,
+    billing,
     bins,
     bundles,
     cash,
@@ -99,7 +100,7 @@ init_error_tracking()
 log = logging.getLogger("tekly")
 
 ROUTERS = [
-    auth, orders, clients, inventory, finance, staff, reports, feed, forms,
+    auth, billing, orders, clients, inventory, finance, staff, reports, feed, forms,
     notifications, public, catalog, assets, cash, statuses, feedback, documents,
     bins, payroll, leads, pricing, sales, returns, transfers, bundles, appointments,
     chats, resources, timeclock, webhooks, payments, apikeys, v1,

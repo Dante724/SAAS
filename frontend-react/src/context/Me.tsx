@@ -17,7 +17,38 @@ export type Me = {
   track_job_hours?: boolean; track_attendance?: boolean;
   mfa_enabled?: boolean; mfa_required?: boolean; email_verified?: boolean;
   location_id?: string | null;
+  billing?: Billing | null;
 };
+
+// Tekly subscription (backend services/billing.py summary). `features` lists the plan features
+// unlocked right now (all of them during the trial); `limits` is set on Solo and Shop.
+export type PlanId = "solo" | "shop" | "pro";
+export type ProFeature =
+  // Shop and up
+  | "inventory" | "labels" | "time_clock" | "reports" | "notification_rules"
+  // Pro
+  | "purchase_orders" | "payroll" | "multi_location" | "ai_estimates" | "accounting_sync" | "sso" | "api_keys";
+export type PlanLimits = { team_members: number; locations: number | null; jobs_per_month: number | null };
+export type Billing = {
+  status: string; plan: PlanId; effective_plan: PlanId; period: "month" | "year";
+  billing_mode?: "stripe" | "custom";
+  read_only: boolean; read_only_reason?: string | null;
+  trial_ends_at?: string | null; trial_days_left?: number | null;
+  features: ProFeature[]; limits?: PlanLimits | null;
+  usage?: { team_members: number; locations: number; jobs_per_month: number };
+  suggested_plan?: PlanId | null;
+  price_locked_until?: string | null;
+  extra_seats?: number; extra_seat_price?: number | null;
+};
+
+// Shop includes a pool of team members; one more is billed as an extra seat. The sentence to
+// confirm before adding someone, or null when adding is free (or the plan refuses it anyway).
+export function extraSeatPrompt(me: Me | null): string | null {
+  const b = me?.billing;
+  const cap = b?.limits?.team_members;
+  if (!b || !b.extra_seat_price || cap == null || (b.usage?.team_members ?? 0) < cap) return null;
+  return `Your plan includes ${cap} team members. Adding another costs $${b.extra_seat_price} a month, added to your next bill.`;
+}
 
 type Ctx = {
   me: Me | null;
@@ -40,6 +71,22 @@ export function canPerm(me: Me | null, code?: string): boolean {
   if (!me) return true;
   if (me.is_owner) return true;
   return me.permissions?.[code] !== false;
+}
+
+// Is a Pro feature unlocked for this shop? Same rule the API enforces (403 otherwise). Before boot,
+// or from a server without billing, nothing is hidden — the server still has the final say.
+export function hasFeature(me: Me | null, feature: ProFeature): boolean {
+  if (!me?.billing) return true;
+  return me.billing.features.includes(feature);
+}
+
+export function useFeature(feature: ProFeature): boolean {
+  return hasFeature(useMe().me, feature);
+}
+
+// Render children only when the shop's plan includes `feature`.
+export function FeatureGate({ feature, children }: { feature: ProFeature; children: ReactNode }) {
+  return useFeature(feature) ? <>{children}</> : null;
 }
 
 // Render children only if the role allows `perm` — the React equivalent of legacy
@@ -70,6 +117,14 @@ export function MeProvider({ children }: { children: ReactNode }) {
   return <MeContext.Provider value={{ me, loading, can, fmt, refresh }}>{children}</MeContext.Provider>;
 }
 
+
+// Nav route → plan feature it needs (hidden on plans without it; the API refuses it anyway).
+export const NAV_FEATURE: Record<string, ProFeature> = {
+  "/inventory": "inventory",
+  "/reports": "reports",
+  "/timesheets": "time_clock",
+  "/my-work": "time_clock",
+};
 
 // Nav route → permission that grants access to that area (mirrors legacy App.NAV_PERM).
 export const NAV_PERM: Record<string, string> = {

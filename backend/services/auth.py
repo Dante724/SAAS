@@ -134,6 +134,10 @@ async def get_current_employee(
     org = (await db.execute(select(Organisation).where(
         Organisation.id == employee.org_id))).scalar_one_or_none()
     assert_org_active(org, today)
+    # Subscription: a read-only shop (trial over, cancelled, unpaid) can't write, and Pro
+    # routes need Pro — one gate for every staff route (services/billing.py).
+    from backend.services.billing import enforce_request
+    enforce_request(org, request, today)
     if (employee.access_start and employee.access_start > today) or \
        (employee.access_end and employee.access_end < today):
         raise HTTPException(status_code=403, detail="Your access is outside its allowed dates.")

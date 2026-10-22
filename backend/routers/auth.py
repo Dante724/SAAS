@@ -54,6 +54,7 @@ class RegisterRequest(BaseModel):
     document_language: Optional[str] = None
     company_phone: Optional[str] = None
     employee_count: Optional[str] = None
+    plan: Optional[str] = None            # solo | shop | pro, from the pricing page (default pro)
 
 
 # Common ISO-4217 code → display symbol, so the sign-up form can send a plain
@@ -190,8 +191,13 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
 
     import secrets as _sec
     from datetime import date as _date
+    from datetime import timedelta as _td
+
+    from backend.models import TRIAL_DAYS
     org = Organisation(name=data.org_name, webhook_secret=_sec.token_urlsafe(24),
-                       sub_status="trial", sub_start=_date.today())   # build 144ce
+                       sub_status="trial", sub_start=_date.today(),   # build 144ce
+                       trial_ends_at=_date.today() + _td(days=TRIAL_DAYS),
+                       plan=data.plan if data.plan in ("solo", "shop", "pro") else "pro")
     # Build 144cg — apply onboarding choices with region-based defaults.
     if data.region:
         org.region = data.region
@@ -572,6 +578,13 @@ async def invite_accept(data: InviteAccept, db: AsyncSession = Depends(get_db)):
     if (await db.execute(select(Employee).where(
             Employee.email == inv.email, Employee.org_id == inv.org_id))).scalar_one_or_none():
         raise HTTPException(400, "An account with this email already exists")
+    # The invite was sent earlier; the shop's plan decides now (unauthenticated route, so the
+    # staff-request gate in get_current_employee doesn't cover it).
+    from backend.services import billing as _billing
+    _org = (await db.execute(select(Organisation).where(Organisation.id == inv.org_id))).scalar_one_or_none()
+    if _org is not None and _billing.state(_org).read_only:
+        raise HTTPException(402, "This shop's Tekly plan has lapsed. Ask the owner to renew, then accept again.")
+    await _billing.assert_can_add(db, inv.org_id, "team_members")
     emp = Employee(
         org_id=inv.org_id, location_id=inv.location_id, role_id=inv.role_id,
         name=(data.name or inv.name or inv.email.split("@")[0]),
@@ -582,8 +595,10 @@ async def invite_accept(data: InviteAccept, db: AsyncSession = Depends(get_db)):
     await db.commit()
     role = (await db.execute(select(Role).where(Role.id == emp.role_id))).scalar_one_or_none()
     token = create_access_token({"sub": emp.id, "org_id": emp.org_id, "tv": 0})
-    return TokenResponse(access_token=token, employee_id=emp.id, org_id=emp.org_id,
-                         name=emp.name, role=role.name if role else "staff")
+    out = TokenResponse(access_token=token, employee_id=emp.id, org_id=emp.org_id,
+                        name=emp.name, role=role.name if role else "staff")
+    await _billing.sync_seats(db, inv.org_id)   # Shop bills members beyond 8 as seats
+    return out
 
 
 @router.get("/me")
@@ -629,4 +644,12 @@ async def me(current: Employee = Depends(get_current_employee),
         # build 144x: org master switches — effective clock = org ON *and* employee tracks it
         "clock_wo_enabled": (org.clock_wo_enabled if org and org.clock_wo_enabled is not None else True),
         "clock_attendance_enabled": (org.clock_attendance_enabled if org and org.clock_attendance_enabled is not None else True),
+        # Subscription: plan, trial, read-only state and the Pro features unlocked, so the app
+        # hides what the plan lacks (the server enforces the same in services/billing.py).
+        "billing": await _billing_summary(db, org),
     }
+
+
+async def _billing_summary(db, org):
+    from backend.services.billing import summary_with_usage
+    return await summary_with_usage(db, org)

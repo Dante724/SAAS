@@ -9,7 +9,7 @@ import Pager from "../../components/Pager";
 import { currencySymbol, money } from "../orders/types";
 import { alertDialog, confirmDialog, promptDialog, selectDialog } from "../../lib/dialog";
 import { isoMonth } from "../../lib/localDate";
-import { useMe } from "../../context/Me";
+import { useMe, hasFeature } from "../../context/Me";
 import CashPanel from "../cash/CashPanel";
 import VoidableList from "../../components/VoidableList";
 
@@ -19,7 +19,7 @@ type Account = { id: string; name?: string; balance?: number; payment_option?: s
 type Balance = { id: string; name?: string; phone?: string; balance?: number };
 
 export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
-  const { can } = useMe();
+  const { can, me } = useMe();
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>(initialTab || "overview");
   const [exFrom, setExFrom] = useState("");   // accountant export range (blank = current month)
@@ -136,7 +136,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
     <Shell title="Finance">
       <div className="px-6 pt-3 border-b border-slate-200/60 bg-white/40 flex-shrink-0">
         <nav className="flex space-x-6 -mb-px text-xs font-semibold">
-          {([...(can("can_view_cashbox") ? [["cashboxes", "Cashboxes"]] as [Tab, string][] : []), ["overview", "Overview"], ["pnl", "P&L"], ["reconcile", "Reconcile"], ["balances", "Client balances"], ["refunds", "Refunds"], ["payroll", "Payroll"]] as [Tab, string][]).map(([id, label]) => (
+          {([...(can("can_view_cashbox") ? [["cashboxes", "Cashboxes"]] as [Tab, string][] : []), ["overview", "Overview"], ["pnl", "P&L"], ["reconcile", "Reconcile"], ["balances", "Client balances"], ["refunds", "Refunds"], ...(hasFeature(me, "payroll") ? [["payroll", "Payroll"]] : [])] as [Tab, string][]).map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)} className={`pb-3 border-b-2 transition-colors ${tab === id ? "text-primary font-bold border-primary" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>{label}</button>
           ))}
         </nav>

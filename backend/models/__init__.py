@@ -33,6 +33,14 @@ def _uuid() -> str:
 def _now() -> datetime:
     return datetime.utcnow()
 
+
+TRIAL_DAYS = 14
+
+
+def _trial_end() -> date:
+    from datetime import timedelta
+    return date.today() + timedelta(days=TRIAL_DAYS)
+
 # ─────────────────────────────────────────────
 # ORGANISATION & LOCATIONS
 # ─────────────────────────────────────────────
@@ -41,7 +49,9 @@ class Organisation(Base):
     __tablename__ = "organisations"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(200))
-    plan: Mapped[str] = mapped_column(String(50), default="trial")
+    # Billing: the plan the shop is on (or will be on after its trial) — "solo" | "shop" | "pro".
+    # During the trial every Pro feature is open; see services/billing.py.
+    plan: Mapped[str] = mapped_column(String(50), default="pro")
     brand_primary_color: Mapped[Optional[str]] = mapped_column(String(9))     # #RRGGBB white-label accent
     brand_custom_domain: Mapped[Optional[str]] = mapped_column(String(120))   # portal.acme.com
     brand_email_from: Mapped[Optional[str]] = mapped_column(String(160))      # "Acme <no-reply@acme.com>"
@@ -123,6 +133,28 @@ class Organisation(Base):
     sub_start: Mapped[Optional[date]] = mapped_column(Date)
     sub_end: Mapped[Optional[date]] = mapped_column(Date)     # term end; past this the tenant is locked
     discount_pct: Mapped[float] = mapped_column(Float, default=0.0)   # manual per-account discount %
+    # Subscription billing (Tekly's own Stripe account, not the shop's). sub_status also takes
+    # past_due (card failed, Stripe still retrying) and unpaid (retries gave up) from Stripe.
+    billing_period: Mapped[str] = mapped_column(String(10), default="month")   # month | year
+    trial_ends_at: Mapped[Optional[date]] = mapped_column(Date, default=lambda: _trial_end())
+    past_due_since: Mapped[Optional[date]] = mapped_column(Date)
+    stripe_customer_id: Mapped[Optional[str]] = mapped_column(String(64), unique=True)
+    stripe_subscription_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    stripe_subscription_item_id: Mapped[Optional[str]] = mapped_column(String(64))
+    stripe_seat_item_id: Mapped[Optional[str]] = mapped_column(String(64))   # Shop's extra team members
+    # Stripe current_period_end, or for a custom-priced shop the end of the term the admin agreed.
+    billing_period_end: Mapped[Optional[date]] = mapped_column(Date)
+    # "stripe" (self-serve Checkout) or "custom" (India and large deals: plan and term set by the
+    # platform admin, invoiced outside Tekly; billing_note records the agreed price).
+    billing_mode: Mapped[str] = mapped_column(String(10), default="stripe")
+    billing_note: Mapped[Optional[str]] = mapped_column(Text)
+    stripe_price_id: Mapped[Optional[str]] = mapped_column(String(64))   # the price being paid
+    # Founding customers: while in the future, the shop keeps the Stripe price it signed up on
+    # even when list prices change (services/billing never re-prices an existing subscription).
+    price_locked_until: Mapped[Optional[date]] = mapped_column(Date)
+    cancel_at_period_end: Mapped[bool] = mapped_column(Boolean, default=False)
+    # `created` of the last subscription event applied, so a late, older event can't undo a newer one.
+    billing_event_at: Mapped[Optional[int]] = mapped_column(Integer)
     admin_notes: Mapped[Optional[str]] = mapped_column(Text)          # platform-admin notes (never shown to tenant)
     # ── Time clocks (build 144x): org master switches. Effective clock for an
     # employee = org switch ON *and* their per-employee track_* flag ON. ──
@@ -889,6 +921,16 @@ class PlatformCoupon(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     expires_at: Mapped[Optional[date]] = mapped_column(Date)
     note: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class BillingEvent(Base):
+    """A Stripe Billing webhook event already applied. The primary key is Stripe's event id,
+    so a redelivered event can't be applied twice (the insert fails and the handler stops)."""
+    __tablename__ = "billing_events"
+    id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    type: Mapped[str] = mapped_column(String(80))
+    org_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
