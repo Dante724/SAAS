@@ -102,9 +102,9 @@ Out of this round:
 
 | Horizon | Items | Status |
 |---|---|---|
-| **Now (pre-launch)** | A1 A2 A5 B1 B2 C1 C2 | Not started |
-| **Next (launch +0–4 wks)** | A3 A4 B3 B4 C3 C4 E1–E4 F1 | Not started |
-| **Integration (sandbox; launch decision later)** | D1–D3 F2–F4 | Not started; go-live needs live creds, a provider account review, and a legal check on call recording/consent |
+| **Now (pre-launch)** | A1 A2 A5 B1 B2 C1 C2 | **Done** on roadmap/orderry-parity |
+| **Next (launch +0–4 wks)** | A3 A4 B3 B4 C3 C4 E1–E4 F1 | **Done** on roadmap/orderry-parity |
+| **Integration (sandbox; launch decision later)** | D1–D3 F2–F4 | **Built and tested in sandbox/test mode.** Go-live needs live creds, provider webhooks, `ALLOW_LIVE_PAYMENTS` / `ALLOW_LIVE_TELEPHONY`, Twilio Geo Permissions, and a legal check on call consent |
 | **Later** | Tap to Pay native, multilingual notifications, delivery address + shipments, real e-commerce sync | Not planned |
 
 ## Dependencies and risks
@@ -130,3 +130,18 @@ Out of this round:
    - checklist auto-attach;
    - a simulated card reader charge.
 4. Do a final `/code-review` of the merged diff, fix the findings, and write the sign-off report.
+
+## Outcome (2026-10-22)
+- All six workstreams were merged, followed by a 27-finding integration review (money, webhooks/sandbox, permissions), all fixed with regression tests, and a design-council polish pass on every new screen.
+- Final gates on the branch:
+  - backend 1,931 passed;
+  - frontend 291 Vitest, tsc, UI-text lint and build;
+  - Playwright parity flows green (the POS wedge-scan spec is load-sensitive: it passes alone and can miss under parallel suites).
+- Also fixed along the way:
+  - scheduled times are shop wall-clock everywhere (the track page showed the wrong time);
+  - checklist rings always read 0 / 0;
+  - pick-one and pick-several checklist questions had no picker;
+  - the service editor wiped fields;
+  - template edits wiped auto-print settings;
+  - negative money printed as ₹-135;
+  - the demo seed had no order lines or payments.
