@@ -402,7 +402,7 @@ export default function InventoryHub() {
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
             <table data-density={density} className="w-full text-left border-collapse">
               <thead><tr className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary ">
-                <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" checked={pAllSel} onChange={pToggleAll} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
+                <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" aria-label="Select all" checked={pAllSel} onChange={pToggleAll} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
                 <th className="py-3.5 px-3">Product</th><th className="py-3.5 px-3">Category</th><th className="py-3.5 px-3">Unit</th>
                 <th className="py-3.5 px-3 text-right">Cost ({currencySymbol()})</th><th className="py-3.5 px-3 text-right">Sell price ({currencySymbol()})</th><th className="py-3.5 px-3 text-right">Margin</th><th className="py-3.5 px-3 text-center">In Stock</th>{cfg.enable_reservations && <th className="py-3.5 px-3 text-center">Reserved</th>}<th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
               </tr></thead>
@@ -446,7 +446,7 @@ export default function InventoryHub() {
                   const b = badgeFor(p, i); const pill = stockPill(p);
                   return (
                     <tr key={p.id} onClick={() => setDrawer({ kind: "product", id: p.id })} className={`hover:bg-blue-50/30 transition-colors cursor-pointer group ${psel.has(p.id) ? "bg-primary/5" : ""}`}>
-                      <td className="py-3.5 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={psel.has(p.id)} onChange={() => pToggle(p.id)} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
+                      <td className="py-3.5 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label="Select row" checked={psel.has(p.id)} onChange={() => pToggle(p.id)} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
                       <td className="py-3.5 px-3"><div className="flex items-center gap-3">
                         {p.image_data ? <img src={p.image_data} alt="" className="w-8 h-8 rounded-lg object-cover border border-slate-200 flex-shrink-0" /> : <div className={`w-8 h-8 rounded-lg border flex items-center justify-center flex-shrink-0 font-bold text-[11px] ${b.cls}`}>{b.txt}</div>}
                         <div className="min-w-0"><span className="font-bold text-ink-primary group-hover:text-primary transition-colors block truncate">{p.name}</span><span className="text-[11px] text-ink-tertiary font-mono block truncate">{[p.sku || p.code, p.barcode, p.brand].filter(Boolean).join(" · ") || "—"}</span></div>
@@ -486,7 +486,7 @@ export default function InventoryHub() {
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
             <table className="w-full text-left border-collapse">
               <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary "><tr>
-                <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" checked={!!assets?.length && assets.every((a) => asel.has(a.id))} onChange={(e) => setAsel((s) => { const n = new Set(s); (assets || []).forEach((a) => (e.target.checked ? n.add(a.id) : n.delete(a.id))); return n; })} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
+                <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" aria-label="Select all" checked={!!assets?.length && assets.every((a) => asel.has(a.id))} onChange={(e) => setAsel((s) => { const n = new Set(s); (assets || []).forEach((a) => (e.target.checked ? n.add(a.id) : n.delete(a.id))); return n; })} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
                 <th className="py-3.5 px-3">Device / Model</th><th className="py-3.5 px-3">Serial / IMEI</th><th className="py-3.5 px-3">Ownership</th><th className="py-3.5 px-3">Status</th><th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-xs">
@@ -494,7 +494,7 @@ export default function InventoryHub() {
                 {assets?.length === 0 && <tr><td colSpan={6} className="py-6 px-5 text-ink-tertiary">No {term.assets.toLowerCase()} registered.</td></tr>}
                 {pageAssets.map((a) => (
                   <tr key={a.id} className="hover:bg-blue-50/30 transition-colors cursor-pointer" onClick={() => setAssetOpen(a.id)}>
-                    <td className="py-3.5 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={asel.has(a.id)} onChange={() => aToggle(a.id)} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
+                    <td className="py-3.5 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label="Select row" checked={asel.has(a.id)} onChange={() => aToggle(a.id)} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
                     <td className="py-3.5 px-3"><div className="font-bold text-ink-primary">{[a.brand, a.model].filter(Boolean).join(" ") || a.asset_type || assetNoun(a, term)}</div><span className="text-[11px] text-ink-tertiary font-normal block">{a.asset_type && a.asset_type !== "Device" ? a.asset_type : assetNoun(a, term)}</span></td>
                     <td className="py-3.5 px-3 font-mono text-[11px] text-ink-secondary">{a.imei || a.serial || "—"}</td>
                     <td className="py-3.5 px-3"><span className={`px-2 py-0.5 rounded text-[11px] font-semibold border ${a.owner_type === "company" ? "bg-purple-50 text-purple-600 border-purple-100" : "bg-blue-50 text-primary border-blue-200/60"}`}>{a.owner_type === "company" ? "Company" : "Client"}</span></td>
@@ -516,7 +516,7 @@ export default function InventoryHub() {
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
             <table className="w-full text-left border-collapse">
               <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary "><tr>
-                <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" className="w-4 h-4 rounded border-slate-300 text-primary" /></th>
+                <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" aria-label="Select all" className="w-4 h-4 rounded border-slate-300 text-primary" /></th>
                 <th className="py-3.5 px-3">PO Number</th><th className="py-3.5 px-3">Supplier</th><th className="py-3.5 px-3">Expected</th><th className="py-3.5 px-3 text-right">Total ({currencySymbol()})</th><th className="py-3.5 px-3 text-center">Status</th><th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-xs">
@@ -527,7 +527,7 @@ export default function InventoryHub() {
                   const cls = st === "received" ? "bg-emerald-50 text-emerald-700 border-emerald-200/60" : st === "partial" || st === "ordered" ? "bg-amber-50 text-amber-700 border-amber-200/60" : "bg-slate-100 text-slate-600 border-slate-200";
                   return (
                     <tr key={po.id} className="hover:bg-blue-50/30 transition-colors">
-                      <td className="py-3.5 pl-5 pr-2"><input type="checkbox" className="w-4 h-4 rounded border-slate-300 text-primary" /></td>
+                      <td className="py-3.5 pl-5 pr-2"><input type="checkbox" aria-label="Select row" className="w-4 h-4 rounded border-slate-300 text-primary" /></td>
                       <td className="py-3.5 px-3 font-mono font-bold text-primary">{po.po_number || po.id}</td>
                       <td className="py-3.5 px-3 font-semibold text-ink-primary">{supName[po.supplier_id || ""] || "—"}</td>
                       <td className="py-3.5 px-3 text-ink-secondary">{po.expected_at ? new Date(po.expected_at).toLocaleDateString() : "—"}</td>
@@ -977,7 +977,7 @@ function ReorderModal({ onClose, onCreated }: { onClose: () => void; onCreated?:
                   {fc?.length === 0 && <tr><td colSpan={6} className="py-6 text-center text-ink-tertiary">Nothing forecast to run out — no moving parts below cover.</td></tr>}
                   {fc?.map((p) => (
                     <tr key={p.part_id}>
-                      <td className="py-2"><input type="checkbox" checked={!!sel[p.part_id]} onChange={(e) => setSel((s) => ({ ...s, [p.part_id]: e.target.checked }))} className="w-4 h-4 rounded border-slate-300 text-primary" /></td>
+                      <td className="py-2"><input type="checkbox" aria-label="Select row" checked={!!sel[p.part_id]} onChange={(e) => setSel((s) => ({ ...s, [p.part_id]: e.target.checked }))} className="w-4 h-4 rounded border-slate-300 text-primary" /></td>
                       <td className="py-2 font-semibold text-ink-primary">{p.name}{p.sku ? ` · ${p.sku}` : ""}</td>
                       <td className="py-2 text-right">{p.free}</td>
                       <td className={`py-2 text-right font-semibold ${p.days_left != null && p.days_left <= 7 ? "text-rose-600" : "text-ink-secondary"}`}>{p.days_left != null ? `${p.days_left}d` : "—"}</td>

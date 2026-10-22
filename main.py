@@ -158,7 +158,7 @@ from backend.core.observability import MetricsMiddleware, RateLimitMiddleware, S
 
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(MetricsMiddleware)
-app.add_middleware(RateLimitMiddleware, limit=600, window_s=60)
+app.add_middleware(RateLimitMiddleware, window_s=60)  # limits: settings.RATE_LIMIT_*_PER_MIN
 from backend.core.body_limit import BodySizeLimitMiddleware
 
 # Inside CORS so a 413 still carries CORS headers and the browser can show the message.

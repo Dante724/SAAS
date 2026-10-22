@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     # address appended by the N-th proxy from the right. Alternatively run uvicorn with
     # --proxy-headers --forwarded-allow-ips=<proxy ip> and leave this at 0.
     TRUSTED_PROXY_HOPS: int = 0
+    # Global request ceilings per minute (core.observability.RateLimitMiddleware). Static files are
+    # never counted. Signed-in requests count per user; anonymous ones per client IP.
+    RATE_LIMIT_USER_PER_MIN: int = 600
+    RATE_LIMIT_IP_PER_MIN: int = 600
     LOG_JSON: bool = False                      # structured JSON logs (recommended in prod)
 
     # -- Notification providers (absent keys -> simulated/logged) --

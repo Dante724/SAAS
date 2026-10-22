@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ChevronRight, ShieldCheck, X } from "lucide-react";
-import { TrackView, usePublicDoc, money, onColor, initials } from "./PublicTrack";
+import { TrackView, usePublicDoc, money, onColor, initials, PaidNote } from "./PublicTrack";
 
 // ── Customer portal: every job of one customer, behind their magic link ────────
 // Served at /portal/:token, no auth, no shell. The job list is this page's own; opening a job
@@ -13,6 +13,7 @@ type Card = {
   total: number; total_converted?: number; currency_symbol?: string;
   complaint?: string | null; device?: string | null; created_at?: string | null;
   warranty_until?: string | null; awaiting_approval?: boolean; open_recommendations?: number;
+  amount_paid?: number; balance_due?: number; paid_in_full?: boolean;
 };
 type Home = {
   shop_name?: string; client_name?: string; logo_data?: string | null; brand_color?: string | null;
@@ -133,7 +134,12 @@ function JobList({ title, cards, accent, onOpen }: { title: string; cards: Card[
                   {ask && <span className="mt-1.5 inline-flex rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[12px] font-medium text-amber-800">{ask}</span>}
                   {c.warranty_until && <span className="mt-1.5 flex items-center gap-1 text-[13px] text-emerald-700"><ShieldCheck size={14} /> Under warranty until {fmtDay(c.warranty_until)}</span>}
                 </span>
-                <span className="text-[15px] font-semibold tabular-nums text-ink-primary">{money(c.total_converted ?? c.total, c.currency_symbol || "$")}</span>
+                <span className="flex flex-col items-end gap-1">
+                  <span className="text-[15px] font-semibold tabular-nums text-ink-primary">{money(c.total_converted ?? c.total, c.currency_symbol || "$")}</span>
+                  {c.paid_in_full ? <PaidNote paidInFull sym={c.currency_symbol || "$"} />
+                    : (c.amount_paid || 0) > 0 && (c.balance_due || 0) > 0
+                      ? <span className="text-[13px] font-semibold tabular-nums text-amber-700">{money(c.balance_due || 0, c.currency_symbol || "$")} due</span> : null}
+                </span>
                 <ChevronRight size={18} className="shrink-0" style={{ color: accent }} />
               </button>
             </li>

@@ -107,3 +107,24 @@ body { background: rgb(var(--c-canvas)); color: rgb(var(--c-ink-primary)); }
 .doc-canvas.editing section[data-block]{outline:1px dashed #dbe1ea;outline-offset:6px;border-radius:2px}
 .doc-canvas.editing section[data-block]:hover{outline-color:#a5b4fc}
 .doc-canvas section[data-block]+section[data-block]{margin-top:14px}
+
+/* Responsive (B3) — wide tables scroll sideways inside their card instead of being clipped by
+   the card's rounded overflow-hidden edge, and on narrow screens a table with five or more
+   columns keeps a readable width (it scrolls) rather than wrapping every cell one word per line. */
+.app-main .overflow-hidden:has(> table) { overflow-x: auto; }
+@media (max-width: 899.98px) {
+  .app-main table:has(> thead > tr > th:nth-child(5)) { min-width: 680px; }
+}
+/* Phone gutter: the desktop 24–32px page padding becomes 16px under 640px so content keeps the width. */
+@media (max-width: 639.98px) {
+  .app-main .px-6, .app-main .p-6, .app-main .px-8, .app-main .p-8 { padding-left: 1rem; padding-right: 1rem; }
+}
+/* Below 1280px the sidebar leaves less room: tighten table cell padding so the last column
+   (usually the row's action) stays on screen instead of scrolling out of the card. */
+@media (max-width: 1279.98px) {
+  .app-main :is(th, td):is(.px-4, .px-5, .px-6) { padding-left: .625rem; padding-right: .625rem; }
+}
+/* Touch / narrow screens: native checkboxes and radios grow to a 24px tap target (WCAG 2.5.8). */
+@media (max-width: 899.98px), (pointer: coarse) {
+  input[type="checkbox"], input[type="radio"] { width: 1.5rem; height: 1.5rem; flex-shrink: 0; }
+}

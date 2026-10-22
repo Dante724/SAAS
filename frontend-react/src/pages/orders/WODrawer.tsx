@@ -4,6 +4,7 @@ import { DeferredWork, MarginNote, ReadyWhy, ServiceDue, TogetherChips } from ".
 import PartsPOPanel from "./PartsPOPanel";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import ConversationPanel from "./ConversationPanel";
 import PhotoAnnotator from "./PhotoAnnotator";
@@ -54,7 +55,7 @@ const fmtDur = (min?: number | null) => {
 };
 
 export default function WODrawer({ order, onClose, onChanged }: { order: Order; onClose: () => void; onChanged?: () => void }) {
-  const { can } = useMe();
+  const { can, me } = useMe();
   const [tab, setTab] = useState<Tab>("general");
   const [sub, setSub] = useState<null | "client" | "asset">(null);
   const [d, setD] = useState<Detail>(order as Detail);
@@ -98,14 +99,16 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
     try { await api.patch(`/orders/${order.id}/notes`, { tech_notes, conclusion }); setD({ ...d, tech_notes, conclusion }); flash("Notes saved"); }
     catch (e: any) { flash(`Failed: ${e.message}`); }
   }
-  async function openTrackingLink() {
+  // Copies the customer's tracking link; staff open it from the "Open" link beside it (a real
+  // new-tab link), so the staff tab never turns into the customer page.
+  async function copyTrackingLink() {
     try {
       // idempotent: returns the existing public token or mints one
       const r = await api.post<{ token: string; path: string }>(`/orders/${order.id}/public-link`, {});
+      setD((p) => ({ ...p, public_token: r.token } as any));
       const url = `${window.location.origin}/track/${r.token}`;
-      try { await navigator.clipboard.writeText(url); } catch { /* clipboard may be blocked */ }
-      window.open(url, "_blank", "noopener");
-      flash("Tracking link opened & copied");
+      try { await navigator.clipboard.writeText(url); flash("Tracking link copied"); }
+      catch { flash("Couldn't copy. Use Open to see the link."); }
     } catch (e: any) { flash(`Failed: ${e.message}`); }
   }
   async function markDone() {
@@ -155,7 +158,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   async function printWO() {
     const w = window.open("", "_blank", "width=420,height=640"); if (!w) return;
     const css = `body{font-family:Inter,system-ui,sans-serif;margin:0;color:#14213f}.s{padding:22px;page-break-after:always}.s:last-child{page-break-after:auto}h1{font-size:16px;margin:0 0 4px}.k{font-size:10px;font-weight:800;text-transform:uppercase;color:#9aa7c4;letter-spacing:.05em;margin-top:12px}.v{font-size:14px;font-weight:600}.n{font-size:22px;font-weight:800;font-family:monospace}hr{border:none;border-top:1px dashed #c9d3ea;margin:12px 0}`;
-    const head = `<h1>Tekly · Workshop Central</h1>`;
+    const head = `<h1>${escapeHtml(me?.org_name || "Tekly")}</h1>`;
     const client = `<div class="k">Client</div><div class="v">${escapeHtml(c.name || "Walk-in")} ${c.phone ? "· " + escapeHtml(c.phone) : ""}</div>`;
     // Several items per job: one bench sticker per item, so each tool on the shelf carries its own.
     let items: JobItem[] = [];
@@ -203,9 +206,9 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 
         {/* Header */}
-        <header className="relative z-20 px-6 py-4 border-b border-slate-200/90 bg-white/95 backdrop-blur flex items-center justify-between flex-shrink-0">
-          <div className="flex items-center gap-3">
-            <span className="tabular-nums text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-100 text-ink-secondary">{woNum}</span>
+        <header className="relative z-20 px-4 sm:px-6 py-3 sm:py-4 border-b border-slate-200/90 bg-white/95 backdrop-blur flex flex-wrap items-center justify-between gap-2 flex-shrink-0">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 min-w-0">
+            <span className="tabular-nums text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-100 text-ink-secondary whitespace-nowrap">{woNum}</span>
             <h3 className="text-base font-semibold text-ink-primary tracking-tight">{hasDevice ? devTitle : (c.name || "Work order")}</h3>
             <StatusControl statuses={statuses} currentKey={d.status} elapsedMin={timing?.elapsed_min}
               isEstimate={!!(order as any).is_estimate} onChange={changeStatus} />
@@ -215,7 +218,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 ml-auto">
             {/* 144au — job timer as a header pill: always reachable on every tab (Jobber pattern) */}
             {!(order as any).is_estimate && (timerRunning ? (
               <button onClick={stopAllTimers} title="Stop the job timer"
@@ -295,7 +298,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
         )}
 
         {/* Tabs */}
-        <nav className="px-6 border-b border-slate-200/80 flex space-x-6 text-xs font-medium bg-white flex-shrink-0">
+        <nav className="px-4 sm:px-6 border-b border-slate-200/80 flex space-x-6 text-xs font-medium bg-white flex-shrink-0 overflow-x-auto whitespace-nowrap">
           {TABS.map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)}
               className={`py-3 border-b-2 transition-colors flex items-center gap-1.5 ${tab === t.id ? "text-ink-primary border-primary font-semibold" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>
@@ -389,8 +392,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Ro label="Job type"><Sel value={d.is_estimate ? "Estimate" : "Hardware Repair"} opts={["Hardware Repair", "Diagnostics", "Warranty", "Maintenance", "Estimate"]} /></Ro>
                   <Ro label="Priority"><Sel value={(d.priority ?? 0) >= 2 ? "Urgent, same day" : urgent ? "High" : "Normal"} opts={["Normal", "High", "Urgent, same day"]} red={urgent} /></Ro>
-                  <Ro label="Manager"><SelEmp value={d.manager?.id || ""} emps={emps.filter((e) => e.in_managers !== false || e.id === d.manager?.id)} onChange={(id) => reassign("manager_id", id)} /></Ro>
-                  <Ro label="Technician"><SelEmp value={d.assigned_to?.id || ""} emps={emps.filter((e) => e.in_assignees !== false || e.id === d.assigned_to?.id)} onChange={(id) => reassign("assigned_to_id", id)} /></Ro>
+                  <Ro label="Manager"><SelEmp label="Manager" value={d.manager?.id || ""} emps={emps.filter((e) => e.in_managers !== false || e.id === d.manager?.id)} onChange={(id) => reassign("manager_id", id)} /></Ro>
+                  <Ro label="Technician"><SelEmp label="Technician" value={d.assigned_to?.id || ""} emps={emps.filter((e) => e.in_assignees !== false || e.id === d.assigned_to?.id)} onChange={(id) => reassign("assigned_to_id", id)} /></Ro>
                   <Ro label="Time on this job">
                     {byEmp.length > 0 ? (
                       <div className="rounded-lg bg-slate-50 border border-slate-200/70 p-2 space-y-1">
@@ -465,13 +468,16 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
         <footer className="px-6 py-3.5 border-t border-slate-200/90 bg-white/95 backdrop-blur-md flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
           <div className="flex items-center gap-4">
             <label className="flex items-center gap-2 text-xs font-semibold text-ink-secondary"><input checked={!!(d as any).estimate_approved_at} readOnly disabled className="rounded text-primary h-4 w-4" type="checkbox" /><span>Customer approved</span></label>
-            <button onClick={openTrackingLink} className="text-xs text-primary font-bold hover:underline flex items-center gap-1"><M n="link" c="text-xs" />Tracking link</button>
+            <span className="flex items-center gap-2">
+              <button onClick={copyTrackingLink} className="text-xs text-primary font-bold hover:underline flex items-center gap-1"><M n="link" c="text-xs" />Copy tracking link</button>
+              {(d as any).public_token && <a href={`/track/${(d as any).public_token}`} target="_blank" rel="noopener noreferrer" className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-0.5 hover:underline">Open<M n="open_in_new" c="text-xs" /></a>}
+            </span>
             <button onClick={printWO} className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-1 border border-slate-200 rounded-lg px-2 py-1 bg-white"><M n="print" c="text-xs" />Print WO</button>
             <button onClick={del} className="text-xs text-rose-600 hover:text-rose-700 font-semibold flex items-center gap-1 hover:bg-rose-50 rounded-lg px-2 py-1 transition-colors"><M n="delete" c="text-xs" />Delete</button>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={onClose} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 transition-colors">Close</button>
-            <button onClick={markDone} className="px-5 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="task_alt" c="text-sm" />Mark done and close</button>
+            {!isClosed && <button onClick={markDone} className="px-5 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="task_alt" c="text-sm" />Mark done and close</button>}
           </div>
         </footer>
 
@@ -674,11 +680,11 @@ function Sel({ value, red }: { value: string; opts?: string[]; red?: boolean }) 
     <div className={`w-full py-2 px-3 text-xs rounded-xl border flex items-center gap-2 ${red ? "font-semibold text-rose-700 bg-rose-50/60 border-rose-200" : "font-medium text-ink-primary bg-slate-50 border-slate-200"}`}>{red && <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />}{value}</div>
   );
 }
-function SelEmp({ value, emps, onChange }: { value: string; emps: Emp[]; onChange: (id: string) => void }) {
+function SelEmp({ value, emps, onChange, label }: { value: string; emps: Emp[]; onChange: (id: string) => void; label?: string }) {
   return (
     <div className="relative">
       <span className="absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none"><Avatar name={emps.find((e) => e.id === value)?.name} size={22} /></span>
-      <select value={value} onChange={(e) => onChange(e.target.value)} className="glass-input w-full py-2 pl-9 pr-3 text-xs font-medium text-ink-primary rounded-xl appearance-none">
+      <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} className="glass-input w-full py-2 pl-9 pr-3 text-xs font-medium text-ink-primary rounded-xl appearance-none">
         <option value="">Unassigned</option>
         {emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
       </select>
@@ -700,8 +706,8 @@ function NotesEditor({ initTech, initConcl, diagnosis, onSave }: { initTech: str
       </div>
       <div className="space-y-1">
         <label className="text-[11px] font-bold text-ink-tertiary flex items-center gap-1"><M n="engineering" c="text-xs text-primary" />Technician bench notes</label>
-        <textarea value={tech} onChange={(e) => setTech(e.target.value)} rows={2} className="glass-input w-full p-2.5 text-xs text-ink-secondary rounded-xl resize-none" placeholder="Working notes…" />
-        <textarea value={concl} onChange={(e) => setConcl(e.target.value)} rows={2} className="glass-input w-full p-2.5 text-xs text-ink-secondary rounded-xl resize-none" placeholder="Conclusion the customer sees…" />
+        <textarea value={tech} onChange={(e) => setTech(e.target.value)} rows={2} aria-label="Technician working notes" className="glass-input w-full p-2.5 text-xs text-ink-secondary rounded-xl resize-none" placeholder="Working notes…" />
+        <textarea value={concl} onChange={(e) => setConcl(e.target.value)} rows={2} aria-label="Conclusion the customer sees" className="glass-input w-full p-2.5 text-xs text-ink-secondary rounded-xl resize-none" placeholder="Conclusion the customer sees…" />
         <div className="flex justify-end"><button onClick={() => onSave(tech, concl)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50">Save notes</button></div>
       </div>
     </div>
@@ -1317,8 +1323,10 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
     } catch (e: any) { onFlash(`Failed: ${e.message}`); } finally { payBusyRef.current = false; setPayBusy(false); }
   };
 
-  const paid = (data?.payments || []).filter((p) => p.kind !== "refund").reduce((s, p) => s + (p.amount || 0), 0);
+  // Net of refunds, like the server's balance (services/order_money), so a refunded job isn't "Settled".
+  const paid = (data?.payments || []).reduce((s, p) => s + (p.kind === "refund" ? -Math.abs(p.amount || 0) : (p.amount || 0)), 0);
   const t = total ?? 0; const due = Math.max(t - paid, 0);
+  const settled = t > 0 && due <= 0;   // fully paid: no payment or deposit actions to offer
   const accts = ctx ? (ctx.accounts_by_method[method] || ctx.accounts_by_method.cash || []) : [];
 
   return (
@@ -1327,7 +1335,7 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
         <div className="relative z-10 flex flex-wrap items-center justify-between gap-4">
           <div>
             <span className="text-[11px] font-bold text-blue-200/80">Still to pay</span>
-            <div className="flex items-baseline gap-3 mt-1"><h2 className="text-3xl font-bold tabular-nums tracking-tight text-white">{money(due)}</h2><span className="text-xs px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30 font-semibold">{due > 0 ? "Balance due" : "Settled"}</span></div>
+            <div className="flex items-baseline gap-3 mt-1"><h2 className="text-3xl font-bold tabular-nums tracking-tight text-white">{money(due)}</h2><span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${settled ? "bg-emerald-400/20 text-emerald-300 border-emerald-400/30" : "bg-amber-400/20 text-amber-300 border-amber-400/30"}`}>{settled ? "Settled" : "Balance due"}</span></div>
             <p className="text-xs text-blue-200/70 mt-1">Grand Total {money(t)} · {money(paid)} Collected</p>
             {isForeign && (
               <p className="text-xs text-blue-100 mt-1 font-mono">≈ {currencySymbol}{conv(due).toFixed(2)} {currencyCode} <span className="text-blue-200/60">(1 {currencyCode} = {fxRate && (1 / fxRate).toFixed(4)} {base?.code})</span></p>
@@ -1342,9 +1350,9 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button onClick={() => openPay("prepay")} className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold border border-white/20 transition-all flex items-center gap-1.5"><M n="savings" c="text-xs" />Take Prepayment</button>
-            <button onClick={() => openPay("pay")} className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold shadow-sm transition-all flex items-center gap-1.5"><M n="credit_card" c="text-xs" />Take Payment</button>
-            {!link ? can("can_create_payment_links") && (
+            {!settled && <button onClick={() => openPay("prepay")} className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold border border-white/20 transition-all flex items-center gap-1.5"><M n="savings" c="text-xs" />Take Prepayment</button>}
+            {!settled && <button onClick={() => openPay("pay")} className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold shadow-sm transition-all flex items-center gap-1.5"><M n="credit_card" c="text-xs" />Take Payment</button>}
+            {!link ? !settled && can("can_create_payment_links") && (
               <button onClick={() => createLink(false)} className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold border border-white/20 transition-all flex items-center gap-1.5"><M n="link" c="text-xs" />Payment link</button>
             ) : (
               <div className="flex items-center gap-1.5 px-2 py-1 rounded-xl bg-white/10 border border-white/20 text-[11px] font-bold">
@@ -1358,7 +1366,7 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-3.5 space-y-2.5">
+      {!settled && <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-3.5 space-y-2.5">
         <div className="flex items-center justify-between">
           <h5 className="text-xs font-bold text-ink-primary">Requested deposit</h5>
           {dep > 0 && <span className="text-[11px] font-bold text-emerald-600">{money(conv(dep))} requested</span>}
@@ -1377,7 +1385,7 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
           {dep > 0 && <button type="button" disabled={depBusy} onClick={() => requestDeposit({ amount: 0 })} className="text-[11px] font-semibold text-rose-600 hover:underline ml-auto disabled:opacity-50">Clear</button>}
         </div>
         <p className="text-[11px] text-ink-tertiary">The customer pays this through the payment link or portal. {total ? `Total ${money(conv(total))}.` : ""}</p>
-      </div>
+      </div>}
 
       {due > 0 && (
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-3.5 space-y-2.5">
@@ -1424,10 +1432,11 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
 
       <div className="bg-slate-50/90 p-4 rounded-xl border border-slate-200 flex items-center justify-between text-xs">
         <div><span className="text-ink-tertiary">Collected</span><p className="text-base font-bold tabular-nums text-emerald-600">{money(paid)}</p></div>
-        <div className="text-right"><span className="text-ink-tertiary">Net Balance Due</span><p className="text-base font-bold tabular-nums text-rose-600">{money(due)}</p></div>
+        <div className="text-right"><span className="text-ink-tertiary">Net Balance Due</span><p className={`text-base font-bold tabular-nums ${due > 0 ? "text-rose-600" : "text-emerald-600"}`}>{money(due)}</p></div>
       </div>
 
-      {modal && ctx && (
+      {/* Portaled to <body>: inside the drawer the header (z-20) painted over the scrim as a white strip. */}
+      {modal && ctx && createPortal(
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-ink-primary/40" onClick={() => setModal(null)} />
           <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-md p-5 space-y-4">
@@ -1446,7 +1455,7 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
             <div className="flex justify-end gap-2 pt-1"><button onClick={() => setModal(null)} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button><button onClick={submit} disabled={payBusy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{payBusy ? "Recording…" : `Record ${modal === "prepay" ? "prepayment" : "payment"}`}</button></div>
           </div>
         </div>
-      )}
+      , document.body)}
     </div>
   );
 }

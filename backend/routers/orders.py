@@ -62,8 +62,14 @@ async def unique_public_token(db: AsyncSession) -> str:
 
 # ── Schemas ──────────────────────────────────
 
+# Line kind as the catalog/UI names it -> billing line_type. A custom line is billed as labour.
+_LINE_TYPE_FROM_KIND = {"service": "labour", "custom": "labour", "product": "part"}
+
+
 class LineIn(BaseModel):
-    line_type: str  # labour|part|fee
+    # labour|part|fee. Optional because the web "New work order" form only sends `kind`
+    # (launch QA B1) — derived from kind in _fill_line_type below.
+    line_type: Optional[str] = None
     order_item_id: Optional[str] = None             # several items per job: which item (null = whole job)
     description: str
     qty: float = 1.0
@@ -112,6 +118,14 @@ class LineIn(BaseModel):
     def _pct_at_most_100(self):
         if (self.discount_type or "pct") == "pct" and (self.discount or 0) > 100:
             raise ValueError("A percentage discount can't exceed 100%")
+        return self
+
+    @model_validator(mode="after")
+    def _fill_line_type(self):
+        if not self.line_type:
+            self.line_type = _LINE_TYPE_FROM_KIND.get((self.kind or "").lower())
+            if not self.line_type:
+                raise ValueError("line_type (labour|part|fee) or kind (service|product|custom) is required")
         return self
 
 class OrderIn(BaseModel):
@@ -802,8 +816,10 @@ async def create_order(
     if data.is_estimate:
         # estimates use the estimate status set; default to its New-group status
         from backend.models import OrderStatus as _OS
+        # A shop may have several New-group estimate statuses: take the default, then the first.
         edflt = (await db.execute(select(_OS).where(
-            _OS.org_id == current.org_id, _OS.is_estimate == True, _OS.status_group == "new", _OS.active == True))).scalar_one_or_none()  # noqa: E712
+            _OS.org_id == current.org_id, _OS.is_estimate == True, _OS.status_group == "new", _OS.active == True)  # noqa: E712
+            .order_by(_OS.is_default.desc(), _OS.sort_order, _OS.id).limit(1))).scalars().first()
         if edflt:
             initial_status = edflt.key
     if data.type_id and not data.is_estimate:

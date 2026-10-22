@@ -270,6 +270,11 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
 
     await db.commit()
 
+    # Launch QA B2: seed every status pipeline now, before the app's parallel first-load
+    # requests race to do it lazily.
+    from backend.routers.statuses import ensure_seeded
+    await ensure_seeded(db, org.id)
+
     # Build 144cb: send an email-verification link (best-effort; never blocks signup).
     await _send_verification(db, employee)
 
@@ -616,6 +621,7 @@ async def me(current: Employee = Depends(get_current_employee),
         "name": current.name,
         "email": current.email,
         "org_id": current.org_id,
+        "org_name": org.name if org else None,   # the shop's name under the logo / on job stickers
         "location_id": current.location_id,
         "active": current.active,
         "currency": (org.currency if org else None) or "₹",

@@ -9,6 +9,7 @@ const HOME = {
     total_converted: 120, currency_symbol: "$", device: "Pixel 8", awaiting_approval: true, open_recommendations: 0 }],
   work_orders: [{ id: "w1", order_number: "WO-3", is_estimate: false, stage_label: "In repair", total: 80,
     total_converted: 80, currency_symbol: "$", device: "iPhone 14", awaiting_approval: false, open_recommendations: 0,
+    amount_paid: 80, balance_due: 0, paid_in_full: true,
     warranty_until: "2027-01-05T00:00:00" }],
   counts: { work_orders: 1, estimates: 1, under_warranty: 1 },
 };
@@ -17,7 +18,7 @@ const JOB = {
   stages: [{ label: "Received" }, { label: "Diagnosing" }, { label: "Waiting" }, { label: "In repair" }, { label: "Ready" }, { label: "Done" }],
   shop_name: "Fixit", device: "iPhone 14", total: 80, currency_symbol: "$", public_token: "trk1",
   lines: [{ label: "Screen", qty: 1, amount: 80 }], recommendations: [], updates: [], timeline: [],
-  allow_messages: true,
+  allow_messages: true, amount_paid: 80, balance_due: 0, paid_in_full: true,
 };
 
 let calls: { url: string; init?: RequestInit }[] = [];
@@ -43,6 +44,24 @@ describe("PublicPortal", () => {
     expect(screen.getByText("Ready for you to review")).toBeInTheDocument();
     expect(screen.getByText("iPhone 14")).toBeInTheDocument();
     expect(screen.getByText(/Under warranty until/)).toBeInTheDocument();
+    expect(screen.getByText("Paid in full")).toBeInTheDocument();     // F2: a settled job says so
+  });
+
+  it("a paid job says Paid in full; a part-paid one names the balance", async () => {
+    const user = userEvent.setup();
+    render(<PublicPortal token="ptok" />);
+    await user.click(await screen.findByText("iPhone 14"));
+    expect(await screen.findByText("What we're doing")).toBeInTheDocument();
+    expect(screen.getAllByText("Paid in full").length).toBeGreaterThan(0);
+    Object.assign(JOB, { amount_paid: 30, balance_due: 50, paid_in_full: false });
+    try {
+      await user.click(screen.getByText("All your repairs"));
+      await user.click(await screen.findByText("iPhone 14"));
+      expect((await screen.findAllByText("Balance due $50")).length).toBeGreaterThan(0);
+      expect(screen.queryByText("Paid in full")).toBeNull();
+    } finally {
+      Object.assign(JOB, { amount_paid: 80, balance_due: 0, paid_in_full: true });
+    }
   });
 
   it("opens a job in the track view and sends actions to the portal API", async () => {

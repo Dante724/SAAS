@@ -79,7 +79,7 @@ export default function ChatsHub() {
       ) : (
       <div className="flex-1 overflow-hidden flex">
         {/* thread list */}
-        <aside className="w-80 flex-shrink-0 border-r border-slate-200/80 bg-white/40 flex flex-col">
+        <aside className={`w-full md:w-80 flex-shrink-0 border-r border-slate-200/80 bg-white/40 flex-col ${sel ? "hidden md:flex" : "flex"}`}>
           <div className="p-3 border-b border-slate-100 flex items-center gap-2">
             <span className="text-[11px] font-bold text-ink-tertiary">Conversations</span>
             <select value={channel} onChange={(e) => setChannel(e.target.value)} className="glass-input ml-auto text-[11px] px-2 py-1 rounded-lg font-semibold">
@@ -104,14 +104,15 @@ export default function ChatsHub() {
         </aside>
 
         {/* conversation */}
-        <div className="flex-1 min-w-0 flex flex-col">
+        <div className={`flex-1 min-w-0 flex-col ${sel ? "flex" : "hidden md:flex"}`}>
           {!sel ? (
             <div className="flex-1 grid place-items-center text-center"><div><M n="chat" c="text-4xl text-ink-placeholder" /><p className="text-sm font-semibold text-ink-secondary mt-2">Pick a conversation</p></div></div>
           ) : (
             <>
-              <div className="px-6 py-4 border-b border-slate-200/80 bg-white/60 flex items-center gap-3">
-                <div className="w-9 h-9 rounded-full bg-emerald-500 text-white font-bold flex items-center justify-center text-xs">{initialsOf(nameOf(sel))}</div>
-                <div><h3 className="text-sm font-bold text-ink-primary">{nameOf(sel)}</h3><p className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />{CH[sel.channel || "web"] || sel.channel} · {sel.contact_phone}</p></div>
+              <div className="px-3 md:px-6 py-4 border-b border-slate-200/80 bg-white/60 flex items-center gap-3">
+                <button onClick={() => setSel(null)} aria-label="Back to conversations" className="md:hidden w-9 h-9 -ml-1 rounded-lg flex items-center justify-center text-ink-secondary hover:bg-slate-100 shrink-0"><M n="arrow_back" c="text-base" /></button>
+                <div className="w-9 h-9 shrink-0 rounded-full bg-emerald-500 text-white font-bold flex items-center justify-center text-xs">{initialsOf(nameOf(sel))}</div>
+                <div className="min-w-0"><h3 className="text-sm font-bold text-ink-primary truncate">{nameOf(sel)}</h3><p className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />{CH[sel.channel || "web"] || sel.channel} · {sel.contact_phone}</p></div>
                 {/* Create split button */}
                 <div className="ml-auto relative">
                   {sel.order_id ? (
@@ -130,12 +131,12 @@ export default function ChatsHub() {
                   )}
                 </div>
               </div>
-              <div className="flex-1 overflow-y-auto p-6 space-y-3 bg-canvas">
+              <div className="flex-1 overflow-y-auto p-3 md:p-6 space-y-3 bg-canvas">
                 {msgs.length === 0 && <p className="text-xs text-ink-tertiary text-center">No messages yet. Outbound is simulated until channel provider keys are connected.</p>}
                 {msgs.map((m) => {
                   const out = m.direction === "out" || m.direction === "outbound";
                   return (
-                    <div key={m.id} className={`flex flex-col max-w-[70%] ${out ? "ml-auto items-end" : "items-start"}`}>
+                    <div key={m.id} className={`flex flex-col max-w-[85%] md:max-w-[70%] ${out ? "ml-auto items-end" : "items-start"}`}>
                       <div className={`p-2.5 rounded-2xl text-xs ${out ? "bg-primary text-white rounded-tr-none" : "bg-white border border-slate-200 text-ink-primary rounded-tl-none shadow-2xs"}`}>{m.body}</div>
                       <span className="text-[11px] text-slate-400 mt-0.5 tabular-nums">{fmt(m.created_at)}{m.status ? ` · ${humanize(m.status)}` : ""}</span>
                     </div>
@@ -150,7 +151,7 @@ export default function ChatsHub() {
               <div className="p-4 pt-2 bg-white flex items-center gap-2">
                 <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={(e) => { if (e.target.files?.[0]) flash("Image attach needs a connected channel provider"); e.currentTarget.value = ""; }} />
                 <button aria-label="Attach image" onClick={() => fileRef.current?.click()} title="Attach image" className="w-10 h-10 flex-shrink-0 rounded-xl bg-slate-100 text-ink-secondary hover:bg-slate-200 flex items-center justify-center"><M n="image" c="text-base" /></button>
-                <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} className="glass-input flex-1 py-2.5 px-3 text-xs rounded-xl" placeholder="Message…" />
+                <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} className="glass-input flex-1 min-w-0 py-2.5 px-3 text-xs rounded-xl" placeholder="Message…" />
                 <button onClick={() => send()} className="px-4 py-2.5 rounded-xl bg-primary text-white text-xs font-bold hover:brightness-110 flex items-center gap-1.5"><span>Send</span><M n="send" c="text-xs" /></button>
               </div>
             </>

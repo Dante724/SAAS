@@ -13,9 +13,10 @@ from backend.config import settings
 from backend.db.database import get_db
 from backend.models import Employee
 
-# The password every staff account created from the React screen used to get (H1). It's public
-# knowledge now, so it can never be set again and never opens a session.
-OLD_DEFAULT_PASSWORDS = frozenset({"changeme123"})
+# The password every staff account created from the React screen used to get (H1), and the demo
+# seed's old passwords that the README published (launch QA F10). They're public knowledge, so they
+# can never be set again and never open a session.
+OLD_DEFAULT_PASSWORDS = frozenset({"changeme123", "admin123", "tech123"})
 
 
 def is_old_default_password(password: str | None) -> bool:

@@ -10,7 +10,7 @@ import { getLocale } from "../i18n";
 //   fmt()   — money formatting in the org currency
 //   refresh — re-pull after a role/currency change so the UI updates live
 export type Me = {
-  id?: string; name?: string; email?: string; role?: string | null;
+  id?: string; name?: string; email?: string; role?: string | null; org_name?: string | null;
   is_owner?: boolean; is_shop_owner?: boolean; permissions?: Record<string, boolean>; home_route?: string | null;
   currency?: string; currency_code?: string;
   clock_wo_enabled?: boolean; clock_attendance_enabled?: boolean;

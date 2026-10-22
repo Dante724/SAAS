@@ -42,6 +42,7 @@ export type Track = {
   shop_name?: string; client_name?: string | null; order_number?: string; stage_label?: string; is_estimate?: boolean;
   stages?: { label: string }[]; stage_index?: number; stopped?: boolean; awaiting_approval?: boolean;
   device?: string; asset_label?: string; complaint?: string; total?: number;
+  amount_paid?: number; balance_due?: number; paid_in_full?: boolean;   // customer currency
   total_converted?: number; fx_rate?: number; currency_symbol?: string;
   lines?: Line[]; recommendations?: Rec[]; updates?: Update[]; timeline?: TL[];
   custom_fields?: { label: string; value: string }[];   // fields the shop set to show on the portal
@@ -71,6 +72,23 @@ export const money = (n: number, sym = "$") => {
 const docTotal = (d: Track) => (d?.fx_rate && Number(d.fx_rate) !== 1
   ? (d.total_converted != null ? d.total_converted : (d.total || 0) * d.fx_rate) : (d?.total || 0));
 const fmtDoc = (d: Track) => money(docTotal(d), d?.currency_symbol || "$");
+// Paid / balance due, in plain words beside every total, so a settled job never reads as owed.
+export function PaidNote({ paid, balance, paidInFull, sym, className = "" }: {
+  paid?: number; balance?: number; paidInFull?: boolean; sym: string; className?: string;
+}) {
+  if (paidInFull) return (
+    <span className={"inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[13px] font-semibold text-emerald-700 " + className}>
+      <Check size={13} strokeWidth={2.5} /> Paid in full
+    </span>
+  );
+  if ((paid || 0) > 0 && (balance || 0) > 0) return (
+    <span className={"text-[13px] text-ink-secondary " + className}>
+      Paid {money(paid || 0, sym)} · <span className="font-semibold text-amber-700">Balance due {money(balance || 0, sym)}</span>
+    </span>
+  );
+  return null;
+}
+
 // White or near-black text on the shop's colour, whichever reads better.
 export function onColor(hex: string) {
   const h = hex.replace("#", ""); const n = parseInt(h.length === 3 ? h.split("").map((c) => c + c).join("") : h, 16);
@@ -282,6 +300,8 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
             <h1 className="text-[24px] sm:text-[28px] font-semibold leading-tight tracking-[-0.02em] text-ink-primary">{headline}</h1>
             <p className="mt-1.5 text-[15px] text-ink-tertiary">{d.stopped ? `${d.stage_label}. Contact ${d.shop_name || "the shop"} if you have questions.`
               : [isEst ? `Status: ${d.stage_label}` : (headline === d.stage_label ? d.device : d.stage_label), ago].filter(Boolean).join(" · ")}</p>
+            {/* phones have no side card; with no line list the paid note sits here */}
+            {!(d.lines || []).length && <div className="mt-3 lg:hidden"><PaidNote paid={d.amount_paid} balance={d.balance_due} paidInFull={d.paid_in_full} sym={sym} /></div>}
             {!d.stopped && !isEst && (d.stages || []).length > 0 && (
               <div className="mt-5">
                 <div className="flex gap-1">
@@ -433,6 +453,7 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
                 </tbody>
               </table>
               <div className="mt-3 flex justify-end gap-10 text-[17px] font-semibold text-ink-primary"><span>Total</span><span className="tabular-nums">{fmtDoc(d)}</span></div>
+              <div className="mt-1.5 flex justify-end"><PaidNote paid={d.amount_paid} balance={d.balance_due} paidInFull={d.paid_in_full} sym={sym} /></div>
             </section>
           )}
 
@@ -581,6 +602,7 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
             <div className="text-[13px] text-ink-tertiary">{d.awaiting_approval ? (isEst ? "Estimate total" : "Total due") : "Total"}</div>
             <div className="mt-1 text-[32px] font-semibold leading-none tracking-[-0.02em] tabular-nums text-ink-primary">{money(total + recSum, sym)}</div>
             {recSum > 0 && <div className="mt-2 text-[13px] text-ink-tertiary">{money(total, sym)} + {money(recSum, sym)} you've chosen</div>}
+            {!recSum && <PaidNote paid={d.amount_paid} balance={d.balance_due} paidInFull={d.paid_in_full} sym={sym} className="mt-2.5" />}
             {d.awaiting_approval && (
               <div className="mt-5 flex flex-col gap-2">
                 <button onClick={() => setSignOpen(true)} className={`${btn} w-full`} style={{ background: accent, color: onAccent }}>Review and sign</button>

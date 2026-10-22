@@ -110,7 +110,7 @@ async def test_the_brief_goes_out_once_after_the_hour_in_the_shops_time_zone(cli
     org = await _org(db, org_id)
     org.timezone = "America/New_York"
     db.add(Invoice(org_id=org_id, invoice_number="I-9", status="issued", total=999, amount_paid=0,
-                   due_at=datetime.utcnow() - timedelta(days=2)))
+                   due_at=datetime(2026, 10, 18, 12, 0)))     # fixed, so the test doesn't age
     await db.commit()
     await client.put("/api/sense/settings", json={"brief": {"hour": 7, "email": True, "push": True}}, headers=H)
 
