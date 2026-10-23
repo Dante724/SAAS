@@ -1,6 +1,6 @@
 # Tekly Go (native): implementation plan
 
-Status: **draft for owner approval. Nothing here is started.** Date: 2026-10-23.
+Status: **LATER, shelved 2026-10-23.** See [`tekly-go-pwa-plan.md`](tekly-go-pwa-plan.md) for the current plan. Kept for the later store app.
 Spec: [`tekly-go-native-spec.md`](tekly-go-native-spec.md). Section references (§n) point there.
 
 ## How to use this plan
