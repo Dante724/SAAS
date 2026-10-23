@@ -280,16 +280,17 @@ Yearly billing gets ${12 - ymo} months free. Every trial includes all Pro featur
       if (LIVE) {
         const r = await api(`/appointment/${encodeURIComponent(B.slug)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: d.name, email: d.email, date: d.date, time: d.time, note }) });
         await say(`You're booked for ${r.when || d.when}. It's in our calendar, and we'll email ${d.email} with the details. Looking forward to it!`);
-      } else if (C.demoEndpoint) {
-        const r = await fetch(C.demoEndpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: d.name, email: d.email, shop: d.shop, industry: tradeName, preferred: d.when, source: "assistant", ...attr }) });
-        if (!r.ok) throw new Error(r.status);
-        await say(`Thanks, ${d.name.split(" ")[0]} — request sent. We'll email ${d.email} to confirm a time on ${d.when}.`);
       } else {
-        const body = `Name: ${d.name}\nEmail: ${d.email}\nShop: ${d.shop}\nTrade: ${tradeName}\nPreferred: ${d.when}`;
-        await say("I'll open an email with your request filled in — just press send.");
-        setTimeout(() => { location.href = `mailto:${C.demoEmail}?subject=${encodeURIComponent("Tekly demo request — " + d.shop)}&body=${encodeURIComponent(body)}`; }, 600);
+        const lead = { name: d.name, email: d.email, shop: d.shop, industry: tradeName, preferred: d.when, locations: mem.locations };
+        if (!C.demoEndpoint && !B.slug) {
+          await say("I'll open an email with your request filled in — just press send.");
+          await new Promise(r => setTimeout(r, 600));
+        }
+        const how = await window.TeklyLead.send(lead, "assistant");
+        if (how === "sent") await say(`Thanks, ${d.name.split(" ")[0]} — request sent. We'll email ${d.email} to confirm a time on ${d.when}.`);
+        else if (C.demoEndpoint || B.slug) await say("That didn't go through, so your email app opened with the request filled in — press send and we'll reply to find a time.");
       }
-      push("generate_lead", { form: "assistant", live: LIVE, industry: tradeName, ...attr });
+      if (LIVE) push("generate_lead", { form: "assistant", live: true, delivery: "booked", industry: tradeName, ...attr });
       flow = null; chips(["Start free trial", "Pricing"]);
     } catch (e) {
       if (e.status === 409) { await say("Someone just took that time — let's pick another."); return liveDays(); }
