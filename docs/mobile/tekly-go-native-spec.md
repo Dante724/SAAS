@@ -312,7 +312,7 @@ These are the owner's standing rules, applied to native. The council's designer 
 - **Account deletion:**
   - 5.1.1(v) applies "if your app supports account creation" [S16], and ours doesn't.
   - Google Play wants an in-app path and a web link when an app "enables account creation" [S17].
-  - **We ship More → Delete account anyway** (cheap insurance against rejection):
+  - **We ship More → Delete account anyway** (decided, §18 Q2; cheap insurance against rejection):
     - for staff, it sends a deletion request that the owner confirms, or that is auto-deactivated after 14 days;
     - for owners, it links to the web's close-account flow;
     - a public web page gives the same request route for Play's Data safety form.
@@ -485,7 +485,7 @@ Events are sent to our own backend (`POST /api/mobile/v1/events`, batched, no th
 These are asked one at a time, each with a recommendation.
 
 1. ~~**Push provider.**~~ **Decided 2026-10-23:** the Expo push service for alerts, with direct APNs only for Live Activities (M2).
-2. **In-app "Delete account".** *Recommend:* ship it even though the app creates no accounts.
+2. ~~**In-app "Delete account".**~~ **Decided 2026-10-23:** ship More → Delete account (a staff request goes to the owner; owners get the web close-account link) plus the public deletion page (B14, plan S9.5–S9.6).
 3. **iOS 26 tab bar.** Native tabs render Apple's Liquid Glass. *Recommend:* accept it, because it's the system look, not our decoration, and fighting it makes the app feel non-native. *Alternative:* a custom flat tab bar (JS tabs).
 4. **Where the app lives.** *Recommend:* `mobile/` as a standalone npm project.
 5. **Branch base.** This branch was cut from `main`, 158 commits behind `launch/audit-fixes`. *Recommend:* merge PR #10's backend (B0a) and commit the device-sessions work (B0b) into the integration branch before M1.
