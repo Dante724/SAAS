@@ -488,7 +488,7 @@ These are asked one at a time, each with a recommendation.
 2. ~~**In-app "Delete account".**~~ **Decided 2026-10-23:** ship More → Delete account (a staff request goes to the owner; owners get the web close-account link) plus the public deletion page (B14, plan S9.5–S9.6).
 3. ~~**iOS 26 tab bar.**~~ **Decided 2026-10-23:** use Apple's native tab bar, Liquid Glass included. It is system furniture, not decoration; every screen's content stays flat and glass-free.
 4. ~~**Where the app lives.**~~ **Decided 2026-10-23:** `mobile/` in this repo, as a standalone npm project (§14).
-5. **Branch base.** This branch was cut from `main`, 158 commits behind `launch/audit-fixes`. *Recommend:* merge PR #10's backend (B0a) and commit the device-sessions work (B0b) into the integration branch before M1.
+5. ~~**Branch base / prerequisites.**~~ **Decided 2026-10-23:** land PR #10's backend (B0a) and get the device-sessions work committed and merged (B0b) into the integration branch before M1.
 6. **Developer accounts.** Who enrols the Apple organisation account (needs a D-U-N-S number) and the Play organisation account, and under which legal name. *Recommend:* start during M0.
 7. **App name and identifiers.** *Recommend:* "Tekly Go", `com.tekly.go` on both stores.
 
