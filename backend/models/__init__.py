@@ -24,6 +24,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
+from backend.core.client_source import current_client
 from backend.db.database import Base
 
 
@@ -650,6 +651,8 @@ class OrderStatusLog(Base):
     changed_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     note: Mapped[Optional[str]] = mapped_column(Text)
     changed_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # "go/<version>" | "web" | None (no request): which app made the change (core/client_source)
+    client: Mapped[Optional[str]] = mapped_column(String(32), default=current_client)
     order: Mapped["Order"] = relationship(back_populates="status_logs")
 
 class OrderComment(Base):
@@ -660,6 +663,7 @@ class OrderComment(Base):
     body: Mapped[str] = mapped_column(Text)
     visible_to_client: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    client: Mapped[Optional[str]] = mapped_column(String(32), default=current_client)   # which app (core/client_source)
     order: Mapped["Order"] = relationship(back_populates="comments")
 
 # ─────────────────────────────────────────────
@@ -1535,6 +1539,7 @@ class AuditLog(Base):
     entity_id: Mapped[Optional[str]] = mapped_column(String)
     diff: Mapped[Optional[dict]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    client: Mapped[Optional[str]] = mapped_column(String(32), default=current_client)   # which app (core/client_source)
 
 
 class EventFeedItem(Base):

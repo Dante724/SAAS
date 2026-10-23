@@ -535,6 +535,13 @@ async def list_orders(
     out = {"total": total, "items": items, "skip": skip, "limit": limit}
     if facets:
         out.update(await _order_facets(db, current, role, status, flt))
+    if (search or q) and not skip:
+        # Go pilot: how the counter looks jobs up — the kind of search, never its text
+        from backend.services import pilot
+        await pilot.record_lookup(db, current, via="search", by=pilot.classify_query(search or q),
+                                  surface="orders_list" if search else "search_box",
+                                  order_id=items[0]["id"] if total == 1 else None,
+                                  matched=total > 0, collapse=True)
     return out
 
 
@@ -950,6 +957,8 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
                  diff={"order_number": order.order_number, "location_id": data.location_id})   # assigns order.id before we reference it
     log = OrderStatusLog(order_id=order.id, from_status=None, to_status=initial_status, changed_by_id=current.id)
     db.add(log)
+    from backend.services import pilot as _pilot
+    _pilot.record_photos(db, current, order.id, len(_intake or []), "create")
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order.id, "Work order created")
 
@@ -1787,7 +1796,10 @@ async def set_intake_photos(
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
+    before = set(order.intake_photos or [])
     order.intake_photos = await _clean_intake_photos(db, current.org_id, data.photos)
+    from backend.services import pilot
+    pilot.record_photos(db, current, order.id, len([b for b in order.intake_photos if b not in before]), "intake")
     # 144dg — drop markups whose original photo is no longer on the order
     order.intake_markups = {k: v for k, v in (order.intake_markups or {}).items() if k in order.intake_photos}
     order.intake_photo_labels = {k: v for k, v in (order.intake_photo_labels or {}).items() if k in order.intake_photos}
@@ -1815,6 +1827,8 @@ async def add_intake_photos(
     if len(current_ids) >= 40 and any(i not in current_ids for i in data.photos):
         raise HTTPException(409, "This job already has 40 photos, the most it can hold.")
     order.intake_photos = await _clean_intake_photos(db, current.org_id, current_ids + list(data.photos))
+    from backend.services import pilot
+    pilot.record_photos(db, current, order.id, len([b for b in order.intake_photos if b not in current_ids]), "intake")
     if data.label:
         labels = dict(order.intake_photo_labels or {})
         for b in data.photos:

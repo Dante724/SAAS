@@ -46,9 +46,18 @@ describe("routeScan", () => {
     await routeScan("https://shop/track/AbCdEf123456", resolve);
     expect(resolve).toHaveBeenCalledWith("https://shop/track/AbCdEf123456");
   });
-  it("skips the network for direct links and empty input", async () => {
+  it("opens direct links without waiting on the network, but still reports the scan", async () => {
+    const resolve = vi.fn(() => new Promise<never>(() => {}));   // never answers
+    expect(await routeScan("https://x/go/job/j1?via=qr", resolve)).toEqual({ kind: "job", path: "/job/j1" });
+    await Promise.resolve();
+    expect(resolve).toHaveBeenCalledWith("https://x/go/job/j1?via=qr");
+  });
+  it("a failed background report doesn't break a direct link", async () => {
+    const resolve = vi.fn().mockRejectedValue(new Error("offline"));
+    expect(await routeScan("/go/job/j2", resolve)).toEqual({ kind: "job", path: "/job/j2" });
+  });
+  it("skips the network for empty input", async () => {
     const resolve = vi.fn();
-    expect(await routeScan("https://x/go/job/j1", resolve)).toEqual({ kind: "job", path: "/job/j1" });
     expect(await routeScan("   ", resolve)).toEqual({ kind: "none", code: "" });
     expect(resolve).not.toHaveBeenCalled();
   });

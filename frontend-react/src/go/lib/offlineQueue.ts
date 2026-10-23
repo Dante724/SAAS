@@ -14,6 +14,7 @@
 //
 // The storage, clock and network are injected so the replay rules can be unit-tested without a
 // browser; `goQueue` at the bottom is the real instance backed by IndexedDB.
+import { GO_CLIENT } from "./client";
 
 export type QueuedItem = { method: string; url: string; body?: unknown };
 export type Row = { id: number; payload: Encrypted; enqueued_at: number };
@@ -99,7 +100,7 @@ export function createQueue(deps: QueueDeps) {
 
   function headers(): Record<string, string> {
     const t = deps.token();
-    return { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) };
+    return { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}), "X-Tekly-Client": GO_CLIENT };
   }
 
   async function enqueue(item: QueuedItem) {

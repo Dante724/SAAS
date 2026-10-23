@@ -70,6 +70,7 @@ describe("offline queue", () => {
     expect(init.method).toBe("PATCH");
     expect(JSON.parse(init.body as string)).toEqual({ status: "ready" });
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer tok-1");
+    expect((init.headers as Record<string, string>)["X-Tekly-Client"]).toMatch(/^go\//);
   });
 
   it("keeps a change the shop network refused (403 network_not_allowed) and stops", async () => {

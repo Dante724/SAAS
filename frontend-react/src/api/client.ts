@@ -34,6 +34,13 @@ function authHeader(): Record<string, string> {
   }
 }
 
+// Which app is calling, sent as X-Tekly-Client. Tekly Go sets "go/<version>" at start-up so the
+// server can tell actions made on a phone from the web app's (the Go pilot report); the web app
+// leaves it empty and sends nothing.
+let clientTag = "";
+export function setClientTag(tag: string) { clientTag = tag; }
+export function clientHeader(): Record<string, string> { return clientTag ? { "X-Tekly-Client": clientTag } : {}; }
+
 async function request<T>(method: string, path: string, body?: unknown, extra?: Record<string, string>): Promise<T> {
   const res = await fetch(BASE + scoped(method, path), {
     method,
@@ -41,6 +48,7 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
     headers: {
       "Content-Type": "application/json",
       ...authHeader(),
+      ...clientHeader(),
       ...(extra || {}),
     },
     body: body != null ? JSON.stringify(body) : undefined,
@@ -93,7 +101,7 @@ export class ApiError extends Error {
 // token, so window.open(url) would 401. Fetch with auth, then open the blob in a
 // new tab. Reused by WO, PO, invoice and payroll print buttons.
 export async function openAuthedDoc(path: string): Promise<void> {
-  const res = await fetch(BASE + path, { credentials: "include", headers: { ...authHeader() } });
+  const res = await fetch(BASE + path, { credentials: "include", headers: { ...authHeader(), ...clientHeader() } });
   if (!res.ok) throw new ApiError(res.status, (await res.text().catch(() => "")) || res.statusText);
   const blob = await res.blob();
   // A blob URL runs with this app's origin, so only open types that can't execute script;
@@ -125,7 +133,7 @@ function downloadName(disposition: string | null): string {
 
 // Multipart upload (no JSON Content-Type → browser sets the boundary). Reuses the session.
 async function postForm<T>(path: string, form: FormData): Promise<T> {
-  const res = await fetch(BASE + path, { method: "POST", credentials: "include", headers: { ...authHeader() }, body: form });
+  const res = await fetch(BASE + path, { method: "POST", credentials: "include", headers: { ...authHeader(), ...clientHeader() }, body: form });
   if (!res.ok) throw new ApiError(res.status, (await res.text().catch(() => "")) || res.statusText);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;

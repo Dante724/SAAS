@@ -3,7 +3,8 @@
 // A label is either something the server must look up (an order barcode or number, a part's
 // SKU/barcode, a device serial/IMEI/VIN, a ticket's tracking link — POST /api/scan/resolve), or a
 // link that already names a job (a Tekly Go link, or a web-app "/orders?open=<id>" link), which we
-// open without a round trip.
+// open without waiting on a round trip (the server is still told, in the background, so the scan
+// is counted).
 
 export type ScanResolve =
   | { matched: true; type: "order" | "product" | "asset"; id: string; label?: string; route?: string; is_estimate?: boolean }
@@ -47,6 +48,11 @@ export async function routeScan(raw: string, resolve: (code: string) => Promise<
   const code = normalizeCode(raw);
   if (!code) return { kind: "none", code };
   const direct = directTarget(code);
-  if (direct) return direct;
+  if (direct) {
+    // Open the job without waiting, but still tell the server about the scan (the Go pilot counts
+    // scans); a failure, offline included, never gets in the way.
+    Promise.resolve().then(() => resolve(code)).catch(() => {});
+    return direct;
+  }
   return targetFor(await resolve(code), code);
 }
