@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime as _datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -280,7 +281,8 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
     # Build 144cb: send an email-verification link (best-effort; never blocks signup).
     await _send_verification(db, employee)
 
-    token = create_access_token({"sub": employee.id, "org_id": org.id, "tv": employee.token_version or 0})
+    from backend.services.sessions import issue_session
+    token = await issue_session(db, employee, request, via="register")
     return TokenResponse(
         access_token=token,
         employee_id=employee.id,
@@ -376,12 +378,17 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
         Organisation.id == employee.org_id))).scalar_one_or_none()
     enroll_needed = bool(org and org.require_mfa) and not employee.mfa_enabled
 
+    # The shop's device limit: at the limit, the person picks one of their devices to sign out
+    # (409 + a short-lived token for /session-limit/continue) — nobody is evicted silently.
+    from backend.services.sessions import issue_session, limit_reached
+    await limit_reached(db, employee, mfa=bool(employee.mfa_enabled))
+
+    # No commit between the limit check and the new device row (issue_session commits both).
     await _audit(db, org_id=employee.org_id, actor_id=employee.id, action="auth.login",
                  entity_type="employee", entity_id=employee.id,
                  diff={"ip": _ip(request), "mfa": bool(employee.mfa_enabled)})
-    await db.commit()
 
-    token = create_access_token({"sub": employee.id, "org_id": employee.org_id, "tv": employee.token_version or 0})
+    token = await issue_session(db, employee, request, via="password", mfa=bool(employee.mfa_enabled))
     return TokenResponse(
         access_token=token,
         employee_id=employee.id,
@@ -412,10 +419,16 @@ async def logout(
     presented = (request.headers.get("authorization") or "").split(" ", 1)[-1]
     claims = _jwt.decode(presented, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
     if claims.get("sid"):
-        # Kept until the whole sign-in would have expired (refresh can slide that far).
-        ends = int(claims.get("auth_time") or claims.get("exp") or 0) + settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60
-        if not await db.get(RevokedSession, claims["sid"]):
-            db.add(RevokedSession(sid=claims["sid"], employee_id=current.id, expires_at=_dt.utcfromtimestamp(ends)))
+        from backend.models import AuthSession
+        from backend.services.sessions import revoke
+        row = (await db.execute(select(AuthSession).where(AuthSession.sid == claims["sid"]))).scalar_one_or_none()
+        if row is not None:
+            await revoke(db, row, actor_id=current.id, reason="self")
+        else:
+            # Kept until the whole sign-in would have expired (refresh can slide that far).
+            ends = int(claims.get("auth_time") or claims.get("exp") or 0) + settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60
+            if not await db.get(RevokedSession, claims["sid"]):
+                db.add(RevokedSession(sid=claims["sid"], employee_id=current.id, expires_at=_dt.utcfromtimestamp(ends)))
     await _audit(db, org_id=current.org_id, actor_id=current.id, action="auth.logout",
                  entity_type="employee", entity_id=current.id)
     await db.commit()
@@ -438,6 +451,15 @@ async def refresh(
     if session_expired(auth_time):
         raise HTTPException(status_code=401, detail="Session expired. Please sign in again.",
                             headers={"WWW-Authenticate": "Bearer"})
+    # Only a tracked sign-in can be extended. A token from before devices were tracked (no sid,
+    # or no row) works until it expires, then the person signs in again — refreshing it would
+    # otherwise create a 30-day session nobody can see or sign out.
+    from backend.models import AuthSession
+    sid = claims.get("sid")
+    dev = (await db.execute(select(AuthSession).where(AuthSession.sid == sid))).scalar_one_or_none() if sid else None
+    if dev is None or dev.revoked_at is not None or dev.expires_at <= _datetime.utcnow():
+        raise HTTPException(status_code=401, detail="Please sign in again.",
+                            headers={"WWW-Authenticate": "Bearer"})
     role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
     data = {"sub": current.id, "org_id": current.org_id, "tv": current.token_version or 0}
     if auth_time is not None:
@@ -445,6 +467,11 @@ async def refresh(
     if claims.get("sid"):
         data["sid"] = claims["sid"]      # same sign-in: logout must reach the refreshed token too
     token = create_access_token(data)
+    from backend.services.sessions import token_expiry
+    import calendar
+    dev.token_expires_at = token_expiry(int(auth_time) if auth_time is not None
+                                        else calendar.timegm(dev.created_at.utctimetuple()))
+    await db.commit()
     return TokenResponse(
         access_token=token, employee_id=current.id, org_id=current.org_id,
         name=current.name, role=role.name if role else "staff",
@@ -459,7 +486,11 @@ async def logout_all_devices(
     """Lost-device / panic logout: invalidate every token issued to this
     employee (including the caller's) by bumping their token version. The
     employee must sign in again everywhere."""
+    from backend.services.sessions import revoke_all
+    await revoke_all(db, current, actor_id=current.id, reason="everywhere")
     current.token_version = (current.token_version or 0) + 1
+    await _audit(db, org_id=current.org_id, actor_id=current.id, action="auth.logout_all",
+                 entity_type="employee", entity_id=current.id)
     await db.commit()
     return {"ok": True, "token_version": current.token_version}
 
@@ -608,7 +639,8 @@ async def invite_accept(data: InviteAccept, request: Request, db: AsyncSession =
     inv.accepted_at = _dt.utcnow()
     await db.commit()
     role = (await db.execute(select(Role).where(Role.id == emp.role_id))).scalar_one_or_none()
-    token = create_access_token({"sub": emp.id, "org_id": emp.org_id, "tv": 0})
+    from backend.services.sessions import issue_session
+    token = await issue_session(db, emp, request, via="invite")
     return TokenResponse(access_token=token, employee_id=emp.id, org_id=emp.org_id,
                          name=emp.name, role=role.name if role else "staff")
 

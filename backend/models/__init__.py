@@ -116,6 +116,7 @@ class Organisation(Base):
     # Build 144cd: org-wide security policy. When on, every member must set up an
     # authenticator (TOTP) before using the app, and can't turn their own 2FA off.
     require_mfa: Mapped[bool] = mapped_column(Boolean, default=False)   # opt-in: owners enable it
+    max_sessions_per_login: Mapped[Optional[int]] = mapped_column(Integer)  # devices one login may use at once; null = no limit
     # Build 144ce: subscription lifecycle, controlled from the separate /admin portal.
     # sub_status drives the portal's segments: trial | active | trial_lost | churned | suspended
     # ("new" is derived = trial started within 14 days; "paid" = active; "lost paid" = churned).
@@ -442,6 +443,28 @@ class RevokedSession(Base):
     sid: Mapped[str] = mapped_column(String(64), primary_key=True)
     employee_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id", ondelete="CASCADE"), index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
+class AuthSession(Base):
+    """One sign-in on one device. The token carries its `sid`; this row is what the user sees under
+    "Signed-in devices", what a sign-out revokes, and what the shop's device limit counts."""
+    __tablename__ = "auth_sessions"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)   # opaque id for the UI
+    sid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    employee_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id", ondelete="CASCADE"), index=True)
+    token_version: Mapped[int] = mapped_column(Integer, default=0)   # "sign out everywhere" bumps the employee's
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)         # end of the whole sign-in (30 days)
+    token_expires_at: Mapped[datetime] = mapped_column(DateTime)               # when its current token lapses; /refresh moves it
+    ip: Mapped[Optional[str]] = mapped_column(String(64))
+    device: Mapped[Optional[str]] = mapped_column(String(80))         # "Chrome on Mac" — parsed, not the raw UA
+    via: Mapped[str] = mapped_column(String(20), default="password")  # password | register | invite
+    mfa: Mapped[bool] = mapped_column(Boolean, default=False)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    revoked_by: Mapped[Optional[str]] = mapped_column(String)
+    revoke_reason: Mapped[Optional[str]] = mapped_column(String(20))  # self | other | admin | limit | everywhere
 
 
 class OrderStatus(Base):
