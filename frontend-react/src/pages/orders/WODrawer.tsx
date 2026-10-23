@@ -60,6 +60,11 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   const [sub, setSub] = useState<null | "client" | "asset">(null);
   const [d, setD] = useState<Detail>(order as Detail);
   const [statuses, setStatuses] = useState<FullStatus[]>([]);
+  // Edits that only save on an explicit button (notes, watch-outs) register here while
+  // unsaved, so "Save and close" can save them and a plain close can warn first.
+  const pending = useRef(new Map<string, () => Promise<boolean>>());
+  const setPending = (key: string, save: (() => Promise<boolean>) | null) => { if (save) pending.current.set(key, save); else pending.current.delete(key); };
+  const [saving, setSaving] = useState(false);
   const [emps, setEmps] = useState<Emp[]>([]);
   const [timing, setTiming] = useState<Timing | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -96,8 +101,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
     catch (e: any) { setD({ ...d, status: prev }); flash(`Failed: ${e.message}`); }
   }
   async function saveNotes(tech_notes: string, conclusion: string) {
-    try { await api.patch(`/orders/${order.id}/notes`, { tech_notes, conclusion }); setD({ ...d, tech_notes, conclusion }); flash("Notes saved"); }
-    catch (e: any) { flash(`Failed: ${e.message}`); }
+    try { await api.patch(`/orders/${order.id}/notes`, { tech_notes, conclusion }); setD((p) => ({ ...p, tech_notes, conclusion })); flash("Notes saved"); return true; }
+    catch (e: any) { flash(`Failed: ${e.message}`); return false; }
   }
   async function openTrackingLink() {
     try {
@@ -109,9 +114,19 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
       flash("Tracking link opened & copied");
     } catch (e: any) { flash(`Failed: ${e.message}`); }
   }
-  async function markDone() {
-    try { await api.post(`/orders/${order.id}/complete`, finishStatus ? { status: finishStatus.key } : {}); onChanged?.(); onClose(); }
-    catch (e: any) { flash(`Cannot close: ${e.message}`); }
+  // Save and close never touches the status (that's the status menu in the header):
+  // it commits fields that save when you leave them, saves pending notes/warnings, then closes.
+  async function saveAndClose() {
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    setSaving(true);
+    try {
+      for (const save of [...pending.current.values()]) if (!(await save())) return;   // stay open on a failed save
+      onChanged?.(); onClose();
+    } finally { setSaving(false); }
+  }
+  async function tryClose() {
+    if (pending.current.size && !(await confirmDialog("You have changes that aren't saved yet. Close without saving them?", { title: "Unsaved changes", confirmLabel: "Close without saving" }))) return;
+    onClose();
   }
   async function del() {
     const reason = await promptDialog("Reason for deleting this work order?"); if (!reason) return;
@@ -183,12 +198,6 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   const devTitle = deviceName(d.device) !== "—" ? deviceName(d.device) : (dev.asset_label || "Device");
   const isClosed = !!statuses.find((st) => st.key === d.status && ["closed", "dropped"].includes(st.status_group || ""));
   const due = dueText(d.due_at, !isClosed);
-  // The footer's finish button moves the job to the shop's first final status ("Done").
-  // Hidden once the job is already finished (Done, Delivered, Not collected…), where it
-  // would drag a closed job back to "Done", and on estimates, which finish by acceptance.
-  const finishStatus = (order as any).is_estimate ? null
-    : [...statuses].filter((st) => st.is_terminal).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))[0] || null;
-  const showFinish = !!finishStatus && !isClosed;
 
   // 144dd — tab badges reflect real state (no always-on dots). Amber Checklists dot only when a
   // required checklist item is still undone; red Activity count only when a customer message is unread.
@@ -204,7 +213,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 40 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={tryClose} />
       <div className="relative h-full w-full max-w-[840px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 
@@ -262,7 +271,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                 </div>
               </>)}
             </div>
-            <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100 transition-colors" title="Close"><M n="close" c="text-lg" /></button>
+            <button aria-label="Close" onClick={tryClose} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100 transition-colors" title="Close"><M n="close" c="text-lg" /></button>
           </div>
         </header>
         {partsOpen && <PartsPOPanel orderId={order.id} lines={(d.lines || []) as any[]} canBuy={canBuy} isEstimate={!!(order as any).is_estimate}
@@ -317,7 +326,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             <span><b>Possible comeback.</b> This device was here {comeback.days_since != null ? `${comeback.days_since} day${comeback.days_since === 1 ? "" : "s"} ago` : "recently"} (WO {comeback.prior_order_number}){comeback.count && comeback.count > 1 ? ` · ${comeback.count} visits in 45 days` : ""}. Check the earlier fix before promising.</span>
           </div>
         )}
-        <WatchOutBanner device={d.device} client={d.client} onChanged={reload} onFlash={flash} />
+        <WatchOutBanner device={d.device} client={d.client} onChanged={reload} onFlash={flash} onPending={(f) => setPending("watchout", f)} />
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-6 bg-slate-50/70 space-y-6">
@@ -431,7 +440,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                 </div>
                 <JobCardFields orderId={order.id} typeId={(d as any).type_id} value={(d as any).custom_data} onFlash={flash}
                   onSaved={(cd) => setD({ ...d, custom_data: cd } as Detail)} />
-                <NotesEditor initTech={d.tech_notes || ""} initConcl={d.conclusion || ""} diagnosis={d.diagnosis || ""} onSave={saveNotes} />
+                <NotesEditor initTech={d.tech_notes || ""} initConcl={d.conclusion || ""} diagnosis={d.diagnosis || ""} onSave={saveNotes} onPending={(f) => setPending("notes", f)} />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><ChecklistRings orderId={order.id} onOpen={() => setTab("checklists")} /></div>
@@ -475,8 +484,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             <button onClick={del} className="text-xs text-rose-600 hover:text-rose-700 font-semibold flex items-center gap-1 hover:bg-rose-50 rounded-lg px-2 py-1 transition-colors"><M n="delete" c="text-xs" />Delete</button>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={onClose} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 transition-colors">Close</button>
-            {showFinish && <button onClick={markDone} className="px-5 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="task_alt" c="text-sm" />Mark {finishStatus!.name.toLowerCase()} and close</button>}
+            <button onClick={tryClose} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 transition-colors">Close</button>
+            <button onClick={saveAndClose} disabled={saving} className="px-5 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all disabled:opacity-60"><M n="check" c="text-sm" />{saving ? "Saving…" : "Save and close"}</button>
           </div>
         </footer>
 
@@ -693,10 +702,13 @@ function SelEmp({ value, emps, onChange }: { value: string; emps: Emp[]; onChang
 }
 
 /* ---- Notes editor ---- */
-function NotesEditor({ initTech, initConcl, diagnosis, onSave }: { initTech: string; initConcl: string; diagnosis: string; onSave: (t: string, c: string) => void }) {
+function NotesEditor({ initTech, initConcl, diagnosis, onSave, onPending }: { initTech: string; initConcl: string; diagnosis: string; onSave: (t: string, c: string) => Promise<boolean>; onPending?: (save: (() => Promise<boolean>) | null) => void }) {
   const [tech, setTech] = useState(initTech);
   const [concl, setConcl] = useState(initConcl);
   useEffect(() => { setTech(initTech); setConcl(initConcl); }, [initTech, initConcl]);
+  const dirty = tech !== initTech || concl !== initConcl;
+  useEffect(() => { onPending?.(dirty ? () => onSave(tech, concl) : null); }, [dirty, tech, concl]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => onPending?.(null), []);   // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
       <div className="space-y-1">
@@ -743,10 +755,11 @@ function ChecklistRings({ orderId, onOpen }: { orderId: string; onOpen: () => vo
 }
 
 /* ---- Watch-out banner — prominent handling warnings for the asset + the customer ---- */
-function WatchOutBanner({ device, client, onChanged, onFlash }: {
+function WatchOutBanner({ device, client, onChanged, onFlash, onPending }: {
   device?: { id?: string; watch_out?: string | null } | null;
   client?: { id?: string; name?: string; watch_out?: string | null } | null;
   onChanged: () => void; onFlash: (m: string) => void;
+  onPending?: (save: (() => Promise<boolean>) | null) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [dev, setDev] = useState(device?.watch_out || "");
@@ -759,9 +772,11 @@ function WatchOutBanner({ device, client, onChanged, onFlash }: {
     try {
       if (client?.id && (cli || "") !== (client.watch_out || "")) await api.patch(`/clients/${client.id}`, { watch_out: cli || null });
       if (device?.id && (dev || "") !== (device.watch_out || "")) await api.put(`/assets/${device.id}`, { watch_out: dev || null });
-      onFlash("Warnings saved"); setEditing(false); onChanged();
-    } catch (e: any) { onFlash(e.message || "Could not save"); } finally { setBusy(false); }
+      onFlash("Warnings saved"); setEditing(false); onChanged(); return true;
+    } catch (e: any) { onFlash(e.message || "Could not save"); return false; } finally { setBusy(false); }
   }
+  const dirty = editing && ((cli || "") !== (client?.watch_out || "") || (dev || "") !== (device?.watch_out || ""));
+  useEffect(() => { onPending?.(dirty ? save : null); }, [dirty, cli, dev]);   // eslint-disable-line react-hooks/exhaustive-deps
   if (!hasAny && !editing) {
     return (
       <div className="px-6 py-1.5 bg-slate-50/70 border-b border-slate-200/70 flex-shrink-0">
