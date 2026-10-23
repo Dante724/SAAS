@@ -146,7 +146,7 @@ Account and shop, notification settings per kind, devices signed in ("This iPhon
 | Piece | Choice | Notes |
 |---|---|---|
 | Framework | **Expo SDK 58** (React Native 0.88, React 19.3) [S1][S2] | New Architecture is mandatory (since SDK 55) [S3]. Floors are **iOS 16.4+, Android 7+**, Xcode 26.4+, Node 22.13+ [S2]. targetSdk 36 meets Google Play's Aug-2026 rule [S14]. |
-| Navigation | **Expo Router 58**, with native tabs **stable in SDK 58** (`expo-router/native-tabs`) [S4] | 5-tab cap on Android; we use 4. On iOS 26 the system tab bar renders Liquid Glass (see §6, open question). |
+| Navigation | **Expo Router 58**, with native tabs **stable in SDK 58** (`expo-router/native-tabs`) [S4] | 5-tab cap on Android; we use 4. On iOS 26 the system tab bar renders Liquid Glass; accepted as system furniture (§18 Q3). |
 | Data | TanStack Query (cache, retries, pull-to-refresh) + ported offline queue | Query keys are per endpoint, and the cache is persisted to SQLite for a warm start. |
 | Storage | `expo-sqlite` for the queue, cache and pending uploads; `expo-secure-store` for tokens [S11] | SQLite is encrypted (SQLCipher option) with a key kept in Keychain / Keystore. |
 | Camera / scan | `expo-camera` `CameraView` barcode scanning; `launchScanner()` as a fallback [S5] | VisionCamera only if we need a frame processor later. |
@@ -486,7 +486,7 @@ These are asked one at a time, each with a recommendation.
 
 1. ~~**Push provider.**~~ **Decided 2026-10-23:** the Expo push service for alerts, with direct APNs only for Live Activities (M2).
 2. ~~**In-app "Delete account".**~~ **Decided 2026-10-23:** ship More → Delete account (a staff request goes to the owner; owners get the web close-account link) plus the public deletion page (B14, plan S9.5–S9.6).
-3. **iOS 26 tab bar.** Native tabs render Apple's Liquid Glass. *Recommend:* accept it, because it's the system look, not our decoration, and fighting it makes the app feel non-native. *Alternative:* a custom flat tab bar (JS tabs).
+3. ~~**iOS 26 tab bar.**~~ **Decided 2026-10-23:** use Apple's native tab bar, Liquid Glass included. It is system furniture, not decoration; every screen's content stays flat and glass-free.
 4. **Where the app lives.** *Recommend:* `mobile/` as a standalone npm project.
 5. **Branch base.** This branch was cut from `main`, 158 commits behind `launch/audit-fixes`. *Recommend:* merge PR #10's backend (B0a) and commit the device-sessions work (B0b) into the integration branch before M1.
 6. **Developer accounts.** Who enrols the Apple organisation account (needs a D-U-N-S number) and the Play organisation account, and under which legal name. *Recommend:* start during M0.
