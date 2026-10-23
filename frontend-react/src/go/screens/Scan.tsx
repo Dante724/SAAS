@@ -55,19 +55,19 @@ export default function Scan() {
   const cameraOn = state.kind === "camera";
   return (
     <Page title="Scan" subtitle="Work order, part, or a device's serial, IMEI or VIN">
-      <div className="relative aspect-[4/3] md:aspect-video w-full overflow-hidden rounded-[1.5rem] bg-[#0b1020] shadow-clay-card">
+      <div className="relative aspect-[4/3] md:aspect-video w-full overflow-hidden rounded-xl bg-[#0b1020]">
         <video ref={video} className={`h-full w-full object-cover ${cameraOn ? "" : "opacity-0"}`} playsInline muted />
         {cameraOn && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center" aria-hidden>
-            <div className="relative h-[46%] w-[74%] rounded-2xl border-2 border-white/80 shadow-[0_0_0_9999px_rgba(0,0,0,.35)]">
-              <span className="absolute inset-x-4 top-1/2 h-0.5 -translate-y-1/2 rounded bg-sky-400/90 shadow-[0_0_12px_rgba(56,189,248,.9)] motion-safe:animate-pulse" />
+            <div className="relative h-[46%] w-[74%] rounded-xl border-2 border-white/80 shadow-[0_0_0_9999px_rgba(0,0,0,.35)]">
+              <span className="absolute inset-x-4 top-1/2 h-0.5 -translate-y-1/2 rounded bg-sky-400/90" />
             </div>
           </div>
         )}
         {!cameraOn && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center text-white/85">
             {state.kind === "looking" ? <Loader2 size={32} className="animate-spin" /> : state.kind === "error" ? <CameraOff size={32} /> : <Camera size={32} />}
-            <p className="text-[0.9375rem]">
+            <p className="text-go-body">
               {state.kind === "looking" ? `Looking up ${state.code}…` : state.kind === "error" ? state.message : "Point the camera at a label"}
             </p>
             {(state.kind === "idle" || state.kind === "error" || state.kind === "miss") && cameraSupported() && (
@@ -84,17 +84,17 @@ export default function Scan() {
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700"><SearchX size={20} /></span>
           <div className="min-w-0">
             <p className="font-semibold text-ink-primary">No match</p>
-            <p className="text-[0.875rem] text-ink-secondary break-all">Nothing in this shop uses <span className="font-mono">{state.code}</span>. Check the label, or type the order number.</p>
+            <p className="text-go-sub text-ink-secondary break-all">Nothing in this shop uses <span className="font-mono">{state.code}</span>. Check the label, or type the order number.</p>
           </div>
         </Card>
       )}
 
       <form onSubmit={submit} className="mt-5">
-        <label htmlFor="go-code" className="mb-1.5 flex items-center gap-1.5 px-1 text-[0.8125rem] font-semibold text-ink-tertiary"><Keyboard size={14} />Type or use a scanner</label>
+        <label htmlFor="go-code" className="mb-1.5 flex items-center gap-1.5 px-1 text-go-sub font-semibold text-ink-tertiary"><Keyboard size={14} />Type or use a scanner</label>
         <div className="flex gap-2">
           <input id="go-code" value={manual} onChange={(e) => setManual(e.target.value)} inputMode="text" autoCapitalize="characters" autoCorrect="off" spellCheck={false}
             enterKeyHint="search" placeholder="WO-00123, SKU, serial…"
-            className="min-h-[3.25rem] flex-1 min-w-0 rounded-2xl border border-slate-200 bg-white px-4 text-[1.0625rem] text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15" />
+            className="min-h-[3.25rem] flex-1 min-w-0 rounded-xl border border-slate-200 bg-white px-4 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15" />
           <PrimaryButton type="submit" className="!w-auto px-6" disabled={!manual.trim() || state.kind === "looking"}>Go</PrimaryButton>
         </div>
       </form>

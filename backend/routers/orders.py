@@ -1166,6 +1166,11 @@ async def board(
                 "assigned_to_id": o.assigned_to_id,
                 "assigned_to_name": o.assigned_to.name if o.assigned_to else None,
                 "scheduled_for": o.scheduled_for.isoformat() if o.scheduled_for else None,
+                # Tekly Go's Today rows: "Device · Problem", the promised time and how long it's been in
+                "complaint": o.complaint or "",
+                "due_at": o.due_at.isoformat() if o.due_at else None,
+                "created_at": o.created_at.isoformat() if o.created_at else None,
+                "age_days": (now - o.created_at).days if o.created_at else None,
                 # flag: scheduled but still in New group → needs attention (Orderry)
                 "needs_attention": bool(o.scheduled_for and g == "new"),
                 "overdue": bool(o.due_at and o.due_at < now),

@@ -21,18 +21,18 @@ export default function NewMenu() {
   return (
     <>
       <button onClick={() => setOpen(true)} aria-label="New"
-        className="fixed z-30 right-[calc(env(safe-area-inset-right)+1rem)] bottom-[calc(env(safe-area-inset-bottom)+5.5rem)] h-14 w-14 rounded-full bg-primary text-white shadow-[0_10px_24px_-6px_rgba(0,89,186,.55)] inline-flex items-center justify-center active:scale-95 transition-transform">
+        className="fixed z-30 right-[calc(env(safe-area-inset-right)+1rem)] bottom-[calc(env(safe-area-inset-bottom)+4.75rem)] h-14 w-14 rounded-full bg-primary text-white shadow-xs inline-flex items-center justify-center active:bg-primary-container transition-colors">
         <Plus size={28} strokeWidth={2.25} />
       </button>
       <Sheet open={open} onClose={() => setOpen(false)} title="New">
         <div className="space-y-1">
           {rows.map((r) => (
             <button key={r.key} onClick={() => { setOpen(false); r.go(); }}
-              className="w-full min-h-[3.75rem] flex items-center gap-3 rounded-2xl px-3 text-left active:bg-slate-100">
-              <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-primary"><r.Icon size={22} /></span>
+              className="w-full min-h-[3.75rem] flex items-center gap-3 rounded-xl px-3 text-left active:bg-slate-100">
+              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50 text-primary"><r.Icon size={20} /></span>
               <span className="flex-1">
-                <span className="block text-[1.0625rem] font-semibold text-ink-primary">{r.label}</span>
-                <span className="block text-[0.875rem] text-ink-secondary">{r.hint}</span>
+                <span className="block text-go-body font-semibold text-ink-primary">{r.label}</span>
+                <span className="block text-go-sub text-ink-secondary">{r.hint}</span>
               </span>
             </button>
           ))}
