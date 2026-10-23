@@ -14,7 +14,6 @@ import { useMe } from "../../context/Me";
 import { useNavigate } from "react-router-dom";
 import { buildReportConfig, pickChartColumns } from "./reportConfig";
 import GoPilotReport from "./GoPilotReport";
-import { useMe } from "../../context/Me";
 
 const REPORT_PAGE = 50;
 
@@ -343,7 +342,6 @@ export default function ReportsHub() {
   const [from, setFrom] = useState(iso(new Date(Date.now() - 30 * 864e5)));
   const [to, setTo] = useState(iso(new Date()));
   const [view, setView] = useState<"reports" | "profitability" | "insights" | "feedback" | "custom" | "fleet" | "gopilot">("reports");
-  const { can } = useMe();
   const [profit, setProfit] = useState<any[] | null>(null);
   const [insights, setInsights] = useState<any[] | null>(null);
   const [feedback, setFeedback] = useState<any | null>(null);
