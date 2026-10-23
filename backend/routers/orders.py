@@ -1,8 +1,8 @@
 import secrets
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -134,6 +134,7 @@ class OrderIn(BaseModel):
     manager_id: Optional[str] = None   # 144cp: WO manager/owner (Orderry parity)
     scheduled_for: Optional[str] = None
     scheduled_to: Optional[str] = None
+    due_at: Optional[str] = None   # gc144g3 — promised-by date/time set at intake (drives "overdue")
     duration_min: int = 60
     resource_id: Optional[str] = None
     type_id: Optional[str] = None
@@ -266,9 +267,10 @@ def _intake_photos_payload(o: Order) -> list:
     """144dg — intake photos with their marked-up copy (if any). The original id/url is always the
     check-in shot; marked_id/url is the annotated derivative. Original is never replaced."""
     mk = getattr(o, "intake_markups", None) or {}
+    labels = getattr(o, "intake_photo_labels", None) or {}
     out = []
     for b in (getattr(o, "intake_photos", None) or []):
-        row = {"id": b, "url": f"/api/media/{b}"}
+        row = {"id": b, "url": f"/api/media/{b}", "label": labels.get(b)}
         m = mk.get(b)
         if m:
             row["marked_id"] = m
@@ -316,6 +318,7 @@ def _serialize_order_scalars(o: Order) -> dict:
         "client_msg_unread": getattr(o, "client_msg_unread", 0) or 0,
         "rec_unread": getattr(o, "rec_unread", 0) or 0,
         "public_token": o.public_token,
+        "signed": bool(getattr(o, "signature", None)),   # customer signature captured (Go shows it)
         "created_at": o.created_at.isoformat(),
         "closed_at": o.closed_at.isoformat() if o.closed_at else None,
         "client": {"id": o.client.id, "name": o.client.name, "phone": o.client.phone,
@@ -726,13 +729,31 @@ async def bulk_action(
 @router.post("", status_code=201)
 async def create_order(
     data: OrderIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_tickets")),
 ):
+    # Estimates have their own permission (it used to be listed but never checked).
     if data.is_estimate:
         await assert_perm(db, current, "can_create_estimates")
     await _assert_listed(db, current.org_id, data.manager_id, "display_in_managers", "Managers")
     await _assert_listed(db, current.org_id, data.assigned_to_id, "display_in_assignees", "Assignee")
+    # A retried create (double tap, phone timeout) with the same Idempotency-Key returns the
+    # first job instead of raising a second one.
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "orders.create")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _create_order(data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
     # Build 144df: location is optional from the client — default to the org's
     # first active location, creating a "Main" one if the org has none yet, so a
     # fresh shop can raise its first work order without a setup dead-end.
@@ -905,6 +926,7 @@ async def create_order(
         manager_id=manager_id,
         scheduled_for=parse_dt(data.scheduled_for, "scheduled_for") if data.scheduled_for else None,
         scheduled_to=parse_dt(data.scheduled_to, "scheduled_to") if data.scheduled_to else None,
+        due_at=parse_dt(data.due_at, "due_at") if data.due_at else None,
         duration_min=data.duration_min or 60,
         resource_id=data.resource_id or None,
         type_id=data.type_id,
@@ -1355,6 +1377,12 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         .order_by(OrderStatus.sort_order)
     )).scalars().first()
     is_closing = target.is_terminal if target else (data.status in ("done", "closed", "delivered"))
+    # Finishing a job is its own permission (closing used to need none). Bulk changes and
+    # /complete come through here too.
+    if is_closing:
+        from backend.services.auth import has_perm
+        if not await has_perm(db, current, "can_close_tickets"):
+            raise HTTPException(403, "Your role can't finish jobs. Move it to a ready status, or ask someone who can.")
 
     # Phase B.7: enforce status transfer rules (allowed from->to for this role)
     from backend.routers.statuses import is_transition_allowed
@@ -1733,6 +1761,11 @@ async def _clean_intake_photos(db, org_id: str, ids) -> list:
 
 class IntakePhotosIn(BaseModel):
     photos: List[str] = []   # the full desired list of media blob ids (replaces the current set)
+    label: Optional[Literal["intake", "before", "after", "damage"]] = None   # gc144g3 — /add only: tag the new photos
+
+
+class PhotoLabelIn(BaseModel):
+    label: Optional[Literal["intake", "before", "after", "damage"]] = None   # None clears it
 
 
 @router.patch("/{order_id}/intake-photos")
@@ -1752,6 +1785,63 @@ async def set_intake_photos(
     order.intake_photos = await _clean_intake_photos(db, current.org_id, data.photos)
     # 144dg — drop markups whose original photo is no longer on the order
     order.intake_markups = {k: v for k, v in (order.intake_markups or {}).items() if k in order.intake_photos}
+    order.intake_photo_labels = {k: v for k, v in (order.intake_photo_labels or {}).items() if k in order.intake_photos}
+    await db.commit()
+    return {"ok": True, "intake_photos": _intake_photos_payload(order)}
+
+
+@router.post("/{order_id}/intake-photos/add")
+async def add_intake_photos(
+    order_id: str,
+    data: IntakePhotosIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Append photos to a work order (the phone app's camera button). Unlike the PATCH, which
+    replaces the whole list, this adds to whatever is there now under a row lock, so two people
+    adding photos at once can't wipe each other's. Adding an id that's already there is a no-op,
+    so a retry is safe. Still capped at 40."""
+    order = (await db.execute(select(Order).where(
+        Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
+    current_ids = list(order.intake_photos or [])
+    if len(current_ids) >= 40 and any(i not in current_ids for i in data.photos):
+        raise HTTPException(409, "This job already has 40 photos, the most it can hold.")
+    order.intake_photos = await _clean_intake_photos(db, current.org_id, current_ids + list(data.photos))
+    if data.label:
+        labels = dict(order.intake_photo_labels or {})
+        for b in data.photos:
+            if b in order.intake_photos and b not in current_ids:   # only the photos this call added
+                labels[b] = data.label
+        order.intake_photo_labels = labels
+    await db.commit()
+    return {"ok": True, "intake_photos": _intake_photos_payload(order)}
+
+
+@router.patch("/{order_id}/intake-photos/{blob_id}/label")
+async def set_intake_photo_label(
+    order_id: str,
+    blob_id: str,
+    data: PhotoLabelIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """gc144g3 — mark what a job photo shows (check-in, before, after, damage), or clear it."""
+    order = (await db.execute(select(Order).where(
+        Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
+    if blob_id not in (order.intake_photos or []):
+        raise HTTPException(404, "That photo isn't on this job.")
+    labels = dict(order.intake_photo_labels or {})
+    if data.label:
+        labels[blob_id] = data.label
+    else:
+        labels.pop(blob_id, None)
+    order.intake_photo_labels = labels
     await db.commit()
     return {"ok": True, "intake_photos": _intake_photos_payload(order)}
 
@@ -2085,7 +2175,7 @@ async def payment_link(
     order_id: str,
     regenerate: bool = False,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
+    current: Employee = Depends(require_perm("can_create_payment_links")),
 ):
     """Create a payment intent for the order's outstanding balance and return a
     shareable link + QR code. Uses the live gateway's checkout URL when

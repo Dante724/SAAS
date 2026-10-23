@@ -474,6 +474,98 @@ async def logout_all_devices(
     return {"ok": True, "token_version": current.token_version}
 
 
+
+# ── Tekly Go: payment PIN (quick re-check before money on a shared phone) ─────
+# A 4–6 digit PIN per person. The phone asks for it before taking a payment or making a pay
+# link once it has been idle, and to unlock after the auto-lock. Only a hash lives here (HMAC'd
+# with the server secret first, so a leaked table alone can't be brute-forced); nothing is kept
+# on the device. Setting or changing it needs the account password, so someone holding an
+# unattended phone can't just set their own. Five wrong PINs in 15 minutes signs the person
+# out everywhere (token_version bump): they have to sign in again with their password.
+PIN_FAIL_LIMIT = 5
+PIN_WINDOW_SEC = 900
+
+
+def _pin_secret(emp_id: str, pin: str) -> str:
+    import hashlib
+    import hmac
+    return hmac.new(settings.SECRET_KEY.encode(), f"{emp_id}:{pin}".encode(), hashlib.sha256).hexdigest()
+
+
+def pin_problem(pin: str) -> Optional[str]:
+    """Why a PIN can't be used, or None. Refuses the ones people guess first."""
+    if not pin.isdigit() or not 4 <= len(pin) <= 6:
+        return "Use 4 to 6 digits"
+    if len(set(pin)) == 1:
+        return "Pick a PIN that isn't one digit repeated"
+    steps = {int(b) - int(a) for a, b in zip(pin, pin[1:])}
+    if steps in ({1}, {-1}):
+        return "Pick a PIN that isn't a run like 1234"
+    return None
+
+
+async def _pin_perms(db: AsyncSession, emp: Employee) -> bool:
+    from backend.services.auth import has_perm
+    return await has_perm(db, emp, "can_take_payments") or await has_perm(db, emp, "can_create_payment_links")
+
+
+@router.get("/pin")
+async def pin_status(db: AsyncSession = Depends(get_db), current: Employee = Depends(get_current_employee)):
+    """Is a PIN set, and does this person need one (they can take payments or make pay links)."""
+    return {"set": bool(current.pin_hash), "required": await _pin_perms(db, current)}
+
+
+class PinSetIn(BaseModel):
+    pin: str
+    password: str
+
+
+@router.post("/pin")
+async def pin_set(data: PinSetIn, db: AsyncSession = Depends(get_db),
+                  current: Employee = Depends(get_current_employee)):
+    await _rate("pin_set", current.id, limit=5, window_sec=PIN_WINDOW_SEC)
+    pin = (data.pin or "").strip()
+    why = pin_problem(pin)
+    if why:
+        raise HTTPException(400, why)
+    if not await asyncio.to_thread(verify_password, data.password or "", current.password_hash):
+        raise HTTPException(403, "Password incorrect")
+    had = bool(current.pin_hash)
+    current.pin_hash = await asyncio.to_thread(hash_password, _pin_secret(current.id, pin))
+    await _audit(db, org_id=current.org_id, actor_id=current.id, action="auth.pin_changed" if had else "auth.pin_set",
+                 entity_type="employee", entity_id=current.id)
+    await db.commit()
+    return {"set": True}
+
+
+class PinVerifyIn(BaseModel):
+    pin: str
+
+
+@router.post("/pin/verify")
+async def pin_verify(data: PinVerifyIn, db: AsyncSession = Depends(get_db),
+                     current: Employee = Depends(get_current_employee)):
+    await _rate("pin_verify", current.id, limit=30, window_sec=PIN_WINDOW_SEC)
+    if not current.pin_hash:
+        raise HTTPException(409, "No PIN set yet")
+    pin = (data.pin or "").strip()
+    ok = pin.isdigit() and await asyncio.to_thread(verify_password, _pin_secret(current.id, pin), current.pin_hash)
+    if ok:
+        return {"ok": True}
+    await _audit(db, org_id=current.org_id, actor_id=current.id, action="auth.pin_failed",
+                 entity_type="employee", entity_id=current.id)
+    try:
+        await _rate("pin_fail", current.id, limit=PIN_FAIL_LIMIT - 1, window_sec=PIN_WINDOW_SEC)
+    except HTTPException:
+        current.token_version = (current.token_version or 0) + 1
+        await _audit(db, org_id=current.org_id, actor_id=current.id, action="auth.pin_locked",
+                     entity_type="employee", entity_id=current.id)
+        await db.commit()
+        raise HTTPException(429, "Too many wrong PINs. You've been signed out. Sign in again with your password.",
+                            headers={"X-Signed-Out": "1"})
+    await db.commit()
+    raise HTTPException(403, "Wrong PIN")
+
 # ── Build 144cb: password reset (self-service, logged out) ───────────────────
 @router.post("/password/forgot")
 async def password_forgot(data: ForgotRequest, request: Request, db: AsyncSession = Depends(get_db)):
@@ -659,6 +751,7 @@ async def me(current: Employee = Depends(get_current_employee),
         # build 144cb: account-security surface for the UI (verify banner, 2FA badge)
         "email_verified": bool(current.email_verified),
         "mfa_enabled": bool(current.mfa_enabled),
+        "pin_set": bool(current.pin_hash),   # Tekly Go payment PIN
         # build 144cd: org 2FA policy — the app forces enrollment when required and not yet set up
         "mfa_required": bool(org.require_mfa) if org else False,
         # build 144j: which time clocks this employee sees in the widget
