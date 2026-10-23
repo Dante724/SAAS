@@ -266,7 +266,7 @@ Events go to our own backend (`POST /api/go/events`, batched), extending the pil
 
 1. ~~**One-time install link (B10).**~~ **Decided 2026-10-23:** yes. The QR carries a 10-minute single-use code, so staff arrive signed in.
 2. ~~**Face ID lock with passkeys.**~~ **Decided 2026-10-23:** yes, after 10 min idle, only if the iPhone device test (plan M0.4.7) passes. Fallback: sign in again.
-3. **Where to build:** on top of the quick-fixes branch (which stacks on PR #10/#11). *Recommend:* yes, merging the stack into `launch/audit-fixes` first (the B0a session is doing the backend half).
+3. ~~**Where to build.**~~ **Decided 2026-10-23:** merge the Go stack (#10 → #11 → quick fixes → pilot kit) into the working branch first, then build on it (plan B0.3).
 4. **iPhone Shortcuts how-to card** ("Hey Siri, scan in Tekly Go" via an Open URL shortcut). *Recommend:* only if a device test shows it opens the installed app rather than Safari.
 
 ## 16. Sources (checked 2026-10-23)
