@@ -806,7 +806,8 @@ async def list_order_invoices(
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
     await assert_perm(db, current, "can_view_invoices_tab")   # the work order's Invoices and payments tab
-    invs = (await db.execute(select(Invoice).where(Invoice.order_id == order_id, Invoice.org_id == current.org_id))).scalars().all()
+    invs = (await db.execute(select(Invoice).where(Invoice.order_id == order_id, Invoice.org_id == current.org_id)
+                    .order_by(Invoice.created_at))).scalars().all()   # oldest → newest
     pays = (await db.execute(select(Payment).where(Payment.order_id == order_id))).scalars().all()
     return {
         "invoices": [{"id": i.id, "invoice_number": i.invoice_number, "total": i.total,

@@ -2,14 +2,15 @@ import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
 import RecommendationsPanel from "./RecommendationsPanel";
 import PartsPOPanel from "./PartsPOPanel";
 import { humanize } from "../../lib/humanize";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ConversationPanel from "./ConversationPanel";
 import PhotoAnnotator from "./PhotoAnnotator";
 import TagChips from "../../components/TagChips";
 import { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
+import FloatingMenu from "../../components/FloatingMenu";
+import PrintMenu from "./PrintMenu";
 import { Order, deviceName, money } from "./types";
 import { Avatar, deviceIcon, dueText, friendlyDate } from "./look";
 import { api, openAuthedDoc } from "../../api/client";
@@ -22,7 +23,7 @@ import { useMe } from "../../context/Me";
 import { useCurrencies } from "../../hooks/useCurrencies";
 import CatalogPicker, { type CatalogItem } from "../../components/CatalogPicker";
 import StatusControl, { type FullStatus } from "../../components/StatusControl";
-import { escapeHtml } from "../../lib/safeHtml";
+import { escapeHtml, printHtmlInFrame } from "../../lib/safeHtml";
 import JobCardFields from "../../components/JobCardFields";
 
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
@@ -153,7 +154,6 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
     for (const b of byEmp.filter((x: any) => x.running)) await stopEntry(b.employee_id);
   }
   async function printWO() {
-    const w = window.open("", "_blank", "width=420,height=640"); if (!w) return;
     const css = `body{font-family:Inter,system-ui,sans-serif;margin:0;color:#14213f}.s{padding:22px;page-break-after:always}.s:last-child{page-break-after:auto}h1{font-size:16px;margin:0 0 4px}.k{font-size:10px;font-weight:800;text-transform:uppercase;color:#9aa7c4;letter-spacing:.05em;margin-top:12px}.v{font-size:14px;font-weight:600}.n{font-size:22px;font-weight:800;font-family:monospace}hr{border:none;border-top:1px dashed #c9d3ea;margin:12px 0}`;
     const head = `<h1>${escapeHtml(me?.org_name || "Tekly")}</h1>`;   // the shop's own name on its stickers
     const client = `<div class="k">Client</div><div class="v">${escapeHtml(c.name || "Walk-in")} ${c.phone ? "· " + escapeHtml(c.phone) : ""}</div>`;
@@ -172,8 +172,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
       <div class="k">Status</div><div class="v">${escapeHtml((d.status || "").replace(/_/g, " "))}</div>
       <div class="k">Complaint</div><div class="v">${escapeHtml(d.complaint || "—")}</div>
       <div class="k">Total</div><div class="v">${escapeHtml(money(d.total))}</div></div>`;
-    w.document.write(`<html><head><title>${escapeHtml(woNum)}</title><style>${css}</style></head><body>${stickers}</body></html>`);
-    w.document.close(); w.focus(); w.print();
+    // Hidden sandboxed frame instead of a pop-up window, so pop-up blockers can't stop it.
+    printHtmlInFrame(`<html><head><title>${escapeHtml(woNum)}</title><style>${css}</style></head><body>${stickers}</body></html>`);
   }
 
   const woNum = d.order_number || order.order_number || order.id;
@@ -465,7 +465,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
           <div className="flex items-center gap-4">
             <label className="flex items-center gap-2 text-xs font-semibold text-ink-secondary"><input checked={!!(d as any).estimate_approved_at} readOnly disabled className="rounded text-primary h-4 w-4" type="checkbox" /><span>Customer approved</span></label>
             <button onClick={openTrackingLink} className="text-xs text-primary font-bold hover:underline flex items-center gap-1"><M n="link" c="text-xs" />Tracking link</button>
-            <button onClick={printWO} className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-1 border border-slate-200 rounded-lg px-2 py-1 bg-white"><M n="print" c="text-xs" />Print WO</button>
+            <PrintMenu key={order.id} orderId={order.id} status={d.status} canInvoices={can("can_view_invoices")} onSticker={printWO} onError={flash} />
             <button onClick={del} className="text-xs text-rose-600 hover:text-rose-700 font-semibold flex items-center gap-1 hover:bg-rose-50 rounded-lg px-2 py-1 transition-colors"><M n="delete" c="text-xs" />Delete</button>
           </div>
           <div className="flex items-center gap-2">
@@ -1525,42 +1525,3 @@ function ActivityTab({ orderId, clientPhone, onFlash }: { orderId: string; clien
   );
 }
 
-// A small menu drawn above the page (portal + fixed position), so cards with
-// overflow-hidden can't clip it. Opens below its button, or above when there
-// isn't room; closes on an outside click, page scroll or resize.
-function FloatingMenu({ anchorSel, onClose, children }: { anchorSel: string; onClose: () => void; children: React.ReactNode }) {
-  const popRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; maxH: number } | null>(null);
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
-  useLayoutEffect(() => {
-    const close = () => closeRef.current();
-    const cleanup = { current: null as null | (() => void) };
-    const a = document.querySelector(anchorSel) as HTMLElement | null;
-    if (!a) return;
-    const r = a.getBoundingClientRect();
-    const W = 224, gap = 4, vh = window.innerHeight;
-    const left = Math.max(8, Math.min(r.left, window.innerWidth - W - 8));
-    const below = vh - r.bottom - gap - 8, above = r.top - gap - 8;
-    setPos(below >= 220 || below >= above
-      ? { left, top: r.bottom + gap, maxH: Math.min(256, below) }
-      : { left, bottom: vh - r.top + gap, maxH: Math.min(256, above) });
-    const raf = requestAnimationFrame(() => {
-      const onDown = (e: MouseEvent) => { const t = e.target as Node; if (!popRef.current?.contains(t) && !a.contains(t)) close(); };
-      const onScroll = (e: Event) => { if (popRef.current?.contains(e.target as Node)) return; close(); };
-      document.addEventListener("mousedown", onDown);
-      window.addEventListener("scroll", onScroll, true);
-      window.addEventListener("resize", close);
-      cleanup.current = () => { document.removeEventListener("mousedown", onDown); window.removeEventListener("scroll", onScroll, true); window.removeEventListener("resize", close); };
-    });
-    return () => { cancelAnimationFrame(raf); cleanup.current?.(); };
-  }, [anchorSel]);
-  if (!pos) return null;
-  return createPortal(
-    <div ref={popRef} style={{ position: "fixed", left: pos.left, width: 224, zIndex: 70, maxHeight: pos.maxH, ...(pos.top !== undefined ? { top: pos.top } : { bottom: pos.bottom }) }}
-      className="bg-white rounded-xl border border-slate-200 shadow-xl p-1.5 overflow-auto text-[11px]">
-      {children}
-    </div>,
-    document.body,
-  );
-}
