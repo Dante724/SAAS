@@ -875,6 +875,8 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
   const [groupBy, setGroupBy] = useState(false);               // false = flat list (default)
   const [assignOpen, setAssignOpen] = useState<string | null>(null);  // line id whose picker is open
   const [splitRatio, setSplitRatio] = useState(0.5);                   // 144ax G8 — primary's share
+  const [splitOpen, setSplitOpen] = useState(false);                   // split choices folded until asked for
+  const [techQuery, setTechQuery] = useState("");                      // filter, shown for bigger teams
   async function patchLine(lineId: string, body: any) {
     try { await api.patch(`/orders/${orderId}/lines/${lineId}`, body); onChanged?.(); }
     catch (e: any) { onFlash(e.message || "Could not update line"); }
@@ -967,7 +969,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
           <div className="mt-2 ml-11 flex flex-wrap items-center gap-2 text-[11px]">
             {/* #1 assignee chip + #3 any co-techs */}
             <div>
-              <button type="button" data-assign-for={l.id} onClick={() => setAssignOpen(openPick ? null : l.id)}
+              <button type="button" data-assign-for={l.id} aria-haspopup="menu" aria-expanded={openPick} onClick={() => { setAssignOpen(openPick ? null : l.id); setSplitOpen(false); setTechQuery(""); }}
                 className="flex items-center gap-1.5 pl-1 pr-2 py-1 rounded-full border border-slate-200 bg-white hover:border-primary/40">
                 {co.length > 1 ? (
                   <span className="flex -space-x-1.5">{co.map((c) => <span key={c.employee_id} className={`w-5 h-5 rounded-full grid place-items-center text-[8px] font-bold text-white ring-1 ring-white ${avHue(c.employee_id)}`}>{empInitials(c.employee_id)}</span>)}</span>
@@ -978,32 +980,73 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                 <M n="expand_more" c="text-[13px] text-ink-tertiary" />
               </button>
               {openPick && (
-                <FloatingMenu anchorSel={`[data-assign-for="${l.id}"]`} onClose={() => setAssignOpen(null)}>
-                  <div className="text-[11px] font-bold text-ink-tertiary px-2 py-1">Assign technician</div>
-                  <button onClick={() => { patchLine(l.id, { technician_id: null, co_technicians: [] }); setAssignOpen(null); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-ink-secondary">Unassigned</button>
-                  {(emps || []).map((e) => (
-                    <button key={e.id} onClick={() => { patchLine(l.id, { technician_id: e.id, co_technicians: [] }); setAssignOpen(null); }}
-                      className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 ${l.technician_id === e.id ? "bg-blue-50 text-primary font-semibold" : "text-ink-primary"}`}>
-                      <span className={`w-5 h-5 rounded-full grid place-items-center text-[8px] font-bold text-white ${avHue(e.id)}`}>{empInitials(e.id)}</span>{e.name}</button>
-                  ))}
-                  {/* #3/#8 split with a second tech at a chosen ratio */}
-                  {l.technician_id && (
-                    <>
-                      <div className="flex items-center justify-between px-2 py-1 border-t border-slate-100 mt-1">
-                        <span className="text-[11px] font-bold text-ink-tertiary">Split with</span>
-                        <span className="flex gap-1">{[0.5, 0.6, 0.7].map((r) => (
-                          <button key={r} onClick={() => setSplitRatio(r)}
-                            className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${splitRatio === r ? "bg-blue-50 text-primary" : "text-ink-tertiary hover:text-ink-primary"}`}>{Math.round(r * 100)}/{Math.round((1 - r) * 100)}</button>
-                        ))}</span>
+                <FloatingMenu anchorSel={`[data-assign-for="${l.id}"]`} onClose={() => setAssignOpen(null)} width={264}>
+                  {(() => {
+                    const pickTech = (id: string | null) => { patchLine(l.id, { technician_id: id, co_technicians: [] }); setAssignOpen(null); };
+                    const q = techQuery.trim().toLowerCase();
+                    const list = (emps || []).filter((e) => !q || e.name.toLowerCase().includes(q));
+                    const row = "w-full flex items-center gap-2.5 px-2.5 h-9 rounded-lg text-left text-[13px] hover:bg-slate-50 focus-visible:bg-slate-100 outline-none";
+                    const check = <M n="check" c="ml-auto text-[16px] text-primary" />;
+                    const first = (id?: string | null) => empName(id).split(" ")[0];
+                    return (
+                      <div className="text-[13px]">
+                        <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Technician for this line</div>
+                        {(emps || []).length > 6 && (
+                          <input autoFocus value={techQuery} onChange={(e) => setTechQuery(e.target.value)} placeholder="Search technicians"
+                            onKeyDown={(e) => { if (e.key === "Enter" && list[0]) pickTech(list[0].id); }}
+                            className="mb-1 w-full h-8 px-2.5 rounded-lg border border-slate-200 bg-slate-50 text-[13px] outline-none focus:border-primary/50 focus:bg-white" />
+                        )}
+                        {!q && (
+                          <button type="button" onClick={() => pickTech(null)} className={`${row} text-ink-secondary`}>
+                            <span className="w-6 h-6 rounded-full border border-dashed border-slate-300 grid place-items-center flex-none"><M n="person_off" c="text-[14px] text-ink-tertiary" /></span>
+                            Unassigned{!l.technician_id && check}
+                          </button>
+                        )}
+                        {list.map((e) => (
+                          <button type="button" key={e.id} onClick={() => pickTech(e.id)}
+                            className={`${row} ${l.technician_id === e.id && co.length < 2 ? "font-semibold text-ink-primary bg-blue-50/60" : "text-ink-primary"}`}>
+                            <span className={`w-6 h-6 rounded-full grid place-items-center text-[10px] font-bold text-white flex-none ${avHue(e.id)}`}>{empInitials(e.id)}</span>
+                            <span className="truncate">{e.name}</span>{l.technician_id === e.id && co.length < 2 && check}
+                          </button>
+                        ))}
+                        {q && list.length === 0 && <p className="px-2.5 py-2 text-ink-tertiary">No technician called “{techQuery}”.</p>}
+                        {/* #3/#8 split with a second tech at a chosen ratio — folded away until asked for */}
+                        {l.technician_id && !q && (emps || []).length > 1 && (
+                          <div className="mt-1 pt-1 border-t border-slate-100">
+                            {co.length > 1 && (
+                              <div className="flex items-center gap-2 px-2.5 h-9 text-ink-secondary">
+                                <M n="group" c="text-[16px] text-emerald-600" />
+                                <span className="truncate">{co.map((c) => `${first(c.employee_id)} ${Math.round((c.share || 0) * 100)}%`).join(" + ")}</span>
+                                <button type="button" onClick={() => { patchLine(l.id, { co_technicians: [] }); setAssignOpen(null); }} className="ml-auto text-[12px] font-semibold text-rose-600 hover:underline">Clear</button>
+                              </div>
+                            )}
+                            <button type="button" onClick={() => setSplitOpen((v) => !v)} aria-expanded={splitOpen} className={`${row} text-ink-secondary`}>
+                              <M n="group_add" c="text-[18px] text-ink-tertiary" />{co.length > 1 ? "Change the split" : "Split the work"}
+                              <M n={splitOpen ? "expand_less" : "expand_more"} c="ml-auto text-[16px] text-ink-tertiary" />
+                            </button>
+                            {splitOpen && (
+                              <div className="pb-1">
+                                <div className="flex items-center gap-1 px-2.5 py-1.5">
+                                  <span className="text-[12px] text-ink-tertiary mr-1">{first(l.technician_id)} gets</span>
+                                  {[0.5, 0.6, 0.7].map((r) => (
+                                    <button type="button" key={r} onClick={() => setSplitRatio(r)}
+                                      className={`text-[12px] font-semibold px-2 h-7 rounded-md ${splitRatio === r ? "bg-primary text-white" : "bg-slate-100 text-ink-secondary hover:bg-slate-200"}`}>{Math.round(r * 100)}%</button>
+                                  ))}
+                                </div>
+                                {(emps || []).filter((e) => e.id !== l.technician_id).map((e) => (
+                                  <button type="button" key={"sp" + e.id} onClick={() => { patchLine(l.id, { co_technicians: [{ employee_id: l.technician_id, share: splitRatio }, { employee_id: e.id, share: Math.round((1 - splitRatio) * 100) / 100 }] }); setAssignOpen(null); }}
+                                    className={`${row} text-ink-primary`}>
+                                    <span className={`w-6 h-6 rounded-full grid place-items-center text-[10px] font-bold text-white flex-none ${avHue(e.id)}`}>{empInitials(e.id)}</span>
+                                    <span className="truncate">+ {e.name}</span><span className="ml-auto text-[12px] tabular-nums text-ink-tertiary">{Math.round((1 - splitRatio) * 100)}%</span>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
-                      {(emps || []).filter((e) => e.id !== l.technician_id).map((e) => (
-                        <button key={"sp" + e.id} onClick={() => { patchLine(l.id, { co_technicians: [{ employee_id: l.technician_id, share: splitRatio }, { employee_id: e.id, share: Math.round((1 - splitRatio) * 100) / 100 }] }); setAssignOpen(null); }}
-                          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-emerald-50 text-ink-primary">
-                          <M n="group_add" c="text-[13px] text-emerald-600" />{empName(l.technician_id).split(" ")[0]} {Math.round(splitRatio * 100)}% + {e.name.split(" ")[0]} {Math.round((1 - splitRatio) * 100)}%</button>
-                      ))}
-                      {co.length > 1 && <button onClick={() => { patchLine(l.id, { co_technicians: [] }); setAssignOpen(null); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 text-rose-600">Clear split</button>}
-                    </>
-                  )}
+                    );
+                  })()}
                 </FloatingMenu>
               )}
             </div>

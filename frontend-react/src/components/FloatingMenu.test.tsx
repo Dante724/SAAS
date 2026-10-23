@@ -89,6 +89,8 @@ describe("FloatingMenu", () => {
 
   it("arrow keys move between choices", async () => {
     await openAt(100);
+    expect(document.activeElement).toBe(screen.getByRole("menu"));   // no ring on a choice after a click
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Unassigned" }));
     fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Rahul Sharma" }));

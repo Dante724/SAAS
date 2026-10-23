@@ -37,12 +37,15 @@ export default function FloatingMenu({ anchorSel, onClose, children, width = 224
       const W = width, gap = 4, vh = window.innerHeight;
       let { top: bTop, bottom: bBot } = boundsFor(a);
       if (onScroll && (r.bottom < bTop || r.top > bBot)) { close(); return; }   // scrolled out of view
-      const want = Math.min(320, popRef.current?.scrollHeight || 256);
-      // If the scrolling box is too short for the menu either way, use the whole window.
-      if (Math.max(bBot - r.bottom, r.top - bTop) - gap < Math.min(want, 160)) { bTop = 8; bBot = vh - 8; }
+      // The menu's full height (scrollHeight ignores the max-height we set), plus its border.
+      const want = (popRef.current?.scrollHeight || 256) + 2;
+      // Fit inside the scrolling box if the menu fits there on either side; otherwise
+      // let it spill over the box (e.g. the drawer's footer) and use the whole window.
+      const fits = bBot - r.bottom - gap >= want || r.top - gap - bTop >= want;
+      if (!fits) { bTop = 8; bBot = vh - 8; }
       const left = Math.max(8, Math.min(r.left, window.innerWidth - W - 8));
       const below = bBot - r.bottom - gap, above = r.top - gap - bTop;
-      setPos(below >= want || below >= above
+      setPos(below >= want || (above < want && below >= above)
         ? { left, top: r.bottom + gap, maxH: Math.min(want, below) }
         : { left, bottom: vh - r.top + gap, maxH: Math.min(want, above) });
     };
@@ -63,8 +66,10 @@ export default function FloatingMenu({ anchorSel, onClose, children, width = 224
       // Content that grows after opening (a list that loads, "show all") re-places the menu.
       const ro = typeof ResizeObserver !== "undefined" && popRef.current?.firstElementChild ? new ResizeObserver(() => place()) : null;
       if (ro && popRef.current) Array.from(popRef.current.children).forEach((c) => ro.observe(c));
-      // Keyboard users land on the first choice.
-      (popRef.current?.querySelector("button") as HTMLButtonElement | null)?.focus({ preventScroll: true });
+      // Focus a search box if the menu has one, else the menu itself (so a mouse click
+      // doesn't draw a focus ring on the first choice); arrow keys reach the choices.
+      const pop = popRef.current;
+      if (pop && !pop.contains(document.activeElement)) ((pop.querySelector("input") as HTMLInputElement | null) || pop).focus({ preventScroll: true });
       cleanup.current = () => { document.removeEventListener("mousedown", onDown); window.removeEventListener("scroll", onScroll, true); window.removeEventListener("resize", onScroll); ro?.disconnect(); cancelAnimationFrame(frame); };
     });
     return () => { cancelAnimationFrame(raf); document.removeEventListener("keydown", onKey); cleanup.current?.(); };
@@ -76,13 +81,13 @@ export default function FloatingMenu({ anchorSel, onClose, children, width = 224
     e.preventDefault();
     const i = items.indexOf(document.activeElement as HTMLButtonElement);
     const next = e.key === "Home" ? 0 : e.key === "End" ? items.length - 1
-      : e.key === "ArrowDown" ? (i + 1) % items.length : (i - 1 + items.length) % items.length;
+      : e.key === "ArrowDown" ? (i + 1) % items.length : i < 0 ? items.length - 1 : (i - 1 + items.length) % items.length;
     items[next].focus();
   };
   return createPortal(
-    <div ref={popRef} onKeyDown={onKeyDown}
+    <div ref={popRef} onKeyDown={onKeyDown} tabIndex={-1} role="menu"
       style={{ position: "fixed", width, zIndex: 70, ...(pos ? { left: pos.left, maxHeight: pos.maxH, ...(pos.top !== undefined ? { top: pos.top } : { bottom: pos.bottom }) } : { left: 0, top: 0, visibility: "hidden" }) }}
-      className="bg-white rounded-xl border border-slate-200 shadow-xl p-1.5 overflow-auto overscroll-contain text-[11px]">
+      className="bg-white rounded-xl border border-slate-200 shadow-xl p-1.5 overflow-auto overscroll-contain text-[11px] outline-none">
       {children}
     </div>,
     document.body,
