@@ -2,7 +2,8 @@ import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
 import RecommendationsPanel from "./RecommendationsPanel";
 import PartsPOPanel from "./PartsPOPanel";
 import { humanize } from "../../lib/humanize";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import ConversationPanel from "./ConversationPanel";
 import PhotoAnnotator from "./PhotoAnnotator";
@@ -965,8 +966,8 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
         {isServ && (
           <div className="mt-2 ml-11 flex flex-wrap items-center gap-2 text-[11px]">
             {/* #1 assignee chip + #3 any co-techs */}
-            <div className="relative">
-              <button type="button" onClick={() => setAssignOpen(openPick ? null : l.id)}
+            <div>
+              <button type="button" data-assign-for={l.id} onClick={() => setAssignOpen(openPick ? null : l.id)}
                 className="flex items-center gap-1.5 pl-1 pr-2 py-1 rounded-full border border-slate-200 bg-white hover:border-primary/40">
                 {co.length > 1 ? (
                   <span className="flex -space-x-1.5">{co.map((c) => <span key={c.employee_id} className={`w-5 h-5 rounded-full grid place-items-center text-[8px] font-bold text-white ring-1 ring-white ${avHue(c.employee_id)}`}>{empInitials(c.employee_id)}</span>)}</span>
@@ -977,7 +978,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                 <M n="expand_more" c="text-[13px] text-ink-tertiary" />
               </button>
               {openPick && (
-                <div className="absolute z-20 mt-1 w-56 bg-white rounded-xl border border-slate-200 shadow-xl p-1.5 max-h-64 overflow-auto">
+                <FloatingMenu anchorSel={`[data-assign-for="${l.id}"]`} onClose={() => setAssignOpen(null)}>
                   <div className="text-[11px] font-bold text-ink-tertiary px-2 py-1">Assign technician</div>
                   <button onClick={() => { patchLine(l.id, { technician_id: null, co_technicians: [] }); setAssignOpen(null); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-ink-secondary">Unassigned</button>
                   {(emps || []).map((e) => (
@@ -1003,7 +1004,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                       {co.length > 1 && <button onClick={() => { patchLine(l.id, { co_technicians: [] }); setAssignOpen(null); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 text-rose-600">Clear split</button>}
                     </>
                   )}
-                </div>
+                </FloatingMenu>
               )}
             </div>
             {/* #2 booked vs actual */}
@@ -1521,5 +1522,45 @@ function ActivityTab({ orderId, clientPhone, onFlash }: { orderId: string; clien
         </div>
       </div>
     </div>
+  );
+}
+
+// A small menu drawn above the page (portal + fixed position), so cards with
+// overflow-hidden can't clip it. Opens below its button, or above when there
+// isn't room; closes on an outside click, page scroll or resize.
+function FloatingMenu({ anchorSel, onClose, children }: { anchorSel: string; onClose: () => void; children: React.ReactNode }) {
+  const popRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; maxH: number } | null>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useLayoutEffect(() => {
+    const close = () => closeRef.current();
+    const cleanup = { current: null as null | (() => void) };
+    const a = document.querySelector(anchorSel) as HTMLElement | null;
+    if (!a) return;
+    const r = a.getBoundingClientRect();
+    const W = 224, gap = 4, vh = window.innerHeight;
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - W - 8));
+    const below = vh - r.bottom - gap - 8, above = r.top - gap - 8;
+    setPos(below >= 220 || below >= above
+      ? { left, top: r.bottom + gap, maxH: Math.min(256, below) }
+      : { left, bottom: vh - r.top + gap, maxH: Math.min(256, above) });
+    const raf = requestAnimationFrame(() => {
+      const onDown = (e: MouseEvent) => { const t = e.target as Node; if (!popRef.current?.contains(t) && !a.contains(t)) close(); };
+      const onScroll = (e: Event) => { if (popRef.current?.contains(e.target as Node)) return; close(); };
+      document.addEventListener("mousedown", onDown);
+      window.addEventListener("scroll", onScroll, true);
+      window.addEventListener("resize", close);
+      cleanup.current = () => { document.removeEventListener("mousedown", onDown); window.removeEventListener("scroll", onScroll, true); window.removeEventListener("resize", close); };
+    });
+    return () => { cancelAnimationFrame(raf); cleanup.current?.(); };
+  }, [anchorSel]);
+  if (!pos) return null;
+  return createPortal(
+    <div ref={popRef} style={{ position: "fixed", left: pos.left, width: 224, zIndex: 70, maxHeight: pos.maxH, ...(pos.top !== undefined ? { top: pos.top } : { bottom: pos.bottom }) }}
+      className="bg-white rounded-xl border border-slate-200 shadow-xl p-1.5 overflow-auto text-[11px]">
+      {children}
+    </div>,
+    document.body,
   );
 }
