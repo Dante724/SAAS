@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import DeviceList from "../../components/DeviceList";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
@@ -1413,6 +1414,12 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
                 <button onClick={sendReset} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Email reset link</button>
                 <button onClick={resetMfa} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Reset 2FA</button>
               </div>
+              {!isSelf && (
+                <div className="border-t border-slate-100 pt-4">
+                  <label className={lblc}>Signed-in devices</label>
+                  <DeviceList base={`/staff/employees/${emp.id}/sessions`} person={(f.name || emp.name || "This person").split(" ")[0]} />
+                </div>
+              )}
             </div>
           )}
         </div>

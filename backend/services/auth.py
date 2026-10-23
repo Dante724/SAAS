@@ -110,6 +110,10 @@ async def get_current_employee(
         employee_id: str = payload.get("sub")
         if employee_id is None:
             raise credentials_exception
+        # Special-purpose tokens (e.g. the device-limit "pick a device to sign out" token) are
+        # never a session.
+        if payload.get("typ"):
+            raise credentials_exception
     except JWTError:
         raise credentials_exception
     # The role rides along in the same query so the cost-redaction decision is made here, once,
@@ -136,8 +140,17 @@ async def get_current_employee(
     # expires, so the session id is checked against the revocation list.
     sid = payload.get("sid")
     if sid:
-        from backend.models import RevokedSession
-        if (await db.execute(select(RevokedSession.sid).where(RevokedSession.sid == sid))).first():
+        from backend.models import AuthSession, RevokedSession
+        dev = (await db.execute(select(AuthSession.revoked_at, AuthSession.last_seen_at)
+                                .where(AuthSession.sid == sid))).first()
+        if dev is not None:
+            # Signed out from "Signed-in devices" (by them, an admin, or to make room at the limit).
+            if dev[0] is not None:
+                raise credentials_exception
+            from backend.services.sessions import touch
+            await touch(db, sid, dev[1])
+        elif (await db.execute(select(RevokedSession.sid).where(RevokedSession.sid == sid))).first():
+            # Tokens from before devices were tracked: still honour a sign-out.
             raise credentials_exception
     # Build 144do (security): enforce org lifecycle + employee access window on
     # EVERY request, not just at login. Previously a suspended/expired org's

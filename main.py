@@ -176,6 +176,9 @@ for r in ROUTERS:
     app.include_router(r.router)
 app.include_router(sales.st_router)
 app.include_router(industry.scan_router)
+from backend.routers import devices  # noqa: E402 — signed-in devices and the per-login device limit
+
+app.include_router(devices.router)
 
 
 @app.get("/health", include_in_schema=False)
