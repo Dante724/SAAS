@@ -8,7 +8,7 @@ income transaction to the chosen account (or to client debt).
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,7 +27,7 @@ from backend.models import (
     Payment,
     Transaction,
 )
-from backend.services.auth import assert_perm, has_perm, require_perm, record_scope
+from backend.services.auth import assert_perm, get_current_employee, has_perm, require_perm, record_scope
 from backend.core import paging as _paging
 from backend.services.numbering import next_number
 from backend.services.money import q2
@@ -517,10 +517,12 @@ class OrderPaymentIn(BaseModel):
 async def order_payment_context(
     order_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
+    current: Employee = Depends(get_current_employee),
 ):
     """What the close-order payment window needs: order total, and the accounts
-    available per payment method."""
+    available per payment method. Open to anyone who can take payments, not only finance."""
+    if not (await has_perm(db, current, "can_take_payments") or await has_perm(db, current, "can_view_finance")):
+        raise HTTPException(403, "Your role does not allow this action (can_take_payments)")
     o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
@@ -554,9 +556,26 @@ async def order_payment_context(
 async def pay_order(
     order_id: str,
     data: OrderPaymentIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
+    current: Employee = Depends(require_perm("can_take_payments")),
 ):
+    # A retried tap with the same Idempotency-Key returns the first payment's answer: the row
+    # lock below only stops a second "pay the balance", not a part payment sent twice.
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "cash.pay_order")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _pay_order(order_id, data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, current: Employee):
     # Lock the order row so two concurrent "pay" requests serialize (Postgres) — combined with the
     # remaining<=0 guard below this prevents a double-click / webhook-race from double-posting a
     # payment. (with_for_update is a no-op on SQLite, which already serializes writes.)
@@ -572,6 +591,9 @@ async def pay_order(
     # order is already settled (double-click / retry → remaining 0 → amount 0 → rejected here).
     if amount is None or amount <= 0:
         raise HTTPException(400, "Nothing to pay — this order is already settled" if remaining <= 0 else "Payment amount must be positive")
+    # No paying more than is owed: an overpayment is a refund waiting to happen (or a typo).
+    if amount > remaining + 0.01:
+        raise HTTPException(400, f"That's more than is owed. The balance due is {q2(max(remaining, 0)):.2f}.")
 
     # ensure an invoice exists for this order
     from backend.services.order_money import primary_invoice

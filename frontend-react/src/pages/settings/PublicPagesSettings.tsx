@@ -193,6 +193,21 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
 
           <Approval prefix="oe" list={est} noun="estimate" />
           <Approval prefix="oe_wo" list={wo} noun="work order" />
+
+          {/* not <Card>: that helper is re-created each render, which would drop focus while typing */}
+          <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card">
+            <div className="flex items-start gap-3 px-5 pt-4 pb-3">
+              <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n="draw" c="text-lg" /></span>
+              <div className="min-w-0"><h3 className="text-sm font-semibold text-ink-primary">Drop-off terms</h3><p className="text-[11px] text-ink-tertiary">What the customer reads and signs on the tablet when they leave an item (Tekly Go). Leave empty to use the standard wording.</p></div>
+            </div>
+            <div className="px-5">
+            <textarea value={cfg.dropoff_terms ?? ""} maxLength={4000} rows={4} aria-label="Drop-off terms"
+              onChange={(e) => setCfg({ ...cfg, dropoff_terms: e.target.value })}
+              onBlur={() => save({ dropoff_terms: (cfg.dropoff_terms || "").trim() })}
+              placeholder="I'm leaving this item for diagnosis and repair. I've backed up my data; the shop isn't responsible for data loss…"
+              className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 mb-4 focus:outline-none focus:ring-1 focus:ring-primary" />
+            </div>
+          </section>
         </div>
 
         {/* Live preview */}

@@ -2,6 +2,8 @@
 the camera) sends one code; this figures out what it is and where to go: a work
 order (barcode / number), a product (sku / barcode / internal code), or an asset
 (serial / imei / vin / hin). Org-scoped; first match wins in a sensible order."""
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import or_, select
@@ -12,6 +14,8 @@ from backend.models import Device, Employee, Order, Part
 from backend.services.auth import get_current_employee
 
 router = APIRouter(prefix="/api/scan", tags=["scan"])
+
+_TRACK_RE = re.compile(r"/track/([A-Za-z0-9_-]{8,})")
 
 
 class ScanIn(BaseModel):
@@ -26,6 +30,15 @@ async def resolve(data: ScanIn, db: AsyncSession = Depends(get_db),
         raise HTTPException(422, "code required")
     up = code.upper()
     org = current.org_id
+
+    # 0) a customer ticket's tracking-link QR (".../track/<token>") — the public page QR
+    m = _TRACK_RE.search(code)
+    if m:
+        o = (await db.execute(select(Order).where(
+            Order.org_id == org, Order.public_token == m.group(1)))).scalars().first()
+        if o:
+            return {"matched": True, "type": "order", "id": o.id, "route": "/orders",
+                    "label": o.order_number, "is_estimate": bool(o.is_estimate)}
 
     # 1) work order — barcode is stored upper-cased; order_number as typed (WO-00001)
     o = (await db.execute(select(Order).where(

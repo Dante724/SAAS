@@ -34,13 +34,14 @@ function authHeader(): Record<string, string> {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, extra?: Record<string, string>): Promise<T> {
   const res = await fetch(BASE + scoped(method, path), {
     method,
     credentials: "include", // send the existing session cookie
     headers: {
       "Content-Type": "application/json",
       ...authHeader(),
+      ...(extra || {}),
     },
     body: body != null ? JSON.stringify(body) : undefined,
   });
@@ -53,7 +54,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
         /* ignore */
       }
       if (typeof window !== "undefined" && window.location.pathname !== "/login") {
-        window.location.replace("/login");
+        // Tekly Go comes back to itself after signing in; the web app lands on its home page.
+        const p = window.location.pathname;
+        window.location.replace(p === "/go" || p.startsWith("/go/") ? "/login?next=" + encodeURIComponent(p) : "/login");
       }
     }
     const text = await res.text().catch(() => "");
@@ -131,6 +134,9 @@ async function postForm<T>(path: string, form: FormData): Promise<T> {
 export const api = {
   get: <T>(p: string) => request<T>("GET", p),
   post: <T>(p: string, b?: unknown) => request<T>("POST", p, b),
+  // Creates and payments a phone may retry: the server runs one request per Idempotency-Key and
+  // answers a retry with the first result (backend/services/idempotency.py).
+  postOnce: <T>(p: string, b: unknown, key: string) => request<T>("POST", p, b, { "Idempotency-Key": key }),
   postForm,
   patch: <T>(p: string, b?: unknown) => request<T>("PATCH", p, b),
   put: <T>(p: string, b?: unknown) => request<T>("PUT", p, b),

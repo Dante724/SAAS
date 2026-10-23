@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { safeNext } from "../lib/safeNext";
 import { ArrowLeft, Eye, EyeOff } from "lucide-react";
 import { AuthShell, Field, FootLink, Notice, Submit, inputCls as input } from "./authUi";
 
@@ -30,7 +31,7 @@ export default function Login() {
   // If already signed in, skip the form. (AuthShell follows the device theme.)
   useEffect(() => {
     try {
-      if (localStorage.getItem("ros_tok")) window.location.replace("/");
+      if (localStorage.getItem("ros_tok")) window.location.replace(safeNext(window.location.search));
     } catch { /* ignore */ }
   }, []);
 
@@ -59,7 +60,7 @@ export default function Login() {
       if (r.status === 429) throw new Error("Too many attempts. Wait a few minutes and try again.");
       if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : "Could not sign in");
       localStorage.setItem("ros_tok", j.access_token);
-      window.location.replace("/");
+      window.location.replace(safeNext(window.location.search));
     } catch (e: any) {
       setErr(e.message || "Could not sign in");
       setBusy(false);

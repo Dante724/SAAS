@@ -200,6 +200,11 @@ async def _erase_related(db, org_id: str, client_id: str) -> None:
     await db.execute(update(NotificationLog).where(
         NotificationLog.org_id == org_id, NotificationLog.client_id == client_id)
         .values(recipient=None, subject=None, body=gone))
+    # texts / WhatsApps staff sent from their own phones (Tekly Go)
+    from backend.models import MessageHandoff
+    await db.execute(update(MessageHandoff).where(
+        MessageHandoff.org_id == org_id, MessageHandoff.client_id == client_id)
+        .values(to_number=None, body=gone))
     await db.execute(update(Call).where(Call.org_id == org_id, Call.client_id == client_id)
                      .values(from_number=None, to_number=None, recording_url=None,
                              transcript=None, summary=None))
