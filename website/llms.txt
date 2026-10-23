@@ -1,0 +1,56 @@
+# Tekly
+
+> Tekly is repair shop management software for electronics, vehicle, small engine and marine repair shops. One system for job intake, estimates, customer approval on the customer's phone, parts and inventory, point of sale, invoices, payroll and commissions. Runs in the browser on a computer, tablet or phone. Plans start at $29 a month.
+
+## What Tekly does
+- Job intake with trade-specific fields: IMEI or serial for phones and computers, VIN or plate for vehicles, serial and engine hours or voltage for small engines and power tools, HIN and per-engine serials for boats. Condition photos; device passcodes stored encrypted.
+- Tekly AI on every plan: job summaries, reply suggestions and call insights. Estimate drafting and parts recognition are on Pro (and in every trial).
+- Estimates. On the Pro plan, Tekly AI drafts labour and parts lines from the customer's description using the shop's own catalog and prices. A person reviews and sends it; Tekly AI never messages a customer on its own.
+- Customer approval: customers approve each line of an estimate on their phone and sign. Extra work found mid-repair is only added if the customer approves it. Declined work is saved for the next visit.
+- Parts and inventory (Shop and Pro): parts ordered from the job are charged to that job when received; multi-location stock, bins, serial numbers, barcode and QR labels, low-stock alerts. Purchase orders and stock transfers between locations are on Pro.
+- Point of sale, invoices, deposits, partial payments, payment links through Stripe or Square, cash drawer and shift counts.
+- Payroll and technician commissions from closed jobs, with a time clock (payroll on Pro, time clock on Shop and Pro).
+- Customer portal and live tracking link; SMS, WhatsApp and email in one inbox; online booking with real time slots.
+- Accounting sync with QuickBooks and Xero (Pro).
+- Tekly Go: a phone app for technicians (installed from the browser) with today's jobs, labour timer, checklists, camera scanning and time clock; works offline.
+- Tekly Sense: suggestions learned from the shop's own closed jobs (suggested lines, service due, margin check, a morning brief). Data is never pooled between shops.
+
+## Who it's for
+- Phone, tablet and computer repair shops (Electronics template)
+- Auto repair shops, truck and fleet service, RV service, motorcycle and e-bike workshops (Vehicles template)
+- Small engine and power tool repair: mowers, chainsaws, generators, cordless tools (Tools & small engine template)
+- Boatyards and outboard/inboard engine shops (Marine template)
+Shops that fix more than one kind of thing can use several templates in one account, and run several locations in one account.
+
+## Pricing (USD, month to month, published)
+- Solo: $29/month. Up to 2 people at one location, 150 new jobs a month. Work orders, estimates, invoices, POS, customer portal and booking, Tekly Go, messaging.
+- Shop: $69/month for the first location, $49 for each extra location. 8 team members shared across locations, $4/month per extra person, unlimited jobs. Adds inventory, barcodes and scanning, time clock, reports and automatic notifications.
+- Pro: $129/month for the first location, $79 for each extra location. Unlimited people and jobs. Adds purchase orders, payroll and commissions, stock transfers, AI estimate drafting, QuickBooks and Xero sync, single sign-on and API keys.
+- Yearly billing: 2 months free. Free trial: 14 days with every Pro feature, no credit card. No setup fee, no contract; free data migration and onboarding on every plan.
+
+## Data and security
+- Shops can export all their data (customers, jobs, stock, finances) to CSV or Excel at any time, including after cancelling.
+- Device passcodes and integration keys are encrypted at rest; two-factor sign-in for everyone; single sign-on on Pro; role permissions and a full audit log.
+
+## Switching
+Shops send an export from their current system or spreadsheets and Tekly brings customers, devices and stock across for free. Most single-location shops are set up in a day.
+
+## Key pages
+- Home: https://tekly.app/
+- Phone and computer repair software: https://tekly.app/phone-repair-software/
+- Auto repair shop software: https://tekly.app/auto-repair-shop-software/
+- Small engine and power tool repair software: https://tekly.app/small-engine-repair-software/
+- Marine repair software: https://tekly.app/marine-repair-software/
+- What's new: https://tekly.app/changelog/
+- How to choose repair shop software (checklist): https://tekly.app/guides/choose-repair-shop-software/
+- Comparisons (published facts from each vendor's site, with sources, checked 23 October 2026): https://tekly.app/compare/
+  - Tekly vs RepairDesk: https://tekly.app/compare/tekly-vs-repairdesk/
+  - Tekly vs RepairShopr: https://tekly.app/compare/tekly-vs-repairshopr/
+  - Tekly vs Shopmonkey: https://tekly.app/compare/tekly-vs-shopmonkey/
+  - Tekly vs Tekmetric: https://tekly.app/compare/tekly-vs-tekmetric/
+  - Tekly vs Orderry: https://tekly.app/compare/tekly-vs-orderry/
+- Pricing: https://tekly.app/#pricing
+- FAQ: https://tekly.app/#faq
+
+## Contact
+Email: hello@tekly.app

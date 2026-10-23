@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Repair Shop Software for Every Trade &amp; Location | Tekly</title>
-  <meta name="description" content="Repair shop software for electronics, auto, small engine and marine shops: every trade and location in one account. Estimates, phone approvals, POS. From $29/mo.">
+  <meta name="description" content="Repair shop software for electronics, auto, small engine and marine shops. Estimates, approvals on the customer's phone, parts and POS. From $29/mo.">
   <link rel="canonical" href="https://tekly.app/">
   <meta name="robots" content="index, follow, max-image-preview:large">
   <meta name="theme-color" content="#071633">
@@ -13,14 +13,14 @@
   <meta property="og:url" content="https://tekly.app/">
   <meta property="og:title" content="Tekly — Repair shop software. Diagnose, approve, get paid.">
   <meta property="og:description" content="Estimates, line-by-line approval on the customer's phone, parts and POS for electronics, auto, small engine and marine shops. Every trade and location in one account. From $29 a month.">
-  <meta property="og:image" content="https://tekly.app/assets/og.png">
+  <meta property="og:image" content="https://tekly.app/assets/og.jpg">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="Tekly — repair shop software for every trade: electronics, vehicles, small engine and marine. From $29 a month.">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Tekly — Repair shop software">
   <meta name="twitter:description" content="Repair shop software for every trade and location: estimates, phone approvals, parts, POS. From $29 a month.">
-  <meta name="twitter:image" content="https://tekly.app/assets/og.png">
+  <meta name="twitter:image" content="https://tekly.app/assets/og.jpg">
   <link rel="icon" type="image/svg+xml" href="/assets/tekly-mark.svg">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/icon-32.png">
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
@@ -31,8 +31,9 @@
   <link rel="modulepreload" href="/assets/vendor/lenis-1.1.18.mjs">
   <script>
     document.documentElement.classList.add("js");
-    /* The loader is a first-impression thing: show it once per visit, never on repeat views. */
-    try { if (sessionStorage.getItem("tekly_seen")) document.documentElement.classList.add("no-loader"); } catch (e) {}
+    /* No splash loader: the headline and buttons are the first thing a visitor (and Google's
+       load-speed measurement) sees. The hero animates in without hiding it first. */
+    document.documentElement.classList.add("no-loader");
     /* Above 1920px the rem grid keeps growing (the CSS media queries cover everything below). */
     (function () {
       var fit = function () {
@@ -71,7 +72,7 @@
   "name": "Tekly",
   "applicationCategory": "BusinessApplication",
   "applicationSubCategory": "Repair shop management software for multi-trade, multi-location repair businesses",
-  "operatingSystem": "Web, iOS, Android",
+  "operatingSystem": "Web browser (installable on iOS and Android)",
   "url": "https://tekly.app/",
   "description": "Repair shop management software with AI-drafted estimates, customer approvals on the phone, parts and purchase orders, POS, inventory and payroll.",
   "publisher": {
@@ -136,7 +137,7 @@
     "url": "https://tekly.app/#pricing"
    }
   ],
-  "image": "https://tekly.app/assets/og.png",
+  "image": "https://tekly.app/assets/og.jpg",
   "screenshot": "https://tekly.app/assets/tech-job.webp",
   "audience": {
    "@type": "BusinessAudience",
@@ -197,7 +198,7 @@
     "name": "Can I switch from RepairDesk, Shopmonkey or another system?",
     "acceptedAnswer": {
      "@type": "Answer",
-     "text": "Yes. Send us an export from your current system or spreadsheets and we bring customers, devices and stock across as part of onboarding, free on every plan. Most single-location shops are set up in a day."
+     "text": "Yes. Send us an export from your current system or spreadsheets and we bring customers, devices and stock across as part of onboarding, free on every plan. Most single-location shops are set up in a day. Comparisons with RepairDesk, RepairShopr, Shopmonkey, Tekmetric and Orderry are at https://tekly.app/compare/."
     }
    },
    {
@@ -375,9 +376,12 @@ main { padding: var(--pad); display: flex; flex-direction: column; gap: var(--ga
 .circ svg { width: 1rem; height: 1rem; }
 .circ:hover { border-color: var(--ink); }
 .circ[disabled] { opacity: .35; cursor: default; }
-.dots { display: flex; gap: .375rem; align-items: center; }
+.dots { display: flex; gap: .875rem; align-items: center; }
 .dots button { width: .5rem; height: .5rem; padding: 0; border: 0; border-radius: var(--pill); background: var(--line-2); cursor: pointer; transition: width .45s var(--ease-out-expo), background-color .3s; }
 .dots button[aria-current="true"] { width: 1.25rem; background: var(--ink); }
+/* An 8px dot, a 28px tap target: the invisible ::after takes the touch. */
+.dots button { position: relative; }
+.dots button::after { content: ""; position: absolute; left: 50%; top: 50%; width: max(100%, 1.75rem); height: 1.75rem; transform: translate(-50%, -50%); }
 .on-dark .dots button { background: rgba(255,255,255,.35); }
 .on-dark .dots button[aria-current="true"] { background: #fff; }
 .tag { display: inline-flex; align-items: center; height: 1.5rem; padding: 0 .625rem; border-radius: var(--pill); font-size: .75rem; font-weight: 500; background: var(--sky); color: var(--sapphire-2); white-space: nowrap; }
@@ -881,7 +885,7 @@ html:not(.js) .loader, .no-loader .loader { display: none; }
 .track-pay { display: flex; align-items: center; gap: 1rem; padding: 1rem 1.25rem; border-top: 1px solid var(--line); background: var(--card-2); }
 .track-pay b { margin-left: auto; font-size: 1.25rem; }
 .track-pay .btn { height: 2.5rem; }
-.foot { margin-top: 6rem; padding-top: 3rem; border-top: 1px solid rgba(255,255,255,.14); display: grid; grid-template-columns: 1.5fr repeat(4, 1fr); gap: 2rem; }
+.foot { margin-top: 6rem; padding-top: 3rem; border-top: 1px solid rgba(255,255,255,.14); display: grid; grid-template-columns: 1.5fr repeat(5, 1fr); gap: 2rem; }
 .foot .about-f { color: var(--on-navy); margin-top: 1rem; max-width: 18rem; font-size: .9375rem; }
 .foot .foot-h { font-family: var(--mono); font-size: .6875rem; letter-spacing: .14em; text-transform: uppercase; color: #8d9bb8; font-weight: 400; margin-bottom: 1rem; }
 .foot li + li { margin-top: .5rem; }
@@ -1642,7 +1646,7 @@ html.is-locked .ta { visibility: hidden; }
       <details><summary>Which kinds of repair shops is Tekly for?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Tekly has four templates: Electronics (phones, tablets and computers), Vehicles (cars, trucks, RVs and bikes), Tools &amp; small engine (power tools, mowers, saws and generators) and Marine (outboards, inboards and hulls). Shops that fix more than one kind of thing can use several templates in one account.</p></details>
       <details><summary>Can customers approve estimates on their phone?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Yes. Customers get a link, approve each line of the estimate and sign on their phone. If you find more work mid-repair, they choose what to add; nothing is added unless they approve it.</p></details>
       <details><summary>How long does it take to switch?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Most single-location shops can be set up in a day. Send us an export from your current system or spreadsheets and we bring customers, devices and stock across as part of onboarding.</p></details>
-      <details><summary>Can I switch from RepairDesk, Shopmonkey or another system?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Yes. Send us an export from your current system or spreadsheets and we bring customers, devices and stock across as part of onboarding, free on every plan. Most single-location shops are set up in a day.</p></details>
+      <details><summary>Can I switch from RepairDesk, Shopmonkey or another system?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Yes. Send us an export from your current system or spreadsheets and we bring customers, devices and stock across as part of onboarding, free on every plan. Most single-location shops are set up in a day. <a href="/compare/">See how Tekly compares</a> with RepairDesk, RepairShopr, Shopmonkey, Tekmetric and Orderry.</p></details>
       <details><summary>What's the difference between Solo, Shop and Pro?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Solo ($29 a month) is for up to 2 people at one location and 150 new jobs a month: work orders, estimates, invoices, POS, the customer portal and booking, the Tekly Go phone app and messaging. Shop ($69 for the first location, $49 for each extra) includes 8 team members you can split across your locations, $4 a month for each extra person, and unlimited jobs. It adds inventory, barcodes and scanning, the time clock, reports and automatic notifications. Pro ($129 for the first location, $79 for each extra) has unlimited people and jobs and adds purchase orders, payroll and commissions, stock transfers between locations, AI estimate drafting, QuickBooks and Xero, single sign-on and API keys. Yearly billing gets 2 months free.</p></details>
       <details><summary>Does Tekly work with QuickBooks, Xero, Stripe or Square?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Yes. Tekly syncs with QuickBooks and Xero on Pro, takes card payments through Stripe or Square, and sends customer updates by SMS, WhatsApp and email from Gmail or Outlook.</p></details>
       <details><summary>Will AI ever message my customers by itself?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>No. Tekly AI drafts estimates, replies and summaries, and a person on your team decides what gets sent.</p></details>
@@ -1697,6 +1701,7 @@ html.is-locked .ta { visibility: hidden; }
     <div><a href="#top" class="wordmark"><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#mark"/></svg>tekly</a><p class="about-f">Repair shop software, from the first complaint to the final payment.</p></div>
     <div><p class="foot-h">Product</p><ul><li><a href="#product">How a job moves</a></li><li><a href="#ai">Tekly AI</a></li><li><a href="/changelog/">What's new</a></li><li><a href="#industries">Industries</a></li><li><a href="#pricing">Pricing</a></li></ul></div>
     <div><p class="foot-h">Software for</p><ul><li><a href="/phone-repair-software/">Phone &amp; computer repair</a></li><li><a href="/auto-repair-shop-software/">Auto repair shops</a></li><li><a href="/small-engine-repair-software/">Small engine &amp; tools</a></li><li><a href="/marine-repair-software/">Marine repair</a></li></ul></div>
+    <div><p class="foot-h">Compare</p><ul><li><a href="/compare/tekly-vs-repairdesk/">Tekly vs RepairDesk</a></li><li><a href="/compare/tekly-vs-shopmonkey/">Tekly vs Shopmonkey</a></li><li><a href="/compare/tekly-vs-tekmetric/">Tekly vs Tekmetric</a></li><li><a href="/compare/">All comparisons</a></li><li><a href="/guides/choose-repair-shop-software/">How to choose</a></li></ul></div>
     <div><p class="foot-h">Company</p><ul><li><a href="#about">About us</a></li><li><a href="#start" data-open-demo>Book a demo</a></li><li><a data-mail href="#start">Contact</a></li><li><a href="#faq">FAQ</a></li></ul></div>
     <div><p class="foot-h">Account</p><ul><li><a data-app="signin" href="#start">Sign in</a></li><li><a data-app="signup" href="#start">Start free trial</a></li></ul></div>
   </footer>
@@ -1871,9 +1876,9 @@ const splitWords = el => {
   walk(el);
   return $$(".wi", el);
 };
-const revealInners = (inners, { stagger = 14, duration = 650, delay = 0, cap = 350 } = {}) => inners.forEach((s, i) => {
+const revealInners = (inners, { stagger = 14, duration = 650, delay = 0, cap = 350, fadeIn = true } = {}) => inners.forEach((s, i) => {
   if (REDUCED) { s.style.transform = "none"; s.style.opacity = 1; return; }
-  s.animate([{ transform: "translateY(115%)", opacity: 0 }, { transform: "translateY(0)", opacity: 1 }],
+  s.animate([{ transform: "translateY(115%)", opacity: fadeIn ? 0 : 1 }, { transform: "translateY(0)", opacity: 1 }],
     { duration, delay: delay + Math.min(i * stagger, cap), easing: EXPO, fill: "both" });
 });
 const rise = (el, delay = 0) => {
@@ -2223,7 +2228,7 @@ addEventListener("keydown", e => {
   }
 });
 
-/* Demo form: same destination as the live site — demoEndpoint (POST JSON) or a mailto to demoEmail. */
+/* Demo form → TeklyLead.send (marketing.js): demoEndpoint, else Tekly's Inquiries board, else email. */
 const form = $("#demoForm");
 const emailOk = v => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v);
 let tried = false;
@@ -2239,18 +2244,11 @@ form.addEventListener("submit", async e => {
   const req = $$("[required]", form);
   if (!req.map(validate).every(Boolean)) { req.find(f => f.classList.contains("bad"))?.focus(); return; }
   const data = Object.fromEntries(new FormData(form)), btn = $("button[type=submit]", form);
-  document.dispatchEvent(new CustomEvent("tekly:demo_request", { detail: data }));
   Object.assign(data, window.TEKLY_ATTRIBUTION || {});
   btn.disabled = true; btn.textContent = "Sending…";
   try {
-    if (C.demoEndpoint) {
-      const r = await fetch(C.demoEndpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...data, source: "website" }) });
-      if (!r.ok) throw new Error(r.status);
-    } else {
-      const body = Object.entries(data).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join("\n");
-      location.href = `mailto:${C.demoEmail}?subject=${encodeURIComponent("Tekly demo request — " + data.shop)}&body=${encodeURIComponent(body)}`;
-    }
-    if (!C.demoEndpoint) { $("#demoDone h2").textContent = "Almost done — press send."; $("#demoDone .lede").textContent = `Your email app opened a message to ${C.demoEmail}. Send it and we'll reply to find a time.`; }
+    const how = await window.TeklyLead.send(data, "website");
+    if (how === "mailto") { $("#demoDone h2").textContent = "Almost done — press send."; $("#demoDone .lede").textContent = `Your email app opened a message to ${C.demoEmail}. Send it and we'll reply to find a time.`; }
     $("#demoBody").hidden = true; $("#demoDone").classList.add("show"); $("#demoDone a")?.focus();
   } catch {
     btn.disabled = false; btn.textContent = "Try again";
@@ -2264,9 +2262,11 @@ const fill = $("#loaderFill");
 const heroWords = splitWords($("[data-hero-words]"));
 const heroLines = $$("#heroTag .lni");
 const heroReveal = () => {
-  revealInners(heroWords, { stagger: 70, duration: 750, delay: 0, cap: 1000 });
-  revealInners(heroLines, { stagger: 60, duration: 750, delay: 150 });
-  $$("[data-hero-fade]").forEach((el, i) => rise(el, 200 + i * 80));
+  // Quick and transform-only, so the headline counts as painted at once and the buttons are
+  // usable within half a second.
+  revealInners(heroWords, { stagger: 45, duration: 600, delay: 0, cap: 300, fadeIn: false });
+  revealInners(heroLines, { stagger: 40, duration: 600, delay: 100, fadeIn: false });
+  $$("[data-hero-fade]").forEach((el, i) => rise(el, 120 + i * 60));
   const gcar = $("#gcar");
   if (REDUCED) { gcar.style.opacity = 1; gcar.style.transform = "none"; }
   else gcar.animate([{ opacity: 0, transform: "translateY(1.5rem)" }, { opacity: 1, transform: "none" }], { duration: 700, delay: 300, easing: SPRINGY, fill: "both" });

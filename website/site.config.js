@@ -9,8 +9,11 @@ window.TEKLY_SITE = {
   signInPath: "/login",
   signUpPath: "/signup",
 
-  // Demo requests. If `demoEndpoint` is set, the form POSTs JSON to it.
-  // Otherwise it opens the visitor's email app addressed to `demoEmail`.
+  // Demo requests (form and assistant) go to the first of these that's set up:
+  //   1. `demoEndpoint` — the form POSTs JSON to it;
+  //   2. `assistant.booking.slug` — lands as a web lead in Tekly → Inquiries (needs the
+  //      "Tekly Demos" shop with online appointments on, and this site in CORS_ORIGINS);
+  //   3. otherwise it opens the visitor's email app addressed to `demoEmail`.
   demoEndpoint: "",
   demoEmail: "hello@tekly.app",
 
