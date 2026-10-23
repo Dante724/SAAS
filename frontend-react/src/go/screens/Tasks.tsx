@@ -61,14 +61,14 @@ function TaskRow({ t, meId, onToggle }: { t: Task; meId?: string; onToggle: (t: 
   const from = t.created_by_id && t.created_by_id !== meId && t.author_name ? `From ${t.author_name}` : "";
   const forWho = t.assigned_to_id && t.assigned_to_id !== meId && t.assignee_name ? `For ${t.assignee_name}` : "";
   return (
-    <div className="flex items-start gap-2 rounded-2xl border border-slate-100 bg-white p-2 pr-4 shadow-clay-card">
+    <div className="flex items-start gap-2 rounded-xl border-[0.5px] border-slate-200 bg-white p-2 pr-4">
       <button onClick={() => onToggle(t)} aria-label={done ? "Mark not done" : "Mark done"} aria-pressed={done}
         className="h-11 w-11 shrink-0 inline-flex items-center justify-center rounded-full active:bg-slate-100">
         {done ? <CheckCircle2 size={26} className="text-emerald-600" /> : <Circle size={26} className="text-ink-tertiary" />}
       </button>
       <div className="min-w-0 flex-1 py-2.5">
-        <p className={`text-[1rem] font-medium ${done ? "text-ink-tertiary line-through" : "text-ink-primary"}`}>{t.title}</p>
-        <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[0.8125rem] text-ink-secondary">
+        <p className={`text-go-body font-medium ${done ? "text-ink-tertiary line-through" : "text-ink-primary"}`}>{t.title}</p>
+        <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-go-sub text-ink-secondary">
           {t.due_at && <span className={late && !done ? "font-semibold text-rose-700" : ""}>{late && !done ? "Overdue · " : ""}{when(t.due_at)}</span>}
           {(from || forWho) && <span>{from || forWho}</span>}
           {t.order_id && <Link to={`/job/${encodeURIComponent(t.order_id)}`} className="inline-flex items-center gap-1 font-semibold text-primary"><Link2 size={13} />Job</Link>}

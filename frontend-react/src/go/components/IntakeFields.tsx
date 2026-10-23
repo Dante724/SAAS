@@ -14,8 +14,8 @@ export function intakeFieldsFrom(items: LayoutItem[]): IntakeField[] {
     .map((i) => ({ key: i.key, label: i.label, field_type: i.field!.field_type, options: i.field!.options || [], required: i.require === "intake" }));
 }
 
-const field = "w-full min-h-[3rem] rounded-2xl border border-slate-200 bg-white px-4 text-[1rem] text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15";
-const chip = (on: boolean) => `min-h-[2.75rem] px-4 rounded-full border text-[0.9375rem] font-medium inline-flex items-center gap-1.5 ${on ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`;
+const field = "w-full min-h-[3rem] rounded-xl border border-slate-200 bg-white px-4 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15";
+const chip = (on: boolean) => `min-h-[2.75rem] px-4 rounded-full border text-go-body font-medium inline-flex items-center gap-1.5 ${on ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`;
 
 export default function IntakeFields({ fields, values, onChange, missing }: {
   fields: IntakeField[]; values: Record<string, unknown>; onChange: (key: string, v: unknown) => void; missing?: Set<string>;
@@ -27,16 +27,16 @@ export default function IntakeFields({ fields, values, onChange, missing }: {
         const v = values[f.key];
         const bad = missing?.has(f.label);
         const label = (
-          <span className={`mb-1.5 block px-1 text-[0.8125rem] font-semibold ${bad ? "text-rose-700" : "text-ink-tertiary"}`}>
+          <span className={`mb-1.5 block px-1 text-go-sub font-semibold ${bad ? "text-rose-700" : "text-ink-tertiary"}`}>
             {f.label}{f.required && f.field_type !== "bool" && <span className="text-rose-600"> *</span>}
           </span>
         );
         if (f.field_type === "bool") {
           return (
             <button key={f.key} onClick={() => onChange(f.key, !v)} aria-pressed={!!v} aria-label={f.label}
-              className="w-full min-h-[3rem] flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 text-left">
+              className="w-full min-h-[3rem] flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 text-left">
               <span className={`h-6 w-6 shrink-0 rounded-md border-2 inline-flex items-center justify-center ${v ? "border-primary bg-primary text-white" : "border-slate-300"}`}>{!!v && <Check size={16} />}</span>
-              <span className="text-[1rem] text-ink-primary">{f.label}</span>
+              <span className="text-go-body text-ink-primary">{f.label}</span>
             </button>
           );
         }

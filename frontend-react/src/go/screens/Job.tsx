@@ -8,7 +8,7 @@ import { AlertTriangle, Camera, Check, ChevronDown, ChevronLeft, CloudOff, Ellip
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import AuthedImage from "../../components/AuthedImage";
-import { Card, Empty, Page, PrimaryButton, Sheet, SkeletonRows, StatusBadge, humanKey } from "../components/ui";
+import { Card, Empty, Page, PrimaryButton, Sheet, SkeletonRows, StatusBadge, StatusDot, humanKey } from "../components/ui";
 import ItemsSheet from "../components/ItemsSheet";
 import SignatureSheet from "../components/SignatureSheet";
 import PaySheet from "../components/PaySheet";
@@ -27,6 +27,7 @@ import { changeStatus } from "../lib/statusChange";
 import { haptic } from "../lib/scanner";
 import { announceChange, useQueueStatus, useStatuses, useToast, useWide, type StatusMeta } from "../lib/useGo";
 import { hm, utc } from "../lib/time";
+import { rowDetail, rowWhen } from "../lib/rows";
 
 type Order = {
   id: string; order_number: string; status: string; is_estimate?: boolean; complaint?: string | null; diagnosis?: string | null;
@@ -39,7 +40,7 @@ type Order = {
   intake_photos?: IntakePhoto[];
   signed?: boolean;
   client_msg_unread?: number;
-  tech_notes?: string | null; conclusion?: string | null; priority?: number;
+  tech_notes?: string | null; conclusion?: string | null; priority?: number; created_at?: string | null;
 };
 type Line = NonNullable<Order["lines"]>[number];
 
@@ -52,8 +53,8 @@ function Detail({ icon, label, children }: { icon: React.ReactNode; label: strin
     <div className="flex gap-3 py-3 first:pt-0 last:pb-0">
       <span className="mt-0.5 text-ink-tertiary">{icon}</span>
       <div className="min-w-0 flex-1">
-        <p className="text-[0.8125rem] text-ink-tertiary">{label}</p>
-        <div className="text-[0.9375rem] text-ink-primary break-words">{children}</div>
+        <p className="text-go-sub text-ink-tertiary">{label}</p>
+        <div className="text-go-body text-ink-primary break-words">{children}</div>
       </div>
     </div>
   );
@@ -261,20 +262,40 @@ export default function Job() {
     primary = { label: "Change status", run: () => setSheet(true) };
   }
 
-  const action = "min-h-[4rem] rounded-2xl border border-slate-200 bg-white flex flex-col items-center justify-center gap-1 text-[0.75rem] font-semibold text-ink-primary active:bg-slate-50 disabled:opacity-40";
+  const due = rowWhen({ due_at: order.due_at, overdue: order.overdue_by_date });
+  const booked = utc(order.created_at)?.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+  const action = "min-h-[4rem] rounded-xl border-[0.5px] border-slate-200 bg-white flex flex-col items-center justify-center gap-1 text-go-caption font-semibold text-ink-primary active:bg-slate-50 disabled:opacity-40";
 
   return (
     <>
-      <Page title={order.order_number} back={back} right={headerRight}
-        subtitle={<button onClick={() => setSheet(true)} className="inline-flex items-center gap-2 mt-1.5 min-h-[2.75rem] -my-2"><StatusBadge meta={meta} statusKey={order.status} pending={pending} /><ChevronDown size={16} className="text-ink-tertiary" />{pending && <span className="inline-flex items-center gap-1 text-[0.8125rem] text-amber-700"><CloudOff size={14} />Not sent yet</span>}{order.is_estimate && <span className="text-[0.8125rem] text-ink-tertiary">Estimate</span>}</button>}>
+      <Page title={order.client?.name || "Walk-in"} back={back} right={headerRight}
+        caption={<><span className="font-mono">{order.order_number}</span>{booked ? ` · Booked ${booked}` : ""}</>}
+        subtitle={<>
+          {rowDetail({ device, complaint: order.complaint }) && <p className="truncate">{rowDetail({ device, complaint: order.complaint })}</p>}
+          <div className="mt-2 flex flex-wrap items-center gap-x-3">
+            <button onClick={() => setSheet(true)} className="inline-flex items-center gap-1.5 min-h-[2.75rem] -my-1.5"><StatusBadge meta={meta} statusKey={order.status} pending={pending} /><ChevronDown size={16} className="text-ink-tertiary" /></button>
+            {due && <span className={`text-go-sub tabular-nums ${due.late ? "font-semibold text-rose-700" : "text-ink-secondary"}`}>{due.late ? due.text : `Due ${due.text}`}</span>}
+            {pending && <span className="inline-flex items-center gap-1 text-go-sub text-amber-700"><CloudOff size={14} />Not sent yet</span>}
+            {order.is_estimate && <span className="text-go-sub text-ink-tertiary">Estimate</span>}
+          </div>
+        </>}
+        footer={<>
+          {primary.note && <p className="mb-2 text-center text-go-sub text-ink-secondary">{primary.note}</p>}
+          <div className="flex gap-2">
+            <PrimaryButton onClick={primary.run} disabled={finishing} className="flex-1">{finishing ? "Finishing…" : primary.label}</PrimaryButton>
+            {primary.label !== "Change status" && (
+              <button onClick={() => setSheet(true)} aria-label="Other statuses" className="min-h-[3.25rem] w-14 rounded-xl border-[0.5px] border-slate-200 bg-white inline-flex items-center justify-center text-ink-primary active:bg-slate-100"><ChevronDown size={22} /></button>
+            )}
+          </div>
+        </>}>
         {watch && (
-          <div className="mb-3 flex gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-[0.9375rem] text-amber-800">
+          <div className="mb-3 flex gap-2 rounded-xl border-[0.5px] border-amber-200 bg-amber-50 p-3 text-go-body text-amber-800">
             <AlertTriangle size={18} className="mt-0.5 shrink-0" /><span>{watch}</span>
           </div>
         )}
         <Card className="p-4">
           <Detail icon={<User size={18} />} label="Customer">{order.client?.name || "Walk-in"}</Detail>
-          {device && <Detail icon={<Smartphone size={18} />} label="Device">{device}{ident && <span className="block text-[0.8125rem] text-ink-secondary font-mono">{ident}</span>}</Detail>}
+          {device && <Detail icon={<Smartphone size={18} />} label="Device">{device}{ident && <span className={`block text-go-sub text-ink-secondary ${order.device?.imei ? "font-mono" : ""}`}>{ident}</span>}</Detail>}
           {(order.complaint || order.diagnosis) && (
             <Detail icon={<Wrench size={18} />} label="Problem">
               {order.complaint}
@@ -289,7 +310,7 @@ export default function Job() {
             : <button disabled className={action}><Phone size={20} />Call</button>}
           <button onClick={() => setOpen("msg")} disabled={!order.client} className={`${action} relative`}>
             <MessageCircle size={20} />Message
-            {!!order.client_msg_unread && <span className="absolute right-1.5 top-1.5 min-w-[1.125rem] h-[1.125rem] px-1 rounded-full bg-rose-500 text-white text-[0.625rem] font-bold leading-[1.125rem] text-center">{order.client_msg_unread}</span>}
+            {!!order.client_msg_unread && <span className="absolute right-1.5 top-1.5 min-w-[1.125rem] h-[1.125rem] px-1 rounded-full bg-rose-500 text-white text-go-caption font-bold leading-[1.125rem] text-center">{order.client_msg_unread}</span>}
           </button>
           <button onClick={() => setOpen("shoot")} disabled={isClosed} className={action}>{uploading ? <Loader2 size={20} className="animate-spin" /> : <Camera size={20} />}Photo</button>
           <button onClick={() => setOpen("items")} disabled={!mayAddItems} className={action}><Plus size={20} />Item</button>
@@ -299,36 +320,36 @@ export default function Job() {
         </div>
         <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple hidden onChange={(e) => onPhotos(e.target.files)} />
         {me?.clock_wo_enabled !== false && (timer.onThis || timer.totalSec > 0 || timer.otherJob) && (
-          <div className={`mt-3 flex items-center gap-3 rounded-2xl border px-4 py-3 ${timer.onThis ? "border-blue-200 bg-blue-50" : "border-slate-200 bg-white"}`} role="status">
+          <div className={`mt-3 flex items-center gap-3 rounded-xl border-[0.5px] px-4 py-3 ${timer.onThis ? "border-blue-200 bg-blue-50" : "border-slate-200 bg-white"}`} role="status">
             <Timer size={18} className={timer.onThis ? "text-blue-700" : "text-ink-tertiary"} />
-            <div className="min-w-0 flex-1 text-[0.9375rem]">
+            <div className="min-w-0 flex-1 text-go-body">
               {timer.onThis
                 ? <><span className="font-semibold text-blue-900">Timer running</span> <span className="tabular-nums text-blue-900">{hm(timer.runningSec)}</span></>
                 : timer.otherJob ? <span className="text-ink-secondary">Your timer is on {timer.otherJob.order_number || timer.otherJob.task_title || "another job"}</span>
                 : <span className="text-ink-secondary">Not running</span>}
-              {timer.totalSec > 0 && <span className="block text-[0.8125rem] text-ink-secondary">Worked on this job: <span className="tabular-nums">{hm(timer.totalSec)}</span></span>}
+              {timer.totalSec > 0 && <span className="block text-go-sub text-ink-secondary">Worked on this job: <span className="tabular-nums">{hm(timer.totalSec)}</span></span>}
             </div>
           </div>
         )}
 
         {(photos.length > 0 || uploading > 0) && (
           <div className="mt-4">
-            <h2 className="px-1 mb-2 text-[0.8125rem] font-semibold text-ink-tertiary">Photos <span className="tabular-nums">{photos.length}</span></h2>
+            <h2 className="px-4 mb-1.5 text-go-sub font-medium text-ink-tertiary">Photos <span className="tabular-nums">{photos.length}</span></h2>
             <div className="flex gap-2 overflow-x-auto pb-1">
               {photos.map((p) => (
-                <button key={p.id} onClick={() => { setPhoto(p); setOpen("photo"); }} className="relative h-20 w-20 shrink-0 overflow-hidden rounded-2xl" aria-label={p.label ? `Open ${labelName(p.label)} photo` : "Open photo"}>
+                <button key={p.id} onClick={() => { setPhoto(p); setOpen("photo"); }} className="relative h-20 w-20 shrink-0 overflow-hidden rounded-xl" aria-label={p.label ? `Open ${labelName(p.label)} photo` : "Open photo"}>
                   <AuthedImage src={p.marked_url || p.url} alt={p.label ? `${labelName(p.label)} photo` : "Job photo"} className="h-20 w-20 object-cover" />
-                  {p.label && <span className={`absolute left-1 bottom-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] font-semibold text-white ${p.label === "damage" ? "bg-rose-600" : p.label === "after" ? "bg-emerald-700" : "bg-ink-primary/80"}`}>{labelName(p.label)}</span>}
+                  {p.label && <span className={`absolute left-1 bottom-1 rounded-md px-1.5 py-0.5 text-go-caption font-semibold text-white ${p.label === "damage" ? "bg-rose-600" : p.label === "after" ? "bg-emerald-700" : "bg-ink-primary/80"}`}>{labelName(p.label)}</span>}
                 </button>
               ))}
-              {Array.from({ length: uploading }).map((_, i) => <div key={`u${i}`} className="sk h-20 w-20 shrink-0 rounded-2xl" />)}
+              {Array.from({ length: uploading }).map((_, i) => <div key={`u${i}`} className="sk h-20 w-20 shrink-0 rounded-xl" />)}
             </div>
           </div>
         )}
 
         <div className="mt-4">
-          <h2 className="px-1 mb-2 text-[0.8125rem] font-semibold text-ink-tertiary">Items</h2>
-          <Card className="p-4 divide-y divide-slate-100">
+          <h2 className="px-4 mb-1.5 text-go-sub font-medium text-ink-tertiary">Items</h2>
+          <Card className="p-4 divide-y-[0.5px] divide-slate-200">
             {order.assigned_to && <div className="flex justify-between py-2.5 first:pt-0"><span className="text-ink-secondary">Technician</span><span className="font-medium text-ink-primary">{order.assigned_to.name}</span></div>}
             {order.scheduled_for && <div className="flex justify-between py-2.5 first:pt-0"><span className="text-ink-secondary">Scheduled</span><span className="font-medium text-ink-primary">{when(order.scheduled_for)}</span></div>}
             {order.due_at && <div className="flex justify-between py-2.5 first:pt-0"><span className="text-ink-secondary">Due</span><span className={`font-medium ${order.overdue_by_date ? "text-rose-700" : "text-ink-primary"}`}>{when(order.due_at)}{order.overdue_by_date ? " · overdue" : ""}</span></div>}
@@ -345,7 +366,7 @@ export default function Job() {
             )}
             <div className="flex justify-between pt-2.5 first:pt-0"><span className="font-semibold text-ink-primary">Total</span><span className="font-semibold tabular-nums text-ink-primary">{fmt(order.total)}</span></div>
             {balance != null && (order.total ?? 0) > 0 && (
-              <div className="flex justify-between pt-1.5 text-[0.875rem]"><span className="text-ink-secondary">{owes ? "Still to pay" : "Paid"}</span><span className={`tabular-nums font-medium ${owes ? "text-amber-700" : "text-emerald-700"}`}>{owes ? fmt(balance) : "In full"}</span></div>
+              <div className="flex justify-between pt-1.5 text-go-body"><span className="text-ink-secondary">{owes ? "Still to pay" : "Paid"}</span><span className={`tabular-nums font-medium ${owes ? "text-ink-primary" : "text-emerald-700"}`}>{owes ? fmt(balance) : "In full"}</span></div>
             )}
           </Card>
         </div>
@@ -354,36 +375,26 @@ export default function Job() {
         <NotesCard orderId={order.id} techNotes={order.tech_notes} conclusion={order.conclusion} readOnly={isClosed}
           onSaved={(n) => setOrder((o) => (o ? { ...o, ...n } : o))} />
 
-        <button onClick={() => setOpen("sign")} className="mt-3 w-full min-h-[3.25rem] rounded-2xl border border-slate-200 bg-white px-4 flex items-center gap-3 text-left active:bg-slate-50">
+        <button onClick={() => setOpen("sign")} className="mt-3 w-full min-h-[3.25rem] rounded-xl border-[0.5px] border-slate-200 bg-white px-4 flex items-center gap-3 text-left active:bg-slate-50">
           <PenLine size={20} className={order.signed ? "text-emerald-600" : "text-ink-tertiary"} />
           <span className="flex-1 font-medium text-ink-primary">{order.signed ? "Customer signed" : "Customer signature"}</span>
-          <span className={`text-[0.875rem] font-semibold ${order.signed ? "text-emerald-700" : "text-primary"}`}>{order.signed ? "Sign again" : "Sign now"}</span>
+          <span className={`text-go-sub font-semibold ${order.signed ? "text-emerald-700" : "text-primary"}`}>{order.signed ? "Sign again" : "Sign now"}</span>
         </button>
 
         {!!order.status_logs?.length && (
           <div className="mt-5">
-            <h2 className="px-1 mb-2 text-[0.8125rem] font-semibold text-ink-tertiary">History</h2>
-            <Card className="p-4 space-y-2.5">
+            <h2 className="px-4 mb-1.5 text-go-sub font-medium text-ink-tertiary">History</h2>
+            <Card className="px-4 py-1 divide-y-[0.5px] divide-slate-200">
               {[...order.status_logs].reverse().slice(0, 4).map((s, i) => (
-                <div key={i} className="flex items-center justify-between gap-3 text-[0.875rem]">
-                  <StatusBadge meta={byKey.get(s.to)} statusKey={s.to} />
-                  <span className="text-ink-tertiary">{utc(s.at)?.toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}</span>
+                <div key={i} className="min-h-[2.75rem] flex items-center justify-between gap-3 text-go-sub">
+                  <StatusDot meta={byKey.get(s.to)} statusKey={s.to} />
+                  <span className="text-ink-tertiary tabular-nums">{utc(s.at)?.toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}</span>
                 </div>
               ))}
             </Card>
           </div>
         )}
 
-        {/* the main action sits in the thumb zone, just above the tab bar */}
-        <div className="sticky bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] md:bottom-[calc(env(safe-area-inset-bottom)+5rem)] mt-6 z-10">
-          {primary.note && <p className="mb-2 rounded-xl bg-white/90 border border-slate-200 px-3 py-2 text-center text-[0.875rem] text-ink-secondary">{primary.note}</p>}
-          <div className="flex gap-2">
-            <PrimaryButton onClick={primary.run} disabled={finishing} className="flex-1">{finishing ? "Finishing…" : primary.label}</PrimaryButton>
-            {primary.label !== "Change status" && (
-              <button onClick={() => setSheet(true)} aria-label="Other statuses" className="min-h-[3.25rem] w-14 rounded-2xl border border-slate-200 bg-white inline-flex items-center justify-center text-ink-primary"><ChevronDown size={22} /></button>
-            )}
-          </div>
-        </div>
       </Page>
 
       <ItemsSheet open={open === "items"} onClose={() => { setOpen(null); load(); }} orderId={order.id} deviceId={order.device?.id} onAdded={() => {}}
@@ -400,11 +411,11 @@ export default function Job() {
       <Sheet open={open === "shoot"} onClose={() => setOpen(null)} title="What's in the photo?">
         <div className="grid grid-cols-2 gap-2 px-2">
           {PHOTO_LABELS.map((l) => (
-            <button key={l.key} onClick={() => shoot(l.key)} className="min-h-[4rem] rounded-2xl border border-slate-200 bg-white inline-flex items-center justify-center gap-2 text-[1rem] font-semibold text-ink-primary active:bg-slate-50">
+            <button key={l.key} onClick={() => shoot(l.key)} className="min-h-[4rem] rounded-xl border border-slate-200 bg-white inline-flex items-center justify-center gap-2 text-go-body font-semibold text-ink-primary active:bg-slate-50">
               <Tag size={18} className={l.key === "damage" ? "text-rose-600" : l.key === "after" ? "text-emerald-700" : "text-ink-tertiary"} />{l.name}
             </button>
           ))}
-          <button onClick={() => shoot(null)} className="col-span-2 min-h-[3.25rem] rounded-2xl text-[0.9375rem] font-semibold text-primary active:bg-slate-50 inline-flex items-center justify-center gap-2"><Camera size={18} />Just a photo</button>
+          <button onClick={() => shoot(null)} className="col-span-2 min-h-[3.25rem] rounded-xl text-go-body font-semibold text-primary active:bg-slate-50 inline-flex items-center justify-center gap-2"><Camera size={18} />Just a photo</button>
         </div>
       </Sheet>
 
@@ -413,22 +424,22 @@ export default function Job() {
           <div className="px-2">
             <div className="flex items-center justify-center gap-6 py-4">
               <button onClick={() => setLineQty(line, (line.qty ?? 1) - 1)} aria-label="One less" className="h-14 w-14 rounded-full border border-slate-200 bg-white inline-flex items-center justify-center text-ink-primary"><Minus size={22} /></button>
-              <span className="text-[2.25rem] font-bold tabular-nums text-ink-primary">{line.qty ?? 1}</span>
+              <span className="text-go-display font-bold tabular-nums text-ink-primary">{line.qty ?? 1}</span>
               <button onClick={() => setLineQty(line, (line.qty ?? 1) + 1)} aria-label="One more" className="h-14 w-14 rounded-full border border-slate-200 bg-white inline-flex items-center justify-center text-ink-primary"><Plus size={22} /></button>
             </div>
             <p className="text-center text-ink-secondary">{fmt(line.unit_price)} each</p>
-            <button onClick={() => setLineQty(line, 0)} className="mt-4 w-full min-h-[3.25rem] rounded-2xl border border-rose-200 bg-rose-50 font-semibold text-rose-700 inline-flex items-center justify-center gap-2"><Trash2 size={18} />Remove from job</button>
+            <button onClick={() => setLineQty(line, 0)} className="mt-4 w-full min-h-[3.25rem] rounded-xl border border-rose-200 bg-rose-50 font-semibold text-rose-700 inline-flex items-center justify-center gap-2"><Trash2 size={18} />Remove from job</button>
           </div>
         )}
       </Sheet>
 
       <Sheet open={open === "more"} onClose={() => setOpen(null)} title={order.order_number}>
         <div className="space-y-1">
-          <button onClick={() => setOpen("task")} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-left text-[1rem] text-ink-primary active:bg-slate-100"><ListTodo size={20} className="text-ink-tertiary" />Add a task for this job</button>
-          {!isClosed && <button onClick={() => { setOpen(null); setPartName(""); }} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-left text-[1rem] text-ink-primary active:bg-slate-100"><PackageSearch size={20} className="text-ink-tertiary" />Ask for a part to be ordered</button>}
-          {mayPay && owes && <button onClick={() => openPay(false)} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-left text-[1rem] text-ink-primary active:bg-slate-100"><Plus size={20} className="text-ink-tertiary" />Take a payment ({fmt(balance)} owed)</button>}
-          <button onClick={() => { setOpen(null); setSheet(true); }} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-left text-[1rem] text-ink-primary active:bg-slate-100"><Check size={20} className="text-ink-tertiary" />Change status</button>
-          <a href={`/orders?open=${encodeURIComponent(order.id)}`} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-[1rem] text-ink-primary active:bg-slate-100"><ExternalLink size={20} className="text-ink-tertiary" />Open the full job in Tekly</a>
+          <button onClick={() => setOpen("task")} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-left text-go-body text-ink-primary active:bg-slate-100"><ListTodo size={20} className="text-ink-tertiary" />Add a task for this job</button>
+          {!isClosed && <button onClick={() => { setOpen(null); setPartName(""); }} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-left text-go-body text-ink-primary active:bg-slate-100"><PackageSearch size={20} className="text-ink-tertiary" />Ask for a part to be ordered</button>}
+          {mayPay && owes && <button onClick={() => openPay(false)} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-left text-go-body text-ink-primary active:bg-slate-100"><Plus size={20} className="text-ink-tertiary" />Take a payment ({fmt(balance)} owed)</button>}
+          <button onClick={() => { setOpen(null); setSheet(true); }} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-left text-go-body text-ink-primary active:bg-slate-100"><Check size={20} className="text-ink-tertiary" />Change status</button>
+          <a href={`/orders?open=${encodeURIComponent(order.id)}`} className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl px-3 text-go-body text-ink-primary active:bg-slate-100"><ExternalLink size={20} className="text-ink-tertiary" />Open the full job in Tekly</a>
         </div>
       </Sheet>
 
@@ -439,7 +450,7 @@ export default function Job() {
             <div className="absolute inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+1rem)] flex justify-center gap-1.5 px-3" onClick={(e) => e.stopPropagation()} role="group" aria-label="What this photo shows">
               {PHOTO_LABELS.map((l) => (
                 <button key={l.key} onClick={() => relabel(photo, photo.label === l.key ? null : l.key)} aria-pressed={photo.label === l.key}
-                  className={`min-h-[2.75rem] rounded-full px-4 text-[0.875rem] font-semibold ${photo.label === l.key ? "bg-[#fff] text-[#14213f]" : "bg-[#fff]/15 text-[#fff]"}`}>{l.name}</button>
+                  className={`min-h-[2.75rem] rounded-full px-4 text-go-sub font-semibold ${photo.label === l.key ? "bg-[#fff] text-[#14213f]" : "bg-[#fff]/15 text-[#fff]"}`}>{l.name}</button>
               ))}
             </div>
           )}
@@ -452,7 +463,7 @@ export default function Job() {
           <div className="space-y-0.5">
             {choices.next && (
               <>
-                <p className="px-3 pt-1 pb-1 text-[0.75rem] font-semibold text-ink-tertiary">Next step</p>
+                <p className="px-3 pt-1 pb-1 text-go-caption font-semibold text-ink-tertiary">Next step</p>
                 <StatusOption s={choices.next} current={false} recommended onPick={pickStatus} />
               </>
             )}
@@ -461,12 +472,12 @@ export default function Job() {
               if (!items.length) return null;
               return (
                 <div key={g}>
-                  <p className="px-3 pt-3 pb-1 text-[0.75rem] font-semibold text-ink-tertiary">{GROUP_LABEL[g]}</p>
+                  <p className="px-3 pt-3 pb-1 text-go-caption font-semibold text-ink-tertiary">{GROUP_LABEL[g]}</p>
                   {items.map((s) => <StatusOption key={s.key} s={s} current={s.key === order.status} onPick={pickStatus} />)}
                 </div>
               );
             })}
-            {allowed && allowed.length <= 1 && <p className="px-3 py-3 text-[0.875rem] text-ink-secondary">Your role can't move this job from here.</p>}
+            {allowed && allowed.length <= 1 && <p className="px-3 py-3 text-go-sub text-ink-secondary">Your role can't move this job from here.</p>}
           </div>
         )}
       </Sheet>
@@ -481,7 +492,7 @@ function StatusOption({ s, current, recommended, onPick }: { s: StatusMeta; curr
       className="w-full min-h-[3rem] flex items-center gap-3 rounded-xl px-3 text-left active:bg-slate-100"
       style={recommended ? { background: `${color}1a`, boxShadow: `inset 0 0 0 1px ${color}55` } : undefined}>
       <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: color }} />
-      <span className="flex-1 text-[1rem] font-medium text-ink-primary">{s.name}</span>
+      <span className="flex-1 text-go-body font-medium text-ink-primary">{s.name}</span>
       {current && <Check size={20} className="text-primary" aria-label="Current status" />}
     </button>
   );

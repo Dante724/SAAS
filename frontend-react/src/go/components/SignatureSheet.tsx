@@ -97,15 +97,15 @@ export default function SignatureSheet({ open, onClose, orderId, customer, onSav
   return (
     <Sheet open={open} onClose={onClose} title={title} wide={wide}>
       <div className="px-2">
-        {intro ?? <p className="mb-2 text-[0.9375rem] text-ink-secondary">{customer ? `${customer}, please` : "Please"} sign below to confirm.</p>}
-        <div className="relative rounded-2xl border border-slate-200 bg-white" style={{ height: intro ? "min(32vh, 20rem)" : "min(46vh, 22rem)" }}>
-          <canvas ref={canvas} className="absolute inset-0 h-full w-full rounded-2xl" style={{ touchAction: "none", background: "#fff" }}
+        {intro ?? <p className="mb-2 text-go-body text-ink-secondary">{customer ? `${customer}, please` : "Please"} sign below to confirm.</p>}
+        <div className="relative rounded-xl border border-slate-200 bg-white" style={{ height: intro ? "min(32vh, 20rem)" : "min(46vh, 22rem)" }}>
+          <canvas ref={canvas} className="absolute inset-0 h-full w-full rounded-xl" style={{ touchAction: "none", background: "#fff" }}
             onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onPointerLeave={up} aria-label="Signature pad" />
-          {!inked && <p className="pointer-events-none absolute inset-x-0 bottom-10 text-center text-[0.875rem] text-slate-400">Sign here</p>}
+          {!inked && <p className="pointer-events-none absolute inset-x-0 bottom-10 text-center text-go-sub text-slate-400">Sign here</p>}
           <div className="pointer-events-none absolute inset-x-6 bottom-8 border-b border-slate-300" />
         </div>
         <div className="mt-3 flex gap-2">
-          <button onClick={clear} className="min-h-[3.25rem] px-5 rounded-2xl border border-slate-200 bg-white font-semibold text-ink-primary inline-flex items-center gap-2"><Eraser size={18} />Clear</button>
+          <button onClick={clear} className="min-h-[3.25rem] px-5 rounded-xl border border-slate-200 bg-white font-semibold text-ink-primary inline-flex items-center gap-2"><Eraser size={18} />Clear</button>
           <PrimaryButton onClick={save} disabled={!inked || busy} className="flex-1">{busy ? "Saving…" : doneLabel}</PrimaryButton>
         </div>
       </div>

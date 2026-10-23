@@ -66,10 +66,10 @@ export default function Clock() {
             <span className={`flex h-11 w-11 items-center justify-center rounded-xl ${shift ? "bg-emerald-50 text-emerald-700" : "bg-slate-50 text-ink-tertiary"}`}><Clock3 size={22} /></span>
             <div>
               <p className="font-semibold text-ink-primary">Shift</p>
-              <p className="text-[0.875rem] text-ink-secondary">{shift ? `Clocked in at ${clock(shift.started_at)}` : "You're clocked out"}</p>
+              <p className="text-go-sub text-ink-secondary">{shift ? `Clocked in at ${clock(shift.started_at)}` : "You're clocked out"}</p>
             </div>
           </div>
-          {shift && <p className="mt-4 text-[2.75rem] font-bold leading-none tabular-nums tracking-tight text-ink-primary">{hm(shift.elapsed_sec + since)}</p>}
+          {shift && <p className="mt-4 text-go-display font-bold leading-none tabular-nums tracking-tight text-ink-primary">{hm(shift.elapsed_sec + since)}</p>}
           <PrimaryButton className={`mt-5 ${shift ? "!bg-ink-primary" : ""}`} disabled={!!busy}
             onClick={() => shift ? act("shift", "/timeclock/shift/clock-out", undefined, "Clocked out") : act("shift", "/timeclock/shift/clock-in", undefined, "Clocked in")}>
             {busy === "shift" ? "…" : shift ? "Clock out" : "Clock in"}
@@ -83,15 +83,15 @@ export default function Clock() {
             <span className={`flex h-11 w-11 items-center justify-center rounded-xl ${entry ? "bg-blue-50 text-blue-700" : "bg-slate-50 text-ink-tertiary"}`}><Timer size={22} /></span>
             <div className="min-w-0">
               <p className="font-semibold text-ink-primary">Job timer</p>
-              <p className="text-[0.875rem] text-ink-secondary truncate">
+              <p className="text-go-sub text-ink-secondary truncate">
                 {entry ? <>Since {clock(entry.started_at)}{entry.order_id ? <> on <Link className="font-semibold text-primary" to={`/job/${encodeURIComponent(entry.order_id)}`}>{entry.order_number}</Link></> : entry.task_title ? ` on ${entry.task_title}` : ""}</> : "Not running"}
               </p>
             </div>
           </div>
-          {entry && <p className="mt-4 text-[2.75rem] font-bold leading-none tabular-nums tracking-tight text-ink-primary">{hm(entry.duration_sec + since)}</p>}
+          {entry && <p className="mt-4 text-go-display font-bold leading-none tabular-nums tracking-tight text-ink-primary">{hm(entry.duration_sec + since)}</p>}
           {entry
             ? <PrimaryButton className="mt-5 !bg-ink-primary" disabled={!!busy} onClick={() => act("timer", "/timeclock/stop", {}, "Timer stopped")}>{busy === "timer" ? "…" : "Stop timer"}</PrimaryButton>
-            : <p className="mt-4 text-[0.875rem] text-ink-secondary">Start the timer from a job so the time lands on it.</p>}
+            : <p className="mt-4 text-go-sub text-ink-secondary">Start the timer from a job so the time lands on it.</p>}
         </Card>
       )}
     </Page>

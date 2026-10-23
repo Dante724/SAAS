@@ -9,7 +9,7 @@ import { newKey } from "../lib/photos";
 import { haptic } from "../lib/scanner";
 import { announceChange, useToast } from "../lib/useGo";
 
-const field = "w-full min-h-[3rem] rounded-2xl border border-slate-200 bg-white px-4 text-[1rem] text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15";
+const field = "w-full min-h-[3rem] rounded-xl border border-slate-200 bg-white px-4 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15";
 
 export default function PartRequestSheet({ open, onClose, orderId, initialName, waitingStatus, onWaiting }: {
   open: boolean; onClose: () => void; orderId: string; initialName?: string;
@@ -49,20 +49,20 @@ export default function PartRequestSheet({ open, onClose, orderId, initialName, 
     <Sheet open={open} onClose={onClose} title="Ask for a part">
       <div className="px-2 space-y-4">
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Which part? e.g. iPhone 13 screen" aria-label="Part" className={field} autoFocus />
-        <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-2">
-          <span className="text-[0.9375rem] text-ink-secondary">How many</span>
+        <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-2">
+          <span className="text-go-body text-ink-secondary">How many</span>
           <div className="flex items-center gap-4">
             <button onClick={() => setQty((n) => Math.max(1, n - 1))} aria-label="One less" className="h-11 w-11 rounded-full border border-slate-200 inline-flex items-center justify-center"><Minus size={18} /></button>
-            <span className="w-6 text-center text-[1.25rem] font-bold tabular-nums">{qty}</span>
+            <span className="w-6 text-center text-go-title font-bold tabular-nums">{qty}</span>
             <button onClick={() => setQty((n) => Math.min(99, n + 1))} aria-label="One more" className="h-11 w-11 rounded-full border border-slate-200 inline-flex items-center justify-center"><Plus size={18} /></button>
           </div>
         </div>
         <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Note for whoever orders it (colour, supplier, how urgent…)" aria-label="Note"
           className={`${field} py-3 min-h-[5rem] resize-none`} />
         {waitingStatus && (
-          <label className="flex min-h-[3rem] items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4">
+          <label className="flex min-h-[3rem] items-center gap-3 rounded-xl border border-slate-200 bg-white px-4">
             <input type="checkbox" checked={wait} onChange={(e) => setWait(e.target.checked)} className="h-6 w-6 accent-primary" />
-            <span className="text-[0.9375rem] text-ink-primary">Move the job to “{waitingStatus.name}”</span>
+            <span className="text-go-body text-ink-primary">Move the job to “{waitingStatus.name}”</span>
           </label>
         )}
         <PrimaryButton onClick={send} disabled={!name.trim() || busy}>{busy ? "Sending…" : "Ask for it"}</PrimaryButton>

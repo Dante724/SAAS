@@ -18,7 +18,7 @@ type Cl = { id: string; title?: string | null; items: ClItem[] };
 
 const CHECK: [string, string, string][] = [["pass", "Pass", "bg-emerald-600"], ["caution", "Caution", "bg-amber-500"], ["fail", "Fail", "bg-rose-600"]];
 const FILLABLE = new Set(["check_result", "yes_no", "text", "textarea", "number", "dropdown", "select"]);
-const field = "mt-2 w-full min-h-[2.75rem] rounded-xl border border-slate-200 bg-white px-3 text-[0.9375rem] text-ink-primary focus:outline-none focus:border-primary";
+const field = "mt-2 w-full min-h-[2.75rem] rounded-xl border border-slate-200 bg-white px-3 text-go-body text-ink-primary focus:outline-none focus:border-primary";
 
 export default function ChecklistCard({ orderId, readOnly, onProgress }: { orderId: string; readOnly?: boolean; onProgress?: (left: number) => void }) {
   const { can } = useMe();
@@ -72,7 +72,7 @@ export default function ChecklistCard({ orderId, readOnly, onProgress }: { order
 
   return (
     <div className="mt-4">
-      <h2 className="px-1 mb-2 text-[0.8125rem] font-semibold text-ink-tertiary flex items-center gap-1.5">
+      <h2 className="px-4 mb-1.5 text-go-sub font-medium text-ink-tertiary flex items-center gap-1.5">
         <ListChecks size={15} />Checklist <span className="tabular-nums">{doneCount}/{all.length}</span>
         {left > 0 && <span className="ml-auto text-amber-700">{left} required left</span>}
       </h2>
@@ -81,26 +81,26 @@ export default function ChecklistCard({ orderId, readOnly, onProgress }: { order
           <button key={it.id} onClick={() => !readOnly && tick(it)} disabled={readOnly} aria-pressed={it.done}
             className="w-full min-h-[3rem] flex items-center gap-3 rounded-xl px-2 text-left active:bg-slate-50 disabled:opacity-100">
             <span className={`h-6 w-6 shrink-0 rounded-md border-2 inline-flex items-center justify-center ${it.done ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-300"}`}>{it.done && <Check size={16} />}</span>
-            <span className={`flex-1 text-[0.9375rem] ${it.done ? "text-ink-secondary line-through" : "text-ink-primary"}`}>{it.label}{it.required && <span className="text-rose-600"> *</span>}</span>
+            <span className={`flex-1 text-go-body ${it.done ? "text-ink-secondary line-through" : "text-ink-primary"}`}>{it.label}{it.required && <span className="text-rose-600"> *</span>}</span>
           </button>
         ))}
         {cls.map((c) => (
           <div key={c.id} className="px-2 pt-2 pb-1">
-            {c.title && <p className="pb-1 text-[0.8125rem] font-semibold text-ink-secondary">{c.title}</p>}
+            {c.title && <p className="pb-1 text-go-sub font-semibold text-ink-secondary">{c.title}</p>}
             {c.items.map((it) => {
               const v = it.value;
               return (
-                <div key={it.id} className="py-2.5 border-t border-slate-100 first:border-t-0">
-                  <p className="text-[0.9375rem] text-ink-primary">
+                <div key={it.id} className="py-2.5 border-t-[0.5px] border-slate-200 first:border-t-0">
+                  <p className="text-go-body text-ink-primary">
                     {it.done && <Check size={15} className="inline mr-1 -mt-0.5 text-emerald-600" />}{it.label}{it.required && <span className="text-rose-600"> *</span>}
                   </p>
-                  {!mayEdit ? (v != null && v !== "" && <p className="text-[0.875rem] text-ink-secondary">{String(v)}</p>) : (
+                  {!mayEdit ? (v != null && v !== "" && <p className="text-go-sub text-ink-secondary">{String(v)}</p>) : (
                     <>
                       {it.field_kind === "check_result" && (
                         <div className="mt-2 grid grid-cols-3 gap-1.5">
                           {CHECK.map(([val, lbl, on]) => (
                             <button key={val} onClick={() => fill(c.id, it, val)} aria-pressed={String(v) === val}
-                              className={`min-h-[2.75rem] rounded-xl text-[0.875rem] font-semibold ${String(v) === val ? `${on} text-white` : "border border-slate-200 bg-white text-ink-secondary"}`}>{lbl}</button>
+                              className={`min-h-[2.75rem] rounded-xl text-go-sub font-semibold ${String(v) === val ? `${on} text-white` : "border border-slate-200 bg-white text-ink-secondary"}`}>{lbl}</button>
                           ))}
                         </div>
                       )}
@@ -108,7 +108,7 @@ export default function ChecklistCard({ orderId, readOnly, onProgress }: { order
                         <div className="mt-2 grid grid-cols-2 gap-1.5">
                           {[["yes", "Yes"], ["no", "No"]].map(([val, lbl]) => (
                             <button key={val} onClick={() => fill(c.id, it, val)} aria-pressed={String(v) === val}
-                              className={`min-h-[2.75rem] rounded-xl text-[0.875rem] font-semibold ${String(v) === val ? "bg-primary text-white" : "border border-slate-200 bg-white text-ink-secondary"}`}>{lbl}</button>
+                              className={`min-h-[2.75rem] rounded-xl text-go-sub font-semibold ${String(v) === val ? "bg-primary text-white" : "border border-slate-200 bg-white text-ink-secondary"}`}>{lbl}</button>
                           ))}
                         </div>
                       )}
@@ -123,7 +123,7 @@ export default function ChecklistCard({ orderId, readOnly, onProgress }: { order
                         </select>
                       )}
                       {!FILLABLE.has(it.field_kind) && (
-                        <a href={`/orders?open=${encodeURIComponent(orderId)}`} className="mt-1 inline-flex min-h-[2.75rem] items-center gap-1.5 text-[0.875rem] font-semibold text-primary">
+                        <a href={`/orders?open=${encodeURIComponent(orderId)}`} className="mt-1 inline-flex min-h-[2.75rem] items-center gap-1.5 text-go-sub font-semibold text-primary">
                           <ExternalLink size={15} />Answer in Tekly
                         </a>
                       )}

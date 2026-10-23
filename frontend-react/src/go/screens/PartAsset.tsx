@@ -4,7 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { AlertTriangle, ChevronLeft, ExternalLink, Package } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
-import { Card, Empty, Page, Section, SkeletonRows } from "../components/ui";
+import { Card, Empty, Group, Page, Section, SkeletonRows } from "../components/ui";
 import { JobRow } from "./Today";
 import { useStatuses } from "../lib/useGo";
 
@@ -45,10 +45,10 @@ export function Part() {
   return (
     <Page title={p.name} back={back} subtitle={p.brand}>
       <Card className="p-5 flex items-center gap-4">
-        <span className={`flex h-14 w-14 items-center justify-center rounded-2xl ${p.low_stock ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}><Package size={26} /></span>
+        <span className={`flex h-14 w-14 items-center justify-center rounded-xl ${p.low_stock ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}><Package size={26} /></span>
         <div>
-          <p className="text-[2rem] font-bold leading-none tabular-nums text-ink-primary">{qty}<span className="ml-1.5 text-[1rem] font-medium text-ink-secondary">{p.uom || "in stock"}</span></p>
-          <p className={`mt-1 text-[0.875rem] font-medium ${p.low_stock ? "text-amber-700" : "text-ink-secondary"}`}>{p.low_stock ? "Low stock" : "In stock"}{p.qty_reserved ? ` · ${p.qty_reserved} reserved` : ""}</p>
+          <p className="text-go-display font-bold leading-none tabular-nums text-ink-primary">{qty}<span className="ml-1.5 text-go-body font-medium text-ink-secondary">{p.uom || "in stock"}</span></p>
+          <p className={`mt-1 text-go-sub font-medium ${p.low_stock ? "text-amber-700" : "text-ink-secondary"}`}>{p.low_stock ? "Low stock" : "In stock"}{p.qty_reserved ? ` · ${p.qty_reserved} reserved` : ""}</p>
         </div>
       </Card>
       <Card className="mt-3 p-4">
@@ -58,7 +58,7 @@ export function Part() {
         <Row k="Code" v={p.code} />
         <Row k="Reorder at" v={p.min_stock || undefined} />
       </Card>
-      <a href={`/inventory?open=${encodeURIComponent(p.id)}`} className="mt-3 min-h-[3rem] w-full rounded-2xl border border-slate-200 bg-white inline-flex items-center justify-center gap-2 font-semibold text-ink-primary active:bg-slate-50">
+      <a href={`/inventory?open=${encodeURIComponent(p.id)}`} className="mt-3 min-h-[3rem] w-full rounded-xl border border-slate-200 bg-white inline-flex items-center justify-center gap-2 font-semibold text-ink-primary active:bg-slate-50">
         <ExternalLink size={18} />Open in Tekly
       </a>
     </Page>
@@ -86,7 +86,7 @@ export function AssetScreen() {
       <div className="mt-6">
         <Section title="Jobs" count={data.history.length}>
           {data.history.length
-            ? <div className="space-y-2.5">{data.history.map((h) => <JobRow key={h.id} job={{ id: h.id, order_number: h.order_number, status: h.status, scheduled_for: h.created_at }} meta={byKey.get(h.status)} />)}</div>
+            ? <Group>{data.history.map((h) => <JobRow key={h.id} job={{ id: h.id, order_number: h.order_number, status: h.status, scheduled_for: h.created_at }} meta={byKey.get(h.status)} showStatus />)}</Group>
             : <Empty icon={<Package size={22} />} title="No jobs yet" body={`This ${noun.toLowerCase()} hasn't been in for a job.`} />}
         </Section>
       </div>
