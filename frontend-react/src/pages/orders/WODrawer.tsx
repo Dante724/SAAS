@@ -110,7 +110,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
     } catch (e: any) { flash(`Failed: ${e.message}`); }
   }
   async function markDone() {
-    try { await api.post(`/orders/${order.id}/complete`, {}); onChanged?.(); onClose(); }
+    try { await api.post(`/orders/${order.id}/complete`, finishStatus ? { status: finishStatus.key } : {}); onChanged?.(); onClose(); }
     catch (e: any) { flash(`Cannot close: ${e.message}`); }
   }
   async function del() {
@@ -183,6 +183,12 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   const devTitle = deviceName(d.device) !== "—" ? deviceName(d.device) : (dev.asset_label || "Device");
   const isClosed = !!statuses.find((st) => st.key === d.status && ["closed", "dropped"].includes(st.status_group || ""));
   const due = dueText(d.due_at, !isClosed);
+  // The footer's finish button moves the job to the shop's first final status ("Done").
+  // Hidden once the job is already finished (Done, Delivered, Not collected…), where it
+  // would drag a closed job back to "Done", and on estimates, which finish by acceptance.
+  const finishStatus = (order as any).is_estimate ? null
+    : [...statuses].filter((st) => st.is_terminal).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))[0] || null;
+  const showFinish = !!finishStatus && !isClosed;
 
   // 144dd — tab badges reflect real state (no always-on dots). Amber Checklists dot only when a
   // required checklist item is still undone; red Activity count only when a customer message is unread.
@@ -470,7 +476,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
           </div>
           <div className="flex items-center gap-2">
             <button onClick={onClose} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 transition-colors">Close</button>
-            <button onClick={markDone} className="px-5 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="task_alt" c="text-sm" />Mark done and close</button>
+            {showFinish && <button onClick={markDone} className="px-5 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="task_alt" c="text-sm" />Mark {finishStatus!.name.toLowerCase()} and close</button>}
           </div>
         </footer>
 
