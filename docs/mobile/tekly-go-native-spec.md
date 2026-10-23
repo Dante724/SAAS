@@ -151,7 +151,7 @@ Account and shop, notification settings per kind, devices signed in ("This iPhon
 | Storage | `expo-sqlite` for the queue, cache and pending uploads; `expo-secure-store` for tokens [S11] | SQLite is encrypted (SQLCipher option) with a key kept in Keychain / Keystore. |
 | Camera / scan | `expo-camera` `CameraView` barcode scanning; `launchScanner()` as a fallback [S5] | VisionCamera only if we need a frame processor later. |
 | Biometrics | `expo-local-authentication` [S11] | Face ID / fingerprint app lock (§10). |
-| Push | `expo-notifications` + Expo push service for alerts; direct APNs for Live Activity updates (M2) [S9] | See open question Q1. |
+| Push | `expo-notifications` + Expo push service for alerts; direct APNs for Live Activity updates (M2) [S9] | Decided (§18 Q1). |
 | Widgets / Live Activities | **`expo-widgets`** (stable since SDK 56; Android widgets opt-in in SDK 58) [S6][S7] | Widgets are written in JSX with `@expo/ui` SwiftUI / Compose components. They run in an isolated runtime with no hooks or async, so the app writes their data. |
 | App Intents / Shortcuts | **`expo-app-intents` (alpha)** [S8] | Intent types are Swift; JS handles them. Pinned version, behind a feature flag (§7). |
 | NFC | `react-native-nfc-manager` 4.x (config plugin) [S10] | M2. |
@@ -484,7 +484,7 @@ Events are sent to our own backend (`POST /api/mobile/v1/events`, batched, no th
 
 These are asked one at a time, each with a recommendation.
 
-1. **Push provider.** *Recommend:* the Expo push service for alerts, with direct APNs only for Live Activities. *Alternative:* direct APNs + FCM from day one: no third party, but more credential handling on our server.
+1. ~~**Push provider.**~~ **Decided 2026-10-23:** the Expo push service for alerts, with direct APNs only for Live Activities (M2).
 2. **In-app "Delete account".** *Recommend:* ship it even though the app creates no accounts.
 3. **iOS 26 tab bar.** Native tabs render Apple's Liquid Glass. *Recommend:* accept it, because it's the system look, not our decoration, and fighting it makes the app feel non-native. *Alternative:* a custom flat tab bar (JS tabs).
 4. **Where the app lives.** *Recommend:* `mobile/` as a standalone npm project.
