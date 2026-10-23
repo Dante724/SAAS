@@ -153,6 +153,9 @@ async def create_feed_item(
         author_name=current.name,
     )
     db.add(item)
+    if entity_type == "order" and data.item_type == "photo":
+        from backend.services import pilot
+        pilot.record_photos(db, current, entity_id, 1, "feed")
     await db.commit()
     await db.refresh(item)
     return _serialize(item)

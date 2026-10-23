@@ -99,7 +99,7 @@ export default function PaySheet({ open, onClose, orderId, orderNumber, customer
     finally { setBusy(false); }
   }
 
-  const tile = (on: boolean) => `min-h-[4.5rem] rounded-2xl border flex flex-col items-center justify-center gap-1 text-[0.9375rem] font-semibold ${on ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`;
+  const tile = (on: boolean) => `min-h-[4.5rem] rounded-xl border flex flex-col items-center justify-center gap-1 text-go-body font-semibold ${on ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`;
   const hasCash = !!ctx?.accounts_by_method.cash?.length;
   const hasCard = !!(ctx?.accounts_by_method.card?.length || ctx?.accounts_by_method.cashless?.length);
 
@@ -115,10 +115,10 @@ export default function PaySheet({ open, onClose, orderId, orderNumber, customer
         ) : (
           <>
             <div className="text-center">
-              <p className="text-[0.8125rem] font-semibold text-ink-tertiary">{customer || "Customer"} pays</p>
+              <p className="text-go-sub font-semibold text-ink-tertiary">{customer || "Customer"} pays</p>
               <input value={amountRaw} onChange={(e) => setAmountRaw(e.target.value)} inputMode="decimal" aria-label="Amount"
-                className="mt-1 w-full bg-transparent text-center text-[2.75rem] font-bold tabular-nums tracking-tight text-ink-primary focus:outline-none" />
-              <p className="text-[0.875rem] text-ink-secondary">{amount && amount < remaining ? `Part payment · ${fmt(remaining)} owed` : `Balance due ${fmt(remaining)}`}</p>
+                className="mt-1 w-full bg-transparent text-center text-go-display font-bold tabular-nums tracking-tight text-ink-primary focus:outline-none" />
+              <p className="text-go-sub text-ink-secondary">{amount && amount < remaining ? `Part payment · ${fmt(remaining)} owed` : `Balance due ${fmt(remaining)}`}</p>
             </div>
 
             <div className="mt-4 grid grid-cols-3 gap-2">
@@ -126,23 +126,23 @@ export default function PaySheet({ open, onClose, orderId, orderNumber, customer
               {hasCard && <button onClick={() => setMethod("card")} className={tile(method === "card")}><CreditCard size={22} />Card</button>}
               {mayLink && <button onClick={() => { setMethod("link"); if (!link) makeLink(); }} className={tile(method === "link")}><QrCode size={22} />Pay link</button>}
             </div>
-            {!hasCash && !hasCard && !mayLink && <p className="mt-3 text-[0.875rem] text-ink-secondary">No cashbox or card account is set up. Add one in Tekly → Finance.</p>}
+            {!hasCash && !hasCard && !mayLink && <p className="mt-3 text-go-sub text-ink-secondary">No cashbox or card account is set up. Add one in Tekly → Finance.</p>}
 
             {method === "cash" && amount && (
               <div className="mt-4">
-                <p className="mb-2 text-[0.8125rem] font-semibold text-ink-tertiary">Customer handed you</p>
+                <p className="mb-2 text-go-sub font-semibold text-ink-tertiary">Customer handed you</p>
                 <div className="flex flex-wrap gap-2">
                   {quickTender(amount).map((v) => (
                     <button key={v} onClick={() => setTendered(v)} className={`min-h-[2.75rem] px-4 rounded-full border font-semibold tabular-nums ${tendered === v ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`}>{fmt(v)}</button>
                   ))}
                 </div>
-                {tendered != null && tendered > amount && <p className="mt-3 text-center text-[1.5rem] font-bold text-emerald-700">Change {fmt(changeDue(tendered, amount))}</p>}
+                {tendered != null && tendered > amount && <p className="mt-3 text-center text-go-title font-bold text-emerald-700">Change {fmt(changeDue(tendered, amount))}</p>}
               </div>
             )}
 
             {(method === "cash" || method === "card") && accounts.length > 1 && (
               <div className="mt-4">
-                <p className="mb-2 text-[0.8125rem] font-semibold text-ink-tertiary">{method === "cash" ? "Cashbox" : "Card account"}</p>
+                <p className="mb-2 text-go-sub font-semibold text-ink-tertiary">{method === "cash" ? "Cashbox" : "Card account"}</p>
                 <div className="flex flex-wrap gap-2">
                   {accounts.map((a) => <button key={a.id} onClick={() => setAccountId(a.id)} className={`min-h-[2.75rem] px-4 rounded-full border font-medium ${accountId === a.id ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`}>{a.name}</button>)}
                 </div>
@@ -153,11 +153,11 @@ export default function PaySheet({ open, onClose, orderId, orderNumber, customer
               <div className="mt-4 text-center">
                 {!link ? <Loader2 className="mx-auto animate-spin text-ink-tertiary" /> : (
                   <>
-                    <img src={link.qr_svg} alt="Pay link QR code" className="mx-auto h-56 w-56 rounded-2xl bg-white p-3" />
-                    <p className="mt-2 text-[0.875rem] text-ink-secondary inline-flex items-center gap-1.5"><Loader2 size={14} className="animate-spin" />Waiting for the customer to pay…</p>
+                    <img src={link.qr_svg} alt="Pay link QR code" className="mx-auto h-56 w-56 rounded-xl bg-white p-3" />
+                    <p className="mt-2 text-go-sub text-ink-secondary inline-flex items-center gap-1.5"><Loader2 size={14} className="animate-spin" />Waiting for the customer to pay…</p>
                     {"share" in navigator && (
                       <button onClick={() => navigator.share({ title: `Pay for ${orderNumber}`, url: link.url }).catch(() => {})}
-                        className="mt-3 min-h-[2.75rem] px-5 rounded-2xl border border-slate-200 bg-white font-semibold text-ink-primary inline-flex items-center gap-2"><Share2 size={18} />Send the link</button>
+                        className="mt-3 min-h-[2.75rem] px-5 rounded-xl border border-slate-200 bg-white font-semibold text-ink-primary inline-flex items-center gap-2"><Share2 size={18} />Send the link</button>
                     )}
                   </>
                 )}
@@ -167,7 +167,7 @@ export default function PaySheet({ open, onClose, orderId, orderNumber, customer
             {(method === "cash" || method === "card") && (
               <div className="mt-5">
                 {confirming && (
-                  <p className="mb-2 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-[0.875rem] text-amber-800">
+                  <p className="mb-2 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-go-sub text-amber-800">
                     Record {amount ? fmt(amount) : ""} {method === "cash" ? "cash" : "by card"} from {customer || "the customer"}, taken by {me?.name || "you"}?
                   </p>
                 )}

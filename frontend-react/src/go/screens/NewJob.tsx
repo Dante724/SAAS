@@ -29,12 +29,12 @@ type JobType = { id: string; name: string; is_default?: boolean };
 const PROBLEMS = ["Cracked screen", "Battery", "Charging port", "Water damage", "Won't turn on", "Software"];
 const CONDITIONS = ["Like new", "Scratches", "Dents", "Cracked back", "Bent frame"];
 const deviceLabel = (d: Device) => [d.brand, d.model].filter(Boolean).join(" ") || d.serial || d.imei || "Device";
-const field = "w-full min-h-[3rem] rounded-2xl border border-slate-200 bg-white px-4 text-[1rem] text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15";
-const chip = (on: boolean) => `min-h-[2.75rem] px-4 rounded-full border text-[0.9375rem] font-medium inline-flex items-center gap-1.5 ${on ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`;
+const field = "w-full min-h-[3rem] rounded-xl border border-slate-200 bg-white px-4 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15";
+const chip = (on: boolean) => `min-h-[2.75rem] px-4 rounded-full border text-go-body font-medium inline-flex items-center gap-1.5 ${on ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`;
 const whenText = (local: string) => new Date(local).toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 
 function Label({ children }: { children: React.ReactNode }) {
-  return <p className="mb-2 px-1 text-[0.8125rem] font-semibold text-ink-tertiary">{children}</p>;
+  return <p className="mb-2 px-1 text-go-sub font-semibold text-ink-tertiary">{children}</p>;
 }
 
 export default function NewJob() {
@@ -223,10 +223,10 @@ export default function NewJob() {
           title="Drop-off terms" doneLabel="I agree" wide onSign={saveDropoffSignature}
           onSaved={() => toast({ title: "Signed", body: "Saved on the job and shown to the customer." })}
           intro={
-            <div className="mb-3 rounded-2xl border border-slate-200 bg-white p-4 text-left">
-              <p className="text-[0.8125rem] font-semibold text-ink-tertiary">{terms?.shop || "Drop-off terms"} · {created.order_number}</p>
-              <p className="mt-1.5 max-h-[18vh] overflow-y-auto whitespace-pre-wrap text-[0.9375rem] leading-relaxed text-ink-primary">{terms?.terms || "Please sign to confirm you've left this item with us."}</p>
-              <p className="mt-2 text-[0.875rem] text-ink-secondary">{client?.name ? `${client.name}, please sign below.` : "Please sign below."}</p>
+            <div className="mb-3 rounded-xl border border-slate-200 bg-white p-4 text-left">
+              <p className="text-go-sub font-semibold text-ink-tertiary">{terms?.shop || "Drop-off terms"} · {created.order_number}</p>
+              <p className="mt-1.5 max-h-[18vh] overflow-y-auto whitespace-pre-wrap text-go-body leading-relaxed text-ink-primary">{terms?.terms || "Please sign to confirm you've left this item with us."}</p>
+              <p className="mt-2 text-go-sub text-ink-secondary">{client?.name ? `${client.name}, please sign below.` : "Please sign below."}</p>
             </div>
           } />
       </Page>
@@ -238,10 +238,10 @@ export default function NewJob() {
   const form = (
     <>
       {mayEstimate && (
-        <div className="mb-5 grid grid-cols-2 rounded-2xl bg-slate-100 p-1" role="tablist">
+        <div className="mb-5 grid grid-cols-2 rounded-xl bg-slate-100 p-1" role="tablist">
           {[false, true].map((est) => (
             <button key={String(est)} role="tab" aria-selected={isEstimate === est} onClick={() => setIsEstimate(est)}
-              className={`min-h-[2.75rem] rounded-xl text-[0.9375rem] font-semibold ${isEstimate === est ? "bg-white text-ink-primary shadow-clay-sm" : "text-ink-secondary"}`}>
+              className={`min-h-[2.75rem] rounded-lg text-go-body font-semibold ${isEstimate === est ? "bg-white text-ink-primary" : "text-ink-secondary"}`}>
               {est ? "Estimate" : "Job"}
             </button>
           ))}
@@ -253,7 +253,7 @@ export default function NewJob() {
         {client ? (
           <Card className="p-3 flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-primary"><User size={20} /></span>
-            <div className="min-w-0 flex-1"><p className="font-semibold text-ink-primary truncate">{client.name}</p>{client.phone && <p className="text-[0.875rem] text-ink-secondary">{client.phone}</p>}</div>
+            <div className="min-w-0 flex-1"><p className="font-semibold text-ink-primary truncate">{client.name}</p>{client.phone && <p className="text-go-sub text-ink-secondary">{client.phone}</p>}</div>
             <button onClick={() => { setClient(null); setDeviceId(null); setNewDevice(null); }} aria-label="Change customer" className="h-11 w-11 inline-flex items-center justify-center rounded-full text-ink-tertiary active:bg-slate-100"><X size={20} /></button>
           </Card>
         ) : adding ? (
@@ -261,8 +261,8 @@ export default function NewJob() {
             <input autoFocus value={adding.name} onChange={(e) => setAdding({ ...adding, name: e.target.value })} placeholder="Name" aria-label="Name" className={field} />
             <input value={adding.phone} onChange={(e) => setAdding({ ...adding, phone: e.target.value })} placeholder="Phone" aria-label="Phone" inputMode="tel" className={field} />
             <div className="flex gap-2">
-              <button onClick={() => setAdding(null)} className="min-h-[2.75rem] flex-1 rounded-2xl border border-slate-200 font-semibold text-ink-primary">Back</button>
-              <button onClick={saveClient} disabled={!adding.name.trim() || savingClient} className="min-h-[2.75rem] flex-1 rounded-2xl bg-primary font-semibold text-white disabled:opacity-50">{savingClient ? "Adding…" : "Add customer"}</button>
+              <button onClick={() => setAdding(null)} className="min-h-[2.75rem] flex-1 rounded-xl border border-slate-200 font-semibold text-ink-primary">Back</button>
+              <button onClick={saveClient} disabled={!adding.name.trim() || savingClient} className="min-h-[2.75rem] flex-1 rounded-xl bg-primary font-semibold text-white disabled:opacity-50">{savingClient ? "Adding…" : "Add customer"}</button>
             </div>
           </Card>
         ) : (
@@ -273,11 +273,11 @@ export default function NewJob() {
               {searching && <Loader2 size={18} className="absolute right-4 top-1/2 -translate-y-1/2 animate-spin text-ink-tertiary" />}
             </div>
             {(results.length > 0 || term.length >= 2) && (
-              <Card className="mt-2 overflow-hidden divide-y divide-slate-100">
+              <Card className="mt-2 overflow-hidden divide-y-[0.5px] divide-slate-200">
                 {results.map((c) => (
                   <button key={c.id} onClick={() => pickClient(c)} className="w-full min-h-[3.25rem] px-4 py-2 text-left active:bg-slate-50">
                     <p className="font-medium text-ink-primary">{c.name}</p>
-                    <p className="text-[0.8125rem] text-ink-secondary truncate">{[c.phone, ...(c.devices || []).slice(0, 2).map(deviceLabel)].filter(Boolean).join(" · ")}</p>
+                    <p className="text-go-sub text-ink-secondary truncate">{[c.phone, ...(c.devices || []).slice(0, 2).map(deviceLabel)].filter(Boolean).join(" · ")}</p>
                   </button>
                 ))}
                 {term.length >= 2 && (
@@ -287,7 +287,7 @@ export default function NewJob() {
                 )}
               </Card>
             )}
-            <p className="mt-2 px-1 text-[0.8125rem] text-ink-tertiary">Leave empty for a walk-in.</p>
+            <p className="mt-2 px-1 text-go-sub text-ink-tertiary">Leave empty for a walk-in.</p>
           </>
         )}
       </section>
@@ -313,7 +313,7 @@ export default function NewJob() {
                 <input value={newDevice.imei} onChange={(e) => setNewDevice({ ...newDevice, imei: e.target.value })} placeholder="IMEI" aria-label="IMEI" inputMode="numeric" className={`${field} col-span-2 md:col-span-1`} />
                 <input value={newDevice.serial} onChange={(e) => setNewDevice({ ...newDevice, serial: e.target.value })} placeholder="Serial number" aria-label="Serial number" autoCapitalize="characters" className={`${field} col-span-2 md:col-span-1`} />
               </div>
-              <p className="mt-3 mb-2 px-1 text-[0.8125rem] font-semibold text-ink-tertiary">Condition at drop-off</p>
+              <p className="mt-3 mb-2 px-1 text-go-sub font-semibold text-ink-tertiary">Condition at drop-off</p>
               <input value={condition} onChange={(e) => setCondition(e.target.value)} placeholder="Marks, cracks, missing parts…" aria-label="Condition at drop-off" className={field} />
               <div className="mt-2 flex flex-wrap gap-2">
                 {CONDITIONS.map((c) => <button key={c} onClick={() => setCondition((cur) => addProblem(cur, c))} className={chip(false)}>{c}</button>)}
@@ -355,7 +355,7 @@ export default function NewJob() {
             <button onClick={() => setPickDue((v) => !v)} aria-pressed={pickDue} className={chip(pickDue || (!!dueAt && !presets.some((p) => p.value === dueAt)))}><CalendarClock size={16} />Pick…</button>
           </div>
           {pickDue && <input type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} aria-label="Promised by date and time" className={`${field} mt-2`} />}
-          {dueAt && <p className="mt-2 px-1 text-[0.8125rem] text-ink-secondary">Due {whenText(dueAt)}</p>}
+          {dueAt && <p className="mt-2 px-1 text-go-sub text-ink-secondary">Due {whenText(dueAt)}</p>}
         </div>
       </section>
 
@@ -371,7 +371,7 @@ export default function NewJob() {
         <Label>{isEstimate ? "Estimate" : "Quote"}</Label>
         <Card className="p-3">
           {lines.length > 0 && (
-            <div className="divide-y divide-slate-100 mb-2">
+            <div className="divide-y-[0.5px] divide-slate-200 mb-2">
               {lines.map((l, i) => (
                 <div key={i} className="flex items-center gap-3 py-2">
                   <span className="min-w-0 flex-1 truncate text-ink-primary">{l.description}</span>
@@ -387,7 +387,7 @@ export default function NewJob() {
           </button>
         </Card>
         <div className="mt-3 flex items-center gap-3">
-          <label htmlFor="deposit" className="flex-1 px-1 text-[0.9375rem] text-ink-secondary">Ask for a deposit</label>
+          <label htmlFor="deposit" className="flex-1 px-1 text-go-body text-ink-secondary">Ask for a deposit</label>
           <input id="deposit" value={deposit} onChange={(e) => setDeposit(e.target.value)} placeholder="0" inputMode="decimal" className={`${field} !w-36 text-right tabular-nums`} />
         </div>
       </section>
@@ -395,18 +395,18 @@ export default function NewJob() {
       <section className="mb-5">
         <Label>Photos</Label>
         <div className="flex gap-2 overflow-x-auto pb-1">
-          <button onClick={() => fileRef.current?.click()} className="h-20 w-20 shrink-0 rounded-2xl border-2 border-dashed border-slate-300 inline-flex flex-col items-center justify-center gap-1 text-ink-secondary active:bg-slate-50">
-            <Camera size={22} /><span className="text-[0.75rem] font-medium">Add</span>
+          <button onClick={() => fileRef.current?.click()} className="h-20 w-20 shrink-0 rounded-xl border-2 border-dashed border-slate-300 inline-flex flex-col items-center justify-center gap-1 text-ink-secondary active:bg-slate-50">
+            <Camera size={22} /><span className="text-go-caption font-medium">Add</span>
           </button>
           {photos.map((p, i) => (
             <div key={i} className="relative h-20 w-20 shrink-0">
-              <img src={p} alt={`Photo ${i + 1}`} className="h-20 w-20 rounded-2xl object-cover" />
+              <img src={p} alt={`Photo ${i + 1}`} className="h-20 w-20 rounded-xl object-cover" />
               <button onClick={() => setPhotos((l) => l.filter((_, j) => j !== i))} aria-label="Remove photo"
                 className="absolute -right-1.5 -top-1.5 h-7 w-7 rounded-full bg-ink-primary text-white inline-flex items-center justify-center"><X size={14} /></button>
             </div>
           ))}
         </div>
-        <p className="mt-1.5 px-1 text-[0.8125rem] text-ink-tertiary">Saved as check-in photos.</p>
+        <p className="mt-1.5 px-1 text-go-sub text-ink-tertiary">Saved as check-in photos.</p>
         <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple hidden onChange={(e) => onPhotos(e.target.files)} />
       </section>
 
@@ -424,23 +424,24 @@ export default function NewJob() {
 
   const signToggle = client && (
     <button onClick={() => setWantSign((v) => !v)} aria-pressed={wantSign}
-      className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 text-left">
+      className="w-full min-h-[3.25rem] flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 text-left">
       <span className={`h-6 w-6 shrink-0 rounded-md border-2 inline-flex items-center justify-center ${wantSign ? "border-primary bg-primary text-white" : "border-slate-300"}`}>{wantSign && <Check size={16} />}</span>
-      <span className="flex-1 text-[0.9375rem] text-ink-primary">Customer signs the drop-off terms</span>
+      <span className="flex-1 text-go-body text-ink-primary">Customer signs the drop-off terms</span>
       <PenLine size={18} className="text-ink-tertiary" />
     </button>
   );
   const createLabel = busy || (isEstimate ? "Create estimate" : "Create job");
 
   return (
-    <Page title={isEstimate ? "New estimate" : "New job"} back={back}>
+    <Page title={isEstimate ? "New estimate" : "New job"} back={back}
+      footer={!wide && <PrimaryButton onClick={create} disabled={!!busy}>{createLabel}</PrimaryButton>}>
       {wide ? (
         <div className="grid grid-cols-[minmax(0,1fr)_19rem] lg:grid-cols-[minmax(0,1fr)_22rem] gap-6 items-start">
           <div className="min-w-0">{form}</div>
           {/* tablet: a live summary of what's being booked in, with the Create button always in reach */}
           <aside className="sticky top-14 space-y-3" aria-label="Summary">
-            <Card className="p-4 space-y-2.5 text-[0.9375rem]">
-              <p className="text-[0.8125rem] font-semibold text-ink-tertiary">Booking in</p>
+            <Card className="p-4 space-y-2.5 text-go-body">
+              <p className="text-go-sub font-semibold text-ink-tertiary">Booking in</p>
               <Row k="Customer" v={client?.name || "Walk-in"} />
               <Row k="Device" v={deviceId ? deviceLabel((client?.devices || []).find((d) => d.id === deviceId) || { id: "" }) : newDevice && (newDevice.brand || newDevice.model) ? `${newDevice.brand} ${newDevice.model}`.trim() : "—"} />
               <Row k="Problem" v={complaint.trim() || "—"} />
@@ -450,20 +451,17 @@ export default function NewJob() {
               <Row k={isEstimate ? "Estimate" : "Quote"} v={lines.length ? fmt(total) : "—"} />
               {depositAmount > 0 && <Row k="Deposit" v={fmt(depositAmount)} />}
               <Row k="Photos" v={photos.length ? String(photos.length) : "—"} />
-              {missing.size > 0 && <p className="rounded-xl bg-amber-50 px-3 py-2 text-[0.875rem] text-amber-800">Still needed: {[...missing].join(", ")}</p>}
+              {missing.size > 0 && <p className="rounded-xl bg-amber-50 px-3 py-2 text-go-sub text-amber-800">Still needed: {[...missing].join(", ")}</p>}
             </Card>
             {signToggle}
             <PrimaryButton onClick={create} disabled={!!busy}>{createLabel}</PrimaryButton>
-            <p className="px-1 text-center text-[0.8125rem] text-ink-tertiary">Then print the ticket or text the tracking link.</p>
+            <p className="px-1 text-center text-go-sub text-ink-tertiary">Then print the ticket or text the tracking link.</p>
           </aside>
         </div>
       ) : (
         <>
           {form}
           {signToggle && <div className="mb-4">{signToggle}</div>}
-          <div className="sticky bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] z-10">
-            <PrimaryButton onClick={create} disabled={!!busy}>{createLabel}</PrimaryButton>
-          </div>
         </>
       )}
       <QuoteSheet open={quoteOpen} onClose={() => setQuoteOpen(false)} deviceId={deviceId}

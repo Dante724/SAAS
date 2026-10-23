@@ -59,17 +59,17 @@ export default function TaskSheet({ open, onClose, orderId, orderLabel }: { open
     } finally { setBusy(false); }
   }
 
-  const chip = (on: boolean) => `min-h-[2.75rem] px-4 rounded-full border text-[0.9375rem] font-medium inline-flex items-center gap-1.5 ${on ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`;
+  const chip = (on: boolean) => `min-h-[2.75rem] px-4 rounded-full border text-go-body font-medium inline-flex items-center gap-1.5 ${on ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`;
 
   return (
     <Sheet open={open} onClose={onClose} title="New task">
       <div className="px-2 space-y-4">
         <input ref={input} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What needs doing?" enterKeyHint="done"
           onKeyDown={(e) => { if (e.key === "Enter") save(); }}
-          className="w-full min-h-[3.25rem] rounded-2xl border border-slate-200 bg-white px-4 text-[1.0625rem] text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15" />
-        {orderId && <p className="inline-flex items-center gap-1.5 text-[0.875rem] text-ink-secondary"><Link2 size={15} />On job {orderLabel}</p>}
+          className="w-full min-h-[3.25rem] rounded-xl border border-slate-200 bg-white px-4 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15" />
+        {orderId && <p className="inline-flex items-center gap-1.5 text-go-sub text-ink-secondary"><Link2 size={15} />On job {orderLabel}</p>}
         <div>
-          <p className="mb-2 text-[0.8125rem] font-semibold text-ink-tertiary">When</p>
+          <p className="mb-2 text-go-sub font-semibold text-ink-tertiary">When</p>
           <div className="flex flex-wrap gap-2">
             {(["today", "tomorrow", "none", "pick"] as When[]).map((w) => (
               <button key={w} onClick={() => setWhen(w)} className={chip(when === w)}>
@@ -79,11 +79,11 @@ export default function TaskSheet({ open, onClose, orderId, orderLabel }: { open
           </div>
           {when === "pick" && (
             <input type="datetime-local" value={picked} onChange={(e) => setPicked(e.target.value)}
-              className="mt-2 w-full min-h-[3rem] rounded-2xl border border-slate-200 bg-white px-4 text-ink-primary" />
+              className="mt-2 w-full min-h-[3rem] rounded-xl border border-slate-200 bg-white px-4 text-ink-primary" />
           )}
         </div>
         <div>
-          <p className="mb-2 text-[0.8125rem] font-semibold text-ink-tertiary">Who</p>
+          <p className="mb-2 text-go-sub font-semibold text-ink-tertiary">Who</p>
           <div className="flex flex-wrap gap-2">
             {people.map((p) => (
               <button key={p.id} onClick={() => setWho(p.id)} className={chip(who === p.id)}>{who === p.id && <Check size={16} />}{p.name}</button>

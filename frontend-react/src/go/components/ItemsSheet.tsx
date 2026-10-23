@@ -85,10 +85,10 @@ export default function ItemsSheet({ open, onClose, orderId, deviceId, onAdded, 
     <Sheet open={open} onClose={onClose} title={count ? `Added ${count}` : "Add to job"}>
       <div className="px-2">
         {mayService && mayPart && (
-          <div className="mb-3 grid grid-cols-2 rounded-2xl bg-slate-100 p-1">
+          <div className="mb-3 grid grid-cols-2 rounded-xl bg-slate-100 p-1">
             {(["service", "product"] as const).map((t) => (
               <button key={t} onClick={() => setType(t)} aria-pressed={type === t}
-                className={`min-h-[2.75rem] rounded-xl text-[0.9375rem] font-semibold inline-flex items-center justify-center gap-1.5 ${type === t ? "bg-white text-ink-primary shadow-clay-sm" : "text-ink-secondary"}`}>
+                className={`min-h-[2.75rem] rounded-lg text-go-body font-semibold inline-flex items-center justify-center gap-1.5 ${type === t ? "bg-white text-ink-primary" : "text-ink-secondary"}`}>
                 {t === "service" ? <Wrench size={16} /> : <Package size={16} />}{t === "service" ? "Service" : "Part"}
               </button>
             ))}
@@ -98,25 +98,25 @@ export default function ItemsSheet({ open, onClose, orderId, deviceId, onAdded, 
           <div className="relative flex-1">
             <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-tertiary" />
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={type === "service" ? "Search services" : "Search parts, SKU, barcode"} enterKeyHint="search" aria-label="Search the catalogue"
-              className="w-full min-h-[3rem] rounded-2xl border border-slate-200 bg-white pl-11 pr-4 text-[1rem] text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary" />
+              className="w-full min-h-[3rem] rounded-xl border border-slate-200 bg-white pl-11 pr-4 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary" />
           </div>
           {type === "product" && cameraSupported() && (
             <button onClick={() => setScanning((v) => !v)} aria-label={scanning ? "Stop scanning" : "Scan a part's barcode"} aria-pressed={scanning}
-              className={`h-12 w-12 shrink-0 rounded-2xl border inline-flex items-center justify-center ${scanning ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`}>
+              className={`h-12 w-12 shrink-0 rounded-xl border inline-flex items-center justify-center ${scanning ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`}>
               {scanning ? <X size={20} /> : <ScanBarcode size={22} />}
             </button>
           )}
         </div>
         {scanning && (
-          <div className="relative mb-3 aspect-[4/3] w-full overflow-hidden rounded-2xl bg-[#0b1020]">
+          <div className="relative mb-3 aspect-[4/3] w-full overflow-hidden rounded-xl bg-[#0b1020]">
             <video ref={video} className="h-full w-full object-cover" playsInline muted />
             <div className="pointer-events-none absolute inset-x-8 top-1/2 h-0.5 -translate-y-1/2 bg-rose-500/80" />
-            <p className="absolute inset-x-0 bottom-2 text-center text-[0.8125rem] text-white/90">Point at the part's barcode</p>
+            <p className="absolute inset-x-0 bottom-2 text-center text-go-sub text-white/90">Point at the part's barcode</p>
           </div>
         )}
         {!mayService && !mayPart && <p className="px-2 py-4 text-ink-secondary">Your role can't add items to jobs.</p>}
         {hits === null ? <div className="py-6 flex justify-center text-ink-tertiary"><Loader2 className="animate-spin" /></div> : (
-          <div className="divide-y divide-slate-100">
+          <div className="divide-y-[0.5px] divide-slate-200">
             {hits.map((h) => {
               const n = added[h.ref_id] || 0;
               const out = h.kind === "product" && h.available != null && h.available <= 0;
@@ -125,7 +125,7 @@ export default function ItemsSheet({ open, onClose, orderId, deviceId, onAdded, 
                   className="w-full min-h-[3.5rem] flex items-center gap-3 px-2 text-left active:bg-slate-50">
                   <span className="min-w-0 flex-1">
                     <span className="block font-medium text-ink-primary truncate">{h.name}</span>
-                    <span className="block text-[0.8125rem] text-ink-secondary">
+                    <span className="block text-go-sub text-ink-secondary">
                       {h.kind === "product" ? (out ? <span className="text-amber-700">Out of stock</span> : h.available != null ? `${h.available} in stock` : h.sku || "") : "Service"}
                       {h.fits ? " · fits this device" : ""}
                     </span>
@@ -133,7 +133,7 @@ export default function ItemsSheet({ open, onClose, orderId, deviceId, onAdded, 
                   <span className="tabular-nums text-ink-primary">{fmt(h.price)}</span>
                   <span className="w-8 inline-flex justify-center">
                     {adding === h.ref_id ? <Loader2 size={18} className="animate-spin text-ink-tertiary" />
-                      : n ? <span className="inline-flex items-center gap-0.5 text-[0.8125rem] font-semibold text-emerald-700"><Check size={16} />{n > 1 ? n : ""}</span> : null}
+                      : n ? <span className="inline-flex items-center gap-0.5 text-go-sub font-semibold text-emerald-700"><Check size={16} />{n > 1 ? n : ""}</span> : null}
                   </span>
                 </button>
               );
@@ -142,7 +142,7 @@ export default function ItemsSheet({ open, onClose, orderId, deviceId, onAdded, 
           </div>
         )}
         {type === "product" && onRequestPart && (
-          <button onClick={() => onRequestPart(q.trim())} className="mt-2 w-full min-h-[3.25rem] rounded-2xl border border-dashed border-slate-300 inline-flex items-center justify-center gap-2 font-semibold text-primary active:bg-slate-50">
+          <button onClick={() => onRequestPart(q.trim())} className="mt-2 w-full min-h-[3.25rem] rounded-xl border border-dashed border-slate-300 inline-flex items-center justify-center gap-2 font-semibold text-primary active:bg-slate-50">
             <PackageSearch size={18} />Part not here? Ask for it to be ordered
           </button>
         )}

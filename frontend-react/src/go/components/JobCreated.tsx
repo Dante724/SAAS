@@ -43,8 +43,8 @@ export default function JobCreated({ job, isEstimate, customer, onOpen, onAnothe
   return (
     <div className="py-6 md:py-10 max-w-xl mx-auto text-center">
       <CheckCircle2 size={56} strokeWidth={1.5} className="mx-auto text-emerald-600" />
-      <h2 className="mt-3 text-[1.5rem] font-bold text-ink-primary">{isEstimate ? "Estimate" : "Job"} {job.order_number} booked in</h2>
-      {customer && <p className="mt-1 text-[1rem] text-ink-secondary">{customer.name}{customer.phone ? ` · ${customer.phone}` : ""}</p>}
+      <h2 className="mt-3 text-go-title font-bold text-ink-primary">{isEstimate ? "Estimate" : "Job"} {job.order_number} booked in</h2>
+      {customer && <p className="mt-1 text-go-body text-ink-secondary">{customer.name}{customer.phone ? ` · ${customer.phone}` : ""}</p>}
       <Card className="mt-6 p-3 text-left">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <GhostButton onClick={() => run("print")} className="min-h-[3.5rem] justify-start">{spin("print") || <Printer size={20} />}Print ticket</GhostButton>

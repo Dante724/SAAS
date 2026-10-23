@@ -121,7 +121,7 @@ export default function MessageSheet({ open, onClose, orderId, onRead }: {
 
   const tabBtn = (t: typeof tab, label: string, Icon: typeof Send) => (
     <button onClick={() => setTab(t)} aria-pressed={tab === t}
-      className={`min-h-[2.75rem] rounded-xl text-[0.9375rem] font-semibold inline-flex items-center justify-center gap-1.5 ${tab === t ? "bg-white text-ink-primary shadow-clay-sm" : "text-ink-secondary"}`}>
+      className={`min-h-[2.75rem] rounded-lg text-go-body font-semibold inline-flex items-center justify-center gap-1.5 ${tab === t ? "bg-white text-ink-primary" : "text-ink-secondary"}`}>
       <Icon size={16} />{label}
     </button>
   );
@@ -132,14 +132,14 @@ export default function MessageSheet({ open, onClose, orderId, onRead }: {
   return (
     <Sheet open={open} onClose={onClose} title="Message">
       <div className="px-2">
-        {mayText && <div className="mb-3 grid grid-cols-2 rounded-2xl bg-slate-100 p-1">{tabBtn("chat", "Chat", MessageCircle)}{tabBtn("text", "Text / WhatsApp", MessageSquareText)}</div>}
+        {mayText && <div className="mb-3 grid grid-cols-2 rounded-xl bg-slate-100 p-1">{tabBtn("chat", "Chat", MessageCircle)}{tabBtn("text", "Text / WhatsApp", MessageSquareText)}</div>}
 
         {confirmSent ? (
           <div className="py-6 text-center">
-            <p className="text-[1.0625rem] font-semibold text-ink-primary">Did the {asked?.channel === "whatsapp" ? "WhatsApp" : "text"} go?</p>
-            <p className="mt-1 text-[0.875rem] text-ink-secondary">If yes, it's added to the job and the customer's tracking page.</p>
+            <p className="text-go-body font-semibold text-ink-primary">Did the {asked?.channel === "whatsapp" ? "WhatsApp" : "text"} go?</p>
+            <p className="mt-1 text-go-sub text-ink-secondary">If yes, it's added to the job and the customer's tracking page.</p>
             <div className="mt-4 flex gap-2">
-              <button onClick={() => markSent(false)} className="min-h-[3.25rem] flex-1 rounded-2xl border border-slate-200 bg-white font-semibold text-ink-primary">Not sent</button>
+              <button onClick={() => markSent(false)} className="min-h-[3.25rem] flex-1 rounded-xl border border-slate-200 bg-white font-semibold text-ink-primary">Not sent</button>
               <PrimaryButton onClick={() => markSent(true)} className="flex-1">Sent</PrimaryButton>
             </div>
           </div>
@@ -150,9 +150,9 @@ export default function MessageSheet({ open, onClose, orderId, onRead }: {
               {thread?.length === 0 && <p className="py-6 text-center text-ink-secondary">No messages yet. Customers can write from their tracking page.</p>}
               {thread?.map((m) => (
                 <div key={m.id} className={`flex ${m.from === "staff" ? "justify-end" : "justify-start"}`}>
-                  <div className={`max-w-[80%] rounded-2xl px-3.5 py-2 ${m.from === "staff" ? "bg-primary text-white rounded-br-md" : "bg-slate-100 text-ink-primary rounded-bl-md"}`}>
-                    <p className="whitespace-pre-wrap text-[0.9375rem]">{m.body}</p>
-                    <p className={`mt-0.5 text-[0.6875rem] ${m.from === "staff" ? "text-white/75" : "text-ink-tertiary"}`}>
+                  <div className={`max-w-[80%] rounded-xl px-3.5 py-2 ${m.from === "staff" ? "bg-primary text-white rounded-br-md" : "bg-slate-100 text-ink-primary rounded-bl-md"}`}>
+                    <p className="whitespace-pre-wrap text-go-body">{m.body}</p>
+                    <p className={`mt-0.5 text-go-caption ${m.from === "staff" ? "text-white/75" : "text-ink-tertiary"}`}>
                       {m.who ? `${m.who} · ` : ""}{utc(m.at)?.toLocaleString([], { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}
                     </p>
                   </div>
@@ -162,7 +162,7 @@ export default function MessageSheet({ open, onClose, orderId, onRead }: {
             </div>
             <div className="mt-2 flex items-end gap-2">
               <textarea value={reply} onChange={(e) => setReply(e.target.value)} rows={1} placeholder="Reply on their tracking page"
-                className="flex-1 min-h-[3rem] max-h-32 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[1rem] text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary resize-none" />
+                className="flex-1 min-h-[3rem] max-h-32 rounded-xl border border-slate-200 bg-white px-4 py-3 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary resize-none" />
               <button onClick={sendReply} disabled={!reply.trim() || sending} aria-label="Send reply"
                 className="h-12 w-12 shrink-0 rounded-full bg-primary text-white inline-flex items-center justify-center disabled:opacity-40"><Send size={20} /></button>
             </div>
@@ -177,25 +177,25 @@ export default function MessageSheet({ open, onClose, orderId, onRead }: {
                   <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
                     {ctx.templates.map((t) => (
                       <button key={t.id} onClick={() => { setTplId(t.id); setBody(t.body); }}
-                        className={`min-h-[2.5rem] shrink-0 px-3.5 rounded-full border text-[0.875rem] font-medium ${tplId === t.id ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`}>{t.name}</button>
+                        className={`min-h-[2.5rem] shrink-0 px-3.5 rounded-full border text-go-sub font-medium ${tplId === t.id ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`}>{t.name}</button>
                     ))}
                   </div>
                 )}
                 <textarea value={body} onChange={(e) => { setBody(e.target.value); }} rows={5} placeholder="Write a message"
-                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[1rem] text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary resize-none" />
-                <p className="mt-1 px-1 text-[0.8125rem] text-ink-tertiary">To {ctx.client?.name} · {ctx.to_e164 || phone}{segs > 1 ? ` · ${segs} texts` : ""}</p>
+                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary resize-none" />
+                <p className="mt-1 px-1 text-go-sub text-ink-tertiary">To {ctx.client?.name} · {ctx.to_e164 || phone}{segs > 1 ? ` · ${segs} texts` : ""}</p>
                 <div className="mt-3 space-y-2">
                   {consent?.sms
                     ? <PrimaryButton onClick={() => openIn("sms")} disabled={!body.trim()}>Open in Messages</PrimaryButton>
-                    : <p className="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-[0.875rem] text-amber-800">This customer asked not to be texted.</p>}
+                    : <p className="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-go-sub text-amber-800">This customer asked not to be texted.</p>}
                   {consent?.whatsapp === true && ctx.to_e164 && (
                     <button onClick={() => openIn("whatsapp")} disabled={!body.trim()}
-                      className="w-full min-h-[3.25rem] rounded-2xl bg-[#1fa855] font-semibold text-white disabled:opacity-50">Open in WhatsApp</button>
+                      className="w-full min-h-[3.25rem] rounded-xl bg-[#1fa855] font-semibold text-white disabled:opacity-50">Open in WhatsApp</button>
                   )}
-                  {consent?.whatsapp === true && !ctx.to_e164 && <p className="text-[0.8125rem] text-ink-secondary">WhatsApp needs the number with its country code. Edit the customer's phone in Tekly.</p>}
+                  {consent?.whatsapp === true && !ctx.to_e164 && <p className="text-go-sub text-ink-secondary">WhatsApp needs the number with its country code. Edit the customer's phone in Tekly.</p>}
                   {consent?.whatsapp == null && (
-                    <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                      <p className="text-[0.9375rem] text-ink-primary">Is WhatsApp OK with {ctx.client?.name?.split(" ")[0] || "the customer"}? Ask them, then tap.</p>
+                    <div className="rounded-xl border border-slate-200 bg-white p-3">
+                      <p className="text-go-body text-ink-primary">Is WhatsApp OK with {ctx.client?.name?.split(" ")[0] || "the customer"}? Ask them, then tap.</p>
                       <div className="mt-2 flex gap-2">
                         <button onClick={() => setWhatsApp(false)} className="min-h-[2.75rem] flex-1 rounded-xl border border-slate-200 font-semibold text-ink-primary">No</button>
                         <button onClick={() => setWhatsApp(true)} className="min-h-[2.75rem] flex-1 rounded-xl bg-[#1fa855] font-semibold text-white">Yes, WhatsApp is OK</button>
