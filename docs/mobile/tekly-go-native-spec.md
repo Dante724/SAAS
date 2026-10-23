@@ -17,7 +17,7 @@ How to read this: each numbered section is short and can be approved on its own.
 
 ## 1. What we're building, in one paragraph
 
-Tekly Go is the phone companion to the Tekly web app, built with Expo / React Native for iPhone and Android. It does a few shop-floor jobs faster than the web app can:
+Tekly Go is a **shortcut app**, not a second Tekly: a handful of one-tap actions for the shop floor, built with Expo / React Native for iPhone and Android. Everything else stays in the web app. Its shortcuts are:
 - scan a label and land on the job;
 - change a status and tell the customer;
 - photograph the device onto the job;
