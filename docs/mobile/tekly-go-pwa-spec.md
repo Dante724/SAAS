@@ -143,7 +143,7 @@ This is the council's language, the same as the native spec §6, built with web 
 | NFC tag → job | **No** [S7] | Yes (Web NFC, Chrome only) | **M2** |
 | Keep screen awake on Scan / Job | Yes on iOS 18.4+ (needs a device test) [S8] | Yes | **M1** |
 | Page transitions | View Transitions, Safari 18+ [S9] | Chrome 111+ | **M0** |
-| Siri / Shortcuts app | Only a user-made Shortcut with "Open URL". It may open in Safari rather than the app [S11, unverified] | Same idea via Google Assistant routines | **M2** (a how-to card, after a device test) |
+| Siri / Shortcuts app | Only a user-made Shortcut with "Open URL". It may open in Safari rather than the app [S11, unverified] | Same idea via Google Assistant routines | Skipped; later native app (§15 Q4) |
 | Widgets, Live Activities, lock screen | **No** [S11] | **No** | Later native app |
 | Tap to Pay | **No**: needs the native Stripe SDK [S10] | **No** | Later native app (or a Stripe smart reader via the JS SDK) |
 | Offline storage | Home-screen apps are **exempt from Safari's 7-day storage wipe**; `storage.persist()` is supported (17+), and eviction is least-recently-used when the device is full [S14] | Persistent once installed | **M1** |
@@ -267,7 +267,7 @@ Events go to our own backend (`POST /api/go/events`, batched), extending the pil
 1. ~~**One-time install link (B10).**~~ **Decided 2026-10-23:** yes. The QR carries a 10-minute single-use code, so staff arrive signed in.
 2. ~~**Face ID lock with passkeys.**~~ **Decided 2026-10-23:** yes, after 10 min idle, only if the iPhone device test (plan M0.4.7) passes. Fallback: sign in again.
 3. ~~**Where to build.**~~ **Decided 2026-10-23:** merge the Go stack (#10 → #11 → quick fixes → pilot kit) into the working branch first, then build on it (plan B0.3).
-4. **iPhone Shortcuts how-to card** ("Hey Siri, scan in Tekly Go" via an Open URL shortcut). *Recommend:* only if a device test shows it opens the installed app rather than Safari.
+4. ~~**iPhone Shortcuts how-to card.**~~ **Decided 2026-10-23:** skipped for the browser version; Siri comes with the later native app.
 
 ## 16. Sources (checked 2026-10-23)
 

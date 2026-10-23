@@ -549,10 +549,7 @@ If the pilot is unclear, use **tech-first**: scanning is what competitors don't 
   - Do: More → "Write tag for this job" (`NDEFReader.write` with the job link); reading on Scan when it's supported.
   - Test: an NDEF URL record → `routeScan`.
   - Device check ✋.
-- **M2.4 iPhone "Hey Siri" how-to.**
-  - Do it **only if** a device test shows a Shortcuts "Open URL" to `/go/scan` opens the installed app, not Safari.
-  - Then: More → "Add Siri shortcut" shows 3 steps and a pre-filled link.
-  - Device check ✋ first; record the result in spec §6.
+- **M2.4 iPhone "Hey Siri": skipped** (owner decision 2026-10-23). It comes with the later native app.
 - **M2.5 Daily summary push** for owners (opt-in, at the shop's closing time).
   - Test: `test_daily_summary_at_close_shop_tz`.
 - **M2.6 Metrics.**
