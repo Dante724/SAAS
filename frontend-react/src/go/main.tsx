@@ -8,14 +8,21 @@ import GoApp from "./GoApp";
 import { applyTheme, watchSystemTheme } from "./theme";
 import { LOGIN_URL, hasToken } from "./session";
 import { goQueue } from "./lib/offlineQueue";
+import { GO_CLIENT, noteLabelOpen } from "./lib/client";
+import { api, setClientTag } from "../api/client";
 import "../index.css";
 
 applyTheme();
 watchSystemTheme();
+setClientTag(GO_CLIENT);   // every API call says it came from Tekly Go
 
 if (!hasToken()) {
-  window.location.replace(LOGIN_URL);
+  // a job opened from a label (or any deep link) comes back to that job after signing in
+  const here = window.location.pathname + window.location.search;
+  window.location.replace(/^\/go\/.+/.test(here) ? "/login?next=" + encodeURIComponent(here) : LOGIN_URL);
 } else {
+  noteLabelOpen(window.location.href, (code) => api.post("/scan/resolve", { code }),
+    (url) => window.history.replaceState(window.history.state, "", url));
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/go/sw.js", { scope: "/go/" }).catch(() => {});
   }

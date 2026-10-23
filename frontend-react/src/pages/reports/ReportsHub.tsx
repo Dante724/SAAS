@@ -12,6 +12,8 @@ import { useTerminology } from "../../lib/useTerminology";
 import { getLocale } from "../../i18n";
 import { useNavigate } from "react-router-dom";
 import { buildReportConfig, pickChartColumns } from "./reportConfig";
+import GoPilotReport from "./GoPilotReport";
+import { useMe } from "../../context/Me";
 
 const REPORT_PAGE = 50;
 
@@ -332,7 +334,8 @@ export default function ReportsHub() {
   const [loading, setLoading] = useState(false);
   const [from, setFrom] = useState(iso(new Date(Date.now() - 30 * 864e5)));
   const [to, setTo] = useState(iso(new Date()));
-  const [view, setView] = useState<"reports" | "profitability" | "insights" | "feedback" | "custom" | "fleet">("reports");
+  const [view, setView] = useState<"reports" | "profitability" | "insights" | "feedback" | "custom" | "fleet" | "gopilot">("reports");
+  const { can } = useMe();
   const [profit, setProfit] = useState<any[] | null>(null);
   const [insights, setInsights] = useState<any[] | null>(null);
   const [feedback, setFeedback] = useState<any | null>(null);
@@ -478,7 +481,7 @@ export default function ReportsHub() {
     <Shell title="Reports">
       <div className="px-6 pt-3 border-b border-slate-200/60 bg-white/40 flex-shrink-0">
         <nav className="flex space-x-1 -mb-px text-xs font-semibold overflow-x-auto">
-          {([["reports", "Reports", "summarize"], ["custom", "Custom report", "tune"], ["fleet", "Business & analytics", "insights"], ["profitability", "Job profitability", "payments"], ["insights", "Insights", "lightbulb"], ["feedback", "Feedback", "reviews"]] as [typeof view, string, string][]).map(([id, label, icon]) => (
+          {([["reports", "Reports", "summarize"], ["custom", "Custom report", "tune"], ["fleet", "Business & analytics", "insights"], ["profitability", "Job profitability", "payments"], ["insights", "Insights", "lightbulb"], ["feedback", "Feedback", "reviews"], ...(can("can_manage_settings") ? [["gopilot", "Go pilot", "qr_code_scanner"]] : [])] as [typeof view, string, string][]).map(([id, label, icon]) => (
             <button key={id} onClick={() => setView(id)} className={`flex items-center gap-1.5 px-3 pb-3 pt-1 border-b-2 whitespace-nowrap transition-colors ${view === id ? "text-primary font-bold border-primary" : "text-ink-secondary hover:text-ink-primary hover:bg-slate-100/60 rounded-t-lg border-transparent"}`}><M n={icon} c="text-sm" />{label}</button>
           ))}
         </nav>
@@ -486,8 +489,9 @@ export default function ReportsHub() {
 
       {view === "custom" && <CustomView />}
       {view === "fleet" && <FleetAnalytics />}
+      {view === "gopilot" && <GoPilotReport />}
 
-      {view !== "reports" && view !== "custom" && view !== "fleet" && (
+      {view !== "reports" && view !== "custom" && view !== "fleet" && view !== "gopilot" && (
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
           {view === "profitability" && (
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
