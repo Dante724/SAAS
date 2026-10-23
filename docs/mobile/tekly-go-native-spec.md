@@ -1,6 +1,6 @@
 # Tekly Go (native): spec
 
-Status: **draft for owner approval**. Date: 2026-10-23. No app code exists yet. Building starts after the one-shop QR pilot reports.
+Status: **LATER, shelved 2026-10-23.** The owner chose a browser-installed (PWA) shortcut app for now: no App Store and no developer account. The native app comes later. The current plan is [`tekly-go-pwa-spec.md`](tekly-go-pwa-spec.md). This doc is kept as the blueprint for the later store app; re-verify §5 and §19 facts before using it. Decisions already made here (§18 Q1–Q5) still stand for that later build.
 
 Companion docs:
 - Implementation plan: [`tekly-go-native-plan.md`](tekly-go-native-plan.md).
