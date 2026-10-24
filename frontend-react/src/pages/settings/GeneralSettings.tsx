@@ -44,6 +44,25 @@ function Section({ icon, title, hint, children }: { icon: string; title: string;
 }
 
 const inp = "w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-ink-tertiary";
+/** The shop's Tekly account ID: read-only, with a copy button. Tekly support asks for it. */
+function AccountId({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try { await navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* clipboard blocked: the ID is still selectable */ }
+  }
+  return (
+    <div className="mt-5 pt-4 border-t border-slate-100 flex flex-wrap items-center gap-3">
+      <div className="min-w-0">
+        <div className="text-[11px] font-semibold text-ink-tertiary">Tekly account ID</div>
+        <div className="font-mono text-sm text-ink-primary select-all">{value}</div>
+      </div>
+      <button type="button" onClick={copy} className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">
+        <M n={copied ? "check" : "content_copy"} c="text-sm" />{copied ? "Copied" : "Copy"}</button>
+      <div className="w-full text-[11px] text-ink-tertiary">Give this to Tekly support so they can find your shop.</div>
+    </div>
+  );
+}
+
 function Field({ label, hint, children, wide }: { label: string; hint?: string; children: ReactNode; wide?: boolean }) {
   return (
     <label className={`block ${wide ? "sm:col-span-2" : ""}`}>
@@ -142,6 +161,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
               <Field label="Website"><input value={co.website || ""} onChange={(e) => set("website", e.target.value)} placeholder="yourshop.com" className={inp} /></Field>
               <Field label="Address"><input value={co.company_address || ""} onChange={(e) => set("company_address", e.target.value)} placeholder="123 Main St, Austin, TX" className={inp} /></Field>
             </div>
+            {co.account_id && <AccountId value={co.account_id} />}
           </Section>
 
           <Section icon="language" title="Region, money and language" hint="Picking a country fills in the time zone and currency. You can still change them.">

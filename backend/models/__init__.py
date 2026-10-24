@@ -8,6 +8,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy import (
+    DDL,
     JSON,
     Boolean,
     Date,
@@ -20,9 +21,10 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
+from sqlalchemy.orm import Mapped, Session, mapped_column, relationship, validates
 
 from backend.db.database import Base
 
@@ -122,8 +124,16 @@ class Organisation(Base):
     sub_status: Mapped[str] = mapped_column(String(20), default="trial")
     sub_start: Mapped[Optional[date]] = mapped_column(Date)
     sub_end: Mapped[Optional[date]] = mapped_column(Date)     # term end; past this the tenant is locked
-    discount_pct: Mapped[float] = mapped_column(Float, default=0.0)   # manual per-account discount %
+    discount_pct: Mapped[float] = mapped_column(Numeric(5, 2, asdecimal=False), default=0.0)   # per-account discount %
     admin_notes: Mapped[Optional[str]] = mapped_column(Text)          # platform-admin notes (never shown to tenant)
+    # Admin panel sprint 1: a short, unique, typo-proof account ID the shop and Tekly
+    # staff can read out (TK-7K4M-92Q); see backend/services/account_id.py.
+    account_id: Mapped[str] = mapped_column(String(12), unique=True, index=True, nullable=False)   # set on insert
+    discount_until: Mapped[Optional[date]] = mapped_column(Date)       # discount ends after this day
+    discount_reason: Mapped[Optional[str]] = mapped_column(String(300))
+    suspend_message: Mapped[Optional[str]] = mapped_column(String(500))  # shown to the shop while suspended
+    assigned_admin_id: Mapped[Optional[str]] = mapped_column(String, index=True)  # whose book this shop is in
+    last_contacted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     # ── Time clocks (build 144x): org master switches. Effective clock for an
     # employee = org switch ON *and* their per-employee track_* flag ON. ──
     clock_wo_enabled: Mapped[bool] = mapped_column(Boolean, default=True)          # job/task labour timer
@@ -893,6 +903,145 @@ class PlatformAdmin(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # Admin panel sprint 1
+    role_id: Mapped[Optional[str]] = mapped_column(String, index=True)       # admin_roles.id; none = owner (legacy)
+    token_version: Mapped[int] = mapped_column(Integer, default=0)           # bump = every session ends
+    mfa_secret: Mapped[Optional[str]] = mapped_column(Text)                  # encrypted at rest (crypto.encrypt)
+    mfa_recovery: Mapped[Optional[str]] = mapped_column(Text)                # JSON of hashed single-use codes
+    mfa_enrolled_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    mfa_last_step: Mapped[Optional[int]] = mapped_column(Integer)            # refuse a code twice
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+
+@event.listens_for(Session, "before_flush")
+def _unique_account_ids(session, flush_context, instances):
+    """Give each new shop an account ID no other shop has: redraw on a clash with the
+    database or with another shop in the same flush. The UNIQUE column stays the
+    final guard against a race between two signups."""
+    new = [o for o in session.new if isinstance(o, Organisation)]
+    if not new:
+        return
+    from backend.services import account_id as _acct
+    taken = set()
+    for org in new:
+        for _ in range(20):
+            if not org.account_id:
+                org.account_id = _acct.new_account_id()
+            clash = org.account_id in taken or session.execute(
+                text("SELECT 1 FROM organisations WHERE account_id = :a"), {"a": org.account_id}).first()
+            if not clash:
+                break
+            org.account_id = None
+        else:
+            raise RuntimeError("Couldn't find a free account ID")
+        taken.add(org.account_id)
+
+
+class AdminSession(Base):
+    """One signed-in admin session. Tokens carry its id; logout, deactivation and a
+    password or role change end it on the next request."""
+    __tablename__ = "admin_sessions"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    admin_id: Mapped[str] = mapped_column(String, ForeignKey("platform_admins.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    ip: Mapped[Optional[str]] = mapped_column(String(64))
+
+
+class AdminRole(Base):
+    """What an admin may do (permissions), on which shops (scope), which fields they
+    see (field levels) and how far they can go (limits). See services/admin_access.py."""
+    __tablename__ = "admin_roles"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(80), unique=True)
+    builtin: Mapped[Optional[str]] = mapped_column(String(30))     # owner|sales|account_manager|sales_am|support
+    permissions: Mapped[Optional[dict]] = mapped_column(JSON)      # {code: true}; unticked = no
+    field_levels: Mapped[Optional[dict]] = mapped_column(JSON)     # {field: hidden|own|shown}
+    scope: Mapped[Optional[dict]] = mapped_column(JSON)            # {countries:[..], own_book:bool, stages:[..]}
+    limits: Mapped[Optional[dict]] = mapped_column(JSON)           # {max_discount_pct, max_discount_months, max_trial_days}
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class AdminActionLog(Base):
+    """Append-only record of every admin action, allowed or refused. A database trigger
+    refuses UPDATE and DELETE, and each row carries a hash of the previous one so any
+    tampering shows. Written in the same transaction as the change it records."""
+    __tablename__ = "admin_action_log"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    admin_id: Mapped[Optional[str]] = mapped_column(String, index=True)
+    admin_email: Mapped[Optional[str]] = mapped_column(String(200))
+    action: Mapped[str] = mapped_column(String(60), index=True)
+    outcome: Mapped[str] = mapped_column(String(20), default="allowed")    # allowed|refused|requested
+    org_id: Mapped[Optional[str]] = mapped_column(String, index=True)
+    target: Mapped[Optional[str]] = mapped_column(String(120))
+    before: Mapped[Optional[dict]] = mapped_column(JSON)
+    after: Mapped[Optional[dict]] = mapped_column(JSON)
+    reason: Mapped[Optional[str]] = mapped_column(String(500))
+    ip: Mapped[Optional[str]] = mapped_column(String(64))
+    prev_hash: Mapped[Optional[str]] = mapped_column(String(64))
+    row_hash: Mapped[Optional[str]] = mapped_column(String(64))
+
+
+# Append-only at the database level. Dev and tests build tables with create_all, so the
+# triggers ride on the table's after_create; the Alembic migration installs the same.
+ADMIN_LOG_SQLITE_TRIGGERS = [
+    "CREATE TRIGGER IF NOT EXISTS admin_action_log_no_update BEFORE UPDATE ON admin_action_log "
+    "BEGIN SELECT RAISE(ABORT, 'admin_action_log is append-only'); END",
+    "CREATE TRIGGER IF NOT EXISTS admin_action_log_no_delete BEFORE DELETE ON admin_action_log "
+    "BEGIN SELECT RAISE(ABORT, 'admin_action_log is append-only'); END",
+]
+ADMIN_LOG_PG_TRIGGERS = [
+    "CREATE OR REPLACE FUNCTION admin_action_log_append_only() RETURNS trigger AS $$ "
+    "BEGIN RAISE EXCEPTION 'admin_action_log is append-only'; END; $$ LANGUAGE plpgsql",
+    "DROP TRIGGER IF EXISTS admin_action_log_no_change ON admin_action_log",
+    "CREATE TRIGGER admin_action_log_no_change BEFORE UPDATE OR DELETE ON admin_action_log "
+    "FOR EACH ROW EXECUTE FUNCTION admin_action_log_append_only()",
+]
+for _sql in ADMIN_LOG_SQLITE_TRIGGERS:
+    event.listen(AdminActionLog.__table__, "after_create", DDL(_sql).execute_if(dialect="sqlite"))
+for _sql in ADMIN_LOG_PG_TRIGGERS:
+    event.listen(AdminActionLog.__table__, "after_create", DDL(_sql).execute_if(dialect="postgresql"))
+
+
+class AdminApprovalRequest(Base):
+    """An action over someone's limit, waiting for the owner (e.g. a 30% discount)."""
+    __tablename__ = "admin_approval_requests"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    requester_id: Mapped[str] = mapped_column(String, index=True)
+    org_id: Mapped[str] = mapped_column(String, index=True)
+    action: Mapped[str] = mapped_column(String(40))
+    payload: Mapped[Optional[dict]] = mapped_column(JSON)
+    reason: Mapped[Optional[str]] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(String(20), default="pending")   # pending|approved|declined|expired|cancelled
+    decided_by: Mapped[Optional[str]] = mapped_column(String)
+    decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+
+class AdminShopNote(Base):
+    """A note on a shop's admin timeline (call notes, emails sent, contact)."""
+    __tablename__ = "admin_shop_notes"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, index=True)
+    admin_id: Mapped[Optional[str]] = mapped_column(String)
+    kind: Mapped[str] = mapped_column(String(20), default="note")       # note|call|email
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class AdminAssignmentLog(Base):
+    """Who a shop was handed from and to (sales → account manager, someone leaving)."""
+    __tablename__ = "admin_assignment_log"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, index=True)
+    from_admin_id: Mapped[Optional[str]] = mapped_column(String)
+    to_admin_id: Mapped[Optional[str]] = mapped_column(String)
+    by_admin_id: Mapped[Optional[str]] = mapped_column(String)
+    reason: Mapped[Optional[str]] = mapped_column(String(300))
+    at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
 class PlatformCoupon(Base):

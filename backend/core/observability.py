@@ -63,8 +63,7 @@ _SECURITY_HEADERS = {
     # Nothing the app serves belongs in a search index: staff screens, and /track, /portal and
     # /pay pages whose URL is the customer's key.
     "X-Robots-Tag": "noindex, nofollow",
-    # No inline script anywhere except the platform-admin page, which sends ADMIN_CSP itself, so a
-    # markup injection can't run code. Styles stay inline-friendly; media may be data: URLs.
+    # No inline script anywhere (the /admin page included), so a markup injection can't run code. Styles stay inline-friendly; media may be data: URLs.
     "Content-Security-Policy": (
         "default-src 'self'; "
         "script-src 'self'; "
@@ -78,10 +77,6 @@ _SECURITY_HEADERS = {
     ),
 }
 
-
-# /admin still has inline handlers (onclick=…); it renders escaped data only. Route-set headers win
-# over the defaults above (setdefault).
-ADMIN_CSP = _SECURITY_HEADERS["Content-Security-Policy"].replace("script-src 'self';", "script-src 'self' 'unsafe-inline';")
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):

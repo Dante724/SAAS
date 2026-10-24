@@ -5,6 +5,9 @@
 
 ## Public — sign-in and account flows (rate-limited per IP and per account)
 POST /api/admin/login [public]
+POST /api/admin/login/mfa [public]  # admin sign-in step 2: needs the 5-minute ticket from the password step
+POST /api/admin/mfa/setup [public]  # first sign-in: 2-step setup, needs the ticket
+POST /api/admin/mfa/setup/confirm [public]  # first sign-in: confirms 2-step, needs the ticket
 POST /api/auth/email/verify [public]
 POST /api/auth/invite/accept [public]
 POST /api/auth/invite/preview [public]

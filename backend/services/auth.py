@@ -90,7 +90,9 @@ def assert_org_active(org, today=None) -> None:
         return
     today = today or _date.today()
     if org.sub_status == "suspended":
-        raise HTTPException(status_code=403, detail="This account is suspended. Please contact support.")
+        # The admin panel can leave the shop a message ("Payment overdue, call us on ...").
+        msg = (getattr(org, "suspend_message", None) or "").strip()
+        raise HTTPException(status_code=403, detail=msg or "This account is suspended. Please contact support.")
     if getattr(org, "sub_end", None) and org.sub_end < today:
         raise HTTPException(status_code=403, detail="Your subscription has ended. Please contact support to renew.")
 
