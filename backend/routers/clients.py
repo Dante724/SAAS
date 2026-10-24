@@ -14,6 +14,8 @@ from backend.core import paging as _paging
 from backend.services.money import q2
 from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
 
+from backend.services import addresses as _addr
+
 router = APIRouter(prefix="/api/clients", tags=["clients"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
@@ -44,6 +46,11 @@ class ClientIn(BaseModel):
     reg_no: Optional[str] = None
     billing_address: Optional[str] = None
     custom_data: Optional[dict] = None
+    addr_street: Optional[str] = None     # WS-C #12: structured address; `address` is rebuilt from these
+    addr_city: Optional[str] = None
+    addr_region: Optional[str] = None
+    addr_postcode: Optional[str] = None
+    addr_country: Optional[str] = None
 
 class DeviceIn(BaseModel):
     brand: Optional[str] = None
@@ -68,7 +75,9 @@ def _ser_client(c: Client, supplier=None, order_count=None) -> dict:
                       "lead_days": supplier.lead_days, "currency": supplier.currency,
                       "balance": float(supplier.balance or 0)} if supplier else None),
         "id": c.id, "name": c.name, "client_type": c.client_type, "phone": c.phone, "email": c.email,
-        "address": c.address, "source": c.source, "birthday": c.birthday, "loyalty_tier": c.loyalty_tier,
+        "address": c.address, "source": c.source, "birthday": c.birthday,
+        "addr_street": c.addr_street, "addr_city": c.addr_city, "addr_region": c.addr_region,
+        "addr_postcode": c.addr_postcode, "addr_country": c.addr_country, "loyalty_tier": c.loyalty_tier,
         "balance": c.balance, "blacklisted": c.blacklisted, "notes": c.notes,
         "watch_out": getattr(c, "watch_out", None),
         "is_supplier": c.is_supplier, "manager_id": c.manager_id, "payer_id": c.payer_id,
@@ -179,7 +188,9 @@ async def create_client(
     # Consent defaults from org policy unless explicitly provided
     payload.setdefault("consent_phone", org.contact_consent_phone_default)
     payload.setdefault("consent_email", org.contact_consent_email_default)
+    addr = {k: payload.pop(k) for k in _addr.PARTS}
     client = Client(org_id=current.org_id, **payload)
+    _addr.apply(client, {k: v for k, v in addr.items() if k in data.model_fields_set})
     db.add(client)
     await db.flush()
     await _sync_supplier(db, current.org_id, client)   # Build 114: mirror to PO-facing Supplier
@@ -275,9 +286,10 @@ async def update_client(
     for k, v in data.model_dump().items():
         if v is None and k in ("custom_data", "consent_phone", "consent_email"):
             continue  # don't wipe values / null NOT-NULL consent on a partial update
-        if k == "custom_data":
-            continue  # handled below through the rule resolver
+        if k == "custom_data" or k in _addr.PARTS:
+            continue  # handled below (rule resolver / address parts only when sent)
         setattr(client, k, v)
+    _addr.apply(client, {k: getattr(data, k) for k in _addr.PARTS if k in data.model_fields_set})
     if data.custom_data is not None:
         from backend.routers.forms import resolve_custom_data
         client.custom_data = await resolve_custom_data(
@@ -316,6 +328,11 @@ class ClientPatch(BaseModel):
     reg_no: Optional[str] = None
     billing_address: Optional[str] = None
     custom_data: Optional[dict] = None
+    addr_street: Optional[str] = None     # WS-C #12: structured address; `address` is rebuilt from these
+    addr_city: Optional[str] = None
+    addr_region: Optional[str] = None
+    addr_postcode: Optional[str] = None
+    addr_country: Optional[str] = None
 
 
 @router.patch("/{client_id}")
@@ -332,8 +349,10 @@ async def patch_client(
         raise HTTPException(404, "Client not found")
     fields = data.model_dump(exclude_unset=True)
     cd = fields.pop("custom_data", None)
+    addr = {k: fields.pop(k) for k in _addr.PARTS if k in fields}
     for k, v in fields.items():
         setattr(client, k, v)
+    _addr.apply(client, addr)
     if cd is not None:
         from backend.routers.forms import resolve_custom_data
         client.custom_data = await resolve_custom_data(

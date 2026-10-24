@@ -9,6 +9,7 @@ import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
 import { btnGhost, btnPrimary, inputCls, labelCls } from "../invoices/billing";
 import ModePill from "./ModePill";
+import MissedCallSettings from "./MissedCallSettings";
 
 const lbl = labelCls;
 const field = `${inputCls} text-ink-primary disabled:opacity-60`;
@@ -19,7 +20,8 @@ const heading = "text-sm font-semibold text-ink-primary";
 
 export type TwilioState = { connected: boolean; mode: "test" | "live" | null; test_mode: boolean; live_allowed: boolean; voice_url: string; status_url: string; test_number: string };
 export type Destinations = { default: string[]; override: string[] | null; effective: string[] };
-export type TelConfig = { provider: string; enabled: boolean; caller_id_number: string | null; forward_to: string | null; destinations?: Destinations; twilio: TwilioState };
+export type AircallState = { available: boolean; connected: boolean; webhook_url: string };
+export type TelConfig = { provider: string; enabled: boolean; caller_id_number: string | null; forward_to: string | null; destinations?: Destinations; twilio: TwilioState; aircall?: AircallState };
 const codes = (list: string[] | null | undefined) => (list || []).map((p) => `+${p}`).join(", ");
 export type ContactAuto = { enabled: boolean; config: { direction: "incoming" | "all"; tag_ids: string[]; assign_manager: boolean } };
 type Tag = { id: string; name: string; color: string };
@@ -28,6 +30,7 @@ export function statusBadge(c: TelConfig | null): { text: string; tone: "on" | "
   if (!c || !c.enabled) return { text: "Off", tone: "off" };
   if (c.provider === "twilio") return c.twilio.test_mode ? { text: "Twilio · Test mode", tone: "test" } : { text: "Twilio · Live", tone: "on" };
   if (c.provider === "simulated") return { text: "Simulated", tone: "test" };
+  if (c.provider === "aircall") return { text: "Aircall", tone: "on" };
   return { text: c.provider, tone: "on" };
 }
 
@@ -63,7 +66,8 @@ export default function TelephonySettings() {
   const [creds, setCreds] = useState({ account_sid: "", auth_token: "" });
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string; where: string } | null>(null);
-  const [sim, setSim] = useState({ from_number: "", extension: "" });
+  const [sim, setSim] = useState({ from_number: "", extension: "", missed: false });
+  const [acToken, setAcToken] = useState("");
 
   function apply(c: TelConfig) {
     setCfg(c);
@@ -106,8 +110,19 @@ export default function TelephonySettings() {
     setAuto(await api.put<ContactAuto>("/telephony/automation/contacts", { enabled: next.enabled, ...next.config }));
     return "Saved.";
   });
+  const saveAircall = () => run("aircall", async () => {
+    const r = await api.put<AircallState>("/telephony/aircall", { webhook_token: acToken.trim() });
+    setAcToken("");
+    setCfg((c) => (c ? { ...c, aircall: r } : c));
+    return "Aircall token saved. Turn calling on with Aircall as the provider.";
+  });
+  const removeAircall = async () => {
+    if (!(await confirmDialog("Remove the Aircall token? Aircall events stop until you save it again.", { danger: true, confirmLabel: "Remove" }))) return;
+    run("aircall", async () => { const r = await api.del<AircallState>("/telephony/aircall"); setCfg((c) => (c ? { ...c, aircall: r } : c)); return "Removed."; });
+  };
   const simulate = () => run("sim", async () => {
-    const r = await api.post<{ client_id: string | null; client_created: boolean; matched: boolean }>("/telephony/simulate/inbound", { from_number: sim.from_number.trim(), extension: sim.extension.trim() || null });
+    const r = await api.post<{ client_id: string | null; client_created: boolean; matched: boolean; lead_id?: string | null }>("/telephony/simulate/inbound", { from_number: sim.from_number.trim(), extension: sim.extension.trim() || null, missed: sim.missed });
+    if (r.lead_id) return "Missed call logged. It's in Inquiries with a call-back task.";
     return r.client_created ? "Call logged. A new contact was created from the call." : r.matched ? "Call logged and matched to an existing contact." : "Call logged. No contact was created (the automation is off).";
   });
 
@@ -136,7 +151,8 @@ export default function TelephonySettings() {
                 <select id="tel-provider" className={field} value={form.provider} onChange={(e) => setForm({ ...form, provider: e.target.value })}>
                   <option value="simulated">Simulated (no real calls)</option>
                   <option value="twilio">Twilio</option>
-                  {form.provider !== "simulated" && form.provider !== "twilio" && <option value={form.provider}>{form.provider[0].toUpperCase() + form.provider.slice(1)} (events through the call webhook)</option>}
+                  {(cfg.aircall?.available || form.provider === "aircall") && <option value="aircall">Aircall</option>}
+                  {!["simulated", "twilio", "aircall"].includes(form.provider) && <option value={form.provider}>{form.provider[0].toUpperCase() + form.provider.slice(1)} (events through the call webhook)</option>}
                 </select>
               </div>
               <label className="flex items-center gap-2 text-xs font-semibold text-ink-primary sm:pt-5">
@@ -198,6 +214,29 @@ export default function TelephonySettings() {
             </div>
           )}
 
+          {/* WS-C: Aircall (only when the server has it switched on) */}
+          {form.provider === "aircall" && cfg.aircall && (
+            <div className="p-4 space-y-3">
+              <div className={heading}>Aircall account</div>
+              {!cfg.aircall.available ? <p className={hint}>Aircall isn't switched on for this server yet.</p> : (
+                <>
+                  <p className={hint}>In Aircall, open Integrations → Webhook, add the address below, and paste the webhook's token here. Tekly checks the token on every call event.</p>
+                  <CopyRow label="Aircall webhook address" value={cfg.aircall.webhook_url} />
+                  {cfg.aircall.connected
+                    ? <div className="flex flex-wrap items-center gap-2"><span className="text-xs text-ink-secondary">Token saved.</span><button className={ghost} disabled={busy === "aircall"} onClick={removeAircall}>Remove token</button></div>
+                    : <div className="flex flex-wrap items-end gap-2">
+                        <div className="flex-1 min-w-[12rem]"><label htmlFor="ac-token" className={lbl}>Webhook token</label><input id="ac-token" type="password" autoComplete="off" className={field} value={acToken} onChange={(e) => setAcToken(e.target.value)} /></div>
+                        <button className={primary} disabled={busy === "aircall" || acToken.trim().length < 8} onClick={saveAircall}>Save token</button>
+                      </div>}
+                </>
+              )}
+              {note("aircall")}
+            </div>
+          )}
+
+          {/* WS-C: missed calls become inquiries */}
+          <MissedCallSettings />
+
           {/* D2: contacts from calls */}
           <div className="p-4 space-y-3">
             <label className={`flex items-center gap-2 ${heading}`}>
@@ -243,6 +282,9 @@ export default function TelephonySettings() {
             <div className="p-4 space-y-3">
               <div className={heading}>Try it</div>
               <p className={hint}>Simulate an incoming call. Nothing is dialled; the call shows up in the call log (Marketing → Call log).</p>
+              <label className="flex items-center gap-2 text-xs font-semibold text-ink-primary">
+                <input type="checkbox" className="accent-primary" checked={sim.missed} onChange={(e) => setSim({ ...sim, missed: e.target.checked })} />Nobody answers (a missed call)
+              </label>
               <div className="grid grid-cols-1 sm:grid-cols-[1fr_8rem_auto] gap-2 items-end">
                 <div><label htmlFor="sim-from" className={lbl}>Caller's number</label><input id="sim-from" className={field} inputMode="tel" value={sim.from_number} onChange={(e) => setSim({ ...sim, from_number: e.target.value })} placeholder="+1 415 555 0100" /></div>
                 <div><label htmlFor="sim-ext" className={lbl}>Extension</label><input id="sim-ext" className={field} value={sim.extension} onChange={(e) => setSim({ ...sim, extension: e.target.value })} placeholder="Optional" /></div>

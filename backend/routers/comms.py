@@ -61,12 +61,24 @@ async def record_inbound_call(db, org_id, *, provider, from_number, to_number, s
 
     # Build 97: a missed inbound call is a customer you didn't get to. If the automation
     # is on, raise a follow-up task so nobody has to notice the call log to catch it.
-    task_id = None
+    missed = None
     if direction == "inbound" and (status or "").lower() in MISSED:
-        task_id = await _task_for_missed_call(db, org_id, call, call.client_id)
+        missed = await on_missed(db, org_id, call)
     return {"id": call.id, "client_id": call.client_id,
             "matched": call.client_id is not None and not link["created"],
-            "client_created": link["created"], "follow_up_task_id": task_id}
+            "client_created": link["created"],
+            "follow_up_task_id": (missed or {}).get("task_id"),
+            "lead_id": (missed or {}).get("lead_id")}
+
+
+async def on_missed(db, org_id, call) -> dict:
+    """WS-C: a missed inbound call opens (or adds to) an inquiry with its call-back task. The
+    older task-only automation runs only when the inquiry flow is off, so there's one task."""
+    from backend.services import leads as _leads
+    res = await _leads.on_missed_call(db, org_id, call)
+    if res:
+        return res
+    return {"task_id": await _task_for_missed_call(db, org_id, call, call.client_id), "lead_id": None}
 
 
 class CallEventIn(BaseModel):
@@ -256,8 +268,16 @@ async def twilio_status_webhook(
     await db.commit()
 
     if call.direction == "inbound" and before != "missed" and call.status == "missed":
-        await _task_for_missed_call(db, org_id, call, call.client_id)
+        await on_missed(db, org_id, call)
     return _xml(tv.twiml())
+
+
+async def _own_employee(db, org_id, emp_id):
+    """An employee id only if it's this shop's (automation config is free-form JSON)."""
+    if not emp_id or not isinstance(emp_id, str):
+        return None
+    return (await db.execute(select(Employee.id).where(
+        Employee.id == emp_id, Employee.org_id == org_id))).scalar_one_or_none()
 
 
 async def _task_for_missed_call(db, org_id, call, client_id):
@@ -281,7 +301,7 @@ async def _task_for_missed_call(db, org_id, call, client_id):
         title=f"Call back {name}",
         description=f"Missed call from {call.from_number} at "
                     f"{call.created_at:%Y-%m-%d %H:%M} — return the call.",
-        assigned_to_id=who or cfg.get("assign_to"),
+        assigned_to_id=who or await _own_employee(db, org_id, cfg.get("assign_to")),
         client_id=client_id,
         priority=cfg.get("priority", "normal"),   # whatever the config specifies
         status="todo")
@@ -320,6 +340,8 @@ async def set_automation(
     from backend.models import AutomationSetting
     if key not in ("task_on_missed_call",):
         raise HTTPException(422, f"Unknown automation “{key}”")
+    if data.config and data.config.get("assign_to") and not await _own_employee(db, current.org_id, data.config["assign_to"]):
+        raise HTTPException(404, "Employee not found")
     s = (await db.execute(select(AutomationSetting).where(
         AutomationSetting.org_id == current.org_id,
         AutomationSetting.key == key))).scalar_one_or_none()

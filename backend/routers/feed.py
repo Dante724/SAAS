@@ -17,7 +17,7 @@ from backend.services.auth import get_current_employee
 
 router = APIRouter(prefix="/api/feed", tags=["event-feed"])
 
-VALID_ENTITIES = {"order", "client"}
+VALID_ENTITIES = {"order", "client", "lead"}
 VALID_ITEMS = {"comment", "photo", "signature", "file"}
 PROTECTED_ITEMS = {"system", "status", "signature", "client_message"}
 MAX_MEDIA_CHARS = 8_000_000  # ~6 MB base64 ceiling for the demo
@@ -29,7 +29,7 @@ class FeedItemIn(BaseModel):
     media_data: Optional[str] = None    # data URL / base64
     media_name: Optional[str] = None
     media_mime: Optional[str] = None
-    visibility: str = "private"         # private | client
+    visibility: Optional[str] = None    # private | client; None = the shop's default (WS-C #17)
 
 
 def _serialize(it: EventFeedItem) -> dict:
@@ -49,6 +49,12 @@ def _serialize(it: EventFeedItem) -> dict:
 
 async def _verify_entity(db: AsyncSession, org_id: str, entity_type: str, entity_id: str,
                          current: Optional[Employee] = None):
+    if entity_type == "lead":
+        from backend.models import Lead
+        rec = (await db.execute(select(Lead).where(Lead.id == entity_id, Lead.org_id == org_id))).scalar_one_or_none()
+        if not rec:
+            raise HTTPException(404, "lead not found")
+        return
     if entity_type == "order":
         row = await db.execute(select(Order).where(Order.id == entity_id, Order.org_id == org_id))
     else:
@@ -72,6 +78,16 @@ async def log_system_event(db: AsyncSession, org_id: str, entity_type: str,
         org_id=org_id, entity_type=entity_type, entity_id=entity_id,
         item_type="system", body=message, author_name="System",
     ))
+
+
+async def _visibility(db: AsyncSession, org_id: str, data: FeedItemIn) -> str:
+    """An explicit choice wins; otherwise Settings → "New comments / files are" decides."""
+    if data.visibility is not None:
+        return "client" if data.visibility == "client" else "private"
+    from backend.models import Organisation
+    org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
+    default = (org.default_comment_visibility if data.item_type == "comment" else org.default_file_visibility) if org else None
+    return "client" if default in ("public", "client") else "private"
 
 
 @router.get("/{entity_type}/{entity_id}")
@@ -148,7 +164,7 @@ async def create_feed_item(
         media_blob_id=media_blob_id,
         media_name=data.media_name,
         media_mime=data.media_mime,
-        visibility="client" if data.visibility == "client" else "private",
+        visibility=await _visibility(db, current.org_id, data),
         author_id=current.id,
         author_name=current.name,
     )

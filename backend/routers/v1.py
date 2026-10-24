@@ -26,13 +26,14 @@ from backend.models import (
     Part,
     TimeEntry,
 )
-from backend.services.apikeys import ApiPrincipal, get_api_principal, require_scope
+from backend.services.apikeys import ApiPrincipal, require_scope
 from backend.services.numbering import next_number
 from backend.services.invoicing import balance_due as _inv_balance
 
 router = APIRouter(prefix="/api/v1", tags=["public-api-v1"])
 
-READ = Depends(get_api_principal)
+# v1 needs a broad scope: a key narrowed to one resource ("inquiries:read") is a v2 key.
+READ = Depends(require_scope("read"))
 WRITE = Depends(require_scope("write"))
 
 
@@ -53,7 +54,7 @@ async def index(principal: ApiPrincipal = READ):
             "estimates": f"{base}/estimates", "products": f"{base}/products",
             "appointments": f"{base}/appointments", "invoices": f"{base}/invoices", "credit_notes": f"{base}/credit-notes",
             "time_entries": f"{base}/time-entries"},
-        "docs": "/api/v1/docs",
+        "docs": "/docs",
     }}
 
 
