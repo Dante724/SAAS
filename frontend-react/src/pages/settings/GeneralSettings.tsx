@@ -233,7 +233,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
             </Section>
           </div>
 
-          <Section icon="forum" title="Comments and files on jobs" hint="What new comments and files start as. Anyone posting can still switch a single one.">
+          <Section icon="chat" title="Comments and files on jobs" hint="What new comments and files start as. Anyone posting can still switch a single one.">
             <Visibility k="default_comment_visibility" label="New comments" hint="Shown to customer means it appears on their tracking page" />
             <Visibility k="default_file_visibility" label="New files and photos" hint="Intake photos and checklist files stay private" />
           </Section>

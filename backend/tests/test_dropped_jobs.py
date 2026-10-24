@@ -64,6 +64,7 @@ async def test_drop_writes_off_unpaid_balance_and_reopen_reverses_it(client, ten
 
     o = (await client.get(f"/api/orders/{oid}", headers=tenant)).json()
     assert o["written_off"] == pytest.approx(70)
+    assert o["payment_due"] is False        # no "Due" badge, even with the deposit's invoice open
     ctx = await _remaining(client, tenant, oid)
     assert ctx["remaining"] == 0 and ctx["written_off"] == pytest.approx(70)
 
@@ -85,6 +86,7 @@ async def test_drop_writes_off_unpaid_balance_and_reopen_reverses_it(client, ten
     assert r.status_code == 200, r.text
     ctx = await _remaining(client, tenant, oid)
     assert ctx["remaining"] == pytest.approx(70) and ctx["written_off"] == 0
+    assert (await client.get(f"/api/orders/{oid}", headers=tenant)).json()["payment_due"] is True
     total = sum(float(x.amount) for x in (await db.execute(select(ClientLedgerEntry).where(
         ClientLedgerEntry.client_id == cid, ClientLedgerEntry.entry_type == "write_off"))).scalars().all())
     assert total == pytest.approx(0)

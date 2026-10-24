@@ -1250,6 +1250,11 @@ async def get_order(
         _Inv.order_id == order.id,
         _Inv.status.notin_(["draft", "cancelled", "canceled"])))).scalar() or 0
     data["payment_due"] = q2(float(_due)) > 0
+    if data["payment_due"] and float(order.written_off or 0) > 0:
+        # A dropped job's unpaid balance is written off: the job isn't owed, even while an issued
+        # invoice keeps its balance until the shop credits it.
+        from backend.services.order_money import balance_due as _bd
+        data["payment_due"] = await _bd(db, order) > 0
     # 144bj: prior-visit count for this device (repeat-repair signal on the WO card).
     if order.device_id and data.get("device"):
         vc = (await db.execute(select(func.count()).select_from(Order).where(

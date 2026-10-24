@@ -94,7 +94,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
     let reason: string | null = null;
     { const ds = droppedStatus(statuses as any[], key); if (ds) { reason = await askCancelReason(ds.name); if (reason === null) return; } }
     const prev = d.status; setD({ ...d, status: key });
-    try { await api.patch(`/orders/${order.id}/status`, { status: key, reason: reason || undefined }); flash("Status updated"); onChanged?.(); }
+    try { await api.patch(`/orders/${order.id}/status`, { status: key, reason: reason || undefined }); flash("Status updated"); onChanged?.(); reload(); }   // the server may change money too (a drop writes off what's unpaid)
     catch (e: any) { setD({ ...d, status: prev }); flash(`Failed: ${e.message}`); }
   }
   async function saveNotes(tech_notes: string, conclusion: string) {
