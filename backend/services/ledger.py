@@ -23,6 +23,7 @@ Entry types used across the app:
     advance         manual: client pays money in                             (-)
     payout          manual: we return money to the client                    (+)
     adjustment      manual: signed correction                                (±)
+    write_off       unpaid balance of a dropped job written off (reversed on reopen) (±)
     posting         goods received from a supplier on credit                 (-)
     purchase_return goods returned to a supplier on credit                   (+)
 """

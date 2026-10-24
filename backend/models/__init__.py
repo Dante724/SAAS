@@ -106,6 +106,9 @@ class Organisation(Base):
     default_due_days: Mapped[int] = mapped_column(Integer, default=0)
     default_comment_visibility: Mapped[str] = mapped_column(String(10), default="private")
     default_file_visibility: Mapped[str] = mapped_column(String(10), default="private")
+    # How staff names show on the booking page and customer messages: full | first | custom
+    # (custom = Employee.public_name, falling back to the full name).
+    public_employee_name: Mapped[str] = mapped_column(String(10), default="full")
     warranty_count_from: Mapped[str] = mapped_column(String(10), default="closure")  # closure|created
     asset_one_open_ticket: Mapped[bool] = mapped_column(Boolean, default=False)
     # Several items per job (tools / equipment / device shops only — see services/multi_asset.py).
@@ -539,6 +542,8 @@ class Order(Base):
     tax: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     prepayment_total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    # Unpaid balance written off when the job moved to a dropped status (reversed on reopen).
+    written_off: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     deposit_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # requested deposit (e.g. on an estimate) the client can pay via pay-link
     warranty_until: Mapped[Optional[date]] = mapped_column(Date)
     due_at: Mapped[Optional[datetime]] = mapped_column(DateTime)

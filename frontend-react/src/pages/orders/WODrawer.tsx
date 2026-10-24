@@ -457,7 +457,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             </div>
           )}
           {tab === "checklists" && <ChecklistsTab orderId={order.id} typeId={(d as any).type_id} />}
-          {tab === "invoices" && <InvoicesTab orderId={order.id} total={d.total} deposit={(d as any).deposit_amount} currencyCode={(d as any).currency_code} fxRate={(d as any).fx_rate} currencySymbol={(d as any).currency_symbol} onCurrencyChange={(code, rate, symbol) => setD({ ...d, currency_code: code, fx_rate: rate, currency_symbol: symbol } as any)} onFlash={flash} />}
+          {tab === "invoices" && <InvoicesTab orderId={order.id} total={d.total} deposit={(d as any).deposit_amount} writtenOff={(d as any).written_off} currencyCode={(d as any).currency_code} fxRate={(d as any).fx_rate} currencySymbol={(d as any).currency_symbol} onCurrencyChange={(code, rate, symbol) => setD({ ...d, currency_code: code, fx_rate: rate, currency_symbol: symbol } as any)} onFlash={flash} />}
           {tab === "activity" && (<>
             <ConversationPanel orderId={order.id} />
             <ActivityTab orderId={order.id} clientName={c.name} clientPhone={c.phone} onFlash={flash} />
@@ -1274,7 +1274,7 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
 
 /* ---- Invoices tab ---- */
 type PayCtx = { order_total: number; already_paid: number; prepaid: number; remaining: number; accounts_by_method: Record<string, { id: string; name: string }[]> };
-export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash }: { orderId: string; total?: number; deposit?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: (m: string) => void }) {
+export function InvoicesTab({ orderId, total, deposit, writtenOff, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash }: { orderId: string; total?: number; deposit?: number; writtenOff?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: (m: string) => void }) {
   const { base, opts: curOpts, multi: multiCurrency } = useCurrencies();
   const { can } = useMe();
   const changeCurrency = async (code: string) => {
@@ -1355,8 +1355,9 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
 
   // Net of refunds, like the server's balance (services/order_money), so a refunded job isn't "Settled".
   const paid = (data?.payments || []).reduce((s, p) => s + (p.kind === "refund" ? -Math.abs(p.amount || 0) : (p.amount || 0)), 0);
-  const t = total ?? 0; const due = Math.max(t - paid, 0);
-  const settled = t > 0 && due <= 0;   // fully paid: no payment or deposit actions to offer
+  const wo = writtenOff || 0;   // a dropped job's unpaid balance, written off
+  const t = total ?? 0; const due = Math.max(t - paid - wo, 0);
+  const settled = t > 0 && due <= 0;   // fully paid (or written off): no payment or deposit actions to offer
   const accts = ctx ? (ctx.accounts_by_method[method] || ctx.accounts_by_method.cash || []) : [];
 
   return (
@@ -1365,8 +1366,8 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
         <div className="relative z-10 flex flex-wrap items-center justify-between gap-4">
           <div>
             <span className="text-[11px] font-bold text-blue-200/80">Still to pay</span>
-            <div className="flex items-baseline gap-3 mt-1"><h2 className="text-3xl font-bold tabular-nums tracking-tight text-white">{money(due)}</h2><span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${settled ? "bg-emerald-400/20 text-emerald-300 border-emerald-400/30" : "bg-amber-400/20 text-amber-300 border-amber-400/30"}`}>{settled ? "Settled" : "Balance due"}</span></div>
-            <p className="text-xs text-blue-200/70 mt-1">Grand Total {money(t)} · {money(paid)} Collected</p>
+            <div className="flex items-baseline gap-3 mt-1"><h2 className="text-3xl font-bold tabular-nums tracking-tight text-white">{money(due)}</h2><span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${settled ? "bg-emerald-400/20 text-emerald-300 border-emerald-400/30" : "bg-amber-400/20 text-amber-300 border-amber-400/30"}`}>{settled ? (wo > 0 ? "Written off" : "Settled") : "Balance due"}</span></div>
+            <p className="text-xs text-blue-200/70 mt-1">Grand Total {money(t)} · {money(paid)} Collected{wo > 0 && <> · {money(wo)} written off</>}</p>
             {isForeign && (
               <p className="text-xs text-blue-100 mt-1 font-mono">≈ {currencySymbol}{conv(due).toFixed(2)} {currencyCode} <span className="text-blue-200/60">(1 {currencyCode} = {fxRate && (1 / fxRate).toFixed(4)} {base?.code})</span></p>
             )}
