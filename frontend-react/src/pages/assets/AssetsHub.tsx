@@ -7,7 +7,11 @@ import AssetDrawer from "../orders/AssetDrawer";
 import { useTerminology, assetNoun } from "../../lib/useTerminology";
 import Pager from "../../components/Pager";
 
-type Asset = { id: string; asset_type?: string; asset_label?: string; template_key?: string; brand?: string; model?: string; serial?: string; imei?: string; owner_type?: string; owner_name?: string; condition?: string; order_count?: number };
+type Asset = { id: string; asset_type?: string; asset_label?: string; template_key?: string; brand?: string; model?: string; serial?: string; imei?: string; owner_type?: string; owner_name?: string; condition?: string; order_count?: number; asset_status?: string };
+
+// Which assets the list shows. Active (everything not written off) is the default.
+type AssetState = "active" | "written_off" | "all";
+const STATES: [AssetState, string][] = [["active", "Active"], ["written_off", "Written off"], ["all", "All"]];
 
 export default function AssetsHub() {
   const term = useTerminology();
@@ -15,11 +19,12 @@ export default function AssetsHub() {
   const [open, setOpen] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [q, setQ] = useState("");
+  const [state, setState] = useState<AssetState>("active");
   const PAGE_SIZE = 50;
 
   // Searched and paged on the server (the API serves at most 200 rows per request).
   const dq = useDebounced(q.trim());
-  const sp_ = useServerPage<Asset>("/assets", { search: dq || undefined }, { pageSize: PAGE_SIZE });
+  const sp_ = useServerPage<Asset>("/assets", { search: dq || undefined, state }, { pageSize: PAGE_SIZE });
   const rows = sp_.rows;
   useEffect(() => { setErr(sp_.err); }, [sp_.err]);
   const reload = () => sp_.reload();
@@ -37,8 +42,16 @@ export default function AssetsHub() {
     <Shell title={term.assets}>
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 flex flex-wrap items-center justify-between gap-3">
-          <button onClick={() => setCreating(true)} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="add" c="text-sm font-bold" />New {term.asset.toLowerCase()}</button>
-          <div className="relative w-72"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" /><input value={q} onChange={(e) => setQ(e.target.value)} className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg font-medium" placeholder={`Search ${term.assets.toLowerCase()}…`} /></div>
+          <div className="flex flex-wrap items-center gap-3">
+            <button onClick={() => setCreating(true)} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="add" c="text-sm font-bold" />New {term.asset.toLowerCase()}</button>
+            <div role="radiogroup" aria-label={`Which ${term.assets.toLowerCase()} to show`} className="inline-flex rounded-lg bg-slate-100 p-0.5">
+              {STATES.map(([v, l]) => (
+                <button key={v} type="button" role="radio" aria-checked={state === v} onClick={() => setState(v)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${state === v ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>{l}</button>
+              ))}
+            </div>
+          </div>
+          <div className="relative w-full sm:w-72"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" /><input value={q} onChange={(e) => setQ(e.target.value)} className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg font-medium" placeholder={`Search ${term.assets.toLowerCase()}…`} /></div>
         </div>
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
           <table className="w-full text-left border-collapse text-xs">
@@ -49,10 +62,11 @@ export default function AssetsHub() {
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
               {err && <tr><td colSpan={7} className="py-6 px-4 text-status-overdue-ink">Error: {err}</td></tr>}
               {!rows && !err && <SkeletonRows cols={7} />}
+              {rows && !err && pageRows.length === 0 && <tr><td colSpan={7} className="py-8 px-4 text-center text-ink-tertiary">{q.trim() ? `No ${term.assets.toLowerCase()} match “${q.trim()}”.` : state === "written_off" ? `No written-off ${term.assets.toLowerCase()}.` : `No ${term.assets.toLowerCase()} yet.`}</td></tr>}
               {pageRows.map((a) => (
                 <tr key={a.id} className="hover:bg-blue-50/40 cursor-pointer transition-colors group" onClick={() => setOpen(a.id)}>
                   <td className="py-3 px-4 text-ink-tertiary">{a.asset_type && a.asset_type !== "Device" ? a.asset_type : assetNoun(a, term)}</td>
-                  <td className="py-3 px-4 font-bold text-ink-primary">{[a.brand, a.model].filter(Boolean).join(" ") || "—"}</td>
+                  <td className="py-3 px-4 font-bold text-ink-primary">{[a.brand, a.model].filter(Boolean).join(" ") || "—"}{a.asset_status === "written_off" && <span className="ml-2 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-ink-secondary align-middle">Written off</span>}</td>
                   <td className="py-3 px-4 font-mono text-[11px]">{a.imei || a.serial || "—"}</td>
                   <td className="py-3 px-4"><span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-blue-100 text-blue-800 border border-blue-200">{a.owner_type === "company" ? "Company" : a.owner_name || "Client"}</span></td>
                   <td className="py-3 px-4">{a.condition || "—"}</td>
