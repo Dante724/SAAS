@@ -995,6 +995,7 @@ async def get_public_pages(
         "oe_allow_recommend": getattr(org, "oe_allow_recommend", True),
         "oe_show_scheduled": getattr(org, "oe_show_scheduled", False),
         "book_show_employee_step": getattr(org, "book_show_employee_step", True),
+        "public_employee_name": getattr(org, "public_employee_name", None) or "full",
         "auto_draft_invoice_on_close": getattr(org, "auto_draft_invoice_on_close", False),
         "default_invoice_display": getattr(org, "default_invoice_display", "detailed"),
         "oe_allow_staff_reply": getattr(org, "oe_allow_staff_reply", True),
@@ -1033,6 +1034,7 @@ class PublicPagesIn(BaseModel):
     oe_allow_staff_reply: Optional[bool] = None
     oe_show_scheduled: Optional[bool] = None            # 144dr
     book_show_employee_step: Optional[bool] = None      # 144dr
+    public_employee_name: Optional[str] = None          # full | first | custom
     oe_wo_allow_approval: Optional[bool] = None         # 144ih
     oe_approval_statuses: Optional[str] = None          # 144ih comma-separated status keys
     oe_wo_approval_statuses: Optional[str] = None       # 144ih
@@ -1060,7 +1062,12 @@ async def update_public_pages(
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
     if not org:
         raise HTTPException(404, "Company not found")
-    for k, v in data.model_dump(exclude_unset=True).items():
+    payload = data.model_dump(exclude_unset=True)
+    if "public_employee_name" in payload:
+        from backend.services.public_name import MODES
+        if payload["public_employee_name"] not in MODES:
+            raise HTTPException(422, f"public_employee_name must be one of {list(MODES)}")
+    for k, v in payload.items():
         setattr(org, k, v)
     await db.commit()
     return {"ok": True}

@@ -929,6 +929,7 @@ async def portal_decide_recs(token: str, order_id: str, data: RecDecideIn, reque
 # ════════════════════════════════════════════════════════════
 from datetime import datetime, timedelta, time as dt_time
 from backend.models import Organisation as _Org, Service, Employee, Appointment, Client, Order
+from backend.services.public_name import public_staff_name
 from backend.services.money import q2
 
 
@@ -1100,7 +1101,9 @@ async def appointment_config(slug: str, response: Response, db: AsyncSession = D
                       "employee_ids": getattr(s, "allowed_employee_ids", None) or [],
                       "category": (_svc_cats.get(s.category_id) if s.category_id else None) or s.category}
                      for s in services],
-        "staff": [{"id": e.id, "name": e.name} for e in staff],
+        # Customers see the name the shop chose (Settings › Public pages): full, first or custom.
+        "staff": [{"id": e.id, "name": public_staff_name(e, getattr(org, "public_employee_name", None))}
+                  for e in staff],
         "locations": [{"id": l.id, "name": l.name,
                        "address": l.address, "phone": l.phone,
                        "working_hours": l.working_hours or {}} for l in locs],
