@@ -379,6 +379,14 @@ class TemplateIn(BaseModel):
     barcode_field: Optional[str] = None      # opa: label {Barcode} source — barcode|sku|code|mpn
     barcode_types: dict[str, str] = {}       # opa: symbology per field — code128|ean13|upca|qr
 
+    @field_validator("auto_print_on")
+    @classmethod
+    def _known_auto_print(cls, v: Optional[str]) -> Optional[str]:
+        v = (v or "").strip() or None
+        if v not in (None, "none", "create", "close"):
+            raise ValueError("auto_print_on must be one of: none, create, close")
+        return None if v == "none" else v
+
     @field_validator("page_size")
     @classmethod
     def _known_page_size(cls, v: Optional[str]) -> str:
@@ -1568,6 +1576,66 @@ class ClientLabelIn(BaseModel):
     template_id: str
     client_ids: list[str] = []
     copies: int = 1
+
+
+# Label templates that print against the job's asset(s) when auto-printed.
+ASSET_LABEL_TYPES = ("label",)
+
+
+@router.post("/auto-print/{order_id}")
+async def auto_print(
+    order_id: str,
+    event: str = "create",
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Templates set to print automatically on `event` (create | close), rendered for this job.
+    The desktop new-job form and Tekly Go call it right after creating a job and open the print
+    dialog for each document returned. An asset label prints one label per item on the job, at
+    the template's exact size; with no item on the job it prints one against the job."""
+    if event not in ("create", "close"):
+        raise HTTPException(422, "event must be create or close")
+    tpls = (await db.execute(select(DocumentTemplate).where(
+        DocumentTemplate.org_id == current.org_id, DocumentTemplate.auto_print_on == event,
+        DocumentTemplate.active == True).order_by(DocumentTemplate.name))).scalars().all()  # noqa: E712
+    if not tpls:
+        return {"docs": []}
+    order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
+        .options(selectinload(Order.lines), selectinload(Order.client),
+                 selectinload(Order.device), selectinload(Order.assigned_to)))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    from backend.models import OrderItem
+    asset_ids = [order.device_id] if order.device_id else []
+    for (aid,) in (await db.execute(select(OrderItem.asset_id).where(
+            OrderItem.order_id == order.id, OrderItem.asset_id.isnot(None)))).all():
+        if aid not in asset_ids:
+            asset_ids.append(aid)
+    assets = []
+    if asset_ids:
+        by_id = {a.id: a for a in (await db.execute(select(Device).where(
+            Device.id.in_(asset_ids), Device.org_id == current.org_id))).scalars().all()}
+        assets = [by_id[i] for i in asset_ids if i in by_id]
+    org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
+    doc, rows = await _resolve(db, current.org_id, order, current)
+    out = []
+    from backend.routers.feed import log_system_event
+    for tpl in tpls:
+        body = await _expand_components(db, current.org_id, tpl.body_html)
+        if tpl.doc_type in ASSET_LABEL_TYPES:
+            tiles = []
+            for a in assets or [None]:
+                varmap = {**doc, **(await _resolve_asset(db, org, a) if a is not None else {})}
+                tiles.append(f"<div class='lbl'>{_render(body, varmap, rows)}</div>")
+            html = _labels_html(tpl, tiles)
+        else:
+            html = _render(body, doc, rows)
+        db.add(GeneratedDocument(org_id=current.org_id, order_id=order.id, template_id=tpl.id,
+                                 name=tpl.name, rendered_html=html))
+        await log_system_event(db, current.org_id, "order", order.id, f"Printed automatically: {tpl.name}")
+        out.append({"template_id": tpl.id, "name": tpl.name, "doc_type": tpl.doc_type, "html": html})
+    await db.commit()
+    return {"docs": out}
 
 
 @router.post("/render-client-labels")
