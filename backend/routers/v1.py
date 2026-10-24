@@ -188,6 +188,7 @@ async def create_order(data: OrderIn, db: AsyncSession = Depends(get_db), princi
     try:
         from backend.services.webhooks import emit_event
         await emit_event(db, principal.org_id, "order.created", {"id": o.id, "number": o.order_number})
+        await db.commit()   # the delivery row is written after the record's own commit
     except Exception:
         pass
     return {"data": _order(o)}
@@ -226,6 +227,7 @@ async def get_product(pid: str, db: AsyncSession = Depends(get_db), principal: A
 
 # ── appointments ─────────────────────────────────────────────────────────────────
 @router.get("/appointments")
+@router.get("/bookings", include_in_schema=False)   # old name the v1 docs used to promise
 async def list_appointments(page: int = 1, page_size: int = Query(25, le=100),
                         db: AsyncSession = Depends(get_db), principal: ApiPrincipal = READ):
     return await _list(db, Appointment, principal.org_id, _appointment, page, page_size,
@@ -244,6 +246,7 @@ class AppointmentIn(BaseModel):
 
 
 @router.post("/appointments", status_code=201)
+@router.post("/bookings", status_code=201, include_in_schema=False)   # old name, kept as an alias
 async def create_appointment(data: AppointmentIn, db: AsyncSession = Depends(get_db), principal: ApiPrincipal = WRITE):
     b = Appointment(org_id=principal.org_id, location_id=data.location_id,
                 scheduled_for=parse_dt(data.scheduled_for, "scheduled_for"), client_name=data.client_name,
@@ -253,6 +256,7 @@ async def create_appointment(data: AppointmentIn, db: AsyncSession = Depends(get
     try:
         from backend.services.webhooks import emit_event
         await emit_event(db, principal.org_id, "appointment.created", {"id": b.id})
+        await db.commit()   # the delivery row is written after the record's own commit
     except Exception:
         pass
     return {"data": _appointment(b)}

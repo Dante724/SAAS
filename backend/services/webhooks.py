@@ -19,12 +19,27 @@ EVENTS = [
     "time_entry.stopped",
 ]
 
+# Old names still accepted on subscriptions. The public API docs used to promise
+# `booking.created` before bookings were renamed appointments; an endpoint subscribed to the
+# old name still receives the event, labelled with the name it subscribed to.
+EVENT_ALIASES = {"booking.created": "appointment.created"}
+
+
+def _delivery_name(endpoint_events: str, event: str):
+    """The event name to deliver to this endpoint, or None when it isn't subscribed."""
+    if not endpoint_events or endpoint_events.strip() == "*":
+        return event
+    wanted = {e.strip() for e in endpoint_events.split(",") if e.strip()}
+    if event in wanted:
+        return event
+    for old, new in EVENT_ALIASES.items():
+        if new == event and old in wanted:
+            return old
+    return None
+
 
 def _subscribed(endpoint_events: str, event: str) -> bool:
-    if not endpoint_events or endpoint_events.strip() == "*":
-        return True
-    wanted = {e.strip() for e in endpoint_events.split(",") if e.strip()}
-    return event in wanted
+    return _delivery_name(endpoint_events, event) is not None
 
 
 async def emit_event(db: AsyncSession, org_id: str, event: str, payload: dict) -> None:
@@ -42,12 +57,13 @@ async def emit_event(db: AsyncSession, org_id: str, event: str, payload: dict) -
     if not endpoints:
         return
 
-    body = json.dumps({"event": event, "data": payload,
-                       "at": datetime.utcnow().isoformat()}, default=str)
+    at = datetime.utcnow().isoformat()
     for ep in endpoints:
-        if not _subscribed(ep.events, event):
+        name = _delivery_name(ep.events, event)
+        if name is None:
             continue
-        delivery = WebhookDelivery(org_id=org_id, endpoint_id=ep.id, event=event,
+        body = json.dumps({"event": name, "data": payload, "at": at}, default=str)
+        delivery = WebhookDelivery(org_id=org_id, endpoint_id=ep.id, event=name,
                                    payload=body, status="pending", attempts=0)
         db.add(delivery)
         await db.flush()

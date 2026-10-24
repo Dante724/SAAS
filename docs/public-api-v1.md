@@ -49,7 +49,8 @@ resource index.
 | Orders | `GET /orders`, `GET /orders/{id}` | `POST /orders` | `?status=` filter; excludes estimates |
 | Estimates | `GET /estimates`, `GET /estimates/{id}` | — | Orders flagged `is_estimate` |
 | Products | `GET /products`, `GET /products/{id}` | — | Inventory parts/products |
-| Bookings | `GET /bookings` | `POST /bookings` | Online/CRM bookings |
+| Appointments | `GET /appointments` | `POST /appointments` | Online/CRM appointments. `/bookings` still works as a deprecated alias |
+| Credit notes | `GET /credit-notes`, `GET /credit-notes/{id}` | — | Read-only |
 | Invoices | `GET /invoices`, `GET /invoices/{id}` | — | Read-only |
 | Time entries | `GET /time-entries` | `POST /time-entries` | `?order_id=` / `?employee_id=` filters |
 
@@ -66,11 +67,11 @@ resource index.
 ```
 Emits the `order.created` webhook event.
 
-`POST /bookings`
+`POST /appointments`
 ```json
 { "location_id": "<loc>", "scheduled_for": "2026-07-01T14:00:00", "client_name": "Jane", "duration_min": 60 }
 ```
-Emits the `booking.created` webhook event.
+Emits the `appointment.created` webhook event.
 
 `POST /time-entries`
 ```json
@@ -95,9 +96,24 @@ curl -X POST -H "Authorization: Bearer rok_..." -H "Content-Type: application/js
 ## Webhooks (companion to the API)
 
 Register endpoints under `POST /api/webhooks` (staff session) to receive event
-callbacks: `order.created`, `order.status_changed`, `booking.created`,
-`time_entry.stopped`, `payment.recorded`. Deliveries are signed with the
-endpoint secret and logged at `GET /api/webhooks/deliveries`.
+callbacks. Subscribe with a comma-separated list of names, or `*` for all.
+
+| Event | Fires when | `data` |
+|-------|-----------|--------|
+| `order.created` | A work order is created (app or API) | `id`, `order_number`/`number`, `status`, `total` |
+| `order.status_changed` | A work order or estimate changes status | `id`, `order_number`, `from`, `to` |
+| `order.closed` | A work order enters a closed or dropped status from an open one | `id`, `order_number`, `status`, `total`, `closed_at` |
+| `estimate.accepted` | The customer accepts an estimate online | `id`, `number`, `total` |
+| `payment.recorded` | An online payment succeeds | `intent_id`, `order_id`, `amount`, `provider`, `payment_id` |
+| `appointment.created` | An appointment is created through the API | `id` |
+| `time_entry.stopped` | A time-clock entry stops | `id`, `employee_id`, `order_id`, `duration_sec`, `billable` |
+
+`booking.created` is the old name for `appointment.created`. Endpoints subscribed to
+it keep receiving the event under that name.
+
+Each POST carries `X-Tekly-Event` and `X-Tekly-Signature: sha256=<hmac>` (HMAC-SHA256 of
+the raw body with the endpoint secret). Deliveries are logged at
+`GET /api/webhooks/deliveries`.
 
 ## Reporting read API (for BI tools)
 

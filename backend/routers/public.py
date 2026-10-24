@@ -130,6 +130,13 @@ async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
     estimate to the appropriate status, auto-converting on accept when configured.
     """
     verb = "accepted" if decision == "accept" else "declined"
+    if decision == "accept" and order.is_estimate:
+        try:
+            from backend.services.webhooks import emit_event
+            await emit_event(db, order.org_id, "estimate.accepted", {
+                "id": order.id, "number": order.order_number, "total": order.total})
+        except Exception:  # noqa: BLE001 — webhooks never block the customer's decision
+            pass
     db.add(EventFeedItem(
         org_id=order.org_id, entity_type="order", entity_id=order.id,
         item_type="comment", body=f"Customer {verb} the estimate",
