@@ -754,7 +754,8 @@ async def get_company(
     if not org:
         raise HTTPException(404, "Company not found")
     return {
-        "name": org.name, "company_email": org.company_email, "company_phone": org.company_phone,
+        "name": org.name, "account_id": org.account_id,   # read-only; what Tekly support asks for
+        "company_email": org.company_email, "company_phone": org.company_phone,
         "company_address": org.company_address, "company_details": org.company_details,
         "company_note": org.company_note, "website": org.website, "logo_data": org.logo_data,
         "country": org.country,

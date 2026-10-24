@@ -117,9 +117,12 @@ async def lifespan(app: FastAPI):
     # Build 144ce: ensure a bootstrap platform admin exists for the /admin portal.
     try:
         from backend.db.database import AsyncSessionLocal
+        from backend.services.admin_access import ensure_builtin_roles
         from backend.services.platform_auth import ensure_seed_admin
         async with AsyncSessionLocal() as _s:
             await ensure_seed_admin(_s)
+            await ensure_builtin_roles(_s)   # Owner, Sales and account management, Sales, ...
+            await _s.commit()
     except Exception:  # noqa: BLE001 — never block startup on this
         log.exception("platform admin seed skipped")
     if settings.SEED_DEMO:
@@ -282,9 +285,12 @@ async def serve_track(token: str):
 
 @app.get("/admin", include_in_schema=False)
 async def serve_admin():
-    # Build 144cf: the separate platform-operator portal (own login, outside any tenant).
-    from backend.core.observability import ADMIN_CSP
-    return FileResponse(os.path.join(frontend_dir, "admin.html"), headers={"Content-Security-Policy": ADMIN_CSP})
+    # Tekly's own back office (separate login, outside any shop): a React page built from
+    # frontend-react/admin.html. It has no inline script, so it gets the app's strict CSP.
+    page = os.path.join(react_dir, "admin.html")
+    if os.path.isfile(page):
+        return FileResponse(page, headers={"Cache-Control": "no-cache"})
+    return HTMLResponse(_NOT_BUILT, status_code=503)
 
 
 @app.get("/book/{slug}", include_in_schema=False)
