@@ -16,6 +16,7 @@ import { api, openAuthedDoc } from "../../api/client";
 import { readAsDataUrl } from "../../lib/files";
 import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
 import AuthedImage from "../../components/AuthedImage";
+import NotesPanel from "./NotesPanel";
 import ClientDrawer from "./ClientDrawer";
 import AssetDrawer from "./AssetDrawer";
 import { useMe } from "../../context/Me";
@@ -460,6 +461,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
           {tab === "invoices" && <InvoicesTab orderId={order.id} total={d.total} deposit={(d as any).deposit_amount} writtenOff={(d as any).written_off} currencyCode={(d as any).currency_code} fxRate={(d as any).fx_rate} currencySymbol={(d as any).currency_symbol} onCurrencyChange={(code, rate, symbol) => setD({ ...d, currency_code: code, fx_rate: rate, currency_symbol: symbol } as any)} onFlash={flash} />}
           {tab === "activity" && (<>
             <ConversationPanel orderId={order.id} />
+            <NotesPanel orderId={order.id} onFlash={flash} />
             <ActivityTab orderId={order.id} clientName={c.name} clientPhone={c.phone} onFlash={flash} />
           </>)}
         </div>

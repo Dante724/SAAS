@@ -175,7 +175,7 @@ class StatusChange(BaseModel):
 
 class CommentIn(BaseModel):
     body: str
-    visible_to_client: bool = False
+    visible_to_client: Optional[bool] = None   # left out: the shop's default comment visibility
 
 # ── Helpers ──────────────────────────────────
 
@@ -1897,6 +1897,9 @@ async def add_comment(
     if not _co:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, _co)
+    if data.visible_to_client is None:
+        from backend.routers.feed import default_visibility
+        data.visible_to_client = await default_visibility(db, current.org_id, "comment") == "client"
     comment = OrderComment(order_id=order_id, author_id=current.id,
                            body=data.body, visible_to_client=data.visible_to_client)
     db.add(comment)

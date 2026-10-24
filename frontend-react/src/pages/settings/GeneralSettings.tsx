@@ -19,7 +19,7 @@ type Opts = {
 const SAVED_KEYS = ["name", "company_email", "company_phone", "company_address", "company_details", "company_note", "logo_data",
   "website", "country", "timezone", "currency", "currency_code", "document_language", "industry_template",
   "prohibit_dup_phone", "prohibit_dup_email", "require_mfa", "clock_wo_enabled", "clock_attendance_enabled",
-  "clock_labour_billing", "rounding_enabled"];
+  "clock_labour_billing", "rounding_enabled", "default_comment_visibility", "default_file_visibility"];
 const snap = (co: any) => JSON.stringify(SAVED_KEYS.map((k) => co?.[k] ?? null));
 
 const INDUSTRY_ICON: Record<string, string> = {
@@ -105,6 +105,24 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
         className={`ml-auto w-10 h-6 rounded-full flex-shrink-0 relative transition-colors ${co?.[k] ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${co?.[k] ? "left-[18px]" : "left-0.5"}`} /></button>
     </label>
   );
+
+  // Private / Shown to customer, for the defaults on new comments and files.
+  const Visibility = ({ k, label, hint }: { k: string; label: string; hint: string }) => {
+    const v = co?.[k] === "public" ? "public" : "private";
+    return (
+      <div className="flex flex-wrap items-center gap-3 py-3 border-t border-slate-100 first:border-0">
+        <span className="min-w-0"><span className="block text-sm text-ink-primary">{label}</span><span className="block text-[11px] text-ink-tertiary">{hint}</span></span>
+        <div role="radiogroup" aria-label={label} className="ml-auto inline-flex rounded-lg bg-slate-100 p-0.5 flex-shrink-0">
+          {([["private", "Private", "lock"], ["public", "Shown to customer", "visibility"]] as const).map(([val, text, icon]) => (
+            <button key={val} type="button" role="radio" aria-checked={v === val} onClick={() => set(k, val)}
+              className={`px-2.5 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1 transition-colors ${v === val ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>
+              <M n={icon} c="text-[14px]" />{text}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  };
 
   const country = opts.countries.find((c) => c[0] === co.country);
   const contact = [co.company_phone, co.company_email, co.website].filter(Boolean);
@@ -214,6 +232,11 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
               <Switch k="require_mfa" label="Two-step sign-in for everyone" hint="Staff can't turn it off for themselves" />
             </Section>
           </div>
+
+          <Section icon="forum" title="Comments and files on jobs" hint="What new comments and files start as. Anyone posting can still switch a single one.">
+            <Visibility k="default_comment_visibility" label="New comments" hint="Shown to customer means it appears on their tracking page" />
+            <Visibility k="default_file_visibility" label="New files and photos" hint="Intake photos and checklist files stay private" />
+          </Section>
 
           <div className="flex items-center gap-3 rounded-2xl border border-slate-200/90 bg-white px-5 py-4">
             <span className="w-9 h-9 rounded-xl bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n="refresh" c="text-lg" /></span>

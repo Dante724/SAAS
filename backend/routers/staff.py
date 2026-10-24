@@ -866,6 +866,9 @@ async def update_company(
         tmpl = payload.get("industry_template", org.industry_template)
         if _ind.normalize_template_key(tmpl) not in _ma.ELIGIBLE:
             raise HTTPException(422, "Several items per job is only for tools, equipment, phone and computer shops")
+    for _k in ("default_comment_visibility", "default_file_visibility"):
+        if _k in payload and payload[_k] not in ("private", "public"):
+            raise HTTPException(422, f"{_k} must be 'private' or 'public'")
     # Build 121: the API field is 'currencies' but the column is 'currencies_json'
     if "currencies" in payload:
         org.currencies_json = payload.pop("currencies")

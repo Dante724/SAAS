@@ -29,7 +29,9 @@ class FeedItemIn(BaseModel):
     media_data: Optional[str] = None    # data URL / base64
     media_name: Optional[str] = None
     media_mime: Optional[str] = None
-    visibility: str = "private"         # private | client
+    # private | client. Left out, it follows the shop's default for comments or files
+    # (Settings → General → Comments and files).
+    visibility: Optional[str] = None
 
 
 def _serialize(it: EventFeedItem) -> dict:
@@ -43,6 +45,7 @@ def _serialize(it: EventFeedItem) -> dict:
         "media_mime": it.media_mime,
         "visibility": it.visibility,
         "author_name": it.author_name,
+        "author_id": it.author_id,
         "created_at": it.created_at.isoformat(),
     }
 
@@ -148,13 +151,63 @@ async def create_feed_item(
         media_blob_id=media_blob_id,
         media_name=data.media_name,
         media_mime=data.media_mime,
-        visibility="client" if data.visibility == "client" else "private",
+        visibility=await _visibility(db, current.org_id, data),
         author_id=current.id,
         author_name=current.name,
     )
     db.add(item)
     await db.commit()
     await db.refresh(item)
+    return _serialize(item)
+
+
+async def default_visibility(db: AsyncSession, org_id: str, kind: str) -> str:
+    """The shop's default for a new comment ("comment") or file ("file"): private | client."""
+    from backend.models import Organisation
+    col = Organisation.default_comment_visibility if kind == "comment" else Organisation.default_file_visibility
+    v = (await db.execute(select(col).where(Organisation.id == org_id))).scalar_one_or_none()
+    return "client" if v == "public" else "private"
+
+
+async def _visibility(db: AsyncSession, org_id: str, data: FeedItemIn) -> str:
+    if data.visibility in ("client", "public"):
+        return "client"
+    if data.visibility == "private":
+        return "private"
+    return await default_visibility(db, org_id, "comment" if data.item_type == "comment" else "file")
+
+
+class VisibilityIn(BaseModel):
+    visibility: str      # private | client
+
+
+@router.patch("/item/{item_id}")
+async def set_feed_item_visibility(
+    item_id: str,
+    data: VisibilityIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Make one comment or file private or show it to the customer (on the tracking page)."""
+    if data.visibility not in ("private", "client"):
+        raise HTTPException(422, "visibility must be 'private' or 'client'")
+    item = (await db.execute(select(EventFeedItem).where(
+        EventFeedItem.id == item_id, EventFeedItem.org_id == current.org_id))).scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "Item not found")
+    if item.item_type not in VALID_ITEMS or item.item_type == "signature":
+        raise HTTPException(403, "Only comments and files can change who sees them")
+    await _verify_entity(db, current.org_id, item.entity_type, item.entity_id, current)
+    if item.author_id != current.id:
+        from backend.services.auth import has_perm
+        if not await has_perm(db, current, "can_delete_orders"):   # same rule as removing it
+            raise HTTPException(403, "You can only change your own posts")
+    if item.visibility != data.visibility:
+        await audit.record(db, org_id=current.org_id, actor_id=current.id, action="feed.visibility",
+                           entity_type=item.entity_type, entity_id=item.entity_id,
+                           diff={"item_id": item.id, "visibility": [item.visibility, data.visibility]})
+        item.visibility = data.visibility
+        await db.commit()
     return _serialize(item)
 
 

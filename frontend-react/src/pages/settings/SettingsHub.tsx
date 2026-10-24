@@ -256,6 +256,8 @@ export default function SettingsHub() {
         prohibit_dup_phone: co.prohibit_dup_phone, prohibit_dup_email: co.prohibit_dup_email,
         require_mfa: co.require_mfa, clock_wo_enabled: co.clock_wo_enabled, clock_attendance_enabled: co.clock_attendance_enabled,
         clock_labour_billing: co.clock_labour_billing, rounding_enabled: co.rounding_enabled,
+        default_comment_visibility: co.default_comment_visibility || "private",
+        default_file_visibility: co.default_file_visibility || "private",
       });
       // Switching industry also seeds its starter brands/models and refreshes the app's wording.
       const prevInd = coSaved.current?.industry_template;
