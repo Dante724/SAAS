@@ -13,8 +13,17 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# A new push to a PR/branch cancels that ref's still-running CI. Runs on main/master each get a
+# unique group (the run id), so they are never cancelled or queued behind one another.
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  SHARDS: 4   # number of backend test shards; keep in sync with the `test` job's matrix
+
 jobs:
-  test:
+  lint-migrations:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     env:
@@ -38,12 +47,95 @@ jobs:
         # migration (e.g. a duplicate index, or SQLite-incompatible batch DDL) before it reaches a
         # production deploy, where the app runs migrations rather than create_all.
         run: alembic -c backend/alembic.ini upgrade head
-      - name: Run tests
+
+  test:
+    # The suite is split into parallel shards (whole files, balanced by test count — see the
+    # sharding hook at the end of backend/tests/conftest.py). Each shard runs its slice with xdist
+    # and uploads raw coverage data; the `coverage` job combines them and enforces the floor.
+    name: test (shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false   # let every shard report its failures
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      ENVIRONMENT: test
+      SEED_DEMO: "false"
+      DATABASE_URL: "sqlite+aiosqlite:///./test.db"
+      PYTEST_SHARD: ${{ matrix.shard }}
+      PYTEST_SHARD_TOTAL: ${{ strategy.job-total }}
+      PYTEST_SHARD_MANIFEST: coverage-data/shard-${{ matrix.shard }}.txt
+      COVERAGE_FILE: coverage-data/.coverage.shard-${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Run tests (this shard)
         # Includes the HARD model/migration drift gate (test_144eo_migrated_schema.py): migrations must
         # build exactly the schema the models describe, minus a reviewed allowlist that can only shrink.
-        # parallel (conftest isolates each worker on its own SQLite file) + branch coverage; fails if
-        # coverage drops below the ratchet floor in pyproject [tool.coverage.report] fail_under.
-        run: pytest -q -n auto --cov --cov-report=term:skip-covered --cov-report=xml
+        # parallel (conftest isolates each worker on its own SQLite file) + branch coverage. A single
+        # shard covers only part of the code, so the floor is enforced on the combined data in the
+        # `coverage` job, not here.
+        run: |
+          mkdir -p coverage-data
+          pytest -q -n auto --cov --cov-report= --cov-fail-under=0
+      - name: Upload shard coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-shard-${{ matrix.shard }}
+          path: coverage-data/
+          include-hidden-files: true   # .coverage.* data files are dotfiles
+          if-no-files-found: error
+          retention-days: 3
+
+  coverage:
+    # Aggregate gate: fails if any shard failed, if the shards did not run exactly the full suite,
+    # or if combined coverage is below the ratchet floor in pyproject [tool.coverage.report] fail_under.
+    needs: test
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    env:
+      ENVIRONMENT: test
+      SEED_DEMO: "false"
+      DATABASE_URL: "sqlite+aiosqlite:///./test.db"
+    steps:
+      - name: All shards passed
+        if: ${{ needs.test.result != 'success' }}
+        run: |
+          echo "test shards: ${{ needs.test.result }}"; exit 1
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-shard-*
+          path: coverage-data
+          merge-multiple: true
+      - name: Shards ran exactly the full suite
+        shell: bash   # -eo pipefail: a collection error fails the step
+        run: |
+          pytest -q --collect-only | grep '::' | sort > all-tests.txt
+          cat coverage-data/shard-*.txt | sort > sharded-tests.txt
+          echo "collected: $(wc -l < all-tests.txt)  sharded: $(wc -l < sharded-tests.txt)  unique: $(sort -u sharded-tests.txt | wc -l)"
+          ls coverage-data/shard-*.txt | wc -l | grep -qx "$SHARDS" || { echo "expected $SHARDS shard manifests"; exit 1; }
+          diff all-tests.txt sharded-tests.txt
+      - name: Combine coverage + enforce floor
+        run: |
+          coverage combine coverage-data/
+          coverage report
+          coverage xml
       - name: Upload backend coverage report
         if: always()
         uses: actions/upload-artifact@v4
@@ -59,9 +151,15 @@ jobs:
     # ADVISORY until its first green run on GitHub — then delete `continue-on-error` to make it a
     # required gate. (Postgres DDL compile + partial-index parity are already hard-gated in the
     # main job via test_postgres_ddl_compat.py.)
+    # Sharded like `test` (same conftest hook); every matrix job gets its own Postgres container.
+    name: backend-postgres (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     services:
       postgres:
         image: postgres:16-alpine
@@ -88,17 +186,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install --require-hashes -r requirements-dev.lock
       - name: Migrations from scratch on Postgres
-        # Separate database so the migration run never collides with the suite's create_all.
+        # Once, not per shard. Separate database so the migration run never collides with the
+        # suite's create_all.
+        if: ${{ matrix.shard == 1 }}
         env:
           DATABASE_URL: postgresql+asyncpg://repairos:repairos@localhost:5432/repairos_mig
         run: |
           psql -h localhost -U repairos -d repairos_test -c "CREATE DATABASE repairos_mig"
           alembic -c backend/alembic.ini upgrade head
-      - name: Full test suite on Postgres
+      - name: Test suite on Postgres (this shard)
         # Serial (-p no:xdist): every worker would share this one database.
         env:
           DATABASE_URL: postgresql+asyncpg://repairos:repairos@localhost:5432/repairos_test
           TEST_DATABASE_URL: postgresql+asyncpg://repairos:repairos@localhost:5432/repairos_test
+          PYTEST_SHARD: ${{ matrix.shard }}
+          PYTEST_SHARD_TOTAL: ${{ strategy.job-total }}
         run: pytest -q -p no:xdist
 
   frontend:

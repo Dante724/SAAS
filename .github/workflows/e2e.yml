@@ -13,6 +13,12 @@ concurrency:
   group: e2e-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# A new push to a PR/branch cancels that ref's still-running e2e. Runs on main/master each get a
+# unique group (the run id), so they are never cancelled or queued behind one another.
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   e2e:
     runs-on: ubuntu-latest
