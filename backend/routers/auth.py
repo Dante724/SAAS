@@ -333,10 +333,9 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
     _org = (await db.execute(select(Organisation).where(
         Organisation.id == employee.org_id))).scalar_one_or_none()
     if _org:
-        if _org.sub_status == "suspended":
-            raise HTTPException(status_code=403, detail="This account is suspended. Please contact support.")
-        if _org.sub_end and _org.sub_end < _date.today():
-            raise HTTPException(status_code=403, detail="Your subscription has ended. Please contact support to renew.")
+        # Same gate as every request (shows the admin's suspend message, if any).
+        from backend.services.auth import assert_org_active
+        assert_org_active(_org, _date.today())
     # Build 144ce: per-employee access window (set from the /admin portal).
     _today = _date.today()
     if (employee.access_start and employee.access_start > _today) or \

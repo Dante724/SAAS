@@ -10,6 +10,8 @@ import PhotoAnnotator from "./PhotoAnnotator";
 import TagChips from "../../components/TagChips";
 import { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
+import FloatingMenu from "../../components/FloatingMenu";
+import PrintMenu from "./PrintMenu";
 import { Order, deviceName, money } from "./types";
 import { Avatar, deviceIcon, dueText, friendlyDate } from "./look";
 import { api, openAuthedDoc } from "../../api/client";
@@ -22,7 +24,7 @@ import { useMe } from "../../context/Me";
 import { useCurrencies } from "../../hooks/useCurrencies";
 import CatalogPicker, { type CatalogItem } from "../../components/CatalogPicker";
 import StatusControl, { type FullStatus } from "../../components/StatusControl";
-import { escapeHtml } from "../../lib/safeHtml";
+import { escapeHtml, printHtmlInFrame } from "../../lib/safeHtml";
 import JobCardFields from "../../components/JobCardFields";
 import ReaderCharge from "../../components/ReaderCharge";
 import CardPaymentsList from "../../components/CardPaymentsList";
@@ -167,7 +169,6 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
     for (const b of byEmp.filter((x: any) => x.running)) await stopEntry(b.employee_id);
   }
   async function printWO() {
-    const w = window.open("", "_blank", "width=420,height=640"); if (!w) return;
     const css = `body{font-family:Inter,system-ui,sans-serif;margin:0;color:#14213f}.s{padding:22px;page-break-after:always}.s:last-child{page-break-after:auto}h1{font-size:16px;margin:0 0 4px}.k{font-size:10px;font-weight:800;text-transform:uppercase;color:#9aa7c4;letter-spacing:.05em;margin-top:12px}.v{font-size:14px;font-weight:600}.n{font-size:22px;font-weight:800;font-family:monospace}hr{border:none;border-top:1px dashed #c9d3ea;margin:12px 0}`;
     const head = `<h1>${escapeHtml(me?.org_name || "Tekly")}</h1>`;   // the shop's own name on its stickers
     const client = `<div class="k">Client</div><div class="v">${escapeHtml(c.name || "Walk-in")} ${c.phone ? "· " + escapeHtml(c.phone) : ""}</div>`;
@@ -186,8 +187,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
       <div class="k">Status</div><div class="v">${escapeHtml((d.status || "").replace(/_/g, " "))}</div>
       <div class="k">Complaint</div><div class="v">${escapeHtml(d.complaint || "—")}</div>
       <div class="k">Total</div><div class="v">${escapeHtml(money(d.total))}</div></div>`;
-    w.document.write(`<html><head><title>${escapeHtml(woNum)}</title><style>${css}</style></head><body>${stickers}</body></html>`);
-    w.document.close(); w.focus(); w.print();
+    // Hidden sandboxed frame instead of a pop-up window, so pop-up blockers can't stop it.
+    printHtmlInFrame(`<html><head><title>${escapeHtml(woNum)}</title><style>${css}</style></head><body>${stickers}</body></html>`);
   }
 
   const woNum = d.order_number || order.order_number || order.id;
@@ -499,7 +500,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               <button onClick={copyTrackingLink} className="text-xs text-primary font-bold hover:underline flex items-center gap-1"><M n="link" c="text-xs" />Copy tracking link</button>
               {(d as any).public_token && <a href={`/track/${(d as any).public_token}`} target="_blank" rel="noopener noreferrer" className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-0.5 hover:underline">Open<M n="open_in_new" c="text-xs" /></a>}
             </span>
-            <button onClick={printWO} className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-1 border border-slate-200 rounded-lg px-2 py-1 bg-white"><M n="print" c="text-xs" />Print WO</button>
+            <PrintMenu key={order.id} orderId={order.id} status={d.status} canInvoices={can("can_view_invoices")} onSticker={printWO} onError={flash} />
             <button onClick={del} className="text-xs text-rose-600 hover:text-rose-700 font-semibold flex items-center gap-1 hover:bg-rose-50 rounded-lg px-2 py-1 transition-colors"><M n="delete" c="text-xs" />Delete</button>
           </div>
           <div className="flex items-center gap-2">
@@ -1098,8 +1099,8 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
         {isServ && (
           <div className="mt-2 ml-11 flex flex-wrap items-center gap-2 text-[11px]">
             {/* #1 assignee chip + #3 any co-techs */}
-            <div className="relative">
-              <button type="button" onClick={() => setAssignOpen(openPick ? null : l.id)}
+            <div>
+              <button type="button" data-assign-for={l.id} onClick={() => setAssignOpen(openPick ? null : l.id)}
                 className="flex items-center gap-1.5 pl-1 pr-2 py-1 rounded-full border border-slate-200 bg-white hover:border-primary/40">
                 {co.length > 1 ? (
                   <span className="flex -space-x-1.5">{co.map((c) => <span key={c.employee_id} className={`w-5 h-5 rounded-full grid place-items-center text-[8px] font-bold text-white ring-1 ring-white ${avHue(c.employee_id)}`}>{empInitials(c.employee_id)}</span>)}</span>
@@ -1110,7 +1111,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                 <M n="expand_more" c="text-[13px] text-ink-tertiary" />
               </button>
               {openPick && (
-                <div className="absolute z-20 mt-1 w-56 bg-white rounded-xl border border-slate-200 shadow-xl p-1.5 max-h-64 overflow-auto">
+                <FloatingMenu anchorSel={`[data-assign-for="${l.id}"]`} onClose={() => setAssignOpen(null)}>
                   <div className="text-[11px] font-bold text-ink-tertiary px-2 py-1">Assign technician</div>
                   <button onClick={() => { patchLine(l.id, { technician_id: null, co_technicians: [] }); setAssignOpen(null); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-ink-secondary">Unassigned</button>
                   {(emps || []).map((e) => (
@@ -1136,7 +1137,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                       {co.length > 1 && <button onClick={() => { patchLine(l.id, { co_technicians: [] }); setAssignOpen(null); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 text-rose-600">Clear split</button>}
                     </>
                   )}
-                </div>
+                </FloatingMenu>
               )}
             </div>
             {/* #2 booked vs actual */}
@@ -1694,3 +1695,4 @@ function ActivityTab({ orderId, clientPhone, onFlash }: { orderId: string; clien
     </div>
   );
 }
+

@@ -20,6 +20,9 @@ export default defineConfig({
     // FastAPI serves this folder at /app2 (see README).
     outDir: "dist",
     emptyOutDir: true,
+    // Two pages: the shop app, and Tekly's own /admin back office (its own bundle, so no
+    // admin code ships to shops).
+    rollupOptions: { input: { main: "index.html", admin: "admin.html" } },
   },
   test: {
     // Frontend unit/component tests (Vitest + React Testing Library).
