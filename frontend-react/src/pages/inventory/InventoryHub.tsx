@@ -17,7 +17,10 @@ import { useTerminology, assetNoun } from "../../lib/useTerminology";
 import { assetStatusTone } from "./statusTone";
 import { cachedPref, loadPref, savePref } from "../../lib/userPref";
 import Pager from "../../components/Pager";
-import { useServerPage } from "../../hooks/useServerPage";
+import SerialEntry from "../../components/SerialEntry";
+import DateField from "../../components/DateField";
+import AssetStateTabs, { AssetCounts, useAssetState } from "../../components/AssetStateTabs";
+import { useDebounced, useServerPage } from "../../hooks/useServerPage";
 import { useMe } from "../../context/Me";
 import { alertDialog, confirmDialog, promptDialog } from "../../lib/dialog";
 import { printHtmlInFrame } from "../../lib/safeHtml";
@@ -84,7 +87,12 @@ export default function InventoryHub() {
   const [tab, setTab] = useState<Tab>("stock");
   const [products, setProducts] = useState<Product[] | null>(null);
   // Devices tab pages on the server (the API serves at most 200 rows per request).
-  const ap = useServerPage<Asset>("/assets", {}, { pageSize: 50, enabled: tab === "devices" });
+  const [aq, setAq] = useState("");
+  const daq = useDebounced(aq.trim());
+  const [aState, setAState] = useAssetState();                      // 19: active / written off, remembered
+  const [aOwner, setAOwner] = useState<"" | "company" | "client">("");
+  const ap = useServerPage<Asset, { counts?: AssetCounts }>("/assets", { search: daq || undefined, state: aState, owner_type: aOwner || undefined },
+    { pageSize: 50, enabled: tab === "devices" });
   const assets = ap.rows;
   const [services, setServices] = useState<Service[] | null>(null);
   const [bundles, setBundles] = useState<Bundle[] | null>(null);
@@ -523,8 +531,11 @@ export default function InventoryHub() {
         {tab === "devices" && (<>
           <div className="flex items-center gap-3 mb-5 flex-wrap">
             <button onClick={() => setAssetCreate(true)} className={primaryBtn}><M n="add" c="text-sm" />Add {term.asset}</button>
-            <div className="flex items-center gap-1.5"><Chip label="Ownership: All" active /><Chip label="Company-owned" /><Chip label="Client-owned" /></div>
-            {searchBar("Search serial, IMEI, client…")}
+            <AssetStateTabs value={aState} onChange={setAState} counts={ap.extra?.counts} />
+            <select value={aOwner} onChange={(e) => setAOwner(e.target.value as "" | "company" | "client")} aria-label="Ownership" className={`${inputCls} w-auto h-8 py-0 text-xs font-semibold`}>
+              <option value="">Ownership: all</option><option value="company">Company-owned</option><option value="client">Client-owned</option>
+            </select>
+            {searchBar("Search serial, IMEI, plate, client…", aq, setAq)}
           </div>
           {asel.size > 0 && (
             <div className="bg-primary/5 rounded-xl border border-primary/30 px-4 py-2.5 mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold">
@@ -542,7 +553,7 @@ export default function InventoryHub() {
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-xs">
                 {!assets && <SkeletonRows cols={6} />}
-                {assets?.length === 0 && <tr><td colSpan={6} className="py-6 px-5 text-ink-tertiary">No {term.assets.toLowerCase()} registered.</td></tr>}
+                {assets?.length === 0 && <tr><td colSpan={6} className="py-6 px-5 text-ink-tertiary">{daq ? `Nothing matches “${daq}”.` : aState === "written_off" ? `No written-off ${term.assets.toLowerCase()}.` : `No ${term.assets.toLowerCase()} registered.`}</td></tr>}
                 {pageAssets.map((a) => (
                   <tr key={a.id} className="hover:bg-blue-50/30 transition-colors cursor-pointer" onClick={() => setAssetOpen(a.id)}>
                     <td className="py-3.5 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label="Select row" checked={asel.has(a.id)} onChange={() => aToggle(a.id)} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
@@ -1055,7 +1066,18 @@ function ReorderModal({ onClose, onCreated }: { onClose: () => void; onCreated?:
 }
 
 /* ── New posting — bulk stock inflow → POST /inventory/postings ── */
-type ReviewRow = PostRow & { match_status: "matched" | "unsure" | "new"; part_id: string | null; part_name?: string | null; sku?: string | null; candidates?: { id: string; name: string; sku?: string }[]; chosen: string };
+type PType = "standard" | "serialized" | "expiry";
+type ReviewRow = PostRow & {
+  match_status: "matched" | "unsure" | "new"; part_id: string | null; part_name?: string | null; sku?: string | null;
+  candidates?: { id: string; name: string; sku?: string; serialized?: boolean }[]; chosen: string;
+  serialized?: boolean; expiry_tracking?: boolean; ptype: PType;          // 16a: type for a new product
+  serials: string[]; serialState?: { blocked: number; checking: boolean }; expiry_date?: string;
+};
+// Is this review row serial-tracked, given what the user picked? (a match keeps its own type)
+const rowSerialized = (r: ReviewRow) => !r.chosen || r.chosen === "__new__" ? r.ptype === "serialized"
+  : r.chosen === r.part_id ? !!r.serialized : !!r.candidates?.find((c) => c.id === r.chosen)?.serialized;
+const rowExpiry = (r: ReviewRow) => !r.chosen || r.chosen === "__new__" ? r.ptype === "expiry" : r.chosen === r.part_id && !!r.expiry_tracking;
+const unitsOf = (r: ReviewRow) => Math.ceil(Number(r.qty) || 0);
 function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () => void; onDone: () => void }) {
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [suppliers, setSuppliers] = useState<{ id: string; name: string }[]>([]);
@@ -1109,19 +1131,29 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
     if (!clean.length) { setErr("Add at least one row (code, MPN or name + qty)."); return; }
     setBusy(true); setErr(null);
     try {
-      const r = await api.post<any>("/inventory/postings/preview", { rows: clean.map((x) => ({ code: x.code || null, mpn: x.mpn || null, name: x.name || null, qty: Number(x.qty), purchase_price: Number(x.purchase_price) || null, markup_pct: x.markup_pct ? Number(x.markup_pct) : null })) });
-      setReview((r.rows || []).map((rr: any) => ({ ...rr, chosen: rr.match_status === "matched" ? rr.part_id : (rr.candidates?.[0]?.id || "__new__") })));
+      const r = await api.post<any>("/inventory/postings/preview", { rows: clean.map((x) => ({ code: x.code || null, mpn: x.mpn || null, name: x.name || null, qty: Number(x.qty), purchase_price: Number(x.purchase_price) || null, markup_pct: x.markup_pct ? Number(x.markup_pct) : null, product_type: x.product_type || null })) });
+      setReview((r.rows || []).map((rr: any) => ({ ...rr, ptype: (rr.product_type || "standard") as PType, serials: rr.serials || [], chosen: rr.match_status === "matched" ? rr.part_id : (rr.candidates?.[0]?.id || "__new__") })));
     } catch (e: any) { setErr(e.message || "Could not match rows"); } finally { setBusy(false); }
   }
+  const extras = (r: ReviewRow) => ({
+    ...(rowSerialized(r) ? { serials: r.serials } : {}),
+    ...(rowExpiry(r) && r.expiry_date ? { expiry_date: r.expiry_date } : {}),
+  });
+  const setReviewRow = (i: number, patch: Partial<ReviewRow>) => setReview((rv) => rv && rv.map((x, j) => j === i ? { ...x, ...patch } : x));
+  // 16b: serial-tracked rows need one good serial per unit before stock can move.
+  const needSerials = (review || []).filter((r) => rowSerialized(r) && (r.serials.length !== unitsOf(r) || unitsOf(r) !== Number(r.qty)));
+  const badSerials = (review || []).filter((r) => rowSerialized(r) && (r.serialState?.blocked || r.serialState?.checking));
   async function doCommit() {
     if (!review) return;
+    if (needSerials.length) { setErr(`${needSerials.length} row${needSerials.length === 1 ? " still needs" : "s still need"} a serial for each unit.`); return; }
+    if (badSerials.length) { setErr("Fix the serials marked in red first."); return; }
     setBusy(true); setErr(null);
     try {
       const body = {
         location_id: locId, supplier_id: supplierId || null, note: note || null,
         rows: review.map((r) => r.chosen && r.chosen !== "__new__"
-          ? { part_id: r.chosen, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null }
-          : { new_name: (r.name || r.code || r.mpn || "").trim(), new_sku: r.code || null, new_mpn: r.mpn || null, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null }),
+          ? { part_id: r.chosen, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null, ...extras(r) }
+          : { new_name: (r.name || r.code || r.mpn || "").trim(), new_sku: r.code || null, new_mpn: r.mpn || null, new_type: r.ptype, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null, ...extras(r) }),
       };
       await api.post("/inventory/postings/commit", body);
       onDone();
@@ -1196,25 +1228,59 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
             <div><label className={lbl2}>Note / reference</label><textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className={`${fld} w-full`} /></div>
           </>) : (<>
             <p className="text-xs text-ink-secondary">Confirm each row before stock moves. {newCount > 0 && <b className="text-primary">{newCount} new product{newCount === 1 ? "" : "s"} will be created.</b>}</p>
+            {needSerials.length > 0 && (
+              <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2 flex items-center gap-1.5">
+                <M n="barcode_scanner" c="text-sm" />{needSerials.length} row{needSerials.length === 1 ? " still needs" : "s still need"} a serial for each unit. Scan them below.
+              </div>
+            )}
             <div className="space-y-1.5">
-              {review.map((r, i) => (
-                <div key={i} className="flex items-center gap-2 border border-slate-100 rounded-lg px-2.5 py-2">
-                  <span className={`text-[11px] font-bold  px-1.5 py-0.5 rounded ${stBadge(r.chosen && r.chosen !== "__new__" ? "matched" : "new")}`}>{r.chosen && r.chosen !== "__new__" ? "match" : "new"}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-semibold text-ink-primary truncate">{r.part_name || r.name || r.code || r.mpn || "—"}</div>
-                    {(r.candidates && r.candidates.length > 0) ? (
-                      <select value={r.chosen} onChange={(e) => setReview(review.map((x, j) => j === i ? { ...x, chosen: e.target.value } : x))} className="mt-1 bg-white border border-slate-200 rounded text-[11px] px-1.5 py-1 w-full">
-                        {r.candidates.map((c) => <option key={c.id} value={c.id}>{c.name}{c.sku ? ` (${c.sku})` : ""}</option>)}
-                        <option value="__new__">+ Create new: {r.name || r.code}</option>
+              {review.map((r, i) => {
+                const ser = rowSerialized(r), exp = rowExpiry(r), isNew = !r.chosen || r.chosen === "__new__";
+                const units = unitsOf(r), missing = ser ? Math.max(0, units - r.serials.length) : 0;
+                return (
+                <div key={i} className="border border-slate-100 rounded-lg px-2.5 py-2 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[11px] font-bold  px-1.5 py-0.5 rounded ${stBadge(isNew ? "new" : "matched")}`}>{isNew ? "new" : "match"}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-semibold text-ink-primary truncate">{r.part_name || r.name || r.code || r.mpn || "—"}</div>
+                      {(r.candidates && r.candidates.length > 0) ? (
+                        <select value={r.chosen} onChange={(e) => setReviewRow(i, { chosen: e.target.value })} className="mt-1 bg-white border border-slate-200 rounded text-[11px] px-1.5 py-1 w-full">
+                          {r.candidates.map((c) => <option key={c.id} value={c.id}>{c.name}{c.sku ? ` (${c.sku})` : ""}</option>)}
+                          <option value="__new__">+ Create new: {r.name || r.code}</option>
+                        </select>
+                      ) : (
+                        <div className="text-[11px] text-ink-tertiary">{r.part_id ? `SKU ${r.sku || "—"}` : `New product${r.code ? ` · SKU ${r.code}` : ""}${r.mpn ? ` · MPN ${r.mpn}` : ""}`}</div>
+                      )}
+                    </div>
+                    {isNew ? (
+                      <select value={r.ptype} onChange={(e) => setReviewRow(i, { ptype: e.target.value as PType })} aria-label="Product type" className="bg-white border border-slate-200 rounded text-[11px] px-1.5 py-1">
+                        <option value="standard">Standard</option><option value="serialized">Serial-tracked</option><option value="expiry">Expiry-tracked</option>
                       </select>
-                    ) : (
-                      <div className="text-[11px] text-ink-tertiary">{r.part_id ? `SKU ${r.sku || "—"}` : `New product${r.code ? ` · SKU ${r.code}` : ""}${r.mpn ? ` · MPN ${r.mpn}` : ""}`}</div>
-                    )}
+                    ) : (ser || exp) && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-ink-secondary">{ser ? "Serial-tracked" : "Expiry-tracked"}</span>}
+                    <span className="text-[11px] text-ink-tertiary">×{r.qty}</span>
+                    <span className="text-[11px] tabular-nums text-ink-secondary w-14 text-right">{money(r.purchase_price || 0)}</span>
                   </div>
-                  <span className="text-[11px] text-ink-tertiary">×{r.qty}</span>
-                  <span className="text-[11px] tabular-nums text-ink-secondary w-14 text-right">{money(r.purchase_price || 0)}</span>
+                  {ser && (
+                    <div className="ml-1 pl-2 border-l-2 border-primary/20 space-y-1">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-semibold text-ink-secondary">Serials / IMEIs</span>
+                        {missing > 0 ? <span className="text-amber-700 font-semibold">Needs {missing} more</span>
+                          : units !== Number(r.qty) ? <span className="text-rose-700 font-semibold">Quantity must be a whole number</span>
+                          : <span className="text-emerald-700 font-semibold flex items-center gap-0.5"><M n="check" c="text-[13px]" />All units entered</span>}
+                      </div>
+                      <SerialEntry value={r.serials} target={units} partId={isNew ? null : r.chosen}
+                        onChange={(v) => setReviewRow(i, { serials: v })}
+                        onState={(st) => setReviewRow(i, { serialState: { blocked: st.blocked, checking: st.checking } })} />
+                    </div>
+                  )}
+                  {exp && (
+                    <div className="ml-1 pl-2 border-l-2 border-primary/20 flex items-center gap-2 text-[11px] text-ink-secondary">
+                      <span className="whitespace-nowrap">Use by (optional)</span>
+                      <div className="w-44"><DateField value={r.expiry_date || ""} onChange={(v) => setReviewRow(i, { expiry_date: v })} /></div>
+                    </div>
+                  )}
                 </div>
-              ))}
+              ); })}
             </div>
           </>)}
         </div>
@@ -1222,7 +1288,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
           <button onClick={review ? () => setReview(null) : onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">{review ? "Back" : "Cancel"}</button>
           {!review
             ? <button onClick={doPreview} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Matching…" : "Review & match →"}</button>
-            : <button onClick={doCommit} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Posting…" : "Post stock"}</button>}
+            : <button onClick={doCommit} disabled={busy || needSerials.length > 0 || badSerials.length > 0} title={needSerials.length ? "Enter a serial for each unit first" : undefined} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Posting…" : "Post stock"}</button>}
         </div>
       </div>
     </div>
@@ -1403,8 +1469,4 @@ function BinsPanel() {
       </div>
     </div>
   );
-}
-
-function Chip({ label, active }: { label: string; active?: boolean }) {
-  return <button className={`h-8 px-3 text-xs font-semibold rounded-lg flex items-center gap-1.5 border ${active ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary hover:bg-slate-50 border-slate-200"}`}>{label}<M n="expand_more" c="text-xs" /></button>;
 }

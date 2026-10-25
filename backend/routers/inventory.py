@@ -1,9 +1,10 @@
+from datetime import date
 from typing import Optional
 
 import base64 as _base64
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -12,6 +13,7 @@ from backend.core import paging as _paging
 from backend.db.database import get_db
 from backend.models import Employee, Part, StockLevel, StockMovement
 from backend.services import stock_posting
+from backend.services.serial_intake import SerialStr
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.numbering import next_number
 from backend.services.redact import can_see_costs, drop_cost_fields
@@ -289,23 +291,28 @@ class PostingLine(BaseModel):
     qty: float
     purchase_price: float = 0.0
     markup_pct: Optional[float] = None   # if set, new sell price = purchase * (1 + markup/100)
+    serials: Optional[list[SerialStr]] = Field(None, max_length=500)  # serial-tracked: one serial / IMEI per unit
 
 
 class PostingIn(BaseModel):
     location_id: str
     note: Optional[str] = None           # invoice / reference
     supplier_id: Optional[str] = None    # Build 120: which supplier this stock came from
-    lines: list[PostingLine]
+    lines: list[PostingLine] = Field(max_length=500)
 
 
 async def _do_posting(db, org_id, created_by_id, location_id, supplier_id, lines):
     """Shared posting engine used by create_posting + bulk commit. `lines` is an iterable of
     objects/dicts with part_id, qty, purchase_price, markup_pct. Assumes parts already exist.
-    Returns (lines_posted, total_cost). Does NOT commit — caller owns the transaction."""
+    Returns (lines_posted, total_cost). Does NOT commit — caller owns the transaction.
+    Serial-tracked products need one serial per unit (`serials`), checked before anything moves."""
+    from backend.services import serial_intake
+
     def _g(ln, k, d=None):
         return getattr(ln, k, None) if not isinstance(ln, dict) else ln.get(k, d)
     posted = 0
     total_cost = 0.0
+    seen_serials: set = set()
     for ln in lines:
         qty = float(_g(ln, "qty") or 0)
         if qty <= 0:
@@ -316,13 +323,15 @@ async def _do_posting(db, org_id, created_by_id, location_id, supplier_id, lines
         if not part:
             raise HTTPException(404, f"Part {pid} not found")
         cost = float(_g(ln, "purchase_price") or 0.0)
+        serials = await serial_intake.validate_intake(db, org_id, part, qty, _g(ln, "serials"), seen_serials)
         from backend.services import inventory_alerts as _alerts
         before_oh = await _alerts.global_on_hand(db, part.id)
         await stock_posting.apply_receipt_line(
             db, org_id=org_id, part=part, location_id=location_id,
             qty=qty, unit_cost=cost, created_by_id=created_by_id,
             ref_type="supplier" if supplier_id else "posting", ref_id=supplier_id,
-            create_batch=True, set_last_cost=True)
+            serials=serials, create_batch=True, set_last_cost=True,
+            expiry_date=_g(ln, "expiry_date") if part.expiry_tracking else None)
         # 144bo: fresh stock arrived — reset low-stock dedupe + ping any job that was waiting.
         after_oh = await _alerts.global_on_hand(db, part.id)
         await _alerts.on_received(db, org_id, part, before_oh, after_oh)
@@ -370,10 +379,12 @@ class PreviewRow(BaseModel):
     qty: float = 1
     purchase_price: Optional[float] = None
     markup_pct: Optional[float] = None
+    product_type: Optional[str] = Field(None, max_length=60)   # 16a: supplier sheet "Type" (serialized / expiry …)
+    serials: Optional[list[SerialStr]] = Field(None, max_length=500)  # serials already pasted for this row
 
 
 class PostingPreviewIn(BaseModel):
-    rows: list[PreviewRow]
+    rows: list[PreviewRow] = Field(max_length=500)
 
 
 @router.post("/postings/preview")
@@ -384,8 +395,11 @@ async def preview_posting(
 ):
     """Classify each pasted/typed row against the catalog so the user confirms before stock
     moves: `matched` (exact code/name hit), `unsure` (fuzzy candidates — pick one), or
-    `new` (will be created on commit). Never writes anything."""
+    `new` (will be created on commit). Never writes anything. Each row also says whether it is
+    serial-tracked and how many serials it still needs (`needs_serials`)."""
     import difflib
+
+    from backend.services import serial_intake
     # ponytail: loads the org's full active catalog into memory for fuzzy matching; fine at SMB
     # scale, paginate / move matching to SQL if a tenant exceeds ~10k active SKUs.
     parts = (await db.execute(select(Part).where(
@@ -422,10 +436,21 @@ async def preview_posting(
             for n in name_list:
                 if q and q in n and n not in close:
                     close.append(n)
-            cands = [{"id": names[n].id, "name": names[n].name, "sku": names[n].sku} for n in close[:5]]
+            cands = [{"id": names[n].id, "name": names[n].name, "sku": names[n].sku,
+                      "serialized": bool(names[n].serialized)} for n in close[:5]]
             status = "unsure" if cands else "new"
+        # 16a: an existing product keeps its own type; the sheet's type only shapes new products.
+        ptype = serial_intake.parse_product_type(row.product_type)
+        serialized = bool(part.serialized) if part else ptype == "serialized"
+        expiry = bool(part.expiry_tracking) if part else ptype == "expiry"
+        have = len([x for x in (row.serials or []) if x and x.strip()])
+        need = max(0, int(_math.ceil(row.qty or 0)) - have) if serialized else 0
         out.append({
             "index": i, "match_status": status,
+            "product_type": "serialized" if serialized else "expiry" if expiry else "standard",
+            "serialized": serialized, "expiry_tracking": expiry,
+            "serials": [x for x in (row.serials or []) if x and x.strip()],
+            "needs_serials": need,
             "part_id": part.id if part else None,
             "part_name": part.name if part else None,
             "sku": (part.sku if part else None) or code or None,
@@ -438,19 +463,22 @@ async def preview_posting(
 
 class CommitRow(BaseModel):
     part_id: Optional[str] = None        # existing part chosen/confirmed
-    new_name: Optional[str] = None       # create a new part with this name
-    new_sku: Optional[str] = None
-    new_mpn: Optional[str] = None
+    new_name: Optional[str] = Field(None, max_length=300)   # create a new part with this name
+    new_sku: Optional[str] = Field(None, max_length=100)
+    new_mpn: Optional[str] = Field(None, max_length=64)
+    new_type: Optional[str] = None       # 16a: standard | serialized | expiry (new products only)
     qty: float = 1
     purchase_price: Optional[float] = None
     markup_pct: Optional[float] = None
+    serials: Optional[list[SerialStr]] = Field(None, max_length=500)  # one per unit for serial-tracked products
+    expiry_date: Optional[date] = None   # dates this delivery's batch (expiry-tracked products)
 
 
 class PostingCommitIn(BaseModel):
     location_id: str
     supplier_id: Optional[str] = None
     note: Optional[str] = None
-    rows: list[CommitRow]
+    rows: list[CommitRow] = Field(max_length=500)
 
 
 @router.post("/postings/commit", status_code=201)
@@ -465,6 +493,10 @@ async def commit_posting(
         raise HTTPException(422, "Warehouse is required")
     if not data.rows:
         raise HTTPException(422, "Add at least one row")
+    if any(not r.part_id for r in data.rows):
+        # new products land in the catalog, so this needs the same right as creating one
+        from backend.services.auth import assert_perm
+        await assert_perm(db, current, "can_create_products")
     created = 0
     lines = []
     for r in data.rows:
@@ -475,21 +507,105 @@ async def commit_posting(
             cost = float(r.purchase_price or 0)
             sell = q2(cost * (1 + float(r.markup_pct) / 100.0)) if (r.markup_pct and cost) else 0.0
             from backend.routers.catalog_products import _checked_mpn
+            from backend.services.serial_intake import parse_product_type
+            ptype = parse_product_type(r.new_type)
             part = Part(org_id=current.org_id, name=r.new_name.strip(),
                         sku=(r.new_sku or "").strip() or None,
                         mpn=await _checked_mpn(db, current.org_id, r.new_mpn),   # one active product per MPN
-                        cost_price=cost, sell_price=sell)
+                        cost_price=cost, sell_price=sell,
+                        serialized=ptype == "serialized", expiry_tracking=ptype == "expiry")
             db.add(part)
             await db.flush()
             pid = part.id
             created += 1
-        lines.append({"part_id": pid, "qty": r.qty,
+        lines.append({"part_id": pid, "qty": r.qty, "serials": r.serials, "expiry_date": r.expiry_date,
                       "purchase_price": r.purchase_price, "markup_pct": r.markup_pct})
     posted, total_cost = await _do_posting(
         db, current.org_id, current.id, data.location_id, data.supplier_id, lines)
     from backend.routers.catalog_products import commit_mpn_safe
     await commit_mpn_safe(db)
     return {"ok": True, "lines_posted": posted, "created_parts": created, "total_cost": total_cost}
+
+
+class SerialCheckIn(BaseModel):
+    serials: list[SerialStr] = Field(max_length=500)
+    part_id: Optional[str] = None        # the product being received (scopes the check to this shop's part)
+
+
+@router.post("/serials/check")
+async def check_serials(
+    data: SerialCheckIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_manage_inventory")),
+):
+    """16b — live check behind the serial / IMEI scan box: duplicates in this delivery and
+    units already in stock are blocked; a wrong IMEI check digit or a unit this shop sold
+    before is a warning. Same rules the posting and PO receive enforce. Never writes."""
+    from backend.services import serial_intake
+    if data.part_id:
+        owned = (await db.execute(select(Part.id).where(
+            Part.id == data.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
+        if not owned:
+            raise HTTPException(404, "Product not found")
+    rows = await serial_intake.check(db, current.org_id, data.serials)
+    return {"rows": rows, "summary": serial_intake.summary(rows)}
+
+
+class ResolveRow(BaseModel):
+    part_id: Optional[str] = None
+    new_name: Optional[str] = Field(None, max_length=300)
+    new_sku: Optional[str] = Field(None, max_length=100)
+    new_mpn: Optional[str] = Field(None, max_length=64)
+    new_barcode: Optional[str] = Field(None, max_length=100)
+    product_type: Optional[str] = Field(None, max_length=60)
+    cost: Optional[float] = Field(None, ge=0)
+
+
+class ResolveIn(BaseModel):
+    rows: list[ResolveRow] = Field(max_length=2000)
+
+
+@router.post("/import/resolve-products")
+async def resolve_import_products(
+    data: ResolveIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_manage_inventory")),
+):
+    """13b — turn reviewed import rows (from `/postings/preview`) into product ids for a
+    purchase order: confirmed matches are checked to be this shop's, and missing products are
+    created (needs "Create new products"). The PO itself is then saved through the usual calls."""
+    from backend.routers.catalog_products import _checked_mpn, commit_mpn_safe
+    from backend.services.serial_intake import parse_product_type
+    if not data.rows:
+        raise HTTPException(422, "Nothing to import")
+    ids = {r.part_id for r in data.rows if r.part_id}
+    names = dict((await db.execute(select(Part.id, Part.name).where(
+        Part.org_id == current.org_id, Part.id.in_(ids)))).all()) if ids else {}
+    if ids - set(names):
+        raise HTTPException(422, "One or more products don't belong to your company")
+    if any(not r.part_id for r in data.rows):
+        from backend.services.auth import assert_perm
+        await assert_perm(db, current, "can_create_products")
+    out, created = [], 0
+    for r in data.rows:
+        if r.part_id:
+            out.append({"part_id": r.part_id, "created": False, "name": names[r.part_id]})
+            continue
+        name = (r.new_name or "").strip() or (r.new_sku or "").strip() or (r.new_mpn or "").strip()
+        if not name:
+            raise HTTPException(422, "Each row needs an existing product or a name for the new one")
+        ptype = parse_product_type(r.product_type)
+        part = Part(org_id=current.org_id, name=name, sku=(r.new_sku or "").strip() or None,
+                    barcode=(r.new_barcode or "").strip() or None,
+                    mpn=await _checked_mpn(db, current.org_id, r.new_mpn),
+                    cost_price=float(r.cost or 0),
+                    serialized=ptype == "serialized", expiry_tracking=ptype == "expiry")
+        db.add(part)
+        await db.flush()
+        created += 1
+        out.append({"part_id": part.id, "created": True, "name": part.name})
+    await commit_mpn_safe(db)
+    return {"rows": out, "created": created}
 
 
 @router.post("/postings/extract")
@@ -1118,9 +1234,15 @@ async def get_po(
         raise HTTPException(404, "Purchase order not found")
     lines = (await db.execute(select(POLine).where(POLine.po_id == po.id))).scalars().all()
     supplier = (await db.execute(select(Supplier).where(Supplier.id == po.supplier_id))).scalar_one_or_none()
-    part_names = {p.id: p.name for p in (await db.execute(
-        select(Part).where(Part.org_id == current.org_id))).scalars().all()}
-    return _ser_po(po, lines, part_names, supplier=supplier)
+    parts = (await db.execute(select(Part).where(
+        Part.org_id == current.org_id, Part.id.in_({l.part_id for l in lines})))).scalars().all() if lines else []
+    part_names = {p.id: p.name for p in parts}
+    out = _ser_po(po, lines, part_names, supplier=supplier)
+    # 16b: receiving asks for a serial per unit on serial-tracked lines
+    serialized = {p.id for p in parts if p.serialized}
+    for ln in out["lines"]:
+        ln["serialized"] = ln["part_id"] in serialized
+    return out
 
 
 @router.get("/po/{po_id}/receipts")
@@ -1614,10 +1736,10 @@ class ReceiveLineIn(BaseModel):
     po_line_id: str
     qty: float
     bin_id: Optional[str] = None        # post-to-bin (Orderry: enter the matching bin per product)
-    serials: Optional[list[str]] = None  # serialized intake: one serial per unit
+    serials: Optional[list[SerialStr]] = Field(None, max_length=500)  # serialized intake: one serial per unit
 
 class ReceiveIn(BaseModel):
-    lines: list[ReceiveLineIn] = []
+    lines: list[ReceiveLineIn] = Field(default_factory=list, max_length=500)
     bin_id: Optional[str] = None  # default bin for all lines
     # 144ar — per-shipment freight: the freight/handling billed WITH this delivery. Spread across
     # only the units received in THIS call (by the PO's alloc_basis) and, when capitalised,
@@ -1665,7 +1787,9 @@ async def receive_po(
     for pl in po_lines:
         rline = by_id.get(pl.id)
         left = (pl.qty_ordered or 0) - (pl.qty_received or 0)
-        recv = rline.qty if rline else left  # default: receive remainder
+        # No lines sent → receive the whole remainder; lines sent → only those lines move.
+        # (An unlisted line used to receive its full remainder too.)
+        recv = rline.qty if rline else (0 if data.lines else left)
         if recv <= 0:
             continue
         # B21: more than is still outstanding would post phantom stock and over-bill the
@@ -1678,6 +1802,15 @@ async def receive_po(
         if not part:
             continue
         plan.append((pl, recv, part, rline))
+
+    # 16b: serial-tracked lines need one valid, unique serial per unit — checked for the whole
+    # delivery before anything moves, so a bad scan never leaves half a receipt behind.
+    from backend.services import serial_intake
+    seen_serials: set = set()
+    checked_serials = {}
+    for pl, recv, part, rline in plan:
+        checked_serials[pl.id] = await serial_intake.validate_intake(
+            db, current.org_id, part, recv, rline.serials if rline else None, seen_serials)
 
     # ── 144ar per-shipment freight: spread this delivery's freight across only the units
     #    received now (by the same alloc_basis), folded into their landed cost when opted in. ──
@@ -1710,7 +1843,7 @@ async def receive_po(
             db, org_id=current.org_id, part=part, location_id=po.location_id,
             qty=recv, unit_cost=unit_cost, created_by_id=current.id,
             ref_type="po", ref_id=po_id, bin_id=line_bin,
-            serials=(rline.serials if rline else None), create_batch=True)
+            serials=checked_serials.get(pl.id) or None, create_batch=True)
         # 144bo: reset low-stock dedupe + notify any job that was waiting on this part.
         after_oh = await _alerts.global_on_hand(db, part.id)
         await _alerts.on_received(db, current.org_id, part, before_oh, after_oh)

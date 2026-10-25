@@ -3,7 +3,7 @@ Bins live under a warehouse (Location). Stock is tracked per (part, location, bi
 Transfers between bins use a guarded conditional UPDATE so the source can never
 go negative under concurrency (no ghost stock)."""
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from sqlalchemy import select, func, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -200,7 +200,7 @@ class BatchIn(BaseModel):
     bin_id: Optional[str] = None
     unit_cost: float
     qty: float
-    serials: Optional[list[str]] = None  # if provided, also create SerializedItems
+    serials: Optional[list[str]] = Field(None, max_length=500)  # if provided, also create SerializedItems
 
 
 @router.post("/batches", status_code=201)
@@ -210,6 +210,14 @@ async def create_batch(
     current: Employee = Depends(require_perm("can_manage_inventory")),
 ):
     """Record an intake cost layer (and optional serialized units)."""
+    from backend.models import Part
+    from backend.services import serial_intake
+    part = (await db.execute(select(Part).where(
+        Part.id == data.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
+    if not part:
+        raise HTTPException(404, "Product not found")
+    # Same serial rules as postings and PO receiving (one per unit, no repeats, none already in stock).
+    serials = await serial_intake.validate_intake(db, current.org_id, part, data.qty, data.serials) if data.serials else []
     batch = StockItemBatch(
         org_id=current.org_id, part_id=data.part_id, location_id=data.location_id,
         bin_id=data.bin_id, unit_cost=_Dec(str(data.unit_cost)),
@@ -217,7 +225,7 @@ async def create_batch(
     db.add(batch)
     await db.flush()
     created_serials = 0
-    for sn in (data.serials or []):
+    for sn in serials:
         db.add(SerializedItem(org_id=current.org_id, part_id=data.part_id, serial_number=sn,
                               bin_id=data.bin_id, location_id=data.location_id, batch_id=batch.id,
                               unit_cost=_Dec(str(data.unit_cost)), status="in_stock"))
