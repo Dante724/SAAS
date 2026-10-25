@@ -1,20 +1,23 @@
-// The "+" button: bottom-right, in thumb reach above the tab bar, on Today and Tasks.
-// Opens a short sheet: New job · New estimate · New task (each shown only if the role may).
+// The "+" button: bottom-right, in thumb reach above the tab bar, on Today, Tasks and Inquiries.
+// Opens a short sheet: New job · New estimate · New inquiry · New task (each shown only if the role may).
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ClipboardList, FileText, ListTodo, Plus } from "lucide-react";
+import { ClipboardList, FileText, ListTodo, PhoneIncoming, Plus } from "lucide-react";
 import { useMe } from "../../context/Me";
 import { Sheet } from "./ui";
 import TaskSheet from "./TaskSheet";
+import InquirySheet from "./InquirySheet";
 
 export default function NewMenu() {
   const nav = useNavigate();
   const { can } = useMe();
   const [open, setOpen] = useState(false);
   const [task, setTask] = useState(false);
+  const [inquiry, setInquiry] = useState(false);
   const rows = [
     can("can_create_tickets") && { key: "job", label: "New job", hint: "Book in a repair", Icon: ClipboardList, go: () => nav("/new/job") },
     can("can_create_tickets") && can("can_create_estimates") && { key: "est", label: "New estimate", hint: "Quote before the work", Icon: FileText, go: () => nav("/new/estimate") },
+    { key: "inq", label: "New inquiry", hint: "Someone asked about a repair", Icon: PhoneIncoming, go: () => setInquiry(true) },
     { key: "task", label: "New task", hint: "For you or a teammate", Icon: ListTodo, go: () => setTask(true) },
   ].filter(Boolean) as { key: string; label: string; hint: string; Icon: typeof Plus; go: () => void }[];
 
@@ -39,6 +42,7 @@ export default function NewMenu() {
         </div>
       </Sheet>
       <TaskSheet open={task} onClose={() => setTask(false)} />
+      <InquirySheet open={inquiry} onClose={() => setInquiry(false)} />
     </>
   );
 }

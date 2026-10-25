@@ -4,7 +4,7 @@
 //   Owner: the same board with counts per stage at the top.
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { AlertTriangle, ChevronRight, Clock3, Pause, RefreshCw, Timer } from "lucide-react";
+import { AlertTriangle, ChevronRight, Clock3, Pause, PhoneIncoming, RefreshCw, Timer } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import { Empty, Group, Page, QuietRow, Section, SkeletonRows, StatusDot } from "../components/ui";
@@ -57,6 +57,31 @@ function List({ jobs, byKey, activeId, overdueIds }: { jobs: JobCard[]; byKey: M
   return <Group>{jobs.map((j) => <JobRow key={j.id} job={j} meta={byKey.get(j.status)} active={j.id === activeId} overdue={overdueIds?.has(j.id) || j.overdue} showStatus={mixed} />)}</Group>;
 }
 
+/** Front desk / owner: one row to the open inquiries, with how many are late. Hidden when none. */
+function InquiriesRow({ tick }: { tick: number }) {
+  const [n, setN] = useState<{ open: number; late: number } | null>(null);
+  useEffect(() => {
+    let live = true;
+    api.get<{ items: { sla_overdue?: boolean }[]; total: number }>("/leads?open_only=true&page=1&page_size=100")
+      .then((r) => { if (live) setN({ open: r.total ?? r.items.length, late: (r.items || []).filter((i) => i.sla_overdue).length }); })
+      .catch(() => { if (live) setN(null); });
+    return () => { live = false; };
+  }, [tick]);
+  if (!n?.open) return null;
+  return (
+    <Group className="mb-6">
+      <Link to="/inquiries" className="min-h-[2.75rem] flex items-center gap-3 px-4 py-2.5 active:bg-slate-100">
+        <PhoneIncoming size={18} className={n.late ? "text-rose-700" : "text-ink-tertiary"} />
+        <span className="flex-1 text-go-body text-ink-primary">Inquiries</span>
+        <span className="text-go-body tabular-nums text-ink-secondary">
+          {n.open} open{n.late ? <span className="font-semibold text-rose-700"> · {n.late} late</span> : null}
+        </span>
+        <ChevronRight size={18} className="text-ink-tertiary" />
+      </Link>
+    </Group>
+  );
+}
+
 const goTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 
 export default function Today() {
@@ -72,9 +97,10 @@ export default function Today() {
   const [work, setWork] = useState<{ today_seconds: number; active: ActiveEntry; at: number } | null>(null);
   const [pausing, setPausing] = useState(false);
   const toast = useToast();
+  const [tick, setTick] = useState(0);
 
   const load = useCallback(async () => {
-    setBusy(true); setErr(null);
+    setBusy(true); setErr(null); setTick((t) => t + 1);
     try {
       if (role === "tech") {
         api.get<{ today_seconds: number; active: ActiveEntry }>("/timeclock/my-work")
@@ -169,6 +195,7 @@ export default function Today() {
         .map(([g, label]) => [g, label, col(g).length] as const).filter(([, , n]) => n > 0);
       body = (
         <>
+          <InquiriesRow tick={tick} />
           {role === "owner" && strip.length > 0 && (
             <div className="mb-6 flex rounded-xl border-[0.5px] border-slate-200 bg-white divide-x-[0.5px] divide-slate-200" role="group" aria-label="Jobs by stage">
               {strip.map(([g, label, n]) => (

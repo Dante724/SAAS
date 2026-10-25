@@ -1,6 +1,7 @@
-// More: who's signed in, which Today to show, payment PIN / lock, appearance, changes waiting to sync, sign out.
+// More: who's signed in, inquiries, which Today to show, payment PIN / lock, appearance, changes waiting to sync, sign out.
 import { useEffect, useState } from "react";
-import { AlertTriangle, Bell, BellOff, Check, CloudOff, ExternalLink, KeyRound, Lock, LogOut, Monitor, Moon, RefreshCw, ScanFace, Sun } from "lucide-react";
+import { Link } from "react-router-dom";
+import { AlertTriangle, Bell, BellOff, Check, ChevronRight, CloudOff, ExternalLink, KeyRound, Lock, LogOut, Monitor, Moon, PhoneIncoming, RefreshCw, ScanFace, Sun } from "lucide-react";
 import { useMe } from "../../context/Me";
 import { Card, Page, Section } from "../components/ui";
 import { goQueue, type Conflict } from "../lib/offlineQueue";
@@ -74,6 +75,12 @@ export default function More() {
           <p className="font-semibold text-ink-primary truncate">{me?.name || "—"}</p>
           <p className="text-go-sub text-ink-secondary truncate">{me?.email}{me?.role ? ` · ${me.role}` : ""}</p>
         </div>
+      </Card>
+
+      <Card className="mb-6">
+        <Link to="/inquiries" className="min-h-[3rem] flex items-center gap-3 px-4 text-go-body text-ink-primary active:bg-slate-50 rounded-xl">
+          <PhoneIncoming size={18} className="text-ink-tertiary" /><span className="flex-1">Inquiries</span><ChevronRight size={18} className="text-ink-tertiary" />
+        </Link>
       </Card>
 
       {(q.pending > 0 || q.conflicts > 0 || !q.online) && (

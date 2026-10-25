@@ -15,6 +15,7 @@ import Clock from "./screens/Clock";
 import More from "./screens/More";
 import Tasks, { useTaskBadge } from "./screens/Tasks";
 import NewJob from "./screens/NewJob";
+import Inquiries from "./screens/Inquiries";
 import NewMenu from "./components/NewMenu";
 import { LockProvider } from "./components/Lock";
 import { AssetScreen, Part } from "./screens/PartAsset";
@@ -53,7 +54,7 @@ export default function GoApp() {
   const q = useQueueStatus();
   const loc = useLocation();
   const tasksDue = useTaskBadge();
-  const showNew = loc.pathname === "/today" || loc.pathname === "/tasks";
+  const showNew = loc.pathname === "/today" || loc.pathname === "/tasks" || loc.pathname === "/inquiries";
   const showTabs = !loc.pathname.startsWith("/new/");
   const [toast, setToast] = useState<ToastMsg | null>(null);
   const clear = useCallback(() => setToast(null), []);
@@ -69,6 +70,7 @@ export default function GoApp() {
           <Route path="/today" element={wide ? <SplitView jobOpen={false} /> : <Today />} />
           <Route path="/job/:id" element={wide ? <SplitView jobOpen /> : <Job />} />
           <Route path="/tasks" element={<Tasks />} />
+          <Route path="/inquiries" element={<Inquiries />} />
           <Route path="/new/job" element={<NewJob key="job" />} />
           <Route path="/new/estimate" element={<NewJob key="estimate" />} />
           <Route path="/scan" element={<Scan />} />
