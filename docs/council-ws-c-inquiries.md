@@ -40,3 +40,27 @@ Out of scope: inventory, reports, invoice templates (A and B own them).
 - **API keys:** rate-limited per key; a narrow scope can't escalate; webhook secrets are returned only to `webhooks:write` keys; endpoint URLs are SSRF-checked as before.
 - **Settings values** are validated against allow-lists (visibility, name mode).
 - **Public pages** never get an employee's full name when the shop picks first name or initials.
+
+## Outcome (25 Oct 2026)
+- **Security review findings, all fixed:**
+  - Broad keys no longer imply webhook management.
+  - Converting an inquiry through the API needs orders and contacts write.
+  - `client_id` is hidden from keys without contacts read.
+  - Staff convert needs `can_create_tickets`.
+  - Generic call-webhook replays are deduped.
+  - Bursts of repeat calls send one alert.
+  - Aircall ids are validated, the token minimum is 16, and failed token attempts are rate-limited per shop.
+  - The idempotency fallback no longer turns a non-key error into a 500.
+- **Tester review findings, all fixed:**
+  - A call reported ringing then missed now raises one inquiry.
+  - Convert reuses only the same customer's device.
+  - Converted inquiries can't be reopened, and the call-back task closes on convert.
+  - The address line and its parts stay in step.
+  - Changing the type moves the respond-by time, and archived types are refused.
+  - Estimates no longer emit `order.created`.
+  - v2 paging has a stable order.
+  - `estimate.accepted` now has a behavioural test.
+- **Kept as is (owner to confirm):**
+  - Missed call → inquiry is on by default for every shop.
+  - A comment or file posted without a visibility uses the shop default.
+- **Tekly Go inquiries screen:** blocked on PR #18, the Go PWA stack, which isn't in `roadmap/orderry-parity`. The backend Go needs is in this PR: the paged `GET /api/leads`, an idempotent `POST /api/leads` and `POST /api/leads/{id}/convert`. The screen is a follow-up stacked on #18.

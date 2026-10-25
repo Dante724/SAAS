@@ -183,7 +183,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
           </Section>
 
           <Section icon="visibility" title="What customers see" hint="Defaults for new notes and files on jobs and inquiries. Staff can still change each one.">
-            <div className="grid sm:grid-cols-3 gap-4">
+            <div className="grid sm:grid-cols-2 gap-4">
               <Field label="New comments are">
                 <select aria-label="New comments are" value={co.default_comment_visibility || "private"} onChange={(e) => set("default_comment_visibility", e.target.value)} className={inp}>
                   <option value="private">Staff only</option><option value="public">Shared with the customer</option>
@@ -192,7 +192,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
                 <select aria-label="New files and photos are" value={co.default_file_visibility || "private"} onChange={(e) => set("default_file_visibility", e.target.value)} className={inp}>
                   <option value="private">Staff only</option><option value="public">Shared with the customer</option>
                 </select></Field>
-              <Field label="Staff names on public pages" hint="Online booking and the customer pages. A name set under the employee's “Name on documents” is always used.">
+              <Field wide label="Staff names on public pages" hint="Online booking and the customer pages. A name set under the employee's “Name on documents” is always used.">
                 <select aria-label="Staff names on public pages" value={co.public_employee_name || "full"} onChange={(e) => set("public_employee_name", e.target.value)} className={inp}>
                   <option value="full">Full name (Jane Doe)</option><option value="first_initial">First name and initial (Jane D.)</option><option value="first">First name only (Jane)</option>
                 </select></Field>

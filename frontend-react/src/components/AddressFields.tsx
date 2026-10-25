@@ -38,14 +38,14 @@ export default function AddressFields({ value, onChange, legacy, idPrefix = "add
   const options = current && !COUNTRIES.includes(current) ? [current, ...COUNTRIES] : COUNTRIES;
   return (
     <fieldset className="space-y-2.5">
-      <legend className={lbl}>Address{required && <span className="text-rose-500"> *</span>}</legend>
+      <legend className={`${lbl} text-xs`}>Address{required && <span className="text-rose-500"> *</span>}</legend>
       {legacy && !hasParts(value) && <p className="text-[11px] text-ink-tertiary">Saved as one line: <span className="text-ink-secondary">{legacy}</span>. Fill in the fields below to split it.</p>}
       <div><label htmlFor={id("street")} className="sr-only">Street</label>
         <input id={id("street")} value={value.addr_street || ""} onChange={(e) => set("addr_street", e.target.value)} placeholder="Street and number" className={field} /></div>
       <div className="grid grid-cols-2 gap-2.5">
         <div><label htmlFor={id("city")} className="sr-only">City</label><input id={id("city")} value={value.addr_city || ""} onChange={(e) => set("addr_city", e.target.value)} placeholder="City" className={field} /></div>
         <div><label htmlFor={id("region")} className="sr-only">State or region</label><input id={id("region")} value={value.addr_region || ""} onChange={(e) => set("addr_region", e.target.value)} placeholder="State or region" className={field} /></div>
-        <div><label htmlFor={id("postcode")} className="sr-only">Postcode</label><input id={id("postcode")} value={value.addr_postcode || ""} onChange={(e) => set("addr_postcode", e.target.value)} placeholder="Postcode / ZIP" className={`${field} uppercase`} /></div>
+        <div><label htmlFor={id("postcode")} className="sr-only">Postcode</label><input id={id("postcode")} value={value.addr_postcode || ""} onChange={(e) => set("addr_postcode", e.target.value)} placeholder="Postcode / ZIP" className={field} /></div>
         <div><label htmlFor={id("country")} className="sr-only">Country</label>
           <select id={id("country")} value={current} onChange={(e) => set("addr_country", e.target.value)} className={`${field} appearance-none`}>
             <option value="">Country</option>
