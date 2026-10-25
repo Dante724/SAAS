@@ -1,5 +1,6 @@
 import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
 import RecommendationsPanel from "./RecommendationsPanel";
+import { DeferredWork, MarginNote, ReadyWhy, ServiceDue, TogetherChips } from "../../components/sense/Sense";
 import PartsPOPanel from "./PartsPOPanel";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useRef, useState } from "react";
@@ -328,6 +329,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                 <M n="event_available" c="text-sm text-emerald-600" />
                 Est. ready <span className="font-semibold text-ink-primary">{fmtDT(timing.predicted_ready_at)}</span>
                 {timing.confidence === "low" && <span className="text-ink-tertiary" title={`Based on ${timing.sample_n} past job(s)`}>· rough</span>}
+                <ReadyWhy sampleN={timing.sample_n} typicalMin={timing.typical_min} fmt={fmtDur} />
               </span>
             )}
           </div>
@@ -1016,6 +1018,7 @@ function CustomLineForm({ orderId, forItem, onFlash, onClose, onAdded }: { order
 function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labor, onClockIn, isEstimate, emps, locked }: { orderId: string; deviceId?: string; lines?: Line[]; total?: number; onFlash: (m: string) => void; onChanged?: () => void; labor?: any; onClockIn?: (lineId: string) => void; isEstimate?: boolean; emps?: { id: string; name: string }[]; locked?: boolean }) {
   const { can } = useMe();
   const seePrices = can("can_view_item_prices");   // off: the API leaves line prices out
+  const [recsVersion, setRecsVersion] = useState(0);   // bumped when a deferred item becomes a draft
   const _secHM = (s: number) => { const h = Math.floor((s || 0) / 3600), m = Math.floor(((s || 0) % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m`; };
   const _byEmp = labor?.by_employee || [];
   const _timeTotal = _byEmp.reduce((n: number, b: any) => n + (b.total_seconds || 0), 0);
@@ -1279,6 +1282,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
         )}
       </div>
 
+      {!locked && <TogetherChips orderId={orderId} linesKey={(lines || []).map((l) => l.description).join("|")} onFlash={onFlash} onChanged={onChanged} />}
       {shown.length === 0 && <p className="text-xs text-ink-tertiary">No line items yet — add a service or product.</p>}
       {Object.entries(groups).map(([tech, ls], gi) => (
         <div key={tech || "all"} className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
@@ -1294,8 +1298,11 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
         </div>
       ))}
 
-      <RecommendationsPanel orderId={orderId} items={tagging ? jobItems.map((it) => ({ id: it.id, name: itemName(it) })) : []} onFlash={onFlash} onChanged={onChanged} />
+      <DeferredWork orderId={orderId} onFlash={onFlash} onChanged={() => { setRecsVersion((v) => v + 1); onChanged?.(); }} />
+      <ServiceDue orderId={orderId} onFlash={onFlash} onChanged={() => { setRecsVersion((v) => v + 1); onChanged?.(); }} />
+      <RecommendationsPanel key={recsVersion} orderId={orderId} items={tagging ? jobItems.map((it) => ({ id: it.id, name: itemName(it) })) : []} onFlash={onFlash} onChanged={onChanged} />
 
+      <MarginNote orderId={orderId} refreshKey={total} />
       <div className="bg-slate-50/90 rounded-2xl p-4 border border-slate-200 space-y-2">
         {/* Totals are for the whole job, whatever filter is on. No lines yet but a price on the job
             (agreed at check-in) reads as the quoted price, not a $0 subtotal next to a real total. */}

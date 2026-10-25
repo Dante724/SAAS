@@ -44,11 +44,11 @@ async def test_appointment_hello_recognises_returning_phone(client, tenant, db):
     r = await client.post(f"/api/public/appointment/{org.id}/hello", json={"phone": "1112223334"})
     assert r.status_code == 200 and r.json()["known"] is False
 
-    # create a client with a phone, then greet by first name only
+    # create a client with a phone: recognised, but the name is never revealed
     await client.post("/api/clients", json={"name": "Ravi Kumar", "phone": "+91 98765 43210"}, headers=tenant)
     r = await client.post(f"/api/public/appointment/{org.id}/hello", json={"phone": "9876543210"})
     body = r.json()
-    assert body["known"] is True and body["name"] == "Ravi"
+    assert body["known"] is True and "name" not in body
     # short/garbage input never matches
     r = await client.post(f"/api/public/appointment/{org.id}/hello", json={"phone": "12"})
     assert r.json()["known"] is False

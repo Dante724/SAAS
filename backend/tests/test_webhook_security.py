@@ -77,10 +77,10 @@ async def test_secret_rotation_invalidates_old_token(client, tenant):
 
 @pytest.mark.asyncio
 async def test_lookup_rate_limited(client, tenant):
-    """Eleventh rapid guess against one order number gets throttled."""
+    """Sixth guess within an hour against one order number gets throttled."""
     lookup_limiter.reset()
     try:
-        for _ in range(10):
+        for _ in range(5):
             r = await client.post("/api/public/lookup", json={
                 "order_number": "BRUTE-1", "phone": "5550001111"})
             assert r.status_code == 404          # unknown order, but allowed through

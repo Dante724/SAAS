@@ -19,6 +19,7 @@ import { identifierFields } from "../../lib/assetIdentifiers";
 import { useMe } from "../../context/Me";
 import IdentifyHint, { type IdMatch } from "../../components/IdentifyHint";
 import NameSuggestInput from "../../components/NameSuggestInput";
+import { JobSuggestions } from "../../components/sense/Sense";
 
 type ClientLite = { id: string; name?: string; phone?: string; email?: string };
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
@@ -42,6 +43,9 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
   const [type, setType] = useState("Repair");
   const [woTypes, setWoTypes] = useState<WOType[]>([]);
   const [woCustom, setWoCustom] = useState<Record<string, any>>({});
+  // What the customer says is wrong: the complaint box, or (when a shop's form asks for it in
+  // its own text fields, e.g. "Fault reported") those fields. Drafting and suggestions read this.
+  const issueText = () => complaint.trim() || Object.values(woCustom).filter((v) => typeof v === "string" && v.trim()).join(". ");
   // Real configured types drive the chips when present; else fall back to static labels.
   const typeId = woTypes.find((t) => t.name === type)?.id || null;
   useEffect(() => {
@@ -421,14 +425,16 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-[11px] font-bold text-ink-tertiary">Line items</span>
                 <button type="button" onClick={async () => {
-                  if (!complaint.trim()) { await alertDialog("Add a complaint/description first."); return; }
+                  if (!issueText()) { await alertDialog("Add a complaint/description first."); return; }
                   try {
-                    const r = await api.post<any>("/ai/estimate/draft", { complaint, device: [brand, model].filter(Boolean).join(" ") });
+                    const r = await api.post<any>("/ai/estimate/draft", { complaint: issueText(), device: [brand, model].filter(Boolean).join(" ") });
                     const add = (r.lines || []).map((l: any) => ({ id: Math.random().toString(36).slice(2), description: l.description, kind: "service", price: l.unit_price || 0 }));
                     if (add.length) setLines((ls) => [...ls, ...add]);
                   } catch (e: any) { await alertDialog(e.message || "AI draft failed"); }
-                }} className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[11px] font-bold shadow-clay-sm flex items-center gap-1"><M n="auto_awesome" c="text-xs" />AI draft from complaint</button>
+                }} className="text-[11px] font-semibold text-ink-tertiary hover:text-primary underline decoration-dotted">Draft from the complaint</button>
               </div>
+              <JobSuggestions complaint={issueText()} deviceId={deviceId}
+                onAdd={(i) => setLines((ls) => [...ls, { id: Math.random().toString(36).slice(2), description: i.description, kind: i.kind, price: i.price }])} />
               <CatalogPicker placeholder="Search a service or product to add…" onPick={(i) => setLines((ls) => [...ls, { id: Math.random().toString(36).slice(2), description: i.name, kind: i.kind, price: i.price || 0, ref_id: i.ref_id }])} />
 
               <div className="space-y-2.5">

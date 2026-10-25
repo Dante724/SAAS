@@ -47,6 +47,8 @@ CATALOG = {
         ("can_create_payment_links", "Create payment links"),
         ("can_close_tickets", "Finish (close) jobs"),
         ("can_take_payments", "Take payments on jobs (cash, card, pay link)"),
+        ("can_use_sense_suggestions", "See Tekly Sense suggestions on jobs"),
+        ("can_approve_agent_sends", "Approve automatic customer messages (Tekly Sense)"),
     ],
     "Inventory": [
         ("can_manage_inventory", "Manage inventory (stock, POs, receiving)"),
@@ -171,8 +173,9 @@ _NOT_FOR_STAFF = {
     "can_take_payments": False, "can_create_payment_links": False,
 }
 TEMPLATES = {
-    "Full access": {},                       # nothing denied
-    "Manager": {"can_delete_transactions": False, "can_manage_roles": False},
+    "Full access": {"can_use_sense_suggestions": True, "can_approve_agent_sends": True},   # nothing denied
+    "Manager": {"can_delete_transactions": False, "can_manage_roles": False,
+                "can_use_sense_suggestions": True},
     "Partner": {"can_manage_settings": False, "can_manage_roles": False,
                 "can_manage_employees": False, "can_make_calls": False, **_NOT_FOR_STAFF},
     "Specialist": {"can_manage_settings": False, "can_manage_roles": False,
@@ -181,7 +184,7 @@ TEMPLATES = {
 
 
 # Codes that were always opt-in (only an explicit True grants them), even for legacy roles.
-OPT_IN = {"can_override_reservation"}
+OPT_IN = {"can_override_reservation", "can_use_sense_suggestions", "can_approve_agent_sends"}
 
 
 def role_allows(role, perm_key: str) -> bool:

@@ -80,10 +80,11 @@ async def _schema():
 
 @pytest.fixture(autouse=True)
 def _fresh_rate_limits():
-    """Each test starts with empty in-process rate-limit counters: every test client shares one
-    IP, so sign-ups and logins from earlier tests would otherwise count against later ones."""
-    from backend.services import ratelimit
+    """Each test starts with empty in-process rate-limit counters (every test client shares one
+    IP) and an empty Tekly Sense per-shop service-history cache."""
+    from backend.services import ratelimit, sense
     ratelimit._HITS.clear()
+    sense._HISTORY_CACHE.clear()
     yield
 
 

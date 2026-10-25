@@ -14,7 +14,7 @@ from backend.models import Employee, Location, Organisation, Role
 from backend.services import tokens as _tok
 from backend.services.audit import record as _audit
 from backend.services.currency import symbol_for as _symbol_for  # sign-up sends a code; we store its symbol
-from backend.services.auth import (create_access_token, get_current_employee, hash_password,
+from backend.services.auth import (create_access_token, get_current_employee, hash_password, is_shop_owner,
                                    is_old_default_password, norm_email, verify_password)
 from backend.services.notifications import send_direct_email
 from backend.services.ratelimit import client_ip as _ip
@@ -755,6 +755,12 @@ async def me(current: Employee = Depends(get_current_employee),
             from backend.services.permissions import effective_permissions
             permissions = effective_permissions(role)
             home_route = getattr(role, "home_route", None) or None
+    shop_owner = await is_shop_owner(db, current)
+    if shop_owner:
+        # The server grants the shop owner every permission (has_perm), including codes added
+        # after their role was saved, so the UI must not hide those controls from them.
+        from backend.services.permissions import ALL_CODES
+        permissions = {code: True for code in sorted(ALL_CODES)}
     return {
         "id": current.id,
         "name": current.name,
@@ -767,6 +773,9 @@ async def me(current: Employee = Depends(get_current_employee),
         "currency_code": (org.currency_code if org else None) or "",
         "role": role_name,
         "is_owner": current.role_id is None,
+        # The shop's creator (organisations.owner_id), who may also hold a role: owner-only
+        # screens such as Tekly Sense settings key off this, matching the server's check.
+        "is_shop_owner": shop_owner,
         "home_route": home_route,
         "permissions": permissions,
         # build 144cb: account-security surface for the UI (verify banner, 2FA badge)
