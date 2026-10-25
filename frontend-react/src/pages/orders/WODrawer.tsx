@@ -63,6 +63,11 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   const [sub, setSub] = useState<null | "client" | "asset">(null);
   const [d, setD] = useState<Detail>(order as Detail);
   const [statuses, setStatuses] = useState<FullStatus[]>([]);
+  // Edits that only save on an explicit button (notes, watch-outs) register here while
+  // unsaved, so "Save and close" can save them and a plain close can warn first.
+  const pending = useRef(new Map<string, () => Promise<boolean>>());
+  const setPending = (key: string, save: (() => Promise<boolean>) | null) => { if (save) pending.current.set(key, save); else pending.current.delete(key); };
+  const [saving, setSaving] = useState(false);
   const [emps, setEmps] = useState<Emp[]>([]);
   const [timing, setTiming] = useState<Timing | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -109,8 +114,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
     } catch (e: any) { flash(`Failed: ${e.message}`); }
   }
   async function saveNotes(tech_notes: string, conclusion: string) {
-    try { await api.patch(`/orders/${order.id}/notes`, { tech_notes, conclusion }); setD({ ...d, tech_notes, conclusion }); flash("Notes saved"); }
-    catch (e: any) { flash(`Failed: ${e.message}`); }
+    try { await api.patch(`/orders/${order.id}/notes`, { tech_notes, conclusion }); setD((p) => ({ ...p, tech_notes, conclusion })); flash("Notes saved"); return true; }
+    catch (e: any) { flash(`Failed: ${e.message}`); return false; }
   }
   // Copies the customer's tracking link; staff open it from the "Open" link beside it (a real
   // new-tab link), so the staff tab never turns into the customer page.
@@ -124,9 +129,19 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
       catch { flash("Couldn't copy. Use Open to see the link."); }
     } catch (e: any) { flash(`Failed: ${e.message}`); }
   }
-  async function markDone() {
-    try { await api.post(`/orders/${order.id}/complete`, {}); onChanged?.(); onClose(); }
-    catch (e: any) { flash(`Cannot close: ${e.message}`); }
+  // Save and close never touches the status (that's the status menu in the header):
+  // it commits fields that save when you leave them, saves pending notes/warnings, then closes.
+  async function saveAndClose() {
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    setSaving(true);
+    try {
+      for (const save of [...pending.current.values()]) if (!(await save())) return;   // stay open on a failed save
+      onChanged?.(); onClose();
+    } finally { setSaving(false); }
+  }
+  async function tryClose() {
+    if (pending.current.size && !(await confirmDialog("You have changes that aren't saved yet. Close without saving them?", { title: "Unsaved changes", confirmLabel: "Close without saving" }))) return;
+    onClose();
   }
   async function del() {
     const reason = await promptDialog("Reason for deleting this work order?"); if (!reason) return;
@@ -213,7 +228,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 40 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={tryClose} />
       <div className="relative h-full w-full max-w-[840px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 
@@ -281,7 +296,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                 </div>
               </>)}
             </div>
-            <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100 transition-colors" title="Close"><M n="close" c="text-lg" /></button>
+            <button aria-label="Close" onClick={tryClose} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100 transition-colors" title="Close"><M n="close" c="text-lg" /></button>
           </div>
         </header>
         {partsOpen && <PartsPOPanel orderId={order.id} lines={(d.lines || []) as any[]} canBuy={canBuy} isEstimate={!!(order as any).is_estimate}
@@ -336,7 +351,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             <span><b>Possible comeback.</b> This device was here {comeback.days_since != null ? `${comeback.days_since} day${comeback.days_since === 1 ? "" : "s"} ago` : "recently"} (WO {comeback.prior_order_number}){comeback.count && comeback.count > 1 ? ` · ${comeback.count} visits in 45 days` : ""}. Check the earlier fix before promising.</span>
           </div>
         )}
-        <WatchOutBanner device={d.device} client={d.client} onChanged={reload} onFlash={flash} />
+        <WatchOutBanner device={d.device} client={d.client} onChanged={reload} onFlash={flash} onPending={(f) => setPending("watchout", f)} />
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-6 bg-slate-50/70 space-y-6">
@@ -450,7 +465,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                 </div>
                 <JobCardFields orderId={order.id} typeId={(d as any).type_id} value={(d as any).custom_data} onFlash={flash}
                   onSaved={(cd) => setD({ ...d, custom_data: cd } as Detail)} />
-                <NotesEditor initTech={d.tech_notes || ""} initConcl={d.conclusion || ""} diagnosis={d.diagnosis || ""} onSave={saveNotes} />
+                <NotesEditor initTech={d.tech_notes || ""} initConcl={d.conclusion || ""} diagnosis={d.diagnosis || ""} onSave={saveNotes} onPending={(f) => setPending("notes", f)} />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><ChecklistRings orderId={order.id} onOpen={() => setTab("checklists")} /></div>
@@ -504,8 +519,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             <button onClick={del} className="text-xs text-rose-600 hover:text-rose-700 font-semibold flex items-center gap-1 hover:bg-rose-50 rounded-lg px-2 py-1 transition-colors"><M n="delete" c="text-xs" />Delete</button>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={onClose} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 transition-colors">Close</button>
-            {!isClosed && <button onClick={markDone} className="px-5 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="task_alt" c="text-sm" />Mark done and close</button>}
+            <button onClick={tryClose} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 transition-colors">Close</button>
+            <button onClick={saveAndClose} disabled={saving} className="px-5 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all disabled:opacity-60"><M n="check" c="text-sm" />{saving ? "Saving…" : "Save and close"}</button>
           </div>
         </footer>
 
@@ -740,10 +755,13 @@ function SelEmp({ value, emps, onChange, label }: { value: string; emps: Emp[]; 
 }
 
 /* ---- Notes editor ---- */
-function NotesEditor({ initTech, initConcl, diagnosis, onSave }: { initTech: string; initConcl: string; diagnosis: string; onSave: (t: string, c: string) => void }) {
+function NotesEditor({ initTech, initConcl, diagnosis, onSave, onPending }: { initTech: string; initConcl: string; diagnosis: string; onSave: (t: string, c: string) => Promise<boolean>; onPending?: (save: (() => Promise<boolean>) | null) => void }) {
   const [tech, setTech] = useState(initTech);
   const [concl, setConcl] = useState(initConcl);
   useEffect(() => { setTech(initTech); setConcl(initConcl); }, [initTech, initConcl]);
+  const dirty = tech !== initTech || concl !== initConcl;
+  useEffect(() => { onPending?.(dirty ? () => onSave(tech, concl) : null); }, [dirty, tech, concl]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => onPending?.(null), []);   // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
       <div className="space-y-1">
@@ -806,10 +824,11 @@ function ChecklistRings({ orderId, onOpen }: { orderId: string; onOpen: () => vo
 }
 
 /* ---- Watch-out banner — prominent handling warnings for the asset + the customer ---- */
-function WatchOutBanner({ device, client, onChanged, onFlash }: {
+function WatchOutBanner({ device, client, onChanged, onFlash, onPending }: {
   device?: { id?: string; watch_out?: string | null } | null;
   client?: { id?: string; name?: string; watch_out?: string | null } | null;
   onChanged: () => void; onFlash: (m: string) => void;
+  onPending?: (save: (() => Promise<boolean>) | null) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [dev, setDev] = useState(device?.watch_out || "");
@@ -822,9 +841,11 @@ function WatchOutBanner({ device, client, onChanged, onFlash }: {
     try {
       if (client?.id && (cli || "") !== (client.watch_out || "")) await api.patch(`/clients/${client.id}`, { watch_out: cli || null });
       if (device?.id && (dev || "") !== (device.watch_out || "")) await api.put(`/assets/${device.id}`, { watch_out: dev || null });
-      onFlash("Warnings saved"); setEditing(false); onChanged();
-    } catch (e: any) { onFlash(e.message || "Could not save"); } finally { setBusy(false); }
+      onFlash("Warnings saved"); setEditing(false); onChanged(); return true;
+    } catch (e: any) { onFlash(e.message || "Could not save"); return false; } finally { setBusy(false); }
   }
+  const dirty = editing && ((cli || "") !== (client?.watch_out || "") || (dev || "") !== (device?.watch_out || ""));
+  useEffect(() => { onPending?.(dirty ? save : null); }, [dirty, cli, dev]);   // eslint-disable-line react-hooks/exhaustive-deps
   if (!hasAny && !editing) {
     return (
       <div className="px-6 py-1.5 bg-slate-50/70 border-b border-slate-200/70 flex-shrink-0">
@@ -1007,6 +1028,8 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
   const [groupBy, setGroupBy] = useState(false);               // false = flat list (default)
   const [assignOpen, setAssignOpen] = useState<string | null>(null);  // line id whose picker is open
   const [splitRatio, setSplitRatio] = useState(0.5);                   // 144ax G8 — primary's share
+  const [splitOpen, setSplitOpen] = useState(false);                   // split choices folded until asked for
+  const [techQuery, setTechQuery] = useState("");                      // filter, shown for bigger teams
   async function patchLine(lineId: string, body: any) {
     try { await api.patch(`/orders/${orderId}/lines/${lineId}`, body); onChanged?.(); }
     catch (e: any) { onFlash(e.message || "Could not update line"); }
@@ -1100,7 +1123,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
           <div className="mt-2 ml-11 flex flex-wrap items-center gap-2 text-[11px]">
             {/* #1 assignee chip + #3 any co-techs */}
             <div>
-              <button type="button" data-assign-for={l.id} onClick={() => setAssignOpen(openPick ? null : l.id)}
+              <button type="button" data-assign-for={l.id} aria-haspopup="menu" aria-expanded={openPick} onClick={() => { setAssignOpen(openPick ? null : l.id); setSplitOpen(false); setTechQuery(""); }}
                 className="flex items-center gap-1.5 pl-1 pr-2 py-1 rounded-full border border-slate-200 bg-white hover:border-primary/40">
                 {co.length > 1 ? (
                   <span className="flex -space-x-1.5">{co.map((c) => <span key={c.employee_id} className={`w-5 h-5 rounded-full grid place-items-center text-[8px] font-bold text-white ring-1 ring-white ${avHue(c.employee_id)}`}>{empInitials(c.employee_id)}</span>)}</span>
@@ -1111,32 +1134,73 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                 <M n="expand_more" c="text-[13px] text-ink-tertiary" />
               </button>
               {openPick && (
-                <FloatingMenu anchorSel={`[data-assign-for="${l.id}"]`} onClose={() => setAssignOpen(null)}>
-                  <div className="text-[11px] font-bold text-ink-tertiary px-2 py-1">Assign technician</div>
-                  <button onClick={() => { patchLine(l.id, { technician_id: null, co_technicians: [] }); setAssignOpen(null); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-ink-secondary">Unassigned</button>
-                  {(emps || []).map((e) => (
-                    <button key={e.id} onClick={() => { patchLine(l.id, { technician_id: e.id, co_technicians: [] }); setAssignOpen(null); }}
-                      className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 ${l.technician_id === e.id ? "bg-blue-50 text-primary font-semibold" : "text-ink-primary"}`}>
-                      <span className={`w-5 h-5 rounded-full grid place-items-center text-[8px] font-bold text-white ${avHue(e.id)}`}>{empInitials(e.id)}</span>{e.name}</button>
-                  ))}
-                  {/* #3/#8 split with a second tech at a chosen ratio */}
-                  {l.technician_id && (
-                    <>
-                      <div className="flex items-center justify-between px-2 py-1 border-t border-slate-100 mt-1">
-                        <span className="text-[11px] font-bold text-ink-tertiary">Split with</span>
-                        <span className="flex gap-1">{[0.5, 0.6, 0.7].map((r) => (
-                          <button key={r} onClick={() => setSplitRatio(r)}
-                            className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${splitRatio === r ? "bg-blue-50 text-primary" : "text-ink-tertiary hover:text-ink-primary"}`}>{Math.round(r * 100)}/{Math.round((1 - r) * 100)}</button>
-                        ))}</span>
+                <FloatingMenu anchorSel={`[data-assign-for="${l.id}"]`} onClose={() => setAssignOpen(null)} width={264}>
+                  {(() => {
+                    const pickTech = (id: string | null) => { patchLine(l.id, { technician_id: id, co_technicians: [] }); setAssignOpen(null); };
+                    const q = techQuery.trim().toLowerCase();
+                    const list = (emps || []).filter((e) => !q || e.name.toLowerCase().includes(q));
+                    const row = "w-full flex items-center gap-2.5 px-2.5 h-9 rounded-lg text-left text-[13px] hover:bg-slate-50 focus-visible:bg-slate-100 outline-none";
+                    const check = <M n="check" c="ml-auto text-[16px] text-primary" />;
+                    const first = (id?: string | null) => empName(id).split(" ")[0];
+                    return (
+                      <div className="text-[13px]">
+                        <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Technician for this line</div>
+                        {(emps || []).length > 6 && (
+                          <input autoFocus value={techQuery} onChange={(e) => setTechQuery(e.target.value)} placeholder="Search technicians"
+                            onKeyDown={(e) => { if (e.key === "Enter" && list[0]) pickTech(list[0].id); }}
+                            className="mb-1 w-full h-8 px-2.5 rounded-lg border border-slate-200 bg-slate-50 text-[13px] outline-none focus:border-primary/50 focus:bg-white" />
+                        )}
+                        {!q && (
+                          <button type="button" onClick={() => pickTech(null)} className={`${row} text-ink-secondary`}>
+                            <span className="w-6 h-6 rounded-full border border-dashed border-slate-300 grid place-items-center flex-none"><M n="person_off" c="text-[14px] text-ink-tertiary" /></span>
+                            Unassigned{!l.technician_id && check}
+                          </button>
+                        )}
+                        {list.map((e) => (
+                          <button type="button" key={e.id} onClick={() => pickTech(e.id)}
+                            className={`${row} ${l.technician_id === e.id && co.length < 2 ? "font-semibold text-ink-primary bg-blue-50/60" : "text-ink-primary"}`}>
+                            <span className={`w-6 h-6 rounded-full grid place-items-center text-[10px] font-bold text-white flex-none ${avHue(e.id)}`}>{empInitials(e.id)}</span>
+                            <span className="truncate">{e.name}</span>{l.technician_id === e.id && co.length < 2 && check}
+                          </button>
+                        ))}
+                        {q && list.length === 0 && <p className="px-2.5 py-2 text-ink-tertiary">No technician called “{techQuery}”.</p>}
+                        {/* #3/#8 split with a second tech at a chosen ratio — folded away until asked for */}
+                        {l.technician_id && !q && (emps || []).length > 1 && (
+                          <div className="mt-1 pt-1 border-t border-slate-100">
+                            {co.length > 1 && (
+                              <div className="flex items-center gap-2 px-2.5 h-9 text-ink-secondary">
+                                <M n="group" c="text-[16px] text-emerald-600" />
+                                <span className="truncate">{co.map((c) => `${first(c.employee_id)} ${Math.round((c.share || 0) * 100)}%`).join(" + ")}</span>
+                                <button type="button" onClick={() => { patchLine(l.id, { co_technicians: [] }); setAssignOpen(null); }} className="ml-auto text-[12px] font-semibold text-rose-600 hover:underline">Clear</button>
+                              </div>
+                            )}
+                            <button type="button" onClick={() => setSplitOpen((v) => !v)} aria-expanded={splitOpen} className={`${row} text-ink-secondary`}>
+                              <M n="group_add" c="text-[18px] text-ink-tertiary" />{co.length > 1 ? "Change the split" : "Split the work"}
+                              <M n={splitOpen ? "expand_less" : "expand_more"} c="ml-auto text-[16px] text-ink-tertiary" />
+                            </button>
+                            {splitOpen && (
+                              <div className="pb-1">
+                                <div className="flex items-center gap-1 px-2.5 py-1.5">
+                                  <span className="text-[12px] text-ink-tertiary mr-1">{first(l.technician_id)} gets</span>
+                                  {[0.5, 0.6, 0.7].map((r) => (
+                                    <button type="button" key={r} onClick={() => setSplitRatio(r)}
+                                      className={`text-[12px] font-semibold px-2 h-7 rounded-md ${splitRatio === r ? "bg-primary text-white" : "bg-slate-100 text-ink-secondary hover:bg-slate-200"}`}>{Math.round(r * 100)}%</button>
+                                  ))}
+                                </div>
+                                {(emps || []).filter((e) => e.id !== l.technician_id).map((e) => (
+                                  <button type="button" key={"sp" + e.id} onClick={() => { patchLine(l.id, { co_technicians: [{ employee_id: l.technician_id, share: splitRatio }, { employee_id: e.id, share: Math.round((1 - splitRatio) * 100) / 100 }] }); setAssignOpen(null); }}
+                                    className={`${row} text-ink-primary`}>
+                                    <span className={`w-6 h-6 rounded-full grid place-items-center text-[10px] font-bold text-white flex-none ${avHue(e.id)}`}>{empInitials(e.id)}</span>
+                                    <span className="truncate">+ {e.name}</span><span className="ml-auto text-[12px] tabular-nums text-ink-tertiary">{Math.round((1 - splitRatio) * 100)}%</span>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
-                      {(emps || []).filter((e) => e.id !== l.technician_id).map((e) => (
-                        <button key={"sp" + e.id} onClick={() => { patchLine(l.id, { co_technicians: [{ employee_id: l.technician_id, share: splitRatio }, { employee_id: e.id, share: Math.round((1 - splitRatio) * 100) / 100 }] }); setAssignOpen(null); }}
-                          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-emerald-50 text-ink-primary">
-                          <M n="group_add" c="text-[13px] text-emerald-600" />{empName(l.technician_id).split(" ")[0]} {Math.round(splitRatio * 100)}% + {e.name.split(" ")[0]} {Math.round((1 - splitRatio) * 100)}%</button>
-                      ))}
-                      {co.length > 1 && <button onClick={() => { patchLine(l.id, { co_technicians: [] }); setAssignOpen(null); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 text-rose-600">Clear split</button>}
-                    </>
-                  )}
+                    );
+                  })()}
                 </FloatingMenu>
               )}
             </div>
