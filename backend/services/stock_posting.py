@@ -30,11 +30,9 @@ async def apply_receipt_line(
     - `expiry_date` dates the cost layer for FEFO (expiry-tracked products).
     - Serials are expected already checked by `serial_intake.validate_intake`.
     """
-    sl = (await db.execute(select(StockLevel).where(
-        StockLevel.part_id == part.id, StockLevel.location_id == location_id))).scalar_one_or_none()
-    if not sl:
-        sl = StockLevel(part_id=part.id, location_id=location_id, qty_available=0.0, qty_reserved=0.0)
-        db.add(sl)
+    from backend.services import stock_rows
+    if bin_id:
+        await stock_rows.check_bin(db, org_id, location_id, bin_id)
 
     # Global moving-average: weight existing on-hand (across ALL locations) against the
     # incoming qty at this receipt's unit cost. Only move the average when a real cost is
@@ -48,9 +46,9 @@ async def apply_receipt_line(
         if set_last_cost:
             part.cost_price = unit_cost
 
-    await _atomic_add(db, sl, "qty_available", qty, round_to=None)   # atomic
-    if bin_id and not sl.bin_id:
-        sl.bin_id = bin_id
+    # ii144a: the exact (product, location, bin) row — the old code reused the location's single row
+    # and only tagged it with the first bin, so a later bin transfer made a second row and crashed here.
+    await stock_rows.add(db, part.id, location_id, qty, bin_id=bin_id)
 
     db.add(StockMovement(part_id=part.id, location_id=location_id, bin_id=bin_id,
                          movement_type="receive", qty=qty, unit_cost=unit_cost or None,

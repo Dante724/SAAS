@@ -21,7 +21,6 @@ from backend.models import (
     OrderStatus,
     OrderStatusLog,
     Organisation,
-    StockLevel,
     StockMovement,
 )
 from backend.services import industry as _ind
@@ -957,10 +956,9 @@ async def create_order(
     # and record the shortfall as pending_stock (Orderry's "add without deduction")
     from backend.services import reservations as _rsv
     _allow_override = _can_override_reservation(perms, current)
+    from backend.services import stock_rows
     for part_id, qty, line_obj in stock_writeoffs:
-        sl = (await db.execute(
-            select(StockLevel).where(StockLevel.part_id == part_id, StockLevel.location_id == data.location_id).with_for_update()
-        )).scalar_one_or_none()
+        sl = await stock_rows.rows(db, part_id, data.location_id, lock=True)
         # 144at — reservation-aware: a new WO can take only FREE stock (+ override for others' holds).
         g = await _rsv.guard_and_draw(
             db, org_id=current.org_id, part_id=part_id, location_id=data.location_id,
@@ -977,8 +975,8 @@ async def create_order(
                 "Not enough free stock and you don't have permission to add products "
                 "without deduction. Reduce the quantity or receive more stock."
             )
-        if sl:
-            await _atomic_add(db, sl, "qty_available", -(deducted), round_to=None)   # atomic
+        if sl and deducted > 0:     # ii144a: drawn across the location's bins
+            await stock_rows.draw(db, part_id, data.location_id, deducted, allow_short=True)
         line_obj.pending_stock = shortfall
         if deducted > 0:
             db.add(StockMovement(
@@ -1644,7 +1642,7 @@ async def _convert_estimate(db, current, estimate):
     """Convert an estimate into a work order IN PLACE (Build 144di, Orderry-style):
     the same record flips ``is_estimate`` off, gets a fresh WO number, keeps its
     lines and history, and now deducts stock. Irreversible. Returns the id."""
-    from backend.models import OrderLine, OrderStatus, StockLevel, StockMovement
+    from backend.models import OrderLine, OrderStatus, StockMovement
     old_number = estimate.order_number
     # initial work-order status (org default or "new")
     init = "new"
@@ -1661,11 +1659,12 @@ async def _convert_estimate(db, current, estimate):
     src_lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == estimate.id))).scalars().all()
     for l in src_lines:
         if l.kind == "product" and l.ref_id:
-            sl = (await db.execute(select(StockLevel).where(
-                StockLevel.part_id == l.ref_id, StockLevel.location_id == estimate.location_id).with_for_update())).scalar_one_or_none()
+            from backend.services import stock_rows
+            sl = await stock_rows.rows(db, l.ref_id, estimate.location_id, lock=True)
             if sl:
-                deduct = min(l.qty, max(sl.qty_available, 0))
-                await _atomic_add(db, sl, "qty_available", -(deduct), round_to=None)   # atomic
+                have = sum(r.qty_available or 0 for r in sl)
+                deduct = min(l.qty, max(have, 0))
+                await stock_rows.draw(db, l.ref_id, estimate.location_id, deduct)
                 l.pending_stock = l.qty - deduct
                 # log the ACTUAL deducted quantity, negative — matches every other
                 # consumption movement; was qty=+l.qty which corrupted movement-sum reports.
@@ -2412,7 +2411,7 @@ async def create_po_from_order(
     in stock. Product lines with no catalog part are turned into real products
     first (so stock can be tracked), the PO is linked back to this work order, and
     — with auto_send — it's marked ordered and the supplier is notified."""
-    from backend.models import Part, POLine, PurchaseOrder, StockLevel, Supplier
+    from backend.models import Part, POLine, PurchaseOrder, Supplier
 
     order = (await db.execute(
         select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
@@ -2434,9 +2433,8 @@ async def create_po_from_order(
         if l.pending_stock and l.pending_stock > 0:
             short = l.pending_stock
         elif data.only_shortfall and l.ref_id:
-            sl = (await db.execute(select(StockLevel).where(
-                StockLevel.part_id == l.ref_id, StockLevel.location_id == order.location_id))).scalar_one_or_none()
-            avail = (sl.qty_available if sl else 0) or 0
+            from backend.services import stock_rows
+            avail, _held = await stock_rows.totals(db, l.ref_id, order.location_id)
             short = max(l.qty - max(avail, 0), 0)
         else:
             short = l.qty
@@ -2509,7 +2507,7 @@ async def reserve_stock_for_order(
     the quantity each product line still needs that isn't already held for this job, and never
     more than is free at the order's location. Returns what was held and what was short."""
     from datetime import timedelta
-    from backend.models import Part, StockLevel, StockReservation
+    from backend.models import Part, StockReservation
 
     order = (await db.execute(
         select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
@@ -2544,14 +2542,13 @@ async def reserve_stock_for_order(
         want = qty_needed - held.get(part_id, 0)      # still to hold for this job
         if want <= 0:
             continue
-        sl = (await db.execute(select(StockLevel).where(
-            StockLevel.part_id == part_id, StockLevel.location_id == order.location_id))).scalar_one_or_none()
-        free = ((sl.qty_available or 0) - (sl.qty_reserved or 0)) if sl else 0
+        from backend.services import stock_rows
+        free = await stock_rows.free(db, part_id, order.location_id)
         take = min(want, max(free, 0))
         if take <= 0:
             short.append({"part": part_names.get(part_id, part_id), "needed": want, "free": max(free, 0)})
             continue
-        sl.qty_reserved = (sl.qty_reserved or 0) + take
+        await stock_rows.reserve(db, part_id, order.location_id, take)
         db.add(StockReservation(org_id=current.org_id, part_id=part_id, location_id=order.location_id,
                                 order_id=order_id, qty=take,
                                 expires_at=now + timedelta(days=hold_days)))
@@ -3259,14 +3256,13 @@ async def receive_pending_stock(
     if (line.pending_stock or 0) <= 0:
         return {"ok": True, "pending": 0}
 
-    sl = (await db.execute(
-        select(StockLevel).where(StockLevel.part_id == line.ref_id, StockLevel.location_id == order.location_id).with_for_update()
-    )).scalar_one_or_none()
-    available = sl.qty_available if sl else 0
+    from backend.services import stock_rows
+    available = sum(r.qty_available or 0 for r in await stock_rows.rows(
+        db, line.ref_id, order.location_id, lock=True))
     deduct = min(line.pending_stock, max(available, 0))
     if deduct <= 0:
         raise HTTPException(409, "No stock available to write off yet")
-    await _atomic_add(db, sl, "qty_available", -(deduct), round_to=None)   # atomic
+    await stock_rows.draw(db, line.ref_id, order.location_id, deduct, allow_short=True)
     line.pending_stock -= deduct
     db.add(StockMovement(
         part_id=line.ref_id, location_id=order.location_id,
@@ -3639,13 +3635,8 @@ async def _reverse_fulfillment(db, order, part_id, qty):
         StockMovement.ref_id == order.id, StockMovement.part_id == part_id,
         StockMovement.movement_type == "use").order_by(StockMovement.created_at.desc()).limit(1))).scalar_one_or_none()
     loc_id = dloc or order.location_id
-    sl = (await db.execute(select(StockLevel).where(
-        StockLevel.part_id == part_id, StockLevel.location_id == loc_id))).scalar_one_or_none()
-    if sl:
-        await _atomic_add(db, sl, "qty_available", qty, round_to=None)   # atomic
-    else:
-        db.add(StockLevel(part_id=part_id, location_id=loc_id,
-                          qty_available=qty, qty_reserved=0))
+    from backend.services import stock_rows
+    await stock_rows.add(db, part_id, loc_id, qty)
     db.add(StockMovement(part_id=part_id, location_id=loc_id,
                          movement_type="return", qty=qty, ref_type="order", ref_id=order.id))
     from backend.models import SerializedItem, StockItemBatch
@@ -3720,12 +3711,12 @@ async def _maybe_deduct(db, order, line, qty, perms, current):
                                  f"A manager with override permission must approve using them.")
     deducted = g["take"]
     shortfall = g["pending"]
-    sl = (await db.execute(select(StockLevel).where(
-        StockLevel.part_id == line.ref_id, StockLevel.location_id == order.location_id))).scalar_one_or_none()
+    from backend.services import stock_rows
+    sl = await stock_rows.rows(db, line.ref_id, order.location_id)
     if shortfall > 0 and perms.get("can_add_without_stock") is False:
         raise HTTPException(403, "Not enough free stock and you can't add without deduction.")
     if sl and deducted > 0:
-        await _atomic_add(db, sl, "qty_available", -(deducted), round_to=None)   # atomic
+        await stock_rows.draw(db, line.ref_id, order.location_id, deducted, allow_short=True)
         if True:
             db.add(StockMovement(part_id=line.ref_id, location_id=order.location_id,
                                  movement_type="use", qty=-deducted, ref_type="order", ref_id=order.id))

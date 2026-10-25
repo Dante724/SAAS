@@ -35,8 +35,9 @@ async def resolve(data: ScanIn, db: AsyncSession = Depends(get_db),
                 "label": o.order_number, "is_estimate": bool(o.is_estimate)}
 
     # 2) product/part — sku / barcode / internal code
+    from backend.services import product_codes
     p = (await db.execute(select(Part).where(
-        Part.org_id == org, or_(Part.sku == code, Part.barcode == code, Part.code == code)))).scalars().first()
+        Part.org_id == org, product_codes.matches_code(org, code)))).scalars().first()   # ii144a: extra barcodes too
     if p:
         return {"matched": True, "type": "product", "id": p.id, "route": "/inventory", "label": p.name}
 

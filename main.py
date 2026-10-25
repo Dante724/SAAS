@@ -174,6 +174,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from sqlalchemy.exc import IntegrityError  # noqa: E402
+
+from backend.core.db_errors import integrity_error_handler  # noqa: E402
+
+app.add_exception_handler(IntegrityError, integrity_error_handler)   # ii144a: unique clash → plain 409
+
 for r in ROUTERS:
     app.include_router(r.router)
 app.include_router(sales.st_router)

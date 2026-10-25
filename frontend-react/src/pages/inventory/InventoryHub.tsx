@@ -5,6 +5,7 @@ import Shell, { M } from "../../components/Shell";
 import ScanStockPanel from "../../components/ScanStockPanel";
 import { api, openAuthedDoc } from "../../api/client";
 import { isoDate } from "../../lib/localDate";
+import { missingBarcodesMessage } from "../../lib/barcodes";
 import { Product, Supplier, PO, Service, Bundle, Asset, currencySymbol, money } from "./types";
 import { analyzePaste, gridToRows, mergeRemap, loadRememberedMap, saveRememberedMap, FIELD_LABELS, FIELD_ORDER } from "./pasteMap";
 import type { PasteField, PostRow } from "./pasteMap";
@@ -271,6 +272,23 @@ export default function InventoryHub() {
     catch (e: any) { await alertDialog(e.message || "Bulk action failed"); }
     finally { setPBusy(false); }
   }
+  // ii144a — give products without a barcode one (shop-made EAN-13 codes; existing ones untouched).
+  async function pAddBarcodes(onlySelected: boolean) {
+    const n = onlySelected ? psel.size : 0;
+    const q = onlySelected
+      ? `Add a barcode to the ${n} selected product${n === 1 ? "" : "s"} that don't have one yet?`
+      : "Add a barcode to every product that doesn't have one yet?";
+    if (!(await confirmDialog(`${q} Products that already have a barcode keep it.`, { confirmLabel: "Add barcodes" }))) return;
+    setPBusy(true);
+    try {
+      const r = await api.post<{ generated: number; more?: boolean }>("/catalog/products/barcodes/generate-missing",
+        onlySelected ? { ids: [...psel] } : {});
+      if (onlySelected) pClear();
+      loadProducts();
+      await alertDialog(missingBarcodesMessage(r, n), "Barcodes");
+    } catch (e: any) { await alertDialog(e.message || "Couldn't add barcodes"); }
+    finally { setPBusy(false); }
+  }
   async function pDelete() {
     if (!(await confirmDialog(`Archive ${psel.size} product(s)? History is kept; they leave active stock.`, { danger: true, confirmLabel: "Delete" }))) return;
     pBulk("delete");
@@ -302,7 +320,7 @@ export default function InventoryHub() {
   const matchesSearch = (p: any) => {
     if (!pq.trim()) return true;
     const q = pq.toLowerCase();
-    return `${p.name} ${p.sku || ""} ${p.code || ""} ${p.barcode || ""} ${p.mpn || ""}`.toLowerCase().includes(q);
+    return `${p.name} ${p.sku || ""} ${p.code || ""} ${p.barcode || ""} ${(p.extra_barcodes || []).join(" ")} ${p.mpn || ""}`.toLowerCase().includes(q);
   };
   const searchMatches = (products || []).filter(matchesSearch);
   const shownProducts = searchMatches.filter((p) => {
@@ -408,6 +426,7 @@ export default function InventoryHub() {
                     <button onClick={() => { setStockMenu(false); setReorderOpen(true); }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-ink-secondary"><M n="sync_alt" c="text-sm" />Reorder list</button>
                     <button onClick={() => { setStockMenu(false); setPostingOpen(true); }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-ink-secondary"><M n="add" c="text-sm" />New posting</button>
                     <button onClick={() => { setStockMenu(false); if (products?.length) { setPsel(new Set(products.map((p) => p.id))); } }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-ink-secondary"><M n="filter_list" c="text-sm" />Bulk edit filtered</button>
+                    <button onClick={() => { setStockMenu(false); pAddBarcodes(false); }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-ink-secondary"><M n="barcode" c="text-sm" />Add missing barcodes</button>
                     <button onClick={() => { setStockMenu(false); setAction({ kind: "write-off" }); }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-ink-secondary"><M n="delete_sweep" c="text-sm" />New write-off</button>
                   </div>
                 </>
@@ -435,6 +454,7 @@ export default function InventoryHub() {
               <div className="flex-1" />
               <button onClick={() => openLabelDlg("product")} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="print" c="text-sm" />Print labels</button>
               <button onClick={pExport} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="download" c="text-sm" />Export CSV</button>
+              <button onClick={() => pAddBarcodes(true)} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="barcode" c="text-sm" />Add missing barcodes</button>
               <button onClick={pMarkup} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="percent" c="text-sm" />Adjust price</button>
               <button onClick={() => setBulkAdj(true)} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="tune" c="text-sm" />Adjust qty</button>
               <button onClick={() => setAction({ kind: "write-off" })} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="delete_sweep" c="text-sm" />Write off</button>
