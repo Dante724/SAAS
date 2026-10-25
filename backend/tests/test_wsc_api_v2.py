@@ -87,6 +87,28 @@ async def test_per_key_rate_limit(client, tenant):
     assert (await client.get("/api/v2", headers=await key(client, tenant))).status_code == 200
 
 
+@pytest.mark.asyncio
+async def test_broad_keys_cannot_manage_webhooks(client, tenant):
+    """An old read,write key must not be able to subscribe its own URL to every event."""
+    for scopes in ("read,write", "*", "read"):
+        k = await key(client, tenant, scopes)
+        assert (await client.get("/api/v2/webhooks", headers=k)).status_code == 403, scopes
+        assert (await client.post("/api/v2/webhooks", json={"url": "https://x.example.com"}, headers=k)).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_inquiry_key_cannot_convert_or_learn_customers(client, tenant):
+    await client.post("/api/clients", json={"name": "Known", "phone": "+14155550100"}, headers=tenant)
+    k = await key(client, tenant, "inquiries:write")
+    r = await client.post("/api/v2/inquiries", json={"name": "Probe", "phone": "+14155550100"}, headers=k)
+    assert r.status_code == 201 and r.json()["data"]["client_id"] is None
+    lid = r.json()["data"]["id"]
+    assert (await client.post(f"/api/v2/inquiries/{lid}/convert", headers=k)).status_code == 403
+    full = await key(client, tenant, "inquiries:write,orders:write,contacts:write")
+    assert (await client.get(f"/api/v2/inquiries/{lid}", headers=full)).json()["data"]["client_id"]
+    assert (await client.post(f"/api/v2/inquiries/{lid}/convert", headers=full)).status_code == 200
+
+
 # ── inquiries over the API ───────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_inquiry_lifecycle_and_idempotency(client, tenant):
@@ -203,6 +225,7 @@ async def test_manage_webhooks_with_the_api(client, tenant, monkeypatch):
     from backend.core import ssrf
     monkeypatch.setattr(ssrf, "assert_safe_url", lambda url: None)
     k = await key(client, tenant, "webhooks:write")
+    from backend.models import AuditLog
     r = await client.post("/api/v2/webhooks", json={"url": "https://hooks.example.com/x",
                                                      "events": "inquiry.created,booking.created"}, headers=k)
     assert r.status_code == 201, r.text
@@ -212,6 +235,7 @@ async def test_manage_webhooks_with_the_api(client, tenant, monkeypatch):
     assert (await client.post("/api/v2/webhooks", json={"url": "https://hooks.example.com/x",
                                                          "events": "order.exploded"}, headers=k)).status_code == 422
     assert (await client.delete(f"/api/v2/webhooks/{r.json()['data']['id']}", headers=k)).status_code == 200
+    return AuditLog
 
 
 @pytest.mark.asyncio
@@ -241,21 +265,37 @@ async def test_every_registered_event_fires_somewhere_and_is_documented():
 
 
 @pytest.mark.asyncio
-async def test_order_closed_and_estimate_accepted_fire(client, tenant, db):
+async def test_order_closed_fires(client, tenant, db):
     o = await org(client, tenant)
     await hook(db, o)
     lead = (await client.post("/api/leads", json={"name": "Close"}, headers=tenant)).json()
     oid = (await client.post(f"/api/leads/{lead['id']}/convert", headers=tenant)).json()["order_id"]
     sts = (await client.get("/api/statuses?record_type=work_order", headers=tenant)).json()
     items = sts.get("items", sts) if isinstance(sts, dict) else sts
-    closing = next((s for s in items if s.get("is_terminal") or s.get("status_group") == "closed"), None)
-    if closing is None:
-        pytest.skip("no closing status in this setup")
+    closing = next(s for s in items if s.get("is_terminal") or s.get("status_group") == "closed")
     r = await client.patch(f"/api/orders/{oid}/status", json={"status": closing["key"]}, headers=tenant)
-    if r.status_code >= 400:
+    if r.status_code == 405:
         r = await client.post(f"/api/orders/{oid}/status", json={"status": closing["key"]}, headers=tenant)
     assert r.status_code < 400, r.text
     assert "order.closed" in await events_for(db, o)
+
+
+@pytest.mark.asyncio
+async def test_estimate_accepted_fires_only_on_accept(client, tenant, db):
+    o = await org(client, tenant)
+    await hook(db, o)
+
+    async def estimate():
+        oid = (await client.post("/api/orders", json={"complaint": "Quote", "is_estimate": True}, headers=tenant)).json()["id"]
+        return (await client.post(f"/api/orders/{oid}/public-link", headers=tenant)).json()["token"]
+    tok = await estimate()
+    r = await client.post(f"/api/public/track/{tok}/respond", json={"decision": "decline", "name": "Jane"})
+    assert r.status_code == 200, r.text
+    assert "estimate.accepted" not in await events_for(db, o)
+    tok = await estimate()
+    r = await client.post(f"/api/public/track/{tok}/respond", json={"decision": "accept", "name": "Jane"})
+    assert r.status_code == 200, r.text
+    assert (await events_for(db, o)).count("estimate.accepted") == 1
 
 
 @pytest.mark.asyncio

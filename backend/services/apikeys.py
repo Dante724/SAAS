@@ -37,6 +37,9 @@ def hash_key(full: str) -> str:
 RESOURCES = ("contacts", "orders", "estimates", "products", "appointments", "invoices", "credit_notes",
              "time_entries", "inquiries", "tags", "services", "bundles", "webhooks")
 BROAD = ("read", "write", "*")
+# Never implied by a broad scope: managing webhooks would let any old "read,write" key subscribe
+# a URL of its choosing to every event, so it needs an explicit webhooks:read / webhooks:write.
+EXPLICIT_ONLY = ("webhooks",)
 DEFAULT_RATE_PER_MIN = 120
 MAX_RATE_PER_MIN = 6000
 
@@ -67,7 +70,7 @@ class ApiPrincipal:
 
     def allows(self, action: str, resource: Optional[str] = None) -> bool:
         s = self.scopes
-        if "*" in s or "write" in s or action in s:
+        if resource not in EXPLICIT_ONLY and ("*" in s or "write" in s or action in s):
             return True
         if resource and (f"{resource}:{action}" in s or (action == "read" and f"{resource}:write" in s)):
             return True

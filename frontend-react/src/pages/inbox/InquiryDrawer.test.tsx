@@ -5,7 +5,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import InquiryDrawer from "./InquiryDrawer";
 import { TypesManager } from "./InquiriesHub";
-import { callsLabel, changes, sla, type Lead, type LeadType } from "./inquiries";
+import { callsLabel, changes, sla, utc, type Lead, type LeadType } from "./inquiries";
 
 const types: LeadType[] = [{ id: "t1", name: "Repair", sla_minutes: 30, sort_order: 0, active: true },
   { id: "t2", name: "Old", sla_minutes: 60, sort_order: 1, active: false }];
@@ -39,6 +39,13 @@ describe("inquiry helpers", () => {
     expect(callsLabel(lead())).toBe("3 missed calls");
     expect(sla(lead({ status: "won" }))).toBeNull();
     expect(sla(lead({ sla_due_at: "2000-01-01T00:00:00" }))?.label).toBe("Overdue");
+  });
+  it("reads the server's zone-less times as UTC", () => {
+    expect(utc("2026-10-25T06:46:00").toISOString()).toBe("2026-10-25T06:46:00.000Z");
+    expect(utc("2026-10-25T06:46:00Z").toISOString()).toBe("2026-10-25T06:46:00.000Z");
+    expect(utc("2026-10-25T12:16:00+05:30").toISOString()).toBe("2026-10-25T06:46:00.000Z");
+    const due = new Date(Date.now() + 20 * 60000).toISOString().replace("Z", "");
+    expect(sla(lead({ sla_due_at: due }))?.label).toMatch(/^(19|20)m left$/);
   });
   it("sends only changed fields, blanks as null", () => {
     expect(changes(lead(), lead())).toEqual({});

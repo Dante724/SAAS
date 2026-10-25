@@ -159,12 +159,39 @@ async def test_anonymous_caller_is_logged_but_opens_no_inquiry(client, tenant, f
 
 
 @pytest.mark.asyncio
-async def test_simulated_missed_call_also_opens_inquiry(client, tenant, db):
+async def test_simulated_missed_call_opens_inquiry(client, tenant, db):
     org = await org_of(client, tenant)
-    r = await client.post(f"/api/comms/calls/webhook?org_id={org}", json={
-        "provider": "manual", "from_number": "+14155550100", "status": "no-answer"}, headers=tenant)
-    # the generic webhook is token-gated; without a token it's refused
-    assert r.status_code in (401, 403)
+    r = await client.post("/api/telephony/simulate/inbound", json={"from_number": "+14155550100", "missed": True},
+                          headers=tenant)
+    assert r.status_code == 201 and r.json()["lead_id"]
+    lead = (await db.execute(select(Lead).where(Lead.org_id == org))).scalar_one()
+    assert lead.id == r.json()["lead_id"] and lead.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_generic_call_webhook_needs_token_and_dedupes_replays(client, tenant, db):
+    from backend.models import Organisation
+    org = await org_of(client, tenant)
+    ev = {"provider": "pbx", "from_number": "+14155550100", "status": "no-answer", "external_id": "evt-1"}
+    o = await db.get(Organisation, org)
+    o.webhook_secret = tok = "whsec-test-0123456789"
+    await db.commit()
+    assert (await client.post(f"/api/comms/calls/webhook?org_id={org}", json=ev)).status_code == 401
+    for _ in range(3):
+        r = await client.post(f"/api/comms/calls/webhook?org_id={org}", json=ev, headers={"X-Webhook-Token": tok})
+        assert r.status_code == 201, r.text
+    assert len((await db.execute(select(Call).where(Call.org_id == org))).scalars().all()) == 1
+    assert (await db.execute(select(Lead).where(Lead.org_id == org))).scalar_one().call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_burst_of_repeat_calls_alerts_once(client, tenant, fake_twilio, db):
+    await connect(client, tenant)
+    org = await org_of(client, tenant)
+    for i in range(3):
+        await _miss(client, org, "CA" + str(i) * 32)
+    notes = (await db.execute(select(StaffNotification).where(StaffNotification.org_id == org))).scalars().all()
+    assert len(notes) == 1
 
 
 # ── P0: richer inquiries on the web ──────────────────────────────────────────
@@ -243,6 +270,14 @@ async def test_convert_creates_job_with_device_and_twice_is_409(client, tenant, 
 
 
 @pytest.mark.asyncio
+async def test_convert_needs_permission_to_create_jobs(client, tenant):
+    lead = (await client.post("/api/leads", json={"name": "Perm"}, headers=tenant)).json()
+    staff = await limited(client, tenant, "noticket@test.dev", deny=("can_create_tickets",))
+    assert (await client.post(f"/api/leads/{lead['id']}/convert", headers=staff)).status_code == 403
+    assert (await client.post(f"/api/leads/{lead['id']}/convert", headers=tenant)).status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_cannot_mark_won_without_converting(client, tenant):
     lead = (await client.post("/api/leads", json={"name": "W"}, headers=tenant)).json()
     assert (await client.patch(f"/api/leads/{lead['id']}", json={"status": "won"}, headers=tenant)).status_code == 422
@@ -294,7 +329,7 @@ async def test_paged_list_filters_and_searches(client, tenant):
 
 
 # ── P2: Aircall (off until switched on) ──────────────────────────────────────
-AIRCALL_TOKEN = "45XXYYZZa08"
+AIRCALL_TOKEN = "45XXYYZZa08-sample-token"
 
 
 def aircall_event(event, call_id=812, answered_at=None, missed_reason=None, raw="+14155550100",
@@ -326,8 +361,6 @@ async def test_aircall_is_off_until_switched_on(client, tenant):
     assert r.status_code == 404
     assert (await client.put("/api/telephony/aircall", json={"webhook_token": AIRCALL_TOKEN},
                              headers=tenant)).status_code == 409
-    assert (await client.put("/api/telephony/config", json={"provider": "aircall", "enabled": True},
-                             headers=tenant)).status_code == 409
     assert (await client.get("/api/telephony/config", headers=tenant)).json()["aircall"]["available"] is False
 
 
@@ -356,6 +389,15 @@ async def test_aircall_answered_call_is_completed_not_an_inquiry(client, tenant,
     call = (await db.execute(select(Call).where(Call.org_id == org))).scalar_one()
     assert call.status == "completed" and call.duration_s == 30
     assert (await db.execute(select(Lead))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_aircall_needs_a_token_once_switched_on(client, tenant, monkeypatch):
+    monkeypatch.setattr(settings, "AIRCALL_ENABLED", True)
+    assert (await client.put("/api/telephony/config", json={"provider": "aircall", "enabled": True},
+                             headers=tenant)).status_code == 409
+    assert (await client.put("/api/telephony/aircall", json={"webhook_token": "short"},
+                             headers=tenant)).status_code == 422
 
 
 @pytest.mark.asyncio
@@ -504,3 +546,124 @@ async def test_postcode_checked_per_country(client, tenant):
     ok = await client.post("/api/clients", json={"name": "Free", "addr_postcode": "anything 1", "addr_country": "KE"},
                            headers=tenant)
     assert ok.status_code == 201
+
+
+# ── review follow-ups ────────────────────────────────────────────────────────
+async def _hook_token(db, org):
+    from backend.models import Organisation
+    o = await db.get(Organisation, org)
+    o.webhook_secret = "whsec-test-0123456789"
+    await db.commit()
+    return {"X-Webhook-Token": o.webhook_secret}
+
+
+@pytest.mark.asyncio
+async def test_generic_webhook_ringing_then_missed_raises_one_inquiry(client, tenant, db):
+    org = await org_of(client, tenant)
+    h = await _hook_token(db, org)
+    base = {"provider": "pbx", "from_number": "+14155550100", "external_id": "evt-9"}
+    await client.post(f"/api/comms/calls/webhook?org_id={org}", json={**base, "status": "ringing"}, headers=h)
+    assert (await db.execute(select(Lead).where(Lead.org_id == org))).scalars().all() == []
+    r = await client.post(f"/api/comms/calls/webhook?org_id={org}", json={**base, "status": "no-answer"}, headers=h)
+    assert r.json()["lead_id"]
+    await client.post(f"/api/comms/calls/webhook?org_id={org}", json={**base, "status": "no-answer"}, headers=h)
+    assert len((await db.execute(select(Lead).where(Lead.org_id == org))).scalars().all()) == 1
+    assert len((await db.execute(select(Task).where(Task.org_id == org))).scalars().all()) == 1
+
+
+@pytest.mark.asyncio
+async def test_convert_never_takes_another_customers_device(client, tenant, db):
+    a = (await client.post("/api/clients", json={"name": "Owner A", "phone": "+14155550001"}, headers=tenant)).json()
+    first = (await client.post("/api/leads", json={"name": "Owner A", "client_id": a["id"], "serial": "356938035643809"},
+                               headers=tenant)).json()
+    dev_a = (await client.post(f"/api/leads/{first['id']}/convert", headers=tenant)).json()["device_id"]
+    b = (await client.post("/api/leads", json={"name": "Someone B", "phone": "+14155550002",
+                                               "serial": "35-693803-564380-9"}, headers=tenant)).json()
+    res = (await client.post(f"/api/leads/{b['id']}/convert", headers=tenant)).json()
+    assert res["device_id"] != dev_a
+    assert (await db.get(Device, res["device_id"])).client_id == res["client_id"]
+    # the same customer coming back with a plain serial reuses their device
+    again = (await client.post("/api/leads", json={"name": "Owner A", "client_id": a["id"], "serial": "356938035643809"},
+                               headers=tenant)).json()
+    assert (await client.post(f"/api/leads/{again['id']}/convert", headers=tenant)).json()["device_id"] == dev_a
+
+
+@pytest.mark.asyncio
+async def test_converted_inquiry_cannot_be_reopened_and_task_closes(client, tenant, fake_twilio, db):
+    await connect(client, tenant)
+    org = await org_of(client, tenant)
+    await _miss(client, org, "CA" + "1" * 32)
+    lead = (await db.execute(select(Lead).where(Lead.org_id == org))).scalar_one()
+    await client.post(f"/api/leads/{lead.id}/convert", headers=tenant)
+    assert (await client.patch(f"/api/leads/{lead.id}", json={"status": "new"}, headers=tenant)).status_code == 409
+    task = (await db.execute(select(Task).where(Task.org_id == org))).scalar_one()
+    await db.refresh(task)
+    assert task.status == "done" and task.order_id
+    # a new call from the same number opens a fresh inquiry, not the converted one
+    await _miss(client, org, "CA" + "2" * 32)
+    assert len((await db.execute(select(Lead).where(Lead.org_id == org))).scalars().all()) == 2
+
+
+@pytest.mark.asyncio
+async def test_lost_inquiry_is_not_merged_into(client, tenant, fake_twilio, db):
+    await connect(client, tenant)
+    org = await org_of(client, tenant)
+    await _miss(client, org, "CA" + "1" * 32)
+    lead = (await db.execute(select(Lead).where(Lead.org_id == org))).scalar_one()
+    await client.patch(f"/api/leads/{lead.id}", json={"status": "lost"}, headers=tenant)
+    await _miss(client, org, "CA" + "2" * 32)
+    assert len((await db.execute(select(Lead).where(Lead.org_id == org))).scalars().all()) == 2
+
+
+@pytest.mark.asyncio
+async def test_alert_again_after_the_quiet_window(client, tenant, fake_twilio, db):
+    from datetime import datetime, timedelta
+    await connect(client, tenant)
+    org = await org_of(client, tenant)
+    await _miss(client, org, "CA" + "1" * 32)
+    lead = (await db.execute(select(Lead).where(Lead.org_id == org))).scalar_one()
+    lead.last_call_at = datetime.utcnow() - timedelta(minutes=10)
+    await db.commit()
+    await _miss(client, org, "CA" + "2" * 32)
+    notes = (await db.execute(select(StaffNotification).where(StaffNotification.org_id == org))).scalars().all()
+    assert len(notes) == 2
+
+
+@pytest.mark.asyncio
+async def test_type_change_moves_respond_by_and_archived_type_refused(client, tenant):
+    from datetime import datetime
+    fast = (await client.post("/api/leads/types", json={"name": "Fast", "sla_minutes": 10}, headers=tenant)).json()
+    lead = (await client.post("/api/leads", json={"name": "T", "sla_minutes": 600}, headers=tenant)).json()
+    got = (await client.patch(f"/api/leads/{lead['id']}", json={"lead_type_id": fast["id"]}, headers=tenant)).json()
+    mins = (datetime.fromisoformat(got["sla_due_at"]) - datetime.fromisoformat(got["created_at"])).total_seconds() / 60
+    assert 9 <= mins <= 11
+    old = (await client.post("/api/leads/types", json={"name": "Old"}, headers=tenant)).json()
+    await client.post("/api/leads", json={"name": "keeps it", "lead_type_id": old["id"]}, headers=tenant)
+    await client.delete(f"/api/leads/types/{old['id']}", headers=tenant)      # in use → archived
+    assert (await client.post("/api/leads", json={"name": "x", "lead_type_id": old["id"]}, headers=tenant)).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_typed_line_and_cleared_parts_stay_in_step(client, tenant, db):
+    cid = (await client.post("/api/clients", json={"name": "Drift", "addr_street": "1 Market St", "addr_city": "SF",
+                                                   "addr_country": "US"}, headers=tenant)).json()["id"]
+    await client.patch(f"/api/clients/{cid}", json={"address": "99 New Rd"}, headers=tenant)
+    c = await db.get(Client, cid)
+    await db.refresh(c)
+    assert c.address == "99 New Rd" and c.addr_street is None
+    await client.patch(f"/api/clients/{cid}", json={"addr_city": "Oakland"}, headers=tenant)
+    await db.refresh(c)
+    assert c.address == "Oakland"
+    await client.patch(f"/api/clients/{cid}", json={"addr_city": ""}, headers=tenant)
+    await db.refresh(c)
+    assert c.address is None
+
+
+@pytest.mark.asyncio
+async def test_aircall_junk_cannot_lock_out_the_real_token(client, tenant, monkeypatch, db):
+    org = await _aircall_shop(client, tenant, monkeypatch)
+    path = f"/api/telephony/aircall/webhook?org_id={org}"
+    for _ in range(31):
+        await client.post(path, json=aircall_event("call.ended", token="guess-guess-guess"))
+    assert (await client.post(path, json=aircall_event("call.ended", token="guess-guess-guess"))).status_code == 429
+    assert (await client.post(path, json=aircall_event("call.ended", missed_reason="no_available_agent"))).status_code == 200

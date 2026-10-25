@@ -283,6 +283,8 @@ async def update_client(
     client = result.scalar_one_or_none()
     if not client:
         raise HTTPException(404, "Client not found")
+    if "address" in data.model_fields_set and not any(k in data.model_fields_set for k in _addr.PARTS):
+        _addr.typed_line(client, data.address)
     for k, v in data.model_dump().items():
         if v is None and k in ("custom_data", "consent_phone", "consent_email"):
             continue  # don't wipe values / null NOT-NULL consent on a partial update
@@ -350,6 +352,8 @@ async def patch_client(
     fields = data.model_dump(exclude_unset=True)
     cd = fields.pop("custom_data", None)
     addr = {k: fields.pop(k) for k in _addr.PARTS if k in fields}
+    if "address" in fields and not addr:
+        _addr.typed_line(client, fields["address"])
     for k, v in fields.items():
         setattr(client, k, v)
     _addr.apply(client, addr)

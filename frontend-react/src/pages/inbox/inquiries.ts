@@ -19,12 +19,16 @@ export const CHANNELS: [string, string][] = [
 export const channelLabel = (s?: string) => CHANNELS.find(([k]) => k === s)?.[1] || "Other";
 export const SRC_ICON: Record<string, string> = { phone: "call", whatsapp: "chat", sms: "sms", email: "mail", instagram: "photo_camera", facebook: "thumb_up", web: "public", walk_in: "directions_walk", api: "hub", other: "help" };
 
-export const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—");
+/** The server sends UTC times without a zone ("2026-10-25T06:46:00"); read them as UTC, not local. */
+export function utc(iso: string): Date {
+  return new Date(/[zZ]$|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
+}
+export const fmt = (iso?: string | null) => (iso ? utc(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—");
 
 /** Respond-by chip: null once the inquiry is closed. */
 export function sla(l: Lead, now = Date.now()) {
   if (!l.sla_due_at || l.status === "won" || l.status === "lost") return null;
-  const ms = new Date(l.sla_due_at).getTime() - now;
+  const ms = utc(l.sla_due_at).getTime() - now;
   if (l.sla_overdue || ms < 0) return { cls: "bg-rose-100 text-rose-700 border-rose-200", label: "Overdue" };
   const mins = Math.round(ms / 60000);
   return { cls: "bg-amber-50 text-amber-700 border-amber-200/60", label: mins > 90 ? `${Math.round(mins / 60)}h left` : `${mins}m left` };

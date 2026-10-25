@@ -106,8 +106,26 @@ async def call_webhook(
     await verify_org_webhook(db, org_id, request)
     if data.direction not in ("inbound", "outbound"):
         raise HTTPException(422, "direction must be inbound or outbound")
+    provider = (data.provider or "manual")[:20]
+    if data.external_id:   # WS-C: a replayed event is the same call, not another missed call
+        prior = (await db.execute(select(Call).where(
+            Call.org_id == org_id, Call.provider == provider, Call.external_id == data.external_id[:100]))).scalars().first()
+        if prior:
+            # The same call reported again: move its status on (ringing → missed raises the
+            # inquiry once); an exact replay changes nothing.
+            new = (data.status or "completed")[:20]
+            res = None
+            if prior.status != new and prior.status not in ("completed", "missed") and prior.status.lower() not in MISSED:
+                prior.status = new
+                prior.duration_s = data.duration_s or prior.duration_s
+                await db.commit()
+                if prior.direction == "inbound" and new.lower() in MISSED:
+                    res = await on_missed(db, org_id, prior)
+            return {"id": prior.id, "client_id": prior.client_id, "matched": prior.client_id is not None,
+                    "client_created": False, "follow_up_task_id": (res or {}).get("task_id"),
+                    "lead_id": (res or {}).get("lead_id"), "duplicate": res is None}
     return await record_inbound_call(
-        db, org_id, provider=(data.provider or "manual")[:20], direction=data.direction,
+        db, org_id, provider=provider, direction=data.direction,
         from_number=data.from_number, to_number=data.to_number, status=(data.status or "completed")[:20],
         duration_s=data.duration_s, recording_url=data.recording_url,
         external_id=data.external_id, extension=data.extension)

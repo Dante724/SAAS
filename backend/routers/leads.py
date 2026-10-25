@@ -239,5 +239,7 @@ async def convert_lead(
     current: Employee = Depends(get_current_employee),
 ):
     """Win the lead: create (or link) the CRM client, attach the device, spawn a work order (or estimate)."""
+    from backend.services.auth import assert_perm
+    await assert_perm(db, current, "can_create_estimates" if is_estimate else "can_create_tickets")
     lead = await _get(db, current, lead_id)
     return await svc.convert_lead(db, current.org_id, lead, actor=current, is_estimate=is_estimate)

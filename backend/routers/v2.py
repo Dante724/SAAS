@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Bundle, Client, Lead, LeadType, Part, Service, Tag, WebhookEndpoint
 from backend.routers import v1
-from backend.services import addresses
+from backend.services import addresses, audit
 from backend.services import leads as lsvc
 from backend.routers.bundles import BundleIn as BundleBody
 from backend.services.apikeys import ApiPrincipal, get_api_principal, require_scope
@@ -43,7 +43,7 @@ def _page(items, total, page, size):
 async def _paged(db, model, org_id: str, ser, page: int, size: int, *conds, order=None):
     cond = [model.org_id == org_id, *conds]
     total = (await db.execute(select(func.count()).select_from(model).where(*cond))).scalar() or 0
-    rows = (await db.execute(select(model).where(*cond).order_by(desc(order if order is not None else model.created_at))
+    rows = (await db.execute(select(model).where(*cond).order_by(desc(order if order is not None else model.created_at), desc(model.id))
                              .limit(size).offset((page - 1) * size))).scalars().all()
     return rows, total
 
@@ -137,6 +137,13 @@ class InquiryPatch(BaseModel):
     custom_data: Optional[dict] = None
 
 
+def _inq(p: ApiPrincipal, rows: list[dict]) -> list[dict]:
+    """Without contacts:read a key doesn't learn which inquiries match an existing customer."""
+    if p.allows("read", "contacts"):
+        return rows
+    return [{**r, "client_id": None} for r in rows]
+
+
 @router.get("/inquiries")
 async def list_inquiries(status: Optional[str] = None, page: int = Page, page_size: int = Size,
                          db: AsyncSession = Depends(get_db), p: ApiPrincipal = R("inquiries")):
@@ -144,23 +151,26 @@ async def list_inquiries(status: Optional[str] = None, page: int = Page, page_si
         raise HTTPException(422, f"status must be one of {lsvc.STATUSES}")
     rows, total = await _paged(db, Lead, p.org_id, None, page, page_size,
                                *([Lead.status == status] if status else []))
-    return _page(await lsvc.ser_many(db, rows), total, page, page_size)
+    return _page(_inq(p, await lsvc.ser_many(db, rows)), total, page, page_size)
 
 
 @router.get("/inquiries/{lid}")
 async def get_inquiry(lid: str, db: AsyncSession = Depends(get_db), p: ApiPrincipal = R("inquiries")):
-    return {"data": await lsvc.ser_one(db, await lsvc.own(db, Lead, lid, p.org_id, "Inquiry"))}
+    return {"data": _inq(p, [await lsvc.ser_one(db, await lsvc.own(db, Lead, lid, p.org_id, "Inquiry"))])[0]}
 
 
 @router.post("/inquiries", status_code=201)
 async def create_inquiry(data: InquiryIn, response: Response,
                          idempotency_key: Optional[str] = Header(None, max_length=64),
                          db: AsyncSession = Depends(get_db), p: ApiPrincipal = W("inquiries")):
-    lead, created = await lsvc.create_lead(db, p.org_id, data.model_dump(),
+    body = data.model_dump()
+    if not p.allows("read", "contacts"):
+        body["client_id"] = None      # linking a contact needs contacts access (no probing by 404)
+    lead, created = await lsvc.create_lead(db, p.org_id, body,
                                            idempotency_key=idempotency_key, via="api")
     if not created:
         response.status_code = 200
-    return {"data": await lsvc.ser_one(db, lead)}
+    return {"data": _inq(p, [await lsvc.ser_one(db, lead)])[0]}
 
 
 @router.patch("/inquiries/{lid}")
@@ -168,12 +178,15 @@ async def update_inquiry(lid: str, data: InquiryPatch, db: AsyncSession = Depend
                          p: ApiPrincipal = W("inquiries")):
     lead = await lsvc.own(db, Lead, lid, p.org_id, "Inquiry")
     lead = await lsvc.update_lead(db, p.org_id, lead, data.model_dump(exclude_unset=True))
-    return {"data": await lsvc.ser_one(db, lead)}
+    return {"data": _inq(p, [await lsvc.ser_one(db, lead)])[0]}
 
 
 @router.post("/inquiries/{lid}/convert")
 async def convert_inquiry(lid: str, is_estimate: bool = False, db: AsyncSession = Depends(get_db),
                           p: ApiPrincipal = W("inquiries")):
+    # Converting creates a contact and a job, so the key must be allowed to make those too.
+    p.require("write", "estimates" if is_estimate else "orders")
+    p.require("write", "contacts")
     lead = await lsvc.own(db, Lead, lid, p.org_id, "Inquiry")
     return {"data": await lsvc.convert_lead(db, p.org_id, lead, is_estimate=is_estimate)}
 
@@ -435,6 +448,9 @@ async def create_hook(data: HookIn, db: AsyncSession = Depends(get_db), p: ApiPr
     await _require_public_url(data.url)
     e = WebhookEndpoint(org_id=p.org_id, url=data.url.strip(), events=_events(data.events), active=data.active)
     db.add(e)
+    await db.flush()
+    await audit.record(db, org_id=p.org_id, actor_id=None, action="webhook.create", entity_type="webhook_endpoint",
+                       entity_id=e.id, diff={"url": e.url, "events": e.events, "api_key_id": p.key_id})
     await db.commit()
     await db.refresh(e)
     return {"data": _hook(e, secret=True)}
@@ -443,6 +459,8 @@ async def create_hook(data: HookIn, db: AsyncSession = Depends(get_db), p: ApiPr
 @router.delete("/webhooks/{hid}")
 async def delete_hook(hid: str, db: AsyncSession = Depends(get_db), p: ApiPrincipal = W("webhooks")):
     e = await lsvc.own(db, WebhookEndpoint, hid, p.org_id, "Webhook")
+    await audit.record(db, org_id=p.org_id, actor_id=None, action="webhook.delete", entity_type="webhook_endpoint",
+                       entity_id=e.id, diff={"url": e.url, "api_key_id": p.key_id})
     await db.delete(e)
     await db.commit()
     return {"data": {"id": hid, "deleted": True}}

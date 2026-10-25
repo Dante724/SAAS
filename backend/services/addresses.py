@@ -85,8 +85,15 @@ def apply(obj, payload: dict) -> None:
     if problem:
         raise HTTPException(422, problem)
     parts = [getattr(obj, k, None) for k in PARTS]
-    if any(parts):
-        obj.address = one_line(*parts)
+    obj.address = one_line(*parts)        # clearing every part clears the line too
+
+
+def typed_line(obj, line) -> None:
+    """Someone typed the single line directly (older screens, imports, v1): it no longer matches
+    the parts, so drop them rather than let a later part edit overwrite what was typed."""
+    if (line or None) != (getattr(obj, "address", None) or None):
+        for k in PARTS:
+            setattr(obj, k, None)
 
 
 def ser(obj) -> dict:

@@ -48,11 +48,13 @@ def parse(payload: dict) -> Optional[dict]:
         return None
     event = payload.get("event")
     data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-    if event not in HANDLED or data.get("id") in (None, ""):
+    cid = data.get("id")
+    if event not in HANDLED or isinstance(cid, bool) or not isinstance(cid, (int, str)) \
+            or not str(cid).isdigit() or len(str(cid)) > 20:   # Aircall call ids are Int64
         return None
     number = data.get("number") if isinstance(data.get("number"), dict) else {}
     other = data.get("raw_digits")
-    other = None if (not isinstance(other, str) or other.strip().lower() == "anonymous") else other.strip()
+    other = None if (not isinstance(other, str) or other.strip().lower() == "anonymous") else other.strip()[:40]
     answered, ended = data.get("answered_at"), data.get("ended_at")
     missed = (event == "call.voicemail_left" or data.get("missed_call_reason") in MISSED_REASONS
               or (event == "call.ended" and not answered))
@@ -61,5 +63,5 @@ def parse(payload: dict) -> Optional[dict]:
         duration = int(ended - answered)
     return {"event": event, "sid": sid(data["id"]),
             "direction": "outbound" if data.get("direction") == "outbound" else "inbound",
-            "other": other, "line": number.get("digits") if isinstance(number.get("digits"), str) else None,
+            "other": other, "line": number.get("digits")[:40] if isinstance(number.get("digits"), str) else None,
             "answered": bool(answered), "missed": bool(missed), "duration_s": duration}

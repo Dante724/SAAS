@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,6 +44,7 @@ OPEN = ("new", "in_progress")
 SOURCES = ("phone", "walk_in", "whatsapp", "sms", "email", "instagram", "facebook", "web", "api", "other")
 
 MISSED_KEY = "lead_on_missed_call"
+ALERT_QUIET_MIN = 5   # repeat calls to one inquiry within this many minutes don't alert again
 MISSED_DEFAULTS = {"merge_hours": 24, "sla_minutes": 30, "notify": True, "fallback_employee_id": None}
 FIELDS = ("name", "phone", "email", "source", "inquiry", "manager_id", "lead_type_id",
           "device_brand", "device_model", "serial", "status")
@@ -129,6 +130,8 @@ async def create_lead(db: AsyncSession, org_id: str, data: dict, *, actor: Optio
     if source not in SOURCES:
         raise HTTPException(422, "Unknown channel")
     ltype = await own(db, LeadType, data.get("lead_type_id"), org_id, "Inquiry type")
+    if ltype and not ltype.active:
+        raise HTTPException(422, "That inquiry type is switched off")
     manager = await own(db, Employee, data.get("manager_id"), org_id, "Employee")
     client = await own(db, Client, data.get("client_id"), org_id, "Contact")
     phone = _clean(data.get("phone"), 40)
@@ -152,7 +155,9 @@ async def create_lead(db: AsyncSession, org_id: str, data: dict, *, actor: Optio
         await db.flush()
     except IntegrityError:          # a concurrent retry with the same key won the insert
         await db.rollback()
-        prior = (await db.execute(select(Lead).where(Lead.org_id == org_id, Lead.idempotency_key == key))).scalar_one()
+        prior = (await db.execute(select(Lead).where(Lead.org_id == org_id, Lead.idempotency_key == key))).scalar_one_or_none() if key else None
+        if prior is None:
+            raise
         return prior, False
     who = actor.name if actor else ("the API" if via == "api" else "Tekly")
     await _feed(db, org_id, lead.id, f"Inquiry logged by {who}" + (f" ({ltype.name})" if ltype else ""))
@@ -170,14 +175,20 @@ async def update_lead(db: AsyncSession, org_id: str, lead: Lead, payload: dict,
         raise HTTPException(422, f"status must be one of {STATUSES}")
     if payload.get("status") == "won" and not lead.converted_order_id:
         raise HTTPException(422, "Convert the inquiry to a job to win it")
+    if "status" in payload and payload["status"] != lead.status and lead.converted_order_id:
+        raise HTTPException(409, "This inquiry is already a job")
     if "source" in payload and payload["source"] not in SOURCES:
         raise HTTPException(422, "Unknown channel")
     if "name" in payload and not _clean(payload["name"], 200):
         raise HTTPException(422, "Enter the customer's name")
     if payload.get("manager_id"):
         await own(db, Employee, payload["manager_id"], org_id, "Employee")
-    if payload.get("lead_type_id"):
-        await own(db, LeadType, payload["lead_type_id"], org_id, "Inquiry type")
+    if payload.get("lead_type_id") and payload["lead_type_id"] != lead.lead_type_id:
+        t = await own(db, LeadType, payload["lead_type_id"], org_id, "Inquiry type")
+        if not t.active:
+            raise HTTPException(422, "That inquiry type is switched off")
+        if lead.status in OPEN and lead.created_at:     # the respond-by time follows the new type
+            lead.sla_due_at = lead.created_at + timedelta(minutes=max(t.sla_minutes, 1))
     if "custom_data" in payload:
         from backend.routers.forms import resolve_custom_data
         lead.custom_data = await resolve_custom_data(db, org_id, "lead", payload.pop("custom_data"),
@@ -225,10 +236,11 @@ async def convert_lead(db: AsyncSession, org_id: str, lead: Lead, *, actor: Opti
         if lead.serial:
             ident["imei" if kind == "imei" else "serial"] = ids.normalize("imei" if kind == "imei" else "serial", lead.serial)
         dev = None
-        col = Device.imei if ident["imei"] else Device.serial
         val = ident["imei"] or ident["serial"]
         if val:
-            dev = (await db.execute(select(Device).where(Device.org_id == org_id, col == val)
+            # only this customer's own device: the same IMEI under another contact is not theirs
+            dev = (await db.execute(select(Device).where(Device.org_id == org_id, Device.client_id == client.id,
+                                                         (Device.imei == val) | (Device.serial == val))
                                     .order_by(Device.id).limit(1))).scalar_one_or_none()
         if dev is None:
             dev = Device(org_id=org_id, client_id=client.id, owner_type="client", asset_type="Device",
@@ -265,9 +277,12 @@ async def convert_lead(db: AsyncSession, org_id: str, lead: Lead, *, actor: Opti
     for t in (await db.execute(select(Task).where(Task.org_id == org_id, Task.lead_id == lead.id,
                                                   Task.status != "done"))).scalars().all():
         t.order_id = t.order_id or order.id
+        t.status, t.completed_at = "done", datetime.utcnow()
     await _emit(db, org_id, "inquiry.converted", lead)
-    from backend.services.webhooks import emit_event
-    await emit_event(db, org_id, "order.created", {"id": order.id, "number": order.order_number})
+    if not is_estimate:   # same as a job made on the work-order screen (estimates don't emit it)
+        from backend.services.webhooks import emit_event
+        await emit_event(db, org_id, "order.created", {"id": order.id, "order_number": order.order_number,
+                                                       "status": order.status, "source": "inquiry"})
     await db.commit()
     return {"ok": True, "order_id": order.id, "order_number": order.order_number,
             "client_id": client.id, "device_id": device_id}
@@ -324,7 +339,8 @@ async def on_missed_call(db: AsyncSession, org_id: str, call) -> Optional[dict]:
     cfg = st["config"]
     now = datetime.utcnow()
     try:
-        merge_hours = max(0, min(int(cfg.get("merge_hours") or 0), 24 * 14))
+        raw = cfg.get("merge_hours")
+        merge_hours = max(0, min(int(MISSED_DEFAULTS["merge_hours"] if raw is None else raw), 24 * 14))
     except (TypeError, ValueError):
         merge_hours = MISSED_DEFAULTS["merge_hours"]
     client = await own(db, Client, call.client_id, org_id, "Contact") if call.client_id else await cc.find_client(db, org_id, number)
@@ -334,18 +350,22 @@ async def on_missed_call(db: AsyncSession, org_id: str, call) -> Optional[dict]:
         since = now - timedelta(hours=merge_hours)
         candidates = (await db.execute(select(Lead).where(
             Lead.org_id == org_id, Lead.status.in_(OPEN), Lead.phone.is_not(None),
-            Lead.created_at >= now - timedelta(days=30)).order_by(Lead.created_at.desc()).limit(200))).scalars().all()
+            or_(Lead.created_at >= since, Lead.last_call_at >= since))
+            .order_by(Lead.created_at.desc()).limit(500))).scalars().all()
         lead = next((l for l in candidates if cc.same_number(l.phone, number)
                      and (l.last_call_at or l.created_at) >= since), None)
     name = client.name if client else cc.format_phone(number)
     merged = lead is not None
+    quiet = False                     # a burst of repeat calls alerts once, not once per call
     if lead:
+        quiet = bool(lead.last_call_at and now - lead.last_call_at < timedelta(minutes=ALERT_QUIET_MIN))
         lead.call_count = (lead.call_count or 0) + 1
         lead.last_call_at = now
         lead.updated_at = now
         if client and not lead.client_id:
             lead.client_id = client.id
-        await _feed(db, org_id, lead.id, f"Missed another call ({lead.call_count} in total)")
+        await _feed(db, org_id, lead.id, "Missed a call from this customer" if lead.call_count == 1
+                    else f"Missed another call ({lead.call_count} in total)")
     else:
         try:
             sla = max(1, int(cfg.get("sla_minutes") or 30))
@@ -363,6 +383,13 @@ async def on_missed_call(db: AsyncSession, org_id: str, call) -> Optional[dict]:
         await _feed(db, org_id, lead.id, "Inquiry opened from a missed call")
         await _emit(db, org_id, "inquiry.created", lead)
 
+    # The older task-only automation's settings still shape the call-back task when it's on.
+    legacy = (await db.execute(select(AutomationSetting).where(
+        AutomationSetting.org_id == org_id, AutomationSetting.key == "task_on_missed_call"))).scalar_one_or_none()
+    legacy_cfg = (legacy.config if legacy and legacy.enabled and isinstance(legacy.config, dict) else {}) or {}
+    if legacy_cfg.get("assign_to") and not cfg.get("fallback_employee_id"):
+        cfg = {**cfg, "fallback_employee_id": legacy_cfg["assign_to"]}
+    priority = str(legacy_cfg.get("priority") or "high")[:20]
     people, duty = await _recipients(db, org_id, client, cfg)
     task = (await db.execute(select(Task).where(Task.org_id == org_id, Task.lead_id == lead.id,
                                                 Task.status != "done").limit(1))).scalar_one_or_none()
@@ -375,7 +402,7 @@ async def on_missed_call(db: AsyncSession, org_id: str, call) -> Optional[dict]:
         task = Task(org_id=org_id, title=f"Call back {name}"[:500],
                     description=f"Missed call from {number}. Return the call.",
                     assigned_to_id=assignee, client_id=lead.client_id, lead_id=lead.id,
-                    location_id=lead.location_id, priority="high", status="todo",
+                    location_id=lead.location_id, priority=priority, status="todo",
                     due_at=lead.sla_due_at)
         db.add(task)
     else:
@@ -383,7 +410,7 @@ async def on_missed_call(db: AsyncSession, org_id: str, call) -> Optional[dict]:
     await db.commit()
     await db.refresh(task)
 
-    if cfg.get("notify", True):
+    if cfg.get("notify", True) and not quiet:
         from backend.services.push import notify
         body = f"{name} ({number})" + (f": {lead.call_count} missed calls" if lead.call_count > 1 else "")
         for p in people:

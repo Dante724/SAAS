@@ -97,9 +97,9 @@ async def set_config(data: ConfigIn, db: AsyncSession = Depends(get_db),
         raise HTTPException(422, "Unknown provider")
     number = (data.caller_id_number or "").strip() or None
     forward = (data.forward_to or (data.config or {}).get("forward_to") or "").strip() or None
-    if data.provider == "aircall" and data.enabled:
-        if not aircall.enabled():
-            raise HTTPException(409, "Aircall isn't switched on for this server yet")
+    # Older setups keep "aircall" as a label fed through the generic call webhook; only once the
+    # server's Aircall adapter is switched on does turning it on need the shop's webhook token.
+    if data.provider == "aircall" and data.enabled and aircall.enabled():
         if not (await aircall_status(db, current.org_id))["connected"]:
             raise HTTPException(409, "Save your Aircall webhook token before turning Aircall calls on")
     if data.provider == "twilio" and data.enabled:
@@ -193,7 +193,7 @@ async def disconnect_twilio(db: AsyncSession = Depends(get_db),
 
 # ── WS-C: Aircall ────────────────────────────────────────────────────────────
 class AircallIn(BaseModel):
-    webhook_token: str = Field(..., min_length=8, max_length=200)
+    webhook_token: str = Field(..., min_length=16, max_length=200)
 
 
 @router.put("/aircall")
@@ -228,12 +228,15 @@ async def aircall_webhook(request: Request, org_id: str = Query(..., max_length=
     from backend.routers.comms import on_missed, record_inbound_call
     if not aircall.enabled():
         raise HTTPException(404, "Not found")
+    await ratelimit.aenforce("aircall-hook-ip", ratelimit.client_ip(request), 1200, 60)
     saved = (await org_creds.own(db, org_id, aircall.PROVIDER)).get("webhook_token")
     try:
         payload = await request.json()
     except ValueError:
         raise HTTPException(400, "Expected JSON")
     if not aircall.token_ok(saved, (payload or {}).get("token") if isinstance(payload, dict) else None):
+        # Only failed attempts count against the shop, so junk can't crowd out Aircall's real events.
+        await ratelimit.aenforce("aircall-hook-bad", org_id, 30, 60)
         raise HTTPException(403, "Invalid Aircall token")
     cfg = await _cfg(db, org_id)
     if not (cfg and cfg.enabled and cfg.provider == "aircall"):

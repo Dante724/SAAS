@@ -226,7 +226,7 @@ export default function TelephonySettings() {
                     ? <div className="flex flex-wrap items-center gap-2"><span className="text-xs text-ink-secondary">Token saved.</span><button className={ghost} disabled={busy === "aircall"} onClick={removeAircall}>Remove token</button></div>
                     : <div className="flex flex-wrap items-end gap-2">
                         <div className="flex-1 min-w-[12rem]"><label htmlFor="ac-token" className={lbl}>Webhook token</label><input id="ac-token" type="password" autoComplete="off" className={field} value={acToken} onChange={(e) => setAcToken(e.target.value)} /></div>
-                        <button className={primary} disabled={busy === "aircall" || acToken.trim().length < 8} onClick={saveAircall}>Save token</button>
+                        <button className={primary} disabled={busy === "aircall" || acToken.trim().length < 16} onClick={saveAircall}>Save token</button>
                       </div>}
                 </>
               )}
