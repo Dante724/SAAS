@@ -133,7 +133,13 @@ VARIABLE_GROUPS = [
     ("Invoice", ["{Invoice Number}", "{Invoice Date}", "{Invoice Due Date}", "{Invoice Status}",
                  "{Invoice Comment}", "{Invoice Subtotal}", "{Invoice Tax}", "{Invoice Total}",
                  "{Invoice Paid}", "{Invoice Balance Due}", "{Invoice Table}", "{Invoice Payment URL}",
-                 "{Invoice Credited}"]),
+                 "{Invoice Credited}",
+                 # the job the invoice bills (the first one, when it bills several)
+                 "{Order Number}", "{Order Malfunction}", "{Order Complaint}", "{Order Technician Notes}",
+                 "{Order Conclusion}", "{Order Created Date}", "{Order Done Date}", "{Order Assignee Name}",
+                 "{Order Custom Fields}",
+                 # per row: the job that row belongs to (invoices billing several jobs)
+                 "{Row Order Number}", "{Row Order Fault}", "{Row Order Technician Notes}"]),
     # opb — credit-note documents (resolved by _resolve_credit_note)
     ("Credit note", ["{Credit Note Number}", "{Credit Note Date}", "{Credit Note Status}",
                      "{Credit Note Reason}", "{Credit Note Invoice}", "{Credit Note Subtotal}",
@@ -194,8 +200,8 @@ LABEL_DOC_TYPES = {"label", "price_tag", "product_label", "vehicle_label"}
 
 # Row-level markers: a <tbody> containing any of these is treated as a repeating
 # product row. {Technician *} are resolved both at row and document level.
-_ROW_MARKER_RE = re.compile(r"\{Product [^}]+\}|\{Row Number\}")
-_ROW_VAR_RE = re.compile(r"\{Product [^}]+\}|\{Row Number\}|\{Technician (?:Name|Phone|Job Title)\}")
+_ROW_MARKER_RE = re.compile(r"\{Product [^}]+\}|\{Row Number\}|\{Row Order [^}]+\}")
+_ROW_VAR_RE = re.compile(r"\{Product [^}]+\}|\{Row Number\}|\{Row Order [^}]+\}|\{Technician (?:Name|Phone|Job Title)\}")
 _TBODY_RE = re.compile(r"(<tbody[^>]*>)(.*?)(</tbody>)", re.S | re.I)
 
 # 144id — Smart-doc conditionals: {#if Var}…{#else}…{/if} and {#unless Var}…{/if}.
@@ -1298,8 +1304,10 @@ async def _resolve_invoice(db, org_id, inv: Invoice):
     def g(o, a):
         return (getattr(o, a, None) if o else "") or "—"
 
+    from backend.services.invoicing import invoice_orders
     from backend.services.multi_asset import group_rows
     dl = await _inv_display(db, inv)
+    inv_orders = {o.id: o for o in await invoice_orders(db, inv) if o.org_id == org_id}
     hdr = ["#", "Description", "Qty", "Unit Price", "Amount"]
     rows, table_rows = [], []
     i = 0
@@ -1311,9 +1319,13 @@ async def _resolve_invoice(db, org_id, inv: Invoice):
             table_rows.append({"subtotal": l["item"], "amount": m(l["total"])})
             continue
         i += 1
+        ro = inv_orders.get(l.get("order_id"))
         rows.append({"{Row Number}": i, "{Product Name}": l["description"] or "—",
                      "{Product Qty}": f"{float(l.get('qty') or 0):g}",
-                     "{Product Price}": m(l["unit_price"]), "{Product Amount}": m(l["total"])})
+                     "{Product Price}": m(l["unit_price"]), "{Product Amount}": m(l["total"]),
+                     "{Row Order Number}": (ro.order_number if ro else "") or "",
+                     "{Row Order Fault}": (ro.complaint if ro else "") or "",
+                     "{Row Order Technician Notes}": (getattr(ro, "tech_notes", None) if ro else "") or ""})
         table_rows.append([i, l["description"] or "", f"{float(l.get('qty') or 0):g}",
                            m(l["unit_price"]), m(l["total"])])
     paid = inv.amount_paid or 0
@@ -1366,10 +1378,27 @@ async def _resolve_invoice(db, org_id, inv: Invoice):
             continue
         val = (getattr(client, "custom_data", None) or {}).get(f.field_key) if client else None
         doc.setdefault(_cf_varname(f), _fmt_cf(val))
-    _inv_order = (await db.execute(select(Order).where(Order.id == inv.order_id, Order.org_id == org_id)
-                                   .options(selectinload(Order.device)))).scalar_one_or_none() if getattr(inv, "order_id", None) else None
+    _first = inv.order_id or next(iter(inv_orders), None)
+    _inv_order = (await db.execute(select(Order).where(Order.id == _first, Order.org_id == org_id)
+                                   .options(selectinload(Order.device), selectinload(Order.assigned_to)))
+                  ).scalar_one_or_none() if _first else None
     doc["{Custom Fields}"] = await _custom_fields_block(db, org_id, order=_inv_order,
                                                       device=_inv_order.device if _inv_order else None, client=client)
+    # Job fields: the job this invoice bills (the first, when it bills several).
+    jo = _inv_order
+    doc.update({
+        "{Order Number}": g(jo, "order_number"), "{Order Malfunction}": g(jo, "complaint"),
+        "{Order Complaint}": g(jo, "complaint"), "{Order Technician Notes}": g(jo, "tech_notes"),
+        "{Order Conclusion}": g(jo, "conclusion"),
+        "{Order Created Date}": _fmt_date(jo.created_at) if jo and jo.created_at else "—",
+        "{Order Done Date}": _fmt_date(jo.closed_at) if jo and jo.closed_at else "—",
+        "{Order Assignee Name}": (jo.assigned_to.name if jo and jo.assigned_to else "—"),
+        "{Order Custom Fields}": doc["{Custom Fields}"],
+    })
+    for f in await _custom_field_defs(db, org_id):    # {Order <label>} for every job custom field
+        if f.entity_type == "order":
+            doc.setdefault(_cf_varname(f), _fmt_cf((getattr(jo, "custom_data", None) or {}).get(f.field_key)
+                                                   if jo else None))
     return doc, rows
 
 
@@ -1380,6 +1409,8 @@ async def render_invoice_document(
     current: Employee = Depends(get_current_employee),
 ):
     """Render an invoice through a customizable document template (doc_type='invoice')."""
+    from backend.services.auth import assert_perm
+    await assert_perm(db, current, "can_view_invoices")   # it carries job notes and custom fields too
     tpl = (await db.execute(select(DocumentTemplate).where(
         DocumentTemplate.id == template_id, DocumentTemplate.org_id == current.org_id))).scalar_one_or_none()
     inv = (await db.execute(select(Invoice).where(
@@ -1388,6 +1419,11 @@ async def render_invoice_document(
         raise HTTPException(404, "Template not found")
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    if inv.order_id:   # it shows the job's notes and fields: a role limited to its own jobs sees only those
+        from backend.services import scoping
+        job = (await db.execute(select(Order).where(Order.id == inv.order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+        if job and not await scoping.can_view_order(db, current, job):
+            raise HTTPException(403, "You can only print invoices for work orders assigned to you")
     doc, rows = await _resolve_invoice(db, current.org_id, inv)
     html = _render(tpl.body_html, doc, rows)
     return {"html": html, "name": tpl.name}

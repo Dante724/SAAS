@@ -214,6 +214,8 @@ async def _rep_work_orders_created(db, org, df, dt, **kw):
 async def _rep_work_orders_closed(db, org, df, dt, **kw):
     _q = _loc_filter(select(Order).where(
         Order.org_id == org, Order.closed_at != None, Order.closed_at >= df, Order.closed_at <= dt), kw)  # noqa: E711
+    if kw.get("hide_zero"):
+        _q = _q.where(func.coalesce(Order.total, 0) != 0)
     rows = (await db.execute(_q
         .options(selectinload(Order.client), selectinload(Order.assigned_to))
         .order_by(Order.closed_at.desc()))).scalars().all()
@@ -259,32 +261,71 @@ async def _rep_cancellations(db, org, df, dt, **kw):
     from backend.models import OrderStatus
     dropped = [k for (k,) in (await db.execute(select(OrderStatus.key).where(
         OrderStatus.org_id == org, OrderStatus.status_group == "dropped"))).all()]
+    cols = ["Reason", "Work orders", "Share", "Lost value", "Written off"]
     if not dropped:
-        return ["Reason", "Work orders", "Share", "Lost value"], []
+        return cols, []
     reason = func.coalesce(func.nullif(Order.cancel_reason, ""), "No reason given")
-    q = _loc_filter(select(reason, func.count(), func.coalesce(func.sum(Order.total), 0)).where(
+    q = _loc_filter(select(reason, func.count(), func.coalesce(func.sum(Order.total), 0),
+                           func.coalesce(func.sum(Order.written_off), 0)).where(
         Order.org_id == org, Order.status.in_(dropped), Order.is_estimate == False,  # noqa: E712
         func.coalesce(Order.closed_at, Order.created_at) >= df,
         func.coalesce(Order.closed_at, Order.created_at) <= dt), kw).group_by(reason)
     rows = sorted((await db.execute(q)).all(), key=lambda r: -r[1])
     total = sum(r[1] for r in rows) or 1
-    cols = ["Reason", "Work orders", "Share", "Lost value"]
-    return cols, [[r, n, f"{round(n * 100 / total)}%", q2(v)] for r, n, v in rows]
+    return cols, [[r, n, f"{round(n * 100 / total)}%", q2(v), q2(w)] for r, n, v, w in rows]
+
+
+async def _rep_dropped_jobs(db, org, df, dt, **kw):
+    """Unsuccessful jobs profit: one row per job dropped in the period — what was paid, what was
+    written off, and the profit after costs, tax and commission (services/profit)."""
+    from backend.services.profit import closed_jobs_query, dropped_keys, job_figures
+    cols = ["Job #", "Dropped", "Client", "Technician", "Type", "Status", "Reason", "Job total",
+            "Money kept", "Written off", "Tax", "Parts cost", "Labour cost", "Commission", "Profit"]
+    dropped = await dropped_keys(db, org)
+    if kw.get("status"):
+        dropped &= {kw["status"]}
+    if not dropped:
+        return cols, []
+    q = closed_jobs_query(org, df, dt, location_id=kw.get("location_id")).where(Order.status.in_(dropped))
+    if kw.get("type_id"):
+        q = q.where(Order.type_id == kw["type_id"])
+    orders = (await db.execute(q.options(selectinload(Order.client), selectinload(Order.assigned_to))
+                               .order_by(Order.closed_at.desc()))).scalars().all()
+    figs = await job_figures(db, org, list(orders), dropped)
+    from backend.models import WorkOrderType
+    tids = {o.type_id for o in orders if o.type_id}
+    tname = dict((await db.execute(select(WorkOrderType.id, WorkOrderType.name).where(
+        WorkOrderType.id.in_(tids), WorkOrderType.org_id == org))).all()) if tids else {}
+    sname = dict((await db.execute(select(OrderStatus.key, OrderStatus.name).where(
+        OrderStatus.org_id == org, OrderStatus.key.in_(dropped)))).all())
+    data = []
+    for o in orders:
+        f = figs[o.id]
+        data.append([o.order_number, o.closed_at.strftime("%Y-%m-%d"), o.client.name if o.client else "—",
+                     o.assigned_to.name if o.assigned_to else "—", tname.get(o.type_id, "—"),
+                     sname.get(o.status, o.status), o.cancel_reason or "No reason given", f["total"],
+                     f["charged"], f["written_off"], f["tax"], f["cogs"], f["labour_cost"],
+                     f["commission"], f["profit"]])
+    return cols, data
 
 
 async def _rep_wo_profit(db, org, df, dt, **kw):
-    """Per-order: revenue, cost, gross profit, markup %."""
+    """Per work order created in the period (open ones are estimated): revenue after tax, cost
+    (parts + labour + commission), profit, markup %. Same maths as every profit screen
+    (services/profit.job_figures)."""
+    from backend.services.profit import job_figures
     _q = _loc_filter(select(Order).where(
-        Order.org_id == org, Order.created_at >= df, Order.created_at <= dt), kw)
-    orders = (await db.execute(_q.options(selectinload(Order.lines)))).scalars().all()
+        Order.org_id == org, Order.is_estimate == False, Order.archived == False,  # noqa: E712
+        Order.created_at >= df, Order.created_at <= dt), kw)
+    orders = (await db.execute(_q.order_by(Order.created_at.desc()))).scalars().all()
+    figs = await job_figures(db, org, list(orders))
     cols = ["Order #", "Revenue", "Cost", "Gross profit", "Markup %"]
     data = []
     for o in orders:
-        rev = sum(l.total for l in o.lines)
-        cost = sum((l.cost_price or 0) * l.qty for l in o.lines)
-        gp = rev - cost
-        markup = round(gp / cost * 100, 1) if cost else 0
-        data.append([o.order_number, q2(rev), q2(cost), q2(gp), markup])
+        f = figs[o.id]
+        cost = q2(f["cogs"] + f["labour_cost"] + f["commission"])
+        markup = round(f["profit"] / cost * 100, 1) if cost else 0
+        data.append([o.order_number, f["revenue"], cost, f["profit"], markup])
     return cols, data
 
 
@@ -380,16 +421,24 @@ async def _rep_total_money(db, org, df, dt, **kw):
 
 
 async def _rep_product_turnover(db, org, df, dt, **kw):
-    """Goods written off to orders/sales (movement_type=use)."""
+    """Goods written off to orders/sales (movement_type=use). `movement`: "with" (default) lists
+    products used in the period; "without" lists active products with no use in it; "all" both."""
+    movement = kw.get("movement") or "with"
     rows = (await db.execute(
         select(StockMovement, Part).join(Part, StockMovement.part_id == Part.id)
         .where(Part.org_id == org, StockMovement.movement_type == "use",
                StockMovement.created_at >= df, StockMovement.created_at <= dt))).all()
-    agg = {}
+    agg: dict = {}
     for mv, part in rows:
-        agg[part.name] = agg.get(part.name, 0) + abs(mv.qty)
-    cols = ["Product", "Qty used (orders/sales)"]
-    data = [[k, q2(v)] for k, v in agg.items()]
+        a = agg.setdefault(part.id, [part.name, part.sku or "—", 0.0])
+        a[2] += abs(mv.qty or 0)
+    cols = ["Product", "SKU", "Qty used (orders/sales)"]
+    data = [[n, sku, q2(v)] for n, sku, v in agg.values()] if movement in ("with", "all") else []
+    if movement in ("without", "all"):
+        idle = (await db.execute(select(Part.name, Part.sku).where(
+            Part.org_id == org, Part.active == True,  # noqa: E712
+            Part.id.notin_(list(agg) or [""])).order_by(Part.name))).all()
+        data += [[n, sku or "—", 0] for n, sku in idle]
     return cols, data
 
 
@@ -822,7 +871,9 @@ async def _rep_reorder_forecast(db, org, df, dt, **kw):
 REPORT_PERMS = {
     "payroll": "can_view_payroll", "labor_cost": "can_view_payroll",
     "labor_utilization": "can_view_payroll", "labor_by_job": "can_view_payroll",   # labour cost = pay rates
-    "wo_profit": "can_see_profit",
+    "wo_profit": ("can_see_profit", "can_view_purchase_price"),   # plain table: its cost column can't be hidden
+    # A plain table can't have its cost columns removed per viewer, so it needs both rights.
+    "dropped_jobs": ("can_see_profit", "can_view_purchase_price"),
     "cash_flow": "can_view_cashflow", "total_money": "can_view_balance",
     "stock_valuation": "can_view_purchase_price",
 }
@@ -839,8 +890,9 @@ EXPORT_PERMS = {
 async def _assert_report_access(db, current, report_key: str, export: bool = False) -> None:
     from backend.services.auth import assert_perm
     await assert_perm(db, current, "can_view_reports")
-    if report_key in REPORT_PERMS:
-        await assert_perm(db, current, REPORT_PERMS[report_key])
+    need = REPORT_PERMS.get(report_key) or ()
+    for perm in ((need,) if isinstance(need, str) else need):
+        await assert_perm(db, current, perm)
     if export and report_key in EXPORT_PERMS:
         await assert_perm(db, current, EXPORT_PERMS[report_key])
 
@@ -848,10 +900,24 @@ async def _assert_report_access(db, current, report_key: str, export: bool = Fal
 PAYROLL_REPORTS = {"payroll", "labor_cost", "labor_utilization", "labor_by_job"}
 
 
-async def _builder_kw(db, current, report_key: str, location_id, role_id, employee_id) -> dict:
+class ReportFilters:
+    """Optional report filters; each builder reads only the ones it understands, unknown values
+    are dropped. movement: product turnover (with | without | all); hide_zero: closed jobs;
+    type_id / status: unsuccessful jobs."""
+    def __init__(self, movement: Optional[str] = Query(None), hide_zero: Optional[str] = Query(None, max_length=10),
+                 type_id: Optional[str] = Query(None, max_length=64),
+                 status: Optional[str] = Query(None, max_length=60)):
+        self.kw = {k: v for k, v in {
+            "movement": movement if movement in ("with", "without", "all") else None,
+            "hide_zero": (hide_zero or "").lower() in ("1", "true", "yes", "on"),
+            "type_id": type_id, "status": status}.items() if v}
+
+
+async def _builder_kw(db, current, report_key: str, location_id, role_id, employee_id,
+                      filters: Optional[ReportFilters] = None) -> dict:
     """Extra builder arguments: the branch, plus (payroll reports) the role/employee filters and
     the caller's payroll scope, so the screen, the run and every export show the same rows."""
-    kw = {"location_id": location_id}
+    kw = {"location_id": location_id, **(filters.kw if filters else {})}
     if report_key in PAYROLL_REPORTS:
         from backend.services.payroll_views import assert_payroll_scope, payroll_scope_ids
         if employee_id:
@@ -881,6 +947,7 @@ REPORTS = {
     "wo_profit":        ("Finance", "Work orders profit", _rep_wo_profit),
     "lead_sources":     ("Customers", "Revenue by lead source", _rep_lead_source_revenue),
     "cancellations":    ("Work Orders", "Cancellations by reason", _rep_cancellations),
+    "dropped_jobs":     ("Finance", "Unsuccessful jobs profit", _rep_dropped_jobs),
     "technicians":      ("Work Orders", "Technicians performance", _rep_technicians),
     "provided_services":("Assortment", "Provided services (Ready+Closed)", _rep_provided_services),
     "sold_products":    ("Assortment", "Sold products (Ready+Closed)", _rep_sold_products),
@@ -916,6 +983,7 @@ async def run_report(
     location_id: str = Query(None),           # build 141: scope order-based reports to a branch
     role_id: str = Query(None),               # E2: payroll reports — one role (position)
     employee_id: str = Query(None),           # E2: payroll reports — one employee
+    filters: ReportFilters = Depends(),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
@@ -928,7 +996,7 @@ async def run_report(
     df = await _report_from(db, current, report_key, df)
     location_id = await _scoped_location(db, current, location_id)
     cols, rows = await builder(db, current.org_id, df, dt,
-                               **await _builder_kw(db, current, report_key, location_id, role_id, employee_id))
+                               **await _builder_kw(db, current, report_key, location_id, role_id, employee_id, filters))
     # totals row for numeric columns
     return {"key": report_key, "title": title, "tab": tab,
             "columns": cols, "rows": rows, "row_count": len(rows)}
@@ -942,6 +1010,7 @@ async def export_report(
     location_id: str = Query(None),
     role_id: str = Query(None),
     employee_id: str = Query(None),
+    filters: ReportFilters = Depends(),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
@@ -957,7 +1026,7 @@ async def export_report(
     df = await _report_from(db, current, report_key, df)
     location_id = await _scoped_location(db, current, location_id)
     cols, rows = await builder(db, current.org_id, df, dt,
-                               **await _builder_kw(db, current, report_key, location_id, role_id, employee_id))
+                               **await _builder_kw(db, current, report_key, location_id, role_id, employee_id, filters))
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -995,6 +1064,7 @@ async def export_report_csv(
     location_id: str = Query(None),
     role_id: str = Query(None),
     employee_id: str = Query(None),
+    filters: ReportFilters = Depends(),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
@@ -1009,7 +1079,7 @@ async def export_report_csv(
     df = await _report_from(db, current, report_key, df)
     location_id = await _scoped_location(db, current, location_id)
     cols, rows = await builder(db, current.org_id, df, dt,
-                               **await _builder_kw(db, current, report_key, location_id, role_id, employee_id))
+                               **await _builder_kw(db, current, report_key, location_id, role_id, employee_id, filters))
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(cols)
@@ -1191,11 +1261,15 @@ async def job_profitability(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_cashflow")),
 ):
-    from backend.models import Location, OrderLine, Role, TimeEntry
+    """Profit per successful job closed in the period (dropped jobs are left out — see Total
+    profit). The figures come from services/profit.job_figures, the same as every profit screen."""
+    from backend.models import Location, Role
+    from backend.services.profit import closed_jobs_query, dropped_keys, job_figures
     oid = current.org_id
 
     # date window (default: trailing 30 days), on closed_at
-    end = datetime.fromisoformat(to) if to else datetime.utcnow()
+    # Same window rules as every report: a date-only "to" covers that whole day.
+    end = _parse_range(None, to)[1] if to else datetime.utcnow()
     start = datetime.fromisoformat(from_) if from_ else (end - timedelta(days=30))
 
     # honour a location-scoped role
@@ -1204,97 +1278,121 @@ async def job_profitability(
         role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
     allow = _allowed_location_ids(role)
 
-    q = select(Order).where(
-        Order.org_id == oid, Order.closed_at.isnot(None),
-        Order.closed_at >= start, Order.closed_at <= end)
-    if location_id:
-        q = q.where(Order.location_id == location_id)
+    dropped = await dropped_keys(db, oid)
+    q = closed_jobs_query(oid, start, end, location_id=location_id, allowed_locations=allow)
+    if dropped:
+        q = q.where(Order.status.notin_(dropped))
     orders = (await db.execute(q)).scalars().all()
-    orders = [o for o in orders if allow is None or o.location_id in allow]
     if not orders:
         return {"rows": [], "by_location": [], "totals": {
-            "revenue": 0, "parts_cost": 0, "labour_cost": 0, "margin": 0,
-            "margin_pct": 0, "jobs": 0}}
-
-    order_ids = [o.id for o in orders]
-
-    # parts cost per order (product/part lines carry FIFO/avg cost_price)
-    lines = (await db.execute(select(OrderLine).where(OrderLine.order_id.in_(order_ids)))).scalars().all()
-    parts_by_order: dict = {}
-    for ln in lines:
-        if ln.line_type == "part" or ln.kind == "product":
-            parts_by_order[ln.order_id] = parts_by_order.get(ln.order_id, 0.0) + (ln.cost_price or 0) * (ln.qty or 0)
-
-    # labour cost + clocked minutes per order (timer AND manual, only real spans)
-    entries = (await db.execute(select(TimeEntry).where(
-        TimeEntry.order_id.in_(order_ids),
-        TimeEntry.ended_at.isnot(None),
-        TimeEntry.state.in_(("stopped", "approved"))))).scalars().all()
-    labour_by_order: dict = {}
-    minutes_by_order: dict = {}
-    for e in entries:
-        hrs = (e.duration_sec or 0) / 3600.0
-        labour_by_order[e.order_id] = labour_by_order.get(e.order_id, 0.0) + hrs * (e.cost_rate or 0)
-        minutes_by_order[e.order_id] = minutes_by_order.get(e.order_id, 0.0) + (e.duration_sec or 0) / 60.0
+            "revenue": 0, "tax": 0, "parts_cost": 0, "labour_cost": 0, "commission": 0, "margin": 0,
+            "margin_pct": 0, "jobs": 0}, "range": {"from": start.isoformat(), "to": end.isoformat()}}
+    figs = await job_figures(db, oid, list(orders), dropped)
 
     # client + location names
     cids = {o.client_id for o in orders if o.client_id}
     lids = {o.location_id for o in orders if o.location_id}
     cname = {c.id: c.name for c in (await db.execute(
-        select(Client).where(Client.id.in_(cids)))).scalars().all()} if cids else {}
+        select(Client).where(Client.id.in_(cids), Client.org_id == oid))).scalars().all()} if cids else {}
     lname = {loc.id: loc.name for loc in (await db.execute(
-        select(Location).where(Location.id.in_(lids)))).scalars().all()} if lids else {}
+        select(Location).where(Location.id.in_(lids), Location.org_id == oid))).scalars().all()} if lids else {}
 
+    keys = ("revenue", "tax", "parts_cost", "labour_cost", "commission", "margin")
     rows = []
     loc_agg: dict = {}
-    tot_rev = tot_parts = tot_labour = 0.0
+    tot = {k: 0.0 for k in keys}
     for o in orders:
-        rev = float(o.total or 0)
-        parts = q2(parts_by_order.get(o.id, 0.0))
-        labour = q2(labour_by_order.get(o.id, 0.0))
-        mins = round(minutes_by_order.get(o.id, 0.0), 1)
-        margin = q2(rev - parts - labour)
+        f = figs[o.id]
+        vals = {"revenue": f["revenue"], "tax": f["tax"], "parts_cost": f["cogs"], "labour_cost": f["labour_cost"],
+                "commission": f["commission"], "margin": f["profit"]}
         rows.append({
             "order_id": o.id, "order_number": o.order_number,
             "client_name": cname.get(o.client_id), "location_id": o.location_id,
-            "location_name": lname.get(o.location_id),
-            "revenue": q2(rev), "parts_cost": parts, "labour_cost": labour,
-            "margin": margin, "margin_pct": round(margin / rev * 100, 1) if rev else 0.0,
-            "clocked_minutes": mins, "has_labour": mins > 0,
+            "location_name": lname.get(o.location_id), **vals,
+            "margin_pct": round(f["profit"] / f["revenue"] * 100, 1) if f["revenue"] else 0.0,
+            "clocked_minutes": f["clocked_minutes"], "has_labour": f["clocked_minutes"] > 0,
         })
-        tot_rev += rev
-        tot_parts += parts
-        tot_labour += labour
         la = loc_agg.setdefault(o.location_id, {
-            "location_id": o.location_id, "name": lname.get(o.location_id) or "—",
-            "revenue": 0.0, "parts_cost": 0.0, "labour_cost": 0.0, "jobs": 0})
-        la["revenue"] += rev
-        la["parts_cost"] += parts
-        la["labour_cost"] += labour
+            "location_id": o.location_id, "name": lname.get(o.location_id) or "—", "jobs": 0,
+            **{k: 0.0 for k in keys}})
         la["jobs"] += 1
+        for k in keys:
+            tot[k] = q2(tot[k] + vals[k])
+            la[k] = q2(la[k] + vals[k])
 
     rows.sort(key=lambda r: r["margin"], reverse=True)
-    by_location = []
-    for la in loc_agg.values():
-        m = la["revenue"] - la["parts_cost"] - la["labour_cost"]
-        by_location.append({
-            "location_id": la["location_id"], "name": la["name"], "jobs": la["jobs"],
-            "revenue": q2(la["revenue"]), "parts_cost": q2(la["parts_cost"]),
-            "labour_cost": q2(la["labour_cost"]), "margin": q2(m),
-            "margin_pct": round(m / la["revenue"] * 100, 1) if la["revenue"] else 0.0})
+    by_location = [{**la, "margin_pct": round(la["margin"] / la["revenue"] * 100, 1) if la["revenue"] else 0.0}
+                   for la in loc_agg.values()]
     by_location.sort(key=lambda r: r["margin"], reverse=True)
-
-    tot_margin = tot_rev - tot_parts - tot_labour
+    from backend.services.redact import can_see_costs
+    if not await can_see_costs(db, current):
+        rows.sort(key=lambda r: r["revenue"], reverse=True)
+        return _hide_profit_figures({"rows": rows, "by_location": by_location, "totals": {**tot, "jobs": len(rows)},
+                                     "range": {"from": start.isoformat(), "to": end.isoformat()}})
     return {
         "rows": rows,
         "by_location": by_location,
-        "totals": {
-            "revenue": q2(tot_rev), "parts_cost": q2(tot_parts),
-            "labour_cost": q2(tot_labour), "margin": q2(tot_margin),
-            "margin_pct": round(tot_margin / tot_rev * 100, 1) if tot_rev else 0.0,
-            "jobs": len(rows)},
+        "totals": {**tot, "margin_pct": round(tot["margin"] / tot["revenue"] * 100, 1) if tot["revenue"] else 0.0,
+                   "jobs": len(rows)},
         "range": {"from": start.isoformat(), "to": end.isoformat()},
     }
+
+
+@router.get("/total-profit")
+async def total_profit_report(
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    location_id: Optional[str] = Query(None),
+    technician_id: Optional[str] = Query(None, max_length=64),
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_see_profit")),
+):
+    """Total profit: successful jobs + dropped jobs + counter sales for the period, after tax and
+    commissions, with the previous period of the same length, by location and technician, and
+    the rows behind every number. Cost and profit fields are removed for roles that can't see
+    purchase prices (core/cost_redaction)."""
+    from backend.models import Role
+    from backend.services.auth import assert_perm
+    from backend.services.profit import total_profit
+    await assert_perm(db, current, "can_view_reports")
+    from fastapi import HTTPException
+
+    from backend.services.redact import can_see_costs
+    try:
+        df, dt = _parse_range(date_from, date_to)
+    except ValueError:
+        raise HTTPException(422, "Use dates like 2026-10-24")
+    if dt - df > timedelta(days=731):
+        raise HTTPException(422, "Pick a period of two years or less")
+    location_id = await _scoped_location(db, current, location_id)
+    role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none() \
+        if current.role_id else None
+    out = await total_profit(db, current.org_id, df, dt, location_id=location_id,
+                             technician_id=technician_id, allowed_locations=_allowed_location_ids(role))
+    if not await can_see_costs(db, current):
+        _hide_profit_figures(out)
+    return out
+
+
+# Cost-like figures the shared redaction list doesn't name (they're fine elsewhere, e.g. payroll).
+_PROFIT_ONLY_KEYS = ("labour_cost", "commission", "parts_cost", "profit_pct", "margin")
+
+
+def _hide_profit_figures(obj):
+    """For a viewer who can't see purchase prices: drop every cost/profit figure from a profit
+    report (the middleware drops cogs/profit/margin_pct) and stop sorting by profit, since the
+    order alone would give the ranking away."""
+    if isinstance(obj, dict):
+        for k in _PROFIT_ONLY_KEYS:
+            obj.pop(k, None)
+        for k, v in obj.items():
+            if isinstance(v, list) and v and isinstance(v[0], dict) and "revenue" in v[0] and k != "rows":
+                v.sort(key=lambda r: r.get("revenue") or 0, reverse=True)
+            _hide_profit_figures(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            _hide_profit_figures(v)
+    return obj
 
 
 @router.get("/home-feed")

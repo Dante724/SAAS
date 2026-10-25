@@ -1429,7 +1429,7 @@ async def public_pay_info(intent_id: str, db: AsyncSession = Depends(get_db)):
         inv = (await db.execute(select(Invoice).where(Invoice.id == i.invoice_id))).scalar_one_or_none()
         if inv:
             from backend.services.invoicing import display_lines
-            lines = await display_lines(db, inv)
+            lines = [{k: v for k, v in ln.items() if k != "order_id"} for ln in await display_lines(db, inv)]
             display_mode = inv.display_mode
             invoice_number = inv.invoice_number
     return {"intent_id": i.id, "amount": i.amount, "currency": i.currency,
