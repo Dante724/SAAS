@@ -11,6 +11,10 @@ export function goPath(link?: string | null): string {
   const p = (link || "").replace(/^https?:\/\/[^/]+/, "");
   const order = p.match(/^\/tech\/?#\/order\/([^/?#]+)/) || p.match(/^\/orders\?(?:.*&)?open=([^&#]+)/);
   if (order) return `/go/job/${order[1]}`;
+  if (/^\/(?:inquiries|leads)\/?(?:[?#]|$)/.test(p)) {
+    const lead = p.match(/[?&]lead=([^&#]+)/);
+    return lead ? `/go/inquiries?lead=${lead[1]}` : "/go/inquiries";
+  }
   if (!p || /^\/tech\/?(#.*)?$/.test(p)) return "/go/today";
   return p.startsWith("/") ? p : "/go/today";
 }
