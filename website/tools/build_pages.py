@@ -9,6 +9,8 @@ import json
 from datetime import date
 from pathlib import Path
 
+from compare_pages import CHECKED, COMPETITORS, GUIDE, TEKLY_PRICES
+
 DOMAIN = "https://tekly.app"
 ROOT = Path(__file__).resolve().parent.parent
 TODAY = date.today().isoformat()
@@ -16,7 +18,7 @@ e = lambda s: html.escape(s, quote=False)
 
 PAGES = [
     {
-        "slug": "phone-repair-software", "noun": "Phone and computer repair",
+        "slug": "phone-repair-software", "vs": [("repairdesk", "RepairDesk"), ("repairshopr", "RepairShopr"), ("orderry", "Orderry")], "noun": "Phone and computer repair",
         "template": "Electronics",
         "title": "Phone & Computer Repair Software | Tekly",
         "desc": "Cell phone, tablet and computer repair shop software. IMEI or serial at intake, AI estimates, customer approvals by phone, parts and POS. From $29/mo.",
@@ -31,6 +33,20 @@ PAGES = [
             ("Customers who never have to call", "A tracking link shows status, photos and the ready time — and lets them pay online."),
             ("Know what each repair earns", "Parts cost, labour and technician commission post to every job automatically."),
         ],
+        "who": ["Cell phone repair stores", "Computer and laptop repair shops", "Tablet and console repair benches", "Refurbishers that sell devices too", "Repair chains with several stores", "Shops with a counter and a separate workshop"],
+        "steps": [
+            ("Check in", "Pick Phone, Tablet, Laptop or Desktop. Tekly asks for the IMEI or serial, stores the passcode encrypted and takes condition photos at the counter."),
+            ("Estimate", "On Pro, Tekly AI turns “dropped in the pool, won't charge” into priced lines from your own catalog. You review and send."),
+            ("Approval", "The customer approves each line on their phone and signs. A cracked back glass found mid-repair waits for their tick."),
+            ("Parts", "Order the screen from the ticket. Scan the box when it arrives and it's charged to that repair, with the cost in the margin."),
+            ("Pickup and pay", "The tracking link says it's ready. They pay at the counter or online, and the technician's commission posts when the job closes."),
+        ],
+        "photo": ("iphone-mat", "An iPhone opened up for repair on a blue work mat", 'Photo: Unsplash (<a href="https://unsplash.com/license" rel="noopener license">Unsplash License</a>)'),
+        "more_faq": [
+            ("How much does phone repair software cost?", "Tekly starts at $29 a month for up to 2 people. Shop is $69 a month for 8 people and adds inventory and barcode scanning; Pro is $129 and adds purchase orders, payroll and AI estimate drafting. Every trial includes all Pro features for 14 days with no card."),
+            ("Can I move my customers and devices from my current system?", "Yes. Send an export from your current system or spreadsheets and we bring customers, devices and stock across, free on every plan. Most single-location shops are set up in a day."),
+            ("Do customers get updates without calling the shop?", "Yes. Each repair has a tracking link with status, photos and the ready time, and updates go out by SMS, WhatsApp or email."),
+        ],
         "faq": [
             ("Does Tekly record IMEI numbers?", "Yes. The electronics template asks for the IMEI on phones and tablets and the serial number on computers, and keeps it on the device's history."),
             ("Are customer passcodes stored safely?", "Passcodes are encrypted at rest and only visible to staff whose role allows it."),
@@ -38,7 +54,7 @@ PAGES = [
         ],
     },
     {
-        "slug": "auto-repair-shop-software", "noun": "Vehicle repair",
+        "slug": "auto-repair-shop-software", "vs": [("shopmonkey", "Shopmonkey"), ("tekmetric", "Tekmetric"), ("orderry", "Orderry")], "noun": "Vehicle repair",
         "template": "Vehicles",
         "title": "Auto Repair Shop Software for Cars, Trucks & RVs | Tekly",
         "desc": "Auto repair shop software for cars, trucks, RVs and bikes. VIN intake, AI estimates, digital approvals by text, parts and payroll. Plans from $29/mo.",
@@ -53,6 +69,20 @@ PAGES = [
             ("Bays that keep moving", "A job board shows what's waiting on parts, approval or a technician, with time in each stage."),
             ("Payroll from closed jobs", "Technician commission and hours post when the job closes, ready for the pay run."),
         ],
+        "who": ["Independent auto repair shops", "Truck and fleet service shops", "RV service centres", "Motorcycle and e-bike workshops", "Tire, brake and quick-service shops", "Multi-bay and multi-location garages"],
+        "steps": [
+            ("Check in", "Find the vehicle by VIN or plate, log the mileage and take condition photos at the counter. Every visit stays on the vehicle's history."),
+            ("Estimate", "On Pro, Tekly AI turns “grinding when braking, pulls left” into an inspection, pads, rotors and labour at your prices. You review and send."),
+            ("Approval", "The customer approves each line on their phone and signs. Declined work is saved for the next visit."),
+            ("Parts", "Order from the repair order. Received parts are charged to the right vehicle and their cost lands in the job's margin."),
+            ("Pickup and pay", "Payment at the counter or by link. Technician commission and hours post when the job closes, ready for the pay run."),
+        ],
+        "photo": ("mechanic-stool", "A mechanic on a low wooden stool working on the front brake of a raised pickup truck", 'Photo: <a href="https://commons.wikimedia.org/wiki/File:DSC_6745_A_mechanic_sitting_on_a_small_wooden_stool_working_on_the_front_suspension_of_a_raised_pickup_truck_in_a_garage.jpg" rel="noopener">PattayaPatrol</a>, CC BY-SA 4.0 (<a href="https://creativecommons.org/licenses/by-sa/4.0" rel="noopener license">licence</a>)'),
+        "more_faq": [
+            ("How much does auto repair shop software cost with Tekly?", "Plans start at $29 a month for up to 2 people. Shop is $69 a month for 8 people across your locations and adds inventory, scanning, the time clock and reports; Pro is $129 and adds purchase orders, payroll and commissions, AI estimate drafting and QuickBooks or Xero sync. Prices are published and month to month."),
+            ("Can I switch from Shopmonkey or another shop system?", "Yes. Send an export from your current system or spreadsheets and we bring customers, vehicles and stock across, free on every plan."),
+            ("Does Tekly work with QuickBooks?", "Yes. Pro syncs invoices and payments with QuickBooks or Xero both ways."),
+        ],
         "faq": [
             ("Does Tekly work for truck, fleet and RV repair?", "Yes. The vehicle template covers cars, trucks, RVs and bikes, with unit numbers and account billing for fleets."),
             ("Can customers approve repairs by text?", "Yes. They get a link by SMS or WhatsApp, approve each line and sign on their phone."),
@@ -60,7 +90,7 @@ PAGES = [
         ],
     },
     {
-        "slug": "small-engine-repair-software", "noun": "Small engine repair",
+        "slug": "small-engine-repair-software", "vs": [("repairshopr", "RepairShopr"), ("repairdesk", "RepairDesk"), ("orderry", "Orderry")], "noun": "Small engine repair",
         "template": "Tools & small engine",
         "title": "Small Engine & Power Tool Repair Software | Tekly",
         "desc": "Repair shop software for small engines and power tools: mowers, saws, generators and cordless tools. Intake, estimates, approvals, parts and POS.",
@@ -75,6 +105,20 @@ PAGES = [
             ("Parts that know their job", "Order from the ticket and book received parts to the right repair automatically."),
             ("Sell parts and equipment", "Quick POS for blades, oil, filters and new equipment."),
         ],
+        "who": ["Lawn mower and outdoor power equipment shops", "Chainsaw and trimmer dealers with a service bench", "Generator repair and service", "Power tool repair centres", "Rental yards that service their own fleet", "Seasonal repair shops"],
+        "steps": [
+            ("Check in", "Record the item, serial and engine hours for small engines, or voltage for cordless tools, and mark the job warranty or paid."),
+            ("Estimate", "On Pro, Tekly AI turns “won't start after winter” into a tune-up, carburettor clean and parts from your catalog. You review and send."),
+            ("Approval", "The customer approves extra work line by line on their phone. Nothing is added unless they choose it."),
+            ("Parts", "Order from the ticket. Received parts are booked to the right repair automatically, and low stock drafts the reorder."),
+            ("Pickup and pay", "The tracking link says it's ready. Sell blades, oil and filters at the same counter with the quick POS."),
+        ],
+        "photo": ("generator-yard", "A small-engine portable generator in a tubular frame, outdoors on gravel", 'Photo: <a href="https://commons.wikimedia.org/wiki/File:Let%27s_Generate!_(29004208321).jpg" rel="noopener">Alan Levine</a>, CC BY 2.0 (<a href="https://creativecommons.org/licenses/by/2.0" rel="noopener license">licence</a>)'),
+        "more_faq": [
+            ("How much does small engine repair software cost?", "Tekly starts at $29 a month for up to 2 people. Shop is $69 a month and adds inventory, barcode scanning and reports; Pro is $129 and adds purchase orders, payroll and AI estimate drafting. Every trial includes all Pro features for 14 days, no card."),
+            ("Can I track engine hours and serial numbers?", "Yes. The template records the serial and engine hours for small engines, or the voltage for power tools, and keeps them on the item's history."),
+            ("Can I move my customer list across?", "Yes. Send an export or spreadsheet and we bring customers, items and stock across, free on every plan."),
+        ],
         "faq": [
             ("Can I separate warranty work from paid repairs?", "Yes. Each job records its warranty status so warranty and paid work stay separate in reports."),
             ("Can customers book a tune-up online?", "Yes. Online booking shows real available time slots and sends reminders."),
@@ -82,7 +126,7 @@ PAGES = [
         ],
     },
     {
-        "slug": "marine-repair-software", "noun": "Marine repair",
+        "slug": "marine-repair-software", "vs": [("shopmonkey", "Shopmonkey"), ("orderry", "Orderry")], "noun": "Marine repair",
         "template": "Marine",
         "title": "Marine Repair & Boat Service Software | Tekly",
         "desc": "Marine repair software for boatyards and outboard shops. HIN and engine serial intake, AI estimates, customer approvals, parts and payroll.",
@@ -96,6 +140,20 @@ PAGES = [
             ("Parts booked to the job", "Impellers, filters and lower-unit parts are written off to the right boat on arrival."),
             ("Seasonal scheduling", "Winterising and spring commissioning booked online with reminders."),
             ("Payroll from closed jobs", "Technician hours and commission post automatically when the job closes."),
+        ],
+        "who": ["Boatyards and marinas with a service department", "Outboard and inboard engine shops", "Fibreglass and gelcoat repair shops", "Trailer service and repair", "Dealers with a service bench"],
+        "steps": [
+            ("Check in", "Record the HIN, each engine's serial and the boat's length, with condition photos at haul-out."),
+            ("Estimate", "On Pro, Tekly AI turns “won't idle, stalls in gear” into a diagnostic, fuel service and parts at your rates. You review and send."),
+            ("Approval", "Owners approve each line from their phone, wherever they are, and sign before you start."),
+            ("Parts", "Impellers, filters and lower-unit parts are charged to the right boat when they arrive."),
+            ("Pickup and pay", "Payment at the dock office or by link. Technician hours and commission post when the job closes."),
+        ],
+        "photo": ("boat-engine", "A mechanic working on an inflatable boat's outboard engine on the water", 'Photo: <a href="https://commons.wikimedia.org/wiki/File:Engineer_person_working_on_boat_engine.jpg" rel="noopener">Steve Hillebrand, U.S. Fish and Wildlife Service</a>, public domain'),
+        "more_faq": [
+            ("How much does marine repair software cost?", "Tekly starts at $29 a month for up to 2 people. Shop is $69 a month and adds inventory, scanning and reports; Pro is $129 and adds purchase orders, payroll and AI estimate drafting. Extra locations are $49 on Shop and $79 on Pro."),
+            ("Can I run a marine shop and another trade in one account?", "Yes. Use the Marine template alongside Vehicles, Electronics or Tools & small engine in one account, with one login."),
+            ("Can I move my existing customer and boat records?", "Yes. Send an export or spreadsheet and we bring customers, vessels and stock across, free on every plan."),
         ],
         "faq": [
             ("Can I track more than one engine per boat?", "Yes. Each engine has its own serial and history under the vessel's hull ID."),
@@ -121,7 +179,8 @@ def footer(current=""):
     <div class="foot-grid">
       <div><a href="/" class="logo"><svg aria-hidden="true"><use href="#mark"/></svg>tekly</a><p class="foot-about">Repair shop software, from the first complaint to the final payment.</p></div>
       <div><h2 class="foot-h">Software for</h2><ul>{nav_links(current)}</ul></div>
-      <div><h2 class="foot-h">Company</h2><ul><li><a href="/#start">Book a demo</a></li><li><a data-mail href="/#start">Contact</a></li><li><a href="/#faq">FAQ</a></li></ul></div>
+      <div><h2 class="foot-h">Compare</h2><ul>{"".join(f'<li><a href="/compare/tekly-vs-{c["slug"]}/">Tekly vs {e(c["name"])}</a></li>' for c in COMPETITORS)}<li><a href="/compare/">All comparisons</a></li><li><a href="/guides/choose-repair-shop-software/">How to choose</a></li></ul></div>
+      <div><h2 class="foot-h">Company</h2><ul><li><a href="/changelog/">What's new</a></li><li><a href="/#start">Book a demo</a></li><li><a data-mail href="/#start">Contact</a></li><li><a href="/#faq">FAQ</a></li></ul></div>
       <div><h2 class="foot-h">Account</h2><ul><li><a data-app="signin" href="/#start">Sign in</a></li><li><a data-app="signup" href="/#start">Start free trial</a></li></ul></div>
     </div>
     <div class="legal"><span>© <span id="yr">{date.today().year}</span> Tekly</span><span class="legal-links">{LEGAL_LINKS}</span><span>Product screens show sample data.</span></div>
@@ -138,6 +197,7 @@ def nav_links(current):
 
 def page(p):
     url = f"{DOMAIN}/{p['slug']}/"
+    all_faq = p["faq"] + p.get("more_faq", [])
     ld = [
         {"@context": "https://schema.org", "@type": "WebPage", "name": p["title"], "url": url, "description": p["desc"],
          "isPartOf": {"@id": DOMAIN + "/#website"}},
@@ -145,11 +205,18 @@ def page(p):
             {"@type": "ListItem", "position": 1, "name": "Tekly", "item": DOMAIN + "/"},
             {"@type": "ListItem", "position": 2, "name": p["h1"], "item": url}]},
         {"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [
-            {"@type": "Question", "name": q, "acceptedAnswer": {"@type": "Answer", "text": a}} for q, a in p["faq"]]},
+            {"@type": "Question", "name": q, "acceptedAnswer": {"@type": "Answer", "text": a}} for q, a in all_faq]},
     ]
     fields = "".join(f"<div><dt>{e(k)}</dt><dd>{e(v)}</dd></div>" for k, v in p["fields"])
     feats = "".join(f'<article class="card rv"><h3>{e(t)}</h3><p>{e(d)}</p></article>' for t, d in p["features"])
-    faq = "".join(f'<details><summary>{e(q)}<svg aria-hidden="true"><use href="#plus"/></svg></summary><p>{e(a)}</p></details>' for q, a in p["faq"])
+    faq = "".join(f'<details><summary>{e(q)}<svg aria-hidden="true"><use href="#plus"/></svg></summary><p>{e(a)}</p></details>' for q, a in all_faq)
+    who = "".join(f"<li>{e(w)}</li>" for w in p["who"])
+    steps = "".join(f'<li class="rv"><span class="mono step-n">{i:02d}</span><div><h3>{e(t)}</h3><p>{e(d)}</p></div></li>'
+                    for i, (t, d) in enumerate(p["steps"], 1))
+    ph, alt, credit = p["photo"]
+    photo = (f'<figure class="sub-photo rv"><img src="/assets/photos/{ph}-960.webp" srcset="/assets/photos/{ph}-600.webp 600w, '
+             f'/assets/photos/{ph}-960.webp 960w" sizes="(max-width: 900px) 92vw, 34rem" width="960" height="640" alt="{html.escape(alt)}" '
+             f'loading="lazy" decoding="async"><figcaption>{credit}</figcaption></figure>')
     others = "".join(f'<li><a class="link" href="/{o["slug"]}/">{e(o["h1"])}</a></li>' for o in PAGES if o is not p)
     main = f'''
 <section class="hero sub-hero">
@@ -170,6 +237,26 @@ def page(p):
       <p class="lede">The {e(p["template"])} template sets up the fields your counter needs, so nothing is missing when the job reaches the bench.</p>
     </div>
     <div class="tpl-form rv" aria-label="Intake fields"><div class="tpl-form-h"><span>New job · {e(p["template"])} intake</span></div><dl class="sub-dl">{fields}</dl></div>
+  </div>
+</section>
+
+<section class="sec">
+  <div class="wrap two-col">
+    <div class="rv">
+      <p class="eyebrow">Who it's for</p>
+      <h2 class="h-section">Built for {e(p["noun"].lower())} shops of every size.</h2>
+      <p class="lede">From a one-person bench to several locations, on one {e(p["template"])} template. Shops that fix more than one kind of thing can add other templates to the same account.</p>
+      <ul class="who">{who}</ul>
+      <p class="fine-print">Switching from another system? {" · ".join(f'<a class="link" href="/compare/tekly-vs-{x}/">Tekly vs {e(n)}</a>' for x, n in p["vs"])}</p>
+    </div>
+    {photo}
+  </div>
+</section>
+
+<section class="sec sec-tight">
+  <div class="wrap">
+    <div class="sec-head"><p class="eyebrow rv">How a job runs</p><h2 class="h-section rv">From check-in to paid, in five steps.</h2></div>
+    <ol class="job-steps">{steps}</ol>
   </div>
 </section>
 
@@ -218,9 +305,9 @@ def shell(p, url, main, ld):
   <meta property="og:url" content="{url}">
   <meta property="og:title" content="{html.escape(p["title"])}">
   <meta property="og:description" content="{html.escape(p["desc"])}">
-  <meta property="og:image" content="{DOMAIN}/assets/og.png">
+  <meta property="og:image" content="{DOMAIN}/assets/og.jpg">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:image" content="{DOMAIN}/assets/og.png">
+  <meta name="twitter:image" content="{DOMAIN}/assets/og.jpg">
   <link rel="icon" type="image/svg+xml" href="/assets/tekly-mark.svg">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/icon-32.png">
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
@@ -263,6 +350,138 @@ def shell(p, url, main, ld):
 '''
 
 
+def faq_ld(items):
+    return {"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [
+        {"@type": "Question", "name": q, "acceptedAnswer": {"@type": "Answer", "text": a}} for q, a in items]}
+
+
+def crumbs_ld(trail):
+    return {"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [
+        {"@type": "ListItem", "position": i, "name": n, "item": u} for i, (n, u) in enumerate(trail, 1)]}
+
+
+def faq_html(items):
+    return "".join(f'<details><summary>{e(q)}<svg aria-hidden="true"><use href="#plus"/></svg></summary><p>{e(a)}</p></details>'
+                   for q, a in items)
+
+
+def sub_hero(crumb, h1, lead, fine):
+    return f'''
+<section class="hero sub-hero">
+  <div class="wrap">
+    <nav class="crumbs" aria-label="Breadcrumb">{crumb}</nav>
+    <h1 class="h-display">{e(h1)}</h1>
+    <p class="hero-sub">{e(lead)}</p>
+    <div class="hero-ctas"><a class="btn btn-brand btn-lg" data-app="signup" data-cta="hero_trial" href="/#start">Start free trial</a><a class="btn btn-ghost btn-lg" href="/#start" data-cta="hero_demo">Book a demo</a></div>
+    <p class="mono hero-fine">{fine}</p>
+  </div>
+</section>'''
+
+
+def compare_page(c):
+    url = f"{DOMAIN}/compare/tekly-vs-{c['slug']}/"
+    name = c["name"]
+    faq = [
+        (f"Is Tekly cheaper than {name}?", f"Going by published prices as of {CHECKED}: Tekly starts at $29 a month (Solo, up to 2 people), or $69 for 8 people on Shop. {name}'s published starting price is {c['rows'][0][2]}. Compare what your whole team would pay, including extra people and locations."),
+        (f"What is a good alternative to {name}?", f"It depends on your trade and team. Tekly is an alternative to {name} for {c['alt_for']}: published prices from $29 a month, a 14-day free trial with no card, and free data migration. The comparison above lists where {name} may suit you better."),
+        (f"Can I switch from {name} to Tekly?", f"Yes. Send an export from {name} or your spreadsheets and Tekly brings customers, devices or vehicles and stock across, free on every plan. Most single-location shops are set up in a day."),
+        (f"Where do these {name} details come from?", f"From {name}'s own public website, checked on {CHECKED}. Prices and features change, so check their site for current terms."),
+    ]
+    ld = [{"@context": "https://schema.org", "@type": "WebPage", "name": c["title"], "url": url, "description": c["desc"],
+           "isPartOf": {"@id": DOMAIN + "/#website"}, "dateModified": TODAY},
+          crumbs_ld([("Tekly", DOMAIN + "/"), ("Compare", DOMAIN + "/compare/"), (f"Tekly vs {name}", url)]),
+          faq_ld(faq)]
+    rows = "".join(f'<tr><th scope="row">{e(k)}</th><td data-col="Tekly">{e(t)}</td><td data-col="{e(name)}">{e(o)} <a class="src" href="{src}" rel="nofollow noopener" target="_blank">source</a></td></tr>'
+                   for k, t, o, src in c["rows"])
+    them = "".join(f"<li>{e(x)}</li>" for x in c["them_fits"])
+    us = "".join(f"<li>{e(x)}</li>" for x in c["tekly_fits"])
+    others = "".join(f'<li><a class="link" href="/compare/tekly-vs-{o["slug"]}/">Tekly vs {e(o["name"])}</a></li>' for o in COMPETITORS if o is not c)
+    main = sub_hero(f'<a href="/">Tekly</a><span aria-hidden="true">/</span><a href="/compare/">Compare</a><span aria-hidden="true">/</span><span>Tekly vs {e(name)}</span>',
+                    f"Tekly vs {name}", c["lead"], f"{name} details from their public website, checked {CHECKED}") + f'''
+<section class="sec">
+  <div class="wrap">
+    <div class="sec-head"><p class="eyebrow rv">Looking for a {e(name)} alternative?</p><h2 class="h-section rv">Tekly and {e(name)}, by the published facts.</h2>
+      <p class="lede rv">{e(c["about"])} Everything in the {e(name)} column comes from their own website on {CHECKED}; follow each source link for current terms.</p></div>
+    <div class="cmp-wrap rv"><table class="cmp-table">
+      <caption class="sr">Tekly compared with {e(name)}</caption>
+      <thead><tr><th scope="col">What to compare</th><th scope="col">Tekly</th><th scope="col">{e(name)}</th></tr></thead>
+      <tbody>{rows}</tbody>
+    </table></div>
+    <p class="fine-print">Tekly plans: {e(TEKLY_PRICES)}</p>
+  </div>
+</section>
+
+<section class="sec sec-cream">
+  <div class="wrap fit-grid">
+    <div class="fit rv"><h2 class="h-sub">{e(name)} may suit you better if…</h2><ul>{them}</ul></div>
+    <div class="fit fit-us rv"><h2 class="h-sub">Tekly may suit you better if…</h2><ul>{us}</ul></div>
+  </div>
+</section>
+
+<section class="sec sec-tight">
+  <div class="wrap faq">
+    <div><p class="eyebrow">Questions</p><h2 class="h-sub">Switching from {e(name)}.</h2><p class="lede">Try every Pro feature free for 14 days, no card. We move your data across for free.</p>
+      <div class="hero-ctas"><a class="btn btn-brand btn-lg" data-app="signup" data-cta="compare_trial" href="/#start">Start free trial</a><a class="link" href="/guides/choose-repair-shop-software/">How to choose repair shop software</a></div></div>
+    <div>{faq_html(faq)}</div>
+  </div>
+</section>
+
+<section class="sec sec-tight sec-cream">
+  <div class="wrap"><p class="eyebrow">Other comparisons</p><ul class="others">{others}</ul></div>
+</section>
+'''
+    return shell({"title": c["title"], "desc": c["desc"], "slug": ""}, url, main, ld)
+
+
+def compare_hub():
+    url = f"{DOMAIN}/compare/"
+    p = {"title": "Repair Shop Software Alternatives, Compared | Tekly", "slug": "",
+         "desc": "Tekly compared with RepairDesk, RepairShopr, Shopmonkey, Tekmetric and Orderry: published prices, approvals, trades and trials, with sources."}
+    ld = [{"@context": "https://schema.org", "@type": "CollectionPage", "name": p["title"], "url": url, "description": p["desc"],
+           "isPartOf": {"@id": DOMAIN + "/#website"}},
+          crumbs_ld([("Tekly", DOMAIN + "/"), ("Compare", url)]),
+          {"@context": "https://schema.org", "@type": "ItemList", "itemListElement": [
+              {"@type": "ListItem", "position": i, "url": f"{DOMAIN}/compare/tekly-vs-{c['slug']}/", "name": f"Tekly vs {c['name']}"}
+              for i, c in enumerate(COMPETITORS, 1)]}]
+    cards = "".join(f'''<a class="card rv cmp-card" href="/compare/tekly-vs-{c["slug"]}/"><h3>Tekly vs {e(c["name"])}</h3><p>{e(c["about"])}</p><p class="fine-print"><b>{e(c["name"])}:</b> {e(c["rows"][0][2])}<br><b>Tekly:</b> {e(c["rows"][0][1])}</p><span class="link">Read the comparison</span></a>''' for c in COMPETITORS)
+    main = sub_hero('<a href="/">Tekly</a><span aria-hidden="true">/</span><span>Compare</span>', "Repair shop software alternatives, compared",
+                    "How Tekly compares with the repair shop software shops most often ask us about — prices, approvals, trades and trials, taken from each vendor's own website.",
+                    f"Vendor details checked {CHECKED}") + f'''
+<section class="sec"><div class="wrap"><div class="ai-grid">{cards}</div>
+<p class="fine-print">Each comparison links to the vendor's own pages. Prices and features change; check the vendor's site for current terms.</p></div></section>'''
+    return shell(p, url, main, ld)
+
+
+def guide_page():
+    g = GUIDE
+    url = f"{DOMAIN}/{g['slug']}/"
+    ld = [{"@context": "https://schema.org", "@type": "Article", "headline": g["h1"], "description": g["desc"], "url": url,
+           "datePublished": "2026-10-23", "dateModified": TODAY, "image": DOMAIN + "/assets/og.jpg",
+           "author": {"@type": "Organization", "name": "Tekly", "url": DOMAIN + "/"},
+           "publisher": {"@id": DOMAIN + "/#org"}, "isPartOf": {"@id": DOMAIN + "/#website"}},
+          crumbs_ld([("Tekly", DOMAIN + "/"), (g["h1"], url)]), faq_ld(g["faq"])]
+    secs = "".join(f'<section class="guide-sec rv" id="s{i}"><h2 class="h-sub"><span class="mono step-n">{i:02d}</span> {e(t)}</h2><p>{e(body)}</p></section>'
+                   for i, (t, body, _) in enumerate(g["sections"], 1))
+    toc = "".join(f'<li><a href="#s{i}">{e(t)}</a></li>' for i, (t, _, _) in enumerate(g["sections"], 1)) + '<li><a href="#compare">Comparing specific products</a></li>'
+    main = sub_hero('<a href="/">Tekly</a><span aria-hidden="true">/</span><span>Guides</span>', g["h1"], g["lead"],
+                    f"Updated {CHECKED} · about 5 minutes to read") + f'''
+<section class="sec"><div class="wrap guide">
+  <aside class="guide-toc"><p class="eyebrow">The checklist</p><ol>{toc}</ol></aside>
+  <div class="guide-body">{secs}
+    <section class="guide-sec rv" id="compare"><h2 class="h-sub">Comparing specific products</h2><p>We've put the published facts side by side for the systems shops ask us about most: {", ".join(f'<a class="link" href="/compare/tekly-vs-{c["slug"]}/">Tekly vs {e(c["name"])}</a>' for c in COMPETITORS)}.</p></section>
+  </div>
+</div></section>
+
+<section class="sec sec-tight sec-cream">
+  <div class="wrap faq">
+    <div><p class="eyebrow">Questions</p><h2 class="h-sub">Repair shop software, answered.</h2></div>
+    <div>{faq_html(g["faq"])}</div>
+  </div>
+</section>
+'''
+    return shell({"title": g["title"], "desc": g["desc"], "slug": ""}, url, main, ld)
+
+
 def legal_page(doc):
     """Privacy / Terms: the landing pages' head, header and footer around a plain text body."""
     url = f"{DOMAIN}/{doc['slug']}/"
@@ -287,6 +506,15 @@ def main():
         d = ROOT / p["slug"]
         d.mkdir(exist_ok=True)
         (d / "index.html").write_text(page(p), encoding="utf-8")
+    for c in COMPETITORS:
+        d = ROOT / "compare" / f"tekly-vs-{c['slug']}"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "index.html").write_text(compare_page(c), encoding="utf-8")
+    (ROOT / "compare").mkdir(exist_ok=True)
+    (ROOT / "compare" / "index.html").write_text(compare_hub(), encoding="utf-8")
+    gd = ROOT / GUIDE["slug"]
+    gd.mkdir(parents=True, exist_ok=True)
+    (gd / "index.html").write_text(guide_page(), encoding="utf-8")
     placeholders = []
     for doc in LEGAL:
         d = ROOT / doc["slug"]
@@ -297,7 +525,9 @@ def main():
             placeholders.append(doc["slug"])
     if placeholders:
         print("WARNING: fill in the [[…]] placeholders in tools/legal/ before launch:", ", ".join(placeholders))
-    urls = ([("/", "1.0")] + [(f"/{p['slug']}/", "0.8") for p in PAGES]
+    urls = ([("/", "1.0"), ("/changelog/", "0.6")] + [(f"/{p['slug']}/", "0.8") for p in PAGES]
+            + [("/compare/", "0.6")] + [(f"/compare/tekly-vs-{c['slug']}/", "0.7") for c in COMPETITORS]
+            + [(f"/{GUIDE['slug']}/", "0.7")]
             + [(f"/{d['slug']}/", "0.3") for d in LEGAL])
     (ROOT / "sitemap.xml").write_text(
         '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'

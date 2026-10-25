@@ -1,4 +1,4 @@
-/* Shared behaviour for the industry landing pages (the homepage uses main.js). */
+/* Shared behaviour for the industry landing pages (the homepage has its own inline script). */
 (() => {
   const C = window.TEKLY_SITE || {};
   const $ = (s, el = document) => el.querySelector(s), $$ = (s, el = document) => [...el.querySelectorAll(s)];
