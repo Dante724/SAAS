@@ -57,8 +57,32 @@ async def credited(db: AsyncSession, order_id: str) -> float:
 
 
 async def balance_due(db: AsyncSession, order: Order) -> float:
-    """Amount still owed on the order (never negative), net of payments and credit notes."""
-    return q2(max(0.0, float(order.total or 0) - await net_paid(db, order.id) - await credited(db, order.id)))
+    """Amount still owed on the order (never negative), net of payments, credit notes and what
+    was written off when the job was dropped."""
+    return q2(max(0.0, float(order.total or 0) - float(getattr(order, "written_off", 0) or 0)
+                  - await net_paid(db, order.id) - await credited(db, order.id)))
+
+
+async def resync_write_off(db: AsyncSession, order: Order, actor_id: str | None = None) -> None:
+    """A dropped job's write-off follows the money the shop actually kept: when money comes back
+    to the customer (a refund) after the job was dropped, the written-off part grows by the same
+    amount and the customer's ledger charge shrinks with it — so a refund never revives a debt.
+    No-op for any job that isn't in a dropped status. Caller commits."""
+    from backend.models import OrderStatus
+    grp = (await db.execute(select(OrderStatus.status_group).where(
+        OrderStatus.org_id == order.org_id, OrderStatus.key == order.status,
+        OrderStatus.record_type == "work_order"))).scalars().first()
+    if grp != "dropped" or order.is_estimate:
+        return
+    order.written_off = q2(max(0.0, float(order.total or 0) - await credited(db, order.id)
+                               - await net_paid(db, order.id)))
+    if order.client_id:
+        from backend.services.ledger import order_charge_net, post_contact_ledger
+        delta = q2(float(order.total or 0) - float(order.written_off) - await order_charge_net(db, order.client_id, order.id))
+        if delta:
+            await post_contact_ledger(db, order.org_id, order.client_id, "charge", delta,
+                                      note=f"Order {order.order_number} dropped: write-off updated",
+                                      ref_type="order", ref_id=order.id, created_by_id=actor_id)
 
 
 async def overpaid(db: AsyncSession, order: Order) -> float:
