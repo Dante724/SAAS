@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-10-25: API v2 and resource scopes
+
+[API v2](10-api-v2.md) adds inquiries, inquiry types, tags, services, bundles, writable products, contacts with structured addresses, and webhook subscriptions managed with a key. It has every protection v1 has. Keys can now be limited to single resources, and each key has its own rate limit.
+
+### New
+
+- **API v2** at `/api/v2`, with its own public OpenAPI document at `GET /api/v2/openapi.json`. v1 is unchanged.
+- **Resource scopes** `<resource>:read` and `<resource>:write` (for example `inquiries:write`), shown in the app as **Only some things**. They work on v2 only; `<resource>:write` includes `<resource>:read`. See [Authentication](02-authentication.md#resource-scopes-api-v2).
+- **Webhook management with a key**: `GET`, `POST` and `DELETE /api/v2/webhooks`, with the explicit-only `webhooks:read` and `webhooks:write` scopes.
+- **Per-key rate limits**: set 1 to 6,000 requests a minute when you create a key (**Requests a minute** in the app). The default is 120.
+- **New events**: `inquiry.created`, `inquiry.updated`, `inquiry.converted`, `tag.created`, `tag.updated`, `tag.deleted`, `bundle.created`, `bundle.updated`, `bundle.deleted`, `product.created` and `product.updated`. See [Events](06-events.md).
+- **`order.created` now fires when an inquiry is converted to a work order**, in the app, in Tekly Go or through v2.
+- **Structured addresses** on v2 contacts (`address_parts`, and `addr_*` fields on create). v1 keeps the single `address` line, which is now built from the parts when they're set.
+
+### Breaking and behaviour changes
+
+| Change | What to do |
+|---|---|
+| **The default rate limit is 120 requests a minute per key**, down from 600. It applies to v1 and v2 together. `X-RateLimit-Limit` now reports the key's own limit. | If you sync in bulk, slow down when `X-RateLimit-Remaining` gets low, or create a key with a higher **Requests a minute**. |
+| **`lead.created` is now `inquiry.created`.** The old name is an alias: endpoints subscribed to it keep getting each new inquiry once, under the old name, with a payload that now also carries the type, device, call count and conversion fields. It also fires for more sources (missed calls, the API, Tekly Go). | Subscribe new endpoints to `inquiry.created`. |
+| **Keys limited to some things can't call v1.** | Use a key with `read` or `write` for v1. |
+| **`read`, `write` and `*` never manage webhooks.** | Create a separate key with `webhooks:write` for that. |
+
+For anyone who tried the pre-release WS-C build of v2, it now follows the v1 rules:
+
+| Was | Now |
+|---|---|
+| Repeating `POST /inquiries` with the same `Idempotency-Key` returned the first inquiry (`200`), whatever the body. | The same body replays the original `201` response with `Idempotent-Replayed: true`; a different body is `422`. Every v2 `POST` accepts the header. |
+| A bundle component from another shop was `400`. | `404`, like every other id from another shop. |
+| Services always included `cost_price`. | Only with `costs:read`. |
+| Webhook endpoints added through v2 got an unencrypted UUID secret, had no 10-endpoint limit, and were deleted outright. | They get a `whsec_` secret, encrypted at rest and shown once, count towards the 10-endpoint limit, and are soft-deleted (the delivery log is kept). |
+| Unknown fields were ignored, and paging had no upper bound on `page`. | Unknown fields are `422`; `page` is 1–10000. |
+| `POST /inquiries/{id}/convert?is_estimate=true` | Send `{"is_estimate": true}` in the body. The query parameter still works, deprecated. |
+
 ## 2026-10-25: Hardening release
 
 This release tightens security across the public API and webhooks, and adds the features integrations need to run safely in production: scopes, key expiry and rotation, idempotency, rate-limit headers, signed and retried webhooks, and a public OpenAPI document.

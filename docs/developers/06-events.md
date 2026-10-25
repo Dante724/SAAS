@@ -12,10 +12,20 @@ Every event you can subscribe to. Each delivery wraps the event's payload in the
 | [`payment.recorded`](#paymentrecorded) | An online payment succeeds. |
 | [`appointment.created`](#appointmentcreated) | An appointment is booked online, by staff or through the API. |
 | [`contact.created`](#contactcreated) | A customer or company contact is added. |
-| [`lead.created`](#leadcreated) | A new inquiry is added. |
+| [`inquiry.created`](#inquirycreated) | A new inquiry is added, from any source. |
+| [`inquiry.updated`](#inquiryupdated) | An inquiry's details or status change. |
+| [`inquiry.converted`](#inquiryconverted) | An inquiry is turned into a work order or estimate. |
 | [`invoice.created`](#invoicecreated) | An invoice is created. |
 | [`invoice.paid`](#invoicepaid) | An invoice is paid in full. |
 | [`time_entry.stopped`](#time_entrystopped) | A timer on a job is stopped. |
+| [`tag.created`](#tagcreated-tagupdated-tagdeleted) | A tag is added. |
+| [`tag.updated`](#tagcreated-tagupdated-tagdeleted) | A tag is renamed or recoloured. |
+| [`tag.deleted`](#tagcreated-tagupdated-tagdeleted) | A tag is deleted. |
+| [`bundle.created`](#bundlecreated-bundleupdated-bundledeleted) | A bundle (a kit of services and products) is added. |
+| [`bundle.updated`](#bundlecreated-bundleupdated-bundledeleted) | A bundle changes. |
+| [`bundle.deleted`](#bundlecreated-bundleupdated-bundledeleted) | A bundle is deleted. |
+| [`product.created`](#productcreated-productupdated) | A product is added through API v2. |
+| [`product.updated`](#productcreated-productupdated) | A product is changed through API v2. |
 
 Subscribe to `*` (**All events** in the app) to get every event, including ones added later. [`webhook.test`](05-webhooks.md#send-a-test-event) is sent only when you ask for it, and isn't subscribable.
 
@@ -24,6 +34,7 @@ Subscribe to `*` (**All events** in the app) to get every event, including ones 
 | Old name | Current name | Behaviour |
 |---|---|---|
 | `booking.created` | `appointment.created` | An endpoint subscribed to `booking.created` still gets the event, **labelled `booking.created`** in `event` and `Tekly-Event`. New subscriptions should use `appointment.created`. |
+| `lead.created` | `inquiry.created` | Inquiries used to be called leads. An endpoint subscribed to `lead.created` gets each new inquiry **once**, labelled `lead.created`, with the `inquiry.created` payload. An endpoint subscribed to both names, or to `*`, still gets it once. New subscriptions should use `inquiry.created`. |
 
 ### Deprecated fields
 
@@ -49,8 +60,9 @@ A work order was created, in the app or through `POST /orders`. Estimates don't 
 
 - **New order** in the app.
 - [`POST /orders`](04-resources.md#post-orders).
+- Converting an inquiry to a work order, in the app, in Tekly Go or with [`POST /api/v2/inquiries/{id}/convert`](10-api-v2.md#post-inquiriesidconvert).
 
-Orders made in other ways don't fire it yet: by converting an inquiry, an appointment or a chat, by duplicating or splitting an order, or by an e-commerce order sync. Payloads are the same whichever source fires them.
+Orders made in other ways don't fire it yet: by converting an appointment or a chat, by duplicating or splitting an order, or by an e-commerce order sync. Payloads are the same whichever source fires them.
 
 ```json
 {
@@ -222,18 +234,18 @@ A contact was added.
 
 `type` is `person` or `organization`.
 
-## `lead.created`
+## `inquiry.created`
 
-A new inquiry was added to **Inquiries**.
+A new inquiry was added to **Inquiries**. It used to be called `lead.created`, which still works as an [alias](#aliases).
 
-**Sources:**
+**Sources:** every way an inquiry is made:
 
-- Staff, in the app.
+- Staff, in the app, and Tekly Go.
+- [`POST /api/v2/inquiries`](10-api-v2.md#post-inquiries).
+- A missed call (Twilio, Aircall or the generic call webhook), when the shop has **Missed calls become inquiries** on. A repeat call added to an open inquiry doesn't fire it again.
 - A chat turned into an inquiry.
 - A request left on the online booking page when no slot fits.
 - A new request from a customer's tracking page.
-
-The API can't create inquiries.
 
 ```json
 {
@@ -246,11 +258,34 @@ The API can't create inquiries.
   "inquiry": "Service: Battery replacement\nPixel 7 battery drains by lunchtime",
   "location_id": "2b9e4c71-5d3a-4f8e-a1b6-7c0d9e2f3a48",
   "client_id": null,
-  "created_at": "2026-10-25T16:41:12Z"
+  "lead_type_id": null,
+  "device_brand": "Google",
+  "device_model": "Pixel 7",
+  "serial": null,
+  "call_count": 0,
+  "converted_order_id": null,
+  "created_at": "2026-10-25T16:41:12Z",
+  "updated_at": null
 }
 ```
 
-`source` is one of `phone`, `walk_in`, `whatsapp`, `instagram`, `web` or `other`. `status` is one of `new`, `in_progress`, `won` or `lost`.
+`source` is one of `phone`, `walk_in`, `whatsapp`, `sms`, `email`, `instagram`, `facebook`, `web`, `api` or `other`. `status` is one of `new`, `in_progress`, `won` or `lost`. `call_count` counts missed calls added to the inquiry.
+
+## `inquiry.updated`
+
+An inquiry's details or status changed.
+
+**Sources:** an edit in the app or Tekly Go, or [`PATCH /api/v2/inquiries/{id}`](10-api-v2.md#patch-inquiriesid). A missed call added to an open inquiry doesn't fire it.
+
+The payload has the same shape as [`inquiry.created`](#inquirycreated), showing the inquiry after the change.
+
+## `inquiry.converted`
+
+An inquiry became a work order or an estimate. Its `status` is now `won` and `converted_order_id` names the new record.
+
+**Sources:** **Convert** in the app or Tekly Go, or [`POST /api/v2/inquiries/{id}/convert`](10-api-v2.md#post-inquiriesidconvert).
+
+The payload has the same shape as [`inquiry.created`](#inquirycreated). Converting to a work order also sends [`order.created`](#ordercreated); converting to an estimate doesn't.
 
 ## `invoice.created`
 
@@ -315,3 +350,51 @@ A running timer was stopped.
 ```
 
 `order_id` is `null` for time that wasn't on a job.
+
+## `tag.created`, `tag.updated`, `tag.deleted`
+
+A tag was added, renamed or recoloured, or deleted.
+
+**Sources:** the tags screen in the app and the [v2 tag routes](10-api-v2.md#tags).
+
+```json
+{
+  "id": "5a1e7c3b-2d9f-4b6a-8e04-7c3f1a9d2b65",
+  "name": "VIP",
+  "color": "#64748b"
+}
+```
+
+`tag.deleted` carries the tag as it was just before it was deleted.
+
+## `bundle.created`, `bundle.updated`, `bundle.deleted`
+
+A bundle was added, changed or deleted.
+
+**Sources:** the bundles screen in the app and the [v2 bundle routes](10-api-v2.md#bundles).
+
+```json
+{
+  "id": "8c2f4e1a-6b3d-4a9e-b175-2e8d0c4f7a93",
+  "name": "Battery swap",
+  "active": true
+}
+```
+
+`bundle.deleted` has `"active": false`. Read the components with `GET /api/v2/bundles/{id}`.
+
+## `product.created`, `product.updated`
+
+A product was added or changed **through API v2**. Products added or edited in the app don't fire these yet.
+
+**Sources:** [`POST /api/v2/products` and `PATCH /api/v2/products/{id}`](10-api-v2.md#products).
+
+```json
+{
+  "id": "c51a9e3d-7f2b-4c8e-a046-3b9d1f7e2c58",
+  "sku": "SCR-14",
+  "name": "Screen iPhone 14"
+}
+```
+
+The payload never has cost fields. Read the product with `GET /api/v2/products/{id}` for the rest.

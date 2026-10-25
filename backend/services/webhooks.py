@@ -5,7 +5,7 @@ transaction (they commit or roll back with the change that caused them):
 
 - ``emit_event()``, called by request handlers (order.created, order.status_changed, ...).
 - ORM hooks (``_register_orm_events``) for records that are created from many places:
-  contact.created, lead.created, appointment.created, invoice.created / invoice.paid and
+  contact.created, inquiry.created, appointment.created, invoice.created / invoice.paid and
   order.updated. Payloads are rendered again just before commit, so they show the committed state.
 
 After commit the outbox hands the rows to ``deliver_pending``; ``core.scheduled`` retries failures
@@ -49,10 +49,20 @@ EVENT_CATALOGUE: dict[str, str] = {
     "payment.recorded": "An online payment succeeded.",
     "appointment.created": "An appointment was booked online, by staff or through the API.",
     "contact.created": "A customer or company contact was added.",
-    "lead.created": "A new inquiry was added.",
+    "inquiry.created": "A new inquiry was added: web form, missed call, staff, Tekly Go or the API.",
+    "inquiry.updated": "An inquiry's details or status changed.",
+    "inquiry.converted": "An inquiry was turned into a work order or estimate.",
     "invoice.created": "An invoice was created.",
     "invoice.paid": "An invoice was paid in full.",
     "time_entry.stopped": "A timer on a job was stopped.",
+    "tag.created": "A tag was added.",
+    "tag.updated": "A tag was renamed or recoloured.",
+    "tag.deleted": "A tag was deleted.",
+    "bundle.created": "A bundle (kit of services and products) was added.",
+    "bundle.updated": "A bundle changed.",
+    "bundle.deleted": "A bundle was deleted.",
+    "product.created": "A product was added through the API.",
+    "product.updated": "A product was changed through the API.",
 }
 EVENTS = list(EVENT_CATALOGUE)
 TEST_EVENT = "webhook.test"
@@ -60,7 +70,10 @@ TEST_EVENT = "webhook.test"
 # Old names still accepted on subscriptions. The public API docs used to promise
 # `booking.created` before bookings were renamed appointments; an endpoint subscribed to the
 # old name still receives the event, labelled with the name it subscribed to.
-EVENT_ALIASES = {"booking.created": "appointment.created"}
+# `lead.created` is the name inquiries had before WS-C (inquiries everywhere); it is the same
+# event as `inquiry.created`, delivered once, under the name the endpoint subscribed to.
+EVENT_ALIASES = {"booking.created": "appointment.created", "lead.created": "inquiry.created"}
+ALIASES = EVENT_ALIASES          # WS-C name
 
 MAX_ENDPOINTS_PER_ORG = 10                    # B7
 SECRET_PREFIX = "whsec_"
@@ -95,6 +108,11 @@ def _delivery_name(endpoint_events: str, event: str):
 
 def _subscribed(endpoint_events: str, event: str) -> bool:
     return _delivery_name(endpoint_events, event) is not None
+
+
+def valid_events(raw) -> str:
+    """WS-C name for normalize_events (same rules: catalogue events, aliases or *)."""
+    return normalize_events(raw)
 
 
 def normalize_events(value) -> str:
@@ -253,7 +271,11 @@ def contact_data(c) -> dict:
 def lead_data(ld) -> dict:
     return {"id": ld.id, "name": ld.name, "phone": ld.phone, "email": ld.email, "source": ld.source,
             "status": ld.status, "inquiry": ld.inquiry, "location_id": ld.location_id,
-            "client_id": ld.client_id, "created_at": _iso(ld.created_at)}
+            "client_id": ld.client_id, "lead_type_id": getattr(ld, "lead_type_id", None),
+            "device_brand": getattr(ld, "device_brand", None), "device_model": getattr(ld, "device_model", None),
+            "serial": getattr(ld, "serial", None), "call_count": getattr(ld, "call_count", None) or 0,
+            "converted_order_id": getattr(ld, "converted_order_id", None),
+            "created_at": _iso(ld.created_at), "updated_at": _iso(getattr(ld, "updated_at", None))}
 
 
 def invoice_data(i) -> dict:
@@ -267,7 +289,7 @@ def _builders():
     return {
         "order.created": (Order, order_data), "order.updated": (Order, order_data),
         "appointment.created": (Appointment, appointment_data),
-        "contact.created": (Client, contact_data), "lead.created": (Lead, lead_data),
+        "contact.created": (Client, contact_data), "inquiry.created": (Lead, lead_data),
         "invoice.created": (Invoice, invoice_data), "invoice.paid": (Invoice, invoice_data),
     }
 
@@ -376,7 +398,7 @@ def _collect_after_flush(session, _ctx) -> None:
             if isinstance(obj, Client):
                 pending.append(("contact.created", obj, None))
             elif isinstance(obj, Lead):
-                pending.append(("lead.created", obj, None))
+                pending.append(("inquiry.created", obj, None))
             elif isinstance(obj, Appointment):
                 pending.append(("appointment.created", obj, None))
             elif isinstance(obj, Invoice):

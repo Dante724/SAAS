@@ -50,6 +50,7 @@ from backend.services.numbering import next_number
 router = APIRouter(prefix="/api/v1", tags=["public-api-v1"],
                    generate_unique_id_function=lambda route: f"v1_{route.name}")
 
+# v1 needs a broad scope: a key narrowed to one resource ("inquiries:read") is a v2 key.
 READ = Depends(require_scope("read"))
 WRITE = Depends(require_scope("write"))
 
@@ -370,11 +371,15 @@ async def _audit(db, principal: ApiPrincipal, action: str, entity_type: str, ent
 
 
 async def _idempotent(db: AsyncSession, principal: ApiPrincipal, idem_key: Optional[str], route: str,
-                      payload: BaseModel, run: Callable[[], Awaitable[dict]], status: int = 201) -> JSONResponse:
+                      payload: BaseModel, run: Callable[[], Awaitable[dict]], status: int = 201,
+                      stored: Optional[Callable[[dict], dict]] = None) -> JSONResponse:
     """A5: Idempotency-Key on writes. The first request claims (org, key, Idempotency-Key) under a
     unique constraint, runs, and stores its response; a retry with the same body replays it, a
     different body is a 422, and a retry while the first is still running is a 409. A failed
-    request releases its claim so it can be retried. Claims expire after 24 hours."""
+    request releases its claim so it can be retried. Claims expire after 24 hours.
+
+    `stored`, when given, is what gets kept for replays (v2 webhooks: the signing secret is shown
+    once and never written to the replay store)."""
     if idem_key is None:
         return JSONResponse(status_code=status, content=jsonable_encoder(await run()))
     body_hash = hashlib.sha256(json.dumps({"route": route, "body": payload.model_dump(mode="json")},
@@ -415,7 +420,7 @@ async def _idempotent(db: AsyncSession, principal: ApiPrincipal, idem_key: Optio
         await db.commit()
         raise
     await db.execute(update(ApiIdempotencyKey).where(ApiIdempotencyKey.id == claim_id).values(
-        status_code=status, response_body=json.dumps(body)))
+        status_code=status, response_body=json.dumps(stored(body) if stored else body)))
     await db.commit()
     return JSONResponse(status_code=status, content=body, headers={"Idempotency-Key": idem_key})
 
@@ -832,21 +837,25 @@ body within 24 hours returns the original response (with `Idempotent-Replayed: t
 _openapi_cache: Optional[dict] = None
 
 
+def openapi_for(api_router: APIRouter, *, version: str, description: str, tag: str, tag_description: str) -> dict:
+    """An OpenAPI document for one public router only (internal routes never leak into it)."""
+    from fastapi.openapi.utils import get_openapi
+
+    from backend.config import settings
+    return get_openapi(
+        title="Tekly API", version=version, openapi_version="3.1.0", description=description,
+        routes=[r for r in api_router.routes if getattr(r, "include_in_schema", False)],
+        servers=[{"url": settings.public_base}],
+        tags=[{"name": tag, "description": tag_description}],
+    )
+
+
 def build_openapi() -> dict:
     """The v1-only OpenAPI document (only routes from this router that are in the schema)."""
     global _openapi_cache
     if _openapi_cache is None:
-        from fastapi.openapi.utils import get_openapi
-
-        from backend.config import settings
-        doc = get_openapi(
-            title="Tekly API", version=API_VERSION, openapi_version="3.1.0",
-            description=_OPENAPI_DESCRIPTION,
-            routes=[r for r in router.routes if getattr(r, "include_in_schema", False)],
-            servers=[{"url": settings.public_base}],
-            tags=[{"name": "public-api-v1", "description": "Tekly public API v1"}],
-        )
-        _openapi_cache = doc
+        _openapi_cache = openapi_for(router, version=API_VERSION, description=_OPENAPI_DESCRIPTION,
+                                     tag="public-api-v1", tag_description="Tekly public API v1")
     return _openapi_cache
 
 

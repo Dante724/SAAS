@@ -9,6 +9,7 @@ import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog, promptDialog } from "../../lib/dialog";
 import { useMe } from "../../context/Me";
 import { money } from "./types";
+import AddressFields, { ADDRESS_KEYS, addressPayload, type Address } from "../../components/AddressFields";
 import CustomFields from "../../components/CustomFields";
 import AssetDrawer from "./AssetDrawer";
 import CreateOrderDrawer from "./CreateOrderDrawer";
@@ -46,12 +47,16 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
   const [source, setSource] = useState("");
   const [disc, setDisc] = useState<any>({});
   const [biz, setBiz] = useState<any>({ tax_id: "", reg_no: "", billing_address: "" });
+  const [addr, setAddr] = useState<Address>({});
+  const [addr0, setAddr0] = useState<Address>({});
   const [busy, setBusy] = useState(false); const [toast, setToast] = useState<string | null>(null);
   const [isSupplier, setIsSupplier] = useState(false);   // Build 144am — Supplier role toggle
   const reload = () => api.get<Client>(`/clients/${clientId}`).then((r) => { setC(r); setIsSupplier(!!r.is_supplier); }).catch(() => {});
   useEffect(() => { api.get<Client>(`/clients/${clientId}`).then((r) => {
     setC(r); setCd(r.custom_data || {}); setSource((r as any).source || ""); setIsSupplier(!!r.is_supplier);
     setBiz({ tax_id: (r as any).tax_id || "", reg_no: (r as any).reg_no || "", billing_address: (r as any).billing_address || "", birthday: (r as any).birthday || "" });
+    const parts = Object.fromEntries(ADDRESS_KEYS.map((k) => [k, (r as any)[k] || ""])) as Address;
+    setAddr(parts); setAddr0(parts);
     setDisc({
       disc_services_mode: r.disc_services_mode || "none", disc_services_value: r.disc_services_value || 0, disc_services_price_type_id: r.disc_services_price_type_id || "",
       disc_materials_mode: r.disc_materials_mode || "none", disc_materials_value: r.disc_materials_value || 0, disc_materials_price_type_id: r.disc_materials_price_type_id || "",
@@ -84,6 +89,8 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
         is_supplier: isSupplier,
         tax_id: biz.tax_id || null, reg_no: biz.reg_no || null, billing_address: biz.billing_address || null,
         birthday: biz.birthday || null,
+        // WS-C: send the address parts only when they were edited, so an old one-line address stays as it is
+        ...(JSON.stringify(addressPayload(addr)) !== JSON.stringify(addressPayload(addr0)) ? addressPayload(addr) : {}),
         ...disc,
         disc_services_price_type_id: disc.disc_services_price_type_id || null,
         disc_materials_price_type_id: disc.disc_materials_price_type_id || null,
@@ -162,7 +169,7 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
                   <DirectorySelect dirKey="lead_source" value={source} onChange={setSource} className="glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full" /></div> },
                 loyalty_tier: { half: true, el: <F l="Loyalty tier" v={c.loyalty_tier || ""} /> },
                 discount_card: { half: true, el: <F l="Discount card / Member ID" v={c.discount_card || ""} /> },
-                address: { el: <F l="Billing & home address" v={c.address || ""} /> },
+                address: { el: <AddressFields value={addr} onChange={setAddr} legacy={c.address} idPrefix="cd-addr" /> },
                 notes: (c as any).notes ? { el: <F l="Notes" v={(c as any).notes} /> } : null,
               }} custom={(ids) => <CustomFields entity="client" only={ids} bare={!!ids} value={cd} onChange={setCd} creating={false} inputSize="sm" />} />
               <div className="grid grid-cols-2 gap-3">

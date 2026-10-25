@@ -109,21 +109,32 @@ def _events(value) -> str:
 @router.post("", status_code=201)
 async def create_endpoint(data: EndpointIn, db: AsyncSession = Depends(get_db),
                           current: Employee = Depends(MANAGE)):
-    count = (await db.execute(select(func.count()).select_from(WebhookEndpoint).where(
-        WebhookEndpoint.org_id == current.org_id, WebhookEndpoint.kind == "endpoint",
-        WebhookEndpoint.deleted_at.is_(None)))).scalar() or 0
-    if count >= wh.MAX_ENDPOINTS_PER_ORG:
-        raise HTTPException(409, f"A shop can have up to {wh.MAX_ENDPOINTS_PER_ORG} webhook endpoints")
-    events = _events(data.events)
-    url = await require_webhook_url(data.url)
-    secret = wh.new_secret()
-    e = WebhookEndpoint(org_id=current.org_id, url=url, events=events, active=data.active,
-                        description=(data.description or "").strip() or None,
-                        secret=wh.store_secret(secret))
-    db.add(e)
+    e, secret = await create_endpoint_core(db, current.org_id, url=data.url, events=data.events,
+                                           description=data.description, active=data.active)
     await db.commit()
     await db.refresh(e)
     return {**_ser(e), "secret": secret}   # the only time the secret is shown
+
+
+async def create_endpoint_core(db: AsyncSession, org_id: str, *, url: str, events, description=None,
+                               active: bool = True) -> tuple[WebhookEndpoint, str]:
+    """The one way to add an endpoint (staff screen and API v2): the per-shop cap (B7),
+    catalogue-checked events, the SSRF/https URL rule, and a new encrypted whsec_ secret.
+    Flushes; the caller commits and shows the returned secret once."""
+    count = (await db.execute(select(func.count()).select_from(WebhookEndpoint).where(
+        WebhookEndpoint.org_id == org_id, WebhookEndpoint.kind == "endpoint",
+        WebhookEndpoint.deleted_at.is_(None)))).scalar() or 0
+    if count >= wh.MAX_ENDPOINTS_PER_ORG:
+        raise HTTPException(409, f"A shop can have up to {wh.MAX_ENDPOINTS_PER_ORG} webhook endpoints")
+    events = _events(events)
+    url = await require_webhook_url(url)
+    secret = wh.new_secret()
+    e = WebhookEndpoint(org_id=org_id, url=url, events=events, active=active,
+                        description=(description or "").strip() or None,
+                        secret=wh.store_secret(secret))
+    db.add(e)
+    await db.flush()
+    return e, secret
 
 
 class EndpointPatch(BaseModel):
@@ -157,14 +168,18 @@ async def update_endpoint(eid: str, data: EndpointPatch, db: AsyncSession = Depe
 async def delete_endpoint(eid: str, db: AsyncSession = Depends(get_db),
                           current: Employee = Depends(MANAGE)):
     """Soft delete (B14): the delivery log keeps its rows; nothing more is sent."""
-    e = await _get(db, current.org_id, eid)
+    await delete_endpoint_core(db, await _get(db, current.org_id, eid))
+    await db.commit()
+    return {"ok": True}
+
+
+async def delete_endpoint_core(db: AsyncSession, e: WebhookEndpoint) -> None:
+    """Soft delete shared with API v2: the log keeps its rows, queued retries are abandoned."""
     e.active = False
     e.deleted_at = datetime.utcnow()
     await db.execute(update(WebhookDelivery).where(
         WebhookDelivery.endpoint_id == e.id, WebhookDelivery.status.in_(("pending", "failed")))
         .values(status="abandoned", next_attempt_at=None).execution_options(synchronize_session=False))
-    await db.commit()
-    return {"ok": True}
 
 
 @router.post("/{eid}/rotate")

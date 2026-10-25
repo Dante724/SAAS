@@ -17,7 +17,7 @@ from backend.services.auth import get_current_employee
 
 router = APIRouter(prefix="/api/feed", tags=["event-feed"])
 
-VALID_ENTITIES = {"order", "client"}
+VALID_ENTITIES = {"order", "client", "lead"}
 VALID_ITEMS = {"comment", "photo", "signature", "file"}
 PROTECTED_ITEMS = {"system", "status", "signature", "client_message"}
 MAX_MEDIA_CHARS = 8_000_000  # ~6 MB base64 ceiling for the demo
@@ -52,6 +52,12 @@ def _serialize(it: EventFeedItem) -> dict:
 
 async def _verify_entity(db: AsyncSession, org_id: str, entity_type: str, entity_id: str,
                          current: Optional[Employee] = None):
+    if entity_type == "lead":
+        from backend.models import Lead
+        rec = (await db.execute(select(Lead).where(Lead.id == entity_id, Lead.org_id == org_id))).scalar_one_or_none()
+        if not rec:
+            raise HTTPException(404, "lead not found")
+        return
     if entity_type == "order":
         row = await db.execute(select(Order).where(Order.id == entity_id, Order.org_id == org_id))
     else:
@@ -166,7 +172,7 @@ async def default_visibility(db: AsyncSession, org_id: str, kind: str) -> str:
     from backend.models import Organisation
     col = Organisation.default_comment_visibility if kind == "comment" else Organisation.default_file_visibility
     v = (await db.execute(select(col).where(Organisation.id == org_id))).scalar_one_or_none()
-    return "client" if v == "public" else "private"
+    return "client" if v in ("public", "client") else "private"
 
 
 async def _visibility(db: AsyncSession, org_id: str, data: FeedItemIn) -> str:

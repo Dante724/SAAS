@@ -1101,7 +1101,8 @@ async def appointment_config(slug: str, response: Response, db: AsyncSession = D
                       "employee_ids": getattr(s, "allowed_employee_ids", None) or [],
                       "category": (_svc_cats.get(s.category_id) if s.category_id else None) or s.category}
                      for s in services],
-        # Customers see the name the shop chose (Settings › Public pages): full, first or custom.
+        # Customers see the name the shop chose (Settings › Public pages): full, first,
+        # first + initial, or custom.
         "staff": [{"id": e.id, "name": public_staff_name(e, getattr(org, "public_employee_name", None))}
                   for e in staff],
         "locations": [{"id": l.id, "name": l.name,

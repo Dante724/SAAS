@@ -770,10 +770,13 @@ async def test_b16_order_updated_lists_changed_fields(client, tenant, db):
 
 
 def test_b16_catalogue_in_one_place():
-    for name in ("contact.created", "invoice.created", "invoice.paid", "lead.created", "order.updated",
+    for name in ("contact.created", "invoice.created", "invoice.paid", "inquiry.created", "order.updated",
                  "appointment.created", "order.created"):
         assert name in wh.EVENTS and wh.EVENT_CATALOGUE[name]
     assert wh.normalize_events("booking.created") == "booking.created"
+    # Merge with WS-C: lead.created is the old name of inquiry.created (an alias, not a second event).
+    assert "lead.created" not in wh.EVENTS and wh.EVENT_ALIASES["lead.created"] == "inquiry.created"
+    assert wh.normalize_events("lead.created") == "lead.created"
 
 
 def test_appointment_scheduled_for_is_wall_clock_without_z():

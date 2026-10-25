@@ -91,41 +91,53 @@ class BundleIn(BaseModel):
     components: list[CompIn] = []
 
 
-@router.post("", status_code=201)
-async def create_bundle(
-    data: BundleIn,
-    db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_manage_settings")),
-):
-    await assert_perm(db, current, "can_manage_bundles")
+async def _emit(db, org_id: str, event: str, b: Bundle) -> None:
+    from backend.services.webhooks import emit_event
+    await emit_event(db, org_id, event, {"id": b.id, "name": b.name, "active": b.active})
+
+
+async def _check_bundle_fields(db, org_id: str, data: "BundleIn") -> None:
+    if data.price_mode not in ("sum", "fixed"):
+        raise HTTPException(422, "price_mode must be sum or fixed")
+    if data.category_id:
+        from backend.models import Category
+        ok = (await db.execute(select(Category.id).where(
+            Category.id == data.category_id, Category.org_id == org_id))).scalar_one_or_none()
+        if not ok:
+            raise HTTPException(404, "Category not found")
+
+
+async def create_bundle_core(db: AsyncSession, org_id: str, data: "BundleIn") -> Bundle:
+    """Shared by the staff screen and API v2. Commits and emits bundle.created."""
     if not data.components:
         raise HTTPException(400, "A bundle needs at least one component")
-    await _validate_components(db, current.org_id, data.components)
-    b = Bundle(org_id=current.org_id, name=data.name,
+    await _check_bundle_fields(db, org_id, data)
+    await _validate_components(db, org_id, data.components)
+    b = Bundle(org_id=org_id, name=data.name,
                price_mode=data.price_mode, price=data.price,
                category_id=data.category_id or None)
     db.add(b)
     await db.flush()
     for c in data.components:
         db.add(BundleComponent(bundle_id=b.id, ref_type=c.ref_type, ref_id=c.ref_id, qty=c.qty, device_variant=bool(getattr(c, "device_variant", False))))
+    await _emit(db, org_id, "bundle.created", b)
     await db.commit()
-    return await _ser(db, b)
+    return b
 
 
-@router.put("/{bundle_id}")
-async def update_bundle(
-    bundle_id: str, data: BundleIn,
-    db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_manage_settings")),
-):
-    await assert_perm(db, current, "can_manage_bundles")
+async def get_bundle(db: AsyncSession, org_id: str, bundle_id: str) -> Bundle:
     b = (await db.execute(select(Bundle).where(
-        Bundle.id == bundle_id, Bundle.org_id == current.org_id))).scalar_one_or_none()
+        Bundle.id == bundle_id, Bundle.org_id == org_id))).scalar_one_or_none()
     if not b:
         raise HTTPException(404, "Bundle not found")
+    return b
+
+
+async def update_bundle_core(db: AsyncSession, b: Bundle, data: "BundleIn") -> Bundle:
     # A1: write only what was sent — a body without category_id keeps the category, and one
     # without components keeps the kit's items instead of emptying it.
     sent = data.model_fields_set
+    await _check_bundle_fields(db, b.org_id, data if "price_mode" in sent else data.model_copy(update={"price_mode": b.price_mode}))
     b.name = data.name
     if "price_mode" in sent:
         b.price_mode = data.price_mode
@@ -136,14 +148,42 @@ async def update_bundle(
     if "components" in sent:
         if not data.components:
             raise HTTPException(400, "A bundle needs at least one component")
-        await _validate_components(db, current.org_id, data.components)
+        await _validate_components(db, b.org_id, data.components)
         for old in (await db.execute(select(BundleComponent).where(
                 BundleComponent.bundle_id == b.id))).scalars().all():
             await db.delete(old)
         for c in data.components:
             db.add(BundleComponent(bundle_id=b.id, ref_type=c.ref_type, ref_id=c.ref_id, qty=c.qty, device_variant=bool(getattr(c, "device_variant", False))))
+    await _emit(db, b.org_id, "bundle.updated", b)
     await db.commit()
-    return await _ser(db, b)
+    return b
+
+
+async def delete_bundle_core(db: AsyncSession, b: Bundle) -> None:
+    b.active = False
+    await _emit(db, b.org_id, "bundle.deleted", b)
+    await db.commit()
+
+
+@router.post("", status_code=201)
+async def create_bundle(
+    data: BundleIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_manage_settings")),
+):
+    await assert_perm(db, current, "can_manage_bundles")
+    return await _ser(db, await create_bundle_core(db, current.org_id, data))
+
+
+@router.put("/{bundle_id}")
+async def update_bundle(
+    bundle_id: str, data: BundleIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_manage_settings")),
+):
+    await assert_perm(db, current, "can_manage_bundles")
+    b = await get_bundle(db, current.org_id, bundle_id)
+    return await _ser(db, await update_bundle_core(db, b, data))
 
 
 @router.delete("/{bundle_id}")
@@ -155,7 +195,6 @@ async def delete_bundle(
     await assert_perm(db, current, "can_manage_bundles")
     b = (await db.execute(select(Bundle).where(
         Bundle.id == bundle_id, Bundle.org_id == current.org_id))).scalar_one_or_none()
-    if b:
-        b.active = False
-        await db.commit()
+    if b and b.active:
+        await delete_bundle_core(db, b)
     return {"ok": True}

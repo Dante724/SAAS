@@ -1,6 +1,8 @@
 # Resources
 
-Every endpoint in v1. Paths are relative to `{BASE_URL}` (`https://<your-shop-domain>/api/v1`). Every endpoint needs an API key (see [Authentication](02-authentication.md)). The [envelope, pagination and errors](03-requests-and-errors.md) work the same everywhere.
+Every endpoint in v1. Paths are relative to `{BASE_URL}` (`https://<your-shop-domain>/api/v1`). Every endpoint needs an API key with a broad scope, `read` or `write` (see [Authentication](02-authentication.md)); keys limited to some things only work on v2. The [envelope, pagination and errors](03-requests-and-errors.md) work the same everywhere.
+
+Inquiries, tags, services, bundles, writable products, structured contact addresses and webhook subscriptions are in [API v2](10-api-v2.md).
 
 | Resource | Endpoints | Scope |
 |---|---|---|

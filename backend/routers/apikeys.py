@@ -1,14 +1,16 @@
 """API key management (Phase 2B, hardened in apih1). Lives under the normal employee session;
-the keys it mints authenticate the public /api/v1 surface.
+the keys it mints authenticate the public /api/v1 and /api/v2 surfaces.
 
 - Listing, creating, rotating and revoking all need can_manage_settings.
-- Scopes are a fixed set (read, write, costs:read); a new key defaults to read only.
+- Scopes are a fixed set: broad read / write / costs:read, plus <resource>:read|write for v2
+  (services/apikeys.py). A new key defaults to read only.
+- Each key has its own per-minute rate limit (default 120, at most 6000).
 - costs:read can only be granted by someone whose role may see costs.
 - Keys expire (default one year), and an org holds at most MAX_ACTIVE_KEYS active keys.
 - Rotation issues a new secret; the old one keeps working for ROTATION_GRACE.
 """
 from datetime import datetime, timedelta
-from typing import Literal, Optional, Union
+from typing import Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -19,19 +21,25 @@ from backend.db.database import get_db
 from backend.models import ApiKey, Employee
 from backend.services import audit
 from backend.services.apikeys import (
+    ALL_SCOPES,
+    DEFAULT_RATE_PER_MIN,
     DEFAULT_SCOPES,
     DEFAULT_TTL,
+    EXPLICIT_ONLY,
     MAX_ACTIVE_KEYS,
+    MAX_RATE_PER_MIN,
+    RESOURCES,
     ROTATION_GRACE,
     SCOPES,
     generate_key,
+    key_rate_limit,
+    normalize_scopes,
     parse_scopes,
 )
 from backend.services.auth import has_perm, require_perm
 
 router = APIRouter(prefix="/api/api-keys", tags=["api-keys"])
 
-Scope = Literal["read", "write", "costs:read"]
 _MANAGE = require_perm("can_manage_settings")
 
 
@@ -48,6 +56,7 @@ def _ser(k: ApiKey, creators: Optional[dict] = None) -> dict:
     creator = (creators or {}).get(k.created_by_id)
     return {"id": k.id, "name": k.name, "prefix": k.prefix, "scopes": k.scopes,
             "scope_list": sorted(parse_scopes(k.scopes)),
+            "rate_limit_per_min": getattr(k, "rate_limit_per_min", None), "effective_rate_limit_per_min": key_rate_limit(k),
             "active": k.active, "status": _status(k, now),
             "expires_at": k.expires_at.isoformat() if k.expires_at else None,
             "rotated_at": k.rotated_at.isoformat() if k.rotated_at else None,
@@ -78,34 +87,26 @@ async def list_keys(
         ApiKey.org_id == current.org_id).order_by(desc(ApiKey.created_at)))).scalars().all()
     creators = await _creators(db, rows)
     return {"items": [_ser(k, creators) for k in rows], "available_scopes": list(SCOPES),
+            "resources": list(RESOURCES), "explicit_only": list(EXPLICIT_ONLY),
+            "resource_scopes": [s for s in ALL_SCOPES if s not in SCOPES],
+            "default_rate_limit_per_min": DEFAULT_RATE_PER_MIN, "max_rate_limit_per_min": MAX_RATE_PER_MIN,
             "max_active": MAX_ACTIVE_KEYS}
-
-
-def _normalize_scopes(v) -> list[str]:
-    """A list, or the old comma-separated string. The legacy '*' is read + write."""
-    if v is None:
-        return list(DEFAULT_SCOPES)
-    items = [s.strip() for s in v.split(",")] if isinstance(v, str) else [str(s).strip() for s in v]
-    items = [s for s in items if s]
-    out: list[str] = []
-    for s in items:
-        for t in (("read", "write") if s == "*" else (s,)):
-            if t not in out:
-                out.append(t)
-    return out
 
 
 class KeyIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field("API key", min_length=1, max_length=120)
-    scopes: list[Scope] = Field(default_factory=lambda: list(DEFAULT_SCOPES), min_length=1)
+    # Broad read / write / costs:read, or <resource>:read|write (API v2). A list or the old csv.
+    scopes: list[str] = Field(default_factory=lambda: list(DEFAULT_SCOPES), min_length=1)
     # Days until the key stops working. Default one year; null = never expires.
     expires_in_days: Optional[int] = Field(int(DEFAULT_TTL.days), ge=1, le=3650)
+    # WS-C: requests per minute for this key (default DEFAULT_RATE_PER_MIN).
+    rate_limit_per_min: Optional[int] = Field(None, ge=1, le=MAX_RATE_PER_MIN)
 
     @field_validator("scopes", mode="before")
     @classmethod
     def _scopes(cls, v: Union[str, list, None]):
-        return _normalize_scopes(v)
+        return normalize_scopes(v)
 
     @field_validator("name")
     @classmethod
@@ -136,12 +137,13 @@ async def create_key(
     full, prefix, key_hash = generate_key()
     expires = now + timedelta(days=data.expires_in_days) if data.expires_in_days else None
     k = ApiKey(org_id=current.org_id, name=data.name, prefix=prefix, key_hash=key_hash,
-               scopes=",".join(scopes), created_by_id=current.id, expires_at=expires)
+               scopes=",".join(scopes), rate_limit_per_min=data.rate_limit_per_min,
+               created_by_id=current.id, expires_at=expires)
     db.add(k)
     await db.flush()
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="apikey.create",
                        entity_type="api_key", entity_id=k.id,
-                       diff={"name": k.name, "scopes": k.scopes,
+                       diff={"name": k.name, "scopes": k.scopes, "rate_limit_per_min": k.rate_limit_per_min,
                              "expires_at": expires.isoformat() if expires else None})
     await db.commit()
     await db.refresh(k)

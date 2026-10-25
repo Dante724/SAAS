@@ -8,7 +8,8 @@ import { confirmDialog } from "../../lib/dialog";
 import { Drawer, ErrorNote, MoreMenu, btnGhost, btnPrimary, inputCls, labelCls } from "../invoices/billing";
 
 // Settings › Integrations › API keys. Create a key with the access it needs (read only by
-// default), an expiry, and optionally cost prices; the key is shown once. Rotate issues a new
+// default) — everything, or only some things (WS-C resource scopes, API v2) — an expiry, its own
+// requests-a-minute limit, and optionally cost prices; the key is shown once. Rotate issues a new
 // secret while the old one keeps working for 24 hours; Revoke stops it at once.
 
 export type ApiKey = {
@@ -16,17 +17,48 @@ export type ApiKey = {
   status?: "active" | "expired" | "revoked"; active: boolean;
   expires_at?: string | null; previous_expires_at?: string | null; last_used_at?: string | null;
   created_at?: string | null; created_by_name?: string | null; creator_inactive?: boolean;
+  rate_limit_per_min?: number | null; effective_rate_limit_per_min?: number;
 };
+
+// What a key can be limited to (services/apikeys.py RESOURCES). Webhooks is never part of
+// "Read only" / "Read and write": it has to be picked here on its own.
+export const RESOURCES: [string, string][] = [
+  ["inquiries", "Inquiries"], ["contacts", "Customers"], ["orders", "Jobs"], ["estimates", "Estimates"],
+  ["products", "Products"], ["services", "Services"], ["bundles", "Bundles"], ["tags", "Tags"],
+  ["appointments", "Appointments"], ["invoices", "Invoices"], ["credit_notes", "Credit notes"],
+  ["time_entries", "Time entries"], ["webhooks", "Webhooks"],
+];
+export const DEFAULT_RATE = 120;
+type Access = "read" | "write" | "some";
+type ScopePick = Record<string, "" | "read" | "write">;
+
+/** The scope list the server expects, from the form. */
+export function scopesFrom(access: Access, pick: ScopePick, costs = false): string[] {
+  const out = access === "write" ? ["read", "write"] : access === "read" ? ["read"]
+    : Object.entries(pick).filter(([, v]) => v).map(([k, v]) => `${k}:${v}`);
+  if (costs && out.length) out.push("costs:read");
+  return out;
+}
 type Fresh = { name: string; key: string; rotated: boolean };
 
 // The API sends UTC without an offset.
 const utc = (iso: string) => new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
 const day = (iso?: string | null) => (iso ? utc(iso).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" }) : "");
 
-export function accessText(k: Pick<ApiKey, "scopes" | "scope_list">): string {
-  const s = new Set(k.scope_list || (k.scopes || "").split(",").map((x) => x.trim()).filter(Boolean));
-  const base = s.has("write") || s.has("*") ? "Read and write" : s.has("read") ? "Read only" : "No access";
+export function accessText(k: { scopes?: string | null; scope_list?: string[] }): string {
+  const list = k.scope_list || (k.scopes || "").split(",").map((x) => x.trim()).filter(Boolean);
+  const s = new Set(list);
+  const name = (r: string) => RESOURCES.find(([x]) => x === r)?.[1] || r;
+  const some = list.filter((x) => x.includes(":") && x !== "costs:read")
+    .map((x) => { const [r, a] = x.split(":"); return `${name(r)} (${a === "write" ? "read and change" : "read"})`; });
+  const broad = s.has("write") || s.has("*") ? "Read and write" : s.has("read") ? "Read only" : "";
+  const base = [broad, ...some].filter(Boolean).join(", ") || "No access";
   return s.has("costs:read") ? `${base}, with cost prices` : base;
+}
+
+export function limitText(k: Pick<ApiKey, "rate_limit_per_min" | "effective_rate_limit_per_min">): string {
+  const n = k.effective_rate_limit_per_min || k.rate_limit_per_min || DEFAULT_RATE;
+  return `${n.toLocaleString()} requests a minute`;
 }
 
 export function lastUsedText(iso?: string | null): string {
@@ -107,7 +139,7 @@ export default function ApiKeysCard() {
             </details>
           )}
           <p className="text-xs text-ink-tertiary leading-relaxed">
-            Send the key as <span className="font-mono">Authorization: Bearer rok_…</span>. The full reference is at <a href="/api/v1/openapi.json" target="_blank" rel="noreferrer" className="font-semibold text-primary hover:underline">/api/v1/openapi.json</a>.
+            Send the key as <span className="font-mono">Authorization: Bearer rok_…</span>. The full reference is at <a href="/api/v1/openapi.json" target="_blank" rel="noreferrer" className="font-semibold text-primary hover:underline">/api/v1/openapi.json</a> and, for inquiries, tags, services, bundles and webhooks, <a href="/api/v2/openapi.json" target="_blank" rel="noreferrer" className="font-semibold text-primary hover:underline">/api/v2/openapi.json</a>.
           </p>
         </div>
       )}
@@ -133,8 +165,8 @@ function KeyList({ keys, onRotate, onRevoke }: { keys: ApiKey[]; onRotate?: (k: 
                 <span className="font-mono text-xs text-ink-tertiary flex-shrink-0">{k.prefix}…</span>
                 <StatusPill k={k} />
               </div>
-              <div className="text-xs text-ink-tertiary">
-                {accessText(k)} · {lastUsedText(k.last_used_at)}
+              <div className="text-xs text-ink-tertiary tabular-nums">
+                {accessText(k)} · {limitText(k)} · {lastUsedText(k.last_used_at)}
                 {active && (k.expires_at ? ` · Expires ${day(k.expires_at)}` : " · Never expires")}
               </div>
               {k.previous_expires_at && active && <div className="text-xs text-ink-secondary">The previous key still works until {utc(k.previous_expires_at).toLocaleString([], { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}.</div>}
@@ -159,26 +191,32 @@ function CreateKeyDrawer({ onClose, onCreated }: { onClose: () => void; onCreate
   const { can } = useMe();
   const canCosts = can("can_view_purchase_price");
   const [name, setName] = useState("");
-  const [access, setAccess] = useState<"read" | "write">("read");
+  const [access, setAccess] = useState<Access>("read");
+  const [pick, setPick] = useState<ScopePick>({});
   const [costs, setCosts] = useState(false);
   const [expiry, setExpiry] = useState("1 year");
+  const [rate, setRate] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   async function create() {
     if (!name.trim()) { setErr("Give the key a name, for example the app that will use it."); return; }
+    const scopes = scopesFrom(access, pick, costs && canCosts);
+    if (!scopes.length) { setErr("Pick at least one thing this key can use."); return; }
+    const perMin = rate.trim() ? Number(rate) : null;
+    if (perMin !== null && (!Number.isInteger(perMin) || perMin < 1 || perMin > 6000)) { setErr("Requests a minute must be a whole number from 1 to 6,000."); return; }
     setBusy(true); setErr(null);
-    const scopes = access === "write" ? ["read", "write"] : ["read"];
-    if (costs && canCosts) scopes.push("costs:read");
-    const pick = EXPIRY.find(([l]) => l === expiry);
-    const days = pick ? pick[1] : 365;   // null = never expires
+    const ttl = EXPIRY.find(([l]) => l === expiry);
+    const days = ttl ? ttl[1] : 365;   // null = never expires
+    const body: Record<string, unknown> = { name: name.trim(), scopes, expires_in_days: days };
+    if (perMin !== null) body.rate_limit_per_min = perMin;
     try {
-      const r = await api.post<{ key: string }>("/api-keys", { name: name.trim(), scopes, expires_in_days: days });
+      const r = await api.post<{ key: string }>("/api-keys", body);
       onCreated({ name: name.trim(), key: r.key, rotated: false });
     } catch (e: any) { setErr(e.message || "Couldn't create the key"); setBusy(false); }
   }
 
-  const radio = (value: "read" | "write", title: string, hint: string) => (
+  const radio = (value: Access, title: string, hint: string) => (
     <label className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer ${access === value ? "border-primary bg-primary/5" : "border-slate-200 hover:bg-slate-50"}`}>
       <input type="radio" name="ak-access" value={value} checked={access === value} onChange={() => setAccess(value)} className="mt-0.5" />
       <span><span className="block text-sm font-semibold text-ink-primary">{title}</span><span className="block text-xs text-ink-tertiary">{hint}</span></span>
@@ -195,19 +233,37 @@ function CreateKeyDrawer({ onClose, onCreated }: { onClose: () => void; onCreate
         <input id="ak-name" value={name} maxLength={120} onChange={(e) => setName(e.target.value)} placeholder="e.g. Zapier" className={inputCls} /></div>
       <fieldset className="space-y-2">
         <legend className={labelCls}>Access</legend>
-        {radio("read", "Read only", "See customers, jobs, estimates, products, appointments, invoices and time.")}
-        {radio("write", "Read and write", "Also add customers, jobs, appointments and time entries.")}
+        {radio("read", "Read only", "See customers, jobs, inquiries, products, appointments, invoices and time.")}
+        {radio("write", "Read and write", "Also add and change them. Managing webhooks is never included.")}
+        {radio("some", "Only some things", "Choose each thing it can use. Works with API version 2 only.")}
       </fieldset>
+      {access === "some" && (
+        <div className="rounded-xl border border-slate-200 divide-y divide-slate-100" role="group" aria-label="What this key can use">
+          {RESOURCES.map(([k, label]) => (
+            <div key={k} className="flex items-center justify-between gap-3 px-3 py-2">
+              <label htmlFor={`ak-scope-${k}`} className="text-sm text-ink-primary">{label}</label>
+              <select id={`ak-scope-${k}`} value={pick[k] || ""} onChange={(e) => setPick({ ...pick, [k]: e.target.value as ScopePick[string] })}
+                className="bg-white border border-slate-200 rounded-lg text-xs px-2 py-1.5 outline-none focus:border-primary">
+                <option value="">No access</option><option value="read">Read</option><option value="write">Read and change</option>
+              </select>
+            </div>
+          ))}
+        </div>
+      )}
       {canCosts && (
         <label className="flex items-start gap-2.5 text-sm text-ink-primary cursor-pointer">
           <input type="checkbox" checked={costs} onChange={(e) => setCosts(e.target.checked)} className="mt-0.5" />
           <span><span className="block font-semibold">Include cost prices</span><span className="block text-xs text-ink-tertiary">Product costs and staff pay rates. Leave off unless the other system needs them.</span></span>
         </label>
       )}
-      <div><label htmlFor="ak-exp" className={labelCls}>Expires after</label>
-        <select id="ak-exp" value={expiry} onChange={(e) => setExpiry(e.target.value)} className={inputCls}>
-          {EXPIRY.map(([l]) => <option key={l} value={l}>{l}</option>)}
-        </select></div>
+      <div className="grid grid-cols-2 gap-3">
+        <div><label htmlFor="ak-exp" className={labelCls}>Expires after</label>
+          <select id="ak-exp" value={expiry} onChange={(e) => setExpiry(e.target.value)} className={inputCls}>
+            {EXPIRY.map(([l]) => <option key={l} value={l}>{l}</option>)}
+          </select></div>
+        <div><label htmlFor="ak-rate" className={labelCls}>Requests a minute</label>
+          <input id="ak-rate" type="number" inputMode="numeric" min={1} max={6000} value={rate} onChange={(e) => setRate(e.target.value)} placeholder={String(DEFAULT_RATE)} className={`${inputCls} tabular-nums`} /></div>
+      </div>
       <ErrorNote msg={err} />
     </Drawer>, document.body);
 }

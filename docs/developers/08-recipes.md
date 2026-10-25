@@ -15,7 +15,7 @@ A visitor fills in "What's wrong with your device?" on the shop's website. You w
 
 **You need:** a key with **Read and write** access, and the `location_id` of the shop that should get the job.
 
-The API can't create **inquiries** (the Inquiries board) yet, only contacts and work orders. If you'd rather web requests land as inquiries, use Tekly's own **Online booking** page (**Settings → Public pages**). Its request form creates an inquiry, and fires [`lead.created`](06-events.md#leadcreated).
+If you'd rather web requests land on the **Inquiries** board than as jobs, use [`POST /api/v2/inquiries`](10-api-v2.md#post-inquiries) with a key limited to **Inquiries** (`inquiries:write`), and send an `Idempotency-Key`. It fires [`inquiry.created`](06-events.md#inquirycreated). Tekly's own **Online booking** page (**Settings → Public pages**) does the same from its request form.
 
 ### 1. Find your `location_id` (once)
 
@@ -230,5 +230,5 @@ The sweep stops on `issued_at`, which can be empty on some invoices. If your sho
 
 - **No invoice lines.** v1 returns invoice totals, not line items or per-line tax. Post each invoice as one summary line, or wait for line support.
 - **No payments endpoint.** You can see `amount_paid` and `balance_due`, and [`payment.recorded`](06-events.md#paymentrecorded) for online payments, but you can't list individual payments, methods or refunds.
-- **No `updated_since` filter.** The nightly sweep re-reads a window of invoices rather than only changed ones. At 100 per page and 600 requests a minute, that's quick even for busy shops.
+- **No `updated_since` filter.** The nightly sweep re-reads a window of invoices rather than only changed ones. At 100 per page and 120 requests a minute (the default per key), that's quick even for busy shops.
 - **Skip drafts** if your books shouldn't contain them: post on `invoice.paid`, or once `status` is past `draft`.

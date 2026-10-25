@@ -2278,7 +2278,7 @@ function FormsDesigner({ types, onAddType, onDeleteType, onAdvanced }: {
   const choices: { id: string; label: string; form: FormKey; typeId?: string; type?: any }[] = [
     ...types.map((t) => ({ id: `type:${t.id}`, label: `Work order · ${t.name}`, form: "order" as FormKey, typeId: t.id, type: t })),
     { id: "client", label: "Client", form: "client" }, { id: "device", label: "Device / asset", form: "device" },
-    { id: "product", label: "Product", form: "product" },
+    { id: "product", label: "Product", form: "product" }, { id: "lead", label: "Inquiry", form: "lead" },
   ];
   const cur = choices.find((c) => c.id === pick) || choices[0];
   const pill = (on: boolean) => `px-3.5 py-1.5 rounded-full text-xs font-semibold border transition-colors ${on ? "bg-primary text-white border-primary" : "bg-white text-ink-secondary border-slate-200 hover:border-slate-300"}`;

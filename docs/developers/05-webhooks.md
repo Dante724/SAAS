@@ -442,7 +442,9 @@ Rotate when someone who had the secret leaves, if it may have leaked, or on a re
 
 ## Managing endpoints from code
 
-Endpoints are managed in the app. The same actions are available at `/api/webhooks` to a **signed-in staff session** with **Manage company settings**. API keys can't call them. They exist for the Tekly app itself and aren't part of the public, versioned API. Prefer the UI.
+With an API key, use [API v2](10-api-v2.md#webhooks): `GET /api/v2/webhooks`, `POST /api/v2/webhooks` and `DELETE /api/v2/webhooks/{id}`. They need a key with **`webhooks:read`** or **`webhooks:write`**, picked under **Only some things**; keys with `read`, `write` or `*` can't use them. They follow the same rules as the app: up to 10 endpoints, catalogue events only, the [URL rules](#url-rules), a `whsec_` secret shown once in the create response, and a delete that keeps the delivery log. Rotating the secret, test events and redelivery stay in the app.
+
+Everything the app does is also at `/api/webhooks`, for a **signed-in staff session** with **Manage company settings**. API keys can't call those routes. They exist for the Tekly app itself and aren't part of the public, versioned API.
 
 ## Automation rule webhooks
 

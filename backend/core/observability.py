@@ -204,6 +204,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             headers.setdefault("Retry-After", str(self.window))
             return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"}, headers=headers)
         response = await call_next(request)
+        # WS-C: an API key also has its own per-minute limit (checked with the key). Report
+        # whichever limit is closer to running out, so the headers describe the binding one.
+        key_rate = getattr(request.state, "api_key_rate", None)
+        if key_rate is not None and remaining is not None and (key_rate[1], key_rate[0]) < (remaining, limit):
+            limit, remaining = key_rate
+            response.headers["X-RateLimit-Limit"] = str(limit)
+            response.headers["X-RateLimit-Remaining"] = str(remaining)
         response.headers.setdefault("X-RateLimit-Limit", str(limit))
         if remaining is not None:
             response.headers.setdefault("X-RateLimit-Remaining", str(remaining))
@@ -211,6 +218,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 
 # ── public API transport (A11) ───────────────────────────────────────────────
+PUBLIC_API_PREFIXES = ("/api/v1", "/api/v2")
+
+
+def is_public_api_path(path: str) -> bool:
+    """/api/v1 and /api/v2: key-authenticated, server to server (no CORS, HTTPS only)."""
+    return any(path == p or path.startswith(p + "/") for p in PUBLIC_API_PREFIXES)
+
+
 def request_scheme(scope) -> str:
     """The scheme the caller used. With TRUSTED_PROXY_HOPS set, X-Forwarded-Proto is read the
     same way as X-Forwarded-For (the entry our outermost trusted proxy wrote); otherwise the ASGI
@@ -232,15 +247,14 @@ def request_scheme(scope) -> str:
 
 
 class PublicApiTransportMiddleware:
-    """Deployed: /api/v1 is refused over plain HTTP (403) instead of quietly working, so an
+    """Deployed: /api/v1 and /api/v2 are refused over plain HTTP (403) instead of quietly working, so an
     integration that sends its key in clear text finds out at once. Dev and test are untouched."""
     def __init__(self, app):
         self.app = app
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
-            path = scope.get("path", "")
-            if path == "/api/v1" or path.startswith("/api/v1/"):
+            if is_public_api_path(scope.get("path", "")):
                 from backend.config import settings
                 if settings.is_deployed and request_scheme(scope) != "https":
                     resp = JSONResponse(status_code=403, content={

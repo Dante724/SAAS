@@ -1,4 +1,5 @@
-// apih1: API keys card — scope picker (read only by default), expiry, show the key once, rotate.
+// apih1 + WS-C: API keys card — access picker (read only by default, or only some things),
+// expiry, per-key limit, show the key once, rotate.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -8,7 +9,7 @@ vi.mock("../../context/Me", async (orig) => {
   return { ...real, useMe: () => ({ can: () => true }) };
 });
 vi.mock("../../lib/dialog", () => ({ confirmDialog: async () => true, alertDialog: async () => {} }));
-import ApiKeysCard, { accessText, lastUsedText } from "./ApiKeysCard";
+import ApiKeysCard, { accessText, lastUsedText, limitText, scopesFrom } from "./ApiKeysCard";
 
 const reply = (body: unknown, status = 200) => ({ ok: status < 400, status, statusText: "", headers: new Headers({ "content-type": "application/json" }), json: async () => body, text: async () => JSON.stringify(body) }) as Response;
 let keys: any[] = [];
@@ -34,7 +35,7 @@ describe("ApiKeysCard", () => {
     const u = userEvent.setup();
     render(<ApiKeysCard />);
     expect(await screen.findByText("Zapier")).toBeInTheDocument();
-    expect(screen.getByText(/Read only · Never used · Expires/)).toBeInTheDocument();
+    expect(screen.getByText(/Read only · 120 requests a minute · Never used · Expires/)).toBeInTheDocument();
     await u.click(screen.getByRole("button", { name: /Create key/ }));
     const dlg = await screen.findByRole("dialog", { name: "Create API key" });
     expect(within(dlg).getByLabelText(/Read only/)).toBeChecked();
@@ -63,6 +64,26 @@ describe("ApiKeysCard", () => {
     expect(posts[0].body).toEqual({ name: "ERP", scopes: ["read", "write", "costs:read"], expires_in_days: null });
   });
 
+  it("limits a key to some things, with its own rate limit (API v2)", async () => {
+    const u = userEvent.setup();
+    render(<ApiKeysCard />);
+    await screen.findByText("Zapier");
+    await u.click(screen.getByRole("button", { name: /Create key/ }));
+    const dlg = await screen.findByRole("dialog", { name: "Create API key" });
+    await u.type(within(dlg).getByLabelText("Name"), "Website form");
+    await u.click(within(dlg).getByLabelText(/Only some things/));
+    await u.click(within(dlg).getByRole("button", { name: "Create key" }));
+    expect(await within(dlg).findByText("Pick at least one thing this key can use.")).toBeInTheDocument();
+    expect(posts).toHaveLength(0);
+    await u.selectOptions(within(dlg).getByLabelText("Inquiries"), "write");
+    await u.selectOptions(within(dlg).getByLabelText("Products"), "read");
+    await u.type(within(dlg).getByLabelText("Requests a minute"), "60");
+    await u.click(within(dlg).getByRole("button", { name: "Create key" }));
+    await screen.findByRole("dialog", { name: "Your new API key" });
+    expect(posts[0].body).toEqual({ name: "Website form", scopes: ["inquiries:write", "products:read"],
+      expires_in_days: 365, rate_limit_per_min: 60 });
+  });
+
   it("rotates from the menu and shows the new key once", async () => {
     const u = userEvent.setup();
     render(<ApiKeysCard />);
@@ -83,5 +104,16 @@ describe("key text", () => {
     expect(accessText({ scopes: "*" })).toBe("Read and write");
     expect(accessText({ scopes: "costs:read,read" })).toBe("Read only, with cost prices");
     expect(lastUsedText(null)).toBe("Never used");
+    expect(accessText({ scopes: "inquiries:write,products:read" })).toBe("Inquiries (read and change), Products (read)");
+    expect(accessText({ scopes: "read,webhooks:write" })).toBe("Read only, Webhooks (read and change)");
+    expect(limitText({ rate_limit_per_min: 30 })).toBe("30 requests a minute");
+    expect(limitText({})).toBe("120 requests a minute");
+  });
+
+  it("builds scopes from the form", () => {
+    expect(scopesFrom("read", {})).toEqual(["read"]);
+    expect(scopesFrom("write", {}, true)).toEqual(["read", "write", "costs:read"]);
+    expect(scopesFrom("some", { inquiries: "write", tags: "", products: "read" })).toEqual(["inquiries:write", "products:read"]);
+    expect(scopesFrom("some", {}, true)).toEqual([]);
   });
 });

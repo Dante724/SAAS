@@ -155,25 +155,29 @@ An id in the path or body that belongs to **another shop** is treated exactly li
 
 ## Rate limits
 
-Each API key has a budget of **600 requests per minute**. A rotated key's old and new secrets share one budget. Requests with an invalid key count against the caller's IP address instead.
+Each API key has its own limit: **120 requests a minute** unless it was given another one (1 to 6,000) when it was created. The key list in the app shows each key's limit. The limit counts every call with that key, on v1 and v2 together, and a rotated key's old and new secrets share it.
+
+On top of that, every key also counts towards a shop-wide ceiling of 600 requests a minute per key, the same one that limits Tekly's own screens. It only matters for keys set above 600. Requests with an invalid key count against the caller's IP address instead.
 
 Every response carries:
 
 | Header | Meaning |
 |---|---|
-| `X-RateLimit-Limit` | Requests allowed per minute, for example `600`. |
-| `X-RateLimit-Remaining` | Requests left in the current minute. |
+| `X-RateLimit-Limit` | Requests allowed per minute, for example `120`. When both limits apply, it's the one closer to running out. |
+| `X-RateLimit-Remaining` | Requests left in the current minute, under that same limit. |
 
 Over the limit you get:
 
 ```http
 HTTP/1.1 429 Too Many Requests
-Retry-After: 60
-X-RateLimit-Limit: 600
+Retry-After: 42
+X-RateLimit-Limit: 120
 X-RateLimit-Remaining: 0
 
-{"detail": "Rate limit exceeded"}
+{"detail": "Rate limit exceeded for this API key"}
 ```
+
+The `detail` is `Rate limit exceeded` when the shop-wide ceiling is the one reached. Match on the status code, not the text.
 
 `Retry-After` is in seconds. Wait at least that long before retrying. If you sync in bulk, slow down when `X-RateLimit-Remaining` gets low, rather than waiting for the 429.
 
@@ -197,7 +201,7 @@ def request_with_retry(session, method, url, attempts=5, **kwargs):
 
 Networks fail. If a `POST` times out, you can't tell whether Tekly created the record. An **`Idempotency-Key`** makes the retry safe.
 
-Send a unique value, such as a UUID or your own form-submission id, in the `Idempotency-Key` header on any `POST`:
+Send a unique value, such as a UUID or your own form-submission id, in the `Idempotency-Key` header on any `POST`, on v1 or [v2](10-api-v2.md):
 
 ```bash
 curl -X POST "$TEKLY_BASE_URL/orders" \

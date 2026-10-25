@@ -174,6 +174,7 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
                 <select value={cfg.public_employee_name || "full"} onChange={(e) => save({ public_employee_name: e.target.value })} aria-label="How your team's names appear"
                   className="ml-auto bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-primary">
                   <option value="full">Full name</option>
+                  <option value="first_initial">First name and initial</option>
                   <option value="first">First name only</option>
                   <option value="custom">Custom name</option>
                 </select>
@@ -232,7 +233,7 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
                       ))}
                     </div>
                     {cfg.book_show_employee_step && (
-                      <div className="flex flex-wrap gap-1.5">{["Any", ...(cfg.public_employee_name === "first" ? ["Priya", "Amit"] : cfg.public_employee_name === "custom" ? ["Priya S.", "Amit (lead tech)"] : ["Priya Shah", "Amit Rao"])].map((p, i) => <span key={p} className="px-2.5 py-1 rounded-full border text-[11px]" style={i === 0 ? { borderColor: accent, color: accent } : { borderColor: "#e2e8f0" }}>{p}</span>)}</div>
+                      <div className="flex flex-wrap gap-1.5">{["Any", ...(cfg.public_employee_name === "first" ? ["Priya", "Amit"] : cfg.public_employee_name === "first_initial" ? ["Priya S.", "Amit R."] : cfg.public_employee_name === "custom" ? ["Priya S.", "Amit (lead tech)"] : ["Priya Shah", "Amit Rao"])].map((p, i) => <span key={p} className="px-2.5 py-1 rounded-full border text-[11px]" style={i === 0 ? { borderColor: accent, color: accent } : { borderColor: "#e2e8f0" }}>{p}</span>)}</div>
                     )}
                     <div className="grid grid-cols-4 gap-1.5">
                       {["9:00", "9:30", "10:00", "10:30", "11:00", "1:00", "1:30", "2:00"].map((t, i) => (

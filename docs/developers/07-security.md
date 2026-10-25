@@ -7,13 +7,13 @@ A repair shop's data includes its customers' names, phone numbers, addresses and
 | Area | What Tekly does |
 |---|---|
 | **Hashed API keys** | Keys are random and shown once. Tekly stores only a SHA-256 hash, so nobody, including Tekly staff, can read a key back out of the database. |
-| **Least privilege** | Every key has scopes. New keys are read-only by default. Cost fields need a separate `costs:read` scope, which only people allowed to see purchase prices can grant. |
+| **Least privilege** | Every key has scopes. New keys are read-only by default. On v2 a key can be limited to single resources, such as `inquiries:write`. Managing webhooks needs its own `webhooks:*` scope, never implied by `read` or `write`. Cost fields need a separate `costs:read` scope, which only people allowed to see purchase prices can grant. |
 | **Expiry, rotation, revocation** | Keys expire (1 year by default). Rotation keeps the old key valid for only 24 hours. Revocation is immediate. A suspended shop's keys stop working. |
-| **Tenant isolation** | A key belongs to one shop. Every query is limited to that shop, and an id from another shop gets the same `404` as an id that doesn't exist, so ids can't be probed across shops. |
+| **Tenant isolation** | A key belongs to one shop. Every query is limited to that shop, and an id from another shop gets the same `404` as an id that doesn't exist, so ids can't be probed across shops. On v2, an inquiry-only key also doesn't see which inquiries match an existing customer. |
 | **HTTPS only** | The API refuses plain HTTP with `403`. Webhooks are only delivered to `https://` URLs. |
-| **No browser access** | `/api/v1` sends no CORS headers, so a key can't be used from a web page on another site. |
+| **No browser access** | `/api/v1` and `/api/v2` send no CORS headers, so a key can't be used from a web page on another site. |
 | **Strict input** | Unknown fields are rejected, and every field has a type and a length limit. Bodies are capped at 16 MB. |
-| **Rate limits** | 600 requests a minute per key. Invalid keys are limited by IP address, so made-up keys can't get a fresh budget. |
+| **Rate limits** | 120 requests a minute per key by default (each key can be set from 1 to 6,000), under a shop-wide ceiling of 600 a minute per key. Invalid keys are limited by IP address, so made-up keys can't get a fresh budget. |
 | **SSRF protection** | Webhook URLs must resolve only to public addresses, on port 443 or 8443. Private, loopback, link-local, cloud-metadata and carrier-grade NAT ranges are blocked. The check runs again on every delivery, and Tekly connects to the exact IP it checked, so DNS rebinding can't redirect a delivery inward. Redirects aren't followed. |
 | **Signed webhooks** | Every delivery is signed with HMAC-SHA256 over a timestamp and the full body, so receivers can detect tampering and replays. |
 | **Encrypted secrets** | Webhook signing secrets are encrypted at rest and shown only when created or rotated. The endpoint list shows only a short hint, such as `whsec_…Q_Hc`. |

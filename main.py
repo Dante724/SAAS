@@ -21,6 +21,7 @@ from backend.routers import (
     appointments,
     assets,
     auth,
+    auto_print,
     automations,
     bins,
     bundles,
@@ -89,6 +90,7 @@ from backend.routers import (
     timeclock,
     transfers,
     v1,
+    v2,
     warehouses,
     webhooks,
 )
@@ -105,7 +107,7 @@ ROUTERS = [
     bins, payroll, leads, pricing, sales, returns, transfers, bundles, appointments,
     chats, resources, timeclock, webhooks, payments, apikeys, v1,
     integrations_qbo, ai, catalog_products, tech, push, checklists, lookups, engage, settings_finance, rbac, directories, analytics, media, compliance, platform, mfa, sso, comms, integrations_xero, integrations_email, integrations_credentials, industry, schedules, conversions, warehouses, tasks, stock_docs, suppliers, printing, inbox, comms_ai, automations, insights, recommendations, order_items, prefs, admin, currencies, tags, telephony, custom_reports, regions, scan,
-    terminals,
+    terminals, auto_print, v2,
 ]
 
 
@@ -155,7 +157,12 @@ from backend.core.cost_redaction import CostRedactionMiddleware  # noqa: E402
 
 app.add_middleware(CostRedactionMiddleware)
 app.add_middleware(RequestContextMiddleware)
-from backend.core.observability import MetricsMiddleware, RateLimitMiddleware, SecurityHeadersMiddleware
+from backend.core.observability import (  # noqa: E402
+    MetricsMiddleware,
+    RateLimitMiddleware,
+    SecurityHeadersMiddleware,
+    is_public_api_path,
+)
 
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(MetricsMiddleware)
@@ -170,15 +177,14 @@ class _CorsExceptPublicApi(CORSMiddleware):
     web page can't be used from there, and preflights get no allow headers."""
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
-            path = scope.get("path", "")
-            if path == "/api/v1" or path.startswith("/api/v1/"):
+            if is_public_api_path(scope.get("path", "")):
                 return await self.app(scope, receive, send)
         return await super().__call__(scope, receive, send)
 
 
 from backend.core.observability import PublicApiTransportMiddleware  # noqa: E402
 
-# Deployed: /api/v1 over plain HTTP is refused with 403 (A11).
+# Deployed: /api/v1 and /api/v2 over plain HTTP are refused with 403 (A11).
 app.add_middleware(PublicApiTransportMiddleware)
 app.add_middleware(
     _CorsExceptPublicApi,

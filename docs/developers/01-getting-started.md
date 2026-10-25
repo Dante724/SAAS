@@ -14,6 +14,8 @@ Every shop is served from its own Tekly address. Its API lives under `/api/v1`:
 
 The API only answers over HTTPS. A plain `http://` request gets `403` (see [Security](07-security.md)).
 
+[API v2](10-api-v2.md) lives next to it, at `https://<your-shop-domain>/api/v2`, for inquiries, tags, services, bundles, writable products and webhook subscriptions. The same key works on both, if its scopes allow.
+
 ## 1. Create an API key
 
 1. Sign in to Tekly as someone whose role has the **Manage company settings** permission.
@@ -21,9 +23,10 @@ The API only answers over HTTPS. A plain `http://` request gets `403` (see [Secu
 3. Give the key a name that says where it will be used, for example `Website contact form`.
 4. Choose the **Access**:
    - **Read only** (the default): see customers, jobs, estimates, products, appointments, invoices and time.
-   - **Read and write**: also add customers, jobs, appointments and time entries.
+   - **Read and write**: also add and change them. It never includes managing webhooks.
+   - **Only some things**: pick each thing the key can use, with **Read** or **Read and change** (for example only **Inquiries**). These keys work with API v2 only. Webhooks can only be given here.
    - **Include cost prices**: adds product costs and staff pay rates (the `costs:read` scope). Leave this off unless the other system needs them. Only someone whose role can **View the purchase price of products** can turn it on.
-5. Choose when the key expires: 30 days, 90 days, 1 year (the default) or never.
+5. Choose when the key expires: 30 days, 90 days, 1 year (the default) or never. Optionally set **Requests a minute** (120 if you leave it empty, at most 6,000).
 6. Copy the key. It looks like `rok_5f2c9a1e_…` and is **shown only once**.
 
 Store the key in your server's secret store or environment, never in a browser, a mobile app or source control. See [Authentication](02-authentication.md) for scopes, rotation and revocation.

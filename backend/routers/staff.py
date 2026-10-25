@@ -785,6 +785,7 @@ async def get_company(
         "default_due_days": org.default_due_days,
         "default_comment_visibility": org.default_comment_visibility,
         "default_file_visibility": org.default_file_visibility,
+        "public_employee_name": getattr(org, "public_employee_name", None) or "full",
         "warranty_count_from": org.warranty_count_from,
         "asset_one_open_ticket": org.asset_one_open_ticket,
         "multi_asset_jobs": _ma.enabled(org),
@@ -825,6 +826,7 @@ class CompanyIn(BaseModel):
     default_due_days: Optional[int] = None
     default_comment_visibility: Optional[str] = None
     default_file_visibility: Optional[str] = None
+    public_employee_name: Optional[str] = None          # full | first | first_initial | custom
     warranty_count_from: Optional[str] = None
     asset_one_open_ticket: Optional[bool] = None
     multi_asset_jobs: Optional[bool] = None            # several items per job (eligible industries only)
@@ -857,6 +859,13 @@ async def update_company(
         valid = set(_ind.TEMPLATE_KEYS) | set(_ind.LEGACY_ALIASES)
         if payload["industry_template"] not in valid:
             raise HTTPException(422, f"Unknown industry_template. Valid: {sorted(valid)}")
+    for k in ("default_comment_visibility", "default_file_visibility"):
+        if k in payload and payload[k] not in ("private", "public"):
+            raise HTTPException(422, "Visibility must be private or public")
+    if "public_employee_name" in payload:
+        from backend.services.public_name import MODES as _name_modes
+        if payload["public_employee_name"] not in _name_modes:
+            raise HTTPException(422, f"public_employee_name must be one of {list(_name_modes)}")
     if "payment_provider" in payload:
         valid = ("auto", "stripe", "square", "sumup", "simulated")
         if payload["payment_provider"] not in valid:
@@ -866,9 +875,6 @@ async def update_company(
         tmpl = payload.get("industry_template", org.industry_template)
         if _ind.normalize_template_key(tmpl) not in _ma.ELIGIBLE:
             raise HTTPException(422, "Several items per job is only for tools, equipment, phone and computer shops")
-    for _k in ("default_comment_visibility", "default_file_visibility"):
-        if _k in payload and payload[_k] not in ("private", "public"):
-            raise HTTPException(422, f"{_k} must be 'private' or 'public'")
     # Build 121: the API field is 'currencies' but the column is 'currencies_json'
     if "currencies" in payload:
         org.currencies_json = payload.pop("currencies")
@@ -1034,7 +1040,7 @@ class PublicPagesIn(BaseModel):
     oe_allow_staff_reply: Optional[bool] = None
     oe_show_scheduled: Optional[bool] = None            # 144dr
     book_show_employee_step: Optional[bool] = None      # 144dr
-    public_employee_name: Optional[str] = None          # full | first | custom
+    public_employee_name: Optional[str] = None          # full | first | first_initial | custom
     oe_wo_allow_approval: Optional[bool] = None         # 144ih
     oe_approval_statuses: Optional[str] = None          # 144ih comma-separated status keys
     oe_wo_approval_statuses: Optional[str] = None       # 144ih
