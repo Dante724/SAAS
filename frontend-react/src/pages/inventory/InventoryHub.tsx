@@ -19,6 +19,7 @@ import { assetStatusTone } from "./statusTone";
 import { cachedPref, loadPref, savePref } from "../../lib/userPref";
 import Pager from "../../components/Pager";
 import SerialEntry from "../../components/SerialEntry";
+import ScanButton from "../../components/ScanButton";
 import DateField from "../../components/DateField";
 import AssetStateTabs, { AssetCounts, useAssetState } from "../../components/AssetStateTabs";
 import { useDebounced, useServerPage } from "../../hooks/useServerPage";
@@ -733,8 +734,8 @@ function StocktakeDrawer({ id, products, onClose, onDone }:
     finally { setBusy(false); }
   }
 
-  async function doScan() {
-    const code = scan.trim(); if (!code || !stId) return;
+  async function doScan(scanned?: string) {
+    const code = (scanned ?? scan).trim(); if (!code || !stId) return;
     setErr(null);
     try {
       const r = await api.post<any>(`/stocktake/${stId}/scan`, { code, qty: scanQty, register_unknown: regUnknown });
@@ -796,7 +797,8 @@ function StocktakeDrawer({ id, products, onClose, onDone }:
                   <div className="flex items-center gap-2">
                     <input ref={scanRef} autoFocus value={scan} onChange={(e) => setScan(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doScan(); }} placeholder="Barcode / SKU / serial" className="flex-1 bg-white border border-slate-200 rounded-lg text-sm px-3 py-2" />
                     <input type="number" min={1} value={scanQty} onChange={(e) => setScanQty(Math.max(1, +e.target.value || 1))} className="w-16 bg-white border border-slate-200 rounded-lg text-sm px-2 py-2 text-right" title="Quantity per scan" />
-                    <button onClick={doScan} className="px-3 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container flex items-center gap-1"><M n="qr_code_scanner" c="text-sm" />Count</button>
+                    <ScanButton title="Count with camera" onScan={(c) => doScan(c)} />
+                    <button onClick={() => doScan()} className="px-3 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container flex items-center gap-1"><M n="qr_code_scanner" c="text-sm" />Count</button>
                   </div>
                   <label className="flex items-center gap-2 text-xs text-ink-secondary"><input type="checkbox" checked={regUnknown} onChange={(e) => setRegUnknown(e.target.checked)} />Register unknown codes as new products</label>
                   {flash && <div className="text-xs text-emerald-700 font-semibold">{flash}</div>}

@@ -20,6 +20,7 @@ def _ser(b: StorageBin) -> dict:
     return {
         "id": b.id, "location_id": b.location_id, "warehouse_id": b.warehouse_id, "name": b.name,
         "zone": b.zone, "shelf": b.shelf, "bin_number": b.bin_number, "barcode": b.barcode,
+        "barcode_type": b.barcode_type or "code128",
         "max_weight_capacity": b.max_weight_capacity, "active": b.active,
     }
 
@@ -49,6 +50,7 @@ class BinIn(BaseModel):
     location_id: str
     name: Optional[str] = Field(None, max_length=60)        # empty = named after its code
     barcode: Optional[str] = Field(None, max_length=60)     # empty = from the bin template
+    barcode_type: Optional[str] = None                      # ii144b: how the label prints it (default Code 128)
     warehouse_id: Optional[str] = None                      # default: the location's product warehouse
     zone: Optional[str] = Field(None, max_length=40)
     shelf: Optional[str] = Field(None, max_length=40)
@@ -110,6 +112,20 @@ async def _commit(db) -> None:
         raise HTTPException(409, "Another bin with that name or code was just saved — refresh and try again")
 
 
+def _label_code(kind: Optional[str], code: str) -> str:
+    """The bin code as its label type stores it (Code 39 upper-cases, EAN adds the check digit) —
+    stored that way so a scan of the printed label finds the bin. 422 with the reason if it can't."""
+    if not kind:
+        return code
+    from backend.services import barcode_types
+    if kind not in barcode_types.TYPES:
+        raise HTTPException(422, "Unknown barcode type")
+    try:
+        return barcode_types.normalize(kind, code)
+    except ValueError as e:
+        raise HTTPException(422, f"The bin code {code} can't be printed as {barcode_types.label(kind)}: {e}")
+
+
 @router.post("", status_code=201)
 async def create_bin(
     data: BinIn,
@@ -123,13 +139,14 @@ async def create_bin(
     wid = await _warehouse_for(db, current.org_id, data.location_id, data.warehouse_id)
     code = (data.barcode or "").strip()
     if code:
+        code = _label_code(data.barcode_type, code)
         await _check_code(db, current.org_id, code)
     else:
-        code = await next_bin_code(db, current.org_id)
+        code = _label_code(data.barcode_type, await next_bin_code(db, current.org_id))
     name = (data.name or "").strip() or code
     await _check_name(db, current.org_id, data.location_id, wid, name)
     b = StorageBin(org_id=current.org_id, location_id=data.location_id, warehouse_id=wid, name=name,
-                   barcode=code, zone=data.zone, shelf=data.shelf, bin_number=data.bin_number,
+                   barcode=code, barcode_type=data.barcode_type or None, zone=data.zone, shelf=data.shelf, bin_number=data.bin_number,
                    max_weight_capacity=data.max_weight_capacity)
     db.add(b)
     await _commit(db)
@@ -153,10 +170,15 @@ async def update_bin(
     name = (data.name or "").strip() or b.name
     if name.lower() != (b.name or "").lower():
         await _check_name(db, current.org_id, b.location_id, b.warehouse_id, name, exclude_id=b.id)
+    kind = data.barcode_type if data.barcode_type is not None else b.barcode_type
     code = (data.barcode or "").strip()
-    if code and code != b.barcode:
-        await _check_code(db, current.org_id, code, exclude_id=b.id)
+    if (code and code != b.barcode) or kind != b.barcode_type:
+        # a new code or a new label type: the code must still fit the type (re-checked either way)
+        code = _label_code(kind, code or b.barcode or "")
+        if code != b.barcode:
+            await _check_code(db, current.org_id, code, exclude_id=b.id)
         b.barcode = code
+        b.barcode_type = kind or None
     b.name = name
     b.zone = data.zone
     b.shelf = data.shelf

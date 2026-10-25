@@ -960,13 +960,15 @@ class ProductBarcode(Base):
     by services/product_codes.py on every flush; `active` mirrors the product's, so an archived product
     releases its codes. Unique per shop among active rows — another shop's codes never clash."""
     __tablename__ = "product_barcodes"
-    __table_args__ = (Index("uq_product_barcodes_org_code", "org_id", "barcode", unique=True,
+    # ii144b: unique on the match key, so one GTIN typed as UPC-A on one product and EAN-13 on another clashes
+    __table_args__ = (Index("uq_product_barcodes_org_key", "org_id", "match_key", unique=True,
                             sqlite_where=text("active = 1"), postgresql_where=text("active")),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id", ondelete="CASCADE"), index=True)
     barcode: Mapped[str] = mapped_column(String(100))
-    barcode_type: Mapped[Optional[str]] = mapped_column(String(12))    # upca|ean13|ean8|code128|qr
+    barcode_type: Mapped[Optional[str]] = mapped_column(String(12))    # services/barcode_types.TYPES
+    match_key: Mapped[str] = mapped_column(String(100))                # scan_codes.match_key: GTIN-14 for GTINs
     is_main: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -1789,6 +1791,7 @@ class StorageBin(Base):
     shelf: Mapped[Optional[str]] = mapped_column(String(40))     # stand / shelf / row
     bin_number: Mapped[Optional[str]] = mapped_column(String(40))
     barcode: Mapped[Optional[str]] = mapped_column(String(60), index=True)   # ii144a: from the bin template (routers/bins.py)
+    barcode_type: Mapped[Optional[str]] = mapped_column(String(12))   # ii144b: how the bin label prints it (default Code 128)
     max_weight_capacity: Mapped[float] = mapped_column(Float, default=0.0)  # kg, 0 = unlimited
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -1942,6 +1945,7 @@ class StockItemBatch(Base):
     qty_received: Mapped[Numeric] = mapped_column(Numeric(14, 3), default=0)
     qty_remaining: Mapped[Numeric] = mapped_column(Numeric(14, 3), default=0)  # consumed FIFO/LIFO
     expiry_date: Mapped[Optional[date]] = mapped_column(Date, index=True)  # FEFO when set
+    lot_number: Mapped[Optional[str]] = mapped_column(String(40))          # ii144b: GS1 (10) batch/lot from the label
     received_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 

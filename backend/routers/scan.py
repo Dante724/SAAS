@@ -3,7 +3,7 @@ the camera) sends one code; this figures out what it is and where to go: a work
 order (barcode / number), a product (sku / barcode / internal code), or an asset
 (serial / imei / vin / hin). Org-scoped; first match wins in a sensible order."""
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,13 +15,15 @@ router = APIRouter(prefix="/api/scan", tags=["scan"])
 
 
 class ScanIn(BaseModel):
-    code: str
+    code: str = Field(max_length=500)
 
 
 @router.post("/resolve")
 async def resolve(data: ScanIn, db: AsyncSession = Depends(get_db),
                   current: Employee = Depends(get_current_employee)):
-    code = (data.code or "").strip()
+    from backend.services import scan_codes
+    scan = scan_codes.parse(data.code)
+    code = scan.text.strip()           # ii144b: AIM prefix / control characters removed, GS1 read
     if not code:
         raise HTTPException(422, "code required")
     up = code.upper()
@@ -39,7 +41,8 @@ async def resolve(data: ScanIn, db: AsyncSession = Depends(get_db),
     p = (await db.execute(select(Part).where(
         Part.org_id == org, product_codes.matches_code(org, code)))).scalars().first()   # ii144a: extra barcodes too
     if p:
-        return {"matched": True, "type": "product", "id": p.id, "route": "/inventory", "label": p.name}
+        return {"matched": True, "type": "product", "id": p.id, "route": "/inventory", "label": p.name,
+                "scan": scan.as_dict()}
 
     # 3) asset — serial / imei / vin(upper) / hin(upper)
     from backend.services import identifiers as _ids
@@ -53,3 +56,20 @@ async def resolve(data: ScanIn, db: AsyncSession = Depends(get_db),
         return {"matched": True, "type": "asset", "id": d.id, "route": "/assets", "label": label}
 
     return {"matched": False, "code": code}
+
+
+@router.post("/parse")
+async def parse_scan(data: ScanIn, db: AsyncSession = Depends(get_db),
+                     current: Employee = Depends(get_current_employee)):
+    """ii144b — what a scanned code says, without acting on it: the code without scanner prefixes,
+    its GTIN, and — for a GS1 label (GS1-128 / GS1 DataMatrix / GS1 QR) — batch, expiry and serial,
+    plus the shop's product it belongs to. Intake screens use it to fill a line from one scan."""
+    from backend.services import product_codes, scan_codes
+    scan = scan_codes.parse(data.code)
+    if not scan.text:
+        raise HTTPException(422, "code required")
+    p = (await db.execute(select(Part).where(
+        Part.org_id == current.org_id, Part.active == True,  # noqa: E712
+        product_codes.matches_code(current.org_id, data.code)))).scalars().first()
+    return {**scan.as_dict(), "product": {"id": p.id, "name": p.name, "serialized": bool(p.serialized),
+                                          "expiry_tracking": bool(p.expiry_tracking)} if p else None}

@@ -349,8 +349,10 @@ class ProductIn(BaseModel):
 async def create_product(data: ProductIn, db: AsyncSession = Depends(get_db),
                          current: Employee = Depends(require_perm("can_manage_inventory"))):
     # ii144a: SKU and barcode are always unique; the shop's chosen identifier (name by default) too.
+    data.barcode = _checked_barcode(data.barcode_type if data.barcode_type in BARCODE_TYPES else None,
+                                    product_codes.clean(data.barcode))
     await product_codes.ensure_identity_free(db, current.org_id, name=data.name, sku=data.sku,
-                                             barcode=data.barcode, code=data.code)
+                                             barcode=data.barcode, code=data.code, barcode_type=data.barcode_type)
     from backend.routers.forms import check_entity_required
     await check_entity_required(db, current.org_id, "product", data)   # built-ins the product form requires
     payload = data.model_dump()
@@ -551,8 +553,15 @@ async def update_product(pid: str, data: ProductIn, db: AsyncSession = Depends(g
     payload["name"] = data.name
     if "mpn" in payload:
         payload["mpn"] = await _checked_mpn(db, current.org_id, data.mpn, exclude_id=p.id)
+    if ("barcode" in payload or "barcode_type" in payload) and (
+            product_codes.clean(payload.get("barcode", p.barcode)) != product_codes.clean(p.barcode)
+            or payload.get("barcode_type", p.barcode_type) != p.barcode_type):
+        kind = payload.get("barcode_type", p.barcode_type)
+        payload["barcode"] = _checked_barcode(kind if kind in BARCODE_TYPES else None,
+                                              product_codes.clean(payload.get("barcode", p.barcode)))
     await product_codes.ensure_identity_free(
         db, current.org_id, exclude_part_id=p.id, fields=set(payload),
+        barcode_type=payload.get("barcode_type", p.barcode_type),
         **{k: payload.get(k) for k in ("name", "sku", "barcode", "code")})
     if not await can_see_costs(db, current):
         drop_cost_fields(payload)
@@ -629,8 +638,22 @@ async def enable_serialization(pid: str, db: AsyncSession = Depends(get_db),
 # Generated codes are GS1 in-store numbers (EAN-13 20–29 by default, the prefix is a shop setting)
 # from a per-shop counter, with the check digit, skipping any code already in use. They are valid,
 # scan everywhere and can never collide with a manufacturer's barcode. Existing codes are never
-# rewritten. Code128 / QR products get the same digits (a valid payload for both).
-BARCODE_TYPES = ("upca", "ean13", "ean8", "code128", "qr")
+# rewritten. ii144b: every type in services/barcode_types.py — non-GTIN types (Code 39/128, ITF, 2D)
+# carry the in-store EAN-13 digits, ITF-14 / GS1-128 the same GTIN, so every form scans to one product.
+from backend.services import barcode_types as _bt  # noqa: E402
+
+BARCODE_TYPES = tuple(_bt.TYPES)
+_TYPES_MSG = "type must be one of " + "|".join(BARCODE_TYPES)
+
+
+def _checked_barcode(kind, value):
+    """A typed barcode in the form its type stores (check digit verified) — 422 with the reason."""
+    if not kind or not value:
+        return value
+    try:
+        return _bt.normalize(kind, value)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
 MAX_BULK_BARCODES = 5000
 
 
@@ -639,7 +662,7 @@ async def generate_barcode(pid: str, type: str = Query("code128"),
                            db: AsyncSession = Depends(get_db),
                            current: Employee = Depends(require_perm("can_manage_inventory"))):
     if type not in BARCODE_TYPES:
-        raise HTTPException(400, "type must be upca|ean13|ean8|code128|qr")
+        raise HTTPException(400, _TYPES_MSG)
     p = (await db.execute(select(Part).where(Part.id == pid, Part.org_id == current.org_id))).scalar_one_or_none()
     if not p:
         raise HTTPException(404, "Product not found")
@@ -660,7 +683,7 @@ async def generate_missing_barcodes(data: GenerateMissingIn, db: AsyncSession = 
     """Give every product that has no barcode one (Orderry "products without barcode → Add barcode").
     Only empty barcodes are filled; ids from another shop are ignored."""
     if data.type not in BARCODE_TYPES:
-        raise HTTPException(400, "type must be upca|ean13|ean8|code128|qr")
+        raise HTTPException(400, _TYPES_MSG)
     q = select(Part).where(Part.org_id == current.org_id, Part.active == True,  # noqa: E712
                            (Part.barcode.is_(None)) | (func.trim(Part.barcode) == ""))
     if data.ids is not None:
@@ -714,10 +737,14 @@ async def add_barcode(pid: str, data: BarcodeIn, db: AsyncSession = Depends(get_
     if not code:
         raise HTTPException(422, "Enter a barcode")
     if data.barcode_type and data.barcode_type not in BARCODE_TYPES:
-        raise HTTPException(422, "barcode_type must be upca|ean13|ean8|code128|qr")
-    if code == product_codes.clean(p.barcode):
-        raise HTTPException(409, "That is already this product's barcode")
-    await product_codes.ensure_barcode_free(db, current.org_id, code, exclude_part_id=None)
+        raise HTTPException(422, _TYPES_MSG)
+    code = _checked_barcode(data.barcode_type, code)
+    from backend.services import scan_codes
+    key = scan_codes.match_key(code, data.barcode_type)
+    if (await db.execute(select(ProductBarcode.id).where(
+            ProductBarcode.part_id == pid, ProductBarcode.match_key == key))).first():
+        raise HTTPException(409, "This product already has that barcode")
+    await product_codes.ensure_barcode_free(db, current.org_id, code, kind=data.barcode_type)
     if not product_codes.clean(p.barcode):
         p.barcode = code
         if data.barcode_type:
@@ -727,7 +754,7 @@ async def add_barcode(pid: str, data: BarcodeIn, db: AsyncSession = Depends(get_
             ProductBarcode.part_id == pid, ProductBarcode.is_main == True))).scalars().first()  # noqa: E712
     else:
         row = ProductBarcode(org_id=current.org_id, part_id=pid, barcode=code, barcode_type=data.barcode_type,
-                             is_main=False, active=p.active is not False)
+                             match_key=key, is_main=False, active=p.active is not False)
         db.add(row)
         await commit_mpn_safe(db)
     return _ser_barcode(row)
