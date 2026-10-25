@@ -673,7 +673,7 @@ async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, curr
     # Never more than the balance due (credit notes included): money for later goes in as a
     # prepayment, an invoice overpayment through Invoices › Record payment.
     if q2(amount) > q2(remaining):
-        raise HTTPException(400, f"Payment exceeds the balance due ({q2(remaining):g})")
+        raise HTTPException(400, f"That's more than is owed. The balance due is {q2(max(remaining, 0)):.2f}.")
 
     from backend.routers.feed import log_system_event
 
