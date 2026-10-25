@@ -25,11 +25,17 @@ afterEach(() => vi.unstubAllGlobals());
 
 const deletes = () => calls.filter((c) => c.method === "DELETE");
 
-describe("CashPanel delete transaction", () => {
+// The ledger row (and its Delete button) only appears after the accounts + transactions
+// fetches resolve. Under a fully parallel `vitest run` that can exceed findBy's 1s default,
+// so the first wait is generous and the tests get room for it.
+const LOAD = { timeout: 5000 };
+const findDelete = () => screen.findByRole("button", { name: "Delete" }, LOAD);
+
+describe("CashPanel delete transaction", { timeout: 15000 }, () => {
   it("Cancel on the reason prompt sends no DELETE", async () => {
     const u = userEvent.setup();
     render(<CashPanel />);
-    await u.click(await screen.findByRole("button", { name: "Delete" }));
+    await u.click(await findDelete());
     await u.click(await screen.findByRole("button", { name: "Cancel" }));
     await new Promise((r) => setTimeout(r, 0));
     expect(deletes()).toHaveLength(0);
@@ -38,7 +44,7 @@ describe("CashPanel delete transaction", () => {
   it("Escape on the reason prompt sends no DELETE", async () => {
     const u = userEvent.setup();
     render(<CashPanel />);
-    await u.click(await screen.findByRole("button", { name: "Delete" }));
+    await u.click(await findDelete());
     await screen.findByRole("button", { name: "Cancel" });
     await u.keyboard("{Escape}");
     await new Promise((r) => setTimeout(r, 0));
@@ -48,7 +54,7 @@ describe("CashPanel delete transaction", () => {
   it("OK with no reason still voids the transaction", async () => {
     const u = userEvent.setup();
     render(<CashPanel />);
-    await u.click(await screen.findByRole("button", { name: "Delete" }));
+    await u.click(await findDelete());
     await u.click(await screen.findByRole("button", { name: "OK" }));
     await vi.waitFor(() => expect(deletes()).toHaveLength(1));
     expect(deletes()[0].url).toBe("/api/cash/transactions/t1");
@@ -57,7 +63,7 @@ describe("CashPanel delete transaction", () => {
   it("OK with a reason sends it along", async () => {
     const u = userEvent.setup();
     render(<CashPanel />);
-    await u.click(await screen.findByRole("button", { name: "Delete" }));
+    await u.click(await findDelete());
     await u.type(await screen.findByRole("textbox"), "duplicate");
     await u.click(screen.getByRole("button", { name: "OK" }));
     await vi.waitFor(() => expect(deletes()).toHaveLength(1));
@@ -65,10 +71,10 @@ describe("CashPanel delete transaction", () => {
   });
 });
 
-describe("CashPanel ledger paging", () => {
+describe("CashPanel ledger paging", { timeout: 15000 }, () => {
   it("asks the server for one page plus full-set totals", async () => {
     render(<CashPanel />);
-    expect(await screen.findByText(/237 transactions/)).toBeTruthy();
+    expect(await screen.findByText(/237 transactions/, {}, LOAD)).toBeTruthy();
     const u = new URL(calls.find((c) => c.url.startsWith("/api/cash/transactions?"))!.url, "http://x");
     expect(u.searchParams.get("account_id")).toBe("acc1");
     expect(u.searchParams.get("limit")).toBe("50");
