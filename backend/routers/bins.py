@@ -217,7 +217,7 @@ async def create_batch(
     if not part:
         raise HTTPException(404, "Product not found")
     # Same serial rules as postings and PO receiving (one per unit, no repeats, none already in stock).
-    serials = await serial_intake.validate_intake(db, current.org_id, part, data.qty, data.serials) if data.serials else []
+    serials = await serial_intake.validate_intake(db, current.org_id, part, data.qty, data.serials)
     batch = StockItemBatch(
         org_id=current.org_id, part_id=data.part_id, location_id=data.location_id,
         bin_id=data.bin_id, unit_cost=_Dec(str(data.unit_cost)),

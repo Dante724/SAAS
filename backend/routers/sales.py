@@ -189,8 +189,9 @@ async def lookup_code(
     matched = {p.id: next((k for k in fields if (getattr(p, k, None) or "").lower() == low), "code") for p in parts}
     if not parts:
         from backend.models import SerializedItem
+        from backend.services.serial_intake import matches as _sn_matches
         si = (await db.execute(select(SerializedItem).where(
-            SerializedItem.org_id == current.org_id, SerializedItem.serial_number == code))).scalars().first()
+            SerializedItem.org_id == current.org_id, _sn_matches(SerializedItem.serial_number, code)))).scalars().first()
         if si:
             parts = (await db.execute(base.where(Part.id == si.part_id))).scalars().all()
             matched = {p.id: "serial" for p in parts}
@@ -739,8 +740,9 @@ async def scan_count(
     code = data.code.strip()
 
     # a serial identifies one specific unit
+    from backend.services.serial_intake import matches as _sn_matches
     unit = (await db.execute(select(SerializedItem).where(
-        SerializedItem.org_id == current.org_id, SerializedItem.serial_number == code))).scalars().first()
+        SerializedItem.org_id == current.org_id, _sn_matches(SerializedItem.serial_number, code)))).scalars().first()
     if unit:
         part = (await db.execute(select(Part).where(Part.id == unit.part_id))).scalar_one_or_none()
     else:

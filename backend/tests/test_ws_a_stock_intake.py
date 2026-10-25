@@ -244,6 +244,72 @@ async def test_bin_batch_intake_uses_the_same_serial_rules(client):
     assert r.status_code == 404
 
 
+async def test_raw_scan_finds_the_cleaned_up_serial_at_scan_and_write_off(client, db):
+    """Intake stores "SN-AB12"; scanning or writing off "sn-ab 12" must still find it, and an IMEI
+    saved before intake cleaned them up ("35-…" with dashes) still counts as in stock."""
+    H = await _register(client)
+    loc = await _loc(client, H)
+    p = await _product(client, H, serialized=True)
+    assert (await _post(client, H, loc, p["id"], 2, ["sn-ab 12", "sn-cd 34"])).status_code == 201
+    from urllib.parse import quote
+    r = await client.get(f"/api/inventory/scan?code={quote('sn-ab 12')}", headers=H)
+    assert r.status_code == 200 and r.json()["matched_on"] == "serial", r.text
+    r = await client.post(f"/api/catalog/products/{p['id']}/write-off",
+                          json={"location_id": loc, "serials": ["sn-cd 34"]}, headers=H)
+    assert r.status_code in (200, 201), r.text
+    # legacy dashed IMEI row
+    from backend.models import SerializedItem
+    db.add(SerializedItem(org_id=await _org(client, H), part_id=p["id"],
+                          serial_number=f"{GOOD[9][:2]}-{GOOD[9][2:8]}-{GOOD[9][8:]}", status="in_stock"))
+    await db.commit()
+    rows = (await client.post("/api/inventory/serials/check", json={"serials": [GOOD[9]]}, headers=H)).json()["rows"]
+    assert rows[0]["reason"] == "in_stock"
+
+
+async def _org(client, H):
+    return (await client.get("/api/auth/me", headers=H)).json()["org_id"]
+
+
+async def test_bin_batch_refuses_serial_tracked_stock_without_serials(client):
+    H = await _register(client)
+    p = await _product(client, H, serialized=True)
+    r = await client.post("/api/bins/batches", json={"part_id": p["id"], "location_id": await _loc(client, H),
+                                                     "unit_cost": 5, "qty": 2}, headers=H)
+    assert r.status_code == 422
+
+
+async def test_po_receive_blocks_one_imei_on_two_lines(client):
+    H = await _register(client)
+    a = await _product(client, H, serialized=True)
+    b = await _product(client, H, serialized=True)
+    sup = (await client.post("/api/suppliers", json={"name": "Sup 2L"}, headers=H)).json()
+    r = await client.post("/api/inventory/po", json={
+        "supplier_id": sup.get("id") or sup["supplier"]["id"], "location_id": await _loc(client, H),
+        "lines": [{"part_id": a["id"], "qty_ordered": 1, "unit_cost": 1},
+                  {"part_id": b["id"], "qty_ordered": 1, "unit_cost": 1}]}, headers=H)
+    po = (await client.get(f"/api/inventory/po/{r.json()['po_id']}", headers=H)).json()
+    r = await client.post(f"/api/inventory/po/{po['id']}/receive", json={"lines": [
+        {"po_line_id": ln["id"], "qty": 1, "serials": [GOOD[3]]} for ln in po["lines"]]}, headers=H)
+    assert r.status_code == 409 and "twice" in r.text.lower()
+
+
+async def test_resolve_import_reuses_a_product_with_the_same_sku(client):
+    H = await _register(client)
+    body = {"rows": [{"new_name": "Hinge", "new_sku": "HNG-1"}]}
+    first = (await client.post("/api/inventory/import/resolve-products", json=body, headers=H)).json()
+    again = (await client.post("/api/inventory/import/resolve-products", json=body, headers=H)).json()
+    assert first["created"] == 1 and again["created"] == 0
+    assert again["rows"][0]["part_id"] == first["rows"][0]["part_id"]
+
+
+async def test_preview_flags_fractional_qty_on_serial_tracked_rows(client):
+    H = await _register(client)
+    await _product(client, H, serialized=True, sku="FR-1")
+    rows = (await client.post("/api/inventory/postings/preview", json={"rows": [
+        {"code": "FR-1", "qty": 1.5}]}, headers=H)).json()["rows"]
+    assert rows[0]["qty_not_whole"] is True
+
+
 # ── 16b: PO receive ─────────────────────────────────────────────────────────
 async def _po(client, H, part_id, qty):
     sup = (await client.post("/api/suppliers", json={"name": f"Sup {uuid.uuid4().hex[:4]}"}, headers=H)).json()

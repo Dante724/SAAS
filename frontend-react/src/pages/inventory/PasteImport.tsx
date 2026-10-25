@@ -56,7 +56,7 @@ export default function PasteImport({ onAdd, onClose, canCreate }: { onAdd: (lin
         ? { new_name: (x.name || x.code || x.mpn || "").trim(), new_sku: x.code || null, new_mpn: x.mpn || null, product_type: x.product_type || null, cost: Number(x.purchase_price) || 0 }
         : { part_id: x.chosen }) });
       onAdd((r.rows || []).map((o: any, i: number) => ({ part_id: o.part_id, name: o.name, created: !!o.created,
-        qty: Math.max(1, Number(picked[i].qty) || 1), cost: Number(picked[i].purchase_price) || 0 })));
+        qty: Number(picked[i].qty) > 0 ? Number(picked[i].qty) : 1, cost: Number(picked[i].purchase_price) || 0 })));
     } catch (e: any) { setErr(e.message || "Couldn't add the rows"); setBusy(false); }
   }
 

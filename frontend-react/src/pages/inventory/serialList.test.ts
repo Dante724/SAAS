@@ -61,3 +61,12 @@ describe("addSerials", () => {
     expect(r.skipped).toBe(1);
   });
 });
+
+describe("localCheck across lines and length", () => {
+  it("blocks a serial already on another line and an over-long entry", () => {
+    const rows = localCheck(["ABC", "X".repeat(121)], ["abc"]);
+    expect(rows[0].status).toBe("block");
+    expect(rows[0].message).toMatch(/another line/);
+    expect(rows[1].message).toMatch(/Too long/);
+  });
+});

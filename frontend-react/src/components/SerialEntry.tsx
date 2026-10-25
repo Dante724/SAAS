@@ -1,39 +1,45 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { M } from "./Shell";
 import { api } from "../api/client";
-import { addSerials, localCheck, mergeServer, SerialRow, SerialStatus } from "../pages/inventory/serialList";
+import { addSerials, localCheck, mergeServer, MAX_SERIAL_LEN, SerialRow, SerialStatus } from "../pages/inventory/serialList";
 
 /** 16b — scan or paste serials / IMEIs for serial-tracked stock, one per unit.
  * Scanners type the code and press Enter, so focus stays in the box for the next scan.
  * Each entry is checked as you go: repeats and units already in stock are blocked; a wrong
  * IMEI check digit or a unit sold before is a warning. The server enforces the same rules. */
-export default function SerialEntry({ value, onChange, target, partId, onState, autoFocus }: {
+export default function SerialEntry({ value, onChange, target, partId, onState, autoFocus, others }: {
   value: string[];
   onChange: (v: string[]) => void;
   target?: number;                         // how many units this line needs
   partId?: string | null;
   onState?: (s: { blocked: number; warned: number; checking: boolean }) => void;
   autoFocus?: boolean;
+  others?: string[];                       // serials on the other lines of the same delivery
 }) {
   const [text, setText] = useState("");
   const [note, setNote] = useState<string | null>(null);
-  const [server, setServer] = useState<{ key: string; rows: { status: SerialStatus; message?: string | null }[] } | null>(null);
+  const [server, setServer] = useState<{ key: string; rows: { status: SerialStatus; message?: string | null }[] | null; error?: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const local = useMemo(() => localCheck(value), [value]);
+  const othersKey = (others || []).join("\n");
+  const local = useMemo(() => localCheck(value, others || []), [value, othersKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const key = value.join("\n");
+  const tooLong = value.some((v) => v.length > MAX_SERIAL_LEN);
 
-  // Ask the server once typing pauses; a stale answer (list changed since) is ignored.
+  // Ask the server once typing pauses; a stale answer (list changed since) is ignored. An
+  // over-long entry is already blocked here, and would make the server refuse the whole list.
   useEffect(() => {
-    if (!value.length) { setServer(null); return; }
+    if (!value.length || tooLong) { setServer(null); return; }
     const t = setTimeout(() => {
       api.post<any>("/inventory/serials/check", { serials: value, part_id: partId || null })
-        .then((r) => setServer({ key, rows: r.rows || [] })).catch(() => {});
+        .then((r) => setServer({ key, rows: r.rows || [] }))
+        .catch(() => setServer({ key, rows: null, error: "Couldn't check these against your stock just now. They'll be checked again when you save." }));
     }, 300);
     return () => clearTimeout(t);
-  }, [key, partId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [key, partId, tooLong]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const rows: SerialRow[] = mergeServer(local, server && server.key === key ? server.rows : null);
-  const checking = value.length > 0 && (!server || server.key !== key);
+  const fresh = server && server.key === key ? server : null;
+  const rows: SerialRow[] = mergeServer(local, fresh ? fresh.rows : null);
+  const checking = value.length > 0 && !tooLong && !fresh;
   const blocked = rows.filter((r) => r.status === "block").length;
   const warned = rows.filter((r) => r.status === "warn").length;
   useEffect(() => { onState?.({ blocked, warned, checking }); }, [blocked, warned, checking]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -95,6 +101,7 @@ export default function SerialEntry({ value, onChange, target, partId, onState, 
         </ul>
       )}
       {checking && <p className="text-[11px] text-ink-tertiary">Checking…</p>}
+      {fresh?.error && <p className="text-[11px] text-amber-800">{fresh.error}</p>}
     </div>
   );
 }

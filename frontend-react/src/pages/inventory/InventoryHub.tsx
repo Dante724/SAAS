@@ -1069,14 +1069,15 @@ function ReorderModal({ onClose, onCreated }: { onClose: () => void; onCreated?:
 type PType = "standard" | "serialized" | "expiry";
 type ReviewRow = PostRow & {
   match_status: "matched" | "unsure" | "new"; part_id: string | null; part_name?: string | null; sku?: string | null;
-  candidates?: { id: string; name: string; sku?: string; serialized?: boolean }[]; chosen: string;
+  candidates?: { id: string; name: string; sku?: string; serialized?: boolean; expiry_tracking?: boolean }[]; chosen: string;
   serialized?: boolean; expiry_tracking?: boolean; ptype: PType;          // 16a: type for a new product
   serials: string[]; serialState?: { blocked: number; checking: boolean }; expiry_date?: string;
 };
 // Is this review row serial-tracked, given what the user picked? (a match keeps its own type)
 const rowSerialized = (r: ReviewRow) => !r.chosen || r.chosen === "__new__" ? r.ptype === "serialized"
   : r.chosen === r.part_id ? !!r.serialized : !!r.candidates?.find((c) => c.id === r.chosen)?.serialized;
-const rowExpiry = (r: ReviewRow) => !r.chosen || r.chosen === "__new__" ? r.ptype === "expiry" : r.chosen === r.part_id && !!r.expiry_tracking;
+const rowExpiry = (r: ReviewRow) => !r.chosen || r.chosen === "__new__" ? r.ptype === "expiry"
+  : r.chosen === r.part_id ? !!r.expiry_tracking : !!r.candidates?.find((c) => c.id === r.chosen)?.expiry_tracking;
 const unitsOf = (r: ReviewRow) => Math.ceil(Number(r.qty) || 0);
 function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () => void; onDone: () => void }) {
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
@@ -1085,6 +1086,12 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
   const blank = (): PostRow => ({ code: "", mpn: "", name: "", qty: 1, purchase_price: 0, markup_pct: 0 });
   const [rows, setRows] = useState<PostRow[]>([blank()]);
   const [review, setReview] = useState<ReviewRow[] | null>(null);
+  const [kept, setKept] = useState<Record<string, { serials: string[]; ptype: PType; expiry_date?: string }>>({});
+  const rowKey = (r: { code?: string | null; mpn?: string | null; name?: string | null }) => [r.code || "", r.mpn || "", r.name || ""].join("|").toLowerCase();
+  const backToEdit = () => {
+    if (review) setKept(Object.fromEntries(review.map((r) => [rowKey(r), { serials: r.serials, ptype: r.ptype, expiry_date: r.expiry_date }])));
+    setReview(null);
+  };
   const [pasteOpen, setPasteOpen] = useState(false); const [pasteText, setPasteText] = useState("");
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null); const [info, setInfo] = useState<string | null>(null);
   const [mapCols, setMapCols] = useState<PasteField[] | null>(null); const [dataGrid, setDataGrid] = useState<string[][] | null>(null);
@@ -1132,7 +1139,12 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
     setBusy(true); setErr(null);
     try {
       const r = await api.post<any>("/inventory/postings/preview", { rows: clean.map((x) => ({ code: x.code || null, mpn: x.mpn || null, name: x.name || null, qty: Number(x.qty), purchase_price: Number(x.purchase_price) || null, markup_pct: x.markup_pct ? Number(x.markup_pct) : null, product_type: x.product_type || null })) });
-      setReview((r.rows || []).map((rr: any) => ({ ...rr, ptype: (rr.product_type || "standard") as PType, serials: rr.serials || [], chosen: rr.match_status === "matched" ? rr.part_id : (rr.candidates?.[0]?.id || "__new__") })));
+      // Back → edit → review again keeps what was scanned and chosen for the same row.
+      setReview((r.rows || []).map((rr: any) => {
+        const k = kept[rowKey(rr)];
+        return { ...rr, ptype: (k?.ptype || rr.product_type || "standard") as PType, serials: k?.serials?.length ? k.serials : (rr.serials || []),
+          expiry_date: k?.expiry_date, chosen: rr.match_status === "matched" ? rr.part_id : (rr.candidates?.[0]?.id || "__new__") };
+      }));
     } catch (e: any) { setErr(e.message || "Could not match rows"); } finally { setBusy(false); }
   }
   const extras = (r: ReviewRow) => ({
@@ -1269,6 +1281,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
                           : <span className="text-emerald-700 font-semibold flex items-center gap-0.5"><M n="check" c="text-[13px]" />All units entered</span>}
                       </div>
                       <SerialEntry value={r.serials} target={units} partId={isNew ? null : r.chosen}
+                        others={review.flatMap((x, j) => j !== i && rowSerialized(x) ? x.serials : [])}
                         onChange={(v) => setReviewRow(i, { serials: v })}
                         onState={(st) => setReviewRow(i, { serialState: { blocked: st.blocked, checking: st.checking } })} />
                     </div>
@@ -1285,7 +1298,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
           </>)}
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex justify-between gap-2">
-          <button onClick={review ? () => setReview(null) : onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">{review ? "Back" : "Cancel"}</button>
+          <button onClick={review ? backToEdit : onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">{review ? "Back" : "Cancel"}</button>
           {!review
             ? <button onClick={doPreview} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Matching…" : "Review & match →"}</button>
             : <button onClick={doCommit} disabled={busy || needSerials.length > 0 || badSerials.length > 0} title={needSerials.length ? "Enter a serial for each unit first" : undefined} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Posting…" : "Post stock"}</button>}

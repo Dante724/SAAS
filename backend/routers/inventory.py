@@ -149,9 +149,10 @@ async def scan_resolve(
                       else "code" if part.code == code else "mpn")
     else:
         from backend.models import SerializedItem
+        from backend.services.serial_intake import matches as _sn_matches
         si = (await db.execute(select(SerializedItem).where(
             SerializedItem.org_id == current.org_id,
-            SerializedItem.serial_number == code))).scalars().first()
+            _sn_matches(SerializedItem.serial_number, code)))).scalars().first()
         if si:
             part = (await db.execute(base.where(Part.id == si.part_id))).scalars().first()
             matched_serial = si.serial_number
@@ -437,7 +438,8 @@ async def preview_posting(
                 if q and q in n and n not in close:
                     close.append(n)
             cands = [{"id": names[n].id, "name": names[n].name, "sku": names[n].sku,
-                      "serialized": bool(names[n].serialized)} for n in close[:5]]
+                      "serialized": bool(names[n].serialized),
+                      "expiry_tracking": bool(names[n].expiry_tracking)} for n in close[:5]]
             status = "unsure" if cands else "new"
         # 16a: an existing product keeps its own type; the sheet's type only shapes new products.
         ptype = serial_intake.parse_product_type(row.product_type)
@@ -445,12 +447,14 @@ async def preview_posting(
         expiry = bool(part.expiry_tracking) if part else ptype == "expiry"
         have = len([x for x in (row.serials or []) if x and x.strip()])
         need = max(0, int(_math.ceil(row.qty or 0)) - have) if serialized else 0
+        whole = not serialized or abs((row.qty or 0) - round(row.qty or 0)) < 1e-9
         out.append({
             "index": i, "match_status": status,
             "product_type": "serialized" if serialized else "expiry" if expiry else "standard",
             "serialized": serialized, "expiry_tracking": expiry,
             "serials": [x for x in (row.serials or []) if x and x.strip()],
             "needs_serials": need,
+            "qty_not_whole": not whole,          # a serial-tracked row needs a whole quantity
             "part_id": part.id if part else None,
             "part_name": part.name if part else None,
             "sku": (part.sku if part else None) or code or None,
@@ -595,7 +599,16 @@ async def resolve_import_products(
         if not name:
             raise HTTPException(422, "Each row needs an existing product or a name for the new one")
         ptype = parse_product_type(r.product_type)
-        part = Part(org_id=current.org_id, name=name, sku=(r.new_sku or "").strip() or None,
+        sku = (r.new_sku or "").strip() or None
+        if sku:
+            # the same SKU twice (a retried import, or two rows) would make two products for one item
+            dup = (await db.execute(select(Part.id, Part.name).where(
+                Part.org_id == current.org_id, Part.active == True,  # noqa: E712
+                func.lower(Part.sku) == sku.lower()).limit(1))).first()
+            if dup:
+                out.append({"part_id": dup[0], "created": False, "name": dup[1]})
+                continue
+        part = Part(org_id=current.org_id, name=name, sku=sku,
                     barcode=(r.new_barcode or "").strip() or None,
                     mpn=await _checked_mpn(db, current.org_id, r.new_mpn),
                     cost_price=float(r.cost or 0),

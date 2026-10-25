@@ -464,6 +464,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                       {scanRow && (
                         <tr><td colSpan={5} className="px-3 pb-3 pt-0">
                           <SerialEntry value={serials[l.id] || []} target={remain} partId={l.part_id}
+                            others={Object.entries(serials).flatMap(([id, v]) => id !== l.id ? v : [])}
                             onChange={(v) => setSerials((m) => ({ ...m, [l.id]: v }))}
                             onState={(st2) => setSerState((m) => ({ ...m, [l.id]: { blocked: st2.blocked, checking: st2.checking } }))} />
                         </td></tr>

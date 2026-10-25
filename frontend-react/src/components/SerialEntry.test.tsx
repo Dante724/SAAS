@@ -59,6 +59,19 @@ describe("SerialEntry", () => {
   });
 });
 
+describe("SerialEntry when the check fails", () => {
+  it("stops saying Checking… and explains, without blocking", async () => {
+    post.mockReset();
+    post.mockRejectedValue(new Error("offline"));
+    const states: any[] = [];
+    render(<Harness target={1} onState={(s) => states.push(s)} />);
+    await userEvent.type(screen.getByLabelText("Scan or type a serial or IMEI"), `${A}{Enter}`);
+    expect(await screen.findByText(/Couldn't check these/)).toBeInTheDocument();
+    expect(screen.queryByText("Checking…")).not.toBeInTheDocument();
+    await waitFor(() => expect(states[states.length - 1]).toMatchObject({ blocked: 0, checking: false }));
+  });
+});
+
 describe("AssetStateTabs", () => {
   it("shows counts and defaults to Active", async () => {
     localStorage.removeItem("tekly.assets.state");

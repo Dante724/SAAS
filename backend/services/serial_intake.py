@@ -18,7 +18,7 @@ from typing import Annotated, Iterable, Optional
 
 from fastapi import HTTPException
 from pydantic import StringConstraints
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 
 from backend.services import identifiers as _ids
 
@@ -57,6 +57,23 @@ def normalize(value: Optional[str]) -> tuple[Optional[str], str]:
     return _ids.normalize("serial", v), "serial"
 
 
+def _canon(col):
+    """A stored serial compared the way intake stores it now (older rows may carry spaces)."""
+    return func.upper(func.replace(col, " ", ""))
+
+
+def matches(col, value: Optional[str]):
+    """SQL condition: the serial column holds this typed / scanned value. Used wherever a unit is
+    looked up by serial (sale, write-off, allocation), so "sn-ab 12" finds the stored "SN-AB12"
+    and an IMEI typed plain finds one saved before as "35-209900-176148-1"."""
+    norm, kind = normalize(value)
+    if not norm:
+        return col == ""  # never matches a real serial
+    if kind == "imei":
+        return func.replace(_canon(col), "-", "") == norm
+    return _canon(col) == norm
+
+
 def parse_product_type(raw: Optional[str]) -> str:
     """A supplier sheet's "Type" cell → standard | serialized | expiry."""
     t = re.sub(r"[^a-z/ -]", "", (raw or "").strip().lower()).strip()
@@ -79,14 +96,18 @@ async def check(db, org_id: str, values: Iterable[str]) -> list[dict]:
     wanted = {n for _, n, _ in entries if n}
     known: dict[str, list[tuple[str, str]]] = {}
     if wanted:
-        # Serials saved before intake normalised them may still carry spaces: compare without.
-        stored = func.upper(func.replace(SerializedItem.serial_number, " ", ""))
+        # Serials saved before intake normalised them may carry spaces (or dashes, for IMEIs).
+        stored = _canon(SerializedItem.serial_number)
+        dashless = func.replace(stored, "-", "")
+        imeis = {n for _, n, k in entries if n and k == "imei"}
         rows = (await db.execute(
-            select(stored, SerializedItem.status, Part.name)
+            select(stored, dashless, SerializedItem.status, Part.name)
             .join(Part, Part.id == SerializedItem.part_id)
-            .where(SerializedItem.org_id == org_id, stored.in_(wanted)))).all()
-        for sn, status, pname in rows:
-            known.setdefault(sn, []).append((status, pname))
+            .where(SerializedItem.org_id == org_id,
+                   or_(stored.in_(wanted), dashless.in_(imeis)) if imeis else stored.in_(wanted)))).all()
+        for sn, sn_nodash, status, pname in rows:
+            key = sn_nodash if sn_nodash in imeis else sn
+            known.setdefault(key, []).append((status, pname))
 
     seen: set[str] = set()
     out = []

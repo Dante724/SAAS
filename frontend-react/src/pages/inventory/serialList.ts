@@ -29,14 +29,20 @@ export function luhnOk(digits: string): boolean {
   return total % 10 === 0;
 }
 
-/** Local checks for the whole list, in order. A repeat is blocked; a bad IMEI checksum is a warning. */
-export function localCheck(values: string[]): SerialRow[] {
+export const MAX_SERIAL_LEN = 120;
+
+/** Local checks for the whole list, in order. A repeat (here or on another line of the same
+ * delivery, `others`) or an over-long entry is blocked; a bad IMEI checksum is a warning. */
+export function localCheck(values: string[], others: string[] = []): SerialRow[] {
   const seen = new Set<string>();
+  const elsewhere = new Set(others.map((v) => normalizeSerial(v).serial));
   return values.map((input) => {
     const { serial, kind } = normalizeSerial(input);
     let status: SerialStatus = "ok"; let message: string | null = null;
     if (!serial) { status = "block"; message = "Empty entry."; }
+    else if (input.length > MAX_SERIAL_LEN) { status = "block"; message = `Too long — a serial has at most ${MAX_SERIAL_LEN} characters.`; }
     else if (seen.has(serial)) { status = "block"; message = "Entered twice in this delivery."; }
+    else if (elsewhere.has(serial)) { status = "block"; message = "Also entered on another line of this delivery."; }
     else if (kind === "imei" && serial.length === 15 && !luhnOk(serial)) { status = "warn"; message = "This IMEI's check digit doesn't match — probably a typo."; }
     if (serial) seen.add(serial);
     return { input, serial, kind, status, message };
