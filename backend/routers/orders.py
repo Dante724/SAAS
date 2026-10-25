@@ -179,7 +179,7 @@ class RescheduleIn(BaseModel):
 class StatusChange(BaseModel):
     status: str
     note: Optional[str] = None
-    reason: Optional[str] = None   # cancellation reason when moving into a dropped status
+    reason: Optional[str] = Field(None, max_length=300)   # cancellation reason when moving into a dropped status
 
 class CommentIn(BaseModel):
     body: str
@@ -298,6 +298,8 @@ def _serialize_order_scalars(o: Order) -> dict:
         "location_id": o.location_id,       # ii144c: which location's bins a product line can come from
         "status": o.status,
         "cancel_reason": getattr(o, "cancel_reason", None),
+        "written_off": float(getattr(o, "written_off", 0) or 0),
+        "continued_from_order_id": getattr(o, "continued_from_order_id", None),
         "priority": o.priority,
         "complaint": o.complaint,
         "diagnosis": o.diagnosis,
@@ -1473,6 +1475,11 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
             fmt = await org_money(db, current.org_id)
             raise HTTPException(403, f"{order.order_number} still has {fmt(due)} to pay. Take the payment "
                                      "first, or ask someone who takes payments to close it.")
+    # Dropped jobs (the customer never collected, refused the repair…): a reason is required,
+    # the finished-work checks below are skipped and what's still owed is written off.
+    is_dropping = bool(target and (target.status_group or "") == "dropped" and not order.is_estimate)
+    if is_dropping and data.status != order.status and not ((data.reason or "").strip() or order.cancel_reason):
+        raise HTTPException(422, "Choose a reason for dropping this job.")
 
     # Phase B.7: enforce status transfer rules (allowed from->to for this role)
     from backend.routers.statuses import is_transition_allowed
@@ -1514,7 +1521,7 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     # Completion gate: when closing, enforce required checklist items + (optional)
     # customer signature. Only bites when the work has required checklist items or
     # the order's type opts in, so other closes are unaffected.
-    if is_closing:
+    if is_closing and not is_dropping:
         from backend.models import OrderChecklistItem, WorkOrderType
         req_items = (await db.execute(select(OrderChecklistItem).where(
             OrderChecklistItem.order_id == order.id,
@@ -1537,7 +1544,7 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
                 raise HTTPException(409, f"Fill in before closing: {', '.join(_missing)}.")
 
     # Orderry rule: cannot close an order with products not yet written off from stock
-    if is_closing:
+    if is_closing and not is_dropping:
         pending = sum((l.pending_stock or 0) for l in order.lines)
         if pending > 0:
             raise HTTPException(
@@ -1553,6 +1560,22 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     order.status = data.status
     if target and (target.status_group or "") == "dropped" and (data.reason or "").strip():
         order.cancel_reason = data.reason.strip()[:120]
+    # Write off (or, on reopen / a normal close, undo) what the customer still owes.
+    from backend.services.audit import record as _audit_wo
+    from backend.services.order_money import balance_due as _owed
+    _was_written_off = q2(float(order.written_off or 0))
+    order.written_off = 0.0
+    if is_dropping:
+        order.written_off = await _owed(db, order)
+        # Writing off what a customer owes is a money decision, not just a status change.
+        if order.written_off > _was_written_off and not await has_perm(db, current, "can_view_finance"):
+            raise HTTPException(403, f"This job still has {order.written_off:.2f} owed. Only someone who can use "
+                                     "finance can drop it and write that off — ask a manager.")
+    if q2(float(order.written_off or 0)) != _was_written_off:
+        await _audit_wo(db, org_id=current.org_id, actor_id=current.id, action="order.write_off",
+                        entity_type="order", entity_id=order.id,
+                        diff={"amount": q2(float(order.written_off or 0)), "previous": _was_written_off,
+                              "reason": order.cancel_reason if is_dropping else None})
     order.status_entered_at = now_utc()
     from backend.services.audit import record as _audit_sc
     await _audit_sc(db, org_id=current.org_id, actor_id=current.id, action="order.status_change",
@@ -1560,8 +1583,8 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     if is_closing:
         order.closed_at = now_utc()
         # Build 144dr — auto-draft an invoice on close (org opt-in). Never blocks
-        # the status change if it fails.
-        if not order.is_estimate:
+        # the status change if it fails. A dropped job isn't billed.
+        if not order.is_estimate and not is_dropping:
             try:
                 from backend.services.invoicing import auto_draft_on_close
                 async with db.begin_nested():     # a failure undoes only the half-made invoice
@@ -1651,7 +1674,8 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     if not order.is_estimate and order.client_id:
         from backend.services.ledger import order_charge_net, post_contact_ledger
         _net = await order_charge_net(db, order.client_id, order.id)
-        _target = q2(float(order.total or 0)) if is_closing else 0.0
+        # A dropped job is charged only what wasn't written off, so it leaves no debt.
+        _target = q2(float(order.total or 0) - float(order.written_off or 0)) if is_closing else 0.0
         _delta = q2(_target - _net)
         if _delta:
             _note = (f"Order {order.order_number} ready" if is_closing
