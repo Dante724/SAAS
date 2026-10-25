@@ -2349,6 +2349,12 @@ class ApiKey(Base):
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # apih1: keys can expire (None = never, which is what keys made before apih1 keep), and a
+    # rotation keeps the previous secret working until previous_expires_at so callers can swap.
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    previous_key_hash: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    previous_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    rotated_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
 class PaymentIntent(Base):
@@ -3476,3 +3482,20 @@ class PaymentWebhookEvent(Base):
     event_id: Mapped[str] = mapped_column(String(255))
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class ApiIdempotencyKey(Base):
+    """apih1: a public-API write sent with an Idempotency-Key header. The same key with the same
+    body replays the stored response; with a different body it is refused. Kept for 24 hours.
+    status_code is None while the first request is still running."""
+    __tablename__ = "api_idempotency_keys"
+    __table_args__ = (UniqueConstraint("org_id", "key_id", "idem_key", name="uq_api_idempotency_key"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    key_id: Mapped[str] = mapped_column(String, ForeignKey("api_keys.id"), index=True)
+    idem_key: Mapped[str] = mapped_column(String(255))
+    route: Mapped[str] = mapped_column(String(80))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    status_code: Mapped[Optional[int]] = mapped_column(Integer)
+    response_body: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
