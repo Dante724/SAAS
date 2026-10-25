@@ -1381,13 +1381,13 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     # Dropped jobs (the customer never collected, refused the repair…): a reason is required,
     # the finished-work checks below are skipped and what's still owed is written off.
     is_dropping = bool(target and (target.status_group or "") == "dropped" and not order.is_estimate)
-    if is_dropping and data.status != order.status and not ((data.reason or "").strip() or order.cancel_reason):
-        raise HTTPException(422, "Choose a reason for dropping this job.")
 
     # Phase B.7: enforce status transfer rules (allowed from->to for this role)
     from backend.routers.statuses import is_transition_allowed
     if not await is_transition_allowed(db, current.org_id, current.role_id, order.status, data.status):
         raise HTTPException(403, f"You can't move this order from '{order.status}' to '{data.status}'.")
+    if is_dropping and data.status != order.status and not ((data.reason or "").strip() or order.cancel_reason):
+        raise HTTPException(422, "Choose a reason for dropping this job.")
 
     # 144gr — Smart Fields: a custom field value can block entering a status.
     if target and order.status != data.status:
