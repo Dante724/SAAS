@@ -77,7 +77,7 @@ async def _reset_rate_limits():
     lookup_limiter.reset()
     node = app.middleware_stack   # built on the first request; None before that
     while node is not None:
-        if isinstance(node, RateLimitMiddleware):
+        if isinstance(node, RateLimitMiddleware) and hasattr(node, "_hits"):   # older in-process counter
             node._hits.clear()
         node = getattr(node, "app", None)
     yield
