@@ -16,6 +16,7 @@ export type Me = {
   clock_wo_enabled?: boolean; clock_attendance_enabled?: boolean;
   track_job_hours?: boolean; track_attendance?: boolean;
   mfa_enabled?: boolean; mfa_required?: boolean; email_verified?: boolean;
+  pin_set?: boolean;   // Tekly Go payment PIN
   location_id?: string | null;
 };
 

@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 import backend.core.scheduled  # noqa: F401 — registers periodic jobs
@@ -56,11 +56,13 @@ from backend.routers import (
     lookups,
     media,
     mfa,
+    mobile_messages,
     notifications,
     order_items,
     orders,
     payments,
     payroll,
+    pilot,
     platform,
     prefs,
     pricing,
@@ -107,7 +109,7 @@ ROUTERS = [
     bins, payroll, leads, pricing, sales, returns, transfers, bundles, appointments,
     chats, resources, timeclock, webhooks, payments, apikeys, v1,
     integrations_qbo, ai, catalog_products, tech, push, checklists, lookups, engage, settings_finance, rbac, directories, analytics, media, compliance, platform, mfa, sso, comms, integrations_xero, integrations_email, integrations_credentials, industry, schedules, conversions, warehouses, tasks, stock_docs, suppliers, printing, inbox, comms_ai, automations, insights, recommendations, order_items, prefs, admin, currencies, tags, telephony, custom_reports, regions, scan,
-    terminals, auto_print, v2,
+    terminals, auto_print, v2, mobile_messages, pilot,
 ]
 
 
@@ -159,6 +161,10 @@ app = FastAPI(
 from backend.core.cost_redaction import CostRedactionMiddleware  # noqa: E402
 
 app.add_middleware(CostRedactionMiddleware)
+# Which app (Tekly Go or the web) made the request; write sites read it via column defaults.
+from backend.core.client_source import ClientSourceMiddleware  # noqa: E402
+
+app.add_middleware(ClientSourceMiddleware)
 app.add_middleware(RequestContextMiddleware)
 from backend.core.observability import MetricsMiddleware, RateLimitMiddleware, SecurityHeadersMiddleware
 
@@ -313,6 +319,42 @@ async def serve_admin():
 async def serve_book(slug: str):
     # Appointment 2.0 — React page (main.tsx detects "/book/" and renders <PublicAppointment/>).
     return _serve_react()
+
+
+# ── Tekly Go (phone app, a second page of the React build) ──
+# Served at /go/. Its service worker lives at /go/sw.js and controls only /go/, so it never
+# touches the web app or the /tech worker's root scope.
+_go_dir = os.path.join(react_dir, "go")
+_go_index = os.path.join(_go_dir, "index.html")
+
+
+@app.get("/go", include_in_schema=False)
+async def serve_go_root():
+    return RedirectResponse("/go/", status_code=307)
+
+
+@app.get("/go/sw.js", include_in_schema=False)
+async def serve_go_sw():
+    if not os.path.isfile(os.path.join(_go_dir, "sw.js")):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    return FileResponse(os.path.join(_go_dir, "sw.js"), media_type="text/javascript",
+                        headers={"Service-Worker-Allowed": "/go/", "Cache-Control": "no-cache"})
+
+
+@app.get("/go/manifest.webmanifest", include_in_schema=False)
+async def serve_go_manifest():
+    if not os.path.isfile(os.path.join(_go_dir, "manifest.webmanifest")):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    return FileResponse(os.path.join(_go_dir, "manifest.webmanifest"), media_type="application/manifest+json",
+                        headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/go/{path:path}", include_in_schema=False)
+async def serve_go(path: str = ""):
+    # Every Go route (/go/today, /go/job/<id>, /go/scan …) is the same shell; the router picks the screen.
+    if os.path.isfile(_go_index):
+        return FileResponse(_go_index, headers={"Cache-Control": "no-cache"})
+    return HTMLResponse(_NOT_BUILT, status_code=503)
 
 
 # ── Technician PWA ──

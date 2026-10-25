@@ -26,6 +26,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship, validates
 
+from backend.core.client_source import current_client
 from backend.db.database import Base
 
 
@@ -188,6 +189,9 @@ class Organisation(Base):
     # 144ii — Orderry-exact accept/decline transitions + require-signature, per doc type.
     oe_estimate_require_signature: Mapped[bool] = mapped_column(Boolean, default=False)
     oe_wo_require_signature: Mapped[bool] = mapped_column(Boolean, default=False)
+    # gc144g3 — what a customer agrees to when they sign at drop-off (Tekly Go intake). Empty =
+    # the built-in wording (DEFAULT_DROPOFF_TERMS in routers/mobile_messages.py).
+    dropoff_terms: Mapped[Optional[str]] = mapped_column(Text)
     oe_estimate_accept_status: Mapped[Optional[str]] = mapped_column(String(50))
     oe_estimate_decline_status: Mapped[Optional[str]] = mapped_column(String(50))
     oe_wo_accept_status: Mapped[Optional[str]] = mapped_column(String(50))
@@ -387,6 +391,9 @@ class Client(Base):
     loyalty_tier: Mapped[str] = mapped_column(String(50), default="standard")
     consent_phone: Mapped[bool] = mapped_column(Boolean, default=True)
     consent_email: Mapped[bool] = mapped_column(Boolean, default=True)
+    # WhatsApp is its own consent (agreeing to texts isn't agreeing to WhatsApp).
+    # None = not asked yet; staff record the customer's answer from the phone app.
+    consent_whatsapp: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     balance: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     blacklisted: Mapped[bool] = mapped_column(Boolean, default=False)
     # Build 122: preferred billing currency for this contact (None → org base). Documents
@@ -604,6 +611,9 @@ class Order(Base):
     # 144dg — {original_blob_id: marked_blob_id}: a marked-up copy of an intake photo. The ORIGINAL
     # (in intake_photos) is never mutated, so the untouched check-in shot survives for disputes.
     intake_markups: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
+    # gc144g3 — {blob_id: "intake"|"before"|"after"|"damage"}: what a job photo shows, so a
+    # before/after pair or a damage shot can be found again (unlabelled photos are just "photos").
+    intake_photo_labels: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
     public_token: Mapped[Optional[str]] = mapped_column(String(40), unique=True, index=True, default=lambda: secrets.token_urlsafe(16))  # 144cu — unique track link, never repeated
     client_msg_unread: Mapped[int] = mapped_column(Integer, default=0)  # 144ba: unread customer messages
     rec_unread: Mapped[int] = mapped_column(Integer, default=0)  # 144bd: unread recommendation decisions (approve/decline)
@@ -696,6 +706,8 @@ class OrderStatusLog(Base):
     changed_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     note: Mapped[Optional[str]] = mapped_column(Text)
     changed_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # "go/<version>" | "web" | None (no request): which app made the change (core/client_source)
+    client: Mapped[Optional[str]] = mapped_column(String(32), default=current_client)
     order: Mapped["Order"] = relationship(back_populates="status_logs")
 
 class OrderComment(Base):
@@ -706,6 +718,7 @@ class OrderComment(Base):
     body: Mapped[str] = mapped_column(Text)
     visible_to_client: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    client: Mapped[Optional[str]] = mapped_column(String(32), default=current_client)   # which app (core/client_source)
     order: Mapped["Order"] = relationship(back_populates="comments")
 
 # ─────────────────────────────────────────────
@@ -1506,9 +1519,9 @@ class ConsentLog(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     client_id: Mapped[str] = mapped_column(String, ForeignKey("clients.id"), index=True)
-    channel: Mapped[str] = mapped_column(String(20))     # email|phone|marketing
+    channel: Mapped[str] = mapped_column(String(20))     # email|phone|whatsapp|marketing
     granted: Mapped[bool] = mapped_column(Boolean)
-    source: Mapped[Optional[str]] = mapped_column(String(60))   # staff|appointment|import|erasure
+    source: Mapped[Optional[str]] = mapped_column(String(60))   # staff|appointment|import|erasure|mobile_verbal
     actor_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
@@ -1773,6 +1786,7 @@ class AuditLog(Base):
     entity_id: Mapped[Optional[str]] = mapped_column(String)
     diff: Mapped[Optional[dict]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    client: Mapped[Optional[str]] = mapped_column(String(32), default=current_client)   # which app (core/client_source)
 
 
 class EventFeedItem(Base):
@@ -3741,3 +3755,39 @@ class PaymentWebhookEvent(Base):
 
 # ii144a: registers the before-flush hook that mirrors parts.barcode into product_barcodes.
 from backend.services import product_codes as _product_codes  # noqa: E402,F401
+
+
+class IdempotencyRecord(Base):
+    """One row per client-chosen Idempotency-Key, so a create or a payment that is retried
+    (double tap, a timeout on a phone's flaky connection) runs once and the retry gets the
+    first answer back. `response` is null while the first request is still in flight.
+    Rows older than 48h are swept by services/idempotency.sweep()."""
+    __tablename__ = "idempotency_records"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    key: Mapped[str] = mapped_column(String(80))
+    endpoint: Mapped[str] = mapped_column(String(80))
+    response: Mapped[Optional[dict]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    __table_args__ = (UniqueConstraint("org_id", "key", name="uq_idempotency_org_key"),)
+
+
+class MessageHandoff(Base):
+    """A text or WhatsApp a staff member opened on their own phone from Tekly Go. Tekly fills in
+    the message; the phone's own SMS/WhatsApp app sends it after the person taps Send, so Tekly
+    can't know it was delivered, only what the person told us when they came back ("Sent?").
+    state: opened → sent | cancelled, or unknown when nobody answered within 24h. Only `sent`
+    goes into the customer's portal thread."""
+    __tablename__ = "message_handoffs"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id", ondelete="SET NULL"), index=True)
+    client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id", ondelete="SET NULL"))
+    actor_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id", ondelete="SET NULL"))
+    channel: Mapped[str] = mapped_column(String(10))            # sms|whatsapp
+    template_id: Mapped[Optional[str]] = mapped_column(String)
+    body: Mapped[str] = mapped_column(Text)
+    to_number: Mapped[Optional[str]] = mapped_column(String(32))
+    state: Mapped[str] = mapped_column(String(12), default="opened")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime)

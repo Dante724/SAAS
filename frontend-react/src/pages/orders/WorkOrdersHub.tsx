@@ -8,6 +8,7 @@ import { api } from "../../api/client";
 import { alertDialog, promptDialog } from "../../lib/dialog";
 import { Order, deviceName, money } from "./types";
 import WODrawer from "./WODrawer";
+import { JobLabelsButton } from "./JobLabels";
 import CreateOrderDrawer from "./CreateOrderDrawer";
 import Pager from "../../components/Pager";
 import { Gate } from "../../context/Me";
@@ -302,6 +303,9 @@ export default function WorkOrdersHub() {
                     <div className="flex items-center justify-between"><span className="text-[11px] font-bold text-ink-tertiary ">Filter work orders</span>{activeFacets ? <button onClick={() => { setFAssignee(""); setFPriority(""); setFScheduled(""); }} className="text-[11px] font-semibold text-primary">Clear</button> : null}</div>
                     <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Assignee</span>
                       <select value={fAssignee} onChange={(e) => setFAssignee(e.target.value)} className="w-full text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-medium"><option value="">Any</option><option value="__none">Unassigned</option>{assignees.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
+                    {fAssignee && fAssignee !== "__none" && (
+                      <JobLabelsButton pick={{ assignedToId: fAssignee }} label="Print QR labels for all their open jobs" className="text-[11px] font-semibold text-primary hover:underline text-left" />
+                    )}
                     <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Priority</span>
                       <select value={fPriority} onChange={(e) => setFPriority(e.target.value)} className="w-full text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-medium"><option value="">Any</option><option value="0">Normal</option><option value="1">High</option><option value="2">Urgent</option><option value="urgent">High or urgent</option></select></label>
                     <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Scheduling</span>
@@ -368,6 +372,7 @@ export default function WorkOrdersHub() {
               {statuses.map((s) => <option key={s.id} value={s.key || norm(s.name)} className="text-ink-primary">{s.name}</option>)}
             </select>
             <div className="h-4 w-px bg-white/30" />
+            <JobLabelsButton pick={{ orderIds: [...sel] }} label="Print QR labels" className="px-2.5 py-1 rounded-lg bg-white/15 hover:bg-white/25" />
             <Gate perm="can_delete_orders"><Gate perm="can_delete_tickets"><button disabled={busy} onClick={bulkArchive} className="px-2.5 py-1 rounded-lg bg-white/15 hover:bg-white/25 flex items-center gap-1"><M n="archive" c="text-[13px]" />Archive</button></Gate></Gate>
             <button onClick={() => setSel(new Set())} className="ml-auto px-2.5 py-1 rounded-lg bg-white/15 hover:bg-white/25">Clear</button>
           </div>
