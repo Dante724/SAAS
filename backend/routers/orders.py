@@ -1608,6 +1608,10 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         await emit_event(db, current.org_id, "order.status_changed", {
             "id": order.id, "order_number": order.order_number,
             "from": prev, "to": data.status})
+        if is_closing:   # WS-C: registered and documented, but never fired before
+            await emit_event(db, current.org_id, "order.closed", {
+                "id": order.id, "order_number": order.order_number, "status": data.status,
+                "is_estimate": bool(order.is_estimate)})
         await db.commit()
     except Exception:
         pass

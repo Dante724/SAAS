@@ -26,6 +26,8 @@ import { ChecklistList, ChecklistEditor } from "./ChecklistSettings";
 import CardReadersCard from "./CardReadersCard";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
 import TelephonySettings from "./TelephonySettings";
+import ApiKeysCard from "./ApiKeysCard";
+
 
 // Full section set = the registry sections + a few that have no nav entry of their own.
 type Section = SectionId | "overview" | "automation" | "payroll-rules";
@@ -445,7 +447,7 @@ export default function SettingsHub() {
               <IntegrationsHub data={integrations} goSection={setSec} reload={() => setIntegrations(null)} />
               <CardReadersCard />
               <TelephonySettings />
-              <ApiKeysCard />
+              <ApiKeysSection />
               <WebhooksCard />
             </div>
           )}
@@ -1230,27 +1232,8 @@ function CredDrawer({ provider, status, onClose, onSaved }: {
     </div>, document.body);
 }
 
-/* ── API keys (create once / revoke) → /api-keys ── */
-function ApiKeysCard() {
-  const [keys, setKeys] = useState<any[] | null>(null);
-  const [label, setLabel] = useState(""); const [fresh, setFresh] = useState<string | null>(null); const [busy, setBusy] = useState(false);
-  const load = () => api.get<any>("/api-keys").then((r) => setKeys(r.items || r || [])).catch(() => setKeys([]));
-  useEffect(() => { load(); }, []);
-  async function create() { if (!label.trim()) return; setBusy(true); try { const r = await api.post<any>("/api-keys", { name: label.trim() }); setFresh(r.key || null); setLabel(""); load(); } catch (e: any) { alertDialog(e.message); } finally { setBusy(false); } }
-  async function revoke(id: string) { if (!(await confirmDialog("Revoke this key?", { danger: true, confirmLabel: "Revoke" }))) return; try { await api.del(`/api-keys/${id}`); load(); } catch (e: any) { alertDialog(e.message); } }
-  return (
-    <SectionCard title="API keys" count={keys?.length ?? undefined}>
-      <div className="p-4 space-y-3">
-        {fresh && <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2">Copy your key now — it won't be shown again:<br /><span className="tabular-nums break-all">{fresh}</span></div>}
-        <div className="flex items-end gap-2">
-          <div className="flex-1"><label className={lbl}>New key name</label><input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Zapier" className={field} /></div>
-          <button onClick={create} disabled={busy} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">Create</button>
-        </div>
-      </div>
-      <SecTable rows={keys} onDelete={(k) => revoke(k.id)} cols={[["Name", (k) => k?.name || "—"], ["Prefix", (k) => k?.prefix || "—"], ["Scopes", (k) => k?.scopes || "—"]]} />
-    </SectionCard>
-  );
-}
+/* ── API keys → ./ApiKeysCard (WS-C: scoped keys, per-key limits) ── */
+function ApiKeysSection() { return <ApiKeysCard Card={SectionCard} />; }
 
 /* ── Webhooks (create / delete) → /webhooks ── */
 function WebhooksCard() {
@@ -2312,7 +2295,7 @@ function FormsDesigner({ types, onAddType, onDeleteType, onAdvanced }: {
   const choices: { id: string; label: string; form: FormKey; typeId?: string; type?: any }[] = [
     ...types.map((t) => ({ id: `type:${t.id}`, label: `Work order · ${t.name}`, form: "order" as FormKey, typeId: t.id, type: t })),
     { id: "client", label: "Client", form: "client" }, { id: "device", label: "Device / asset", form: "device" },
-    { id: "product", label: "Product", form: "product" },
+    { id: "product", label: "Product", form: "product" }, { id: "lead", label: "Inquiry", form: "lead" },
   ];
   const cur = choices.find((c) => c.id === pick) || choices[0];
   const pill = (on: boolean) => `px-3.5 py-1.5 rounded-full text-xs font-semibold border transition-colors ${on ? "bg-primary text-white border-primary" : "bg-white text-ink-secondary border-slate-200 hover:border-slate-300"}`;
