@@ -1061,8 +1061,9 @@ async def create_order(
     try:
         from backend.services import automation as _auto
         await _auto.run(db, current.org_id, "order_created", order=order)
+        await db.commit()   # its tasks/tags/assignments and queued webhooks were never committed
     except Exception:
-        pass
+        await db.rollback()
 
     result = await db.execute(
         select(Order)

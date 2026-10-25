@@ -121,10 +121,12 @@ async def get_intent(
 
 
 @router.post("/intents/{intent_id}/view")
-async def mark_viewed(intent_id: str, db: AsyncSession = Depends(get_db)):
+async def mark_viewed(intent_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     """A2: public hook — the client opened the pay link. Advances Created→Viewed
     so staff can see the link was seen. Idempotent; never regresses a later state."""
     from datetime import datetime as _dt
+    from backend.services import ratelimit
+    await ratelimit.aenforce("pay_view_ip", ratelimit.client_ip(request), 60, 60)   # B13
     i = (await db.execute(select(PaymentIntent).where(PaymentIntent.id == intent_id))).scalar_one_or_none()
     if not i:
         raise HTTPException(404, "Intent not found")

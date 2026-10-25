@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,12 +35,27 @@ async def list_calls(
     return {"items": [{"id": c.id, "provider": c.provider, "direction": c.direction,
                        "from": c.from_number, "to": c.to_number, "client_id": c.client_id,
                        "status": c.status, "duration_s": c.duration_s,
-                       "recording_url": c.recording_url, "provider_sid": c.provider_sid,
+                       "recording_url": safe_recording_url(c.recording_url), "provider_sid": c.provider_sid,
                        "created_at": c.created_at.isoformat() if c.created_at else None}
                       for c in rows]}
 
 
 MISSED = ("missed", "no-answer", "failed", "busy", "canceled")
+
+
+def safe_recording_url(url):
+    """B9: only an https link with a host is ever stored or returned (never javascript:, data:)."""
+    from urllib.parse import urlparse
+    if not url or not isinstance(url, str):
+        return None
+    u = url.strip()
+    try:
+        p = urlparse(u)
+    except ValueError:
+        return None
+    if p.scheme.lower() != "https" or not p.hostname or any(ch in u for ch in "\x00\r\n\t <>\"'"):
+        return None
+    return u
 
 
 async def record_inbound_call(db, org_id, *, provider, from_number, to_number, status,
@@ -70,15 +85,24 @@ async def record_inbound_call(db, org_id, *, provider, from_number, to_number, s
 
 
 class CallEventIn(BaseModel):
-    provider: str = "manual"
+    provider: str = Field("manual", max_length=20)
     direction: str = "inbound"
-    from_number: Optional[str] = None
-    to_number: Optional[str] = None
-    status: str = "completed"
-    duration_s: int = 0
-    recording_url: Optional[str] = None
-    external_id: Optional[str] = None
-    extension: Optional[str] = None   # D2: the dialled extension, when the provider sends one
+    from_number: Optional[str] = Field(None, max_length=40)
+    to_number: Optional[str] = Field(None, max_length=40)
+    status: str = Field("completed", max_length=40)
+    duration_s: int = Field(0, ge=0, le=7 * 86400)
+    recording_url: Optional[str] = Field(None, max_length=400)
+    external_id: Optional[str] = Field(None, max_length=120)   # the provider's call id: retries upsert on it
+    extension: Optional[str] = Field(None, max_length=20)   # D2: the dialled extension, when the provider sends one
+
+    @field_validator("recording_url")
+    @classmethod
+    def _https_recording(cls, v):
+        if v in (None, ""):
+            return None
+        if safe_recording_url(v) is None:
+            raise ValueError("recording_url must be an https:// link")
+        return v.strip()
 
 
 @router.post("/calls/webhook", status_code=201)
@@ -94,11 +118,45 @@ async def call_webhook(
     await verify_org_webhook(db, org_id, request)
     if data.direction not in ("inbound", "outbound"):
         raise HTTPException(422, "direction must be inbound or outbound")
-    return await record_inbound_call(
-        db, org_id, provider=(data.provider or "manual")[:20], direction=data.direction,
-        from_number=data.from_number, to_number=data.to_number, status=(data.status or "completed")[:20],
-        duration_s=data.duration_s, recording_url=data.recording_url,
-        external_id=data.external_id, extension=data.extension)
+    provider = (data.provider or "manual")[:20]
+    ext_id = (data.external_id or "").strip() or None
+    if ext_id:
+        # B9: a provider retry (same call id) updates the call instead of logging it twice.
+        existing = (await db.execute(select(Call).where(
+            Call.org_id == org_id, Call.provider == provider, Call.external_id == ext_id))).scalar_one_or_none()
+        if existing:
+            return _JSON(await _update_call(db, existing, data), 200)
+    try:
+        return await record_inbound_call(
+            db, org_id, provider=provider, direction=data.direction,
+            from_number=data.from_number, to_number=data.to_number, status=(data.status or "completed")[:20],
+            duration_s=data.duration_s, recording_url=data.recording_url,
+            external_id=ext_id, extension=data.extension)
+    except IntegrityError:          # lost a race with a concurrent retry of the same call
+        await db.rollback()
+        existing = (await db.execute(select(Call).where(
+            Call.org_id == org_id, Call.provider == provider, Call.external_id == ext_id))).scalar_one_or_none()
+        if not existing:
+            raise
+        return _JSON(await _update_call(db, existing, data), 200)
+
+
+def _JSON(body, status):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(body, status_code=status)
+
+
+async def _update_call(db, call: Call, data: "CallEventIn") -> dict:
+    """Apply a later event for a call we already logged (status, duration, recording)."""
+    if data.status:
+        call.status = data.status[:20]
+    if data.duration_s:
+        call.duration_s = data.duration_s
+    if data.recording_url:
+        call.recording_url = data.recording_url
+    await db.commit()
+    return {"id": call.id, "client_id": call.client_id, "matched": call.client_id is not None,
+            "client_created": False, "follow_up_task_id": None, "duplicate": True}
 
 
 # ── D1: Twilio Programmable Voice webhooks ───────────────────────────────────

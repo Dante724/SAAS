@@ -48,3 +48,15 @@ export function printHtmlInFrame(html: string): void {
   ifr.onload = () => { try { ifr.contentWindow?.focus(); ifr.contentWindow?.print(); } catch { /* noop */ } setTimeout(() => ifr.remove(), 2000); };
   document.body.appendChild(ifr);
 }
+
+/** An https:// link with a host, else null. Use before putting a URL that came from outside
+ *  (a provider webhook, an import) into href, so javascript: and data: links never render. */
+export function safeHttpsUrl(url: unknown): string | null {
+  if (typeof url !== "string" || !url.trim()) return null;
+  try {
+    const u = new URL(url.trim());
+    return u.protocol === "https:" && u.hostname ? u.href : null;
+  } catch {
+    return null;
+  }
+}

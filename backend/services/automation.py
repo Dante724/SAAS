@@ -113,24 +113,20 @@ async def _do_action(db, org_id, rule: AutomationRule, order, part) -> Optional[
         return f"tagged “{cfg['tag']}”"
 
     if at == "webhook" and cfg.get("url"):
-        payload = {"event": rule.event, "rule": rule.name,
-                   "order_id": getattr(order, "id", None),
-                   "order_number": getattr(order, "order_number", None),
-                   "status": getattr(order, "status", None)}
+        # B2: through the signed outbox, like webhook endpoints: delivered after commit, pinned
+        # to the IP that passed the SSRF check, retried on the backoff schedule, and logged.
+        # The summary stays generic (B11): no addresses or exception names in the feed.
+        from backend.services.webhooks import queue_automation_webhook
         try:
-            # Build 144cq (SSRF fix): reject private/loopback/link-local hosts
-            # and cloud-metadata addresses before making the request.
-            from backend.core.ssrf import UnsafeURLError, assert_safe_url
-            try:
-                assert_safe_url(cfg["url"])
-            except UnsafeURLError as ue:
-                return f"webhook blocked (unsafe url): {ue}"
-            import httpx
-            async with httpx.AsyncClient(timeout=4.0, follow_redirects=False) as client:
-                await client.post(cfg["url"], json=payload)
-            return f"called webhook {cfg['url']}"
-        except Exception as e:   # network best-effort — never fail the request
-            return f"webhook {cfg['url']} failed: {type(e).__name__}"
+            return await queue_automation_webhook(db, org_id, rule, {
+                "_url": cfg["url"], "rule": rule.name, "rule_id": rule.id, "trigger": rule.event,
+                "order_id": getattr(order, "id", None),
+                "order_number": getattr(order, "order_number", None),
+                "status": getattr(order, "status", None)})
+        except Exception:  # noqa: BLE001 — never fail the request that fired the rule
+            import logging
+            logging.getLogger("tekly.automation").exception("automation webhook could not be queued")
+            return "webhook could not be queued"
 
     if at == "notify":
         msg = cfg.get("message") or "Automation notification"

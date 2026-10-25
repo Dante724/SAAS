@@ -184,7 +184,9 @@ class Organisation(Base):
     cash_category_sales_id: Mapped[Optional[str]] = mapped_column(String)
     # Build 110: shared secret for inbound provider webhooks (inbox, comms). Generated at
     # registration; rotatable from Settings -> API. Inbound posts must present it.
-    webhook_secret: Mapped[Optional[str]] = mapped_column(String(64))
+    # whh1 (B8): every org gets one at creation, whatever the path (registration, platform admin,
+    # seed); the migration backfilled orgs that had none, and inbound posts now fail closed.
+    webhook_secret: Mapped[Optional[str]] = mapped_column(String(64), default=lambda: secrets.token_urlsafe(24))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     locations: Mapped[list["Location"]] = relationship(back_populates="org")
@@ -2033,16 +2035,36 @@ class TimeEntryAudit(Base):
     at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 
+def _new_webhook_secret() -> str:
+    """A fresh endpoint signing secret, encrypted for storage (see services.webhooks)."""
+    from backend.services.crypto import encrypt
+    return encrypt("whsec_" + secrets.token_urlsafe(32))
+
+
 class WebhookEndpoint(Base):
-    """A customer-registered URL that receives event callbacks."""
+    """A customer-registered URL that receives event callbacks.
+
+    whh1: the signing secret is a `whsec_` token stored encrypted (services.crypto) and shown only
+    on create / rotate. A rotation keeps the previous secret signing alongside the new one until
+    previous_secret_expires_at. kind="automation" rows are the hidden targets of automation-rule
+    webhook actions (source_id = the rule) so those go through the same signed, pinned outbox.
+    Deleting is a soft delete (deleted_at) so the delivery log keeps its rows."""
     __tablename__ = "webhook_endpoints"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     url: Mapped[str] = mapped_column(String(500))
-    secret: Mapped[str] = mapped_column(String(64), default=_uuid)
+    secret: Mapped[str] = mapped_column(String(500), default=lambda: _new_webhook_secret())
     events: Mapped[str] = mapped_column(String(500), default="*")  # csv of events or *
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    description: Mapped[Optional[str]] = mapped_column(String(200))
+    kind: Mapped[str] = mapped_column(String(20), default="endpoint", server_default="endpoint")  # endpoint|automation
+    source_id: Mapped[Optional[str]] = mapped_column(String, index=True)   # automation rule id
+    previous_secret: Mapped[Optional[str]] = mapped_column(String(500))
+    previous_secret_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    failing_since: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    disabled_reason: Mapped[Optional[str]] = mapped_column(String(200))
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
 class WebhookDelivery(Base):
@@ -2053,12 +2075,17 @@ class WebhookDelivery(Base):
     endpoint_id: Mapped[str] = mapped_column(String, ForeignKey("webhook_endpoints.id"), index=True)
     event: Mapped[str] = mapped_column(String(60))
     payload: Mapped[str] = mapped_column(Text, default="{}")
-    status: Mapped[str] = mapped_column(String(12), default="pending")  # pending|sent|failed
+    status: Mapped[str] = mapped_column(String(12), default="pending")  # pending|sending|sent|failed|abandoned
     response_code: Mapped[Optional[int]] = mapped_column(Integer)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
     delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # whh1 (B5): when the retry sweep may try a failed row again (None = due now, or given up
+    # once attempts reach the schedule's end); claimed_at lets the sweep reclaim rows a crashed
+    # worker left in "sending".
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
 class Lead(Base):
@@ -2927,7 +2954,9 @@ class Call(Base):
     Populated by the provider webhook; the provider itself is a gated seam."""
     __tablename__ = "calls"
     # D1: one row per provider call (Twilio CallSid), so webhook retries never duplicate.
-    __table_args__ = (Index("uq_calls_org_provider_sid", "org_id", "provider_sid", unique=True),)
+    # whh1 (B9): the generic call webhook upserts on the provider's own call id.
+    __table_args__ = (Index("uq_calls_org_provider_sid", "org_id", "provider_sid", unique=True),
+                      Index("uq_calls_org_provider_external", "org_id", "provider", "external_id", unique=True))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     provider: Mapped[str] = mapped_column(String(20), default="manual")   # aircall|twilio|zadarma|manual

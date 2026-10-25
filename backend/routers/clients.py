@@ -879,11 +879,12 @@ async def client_calls(
     rows = (await db.execute(select(Call).where(
         Call.org_id == current.org_id, Call.client_id == client_id)
         .order_by(Call.id.desc()).limit(100))).scalars().all()
+    from backend.routers.comms import safe_recording_url as _safe_rec
     return {"items": [{
         "id": c.id, "direction": c.direction, "provider": c.provider,
         "from_number": c.from_number, "to_number": c.to_number,
         "duration_s": getattr(c, "duration_s", None),
-        "recording_url": getattr(c, "recording_url", None),
+        "recording_url": _safe_rec(getattr(c, "recording_url", None)),   # B9
         "created_at": c.created_at.isoformat() if getattr(c, "created_at", None) else None,
     } for c in rows]}
 
