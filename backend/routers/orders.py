@@ -1627,7 +1627,8 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         if is_closing and not prev_terminal and not order.is_estimate:
             await emit_event(db, current.org_id, "order.closed", {
                 "id": order.id, "order_number": order.order_number, "status": data.status,
-                "total": order.total, "closed_at": order.closed_at})
+                "total": order.total,
+                "closed_at": order.closed_at.replace(microsecond=0).isoformat() + "Z" if order.closed_at else None})
         await db.commit()
     except Exception:
         pass

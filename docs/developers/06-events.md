@@ -34,7 +34,7 @@ Subscribe to `*` (**All events** in the app) to get every event, including ones 
 
 ### General notes
 
-- Timestamps in record payloads are UTC, ISO 8601 with `Z` and no fractions, for example `2026-10-25T18:06:01Z`. The exceptions are noted below.
+- Timestamps in record payloads are UTC, ISO 8601 with `Z` and no fractions, for example `2026-10-25T18:06:01Z`. Scheduled times (`scheduled_for`) are the exception: they are shop wall-clock time with no `Z`.
 - Money is a JSON number in the shop's currency.
 - Ids match the [API](04-resources.md), so you can fetch the full record, for example `GET /orders/{data.id}`.
 - A field shown as `null` below can also hold a value, and the other way round.
@@ -128,11 +128,11 @@ A work order moved from an open status to a closed or dropped one. Moving betwee
   "order_number": "WO-01042",
   "status": "done",
   "total": 129.0,
-  "closed_at": "2026-10-25 18:06:54.448515"
+  "closed_at": "2026-10-25T18:06:54Z"
 }
 ```
 
-**Note:** `closed_at` is in a different format from other timestamps. It's UTC with a space instead of `T`, no `Z`, and microseconds. Parse it leniently, or use the envelope's `created_at`.
+`closed_at` is UTC, in the same ISO 8601 format as the other timestamps.
 
 ## `estimate.accepted`
 
@@ -184,7 +184,7 @@ An appointment was booked.
 ```json
 {
   "id": "e02f7c4a-9b1d-4e6f-a83c-5d2b0f9e7c16",
-  "scheduled_for": "2026-10-28T10:30:00Z",
+  "scheduled_for": "2026-10-28T10:30:00",
   "duration_min": 60,
   "status": "confirmed",
   "client_id": "6f1c2a9d-3e4b-4c8a-9f17-5b2d8e0a6c31",
@@ -197,7 +197,7 @@ An appointment was booked.
 }
 ```
 
-**Note:** `scheduled_for` is the shop's **wall-clock** time, as in the API, even though it ends in `Z`. `2026-10-28T10:30:00Z` means 10:30 on the shop's clock, not 10:30 UTC. Ignore the `Z`.
+**Note:** `scheduled_for` is the shop's **wall-clock** time, as in the API, so it has no `Z` or offset. `2026-10-28T10:30:00` means 10:30 on the shop's clock.
 
 Subscribed as `booking.created`? You get this same payload, labelled `booking.created`.
 

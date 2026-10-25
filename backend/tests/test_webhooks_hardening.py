@@ -774,3 +774,18 @@ def test_b16_catalogue_in_one_place():
                  "appointment.created", "order.created"):
         assert name in wh.EVENTS and wh.EVENT_CATALOGUE[name]
     assert wh.normalize_events("booking.created") == "booking.created"
+
+
+def test_appointment_scheduled_for_is_wall_clock_without_z():
+    """scheduled_for is shop wall-clock time; a trailing Z would tell receivers it is UTC."""
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from backend.services.webhooks import appointment_data
+    a = SimpleNamespace(id="a1", scheduled_for=datetime(2026, 10, 25, 9, 30, 15, 123), duration_min=60,
+                        status="booked", client_id=None, client_name="Ana", service_id=None,
+                        employee_id=None, location_id=None, order_id=None,
+                        created_at=datetime(2026, 10, 25, 8, 0))
+    d = appointment_data(a)
+    assert d["scheduled_for"] == "2026-10-25T09:30:15"
+    assert d["created_at"].endswith("Z")          # created_at is a real UTC instant

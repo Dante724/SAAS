@@ -206,6 +206,14 @@ def _iso(v):
     return v.isoformat() if hasattr(v, "isoformat") else v
 
 
+def _wall(v):
+    """Shop wall-clock times (scheduled_for and friends) are naive local time: no zone suffix,
+    so receivers don't read them as UTC."""
+    if v is None:
+        return None
+    return v.replace(microsecond=0, tzinfo=None).isoformat() if isinstance(v, datetime) else v
+
+
 def _num(v):
     try:
         return float(v) if v is not None else None
@@ -231,7 +239,7 @@ def order_data(o) -> dict:
 
 
 def appointment_data(a) -> dict:
-    return {"id": a.id, "scheduled_for": _iso(a.scheduled_for), "duration_min": a.duration_min,
+    return {"id": a.id, "scheduled_for": _wall(a.scheduled_for), "duration_min": a.duration_min,
             "status": a.status, "client_id": a.client_id, "client_name": a.client_name,
             "service_id": a.service_id, "employee_id": a.employee_id, "location_id": a.location_id,
             "order_id": a.order_id, "created_at": _iso(a.created_at)}
@@ -620,7 +628,7 @@ async def _notify_disabled(db, ep) -> None:
     rows = (await db.execute(select(Employee, Role).outerjoin(Role, Role.id == Employee.role_id).where(
         Employee.org_id == ep.org_id, Employee.active == True))).all()  # noqa: E712
     if ep.kind == "automation":
-        where, fix = "an automation rule's webhook", "Fix the endpoint, then save the rule again in Settings › Automations."
+        where, fix = "an automation rule's webhook", "Fix the endpoint, then save the rule again in Settings › Notifications › Automations."
     else:
         where, fix = (ep.description or ep.url)[:80], "Fix the endpoint, then turn it back on in Settings › Integrations."
     for emp, role in rows:
