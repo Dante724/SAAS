@@ -110,9 +110,12 @@ async def test_v2_cost_fields_need_costs_read(client):
     plain = _auth(await _key(client, H, ["write"]))
     costs = _auth(await _key(client, H, ["write", "costs:read"]))
     narrow_costs = _auth(await _key(client, H, ["services:read", "products:read", "costs:read"]))
-    s = (await client.post("/api/v2/services", json={"name": "Diag", "price": 25, "cost_price": 9}, headers=plain)).json()["data"]
+    # Setting a cost needs costs:read too (a key that can't read costs can't write them).
+    s = (await client.post("/api/v2/services", json={"name": "Diag", "price": 25, "cost_price": 9}, headers=costs)).json()["data"]
     p = (await client.post("/api/v2/products", json={"name": "Screen", "sell_price": 99, "cost_price": 40},
-                           headers=plain)).json()["data"]
+                           headers=costs)).json()["data"]
+    s = (await client.get(f"/api/v2/services/{s['id']}", headers=plain)).json()["data"]
+    p = (await client.get(f"/api/v2/products/{p['id']}", headers=plain)).json()["data"]
     assert "cost_price" not in s and "cost_price" not in p
     for path in (f"/api/v2/services/{s['id']}", f"/api/v2/products/{p['id']}"):
         assert "cost_price" not in (await client.get(path, headers=plain)).json()["data"]
@@ -395,3 +398,16 @@ async def test_inquiry_created_fires_once_for_new_and_old_names(client, db):
     import json
     payload = json.loads(next(r for r in rows if r.event == "inquiry.created").payload)
     assert payload["data"]["name"] in ("Web form", "Staff made") and "device_model" in payload["data"]
+
+
+@pytest.mark.asyncio
+async def test_v2_cost_price_write_needs_costs_read(client):
+    H, _ = await _register(client)
+    plain = _auth(await _key(client, H, ["write"]))
+    for path, body in (("/api/v2/services", {"name": "Diag", "price": 25, "cost_price": 9}),
+                       ("/api/v2/products", {"name": "Screen", "sell_price": 99, "cost_price": 40})):
+        assert (await client.post(path, json=body, headers=plain)).status_code == 403
+        rec = (await client.post(path, json={k: v for k, v in body.items() if k != "cost_price"},
+                                 headers=plain)).json()["data"]
+        assert (await client.patch(f"{path}/{rec['id']}", json={"cost_price": 1}, headers=plain)).status_code == 403
+        assert (await client.patch(f"{path}/{rec['id']}", json={"name": "Renamed"}, headers=plain)).status_code == 200

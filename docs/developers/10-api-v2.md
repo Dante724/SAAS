@@ -17,7 +17,7 @@ Everything on [Requests and errors](03-requests-and-errors.md) and [Security](07
 - **`Idempotency-Key`** on every `POST`, with the same rules as v1 (24 hours; the same body replays with `Idempotent-Replayed: true`, a different body is `422`, a request still running is `409`).
 - **Rate limits**: the key's own per-minute limit, with `X-RateLimit-*` headers. See [Rate limits](03-requests-and-errors.md#rate-limits).
 - **Auditing**: every write is in the shop's audit log, attributed to the key (`via_api_key`).
-- **Cost fields** (`cost_price` on services and products) appear only for keys with `costs:read`. Without it they are left out, not set to `null`.
+- **Cost fields** (`cost_price` on services and products) are read and written only by keys with `costs:read`. Without it they are left out of responses (not set to `null`), and setting them returns `403`.
 
 ## Scopes
 
@@ -282,7 +282,7 @@ The [v1 product](04-resources.md#products), now writable.
 
 - An `mpn` already used by another active product in the shop, in any case, is `409`.
 - `PATCH` skips `null` for `name`, `uom`, the prices and `active`, which can't be cleared.
-- A key without `costs:read` can set `cost_price` but won't see it in the response.
+- Setting `cost_price` also needs `costs:read`. Without it the request gets `403`.
 
 Fire [`product.created` and `product.updated`](06-events.md#productcreated-productupdated).
 

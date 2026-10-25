@@ -151,7 +151,7 @@ async def test_api_never_crosses_shops(client, tenant):
 # ── catalogue ────────────────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_products_writable(client, tenant, db):
-    k = await key(client, tenant)
+    k = await key(client, tenant, "read,write,costs:read")   # it sets cost_price, which needs costs:read
     await hook(db, await org(client, tenant))
     r = await client.post("/api/v2/products", json={"name": "Screen iPhone 14", "sku": "SCR-14", "mpn": "A2649-LCD",
                                                      "sell_price": 129, "cost_price": 60}, headers=k)

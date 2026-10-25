@@ -78,6 +78,12 @@ def _costs(p: ApiPrincipal) -> bool:
     return p.can_see_costs
 
 
+def _guard_cost_write(p: ApiPrincipal, data) -> None:
+    """A key that can't read cost prices can't set them either."""
+    if "cost_price" in data.model_fields_set and not _costs(p):
+        raise HTTPException(403, "Setting cost_price needs the costs:read scope")
+
+
 # ── discovery ────────────────────────────────────────────────────────────────
 RESOURCE_PATHS = ("contacts", "inquiries", "inquiry_types", "tags", "services", "bundles", "products", "webhooks")
 
@@ -392,6 +398,7 @@ async def get_service(sid: str, db: AsyncSession = Depends(get_db), p: ApiPrinci
 @router.post("/services", status_code=201, summary="Create a service")
 async def create_service(data: ServiceIn, db: AsyncSession = Depends(get_db), p: ApiPrincipal = W("services"),
                          idempotency_key: Optional[str] = _idem_h()):
+    _guard_cost_write(p, data)
     async def run():
         s = Service(org_id=p.org_id, **{**data.model_dump(), "name": data.name.strip()})
         db.add(s)
@@ -407,6 +414,7 @@ async def create_service(data: ServiceIn, db: AsyncSession = Depends(get_db), p:
 async def update_service(sid: str, data: ServicePatch, db: AsyncSession = Depends(get_db),
                          p: ApiPrincipal = W("services")):
     s = await lsvc.own(db, Service, sid, p.org_id, "Service")
+    _guard_cost_write(p, data)
     changes = data.model_dump(exclude_unset=True)
     for k, v in changes.items():
         if v is not None or k == "barcode":
@@ -551,6 +559,7 @@ async def get_product(pid: str, db: AsyncSession = Depends(get_db), p: ApiPrinci
 @router.post("/products", status_code=201, summary="Create a product")
 async def create_product(data: ProductIn, db: AsyncSession = Depends(get_db), p: ApiPrincipal = W("products"),
                          idempotency_key: Optional[str] = _idem_h()):
+    _guard_cost_write(p, data)
     async def run():
         row = Part(org_id=p.org_id, **{k: (v.strip() or None) if isinstance(v, str) and k != "uom" else v
                                        for k, v in data.model_dump().items()})
@@ -564,6 +573,7 @@ async def create_product(data: ProductIn, db: AsyncSession = Depends(get_db), p:
 async def update_product(pid: str, data: ProductPatch, db: AsyncSession = Depends(get_db),
                          p: ApiPrincipal = W("products")):
     row = await lsvc.own(db, Part, pid, p.org_id, "Product")
+    _guard_cost_write(p, data)
     changes = data.model_dump(exclude_unset=True)
     for k, v in changes.items():
         if k in ("name", "uom", "sell_price", "cost_price", "active") and v is None:
