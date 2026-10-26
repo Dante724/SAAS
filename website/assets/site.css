@@ -50,9 +50,6 @@ html { font-size: 16px; }
 
 *, *::before, *::after { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-html.lenis, html.lenis body { height: auto; }
-.lenis.lenis-smooth { scroll-behavior: auto !important; }
-.lenis.lenis-stopped { overflow: hidden; }
 html.is-locked { overflow: hidden; }
 body { margin: 0; background: var(--page); color: var(--ink); font-family: var(--sans); font-size: 1rem; line-height: 1.5;
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; font-feature-settings: "ss01", "cv11"; overflow-x: clip; }
@@ -170,7 +167,7 @@ html:not(.js) .loader, .no-loader .loader { display: none; }
 .hdr-nav a:hover { opacity: 1; }
 .hdr-right { display: flex; justify-content: flex-end; align-items: center; gap: 1.25rem; }
 .hdr .text-btn { color: #fff; }
-.glass { background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.22); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.glass { background: rgba(7,22,51,.62); border: 1px solid rgba(255,255,255,.2); }
 .burger { width: 3.25rem; height: 3.25rem; border-radius: 50%; display: grid; place-items: center; cursor: pointer; color: #fff; padding: 0; }
 .burger-lines { display: grid; gap: .3rem; }
 .burger-lines > span { display: block; width: 1.125rem; height: 1.5px; background: currentColor; border-radius: 1px; }
@@ -470,7 +467,7 @@ html:not(.js) .loader, .no-loader .loader { display: none; }
   .tpl-form dd { overflow-wrap: anywhere; }
   .tpl-covers .cv { font-size: .75rem; padding: .2rem .6rem; }
 }
-.board { position: absolute; z-index: 2; left: .5rem; right: .5rem; bottom: .5rem; padding: .625rem .75rem .5rem; border-radius: .75rem; color: #fff; background: rgba(7,22,51,.78); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+.board { position: absolute; z-index: 2; left: .5rem; right: .5rem; bottom: .5rem; padding: .625rem .75rem .5rem; border-radius: .75rem; color: #fff; background: rgba(7,22,51,.88); }
 .board-h { display: flex; justify-content: space-between; font-family: var(--mono); font-size: .625rem; letter-spacing: .08em; text-transform: uppercase; color: rgba(255,255,255,.72); margin-bottom: .375rem; }
 .board-win { height: 5.25rem; overflow: hidden; }
 .board-list li + li { opacity: .5; }
@@ -837,3 +834,12 @@ html.is-locked .ta { visibility: hidden; }
 /* Changelog months */
 .month { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; margin-bottom: 2.25rem; }
 .month span { color: var(--muted); }
+
+/* Parallax without JavaScript: the compositor drives it from the scroll position. */
+@supports (animation-timeline: scroll()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .hero-plate { animation: plateDrift linear both; animation-timeline: scroll(root block); animation-range: 0 100vh; }
+    @keyframes plateDrift { to { transform: translate3d(0, 12%, 0); } }
+  }
+}
+.about-photo img { height: 100%; }

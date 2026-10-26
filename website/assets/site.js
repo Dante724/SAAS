@@ -51,22 +51,15 @@ $$("[data-trial]").forEach(el => { el.textContent = C.trialDays ?? 14; if (el.da
 $$("[data-save]").forEach(el => { el.textContent = `${12 - (C.yearlyMonths ?? 10)} months free`; });
 $$("#yr").forEach(el => { el.textContent = new Date().getFullYear(); });
 
-/* ── Scroll lock (Lenis arrives a moment later and never blocks first paint) ── */
-let lenis = null, locks = 0;
-const lock = () => { if (locks++ === 0) { lenis?.stop(); root.classList.add("is-locked"); } };
-const unlock = () => { if (locks > 0 && --locks === 0) { lenis?.start(); root.classList.remove("is-locked"); } };
-if (!REDUCED) {
-  import("lenis").then(({ default: Lenis }) => {
-    lenis = new Lenis({ lerp: 0.15, smoothWheel: true, autoRaf: true });
-    if (locks) lenis.stop();
-  }).catch(() => {});   // blocked or offline → native scrolling
-}
+/* ── Scroll lock for the menu and modal. Scrolling itself is the browser's own: a JS smooth-scroll
+      layer made the page trail the wheel, worst on laptops in battery-saver mode (30fps). ── */
+let locks = 0;
+const lock = () => { if (locks++ === 0) root.classList.add("is-locked"); };
+const unlock = () => { if (locks > 0 && --locks === 0) root.classList.remove("is-locked"); };
 const scrollToHash = hash => {
   const el = hash === "#top" ? 0 : document.querySelector(hash);
   if (el === null) return;
-  const off = el === 0 ? 0 : (document.querySelector("[data-subnav]") ? -120 : -12);   // clear the sticky product tabs
-  if (lenis) lenis.scrollTo(el, { offset: off, duration: 0.9 });
-  else if (el === 0) scrollTo({ top: 0, behavior: REDUCED ? "auto" : "smooth" });
+  if (el === 0) scrollTo({ top: 0, behavior: REDUCED ? "auto" : "smooth" });
   else el.scrollIntoView({ behavior: REDUCED ? "auto" : "smooth" });
 };
 document.addEventListener("click", e => {
@@ -177,32 +170,19 @@ $("#gcar").addEventListener("pointerleave", e => { if (e.pointerType !== "mouse"
 $("#gcar").addEventListener("focusin", () => { gPaused = true; clearInterval(gTimer); });
 }
 
-/* ── Scroll: parallax + floating bar. Geometry is measured on resize, never per frame. ── */
-const hero = $("#top"), plate = $("#heroPlate"), ghostA = $("#ghostA"), ghostB = $("#ghostB"), ind = $("#industries"), minibar = $("#minibar");
-const aboutImg = $("#aboutImg"), about = $("#about");
-let G = {}, barOn = null, ticking = false;
-const docTop = el => el.getBoundingClientRect().top + scrollY;
-const measure = () => { G = { vh: innerHeight, heroH: hero ? hero.offsetHeight : 0,
-  indT: ind ? docTop(ind) : 0, indH: ind ? ind.offsetHeight : 0, abT: about ? docTop(about) : 0, abH: about ? about.offsetHeight : 0 }; };
+/* ── Floating bar after the hero. (Parallax is pure CSS — a scroll timeline the compositor runs —
+      so nothing moves on the main thread while scrolling.) ── */
+const hero = $("#top"), minibar = $("#minibar");
+let heroH = 0, barOn = null, ticking = false;
+const measure = () => { heroH = hero ? hero.offsetHeight : 0; };
 const frame = () => {
   ticking = false;
-  const y = scrollY, { vh, heroH, indT, indH, abT, abH } = G;
-  if (!REDUCED) {
-    if (plate && y < heroH) plate.style.transform = `translate3d(0, ${(y / heroH) * 12}%, 0)`;
-    if (ghostA && y + vh > indT && y < indT + indH) {
-      const ip = (y + vh - indT) / (vh + indH);
-      ghostA.style.transform = `translate3d(${(ip - .5) * -6}rem, 0, 0)`;
-      ghostB.style.transform = `translate3d(${(ip - .5) * 6}rem, 0, 0)`;
-    }
-    if (aboutImg && y + vh > abT && y < abT + abH) aboutImg.style.transform = `translate3d(0, ${-((y + vh - abT) / (vh + abH)) * 13}%, 0)`;
-  }
-  const on = y > heroH - 80 && !menuOpen;
+  const on = scrollY > heroH - 80 && !menuOpen;
   if (on !== barOn) { barOn = on; minibar.classList.toggle("show", on); }
 };
 const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(frame); } };
 addEventListener("scroll", onScroll, { passive: true });
 addEventListener("resize", () => { measure(); onScroll(); }, { passive: true });
-addEventListener("load", () => { measure(); onScroll(); });
 measure();
 
 /* ── Job stages: numbered rows ↔ screen; the progress bar is a CSS animation ── */

@@ -98,7 +98,7 @@ Home, `/product/`, `/pricing/`, `/about/` and `/changelog/` are built from `src/
 | Footer and the closing call to action | `src/sections/cta.html` |
 | Which sections each page shows, titles, descriptions, structured data | `PAGES` in `tools/build_site.py` |
 | Changelog cards | `src/sections/changelog-soon.cards.html` (coming soon) and `changelog-oct.cards.html` (shipped) |
-| Styles and behaviour for all five pages | `assets/site.css`, `assets/site.js` (Lenis 1.1.18 self-hosted in `assets/vendor/`) |
+| Styles and behaviour for all five pages | `assets/site.css`, `assets/site.js` |
 
 Plans and prices still come from `site.config.js` (the pricing page renders them; the home
 pricing strip has them written in, so update both). The FAQ's structured data lives in
@@ -106,7 +106,7 @@ pricing strip has them written in, so update both). The FAQ's structured data li
 
 - **Look and motion:** a light page of rounded card sections, Geist and midnight sapphire; a photo
   hero on home and a navy title card on the other pages; spring hovers, compositor reveals,
-  hero/About parallax, the trade cards' example-job boards (all four change together every 7s),
+  a CSS scroll-timeline hero parallax (no JavaScript on scroll, native scrolling), the trade cards' example-job boards (all four change together every 7s),
   sticky tabs on the product page. `prefers-reduced-motion` turns motion off.
 - **Coming soon:** the changelog's "Coming soon" cards and the three on home describe features
   from open PRs #12–#28; move them to a shipped month as they merge.

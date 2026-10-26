@@ -202,8 +202,7 @@ def head(p):
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
   <link rel="manifest" href="/site.webmanifest">
   <link rel="preload" href="/assets/fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
-{HERO_PRELOAD if p.get("hero_preload") else ""}  <link rel="modulepreload" href="/assets/vendor/lenis-1.1.18.mjs">
-  <link rel="modulepreload" href="/assets/site.js">
+{HERO_PRELOAD if p.get("hero_preload") else ""}  <link rel="modulepreload" href="/assets/site.js">
   <link rel="stylesheet" href="/assets/site.css">
 {p.get("css", "")}  <script>
     document.documentElement.classList.add("js");
@@ -240,9 +239,6 @@ def render(p, body=None):
            + body + section("cta") + "</main>\n\n" + menu + "\n" + read("partials/modal.html")
            + '''<script defer src="/site.config.js"></script>
 <script defer src="/marketing.js"></script>
-<script type="importmap">
-  { "imports": { "lenis": "/assets/vendor/lenis-1.1.18.mjs" } }
-</script>
 <script type="module" src="/assets/site.js"></script>
 </body>
 </html>
