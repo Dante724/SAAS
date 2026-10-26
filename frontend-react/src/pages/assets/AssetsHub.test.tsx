@@ -33,11 +33,11 @@ describe("AssetsHub state filter", () => {
     render(<MemoryRouter><AssetsHub /></MemoryRouter>);
     expect(await screen.findByText("Bosch Drill")).toBeTruthy();
     expect(urls.find((x) => x.startsWith("/api/assets"))).toContain("state=active");
-    expect(screen.getByRole("radio", { name: "Active" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("tab", { name: /^Active/ }).getAttribute("aria-selected")).toBe("true");
 
-    await u.click(screen.getByRole("radio", { name: "Written off" }));
+    await u.click(screen.getByRole("tab", { name: /^Written off/ }));
     expect(await screen.findByText("Bosch Saw")).toBeTruthy();
     expect(urls.filter((x) => x.startsWith("/api/assets")).pop()).toContain("state=written_off");
-    expect(screen.getAllByText("Written off").length).toBeGreaterThan(1);   // the filter + the row pill
+    expect(screen.getAllByText(/Written off/).length).toBeGreaterThan(1);   // the filter + the row pill
   });
 });
