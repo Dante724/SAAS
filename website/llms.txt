@@ -33,7 +33,7 @@ Shops that fix more than one kind of thing can use several templates in one acco
 - Device passcodes and integration keys are encrypted at rest; two-factor sign-in for everyone; single sign-on on Pro; role permissions and a full audit log.
 
 ## Switching
-Shops send an export from their current system or spreadsheets and Tekly brings customers, devices and stock across for free. Most single-location shops are set up in a day.
+Shops send an export from their current system or spreadsheets and Tekly brings customers, devices and stock across for free. You can take your first job the day you sign up.
 
 ## Key pages
 - Home: https://tekly.app/
@@ -42,7 +42,8 @@ Shops send an export from their current system or spreadsheets and Tekly brings 
 - Phone and computer repair software: https://tekly.app/phone-repair-software/
 - Auto repair shop software: https://tekly.app/auto-repair-shop-software/
 - Small engine and power tool repair software: https://tekly.app/small-engine-repair-software/
-- Marine repair software: https://tekly.app/marine-repair-software/
+- Marine service and boat repair software: https://tekly.app/marine-repair-software/
+- Multi-location repair shop software (pricing by number of locations): https://tekly.app/multi-location-repair-shop-software/
 - What's new: https://tekly.app/changelog/
 - How to choose repair shop software (checklist): https://tekly.app/guides/choose-repair-shop-software/
 - Comparisons (published facts from each vendor's site, with sources, checked 23 October 2026): https://tekly.app/compare/

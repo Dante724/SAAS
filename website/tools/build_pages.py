@@ -56,7 +56,7 @@ PAGES = [
         "photo": ("iphone-mat", "An iPhone opened up for repair on a blue work mat", 'Photo: Unsplash (<a href="https://unsplash.com/license" rel="noopener license">Unsplash License</a>)'),
         "more_faq": [
             ("How much does phone repair software cost?", "Tekly starts at $29 a month for up to 2 people. Shop is $69 a month for 8 people and adds inventory and barcode scanning; Pro is $129 and adds purchase orders, payroll and AI estimate drafting. Every trial includes all Pro features for 14 days with no card."),
-            ("Can I move my customers and devices from my current system?", "Yes. Send an export from your current system or spreadsheets and we bring customers, devices and stock across, free on every plan. Most single-location shops are set up in a day."),
+            ("Can I move my customers and devices from my current system?", "Yes. Send an export from your current system or spreadsheets and we bring customers, devices and stock across, free on every plan. You can take your first job the day you sign up."),
             ("Do customers get updates without calling the shop?", "Yes. Each repair has a tracking link with status, photos and the ready time, and updates go out by SMS, WhatsApp or email."),
         ],
         "faq": [
@@ -324,7 +324,7 @@ def shell(p, url, main, ld):
     top = build_site.phero("", h1, lead, ctas if m else "", crumbs_html=crumbs)
     if not lead:
         top = top.replace('    <p class="phero-lede" data-hero-fade></p>\n', "")
-    nav = "/compare/" if path.startswith("/compare/") else "/#industries" if p.get("slug") in {x["slug"] for x in PAGES} else ""
+    nav = "/compare/" if path.startswith("/compare/") else "/#industries" if p.get("slug") in {x["slug"] for x in PAGES} | {"multi-location-repair-shop-software"} else ""
     page = {"path": path, "title": html.unescape(p["title"]), "desc": html.unescape(p["desc"]), "nav": nav, "ld": ld if isinstance(ld, list) else [ld],
             "css": f'  <link rel="stylesheet" href="/assets/sub.css?v={build_site.ver("assets/sub.css")}">\n'}
     return build_site.render(page, top + wrap_legacy(main))
@@ -447,7 +447,7 @@ def compare_page(c):
     faq = [
         (f"Is Tekly cheaper than {name}?", f"Going by published prices as of {CHECKED}: Tekly starts at $29 a month (Solo, up to 2 people), or $69 for 8 people on Shop. {name}'s published starting price is {c['rows'][0][2]}. Compare what your whole team would pay, including extra people and locations."),
         (f"What is a good alternative to {name}?", f"It depends on your trade and team. Tekly is an alternative to {name} for {c['alt_for']}: published prices from $29 a month, a 14-day free trial with no card, and free data migration. The comparison above lists where {name} may suit you better."),
-        (f"Can I switch from {name} to Tekly?", f"Yes. Send an export from {name} or your spreadsheets and Tekly brings customers, devices or vehicles and stock across, free on every plan. Most single-location shops are set up in a day."),
+        (f"Can I switch from {name} to Tekly?", f"Yes. Send an export from {name} or your spreadsheets and Tekly brings customers, devices or vehicles and stock across, free on every plan. You can take your first job the day you sign up."),
         (f"Where do these {name} details come from?", f"From {name}'s own public website, checked on {CHECKED}. Prices and features change, so check their site for current terms."),
     ]
     ld = [{"@context": "https://schema.org", "@type": "WebPage", "name": c["title"], "url": url, "description": c["desc"],
@@ -564,6 +564,77 @@ LEGAL = [
 ]
 
 
+MULTI = {
+    "slug": "multi-location-repair-shop-software",
+    "title": "Multi-Location Repair Shop Software | Tekly",
+    "desc": "Run every repair shop location in one account: shared team seats, stock across sites, numbers for each location. Extra locations from $49/mo.",
+    "h1": "Multi-location repair shop software",
+    "lead": "Two counters across town, a depot and a storefront, or a phone shop next to a boatyard: Tekly runs every location and every trade in one account, with one login.",
+    "faq": [
+        ("How is multi-location pricing worked out?", "You pay for the first location on your plan, then a flat price for each extra one: Shop is $69 a month plus $49 per extra location, Pro is $129 a month plus $79 per extra location. Solo covers one location."),
+        ("Can my team work at more than one location?", "Yes. On Shop, 8 team members are shared across all your locations, and each extra person is $4 a month. Pro has no limit on people."),
+        ("Can I move stock between locations?", "Every location on Shop and Pro keeps its own stock, bins and serial numbers. Transfers between locations are on Pro."),
+        ("Can each location run a different trade?", "Yes. Use the Electronics, Vehicles, Tools & small engine and Marine templates side by side in one account."),
+        ("Can I see each location's numbers separately?", "Yes. Profit per job, per technician and per location is always current, and roles limit who sees what."),
+        ("What if I have ten or more locations?", "Shop and Pro add locations at the same flat price, as many as you need. Franchises, depots and fleets can ask us about custom terms."),
+    ],
+}
+
+
+def multi_location_page():
+    p, cfg = MULTI, build_site.site_config()
+    url = f"{DOMAIN}/{p['slug']}/"
+    plans = {x["id"]: x for x in cfg["plans"]}
+    shop, pro = plans["shop"], plans["pro"]
+    cost = lambda pl, n: pl["monthly"] + (n - 1) * pl["extraLocation"]
+    rows = "".join(f'<tr><th scope="row">{n} location{"s" if n > 1 else ""}</th><td>${cost(shop, n):,}/mo <span class="dim">· 8 people shared</span></td>'
+                   f'<td>${cost(pro, n):,}/mo <span class="dim">· unlimited people</span></td></tr>' for n in (1, 2, 3, 5))
+    ld = [{"@context": "https://schema.org", "@type": "WebPage", "name": p["h1"], "url": url, "description": p["desc"],
+           "isPartOf": {"@id": DOMAIN + "/#website"}, "about": {"@id": DOMAIN + "/#software"}},
+          crumbs_ld([("Tekly", DOMAIN + "/"), (p["h1"], url)]), faq_ld(p["faq"])]
+    trades = "".join(f'<li><a class="link" href="/{o["slug"]}/">{e(o["h1"])}</a></li>' for o in PAGES)
+    main = sub_hero(f'<a href="/">Tekly</a><span aria-hidden="true">/</span><span>{e(p["h1"])}</span>', p["h1"], p["lead"],
+                    f'<span data-trial>14</span>-day trial · no card · extra locations from ${shop["extraLocation"]}/mo') + f'''
+<section class="sec">
+  <div class="wrap">
+    <div class="sec-head"><p class="eyebrow rv">One account</p><h2 class="h-section rv">Every location, every trade, one login.</h2>
+      <p class="lede rv">Add a location when you open one. Customers, jobs and history stay in the same account, so the owner sees the whole business and each counter sees its own work.</p></div>
+    <div class="ai-grid" style="grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr))">
+      <article class="card rv"><h3>Several trades, one login</h3><p>Use the Electronics, Vehicles, Tools &amp; small engine and Marine templates side by side.</p></article>
+      <article class="card rv"><h3>Team seats that travel</h3><p>Shop's 8 team members are shared across your locations. Pro has no limit.</p></article>
+      <article class="card rv"><h3>Stock per site</h3><p>Each location keeps its own stock, bins and serial numbers. Pro moves stock between them.</p></article>
+      <article class="card rv"><h3>Numbers for each location</h3><p>Profit per job, per technician and per location, with roles that limit who sees what.</p></article>
+    </div>
+  </div>
+</section>
+
+<section class="sec sec-cream">
+  <div class="wrap">
+    <div class="sec-head"><p class="eyebrow rv">What it costs</p><h2 class="h-section rv">A flat price for each extra location.</h2>
+      <p class="lede rv">Shop is ${shop["monthly"]} a month for the first location and ${shop["extraLocation"]} for each one after. Pro is ${pro["monthly"]} and ${pro["extraLocation"]}. No setup fee, no contract.</p></div>
+    <div class="cmp-wrap rv"><table class="cmp-table">
+      <caption class="sr">Monthly cost by number of locations</caption>
+      <thead><tr><th scope="col">Locations</th><th scope="col">Shop</th><th scope="col">Pro</th></tr></thead>
+      <tbody>{rows}</tbody>
+    </table></div>
+    <p class="fine-print">Shop adds ${shop["extraSeat"]} a month for each person past 8. Pro adds purchase orders, payroll, stock transfers between locations and AI estimate drafting. <a class="link" href="/pricing/">Compare plans</a></p>
+  </div>
+</section>
+
+<section class="sec sec-tight">
+  <div class="wrap faq">
+    <div><p class="eyebrow">Questions</p><h2 class="h-sub">Running several locations, answered.</h2><p class="lede">More questions? <a class="link" href="/pricing/#faq">Read the full FAQ</a></p></div>
+    <div>{faq_html(p["faq"])}</div>
+  </div>
+</section>
+
+<section class="sec sec-tight sec-cream">
+  <div class="wrap"><p class="eyebrow">Templates for each trade</p><ul class="others">{trades}</ul></div>
+</section>
+'''
+    return shell(p, url, main, ld)
+
+
 def main():
     old_css, site_css = (ROOT / "styles.css").read_text(encoding="utf-8"), (ROOT / "assets" / "site.css").read_text(encoding="utf-8")
     (ROOT / "assets" / "sub.css").write_text("/* Generated by tools/build_pages.py from styles.css — do not edit. */\n"
@@ -572,6 +643,9 @@ def main():
         d = ROOT / p["slug"]
         d.mkdir(exist_ok=True)
         (d / "index.html").write_text(page(p), encoding="utf-8")
+    d = ROOT / MULTI["slug"]
+    d.mkdir(exist_ok=True)
+    (d / "index.html").write_text(multi_location_page(), encoding="utf-8")
     for c in COMPETITORS:
         d = ROOT / "compare" / f"tekly-vs-{c['slug']}"
         d.mkdir(parents=True, exist_ok=True)
@@ -591,7 +665,7 @@ def main():
             placeholders.append(doc["slug"])
     if placeholders:
         print("WARNING: fill in the [[…]] placeholders in tools/legal/ before launch:", ", ".join(placeholders))
-    urls = ([("/", "1.0"), ("/product/", "0.9"), ("/pricing/", "0.9"), ("/about/", "0.5"), ("/changelog/", "0.6")] + [(f"/{p['slug']}/", "0.8") for p in PAGES]
+    urls = ([("/", "1.0"), ("/product/", "0.9"), ("/pricing/", "0.9"), ("/about/", "0.5"), ("/changelog/", "0.6")] + [(f"/{p['slug']}/", "0.8") for p in PAGES] + [(f"/{MULTI['slug']}/", "0.8")]
             + [("/compare/", "0.6")] + [(f"/compare/tekly-vs-{c['slug']}/", "0.7") for c in COMPETITORS]
             + [(f"/{GUIDE['slug']}/", "0.7")]
             + [(f"/{d['slug']}/", "0.3") for d in LEGAL])
