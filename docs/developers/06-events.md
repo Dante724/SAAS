@@ -14,6 +14,7 @@ Every event you can subscribe to. Each delivery wraps the event's payload in the
 | [`appointment.updated`](#appointmentupdated) | An appointment is rescheduled, or its note changes, through API v2. The event lists which fields. |
 | [`appointment.cancelled`](#appointmentcancelled) | An appointment is cancelled through API v2. |
 | [`contact.created`](#contactcreated) | A customer or company contact is added. |
+| [`contact.updated`](#contactupdated) | A contact's details are changed through API v2. |
 | [`inquiry.created`](#inquirycreated) | A new inquiry is added, from any source. |
 | [`inquiry.updated`](#inquiryupdated) | An inquiry's details or status change. |
 | [`inquiry.converted`](#inquiryconverted) | An inquiry is turned into a work order or estimate. |
@@ -283,6 +284,12 @@ A contact was added.
 ```
 
 `type` is `person` or `organization`.
+
+## `contact.updated`
+
+A contact was changed through [`PATCH /api/v2/contacts/{id}`](10-api-v2.md#patch-contactsid). The payload is the [`contact.created`](#contactcreated) one, showing the contact after the change.
+
+**Not yet:** changes made by staff in the app don't fire this event. Re-read the contact (`GET /api/v2/contacts/{id}`) when you need the latest.
 
 ## `inquiry.created`
 

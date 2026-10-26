@@ -1,4 +1,5 @@
 import secrets
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -1358,17 +1359,34 @@ async def change_status(
     return await _apply_status_change(db, current, order, data.status, note=data.note, reason=data.reason)
 
 
+@dataclass(frozen=True)
+class ApiActor:
+    """A public API key changing an order (API v2), in place of the signed-in employee.
+
+    It has no employee id and no role: the key's own scope (orders:write) is its permission for
+    the whole shop, so the employee-only checks (record scope, "Edit the closed ticket") don't
+    apply, and status transfer rules apply as for a role with no rules of its own (only the
+    shop's all-roles rules). Every other gate and side effect is the app's, unchanged."""
+    org_id: str
+    api_key_id: str
+    id: Optional[str] = None
+    role_id: Optional[str] = None
+
+
 async def _apply_status_change(db, current, order, new_status, note=None, reason=None):
     """Shared gate + side-effect flow for a single-step status change, used by the
-    single-order PATCH endpoint and the bulk set_status path so both enforce the same
-    transition RBAC, completion + pending-stock-write-off gates, status_entered_at,
+    single-order PATCH endpoint, the bulk set_status path and API v2
+    (POST /api/v2/orders/{id}/status, with an ApiActor as ``current``) so all of them enforce
+    the same transition RBAC, completion + pending-stock-write-off gates, status_entered_at,
     audit, ledger, commissions and (best-effort) notifications. The original endpoint
     body is preserved verbatim; it is simply reached via ``data`` rebuilt from the
     arguments so both callers share one code path."""
     data = StatusChange(status=new_status, note=note, reason=reason)
-    await _guard_order_access(db, current, order)
-    if data.status != order.status and await _is_closed(db, current.org_id, order):
-        await assert_perm(db, current, "can_edit_closed_ticket")   # reopening counts as editing it
+    via_api = isinstance(current, ApiActor)
+    if not via_api:
+        await _guard_order_access(db, current, order)
+        if data.status != order.status and await _is_closed(db, current.org_id, order):
+            await assert_perm(db, current, "can_edit_closed_ticket")   # reopening counts as editing it
 
     # Resolve the target status from the configurable status table, scoped to this
     # record's pipeline. .first() (not scalar_one_or_none) so legacy duplicate keys
@@ -1463,7 +1481,9 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     order.status_entered_at = datetime.utcnow()
     from backend.services.audit import record as _audit_sc
     await _audit_sc(db, org_id=current.org_id, actor_id=current.id, action="order.status_change",
-                    entity_type="order", entity_id=order.id, diff={"status": [_prev_status, data.status]})   # for status time-limit tracking
+                    entity_type="order", entity_id=order.id,
+                    diff={"status": [_prev_status, data.status],
+                          **({"via_api_key": current.api_key_id} if via_api else {})})   # for status time-limit tracking
     if is_closing:
         order.closed_at = datetime.utcnow()
         # Build 144dr — auto-draft an invoice on close (org opt-in). Never blocks

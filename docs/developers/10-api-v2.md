@@ -1,8 +1,8 @@
 # API v2
 
-API v2 adds inquiries, inquiry types, tags, services, bundles, writable products, contacts with structured addresses, and webhook subscriptions managed with a key. [v1](04-resources.md) is unchanged and keeps working; use whichever version has the resource you need. The same keys work on both.
+API v2 adds inquiries, inquiry types, tags, services, bundles, writable products, contacts with structured addresses and search, locations and employees to look ids up, work orders you can update and move through the shop's statuses, invoices with their lines and payments, and webhook subscriptions managed with a key. [v1](04-resources.md) is unchanged and keeps working; use whichever version has the resource you need. The same keys work on both.
 
-Paths below are relative to `{BASE_URL_V2}`, which is `https://<your-shop-domain>/api/v2`.
+Paths below are relative to `{BASE_URL_V2}`, which is `https://<your-shop-domain>/api/v2` (`$TEKLY_BASE_URL_V2` in the `curl` examples).
 
 ## What's the same as v1
 
@@ -17,7 +17,7 @@ Everything on [Requests and errors](03-requests-and-errors.md) and [Security](07
 - **`Idempotency-Key`** on every `POST`, with the same rules as v1 (24 hours; the same body replays with `Idempotent-Replayed: true`, a different body is `422`, a request still running is `409`).
 - **Rate limits**: the key's own per-minute limit, with `X-RateLimit-*` headers. See [Rate limits](03-requests-and-errors.md#rate-limits).
 - **Auditing**: every write is in the shop's audit log, attributed to the key (`via_api_key`).
-- **Cost fields** (`cost_price` on services and products) are read and written only by keys with `costs:read`. Without it they are left out of responses (not set to `null`), and setting them returns `403`.
+- **Cost fields** (`cost_price` on services, products and work-order lines) are read and written only by keys with `costs:read`. Without it they are left out of responses (not set to `null`), and setting them returns `403`.
 
 ## Scopes
 
@@ -39,7 +39,11 @@ A key with only resource scopes can't call v1 at all: v1 needs `read` or `write`
 | Resource | Read | Write | Scope resource |
 |---|---|---|---|
 | [Discovery](#discovery) | `GET /` | | any valid key |
-| [Contacts](#contacts) | `GET /contacts`, `GET /contacts/{id}` | `POST /contacts` | `contacts` |
+| [Contacts](#contacts) | `GET /contacts` (with search), `GET /contacts/{id}` | `POST /contacts`, `PATCH /contacts/{id}` | `contacts` |
+| [Locations](#locations) | `GET /locations`, `GET /locations/{id}` | | `locations` |
+| [Employees](#employees) | `GET /employees`, `GET /employees/{id}` | | `employees` |
+| [Work orders](#work-orders) | `GET /orders`, `GET /orders/{id}`, `GET /orders/{id}/lines` | `PATCH /orders/{id}`, `POST /orders/{id}/status` | `orders` |
+| [Invoices](#invoices) | `GET /invoices`, `GET /invoices/{id}`, `GET /invoices/{id}/payments` | | `invoices` |
 | [Inquiries](#inquiries) | `GET /inquiries`, `GET /inquiries/{id}` | `POST /inquiries`, `PATCH /inquiries/{id}`, `POST /inquiries/{id}/convert` | `inquiries` |
 | [Inquiry types](#inquiry-types) | `GET /inquiry-types` | | `inquiries` |
 | [Tags](#tags) | `GET /tags` | `POST /tags`, `PATCH /tags/{id}`, `DELETE /tags/{id}` | `tags` |
@@ -48,7 +52,7 @@ A key with only resource scopes can't call v1 at all: v1 needs `read` or `write`
 | [Products](#products) | `GET /products`, `GET /products/{id}` | `POST /products`, `PATCH /products/{id}` | `products` |
 | [Webhooks](#webhooks) | `GET /webhooks` | `POST /webhooks`, `DELETE /webhooks/{id}` | `webhooks` (explicit only) |
 
-`POST` creates return `201`, except convert, which returns `200`. `PATCH`, `PUT` and `DELETE` return `200`.
+`POST` creates return `201`, except convert and the order status change, which return `200`. `PATCH`, `PUT` and `DELETE` return `200`.
 
 The machine-readable contract is `GET /api/v2/openapi.json` (OpenAPI 3.1, public, no key needed, served in production). It covers v2 only; v1 has its own at `/api/v1/openapi.json`. `GET /api/v2/docs` redirects to it.
 
@@ -74,7 +78,11 @@ Any valid key can call it, whatever its scopes. It shows only the key's own shop
       "services": "/api/v2/services",
       "bundles": "/api/v2/bundles",
       "products": "/api/v2/products",
-      "webhooks": "/api/v2/webhooks"
+      "webhooks": "/api/v2/webhooks",
+      "locations": "/api/v2/locations",
+      "employees": "/api/v2/employees",
+      "orders": "/api/v2/orders",
+      "invoices": "/api/v2/invoices"
     },
     "v1": "/api/v1",
     "docs": "/api/v2/openapi.json",
@@ -106,6 +114,36 @@ The [v1 contact](04-resources.md#contacts), plus `address_parts`:
 }
 ```
 
+### `GET /contacts`
+
+Newest first. With no query it lists every contact. To find a customer, add any of these (they combine: a contact must match all of them):
+
+| Query | Matches |
+|---|---|
+| `phone` | The same phone number, however either side is written. Spaces, dashes, dots, brackets and a leading `+` or `00` are ignored, and a number with a country code matches the same national number stored without it. These are the rules Tekly uses to link calls to contacts. Needs at least 4 digits (`422`). Up to 40 characters. |
+| `email` | The email address, exactly, ignoring case. |
+| `q` | Text found anywhere in the name, phone or email, ignoring case. At least 2 characters (`422`), up to 100. Digits in `q` also match phone numbers with their formatting removed. |
+
+```bash
+curl "$TEKLY_BASE_URL_V2/contacts?phone=%2B1%20(555)%20010-2233" -H "Authorization: Bearer $TEKLY_API_KEY"
+```
+
+```json
+{
+  "data": [
+    {"id": "6f1c2a9d-3e4b-4c8a-9f17-5b2d8e0a6c31", "name": "Dana Whitfield", "type": "person",
+     "phone": "5550102233", "email": "dana@example.com", "address": null, "loyalty_tier": "standard",
+     "balance": 0.0, "created_at": "2026-10-25T18:06:01",
+     "address_parts": {"street": null, "city": null, "region": null, "postcode": null, "country": null}}
+  ],
+  "page": 1, "page_size": 25, "total": 1
+}
+```
+
+A phone search returns **every** match, newest first. Shops sometimes have the same person twice; pick the first, or show the list to whoever is choosing. `+1 (555) 010-2233` finds `5550102233`, `(555) 010-2233` and `+1 555 010 2233`, but not `+44 555 010 2233`. A number sent without a country code also matches the same number stored with one.
+
+Scope: `contacts:read` (or `read`).
+
 ### `POST /contacts`
 
 | Field | Type | Required | Notes |
@@ -124,6 +162,27 @@ The [v1 contact](04-resources.md#contacts), plus `address_parts`:
 When you send any `addr_*` part, Tekly rebuilds the single `address` line from the parts (street, city, region and postcode, country), so v1, documents and exports show the same address. For countries with a fixed postcode format (for example US, CA, GB, IE, IN, AU, DE, FR, NL, PL, BR, JP), a postcode that doesn't fit is refused with `422`, as is a country that isn't two letters.
 
 Scope: `contacts:write` (or `write`).
+
+### `PATCH /contacts/{id}`
+
+Changes only the fields you send. Send `null` to clear one.
+
+| Field | Notes |
+|---|---|
+| `name` | 1–200, not blank. Can't be cleared. |
+| `phone` | up to 40 |
+| `email` | up to 254, must look like an email address |
+| `address` | up to 500 |
+| `addr_street`, `addr_city`, `addr_region`, `addr_postcode`, `addr_country` | As on create. Sending any part rebuilds `address` from the parts. |
+| `notes` | up to 5000. The internal note on the contact; it isn't returned in the contact object. |
+
+```bash
+curl -X PATCH "$TEKLY_BASE_URL_V2/contacts/6f1c2a9d-3e4b-4c8a-9f17-5b2d8e0a6c31" \
+  -H "Authorization: Bearer $TEKLY_API_KEY" -H "Content-Type: application/json" \
+  -d '{"email": "dana.w@example.com", "phone": "+1 555 010 2233"}'
+```
+
+Returns the updated contact. Fires [`contact.updated`](06-events.md#contactupdated). Scope: `contacts:write` (or `write`).
 
 ---
 
@@ -288,6 +347,291 @@ Fire [`product.created` and `product.updated`](06-events.md#productcreated-produ
 
 ---
 
+## Locations
+
+The shop's locations (branches). Use an `id` as `location_id` when you create work orders or appointments.
+
+```json
+{"id": "2b9e4c71-5d3a-4f8e-a1b6-7c0d9e2f3a48", "name": "Main Street", "address": "12 High St, Springfield",
+ "phone": "+1 555 0100", "timezone": "America/New_York", "active": true}
+```
+
+`timezone` is the clock the location's [wall-clock times](03-requests-and-errors.md) (`scheduled_for`, `scheduled_to`) are in.
+
+| Route | Notes |
+|---|---|
+| `GET /locations` | Paged. `?active=true` for open locations only, `false` for switched-off ones. |
+| `GET /locations/{id}` | |
+
+Scope: `locations:read` (or `read`).
+
+## Employees
+
+The staff directory, for picking an assignee, a manager or a technician to book.
+
+```json
+{"id": "9d0a6b3e-1c2f-4e5d-8a7b-6c5d4e3f2a10", "name": "Sam Ortega", "public_name": "Sam O.",
+ "role": "Technician", "location_id": "2b9e4c71-5d3a-4f8e-a1b6-7c0d9e2f3a48", "active": true}
+```
+
+| Field | Description |
+|---|---|
+| `name` | The name staff see in the app. |
+| `public_name` | The name customers see (booking page, messages), from the shop's **Name on public pages** setting: the full name, the first name, the first name and last initial, or the employee's own public name. Show this one to customers. |
+| `role` | The role's name, or `null`. |
+| `location_id` | The employee's home location, or `null`. |
+| `active` | `false` for someone who has left. |
+
+**Never included:** email, phone, pay, wage or rates, commission, tax ids, or anything to do with signing in, whatever the key's scopes (`costs:read` included).
+
+| Route | Notes |
+|---|---|
+| `GET /employees` | Paged. Filters: `?location_id=` (home location) and `?active=true|false`. |
+| `GET /employees/{id}` | |
+
+Scope: `employees:read` (or `read`).
+
+---
+
+## Work orders
+
+v2 work orders are the jobs on the board. Estimates aren't included: an estimate's id is `404` here (v1 [`GET /estimates`](04-resources.md#estimates) reads them). To create a work order, use v1 [`POST /orders`](04-resources.md#post-orders) or convert an [inquiry](#post-inquiriesidconvert).
+
+### The order object
+
+```json
+{
+  "id": "a83d5f2c-9b1e-4f7a-8c6d-2e1f0a9b8c7d",
+  "number": "WO-01042",
+  "status": "in_repair",
+  "status_name": "In repair",
+  "status_group": "in_progress",
+  "client_id": "6f1c2a9d-3e4b-4c8a-9f17-5b2d8e0a6c31",
+  "location_id": "2b9e4c71-5d3a-4f8e-a1b6-7c0d9e2f3a48",
+  "assigned_to_id": "9d0a6b3e-1c2f-4e5d-8a7b-6c5d4e3f2a10",
+  "manager_id": null,
+  "priority": 0,
+  "complaint": "Cracked screen",
+  "device": {"id": "c51a7e2d-4b3f-4a1e-9d8c-7b6a5f4e3d2c", "asset_type": "Device", "brand": "Apple",
+             "model": "iPhone 14", "serial": "F2LXK0Q1N72J", "imei": "356938035643809", "vin": null, "hin": null,
+             "color": "Black"},
+  "labour_total": 60.0, "parts_total": 89.0, "discount": 0.0, "tax": 0.0, "total": 149.0, "written_off": 0.0,
+  "due_at": "2026-10-29T17:00:00",
+  "scheduled_for": "2026-10-28T10:30:00",
+  "scheduled_to": "2026-10-28T11:30:00",
+  "duration_min": 60,
+  "cancel_reason": null,
+  "archived": false,
+  "tracking_url": "https://shop.example.com/track/Xf3kQ9…",
+  "created_at": "2026-10-25T18:06:01",
+  "updated_at": "2026-10-26T09:12:44",
+  "closed_at": null
+}
+```
+
+| Field | Description |
+|---|---|
+| `status`, `status_name`, `status_group` | The status key, the shop's name for it, and its group: `new`, `in_progress`, `pending`, `ready`, `closed` or `dropped`. |
+| `priority` | `0` normal, `1` urgent, `2` VIP. |
+| `device` | The customer's device on the job, or `null`. Passcodes, photos and prices aren't included. |
+| `written_off` | The unpaid balance written off when the job was dropped. |
+| `cancel_reason` | Why a dropped job was dropped. |
+| `tracking_url` | The customer's tracking page for this job. Anyone with the link can see the job's progress, so send it only to the customer. |
+| `due_at`, `created_at`, `updated_at`, `closed_at` | UTC. |
+| `scheduled_for`, `scheduled_to` | The shop's wall-clock time at the order's location. |
+
+`GET /orders/{id}` adds `lines`, a summary: `{"count": 2, "by_kind": {"service": 1, "product": 1}, "url": "/api/v2/orders/{id}/lines"}`.
+
+### `GET /orders`
+
+Newest first. Filters (they combine):
+
+| Query | Notes |
+|---|---|
+| `status` | A status key, for example `ready`. |
+| `client_id`, `location_id` | |
+| `updated_since` | Orders changed at or after this time: details, status, totals. ISO 8601; an offset (`Z`, `+02:00`) is converted to UTC, without one it's taken as UTC. |
+| `created_since` | Orders created at or after this time. Same format. |
+
+To keep a copy in sync, save the time you start each run and pass it as `updated_since` next time. A bad date is `422`.
+
+### `GET /orders/{id}`
+
+The order object plus the `lines` summary.
+
+### `GET /orders/{id}/lines`
+
+Every line on the job, as the app lists them. Not paged.
+
+```json
+{
+  "data": [
+    {"id": "e1c0…", "kind": "service", "line_type": "labour", "description": "Screen replacement", "qty": 1.0,
+     "unit_price": 60.0, "discount": 0.0, "discount_type": "pct", "tax_rate": 0.0, "tax_mode": "imposed",
+     "tax": 0.0, "total": 60.0, "warranty_days": 90},
+    {"id": "e1c1…", "kind": "product", "line_type": "part", "description": "iPhone 14 screen", "qty": 1.0,
+     "unit_price": 89.0, "discount": 10.0, "discount_type": "pct", "tax_rate": 8.0, "tax_mode": "imposed",
+     "tax": 6.41, "total": 86.51, "warranty_days": 90, "cost_price": 41.0}
+  ]
+}
+```
+
+| Field | Description |
+|---|---|
+| `kind` | `service`, `product`, `bundle` or `custom`. |
+| `discount`, `discount_type` | A percentage (`pct`) or an amount off the line (`fixed`). |
+| `tax_rate`, `tax_mode`, `tax` | The rate, whether tax is `included` in the price or `imposed` on top, and the tax amount in the line. |
+| `total` | What the customer pays for the line, after discount and with tax. |
+| `cost_price` | Only for keys with `costs:read`. |
+
+### `PATCH /orders/{id}`
+
+Changes only the fields you send. `null` clears a field, except `priority` and `location_id`, where it's ignored.
+
+| Field | Notes |
+|---|---|
+| `complaint` | up to 5000 |
+| `priority` | `0`, `1` or `2` |
+| `assigned_to_id`, `manager_id` | An active employee of this shop (`404` if not the shop's, `422` if deactivated or not someone the shop lists as an assignee or manager). A new assignee gets the app's "new job" notification. |
+| `due_at` | ISO 8601. An offset is converted to UTC; without one it's UTC. |
+| `scheduled_for`, `scheduled_to` | ISO 8601, the shop's **wall-clock** time. With an offset it's converted to the location's clock, so `2026-10-28T14:30:00Z` at a New York location is stored as `2026-10-28T10:30:00`. `scheduled_to` can't be before `scheduled_for` (`422`). |
+| `location_id` | Another location of this shop (`404` otherwise). Scheduled times you send in the same request are read in the new location's clock. |
+
+```bash
+curl -X PATCH "$TEKLY_BASE_URL_V2/orders/a83d5f2c-9b1e-4f7a-8c6d-2e1f0a9b8c7d" \
+  -H "Authorization: Bearer $TEKLY_API_KEY" -H "Content-Type: application/json" \
+  -d '{"assigned_to_id": "9d0a6b3e-1c2f-4e5d-8a7b-6c5d4e3f2a10", "scheduled_for": "2026-10-28T10:30:00", "priority": 1}'
+```
+
+Returns the order (with the `lines` summary). Dates that aren't ISO 8601 are `400`.
+
+- A closed order, or one in a status that locks edits, is `409`. Reopen it with a status change first.
+- `status` isn't a field here (`422`): use the status route below.
+
+Fires [`order.updated`](06-events.md#orderupdated). Scope: `orders:write` (or `write`).
+
+### `POST /orders/{id}/status`
+
+Moves the order to another status **through the app's own status change**, so everything the shop has set up applies, exactly as when staff change it on screen.
+
+| Field | Notes |
+|---|---|
+| `status` | Required. One of the shop's active work-order status keys. Anything else is `422`, and the message lists the keys. |
+| `comment` | Optional, up to 5000. Saved with the change in the order's status history. |
+| `cancel_reason` | Optional, up to 120. Kept as the job's `cancel_reason` when the status is in the **dropped** group. |
+
+```bash
+curl -X POST "$TEKLY_BASE_URL_V2/orders/a83d5f2c-9b1e-4f7a-8c6d-2e1f0a9b8c7d/status" \
+  -H "Authorization: Bearer $TEKLY_API_KEY" -H "Content-Type: application/json" \
+  -H "Idempotency-Key: status-a83d5f2c-ready" \
+  -d '{"status": "ready", "comment": "Tested and packed"}'
+```
+
+```json
+{
+  "data": {"id": "a83d5f2c-…", "number": "WO-01042", "status": "ready", "status_name": "Ready", "status_group": "ready", "…": "…"},
+  "change": {"from": "in_repair", "to": "ready", "is_closing": false}
+}
+```
+
+Returns `200` with the order after the change. `change.is_closing` is `true` when the new status closes the job (a closed or dropped status).
+
+**What applies**, as in the app:
+
+- **Status transfer rules.** A rule set for all roles applies; rules for one role don't (a key has no role). A move the rules don't allow is `409`.
+- **Requirements of the new status**: a comment on the order, every checklist item done, or the order paid in full. Each is `409` with the shop's message, for example `'QC passed' requires all 3 checklist item(s) done (1 left).`
+- **Close gates** when the status closes the job: required checklist items, the customer's signature, fields the shop marks "fill in before closing", and products still waiting to be written off from stock. Each is `409`.
+- **Dropped jobs** (a status in the dropped group: not collected, cancelled…) skip the "finish the work" close gates, and the unpaid balance is written off, so the job stops showing as owed. Moving the job out of the dropped group puts the balance back.
+- **Side effects**: checklists that attach on the status, the auto-drafted invoice, warranty, the customer's ledger, commissions, asset moves, automations, the shop's customer and staff notification rules, the feedback request, and the webhooks [`order.status_changed`](06-events.md#orderstatus_changed) and [`order.closed`](06-events.md#orderclosed).
+
+The change is in the shop's audit log and the order's history, attributed to the key (`via_api_key`), with no employee. Unlike staff, a key isn't limited to its own orders and can reopen a closed order: `orders:write` is the permission.
+
+Send an `Idempotency-Key` to make a retry safe: the same key and body replays the first response, and a change a gate stopped can be retried with the same key. Scope: `orders:write` (or `write`).
+
+---
+
+## Invoices
+
+### The invoice object
+
+The [v1 invoice](04-resources.md#invoices), plus `order_ids`, `display_mode`, `due_at` and `created_at`:
+
+```json
+{
+  "id": "0b7d3e9a-5c1f-4a2b-8e6d-9f0a1b2c3d4e",
+  "number": "INV-00031",
+  "order_id": "a83d5f2c-9b1e-4f7a-8c6d-2e1f0a9b8c7d",
+  "order_ids": ["a83d5f2c-9b1e-4f7a-8c6d-2e1f0a9b8c7d"],
+  "client_id": "6f1c2a9d-3e4b-4c8a-9f17-5b2d8e0a6c31",
+  "status": "partial",
+  "display_mode": "detailed",
+  "subtotal": 149.0, "tax": 0.0, "total": 149.0,
+  "amount_paid": 100.0, "credited": 0.0, "balance_due": 49.0,
+  "issued_at": "2026-10-26T09:00:00",
+  "due_at": "2026-11-09T09:00:00",
+  "created_at": "2026-10-26T09:00:00"
+}
+```
+
+| Field | Description |
+|---|---|
+| `order_id`, `order_ids` | The first work order it bills, and every work order it bills. |
+| `amount_paid` | Payments, net of refunds. |
+| `credited` | Issued credit notes. |
+| `balance_due` | `total − amount_paid − credited`, never below 0. |
+| `display_mode` | How the lines are shown: `detailed`, `simplified` or `one_line`. |
+
+### `GET /invoices`
+
+Newest first. Filters (they combine):
+
+| Query | Notes |
+|---|---|
+| `status` | `draft`, `issued`, `partial`, `paid`, `cancelled`… |
+| `client_id` | |
+| `issued_since` | Issued at or after this time. ISO 8601, UTC unless it has an offset. |
+| `updated_since` | Created, issued, or with a payment or refund recorded (on the invoice or on a job it bills), at or after this time. Other edits (a changed due date, a cancelled invoice) don't count, so keep a periodic full sweep too. |
+
+### `GET /invoices/{id}`
+
+The invoice plus `lines`, **as the customer sees them**, following `display_mode`: `detailed` lists every line of every job it bills plus lines added on the invoice, `simplified` one line per job, `one_line` a single line.
+
+```json
+{
+  "data": {
+    "id": "0b7d3e9a-…", "number": "INV-00031", "status": "partial", "total": 149.0, "amount_paid": 100.0,
+    "credited": 0.0, "balance_due": 49.0, "order_ids": ["a83d5f2c-…"], "…": "…",
+    "lines": [
+      {"description": "Screen replacement", "qty": 1.0, "unit_price": 60.0, "total": 60.0},
+      {"description": "iPhone 14 screen", "qty": 1.0, "unit_price": 89.0, "total": 89.0}
+    ]
+  }
+}
+```
+
+Each line has `description`, `qty`, `unit_price` and `total`. On a job with several items, a `detailed` line also has `item_id` and `item`.
+
+### `GET /invoices/{id}/payments`
+
+Money recorded on the invoice, and refunds made on the jobs it bills. Oldest first, not paged.
+
+```json
+{
+  "data": [
+    {"id": "5e2a…", "kind": "payment", "method": "card", "amount": 100.0, "reference": null,
+     "paid_at": "2026-10-26T09:05:12", "invoice_id": "0b7d3e9a-…", "order_id": "a83d5f2c-…"},
+    {"id": "5e2b…", "kind": "refund", "method": "card", "amount": 20.0, "reference": "Overpayment refund",
+     "paid_at": "2026-10-27T11:40:03", "invoice_id": null, "order_id": "a83d5f2c-…"}
+  ]
+}
+```
+
+`kind` is `payment`, `prepayment` or `refund`; `amount` is always positive. `method` is `cash`, `card`, `transfer`, `balance` (the customer's credit) or `online`. Which till or account it went to, who took it, and card-reader charge ids stay in the app.
+
+Scope for every invoice route: `invoices:read` (or `read`).
+
+---
+
 ## Webhooks
 
 Manage the shop's webhook endpoints with a key. These routes need **`webhooks:read`** (list) or **`webhooks:write`** (add, delete). `read`, `write` and `*` never include them, so an older key can't point the shop's events at a URL of its choosing.
@@ -333,6 +677,6 @@ Stops deliveries and abandons queued retries. The delivery log is kept. Signing-
 |---|---|
 | `403` `API key lacks '<resource>:<action>' scope` | The key can't use this resource. |
 | `404` | The id, or an id in the body, isn't in this shop. |
-| `409` | A duplicate tag name or product MPN, an inquiry already converted, the webhook endpoint limit, or an `Idempotency-Key` still in progress. |
-| `422` | A field fails validation, an unknown field, an unknown event, a bad postcode, or an `Idempotency-Key` reused with a different body. |
+| `409` | A duplicate tag name or product MPN, an inquiry already converted, the webhook endpoint limit, a status change the shop's rules stop (with the shop's message), editing a closed or locked order, or an `Idempotency-Key` still in progress. |
+| `422` | A field fails validation, an unknown field, an unknown event or status, a bad postcode or date filter, a search term that's too short, an assignee the shop doesn't list, or an `Idempotency-Key` reused with a different body. |
 | `429` | The key's rate limit. Wait `Retry-After` seconds. |
