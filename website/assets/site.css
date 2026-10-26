@@ -1045,3 +1045,7 @@ p a:not(.btn):not(.link):hover, .lede a:not(.btn):hover { text-decoration-color:
 .ui.app .flash { animation: flash 1s var(--e-out); }
 @keyframes flash { 0% { background-color: #e8f7ee; } 100% { background-color: transparent; } }
 @media (max-width: 639px) { .ui.app .job-hd { padding: .875rem 1rem .625rem; } .ui.app .stepper { padding: 0 1rem .75rem; } .ui.app .stepper li { font-size: .5625rem; } .ui.app .scene { padding: 1rem; min-height: 0; } .ui.app .actbar .hint { display: none; } .ui.app .actbar { justify-content: flex-end; } }
+
+/* Yearly billing: the yearly bill and the saving, under the per-month price */
+.plan .saving { margin-top: .5rem; font-size: .8125rem; font-weight: 500; color: var(--ok); }
+.plan.is-featured .saving { color: #7ee2a8; }

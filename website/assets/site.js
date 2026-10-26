@@ -366,15 +366,19 @@ if (plansBox) {
   let billing = "monthly";
   const render = () => {
     const ym = C.yearlyMonths ?? 10, yearly = billing === "annual", f = yearly ? ym : 1;
+    // Yearly shows what it works out to each month, with the yearly bill and the saving in dollars underneath.
+    const pm = n => (yearly ? (n * ym) / 12 : n);
+    const each = yearly ? " a month" : "", billed = yearly ? ", billed yearly" : "";
     plansBox.innerHTML = (C.plans || []).map(p => {
-      const extra = (p.extraLocation ? `<p class="extra">+ ${cur}${fmt(p.extraLocation * f)} for each extra location</p>` : "")
-        + (p.extraSeat ? `<p class="extra">+ ${cur}${fmt(p.extraSeat * f)} for each extra team member</p>` : "");
-      const unit = yearly ? p.unit.replace("per month", "per year") + ` · ${12 - ym} months free` : p.unit;
+      const extra = (p.extraLocation ? `<p class="extra">+ ${cur}${fmt(pm(p.extraLocation))}${each} for each extra location${billed}</p>` : "")
+        + (p.extraSeat ? `<p class="extra">+ ${cur}${fmt(pm(p.extraSeat))}${each} for each extra team member${billed}</p>` : "");
+      const saving = yearly ? `<p class="saving">Billed ${cur}${fmt(p.monthly * ym)} a year · you save ${cur}${fmt(p.monthly * (12 - ym))}</p>` : "";
       return `<article class="plan${p.featured ? " is-featured" : ""}">
         <div class="plan-top"><h3>${p.name}</h3>${p.badge ? `<span class="badge">${p.badge}</span>` : ""}</div>
         <p class="tagl">${p.tagline}</p>
-        <div class="price"><span class="c">${cur}</span><span class="a">${fmt(p.monthly * f)}</span>${yearly ? `<span class="was">${cur}${fmt(p.monthly * 12)}</span>` : ""}</div>
-        <p class="unit">${unit}</p>
+        <div class="price"><span class="c">${cur}</span><span class="a">${fmt(pm(p.monthly))}</span>${yearly ? `<span class="was">${cur}${fmt(p.monthly)}</span>` : ""}</div>
+        <p class="unit">${p.unit}</p>
+        ${saving}
         ${extra}
         <p class="seats">${p.seats}</p>
         <a class="btn btn-wide ${p.featured ? "btn-solid" : "btn-outline"}" href="${appUrl}${C.signUpPath || "/signup"}?plan=${p.id}&billing=${yearly ? "year" : "month"}" data-spring="nudge">${p.cta} <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
