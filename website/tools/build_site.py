@@ -98,6 +98,17 @@ def compare_band():
 '''
 
 
+def home_stage():
+    """The job-flow section as home's one navy 'stage': the screen stays put while the five
+    steps scroll past (and a click on a step shows it too)."""
+    s = section("flow")
+    s = s.replace('<!-- ════════ HOW A JOB MOVES (numbered rows) ════════ -->', '<!-- ════════ HOME: THE NAVY STAGE (job flow; full tour on /product/) ════════ -->')
+    s = s.replace('<section class="card-sec" id="flow" aria-labelledby="flowTitle">', '<section class="card-sec navy stage airy" id="flow" aria-labelledby="flowTitle">')
+    s = s.replace("</section>", '''  <div class="tour-cta" data-rise><a class="btn btn-light" href="/product/" data-spring="nudge">Take the full product tour <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a><a class="link" href="/product/#features">See every feature</a></div>
+</section>''', 1)
+    return s
+
+
 def changelog_body():
     soon = read("sections/changelog-soon.cards.html")
     shipped = read("sections/changelog-oct.cards.html").replace('<article class="new-card">', '<article class="new-card" data-rise data-spring="lift">')
@@ -127,7 +138,7 @@ PAGES = [
         "og_desc": "Estimates, line-by-line approval on the customer's phone, parts and POS for electronics, auto, small engine and marine shops. Every trade and location in one account. From $29 a month.",
         "hero_preload": True,
         "ld": [ORG, WEBSITE, APP, HOME_FAQ],
-        "body": lambda: "".join(section(n) for n in ["hero", "intro", "home-tour", "industries", "home-switch", "home-pricing", "home-faq"]),
+        "body": lambda: section("hero") + section("intro") + home_stage() + "".join(section(n) for n in ["industries", "home-switch", "home-pricing", "home-faq"]),
     },
     {
         "path": "/product/", "out": "product/index.html", "nav": "/product/",
@@ -170,7 +181,7 @@ PAGES = [
 ]
 
 
-HERO_PRELOAD = '''  <link rel="preload" as="image" type="image/webp" href="/assets/photos/bench-hero-1600.webp" imagesrcset="/assets/photos/bench-hero-960.webp 960w, /assets/photos/bench-hero-1600.webp 1600w" imagesizes="(max-width: 1024px) 92vw, 36rem" fetchpriority="high">
+HERO_PRELOAD = '''  <link rel="preload" as="image" type="image/webp" href="/assets/photos/bench-hero-1600.webp" imagesrcset="/assets/photos/bench-hero-960.webp 960w, /assets/photos/bench-hero-1600.webp 1600w, /assets/photos/bench-hero-2400.webp 2400w" imagesizes="100vw" fetchpriority="high">
 '''
 
 

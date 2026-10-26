@@ -2,9 +2,9 @@
    Tekly marketing site — shared script for every page (built by tools/build_site.py
    and tools/build_pages.py). Each block runs only when its markup is on the page.
 
-   Motion rules ("Daylight"): nothing changes on its own. Content fades in once as it
-   scrolls into view; everything else moves only when someone clicks or taps.
-   Scrolling is the browser's own.
+   Motion (Baseline): headings slide up word by word from behind a clip mask, blocks rise
+   on a light spring, the hero photo drifts with the scroll, hovers spring. Each reveal
+   plays once; nothing cycles on its own. Scrolling is the browser's own.
    ══════════════════════════════════════════════════════════════════════════ */
 const C = window.TEKLY_SITE || {};
 const $ = (s, el = document) => el.querySelector(s);
@@ -99,9 +99,55 @@ document.addEventListener("click", e => {
   history.replaceState(null, "", u.hash);
 });
 
-/* ── Fade in once on entering the viewport (opacity + 8px, 400ms, in CSS) ── */
-const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add("is-in"); io.unobserve(e.target); } }), { rootMargin: "0px 0px 8% 0px" });
-$$("[data-rise], [data-reveal]").forEach(el => (REDUCED ? el.classList.add("is-in") : io.observe(el)));
+/* ── Clip-mask reveals. Words are wrapped in place, so the text stays in the HTML for search. ── */
+const EXPO = "cubic-bezier(.16, 1, .3, 1)";
+const splitWords = el => {
+  const walk = node => [...node.childNodes].forEach(n => {
+    if (n.nodeType === 3) {
+      const frag = document.createDocumentFragment();
+      n.textContent.split(/(\s+)/).forEach(p => {
+        if (!p) return;
+        if (/^\s+$/.test(p)) { frag.appendChild(document.createTextNode(" ")); return; }
+        const w = document.createElement("span"); w.className = "w";
+        const i = document.createElement("span"); i.className = "wi"; i.textContent = p;
+        w.appendChild(i); frag.appendChild(w);
+      });
+      n.replaceWith(frag);
+    } else if (n.nodeType === 1 && n.tagName !== "BR" && !n.classList.contains("w") && !n.classList.contains("sr")) walk(n);
+  });
+  walk(el);
+  return $$(".wi", el);
+};
+const revealInners = (inners, { stagger = 40, duration = 950, delay = 0, cap = 600 } = {}) => inners.forEach((s, i) => {
+  if (REDUCED) return;
+  s.animate([{ transform: "translateY(115%)", opacity: 0 }, { transform: "translateY(0)", opacity: 1 }],
+    { duration, delay: delay + Math.min(i * stagger, cap), easing: EXPO, fill: "both" });
+});
+const fadeUp = (el, delay = 0, y = "1.5rem", duration = 900) => {
+  if (REDUCED) return;
+  el.animate([{ opacity: 0, transform: `translateY(${y})` }, { opacity: 1, transform: "none" }],
+    { duration, delay, easing: "cubic-bezier(.2, 1.1, .3, 1)", fill: "both" });
+};
+const countUp = (el, to, ms = 900, delay = 0, dp = 2) => {
+  const pre = el.dataset.prefix ?? (/^\$/.test(el.textContent) ? cur : "");
+  const put = v => { el.textContent = pre + Number(v).toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp }); };
+  if (REDUCED) return put(to);
+  put(0);
+  setTimeout(() => { const t0 = performance.now(); const step = now => { const t = Math.min(1, (now - t0) / ms); put(to * (1 - Math.pow(1 - t, 4))); if (t < 1) requestAnimationFrame(step); }; requestAnimationFrame(step); }, delay);
+};
+
+/* ── In view, once: headings reveal by word; blocks rise, staggered with their siblings ── */
+const io = new IntersectionObserver(es => es.forEach(e => {
+  if (!e.isIntersecting) return;
+  const el = e.target; io.unobserve(el);
+  if (el.matches("[data-reveal]")) { revealInners(el._w || []); return; }
+  const sibs = [...el.parentElement.children].filter(c => c.hasAttribute("data-rise"));
+  el.style.setProperty("--rd", Math.min(Math.max(0, sibs.indexOf(el)), 5) * 80 + "ms");
+  el.classList.add("is-in");
+  $$("[data-count]", el).forEach(b => countUp(b, +b.dataset.count, 900, 150, 0));
+}), { rootMargin: "0px 0px -6% 0px" });
+$$("[data-reveal]").forEach(el => { el._w = splitWords(el); REDUCED || io.observe(el); });
+$$("[data-rise]").forEach(el => (REDUCED ? el.classList.add("is-in") : io.observe(el)));
 // Older page bodies (industry, compare, guide, legal) use .rv + .shown for the same thing.
 const legacy = $$(".legacy .rv");
 if (legacy.length) {
@@ -118,6 +164,49 @@ const bindHovers = (scope = document) => $$('[data-spring="nudge"]', scope).forE
   el.addEventListener("pointerleave", () => s.set(0));
 });
 bindHovers();
+// Cards lift a little under the pointer (pointer devices wider than 768px only)
+$$(".tease, .new-card, .quote, .q-card, .tpl").forEach(el => {
+  const s = new Spring(0, { tension: 300, friction: 22 }, y => { el.style.translate = `0 ${y}px`; });
+  el.addEventListener("pointerenter", () => canHover() && innerWidth > 768 && s.set(-6));
+  el.addEventListener("pointerleave", () => s.set(0));
+});
+
+/* ── Home hero: headline, tagline and the sample estimate play in on load ── */
+const heroWords = $("[data-hero-words]");
+if (heroWords) {
+  const words = splitWords(heroWords);
+  revealInners(words, { stagger: 140, duration: 1100, delay: 80, cap: 2000 });
+  revealInners($$("#heroTag .lni"), { stagger: 110, duration: 900, delay: 350 });
+  $$("[data-hero-fade]").forEach((el, i) => fadeUp(el, 250 + i * 120, "1rem", 800));
+  const est = $("#heroEst");
+  if (est) {
+    fadeUp(est, 650, "1.75rem", 1000);
+    $$("li", est).forEach((li, i) => fadeUp(li, 900 + i * 110, ".5rem", 600));
+    fadeUp($(".gest-sum", est), 1350, ".5rem", 600);
+    const b = $("[data-to]", est); if (b) countUp(b, +b.dataset.to, 1000, 1350);
+  }
+}
+
+/* ── Parallax: the hero photo drifts down, ghost words slide apart. Geometry is measured on resize, not per frame. ── */
+const plate = $("#heroPlate"), ghosts = $$("[data-ghost]");
+if (!REDUCED && (plate || ghosts.length)) {
+  let G = [], ticking = false;
+  const measure = () => { G = [plate, ...ghosts].filter(Boolean).map(el => { const host = el === plate ? el.parentElement : el.closest("section"); const r = host.getBoundingClientRect(); return { el, top: r.top + scrollY, h: r.height }; }); };
+  const frame = () => {
+    ticking = false; const y = scrollY, vh = innerHeight;
+    G.forEach(({ el, top, h }) => {
+      if (y + vh < top || y > top + h) return;
+      if (el === plate) { el.style.transform = `translate3d(0, ${Math.max(0, (y - top) / h) * 12}%, 0)`; return; }
+      const p = (y + vh - top) / (vh + h) - .5;
+      el.style.transform = `translate3d(${p * +el.dataset.ghost}rem, 0, 0)`;
+    });
+  };
+  const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(frame); } };
+  addEventListener("scroll", onScroll, { passive: true });
+  addEventListener("resize", () => { measure(); onScroll(); }, { passive: true });
+  addEventListener("load", () => { measure(); onScroll(); });
+  measure(); frame();
+}
 
 /* ── Product: job stages (click a row to see its screen) ── */
 const stepsBox = $("#steps");
@@ -128,11 +217,21 @@ if (stepsBox) {
   const show = (i, focus) => {
     stage = (i + steps.length) % steps.length;
     steps.forEach((s, k) => { const on = k === stage; s.setAttribute("aria-selected", String(on)); s.tabIndex = on ? 0 : -1; });
-    scenes.forEach((s, k) => { s.hidden = k !== stage; });
+    scenes.forEach((s, k) => {
+      const was = !s.hidden; s.hidden = k !== stage;
+      if (!s.hidden && !was && !REDUCED) { s.classList.remove("enter"); void s.offsetWidth; s.classList.add("enter"); }
+    });
+    const tot = $(".sum .r", scenes[stage]);
+    if (tot && !tot._counted) { tot._counted = 1; countUp(tot, 482, 800, 250); }
     screenTitle.textContent = TITLES[stage];
     if (focus) steps[stage].focus();
   };
   steps.forEach((s, i) => s.addEventListener("click", () => show(i)));
+  // Desktop: the screen follows whichever step is in the middle of the view as you scroll
+  if (matchMedia("(min-width: 1025px)").matches) {
+    const sio = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { const i = steps.indexOf(e.target); if (i !== stage) show(i); } }), { rootMargin: "-45% 0px -45% 0px" });
+    steps.forEach(s => sio.observe(s));
+  }
   stepsBox.addEventListener("keydown", e => {
     const d = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
     if (e.key === "Home" || e.key === "End") { e.preventDefault(); show(e.key === "Home" ? 0 : steps.length - 1, true); }

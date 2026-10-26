@@ -1,35 +1,48 @@
-<!-- ════════ HERO (light) ════════ -->
-<section class="hero" id="top" aria-labelledby="heroTitle">
-  <div>
-    <h1 id="heroTitle"><span class="hero-kicker">Repair shop software for every trade · electronics, vehicles, tools &amp; marine</span><span class="sr">: </span><span class="hero-words">Diagnose. Approve. Get paid.</span></h1>
-    <p class="hero-lede">Tekly drafts the estimate, gets the customer's yes on their phone, books the parts to the job and pays out the commission — at every location, for every bench from phones to fleets.</p>
-    <div class="hero-ctas">
-      <a class="btn btn-solid" data-app="signup" href="#start" data-spring="nudge">Start free trial <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
-      <button class="btn btn-outline" type="button" data-open-demo>Book a demo</button>
-    </div>
-    <p class="hero-fine"><span data-trial>14</span>-day trial · no card · free data migration · <a href="/pricing/">plans from $29/mo</a></p>
-    <div class="trades-row">
-      <span>Built for</span>
-      <a href="/phone-repair-software/">Phone &amp; computer</a>
-      <a href="/auto-repair-shop-software/">Auto</a>
-      <a href="/small-engine-repair-software/">Small engine &amp; tools</a>
-      <a href="/marine-repair-software/">Marine</a>
-    </div>
-  </div>
-  <figure class="hero-visual">
-    <img src="/assets/photos/bench-hero-1600.webp" srcset="/assets/photos/bench-hero-960.webp 960w, /assets/photos/bench-hero-1600.webp 1600w" sizes="(max-width: 1024px) 92vw, 36rem" width="1600" height="1000" alt="A technician's hands repairing a phone circuit board at the bench" fetchpriority="high">
-    <figcaption class="est" aria-label="Example: an estimate Tekly AI drafted from the customer's words (sample data)">
-      <div class="est-top"><span>Customer says → Tekly AI drafts</span><span class="tag ghost">Sample</span></div>
-      <p class="q">“iPhone 14 Pro dropped in water, won't charge and the screen flickers”</p>
-      <ol>
-        <li><span>Liquid-damage diagnostic</span><b>$49.00</b></li>
-        <li><span>Ultrasonic board clean</span><b>$65.00</b></li>
-        <li><span>Charging port flex</span><b>$89.00</b></li>
-        <li><span>Display assembly</span><b>$279.00</b></li>
-      </ol>
-      <div class="tot"><span>4 lines · from your catalog</span><b>$482.00</b></div>
-      <p class="est-cap">AI estimate drafting is on Pro and in every trial. Nothing is sent until you approve it.</p>
-    </figcaption>
-  </figure>
-</section>
+<!-- ════════ HERO: navy card with the bench photo (parallax), giant headline, sample estimate ════════ -->
+<div class="hero-wrap">
+<section class="hero on-dark" id="top" aria-labelledby="heroTitle">
+  <div class="hero-plate" id="heroPlate"><picture>
+    <source media="(max-width: 639px)" srcset="/assets/photos/bench-hero-tall-750.webp" width="750" height="1333">
+    <img src="/assets/photos/bench-hero-1600.webp" srcset="/assets/photos/bench-hero-960.webp 960w, /assets/photos/bench-hero-1600.webp 1600w, /assets/photos/bench-hero-2400.webp 2400w" sizes="100vw" width="1600" height="1000" alt="A technician's hands repairing a phone circuit board at the bench" fetchpriority="high">
+  </picture></div>
 
+  <div class="hero-body">
+    <div class="hero-main">
+      <h1 id="heroTitle"><span class="hero-kicker" data-hero-fade>Repair shop software for electronics, vehicles, tools &amp; marine</span><span class="sr">: </span><span class="hero-words" data-hero-words>Diagnose. <br>Approve. <br>Get paid.</span></h1>
+      <div class="hero-foot">
+        <p class="hero-tag" id="heroTag"><span class="ln"><span class="lni">From the first complaint</span></span><span class="ln"><span class="lni">to the final payment.</span></span></p>
+        <div data-hero-fade>
+          <div class="hero-ctas">
+            <a class="btn btn-light" data-app="signup" href="#start" data-spring="nudge">Start free trial <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
+            <button class="btn btn-outline" type="button" data-open-demo>Book a demo</button>
+          </div>
+          <p class="hero-fine"><b><span data-trial>14</span>-day trial</b> · no card · free data migration · <a href="/pricing/">from $29/mo</a></p>
+        </div>
+      </div>
+    </div>
+
+    <!-- A sample estimate: the lines build in once, then the total counts up -->
+    <aside class="gest" id="heroEst" aria-label="Example: an estimate Tekly AI drafted from the customer's words">
+      <div class="gest-top"><span>Customer says → Tekly AI drafts</span><span>Sample</span></div>
+      <p class="gest-q">“Dropped it in the pool. Won't charge, screen flickers.”</p>
+      <p class="gest-asset">Apple iPhone 14 Pro · WO-1042</p>
+      <ol>
+        <li><span>Liquid-damage diagnostic</span><span>$49.00</span></li>
+        <li><span>Ultrasonic board clean</span><span>$65.00</span></li>
+        <li><span>Charging port flex</span><span>$89.00</span></li>
+        <li><span>Display assembly, OEM grade</span><span>$279.00</span></li>
+      </ol>
+      <div class="gest-sum"><span>Estimate total</span><b class="tnum" data-to="482">$482.00</b></div>
+      <p class="gest-fine">Prices from your own catalog · nothing is sent until you approve it</p>
+    </aside>
+  </div>
+
+  <div class="trades-row" data-hero-fade>
+    <span>Built for</span>
+    <a href="/phone-repair-software/">Phone &amp; computer</a>
+    <a href="/auto-repair-shop-software/">Auto</a>
+    <a href="/small-engine-repair-software/">Small engine &amp; tools</a>
+    <a href="/marine-repair-software/">Marine</a>
+  </div>
+</section>
+</div>
