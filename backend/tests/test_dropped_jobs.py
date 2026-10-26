@@ -29,7 +29,10 @@ async def _pay(client, h, oid, amount):
 
 
 async def _status(client, h, oid, status):
-    return await client.patch(f"/api/orders/{oid}/status", json={"status": status}, headers=h)
+    body = {"status": status}
+    if status == "dropped":
+        body["reason"] = "Customer didn't come back"   # dropping a job needs a reason
+    return await client.patch(f"/api/orders/{oid}/status", json=body, headers=h)
 
 
 async def _remaining(client, h, oid):
@@ -68,28 +71,27 @@ async def test_drop_writes_off_unpaid_balance_and_reopen_reverses_it(client, ten
     ctx = await _remaining(client, tenant, oid)
     assert ctx["remaining"] == 0 and ctx["written_off"] == pytest.approx(70)
 
-    # recorded in the client ledger: charge 100, payment -30, write-off -70 → nothing owed
-    rows = (await db.execute(select(ClientLedgerEntry).where(
-        ClientLedgerEntry.client_id == cid, ClientLedgerEntry.entry_type == "write_off"))).scalars().all()
-    assert [float(x.amount) for x in rows] == [-70.0]
+    # Preview: workstream B records the write-off by lowering the job's charge in the client
+    # ledger (not a separate "write_off" line); either way the customer owes nothing.
     c = (await db.execute(select(Client).where(Client.id == cid))).scalar_one()
     await db.refresh(c)
     assert float(c.balance) == pytest.approx(0)
 
     # dropping again (e.g. re-saving the status) never writes off twice
     r = await _status(client, tenant, oid, "dropped")
-    assert len((await db.execute(select(ClientLedgerEntry).where(
-        ClientLedgerEntry.client_id == cid, ClientLedgerEntry.entry_type == "write_off"))).scalars().all()) == 1
+    await db.refresh(c)
+    assert float(c.balance) == pytest.approx(0)
 
-    # reopen: the balance is owed again and the write-off is reversed in the ledger
+    # reopen: the balance is owed again (on the job and in the customer's ledger)
     r = await _status(client, tenant, oid, "in_repair")
     assert r.status_code == 200, r.text
     ctx = await _remaining(client, tenant, oid)
     assert ctx["remaining"] == pytest.approx(70) and ctx["written_off"] == 0
     assert (await client.get(f"/api/orders/{oid}", headers=tenant)).json()["payment_due"] is True
-    total = sum(float(x.amount) for x in (await db.execute(select(ClientLedgerEntry).where(
-        ClientLedgerEntry.client_id == cid, ClientLedgerEntry.entry_type == "write_off"))).scalars().all())
-    assert total == pytest.approx(0)
+    # An open job isn't charged to the customer's ledger until it closes, so after reopening the
+    # 30 paid shows as credit again, exactly as before the drop.
+    await db.refresh(c)
+    assert float(c.balance) == pytest.approx(-30)
 
 
 @pytest.mark.asyncio

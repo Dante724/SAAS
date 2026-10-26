@@ -323,7 +323,8 @@ async def _rep_wo_profit(db, org, df, dt, **kw):
     from backend.services.profit import job_figures
     _q = _loc_filter(select(Order).where(
         Order.org_id == org, Order.is_estimate == False, Order.archived == False,  # noqa: E712
-        Order.created_at >= df, Order.created_at <= dt), kw)
+        Order.created_at >= df, Order.created_at <= dt,
+        Order.status.notin_(await _dropped_keys(db, org))), kw)          # dropped jobs earned nothing
     orders = (await db.execute(_q.order_by(Order.created_at.desc()))).scalars().all()
     figs = await job_figures(db, org, list(orders))
     cols = ["Order #", "Revenue", "Cost", "Gross profit", "Markup %"]
