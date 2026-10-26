@@ -671,3 +671,7 @@ async def openapi_document():
 @router.get("/docs", include_in_schema=False)
 async def docs_redirect():
     return RedirectResponse("/api/v2/openapi.json", status_code=307)
+
+
+# Integrator gaps: more v2 routes registered on this same router (they appear in the v2 OpenAPI).
+from backend.routers import v2_records, v2_bookings  # noqa: E402,F401

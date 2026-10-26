@@ -60,7 +60,7 @@ def hash_key(full: str) -> str:
 # WS-C: resource scopes narrow a key to one resource ("inquiries:read", "products:write"). They
 # work on /api/v2 only; v1 needs a broad read / write.
 RESOURCES = ("contacts", "orders", "estimates", "products", "appointments", "invoices", "credit_notes",
-             "time_entries", "inquiries", "tags", "services", "bundles", "webhooks")
+             "time_entries", "inquiries", "tags", "services", "bundles", "webhooks", "locations", "employees")
 BROAD = ("read", "write", "*")
 # Never implied by a broad scope: managing webhooks would let any old "read,write" key subscribe
 # a URL of its choosing to every event, so it needs an explicit webhooks:read / webhooks:write.
