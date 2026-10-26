@@ -37,6 +37,8 @@ Shops send an export from their current system or spreadsheets and Tekly brings 
 
 ## Key pages
 - Home: https://tekly.app/
+- Product tour (every feature): https://tekly.app/product/
+- About Tekly: https://tekly.app/about/
 - Phone and computer repair software: https://tekly.app/phone-repair-software/
 - Auto repair shop software: https://tekly.app/auto-repair-shop-software/
 - Small engine and power tool repair software: https://tekly.app/small-engine-repair-software/
@@ -49,8 +51,8 @@ Shops send an export from their current system or spreadsheets and Tekly brings 
   - Tekly vs Shopmonkey: https://tekly.app/compare/tekly-vs-shopmonkey/
   - Tekly vs Tekmetric: https://tekly.app/compare/tekly-vs-tekmetric/
   - Tekly vs Orderry: https://tekly.app/compare/tekly-vs-orderry/
-- Pricing: https://tekly.app/#pricing
-- FAQ: https://tekly.app/#faq
+- Pricing: https://tekly.app/pricing/
+- FAQ: https://tekly.app/pricing/#faq
 
 ## Contact
 Email: hello@tekly.app

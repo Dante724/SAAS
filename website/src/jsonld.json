@@ -1,0 +1,198 @@
+[
+ {
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  "@id": "https://tekly.app/#org",
+  "name": "Tekly",
+  "url": "https://tekly.app/",
+  "logo": "https://tekly.app/assets/icon-512.png",
+  "email": "hello@tekly.app"
+ },
+ {
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  "@id": "https://tekly.app/#website",
+  "name": "Tekly",
+  "url": "https://tekly.app/",
+  "publisher": {
+   "@id": "https://tekly.app/#org"
+  }
+ },
+ {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Tekly",
+  "applicationCategory": "BusinessApplication",
+  "applicationSubCategory": "Repair shop management software for multi-trade, multi-location repair businesses",
+  "operatingSystem": "Web browser (installable on iOS and Android)",
+  "url": "https://tekly.app/",
+  "description": "Repair shop management software with AI-drafted estimates, customer approvals on the phone, parts and purchase orders, POS, inventory and payroll.",
+  "publisher": {
+   "@id": "https://tekly.app/#org"
+  },
+  "offers": [
+   {
+    "@type": "Offer",
+    "name": "Solo",
+    "price": "29",
+    "priceCurrency": "USD",
+    "priceSpecification": {
+     "@type": "UnitPriceSpecification",
+     "price": "29",
+     "priceCurrency": "USD",
+     "unitText": "per month",
+     "unitCode": "MON",
+     "referenceQuantity": {
+      "@type": "QuantitativeValue",
+      "value": 1,
+      "unitCode": "MON"
+     }
+    },
+    "url": "https://tekly.app/#pricing"
+   },
+   {
+    "@type": "Offer",
+    "name": "Shop",
+    "price": "69",
+    "priceCurrency": "USD",
+    "priceSpecification": {
+     "@type": "UnitPriceSpecification",
+     "price": "69",
+     "priceCurrency": "USD",
+     "unitText": "per month, first location",
+     "unitCode": "MON",
+     "referenceQuantity": {
+      "@type": "QuantitativeValue",
+      "value": 1,
+      "unitCode": "MON"
+     }
+    },
+    "url": "https://tekly.app/#pricing"
+   },
+   {
+    "@type": "Offer",
+    "name": "Pro",
+    "price": "129",
+    "priceCurrency": "USD",
+    "priceSpecification": {
+     "@type": "UnitPriceSpecification",
+     "price": "129",
+     "priceCurrency": "USD",
+     "unitText": "per month, first location",
+     "unitCode": "MON",
+     "referenceQuantity": {
+      "@type": "QuantitativeValue",
+      "value": 1,
+      "unitCode": "MON"
+     }
+    },
+    "url": "https://tekly.app/#pricing"
+   }
+  ],
+  "image": "https://tekly.app/assets/og.jpg",
+  "screenshot": "https://tekly.app/assets/tech-job.webp",
+  "audience": {
+   "@type": "BusinessAudience",
+   "audienceType": "Repair shops: phone and computer repair, auto and truck repair, small engine and power tool repair, marine and outboard repair"
+  },
+  "featureList": [
+   "Work orders, estimates and invoices",
+   "AI estimate drafting",
+   "Line-by-line customer approval and signature on the phone",
+   "Intake templates for electronics (IMEI, serial), vehicles (VIN, plate), small engines and marine (HIN)",
+   "Several trade templates in one account",
+   "Multiple locations with shared team seats",
+   "Inventory, purchase orders and stock transfers between locations",
+   "POS, payment links, Stripe and Square",
+   "Payroll, commissions and time clock",
+   "QuickBooks and Xero sync",
+   "Tekly Go technician phone app"
+  ]
+ },
+ {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+   {
+    "@type": "Question",
+    "name": "What is repair shop management software?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "It's one system for everything a repair shop does: checking jobs in, estimates and customer approvals, ordering parts, the point of sale, invoices, inventory and payroll. Tekly replaces the mix of spreadsheets, notebooks and separate apps most shops run on."
+    }
+   },
+   {
+    "@type": "Question",
+    "name": "Which kinds of repair shops is Tekly for?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "Tekly has four templates: Electronics (phones, tablets and computers), Vehicles (cars, trucks, RVs and bikes), Tools & small engine (power tools, mowers, saws and generators) and Marine (outboards, inboards and hulls). Shops that fix more than one kind of thing can use several templates in one account."
+    }
+   },
+   {
+    "@type": "Question",
+    "name": "Can customers approve estimates on their phone?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "Yes. Customers get a link, approve each line of the estimate and sign on their phone. If you find more work mid-repair, they choose what to add; nothing is added unless they approve it."
+    }
+   },
+   {
+    "@type": "Question",
+    "name": "How long does it take to switch?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "Most single-location shops can be set up in a day. Send us an export from your current system or spreadsheets and we bring customers, devices and stock across as part of onboarding."
+    }
+   },
+   {
+    "@type": "Question",
+    "name": "Can I switch from RepairDesk, Shopmonkey or another system?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "Yes. Send us an export from your current system or spreadsheets and we bring customers, devices and stock across as part of onboarding, free on every plan. Most single-location shops are set up in a day. Comparisons with RepairDesk, RepairShopr, Shopmonkey, Tekmetric and Orderry are at https://tekly.app/compare/."
+    }
+   },
+   {
+    "@type": "Question",
+    "name": "What's the difference between Solo, Shop and Pro?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "Solo ($29 a month) is for up to 2 people at one location and 150 new jobs a month: work orders, estimates, invoices, POS, the customer portal and booking, the Tekly Go phone app and messaging. Shop ($69 for the first location, $49 for each extra) includes 8 team members you can split across your locations, $4 a month for each extra person, and unlimited jobs. It adds inventory, barcodes and scanning, the time clock, reports and automatic notifications. Pro ($129 for the first location, $79 for each extra) has unlimited people and jobs and adds purchase orders, payroll and commissions, stock transfers between locations, AI estimate drafting, QuickBooks and Xero, single sign-on and API keys. Yearly billing gets 2 months free."
+    }
+   },
+   {
+    "@type": "Question",
+    "name": "Does Tekly work with QuickBooks, Xero, Stripe or Square?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "Yes. Tekly syncs with QuickBooks and Xero on Pro, takes card payments through Stripe or Square, and sends customer updates by SMS, WhatsApp and email from Gmail or Outlook."
+    }
+   },
+   {
+    "@type": "Question",
+    "name": "Will AI ever message my customers by itself?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "No. Tekly AI drafts estimates, replies and summaries, and a person on your team decides what gets sent."
+    }
+   },
+   {
+    "@type": "Question",
+    "name": "Do I need special hardware?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "No. Tekly runs in any modern browser on a computer, tablet or phone, and works with standard barcode scanners, label printers and receipt printers."
+    }
+   },
+   {
+    "@type": "Question",
+    "name": "What happens to my data if I leave?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "It's yours. Export everything to CSV or Excel at any time, including after you cancel."
+    }
+   }
+  ]
+ }
+]

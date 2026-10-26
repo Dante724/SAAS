@@ -178,9 +178,10 @@ def footer(current=""):
   <div class="wrap">
     <div class="foot-grid">
       <div><a href="/" class="logo"><svg aria-hidden="true"><use href="#mark"/></svg>tekly</a><p class="foot-about">Repair shop software, from the first complaint to the final payment.</p></div>
+      <div><h2 class="foot-h">Product</h2><ul><li><a href="/product/">Product tour</a></li><li><a href="/pricing/">Pricing</a></li><li><a href="/product/#features">All features</a></li></ul></div>
       <div><h2 class="foot-h">Software for</h2><ul>{nav_links(current)}</ul></div>
       <div><h2 class="foot-h">Compare</h2><ul>{"".join(f'<li><a href="/compare/tekly-vs-{c["slug"]}/">Tekly vs {e(c["name"])}</a></li>' for c in COMPETITORS)}<li><a href="/compare/">All comparisons</a></li><li><a href="/guides/choose-repair-shop-software/">How to choose</a></li></ul></div>
-      <div><h2 class="foot-h">Company</h2><ul><li><a href="/changelog/">What's new</a></li><li><a href="/#start">Book a demo</a></li><li><a data-mail href="/#start">Contact</a></li><li><a href="/#faq">FAQ</a></li></ul></div>
+      <div><h2 class="foot-h">Company</h2><ul><li><a href="/about/">About us</a></li><li><a href="/changelog/">What's new</a></li><li><a href="/#start">Book a demo</a></li><li><a data-mail href="/#start">Contact</a></li><li><a href="/pricing/#faq">FAQ</a></li></ul></div>
       <div><h2 class="foot-h">Account</h2><ul><li><a data-app="signin" href="/#start">Sign in</a></li><li><a data-app="signup" href="/#start">Start free trial</a></li></ul></div>
     </div>
     <div class="legal"><span>© <span id="yr">{date.today().year}</span> Tekly</span><span class="legal-links">{LEGAL_LINKS}</span><span>Product screens show sample data.</span></div>
@@ -270,13 +271,13 @@ def page(p):
 <section class="sec sec-tight">
   <div class="wrap"><div class="sub-price rv">
     <div><p class="eyebrow">Pricing</p><h2 class="h-sub">Plans from $29 a month.</h2><p class="lede">Solo is $29 for up to 2 people. Shop is $69 for 8 people shared across locations ($49 per extra location, $4 per extra person) and adds inventory, scanning, the time clock and reports. Pro is $129 for the first location ($79 each extra) with no limits, plus purchase orders, payroll, AI estimate drafting and accounting sync. Every trial includes all Pro features for 14 days, no card.</p></div>
-    <div class="sub-price-ctas"><a class="btn btn-brand btn-lg" data-app="signup" data-cta="pricing_trial" href="/#start">Start free trial</a><a class="link" href="/#pricing">Compare plans</a></div>
+    <div class="sub-price-ctas"><a class="btn btn-brand btn-lg" data-app="signup" data-cta="pricing_trial" href="/#start">Start free trial</a><a class="link" href="/pricing/">Compare plans</a></div>
   </div></div>
 </section>
 
 <section class="sec sec-tight">
   <div class="wrap faq">
-    <div><p class="eyebrow">Questions</p><h2 class="h-sub">{e(p["noun"])}, answered.</h2><p class="lede">More questions? <a class="link" href="/#faq">Read the full FAQ</a></p></div>
+    <div><p class="eyebrow">Questions</p><h2 class="h-sub">{e(p["noun"])}, answered.</h2><p class="lede">More questions? <a class="link" href="/pricing/#faq">Read the full FAQ</a></p></div>
     <div>{faq}</div>
   </div>
 </section>
@@ -326,7 +327,7 @@ def shell(p, url, main, ld):
 <header class="nav" id="nav">
   <div class="wrap nav-in">
     <a href="/" class="logo" aria-label="Tekly home"><svg aria-hidden="true"><use href="#mark"/></svg>tekly</a>
-    <nav class="nav-links" aria-label="Primary"><a href="/#product">Product</a><a href="/#industries">Industries</a><a href="/#ai">AI</a><a href="/#pricing">Pricing</a><a href="/#faq">FAQ</a></nav>
+    <nav class="nav-links" aria-label="Primary"><a href="/product/">Product</a><a href="/#industries">Every trade</a><a href="/pricing/">Pricing</a><a href="/compare/">Compare</a><a href="/about/">About</a></nav>
     <div class="nav-right">
       <a class="nav-signin" data-app="signin" data-cta="nav_signin" href="/#start">Sign in</a>
       <a class="btn btn-quiet" href="/#start" data-cta="nav_demo">Book a demo</a>
@@ -334,7 +335,7 @@ def shell(p, url, main, ld):
       <button class="burger" aria-label="Menu" aria-expanded="false" aria-controls="mmenu"><span></span><span></span></button>
     </div>
   </div>
-  <div class="mmenu" id="mmenu"><a href="/#product">Product</a><a href="/#industries">Industries</a><a href="/#ai">AI</a><a href="/#pricing">Pricing</a><a href="/#faq">FAQ</a>
+  <div class="mmenu" id="mmenu"><a href="/product/">Product</a><a href="/#industries">Every trade</a><a href="/pricing/">Pricing</a><a href="/compare/">Compare</a><a href="/about/">About</a>
     <div class="mmenu-ctas"><a class="btn btn-quiet" data-app="signin" href="/#start">Sign in</a><a class="btn btn-brand" data-app="signup" href="/#start">Start free trial</a></div></div>
 </header>
 
@@ -525,7 +526,7 @@ def main():
             placeholders.append(doc["slug"])
     if placeholders:
         print("WARNING: fill in the [[…]] placeholders in tools/legal/ before launch:", ", ".join(placeholders))
-    urls = ([("/", "1.0"), ("/changelog/", "0.6")] + [(f"/{p['slug']}/", "0.8") for p in PAGES]
+    urls = ([("/", "1.0"), ("/product/", "0.9"), ("/pricing/", "0.9"), ("/about/", "0.5"), ("/changelog/", "0.6")] + [(f"/{p['slug']}/", "0.8") for p in PAGES]
             + [("/compare/", "0.6")] + [(f"/compare/tekly-vs-{c['slug']}/", "0.7") for c in COMPETITORS]
             + [(f"/{GUIDE['slug']}/", "0.7")]
             + [(f"/{d['slug']}/", "0.3") for d in LEGAL])
