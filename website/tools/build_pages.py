@@ -6,6 +6,7 @@ Change DOMAIN below (or run the sed one-liner in website/README.md) once the dom
 """
 import html
 import json
+import subprocess
 from datetime import date
 from pathlib import Path
 
@@ -16,6 +17,15 @@ import build_site
 DOMAIN = "https://tekly.app"
 ROOT = Path(__file__).resolve().parent.parent
 TODAY = date.today().isoformat()
+
+
+def lastmod(url):
+    """The day a page last changed: today if its built file differs from git, else its last commit date."""
+    rel = (url.strip("/") + "/index.html") if url != "/" else "index.html"
+    run = lambda *a: subprocess.run(["git", *a], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+    if run("status", "--porcelain", "--", rel):
+        return TODAY
+    return run("log", "-1", "--format=%cs", "--", rel) or TODAY
 e = lambda s: html.escape(s, quote=False)
 
 PAGES = [
@@ -61,7 +71,7 @@ PAGES = [
         "title": "Auto Repair Shop Software for Cars, Trucks & RVs | Tekly",
         "desc": "Auto repair shop software for cars, trucks, RVs and bikes. VIN intake, AI estimates, digital approvals by text, parts and payroll. Plans from $29/mo.",
         "h1": "Auto repair shop software for cars, trucks, RVs and bikes",
-        "lead": "One vehicle template from a family hatchback to a fleet truck or an RV. Check vehicles in by VIN or plate, draft the estimate with AI, and let customers approve each line from their phone.",
+        "lead": "Auto repair software with one vehicle template, from a family hatchback to a fleet truck or an RV. Check vehicles in by VIN or plate, draft the estimate with AI, and let customers approve each line from their phone.",
         "fields": [("VIN", "Kept on the vehicle's history"), ("Year, make and model", "e.g. 2019 Honda CR-V"), ("Plate", "Find the vehicle by plate"), ("Mileage or hours", "Logged every visit"), ("Unit number", "For fleet vehicles"), ("Condition photos", "Taken at check-in")],
         "features": [
             ("AI estimates from the complaint", "“Grinding when braking, pulls left” becomes an inspection, pads and rotors, and a caliper service — at your prices."),
@@ -130,10 +140,10 @@ PAGES = [
     {
         "slug": "marine-repair-software", "vs": [("shopmonkey", "Shopmonkey"), ("orderry", "Orderry")], "noun": "Marine repair",
         "template": "Marine",
-        "title": "Marine Repair & Boat Service Software | Tekly",
-        "desc": "Marine repair software for boatyards and outboard shops. HIN and engine serial intake, AI estimates, customer approvals, parts and payroll.",
-        "h1": "Marine repair and boat service software",
-        "lead": "A template built for boatyards — from winterising to a full repower. Track the hull ID and each engine separately, draft estimates with AI and get approvals before the boat comes out of the water.",
+        "title": "Marine Service & Boat Repair Software | Tekly",
+        "desc": "Marine service software for boatyards and outboard shops. HIN and engine serial intake, AI estimates, customer approvals, parts and payroll.",
+        "h1": "Marine service and boat repair software",
+        "lead": "Marine service software built for boatyards and outboard shops, from winterising to a full repower. Track the hull ID and each engine separately, draft estimates with AI and get approvals before the boat comes out of the water.",
         "fields": [("HIN", "Hull identification number"), ("Engine serial", "Each engine tracked separately"), ("Make, model and year", "e.g. 19 ft centre console"), ("Length", "In feet"), ("Registration", "State or national"), ("Condition photos", "Taken at haul-out")],
         "features": [
             ("AI estimates from the complaint", "“Won't idle, stalls in gear” becomes a diagnostic, fuel service and parts — at your rates."),
@@ -153,7 +163,7 @@ PAGES = [
         ],
         "photo": ("boat-engine", "A mechanic working on an inflatable boat's outboard engine on the water", 'Photo: <a href="https://commons.wikimedia.org/wiki/File:Engineer_person_working_on_boat_engine.jpg" rel="noopener">Steve Hillebrand, U.S. Fish and Wildlife Service</a>, public domain'),
         "more_faq": [
-            ("How much does marine repair software cost?", "Tekly starts at $29 a month for up to 2 people. Shop is $69 a month and adds inventory, scanning and reports; Pro is $129 and adds purchase orders, payroll and AI estimate drafting. Extra locations are $49 on Shop and $79 on Pro."),
+            ("How much does marine service software cost?", "Tekly starts at $29 a month for up to 2 people. Shop is $69 a month and adds inventory, scanning and reports; Pro is $129 and adds purchase orders, payroll and AI estimate drafting. Extra locations are $49 on Shop and $79 on Pro."),
             ("Can I run a marine shop and another trade in one account?", "Yes. Use the Marine template alongside Vehicles, Electronics or Tools & small engine in one account, with one login."),
             ("Can I move my existing customer and boat records?", "Yes. Send an export or spreadsheet and we bring customers, vessels and stock across, free on every plan."),
         ],
@@ -587,9 +597,9 @@ def main():
             + [(f"/{d['slug']}/", "0.3") for d in LEGAL])
     (ROOT / "sitemap.xml").write_text(
         '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
-        + "".join(f"  <url><loc>{DOMAIN}{u}</loc><lastmod>{TODAY}</lastmod><priority>{pr}</priority></url>\n" for u, pr in urls)
+        + "".join(f"  <url><loc>{DOMAIN}{u}</loc><lastmod>{lastmod(u)}</lastmod></url>\n" for u, _ in urls)
         + "</urlset>\n", encoding="utf-8")
-    (ROOT / "robots.txt").write_text(f"User-agent: *\nAllow: /\nDisallow: /tools/\n\nSitemap: {DOMAIN}/sitemap.xml\n", encoding="utf-8")
+    (ROOT / "robots.txt").write_text(f"User-agent: *\nAllow: /\nDisallow: /tools/\nDisallow: /v2/\n\nSitemap: {DOMAIN}/sitemap.xml\n", encoding="utf-8")
     (ROOT / "site.webmanifest").write_text(json.dumps({
         "name": "Tekly", "short_name": "Tekly", "start_url": "/", "display": "standalone",
         "background_color": "#ffffff", "theme_color": "#003dff",

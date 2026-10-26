@@ -28,7 +28,7 @@
   <link rel="preload" href="/assets/fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" as="image" type="image/webp" href="/assets/photos/bench-hero-1600.webp" imagesrcset="/assets/photos/bench-hero-960.webp 960w, /assets/photos/bench-hero-1600.webp 1600w, /assets/photos/bench-hero-2400.webp 2400w" imagesizes="100vw" fetchpriority="high">
   <link rel="modulepreload" href="/assets/site.js?v=ccddd87d">
-  <link rel="stylesheet" href="/assets/site.css?v=83175212">
+  <link rel="stylesheet" href="/assets/site.css?v=e3677e89">
   <script>document.documentElement.classList.add("js")</script>
   <script type="application/ld+json">
 [
@@ -39,7 +39,14 @@
   "name": "Tekly",
   "url": "https://tekly.app/",
   "logo": "https://tekly.app/assets/icon-512.png",
-  "email": "hello@tekly.app"
+  "email": "hello@tekly.app",
+  "description": "Tekly makes repair shop software for electronics, vehicle, small-engine and marine repair businesses, from one location to many.",
+  "contactPoint": {
+   "@type": "ContactPoint",
+   "email": "hello@tekly.app",
+   "contactType": "sales",
+   "availableLanguage": "English"
+  }
  },
  {
   "@context": "https://schema.org",
@@ -81,7 +88,8 @@
       "unitCode": "MON"
      }
     },
-    "url": "https://tekly.app/#pricing"
+    "url": "https://tekly.app/pricing/",
+    "availability": "https://schema.org/InStock"
    },
    {
     "@type": "Offer",
@@ -100,7 +108,8 @@
       "unitCode": "MON"
      }
     },
-    "url": "https://tekly.app/#pricing"
+    "url": "https://tekly.app/pricing/",
+    "availability": "https://schema.org/InStock"
    },
    {
     "@type": "Offer",
@@ -119,7 +128,8 @@
       "unitCode": "MON"
      }
     },
-    "url": "https://tekly.app/#pricing"
+    "url": "https://tekly.app/pricing/",
+    "availability": "https://schema.org/InStock"
    }
   ],
   "image": "https://tekly.app/assets/og.jpg",
@@ -140,7 +150,8 @@
    "Payroll, commissions and time clock",
    "QuickBooks and Xero sync",
    "Tekly Go technician phone app"
-  ]
+  ],
+  "@id": "https://tekly.app/#software"
  },
  {
   "@context": "https://schema.org",
@@ -167,7 +178,7 @@
     "name": "Can I switch from RepairDesk, Shopmonkey or another system?",
     "acceptedAnswer": {
      "@type": "Answer",
-     "text": "Yes. Send us an export from your current system or spreadsheets and we bring customers, devices and stock across as part of onboarding, free on every plan. Most single-location shops are set up in a day. Comparisons with RepairDesk, RepairShopr, Shopmonkey, Tekmetric and Orderry are at https://tekly.app/compare/."
+     "text": "Yes. Send us an export from your current system or spreadsheets and we bring customers, devices and stock across as part of onboarding, free on every plan. You can take your first job the day you sign up. Comparisons with RepairDesk, RepairShopr, Shopmonkey, Tekmetric and Orderry are at https://tekly.app/compare/."
     }
    },
    {
@@ -283,9 +294,10 @@
 
   <div class="hero-body">
     <div class="hero-main">
-      <h1 id="heroTitle"><span class="hero-kicker" data-hero-fade>Repair shop software for electronics, vehicles, tools &amp; marine</span><span class="sr">: </span><span class="hero-words" data-hero-words>Diagnose. <br>Approve. <br>Get paid.</span></h1>
+      <h1 id="heroTitle" class="hero-kicker" data-hero-fade>Repair shop software for electronics, vehicles, tools &amp; marine</h1>
+      <p class="hero-words" data-hero-words>Diagnose. <br>Approve. <br>Get paid.</p>
       <div class="hero-foot">
-        <p class="hero-tag" id="heroTag"><span class="ln"><span class="lni">From the first complaint</span></span><span class="ln"><span class="lni">to the final payment.</span></span></p>
+        <p class="hero-tag" id="heroTag"><span class="ln"><span class="lni">Customers approve each line on their phone.</span></span><span class="ln"><span class="lni">Parts land on the job. Commission posts when it's paid.</span></span></p>
         <div data-hero-fade>
           <div class="hero-ctas">
             <a class="btn btn-light" data-app="signup" href="#start" data-spring="nudge">Start free trial <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
@@ -374,7 +386,7 @@
           </div>
           <div class="photos">
             <span class="k">Condition photos</span>
-            <div class="thumbs"><img src="/assets/photos/iphone-mat-600.webp" alt="" loading="lazy"><img src="/assets/photos/repair-lab-1-600.webp" alt="" loading="lazy"><img src="/assets/photos/repair-lab-2-600.webp" alt="" loading="lazy"><span class="more">+ add</span></div>
+            <div class="thumbs"><img src="/assets/photos/iphone-mat-600.webp" alt="" width="600" height="400" loading="lazy" decoding="async"><img src="/assets/photos/repair-lab-1-600.webp" alt="" width="600" height="400" loading="lazy" decoding="async"><img src="/assets/photos/repair-lab-2-600.webp" alt="" width="600" height="400" loading="lazy" decoding="async"><span class="more">+ add</span></div>
           </div>
           <div class="checks" role="group" aria-label="Intake checklist (try it)">
             <button type="button" class="chk on" aria-pressed="true"><i><svg><use href="#check"/></svg></i>Cracked back glass noted</button>
@@ -456,7 +468,7 @@
   <div class="ind-head">
     <div>
       <p class="eyebrow">Every repair business</p>
-      <h2 class="h2" id="indTitle" data-reveal>Built for your bench, whatever is on it.</h2>
+      <h2 class="h2" id="indTitle" data-reveal>Phones, pickups, mowers, outboards. Same software.</h2>
       <p class="lede" data-rise>Four templates cover every bench. Each one asks for the right details at intake — and if you fix more than one kind of thing, use several in one account.</p>
       <p class="note" data-rise>Pick a job type on any card to see an example job and what Tekly asks for at check-in.</p>
     </div>
@@ -529,7 +541,7 @@
 <section class="card-sec dense" id="switching" aria-labelledby="swTitle">
   <div class="sec-head">
     <h2 class="h2" id="swTitle" data-reveal>Switching from RepairDesk, Shopmonkey or spreadsheets?</h2>
-    <p class="lede" data-rise>Most single-location shops are set up in a day.</p>
+    <p class="lede" data-rise>You can take your first job the day you sign up.</p>
   </div>
   <ul class="switch-grid">
     <li data-rise><b>We move your data, free</b><span>Send us an export from your current system or spreadsheets. We bring customers, devices and stock across as part of onboarding, on every plan.</span></li>
@@ -543,7 +555,7 @@
 <section class="card-sec tint dense" id="pricing" aria-labelledby="ptTitle">
   <div class="price-line">
     <div>
-      <h2 id="ptTitle" data-reveal>Plans from $29 a month. Prices on the page.</h2>
+      <h2 id="ptTitle" data-reveal>Three plans, from $29 a month.</h2>
       <div class="price-chips" data-rise><span><b>Solo</b> $29/mo</span><span><b>Shop</b> $69/mo · extra locations $49</span><span><b>Pro</b> $129/mo · extra locations $79</span></div>
     </div>
     <a class="btn btn-dark" href="/pricing/" data-spring="nudge" data-rise>Compare plans <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
@@ -560,7 +572,7 @@
     <div>
       <details><summary>Which kinds of repair shops is Tekly for?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Tekly has four templates: Electronics (phones, tablets and computers), Vehicles (cars, trucks, RVs and bikes), Tools &amp; small engine (power tools, mowers, saws and generators) and Marine (outboards, inboards and hulls). Shops that fix more than one kind of thing can use several templates in one account.</p></details>
       <details><summary>Can customers approve estimates on their phone?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Yes. Customers get a link, approve each line of the estimate and sign on their phone. If you find more work mid-repair, they choose what to add; nothing is added unless they approve it.</p></details>
-      <details><summary>Can I switch from RepairDesk, Shopmonkey or another system?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Yes. Send us an export from your current system or spreadsheets and we bring customers, devices and stock across as part of onboarding, free on every plan. Most single-location shops are set up in a day. <a href="/compare/">See how Tekly compares</a> with RepairDesk, RepairShopr, Shopmonkey, Tekmetric and Orderry.</p></details>
+      <details><summary>Can I switch from RepairDesk, Shopmonkey or another system?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Yes. Send us an export from your current system or spreadsheets and we bring customers, devices and stock across as part of onboarding, free on every plan. You can take your first job the day you sign up. <a href="/compare/">See how Tekly compares</a> with RepairDesk, RepairShopr, Shopmonkey, Tekmetric and Orderry.</p></details>
       <details><summary>What's the difference between Solo, Shop and Pro?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Solo ($29 a month) is for up to 2 people at one location and 150 new jobs a month: work orders, estimates, invoices, POS, the customer portal and booking, the Tekly Go phone app and messaging. Shop ($69 for the first location, $49 for each extra) includes 8 team members you can split across your locations, $4 a month for each extra person, and unlimited jobs. It adds inventory, barcodes and scanning, the time clock, reports and automatic notifications. Pro ($129 for the first location, $79 for each extra) has unlimited people and jobs and adds purchase orders, payroll and commissions, stock transfers between locations, AI estimate drafting, QuickBooks and Xero, single sign-on and API keys. Yearly billing gets 2 months free.</p></details>
       <details><summary>What happens to my data if I leave?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>It's yours. Export everything to CSV or Excel at any time, including after you cancel.</p></details>
     </div>
@@ -571,13 +583,11 @@
 <section class="card-sec navy cta-foot" id="start" aria-labelledby="startTitle">
   <div class="cta-grid">
     <div class="cta-copy">
-      <p class="eyebrow">Get started</p>
       <h2 id="startTitle" data-reveal>See your shop on Tekly.</h2>
       <p class="lede"><span data-trial>14</span> days of every Pro feature, AI included. No credit card. Or book a 30-minute demo and we'll set your trade up live.</p>
       <div class="cta-btns">
-        <a class="btn btn-light" data-app="signup" href="#start" data-spring="nudge">Create your shop <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
+        <a class="btn btn-light" data-app="signup" href="#start" data-spring="nudge">Start free trial <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
         <button class="btn btn-outline" type="button" data-open-demo>Book a demo</button>
-        <a class="btn btn-outline" data-app="signin" href="#start">Sign in</a>
       </div>
       <ul class="cta-list">
         <li><svg aria-hidden="true"><use href="#check"/></svg>Pick your trade — fields and services are pre-filled</li>
@@ -589,7 +599,6 @@
         <li><span>10:00</span>One job from intake to paid, with AI</li>
         <li><span>20:00</span>Moving your data, pricing, questions</li>
       </ol>
-      <p class="note" style="color:#8d9bb8">Signing in with single sign-on? Choose it on the sign-in screen. Forgot your password? Choose “Reset password” there.</p>
     </div>
     <div data-rise>
       <div class="ui track" aria-label="Customer tracking page preview" data-spring="lift">
@@ -648,7 +657,7 @@
       <span class="tick"><svg aria-hidden="true"><use href="#check"/></svg></span>
       <h2>Thanks — you're on the list.</h2>
       <p class="lede" style="margin:0">We'll email you shortly to find a time.</p>
-      <a class="link" data-app="signup" href="#start">Start a free trial meanwhile <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
+      <a class="link" data-app="signup" href="#start">Or start a free trial now <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
     </div>
   </div>
 </div>

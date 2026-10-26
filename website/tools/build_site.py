@@ -17,6 +17,7 @@ The industry, comparison, guide and legal pages are built by tools/build_pages.p
 import hashlib
 import html
 import json
+import subprocess
 import re
 from pathlib import Path
 
@@ -76,7 +77,36 @@ def pricing_body():
     s = section("pricing")
     s = re.sub(r'\s*<p class="eyebrow">Pricing</p>\s*<h2 class="h2" id="priceTitle"[^>]*>.*?</h2>\s*<p class="lede"[^>]*>.*?</p>', "", s, count=1, flags=re.S)
     s = s.replace('aria-labelledby="priceTitle"', 'aria-label="Plans"').replace('id="pricing"', 'id="plans-sec"')
-    return s
+    return s.replace('<div class="plans" id="plans"></div>', f'<div class="plans" id="plans">{static_plans()}</div>')
+
+
+def site_config():
+    """site.config.js, read with node so the plans in the HTML match the ones site.js draws."""
+    js = "global.window={};require(process.argv[1]);process.stdout.write(JSON.stringify(window.TEKLY_SITE))"
+    return json.loads(subprocess.run(["node", "-e", js, str(ROOT / "site.config.js")], check=True, capture_output=True, text=True).stdout)
+
+
+def static_plans():
+    """The monthly plan cards, written into the page so crawlers that don't run JavaScript still see prices.
+    site.js redraws them (and switches to yearly) in the browser."""
+    c = site_config()
+    cur, app, path = c.get("currency", "$"), c.get("appUrl", "").rstrip("/"), c.get("signUpPath", "/signup")
+    out = []
+    for p in c["plans"]:
+        extra = (f'<p class="extra">+ {cur}{p["extraLocation"]} for each extra location</p>' if p.get("extraLocation") else "") \
+            + (f'<p class="extra">+ {cur}{p["extraSeat"]} for each extra team member</p>' if p.get("extraSeat") else "")
+        feats = "".join(f'<li><svg aria-hidden="true"><use href="#check"/></svg>{f}</li>' for f in p["features"])
+        out.append(f'''<article class="plan{" is-featured" if p.get("featured") else ""}">
+        <div class="plan-top"><h3>{p["name"]}</h3>{f'<span class="badge">{p["badge"]}</span>' if p.get("badge") else ""}</div>
+        <p class="tagl">{p["tagline"]}</p>
+        <div class="price"><span class="c">{cur}</span><span class="a">{p["monthly"]}</span></div>
+        <p class="unit">{p["unit"]}</p>
+        {extra}
+        <p class="seats">{p["seats"]}</p>
+        <a class="btn btn-wide {"btn-solid" if p.get("featured") else "btn-outline"}" href="{app}{path}?plan={p["id"]}&amp;billing=month">{p["cta"]} <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
+        <ul>{feats}</ul>
+      </article>''')
+    return "".join(out)
 
 
 def compare_band():
@@ -142,9 +172,10 @@ PAGES = [
     },
     {
         "path": "/product/", "out": "product/index.html", "nav": "/product/",
-        "title": "Repair Shop Software Features: Approvals, Parts, POS, Payroll | Tekly",
-        "desc": "Every Tekly feature: intake by IMEI, VIN or HIN, line-by-line approvals on the customer's phone, parts booked to the job, POS, payroll, a technician app and AI.",
-        "ld": [crumbs_ld("Product", "/product/")],
+        "title": "Repair Shop Software Features: Approvals, Parts & POS | Tekly",
+        "desc": "Every Tekly feature: IMEI, VIN or HIN intake, line-by-line approvals on the customer's phone, parts booked to the job, POS, payroll and AI.",
+        "ld": [{"@context": "https://schema.org", "@type": "WebPage", "name": "Tekly features", "url": DOMAIN + "/product/", "about": {"@id": DOMAIN + "/#software"}},
+               crumbs_ld("Product", "/product/")],
         "body": lambda: phero("Product", "Everything a repair shop runs on, in one place.",
                               "From check-in to payout: approvals on the customer's phone, parts that know their job, payroll from closed jobs, and a phone app for every technician.")
         + SUBNAV + "".join(section(n) for n in ["flow", "feats", "go", "stats", "ai", "sense", "switch", "everything"]),
@@ -154,7 +185,7 @@ PAGES = [
         "title": "Repair Shop Software Pricing: Plans from $29 a Month | Tekly",
         "desc": "Tekly pricing: Solo $29, Shop $69 and Pro $129 a month. Add locations from $49. 14-day free trial of every Pro feature, no card, no contract.",
         "ld": [APP, FAQ, crumbs_ld("Pricing", "/pricing/")],
-        "body": lambda: phero("Pricing", "Simple plans. Every Pro feature in your trial.",
+        "body": lambda: phero("Pricing", "Repair shop software pricing, from $29 a month.",
                               'Try everything free for <span data-trial>14</span> days, no card. Then pick the plan that fits — free onboarding and data migration, no setup fee, no contract.')
         + pricing_body() + compare_band() + section("faq"),
     },
@@ -164,9 +195,9 @@ PAGES = [
         "desc": "Why we build Tekly: repair shop software that earns the trust customers give a repair shop. No contracts, prices on the page, your data always yours.",
         "ld": [{"@context": "https://schema.org", "@type": "AboutPage", "name": "About Tekly", "url": DOMAIN + "/about/", "about": {"@id": DOMAIN + "/#org"}},
                crumbs_ld("About", "/about/")],
-        "body": lambda: phero("About", "Software that earns a repair shop's trust.",
-                              "Someone hands you their phone, their truck or their boat and trusts you with it. Tekly is built to deserve the same trust from you.")
-        + section("about") + section("quotes"),
+        "body": lambda: phero("About", "We build Tekly for the people at the bench.",
+                              "A small team making software for repair shops: prices on the page, no contracts, and your data always yours.")
+        + section("about"),
     },
     {
         "path": "/changelog/", "out": "changelog/index.html", "nav": "/changelog/",

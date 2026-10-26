@@ -6,7 +6,14 @@
   "name": "Tekly",
   "url": "https://tekly.app/",
   "logo": "https://tekly.app/assets/icon-512.png",
-  "email": "hello@tekly.app"
+  "email": "hello@tekly.app",
+  "description": "Tekly makes repair shop software for electronics, vehicle, small-engine and marine repair businesses, from one location to many.",
+  "contactPoint": {
+   "@type": "ContactPoint",
+   "email": "hello@tekly.app",
+   "contactType": "sales",
+   "availableLanguage": "English"
+  }
  },
  {
   "@context": "https://schema.org",
@@ -48,7 +55,8 @@
       "unitCode": "MON"
      }
     },
-    "url": "https://tekly.app/#pricing"
+    "url": "https://tekly.app/pricing/",
+    "availability": "https://schema.org/InStock"
    },
    {
     "@type": "Offer",
@@ -67,7 +75,8 @@
       "unitCode": "MON"
      }
     },
-    "url": "https://tekly.app/#pricing"
+    "url": "https://tekly.app/pricing/",
+    "availability": "https://schema.org/InStock"
    },
    {
     "@type": "Offer",
@@ -86,7 +95,8 @@
       "unitCode": "MON"
      }
     },
-    "url": "https://tekly.app/#pricing"
+    "url": "https://tekly.app/pricing/",
+    "availability": "https://schema.org/InStock"
    }
   ],
   "image": "https://tekly.app/assets/og.jpg",
@@ -107,7 +117,8 @@
    "Payroll, commissions and time clock",
    "QuickBooks and Xero sync",
    "Tekly Go technician phone app"
-  ]
+  ],
+  "@id": "https://tekly.app/#software"
  },
  {
   "@context": "https://schema.org",
@@ -142,7 +153,7 @@
     "name": "How long does it take to switch?",
     "acceptedAnswer": {
      "@type": "Answer",
-     "text": "Most single-location shops can be set up in a day. Send us an export from your current system or spreadsheets and we bring customers, devices and stock across as part of onboarding."
+     "text": "You can take your first job the day you sign up. Send us an export from your current system or spreadsheets and we bring customers, devices and stock across as part of onboarding."
     }
    },
    {
@@ -150,7 +161,7 @@
     "name": "Can I switch from RepairDesk, Shopmonkey or another system?",
     "acceptedAnswer": {
      "@type": "Answer",
-     "text": "Yes. Send us an export from your current system or spreadsheets and we bring customers, devices and stock across as part of onboarding, free on every plan. Most single-location shops are set up in a day. Comparisons with RepairDesk, RepairShopr, Shopmonkey, Tekmetric and Orderry are at https://tekly.app/compare/."
+     "text": "Yes. Send us an export from your current system or spreadsheets and we bring customers, devices and stock across as part of onboarding, free on every plan. You can take your first job the day you sign up. Comparisons with RepairDesk, RepairShopr, Shopmonkey, Tekmetric and Orderry are at https://tekly.app/compare/."
     }
    },
    {
