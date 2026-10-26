@@ -720,6 +720,8 @@ class Appointment(Base):
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))  # Build 85: appointment → work order
     client_phone: Mapped[Optional[str]] = mapped_column(String(40))                   # Build 85: public appointments
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # API v2 (bk1): last change, for GET /api/v2/appointments?updated_since= (UTC, like created_at).
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=_now, onupdate=_now)
     # Build 144bz: DB-level guard against the concurrent-create race — two clients
     # can't both grab the same offered slot for the same technician.
     __table_args__ = (
