@@ -299,11 +299,17 @@ async def missed_settings(db: AsyncSession, org_id: str) -> dict:
 async def on_duty(db: AsyncSession, org_id: str) -> list[Employee]:
     """Active employees clocked in (open attendance shift) at one of this shop's locations."""
     locs = select(Location.id).where(Location.org_id == org_id)
-    return list((await db.execute(
+    rows = (await db.execute(
         select(Employee).join(Shift, Shift.employee_id == Employee.id)
         .where(Employee.org_id == org_id, Employee.active == True,  # noqa: E712
                Shift.ended_at.is_(None), Shift.location_id.in_(locs))
-        .order_by(Shift.started_at).distinct())).scalars().all())
+        .order_by(Shift.started_at))).scalars().all()
+    # De-duplicate in Python (longest on shift first): Postgres rejects SELECT DISTINCT with an
+    # ORDER BY on a column outside the select list.
+    seen: dict[str, Employee] = {}
+    for e in rows:
+        seen.setdefault(e.id, e)
+    return list(seen.values())
 
 
 async def _admins(db: AsyncSession, org_id: str) -> list[Employee]:
