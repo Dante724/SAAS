@@ -935,7 +935,7 @@ async def portal_decide_recs(token: str, order_id: str, data: RecDecideIn, reque
 #  No auth. A client opens /book/{slug}, picks a service + slot,
 #  enters contact details, and the appointment lands in the schedule.
 # ════════════════════════════════════════════════════════════
-from datetime import datetime, timedelta, time as dt_time
+from datetime import datetime, timedelta
 from backend.models import Organisation as _Org, Service, Employee, Appointment, Client, Order
 from backend.services.public_name import public_staff_name
 from backend.services.money import q2
@@ -952,106 +952,20 @@ async def _org_by_slug(db: AsyncSession, slug: str) -> _Org:
 
 
 # ── Build 144bo: availability engine helpers ──────────────────────────────
-_WEEKDAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-
-
-def _parse_hhmm(v, default_min):
-    """'HH:MM' → minutes past midnight; falls back to default on junk."""
-    try:
-        h, m = str(v).split(":")
-        return int(h) * 60 + int(m)
-    except (ValueError, AttributeError):
-        return default_min
-
-
-def _day_window(location, day):
-    """Open window for a weekday as (open_min, close_min), or None when the
-    branch is closed. Reads Location.working_hours ({mon:{open,close,closed}}).
-    A location with no configured hours falls back to 09:00-18:00 so existing
-    orgs keep working until they set hours."""
-    wh = getattr(location, "working_hours", None) if location else None
-    if not wh:
-        return (540, 1080)  # 09:00-18:00 default
-    d = wh.get(_WEEKDAY_KEYS[day.weekday()]) or {}
-    if d.get("closed"):
-        return None
-    o = _parse_hhmm(d.get("open"), 540)
-    c = _parse_hhmm(d.get("close"), 1080)
-    return (o, c) if c > o else None
-
-
-def _local_now(tzname):
-    """Build 144br: 'now' as naive local wall-clock in the location's timezone.
-    Appointments are stored as naive local time and working hours are local, so all
-    lead-time / window / past-slot comparisons must use the same clock — not UTC.
-    Falls back to UTC on an unknown tz."""
-    from datetime import timezone as _tz
-    try:
-        from zoneinfo import ZoneInfo
-        return datetime.now(ZoneInfo(tzname or "UTC")).replace(tzinfo=None)
-    except Exception:
-        return datetime.now(_tz.utc).replace(tzinfo=None)
-
-
-async def _resolve_location(db, org, location_id):
-    q = select(Location).where(Location.org_id == org.id, Location.active == True)  # noqa: E712
-    if location_id:
-        q = q.where(Location.id == location_id)
-    return (await db.execute(q)).scalars().first()
-
-
-async def _busy_windows(db, org, location, day, employee_id):
-    """(start,end) datetimes already taken on `day` — appointments, and optionally
-    scheduled work orders when appointment_consider_orders is on. Scoped to the
-    location and, if given, one employee."""
-    day_start = datetime.combine(day, dt_time(0, 0))
-    day_end = day_start + timedelta(days=1)
-    q = select(Appointment).where(
-        Appointment.org_id == org.id, Appointment.status == "booked",
-        Appointment.scheduled_for >= day_start, Appointment.scheduled_for < day_end)
-    if location:
-        q = q.where(Appointment.location_id == location.id)
-    if employee_id:
-        q = q.where(Appointment.employee_id == employee_id)
-    rows = (await db.execute(q)).scalars().all()
-    busy = [(b.scheduled_for, b.scheduled_for + timedelta(minutes=b.duration_min or 60)) for b in rows]
-    if org.appointment_consider_orders:
-        oq = select(Order).where(
-            Order.org_id == org.id, Order.scheduled_for.isnot(None),
-            Order.scheduled_for >= day_start, Order.scheduled_for < day_end)
-        if location:
-            oq = oq.where(Order.location_id == location.id)
-        for o in (await db.execute(oq)).scalars().all():
-            busy.append((o.scheduled_for, o.scheduled_for + timedelta(minutes=60)))
-    return busy
-
-
-def _slot_is_free(cur, slot_end, busy, allow_multiple):
-    """When multiple appointments per slot are allowed the window is never 'full'
-    (capacity is unbounded); otherwise any overlap makes it busy."""
-    if allow_multiple:
-        return True
-    return not any(cur < be and bs < slot_end for bs, be in busy)
-
-
-def _day_slots(org, location, day, busy, dur, now):
-    """List of 'HH:MM' start times bookable on `day` for a job of `dur` mins."""
-    win = _day_window(location, day)
-    if win is None:
-        return None  # closed
-    open_min, close_min = win
-    step = org.appointment_time_slot or 60
-    lead = timedelta(minutes=org.appointment_lead_min or 0)
-    earliest = now + lead
-    out = []
-    cur = datetime.combine(day, dt_time(0, 0)) + timedelta(minutes=open_min)
-    win_end = datetime.combine(day, dt_time(0, 0)) + timedelta(minutes=close_min)
-    while cur + timedelta(minutes=dur) <= win_end:
-        slot_end = cur + timedelta(minutes=dur)
-        if cur >= earliest and _slot_is_free(cur, slot_end, busy, org.appointment_allow_multiple):
-            out.append(cur.strftime("%H:%M"))
-        cur += timedelta(minutes=step)
-    return out
+# The engine lives in services/booking_slots.py so API v2 gives the same answer; the old
+# private names stay importable from here.
+from backend.services.booking_slots import (  # noqa: E402
+    WEEKDAY_KEYS as _WEEKDAY_KEYS,  # noqa: F401
+    busy_windows as _busy_windows,
+    day_slots as _day_slots,
+    day_window as _day_window,
+    local_now as _local_now,
+    parse_hhmm as _parse_hhmm,  # noqa: F401
+    resolve_location as _resolve_location,
+    service_duration as _service_duration,
+    slot_is_free as _slot_is_free,  # noqa: F401
+    slots_for_day as _slots_for_day,
+)
 
 
 # ── Back-compat (144dx): old /api/public/booking/* → /api/public/appointment/* ──
@@ -1150,15 +1064,6 @@ def _booking_id_note(org, raw: Optional[str]) -> Optional[str]:
     return f"{_BOOKING_ID[kind][0].split(' (')[0]}: {v}" if v else None
 
 
-async def _service_duration(db, org, service_id):
-    dur = org.appointment_time_slot or 60
-    if service_id:
-        svc = (await db.execute(select(Service).where(Service.id == service_id))).scalar_one_or_none()
-        if svc and svc.duration_min:
-            dur = svc.duration_min
-    return dur
-
-
 @router.get("/appointment/{slug}/slots")
 async def appointment_slots(slug: str, date: str, response: Response, employee_id: Optional[str] = None,
                         location_id: Optional[str] = None, service_id: Optional[str] = None,
@@ -1179,21 +1084,12 @@ async def appointment_slots(slug: str, date: str, response: Response, employee_i
     except ValueError:
         raise HTTPException(400, "Bad date")
 
-    location = await _resolve_location(db, org, location_id)
-    now = _local_now(location.timezone if location else "UTC")
-    window_days = org.appointment_window_days or 30
-    if day < now.date():
-        return {"date": date, "step": org.appointment_time_slot or 60, "slots": [], "reason": "in the past"}
-    if day > (now.date() + timedelta(days=window_days)):
-        return {"date": date, "step": org.appointment_time_slot or 60, "slots": [],
-                "reason": f"beyond the {window_days}-day appointment window"}
-
-    dur = await _service_duration(db, org, service_id)
-    busy = await _busy_windows(db, org, location, day, employee_id)
-    slots = _day_slots(org, location, day, busy, dur, now)
-    if slots is None:
-        return {"date": date, "step": org.appointment_time_slot or 60, "slots": [], "reason": "closed"}
-    return {"date": date, "step": org.appointment_time_slot or 60, "slots": slots,
+    ans = await _slots_for_day(db, org, day, location_id=location_id, employee_id=employee_id,
+                               service_id=service_id)
+    if ans["reason"]:
+        return {"date": date, "step": ans["step"], "slots": [], "reason": ans["reason"]}
+    location = ans["location"]
+    return {"date": date, "step": ans["step"], "slots": ans["slots"],
             "location_id": location.id if location else None}
 
 

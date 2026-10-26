@@ -15,7 +15,7 @@ import hashlib
 import json
 import re
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -539,11 +539,23 @@ async def create_contact(data: ContactIn, db: AsyncSession = Depends(get_db), pr
 @router.get("/orders", summary="List work orders", responses=_doc(_many("OrderList", OrderOut), _ERRORS),
             description="Work orders only (estimates are under /estimates). Newest first.")
 async def list_orders(status: Optional[str] = Query(None, max_length=40, description="Exact status key."),
+                      updated_since: Optional[str] = Query(
+                          None, min_length=1, max_length=64,
+                          description="Only orders changed at or after this time. ISO 8601; an offset is "
+                                      "converted to UTC, without one it is taken as UTC."),
                       page: int = _page_q(), page_size: int = _size_q(),
                       db: AsyncSession = Depends(get_db), principal: ApiPrincipal = READ):
     extra = (Order.is_estimate == False)  # noqa: E712
     if status:
         extra = extra & (Order.status == status)
+    if updated_since is not None:
+        try:
+            since = datetime.fromisoformat(updated_since.strip())
+        except ValueError:
+            raise HTTPException(422, "updated_since must be an ISO 8601 date or datetime, like 2026-10-25T18:00:00Z")
+        if since.tzinfo:
+            since = since.astimezone(timezone.utc).replace(tzinfo=None)
+        extra = extra & (Order.updated_at >= since)
     return await _list(db, Order, principal.org_id, _order, page, page_size, extra=extra)
 
 
