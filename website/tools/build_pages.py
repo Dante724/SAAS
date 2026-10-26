@@ -10,6 +10,8 @@ from datetime import date
 from pathlib import Path
 
 from compare_pages import CHECKED, COMPETITORS, GUIDE, TEKLY_PRICES
+import re
+import build_site
 
 DOMAIN = "https://tekly.app"
 ROOT = Path(__file__).resolve().parent.parent
@@ -290,66 +292,117 @@ def page(p):
 
 
 def shell(p, url, main, ld):
-    """Head, header and footer shared by every generated page; `main` is the page body."""
-    return f'''<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>{e(p["title"])}</title>
-  <meta name="description" content="{html.escape(p["desc"])}">
-  <link rel="canonical" href="{url}">
-  <meta name="robots" content="index, follow, max-image-preview:large">
-  <meta name="theme-color" content="#003dff">
-  <meta property="og:type" content="website">
-  <meta property="og:site_name" content="Tekly">
-  <meta property="og:url" content="{url}">
-  <meta property="og:title" content="{html.escape(p["title"])}">
-  <meta property="og:description" content="{html.escape(p["desc"])}">
-  <meta property="og:image" content="{DOMAIN}/assets/og.jpg">
-  <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:image" content="{DOMAIN}/assets/og.jpg">
-  <link rel="icon" type="image/svg+xml" href="/assets/tekly-mark.svg">
-  <link rel="icon" type="image/png" sizes="32x32" href="/assets/icon-32.png">
-  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
-  <link rel="manifest" href="/site.webmanifest">
-{FONT_PRELOADS}
-  <link rel="stylesheet" href="/styles.css">
-  <script>document.documentElement.classList.add("js")</script>
-  <script type="application/ld+json">{json.dumps(ld, ensure_ascii=False)}</script>
-</head>
-<body class="sub">
-<a class="skip" href="#main">Skip to content</a>
-<svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <symbol id="mark" viewBox="0 0 64 64">{ICON}</symbol>
-  <symbol id="plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></symbol>
-</svg>
-<header class="nav" id="nav">
-  <div class="wrap nav-in">
-    <a href="/" class="logo" aria-label="Tekly home"><svg aria-hidden="true"><use href="#mark"/></svg>tekly</a>
-    <nav class="nav-links" aria-label="Primary"><a href="/product/">Product</a><a href="/#industries">Every trade</a><a href="/pricing/">Pricing</a><a href="/compare/">Compare</a><a href="/about/">About</a></nav>
-    <div class="nav-right">
-      <a class="nav-signin" data-app="signin" data-cta="nav_signin" href="/#start">Sign in</a>
-      <a class="btn btn-quiet" href="/#start" data-cta="nav_demo">Book a demo</a>
-      <a class="btn btn-brand nav-cta" data-app="signup" data-cta="nav_trial" href="/#start">Start free trial</a>
-      <button class="burger" aria-label="Menu" aria-expanded="false" aria-controls="mmenu"><span></span><span></span></button>
-    </div>
-  </div>
-  <div class="mmenu" id="mmenu"><a href="/product/">Product</a><a href="/#industries">Every trade</a><a href="/pricing/">Pricing</a><a href="/compare/">Compare</a><a href="/about/">About</a>
-    <div class="mmenu-ctas"><a class="btn btn-quiet" data-app="signin" href="/#start">Sign in</a><a class="btn btn-brand" data-app="signup" href="/#start">Start free trial</a></div></div>
-</header>
+    """Wraps a page body in the shared site shell (tools/build_site.py: header in a navy title card,
+    floating bar, footer, menu, demo form, assets/site.css + site.js), so these pages look and
+    behave like home, product and pricing. The body keeps its own markup, styled by
+    assets/sub.css (styles.css scoped to .legacy) and wrapped in rounded content cards."""
+    path = url[len(DOMAIN):] or "/"
+    m = re.search(r'<section class="hero sub-hero">.*?<nav class="crumbs"[^>]*>(.*?)</nav>\s*<h1[^>]*>(.*?)</h1>\s*'
+                  r'<p class="hero-sub">(.*?)</p>.*?<p class="mono hero-fine">(.*?)</p>\s*</div>\s*</section>', main, re.S)
+    if m:
+        crumbs, h1, lead, fine = m.groups()
+        main = main[:m.start()] + main[m.end():]
+    else:   # legal pages: the title lives in the body
+        t = re.search(r'<p class="eyebrow">[^<]*</p><h1 class="h-section">(.*?)</h1>', main)
+        h1, lead, fine = t.group(1), "", ""
+        main = main.replace(t.group(0), "")
+        crumbs = f'<a href="/">Tekly</a><span aria-hidden="true">/</span><span>{h1}</span>'
+    crumbs = re.sub(r'<span>([^<]*)</span>$', r'<span aria-current="page">\1</span>', crumbs.strip())
+    ctas = ('<div class="hero-ctas phero-ctas" data-hero-fade><a class="btn btn-light" data-app="signup" href="#start" data-spring="nudge">Start free trial '
+            '<svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a><button class="btn btn-outline" type="button" data-open-demo>Book a demo</button></div>'
+            + (f'<p class="hero-fine">{fine}</p>' if fine else ""))
+    top = build_site.phero("", h1, lead, ctas if m else "", crumbs_html=crumbs)
+    if not lead:
+        top = top.replace('    <p class="phero-lede" data-hero-fade></p>\n', "")
+    nav = "/compare/" if path.startswith("/compare/") else "/#industries" if p.get("slug") in {x["slug"] for x in PAGES} else ""
+    page = {"path": path, "title": html.unescape(p["title"]), "desc": html.unescape(p["desc"]), "nav": nav, "ld": ld if isinstance(ld, list) else [ld],
+            "css": '  <link rel="stylesheet" href="/assets/sub.css">\n'}
+    return build_site.render(page, top + wrap_legacy(main))
 
-<main id="main">{main}</main>
 
-{footer(p["slug"])}
-<script defer src="/site.config.js"></script>
-<script defer src="/page.js"></script>
-<script defer src="/marketing.js"></script>
-<script defer src="/assistant.js"></script>
-</body>
-</html>
-'''
+def wrap_legacy(main):
+    """Each top-level <section> of the old markup becomes a rounded content card."""
+    out, pos = [], 0
+    for m in re.finditer(r"<section\b[^>]*>|</section>", main):
+        pass
+    depth, start, cls = 0, None, ""
+    for m in re.finditer(r"<section\b([^>]*)>|</section>", main):
+        if m.group(0).startswith("<section"):
+            if depth == 0:
+                out.append(main[pos:m.start()]); start = m.start()
+                cls = re.search(r'class="([^"]*)"', m.group(1) or "")
+                cls = cls.group(1) if cls else ""
+            depth += 1
+        else:
+            depth -= 1
+            if depth == 0:
+                tint = " tint" if "sec-cream" in cls else ""
+                out.append(f'<div class="card-sec legacy{tint}">\n{main[start:m.end()]}\n</div>\n\n'); pos = m.end()
+    out.append(main[pos:])
+    return "".join(out)
 
+
+def shared_class_reset(site_css, old_css, scope=".legacy"):
+    """Class names both stylesheets define (.sec-head, .eyebrow, .lede, .card…) would pick up the
+    new site's rules inside old page bodies. Reset them there first; the scoped old rules follow."""
+    names = lambda css: set(re.findall(r"\.([a-zA-Z][\w-]*)", re.sub(r"\{[^{}]*\}", "{}", re.sub(r"/\*.*?\*/", "", css, flags=re.S))))
+    shared = sorted((names(site_css) & names(old_css)) - {"js", "sub", "legacy", "reduced", "on", "shown", "rv"})
+    return f"{scope} :is({', '.join('.' + n for n in shared)}) {{ all: revert; }}\n"
+
+
+def scope_css(css, scope=".legacy"):
+    """styles.css with every rule limited to `scope` (`:root`, `html`, `body` and `.sub` become the
+    scope itself), for old page bodies shown inside the new site shell."""
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+
+    def sel(one):
+        one = one.strip()
+        if not one:
+            return one
+        if one.startswith(".js "):
+            return ".js " + sel(one[4:])
+        for head in (":root", "html", "body.sub", "body", ".sub"):
+            if one == head:
+                return scope
+            if one.startswith(head + " ") or one.startswith(head + ":") and head != ":root":
+                return scope + one[len(head):]
+        if one.startswith("::"):
+            return f"{scope} {one}"
+        return f"{scope} {one}"
+
+    out, i = [], 0
+    while i < len(css):
+        j = css.find("{", i)
+        if j < 0:
+            break
+        head = css[i:j].strip()
+        depth, k = 1, j + 1
+        while depth and k < len(css):
+            depth += {"{": 1, "}": -1}.get(css[k], 0); k += 1
+        block = css[j + 1:k - 1]
+        if head.startswith("@media") or head.startswith("@supports"):
+            out.append(f"{head} {{ {scope_css(block, scope)} }}")
+        elif head.startswith("@"):
+            out.append(f"{head} {{{block}}}")
+        else:
+            out.append(", ".join(sel(x) for x in head.split(",")) + " {" + block + "}")
+        i = k
+    return "\n".join(out)
+
+
+LEGACY_FIXES = """
+/* Inside the shared shell: the card supplies the spacing and width. */
+.legacy .sec { padding: 0; background: none; border: 0; }
+.legacy .sec + .sec { margin-top: 4rem; }
+.legacy .wrap { max-width: none; padding: 0; }
+.legacy { color: var(--ink-2); }
+.js .legacy .rv { transition-duration: .55s; }
+/* The card itself keeps the shell's shape (styles.css redefines --r-lg inside .legacy). */
+.card-sec.legacy { border-radius: 2rem; }
+.legacy .eyebrow { display: inline-flex; align-items: center; gap: .625rem; letter-spacing: .22em; }
+.legacy .eyebrow::before { content: ""; width: .4375rem; height: .4375rem; border-radius: 50%; background: #1c5fd6; flex: none; }
+@media (max-width: 639px) { .card-sec.legacy { border-radius: 1.5rem; } }
+"""
 
 def faq_ld(items):
     return {"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [
@@ -503,6 +556,9 @@ LEGAL = [
 
 
 def main():
+    old_css, site_css = (ROOT / "styles.css").read_text(encoding="utf-8"), (ROOT / "assets" / "site.css").read_text(encoding="utf-8")
+    (ROOT / "assets" / "sub.css").write_text("/* Generated by tools/build_pages.py from styles.css — do not edit. */\n"
+        + shared_class_reset(site_css, old_css) + scope_css(old_css) + LEGACY_FIXES, encoding="utf-8")
     for p in PAGES:
         d = ROOT / p["slug"]
         d.mkdir(exist_ok=True)

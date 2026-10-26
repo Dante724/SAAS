@@ -43,13 +43,14 @@ def crumbs_ld(name, path):
         {"@type": "ListItem", "position": 2, "name": name, "item": DOMAIN + path}]}
 
 
-def phero(crumb, h1, lede, extra=""):
+def phero(crumb, h1, lede, extra="", crumbs_html=None):
     """The navy title card at the top of every page except home."""
+    crumbs_html = crumbs_html or f'<a href="/">Tekly</a><span aria-hidden="true">/</span><span aria-current="page">{crumb}</span>'
     return f'''<!-- ════════ PAGE TITLE ════════ -->
 <section class="phero on-dark" id="top" aria-labelledby="pageTitle">
 {{{{hdr}}}}
   <div class="phero-body">
-    <nav class="crumbs" aria-label="Breadcrumb"><a href="/">Tekly</a><span aria-hidden="true">/</span><span aria-current="page">{crumb}</span></nav>
+    <nav class="crumbs" aria-label="Breadcrumb">{crumbs_html}</nav>
     <h1 id="pageTitle" data-reveal="words">{h1}</h1>
     <p class="phero-lede" data-hero-fade>{lede}</p>
     {extra}
@@ -204,7 +205,7 @@ def head(p):
 {HERO_PRELOAD if p.get("hero_preload") else ""}  <link rel="modulepreload" href="/assets/vendor/lenis-1.1.18.mjs">
   <link rel="modulepreload" href="/assets/site.js">
   <link rel="stylesheet" href="/assets/site.css">
-  <script>
+{p.get("css", "")}  <script>
     document.documentElement.classList.add("js");
     /* Above 1920px the rem grid keeps growing (the CSS media queries cover everything below). */
     (function () {{
@@ -230,10 +231,11 @@ def mark_current(markup, nav):
     return re.sub(rf'(<a href="{re.escape(nav)}")(?=[ >])', r'\1 aria-current="page"', markup)
 
 
-def build(p):
-    hdr = mark_current(read("partials/hdr.html"), p["nav"])
-    body = p["body"]().replace("{{hdr}}", hdr.rstrip("\n"))
-    menu = mark_current(read("partials/menu.html"), p["nav"])
+def render(p, body=None):
+    """A whole page: shared head, header, floating bar, footer, menu and demo form around `body`."""
+    hdr = mark_current(read("partials/hdr.html"), p.get("nav", ""))
+    body = (body if body is not None else p["body"]()).replace("{{hdr}}", hdr.rstrip("\n"))
+    menu = mark_current(read("partials/menu.html"), p.get("nav", ""))
     out = (head(p) + read("partials/sprite.html") + "\n" + read("partials/minibar.html") + "\n<main id=\"main\">\n\n"
            + body + section("cta") + "</main>\n\n" + menu + "\n" + read("partials/modal.html")
            + '''<script defer src="/site.config.js"></script>
@@ -246,6 +248,11 @@ def build(p):
 </html>
 ''')
     assert "{{" not in out, p["path"]
+    return out
+
+
+def build(p):
+    out = render(p)
     dest = ROOT / p["out"]
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(out, encoding="utf-8")

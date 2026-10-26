@@ -264,6 +264,13 @@ if (subnav) {
   targets.forEach(t => tabIO.observe(t));
 }
 
+/* ── Older page bodies (industry, compare, guide and legal pages): their own fade-in ── */
+const legacyRv = $$(".legacy .rv");
+if (legacyRv.length) {
+  const lio = new IntersectionObserver(es => es.forEach(x => { if (x.isIntersecting) { x.target.classList.add("shown"); lio.unobserve(x.target); } }), { rootMargin: "0px 0px 8% 0px" });
+  legacyRv.forEach(el => REDUCED ? el.classList.add("shown") : lio.observe(el));
+}
+
 /* ── Stats count-up ── */
 $$("[data-count]").forEach(el => {
   new IntersectionObserver(([e], obs) => {

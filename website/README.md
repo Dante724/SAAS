@@ -20,8 +20,10 @@ python3 -m http.server 4321 --directory website
 ## Design system
 Home, product, pricing, about and changelog share `assets/site.css` and `assets/site.js`: Geist and
 the Tekly midnight-sapphire palette on a light page of rounded card sections (see "Main pages"
-below). The industry, comparison, guide and legal pages use `styles.css` and `page.js`, built by
-`tools/build_pages.py`, with the same header links.
+below). The industry, comparison, guide and legal pages are built by `tools/build_pages.py` inside the
+same shell (header, title card, footer, menu, demo form). Their bodies keep their own markup, styled by
+`assets/sub.css`, which `build_pages.py` generates from `styles.css` scoped to `.legacy` content cards —
+edit `styles.css`, not `sub.css`.
 
 ## Visuals
 No photography. Every visual is a product screen built in HTML/CSS with sample data (labelled as
