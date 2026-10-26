@@ -213,6 +213,8 @@ const stepsBox = $("#steps");
 if (stepsBox) {
   const TITLES = ["WO-1042 · Intake", "E-1042 · Estimate", "E-1042 · Approval", "PO-2208 · Parts", "Today · Paid"];
   const steps = $$(".row", stepsBox), scenes = $$(".scene"), screenTitle = $("#screenTitle");
+  const PILLS = [["Checked in", "new"], ["Estimate draft", "progress"], ["Awaiting approval", "pending"], ["Waiting on parts", "pending"], ["Paid", "done"]];
+  const pill = $("#jobPill"), stepper = $("#stepper");
   let stage = 0;
   const show = (i, focus) => {
     stage = (i + steps.length) % steps.length;
@@ -222,11 +224,44 @@ if (stepsBox) {
       if (!s.hidden && !was && !REDUCED) { s.classList.remove("enter"); void s.offsetWidth; s.classList.add("enter"); }
     });
     const tot = $(".sum .r", scenes[stage]);
-    if (tot && !tot._counted) { tot._counted = 1; countUp(tot, 482, 800, 250); }
+    if (tot && !tot._counted) { tot._counted = 1; countUp(tot, parseFloat(tot.textContent.replace(/[^\d.]/g, "")), 800, 250); }
+    const [label, tone] = PILLS[stage];
+    if (pill) { pill.dataset.tone = tone; $("span", pill).textContent = label; }
+    $$("li", stepper).forEach((li, k) => { li.className = k < stage ? "is-done" : k === stage ? "is-cur" : ""; });
     screenTitle.textContent = TITLES[stage];
     if (focus) steps[stage].focus();
   };
   steps.forEach((s, i) => s.addEventListener("click", () => show(i)));
+
+  /* The sample job is clickable like the app: checklist, estimate lines, the customer's approval, scanning the part */
+  $$("[data-next]").forEach(b => b.addEventListener("click", () => show(stage + 1)));
+  $$(".chk").forEach(b => b.addEventListener("click", () => { const on = b.classList.toggle("on"); b.setAttribute("aria-pressed", String(on)); }));
+  const estTotal = $("#estTotal"), lines = $$("#estLines .line");
+  lines.forEach(b => { b.setAttribute("aria-pressed", "true"); b.addEventListener("click", () => {
+    const on = b.classList.toggle("on"); b.setAttribute("aria-pressed", String(on));
+    estTotal.textContent = money(lines.filter(l => l.classList.contains("on")).reduce((t, l) => t + +l.dataset.amt, 0), 2);
+  }); });
+  const mrows = $$(".mini-phone .mrow"), mini = $("#miniApprove"), sign = $("#tlSign");
+  let signed = false;
+  const miniSum = () => mrows.filter(r => r.classList.contains("on")).reduce((t, r) => t + +r.dataset.amt, 0);
+  mrows.forEach(r => { r.setAttribute("aria-pressed", String(r.classList.contains("on"))); r.addEventListener("click", () => {
+    if (signed) return; const on = r.classList.toggle("on"); r.setAttribute("aria-pressed", String(on)); $("span", mini).textContent = money(miniSum());
+  }); });
+  mini?.addEventListener("click", () => {
+    if (signed) { show(stage + 1); return; }
+    signed = true; mini.classList.add("ok"); mini.textContent = "Approved ✓ · next: parts";
+    sign.className = "is-done flash"; sign.innerHTML = `<b>Signed · ${money(miniSum())} approved</b><span>12:05 pm · declined lines saved for next visit</span>`;
+    pill.dataset.tone = "progress"; $("span", pill).textContent = "In repair";
+  });
+  const scan = $("#poScan");
+  scan?.addEventListener("click", () => {
+    if (scan.classList.contains("ok")) { show(stage + 1); return; }
+    const last = $("#poTrack li:last-child"); last.className = "is-done"; $("em", last).textContent = "now";
+    const pp = $("#poPill"); pp.dataset.tone = "done"; $("span", pp).textContent = "Received";
+    const ready = $("#poReady"); ready.textContent = "Today 4:00 pm"; ready.parentElement.classList.add("flash");
+    pill.dataset.tone = "ready"; $("span", pill).textContent = "In repair · part in";
+    scan.classList.add("ok"); scan.textContent = "Received ✓ · take payment";
+  });
   // Desktop: the screen follows whichever step is in the middle of the view as you scroll
   if (matchMedia("(min-width: 1025px)").matches) {
     const sio = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { const i = steps.indexOf(e.target); if (i !== stage) show(i); } }), { rootMargin: "-45% 0px -45% 0px" });

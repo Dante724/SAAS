@@ -27,8 +27,8 @@
   <link rel="manifest" href="/site.webmanifest">
   <link rel="preload" href="/assets/fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" as="image" type="image/webp" href="/assets/photos/bench-hero-1600.webp" imagesrcset="/assets/photos/bench-hero-960.webp 960w, /assets/photos/bench-hero-1600.webp 1600w, /assets/photos/bench-hero-2400.webp 2400w" imagesizes="100vw" fetchpriority="high">
-  <link rel="modulepreload" href="/assets/site.js?v=16227ff1">
-  <link rel="stylesheet" href="/assets/site.css?v=e95ebf36">
+  <link rel="modulepreload" href="/assets/site.js?v=ccddd87d">
+  <link rel="stylesheet" href="/assets/site.css?v=83175212">
   <script>document.documentElement.classList.add("js")</script>
   <script type="application/ld+json">
 [
@@ -353,77 +353,94 @@
     </div>
 
     <div class="flow-screen" data-rise>
-      <div class="ui screen" aria-label="Product preview">
+      <div class="ui screen app" aria-label="Product preview with sample data">
         <div class="ui-top"><span class="screen-dots" aria-hidden="true"><i></i><i></i><i></i></span><span id="screenTitle">WO-1042 · Intake</span><span class="tag">Sample data</span></div>
+
+        <!-- Job header, the same on every stage: who, what, where it stands -->
+        <div class="job-hd">
+          <span class="av" aria-hidden="true">NK</span>
+          <div class="job-who"><b>Neha Kapoor</b><span>Apple iPhone 14 Pro · WO-1042</span></div>
+          <span class="pill" id="jobPill" data-tone="new"><i></i><span>Checked in</span></span>
+        </div>
+        <ol class="stepper" id="stepper" aria-hidden="true"><li>Intake</li><li>Estimate</li><li>Approval</li><li>Parts</li><li>Paid</li></ol>
 
         <div class="scene" id="sc-0" role="tabpanel" aria-labelledby="st-0">
           <div class="kv">
-            <div><span class="k">Device</span><span class="v">Apple iPhone 14 Pro</span></div>
+            <div><span class="k">Device</span><span class="v">Apple iPhone 14 Pro · 256 GB</span></div>
             <div><span class="k">IMEI</span><span class="v mono">35 291811 402177 3</span></div>
-            <div><span class="k">Passcode</span><span class="v">•••••• <em>encrypted</em></span></div>
-            <div><span class="k">Customer</span><span class="v">Neha Kapoor</span></div>
+            <div><span class="k">Passcode</span><span class="v">•••••• <em class="enc">Encrypted</em></span></div>
+            <div><span class="k">Assigned to</span><span class="v"><span class="av xs" aria-hidden="true">PS</span>Priya S.</span></div>
             <div class="full"><span class="k">Customer says</span><span class="v">“Dropped it in the pool. Won't charge, screen flickers.”</span></div>
           </div>
-          <ul class="list-rows">
-            <li><svg class="ok-i"><use href="#check"/></svg>3 intake photos — cracked back glass noted</li>
-            <li><svg class="ok-i"><use href="#check"/></svg>Liquid indicator triggered</li>
-            <li><span class="dim mono">Typical time in diagnosis</span><span class="r">1h 40m · ready Thu</span></li>
-          </ul>
+          <div class="photos">
+            <span class="k">Condition photos</span>
+            <div class="thumbs"><img src="/assets/photos/iphone-mat-600.webp" alt="" loading="lazy"><img src="/assets/photos/repair-lab-1-600.webp" alt="" loading="lazy"><img src="/assets/photos/repair-lab-2-600.webp" alt="" loading="lazy"><span class="more">+ add</span></div>
+          </div>
+          <div class="checks" role="group" aria-label="Intake checklist (try it)">
+            <button type="button" class="chk on" aria-pressed="true"><i><svg><use href="#check"/></svg></i>Cracked back glass noted</button>
+            <button type="button" class="chk on" aria-pressed="true"><i><svg><use href="#check"/></svg></i>Liquid indicator triggered</button>
+            <button type="button" class="chk" aria-pressed="false"><i><svg><use href="#check"/></svg></i>Face ID tested</button>
+          </div>
+          <div class="actbar"><span class="hint">Typical diagnosis · 1h 40m · ready Thu</span><button type="button" class="abtn" data-next>Start diagnosis</button></div>
         </div>
 
         <div class="scene" id="sc-1" role="tabpanel" aria-labelledby="st-1" hidden>
-          <p class="scene-k">Drafted by Tekly AI from the complaint</p>
-          <ul class="list-rows">
-            <li><span class="dim mono">01</span>Liquid-damage diagnostic<span class="r">$49.00</span></li>
-            <li><span class="dim mono">02</span>Ultrasonic board clean<span class="r">$65.00</span></li>
-            <li><span class="dim mono">03</span>Charging port flex<span class="r">$89.00</span></li>
-            <li><span class="dim mono">04</span>Display assembly, OEM grade<span class="r">$279.00</span></li>
-            <li class="sum"><span>Total</span><span class="r">$482.00</span></li>
+          <p class="scene-k"><span class="ai">AI</span>Drafted from the customer's words · your catalog prices · tap a line to include or skip it</p>
+          <ul class="lines" id="estLines">
+            <li><button type="button" class="line on" data-amt="49"><i><svg><use href="#check"/></svg></i><span>Liquid-damage diagnostic<em>Labour · 0.5 h</em></span><b>$49.00</b></button></li>
+            <li><button type="button" class="line on" data-amt="65"><i><svg><use href="#check"/></svg></i><span>Ultrasonic board clean<em>Labour · 0.75 h</em></span><b>$65.00</b></button></li>
+            <li><button type="button" class="line on" data-amt="89"><i><svg><use href="#check"/></svg></i><span>Charging port flex<em>Part · 2 in stock</em></span><b>$89.00</b></button></li>
+            <li><button type="button" class="line on" data-amt="279"><i><svg><use href="#check"/></svg></i><span>Display assembly, OEM grade<em>Part · order from supplier</em></span><b>$279.00</b></button></li>
           </ul>
-          <p class="scene-foot">Review, edit, send — nothing leaves without you</p>
+          <div class="sum"><span>Total</span><span class="r" id="estTotal">$482.00</span></div>
+          <div class="actbar"><span class="hint">Nothing leaves without you</span><button type="button" class="abtn" data-next>Send to Neha</button></div>
         </div>
 
         <div class="scene" id="sc-2" role="tabpanel" aria-labelledby="st-2" hidden>
           <div class="scene-phone">
-            <div class="mini-phone" aria-hidden="true">
+            <div class="mini-phone">
               <p class="shop">Northside Repair Co.</p>
               <p class="t">Approve your repair</p>
-              <p class="mrow on"><span class="cb"></span>Diagnostic &amp; clean<b>$114</b></p>
-              <p class="mrow on"><span class="cb"></span>Charging port<b>$89</b></p>
-              <p class="mrow on"><span class="cb"></span>Display assembly<b>$279</b></p>
-              <p class="mrow"><span class="cb"></span>Battery (81%)<b>$69</b></p>
+              <button type="button" class="mrow on" data-amt="114"><span class="cb"></span>Diagnostic &amp; clean<b>$114</b></button>
+              <button type="button" class="mrow on" data-amt="89"><span class="cb"></span>Charging port<b>$89</b></button>
+              <button type="button" class="mrow on" data-amt="279"><span class="cb"></span>Display assembly<b>$279</b></button>
+              <button type="button" class="mrow" data-amt="69"><span class="cb"></span>Battery (81%)<b>$69</b></button>
               <p class="note2">Nothing is added unless you choose it.</p>
-              <p class="mbtn">Approve $482</p>
+              <button type="button" class="mbtn" id="miniApprove">Approve <span>$482</span></button>
             </div>
-            <ul class="list-rows">
-              <li><svg class="ok-i"><use href="#check"/></svg>Signed on the customer's phone</li>
-              <li><svg class="ok-i"><use href="#check"/></svg>Battery declined — saved for next visit</li>
-              <li><span class="dim mono">Status</span><span class="r">Approved → In repair</span></li>
-            </ul>
+            <ol class="tl">
+              <li class="is-done"><b>Estimate sent</b><span>12:02 pm · text + email</span></li>
+              <li class="is-done"><b>Opened by Neha</b><span>12:04 pm</span></li>
+              <li id="tlSign"><b>Waiting for signature</b><span>Tap the lines on her phone, then approve</span></li>
+            </ol>
           </div>
         </div>
 
         <div class="scene" id="sc-3" role="tabpanel" aria-labelledby="st-3" hidden>
-          <p class="scene-k">PO-2208 · received 2:14 pm</p>
+          <div class="po">
+            <div class="po-hd"><b>PO-2208</b><span>iFixParts Direct</span><span class="pill" id="poPill" data-tone="pending"><i></i><span>In transit</span></span></div>
+            <ol class="track" id="poTrack"><li class="is-done">Ordered<em>Mon</em></li><li class="is-done">Shipped<em>Tue</em></li><li>Received<em>—</em></li></ol>
+          </div>
           <ul class="list-rows">
-            <li>Display assembly, iPhone 14 Pro<span class="r">Arrived 1</span></li>
+            <li>Display assembly, iPhone 14 Pro<span class="r">× 1</span></li>
             <li><span class="dim">Charged to</span><span class="r">WO-1042</span></li>
-            <li><span class="dim">Owed to job</span><span class="r">1 → 0</span></li>
             <li><span class="dim">Part cost</span><span class="r">$118.40</span></li>
             <li><span class="dim">Job margin</span><span class="r up">51%</span></li>
+            <li><span class="dim">Ready for pickup</span><span class="r" id="poReady">Thu 4:00 pm</span></li>
           </ul>
-          <p class="scene-foot">Customer's ready time updated automatically</p>
+          <div class="actbar"><span class="hint">Scan the box when it arrives</span><button type="button" class="abtn" id="poScan">Scan box</button></div>
         </div>
 
         <div class="scene" id="sc-4" role="tabpanel" aria-labelledby="st-4" hidden>
           <div class="kpis">
-            <div><span class="k">Collected today</span><b class="tnum">$3,940</b></div>
-            <div><span class="k">Avg. margin</span><b class="tnum">46%</b></div>
-            <div><span class="k">Jobs closed</span><b class="tnum">14</b></div>
+            <div><span class="k">Collected today</span><b class="tnum">$3,940</b><span class="d up">▲ 12% vs last Tue</span></div>
+            <div><span class="k">Avg. margin</span><b class="tnum">46%</b><span class="d">14 jobs</span></div>
+            <div><span class="k">Jobs closed</span><b class="tnum">14</b><span class="d">3 waiting pickup</span></div>
           </div>
+          <div class="bars" aria-hidden="true"><i style="--h:38%;--n:0"></i><i style="--h:52%;--n:1"></i><i style="--h:44%;--n:2"></i><i style="--h:70%;--n:3"></i><i style="--h:58%;--n:4"></i><i style="--h:82%;--n:5"></i><i style="--h:100%;--n:6" class="now"></i></div>
           <ul class="list-rows">
-            <li>WO-1042 paid by card<span class="r">$482.00</span></li>
-            <li><span class="dim">Commission · Priya S.</span><span class="r">$48.20</span></li>
+            <li><span class="pill sm" data-tone="done"><i></i><span>Paid</span></span>WO-1042 · card<span class="r">$482.00</span></li>
+            <li><span class="dim">Commission · Priya S. (10%)</span><span class="r">$48.20</span></li>
             <li><span class="dim">Added to pay run</span><span class="r">Oct 31</span></li>
           </ul>
         </div>
@@ -638,6 +655,6 @@
 
 <script defer src="/site.config.js"></script>
 <script defer src="/marketing.js"></script>
-<script type="module" src="/assets/site.js?v=16227ff1"></script>
+<script type="module" src="/assets/site.js?v=ccddd87d"></script>
 </body>
 </html>
