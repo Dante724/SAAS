@@ -26,23 +26,10 @@
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
   <link rel="manifest" href="/site.webmanifest">
   <link rel="preload" href="/assets/fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="preload" as="image" type="image/webp" href="/assets/photos/bench-hero-1600.webp" imagesrcset="/assets/photos/bench-hero-960.webp 960w, /assets/photos/bench-hero-1600.webp 1600w, /assets/photos/bench-hero-2400.webp 2400w" imagesizes="100vw" media="(min-width: 640px)" fetchpriority="high">
-  <link rel="preload" as="image" type="image/webp" href="/assets/photos/bench-hero-tall-750.webp" media="(max-width: 639px)" fetchpriority="high">
-  <link rel="modulepreload" href="/assets/site.js">
-  <link rel="stylesheet" href="/assets/site.css">
-  <script>
-    document.documentElement.classList.add("js");
-    /* Above 1920px the rem grid keeps growing (the CSS media queries cover everything below). */
-    (function () {
-      var fit = function () {
-        var w = innerWidth, h = document.documentElement;
-        if (w <= 1920) { h.style.fontSize = ""; return; }
-        var reduction = ((1920 - w) / 1920) * 100 * 0.6666, size = 16 - 16 * reduction / 100;
-        h.style.fontSize = size > 16 ? size + "px" : "";
-      };
-      fit(); addEventListener("resize", fit);
-    })();
-  </script>
+  <link rel="preload" as="image" type="image/webp" href="/assets/photos/bench-hero-1600.webp" imagesrcset="/assets/photos/bench-hero-960.webp 960w, /assets/photos/bench-hero-1600.webp 1600w" imagesizes="(max-width: 1024px) 92vw, 36rem" fetchpriority="high">
+  <link rel="modulepreload" href="/assets/site.js?v=94d9eab2">
+  <link rel="stylesheet" href="/assets/site.css?v=17abdd83">
+  <script>document.documentElement.classList.add("js")</script>
   <script type="application/ld+json">
 [
  {
@@ -154,6 +141,52 @@
    "QuickBooks and Xero sync",
    "Tekly Go technician phone app"
   ]
+ },
+ {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+   {
+    "@type": "Question",
+    "name": "Which kinds of repair shops is Tekly for?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "Tekly has four templates: Electronics (phones, tablets and computers), Vehicles (cars, trucks, RVs and bikes), Tools & small engine (power tools, mowers, saws and generators) and Marine (outboards, inboards and hulls). Shops that fix more than one kind of thing can use several templates in one account."
+    }
+   },
+   {
+    "@type": "Question",
+    "name": "Can customers approve estimates on their phone?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "Yes. Customers get a link, approve each line of the estimate and sign on their phone. If you find more work mid-repair, they choose what to add; nothing is added unless they approve it."
+    }
+   },
+   {
+    "@type": "Question",
+    "name": "Can I switch from RepairDesk, Shopmonkey or another system?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "Yes. Send us an export from your current system or spreadsheets and we bring customers, devices and stock across as part of onboarding, free on every plan. Most single-location shops are set up in a day. Comparisons with RepairDesk, RepairShopr, Shopmonkey, Tekmetric and Orderry are at https://tekly.app/compare/."
+    }
+   },
+   {
+    "@type": "Question",
+    "name": "What's the difference between Solo, Shop and Pro?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "Solo ($29 a month) is for up to 2 people at one location and 150 new jobs a month: work orders, estimates, invoices, POS, the customer portal and booking, the Tekly Go phone app and messaging. Shop ($69 for the first location, $49 for each extra) includes 8 team members you can split across your locations, $4 a month for each extra person, and unlimited jobs. It adds inventory, barcodes and scanning, the time clock, reports and automatic notifications. Pro ($129 for the first location, $79 for each extra) has unlimited people and jobs and adds purchase orders, payroll and commissions, stock transfers between locations, AI estimate drafting, QuickBooks and Xero, single sign-on and API keys. Yearly billing gets 2 months free."
+    }
+   },
+   {
+    "@type": "Question",
+    "name": "What happens to my data if I leave?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "It's yours. Export everything to CSV or Excel at any time, including after you cancel."
+    }
+   }
+  ]
  }
 ]
   </script>
@@ -172,74 +205,112 @@
 </svg>
 
 
-<!-- Floating bar after the hero -->
-<div class="minibar" id="minibar">
-  <a href="/" class="wordmark" aria-label="Tekly home"><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#mark" class="nut"/></svg>tekly</a>
-  <a class="btn btn-solid btn-sm" data-app="signup" href="#start" data-spring="nudge">Start free trial <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
-  <button class="burger" type="button" aria-label="Open menu" aria-controls="menu" aria-expanded="false" data-open-menu><span class="burger-lines" aria-hidden="true"><span></span><span></span></span></button>
-</div>
+<header class="site-hdr" id="siteHdr">
+  <div class="hdr-in">
+    <a href="/" aria-current="page" class="wordmark" aria-label="Tekly home"><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#mark" class="nut"/></svg>tekly</a>
+    <nav class="hdr-nav" aria-label="Primary">
+      <div class="nav-item" data-dd>
+        <button class="nav-link" type="button" aria-expanded="false" aria-controls="dd-product">Product <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5L6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <div class="dd" id="dd-product">
+          <a href="/product/"><b>Product tour</b><span>Everything Tekly does, from check-in to payout</span></a>
+          <a href="/product/#approvals"><b>Approvals</b><span>Customers approve each line on their phone</span></a>
+          <a href="/product/#inventory"><b>Inventory &amp; parts</b><span>Parts booked to the job, stock across locations</span></a>
+          <a href="/product/#money"><b>Money &amp; payroll</b><span>POS, invoices, commissions, profit per job</span></a>
+          <a href="/product/#go"><b>Tekly Go app</b><span>The phone app for technicians</span></a>
+          <a href="/product/#ai"><b>AI &amp; Sense</b><span>Drafts and suggestions; a person always sends</span></a>
+          <hr>
+          <a href="/product/#features"><b>All features</b></a>
+          <a href="/changelog/"><b>What's new</b></a>
+        </div>
+      </div>
+      <div class="nav-item" data-dd>
+        <button class="nav-link" type="button" aria-expanded="false" aria-controls="dd-ind">Industries <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5L6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <div class="dd" id="dd-ind">
+          <a href="/phone-repair-software/"><b>Phone &amp; computer repair</b><span>IMEI or serial at intake, passcodes encrypted</span></a>
+          <a href="/auto-repair-shop-software/"><b>Auto repair</b><span>Cars, trucks, RVs and bikes by VIN or plate</span></a>
+          <a href="/small-engine-repair-software/"><b>Small engine &amp; tools</b><span>Mowers, saws, generators, power tools</span></a>
+          <a href="/marine-repair-software/"><b>Marine repair</b><span>Outboards, inboards and hulls by HIN</span></a>
+          <hr>
+          <a href="/#industries"><b>More than one trade or location?</b><span>Several templates and locations in one account</span></a>
+        </div>
+      </div>
+      <div class="nav-item"><a class="nav-link" href="/pricing/">Pricing</a></div>
+      <div class="nav-item" data-dd>
+        <button class="nav-link" type="button" aria-expanded="false" aria-controls="dd-res">Resources <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5L6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <div class="dd" id="dd-res">
+          <a href="/compare/"><b>Compare Tekly</b><span>With RepairDesk, Shopmonkey, RepairShopr and more</span></a>
+          <a href="/guides/choose-repair-shop-software/"><b>How to choose repair shop software</b><span>A checklist before you switch</span></a>
+          <a href="/pricing/#faq"><b>FAQ</b></a>
+          <a href="/about/"><b>About Tekly</b></a>
+        </div>
+      </div>
+    </nav>
+    <div class="hdr-right">
+      <a class="text-link" data-app="signin" href="#start">Sign in</a>
+      <button class="btn btn-outline" type="button" data-open-demo>Book a demo</button>
+      <a class="btn btn-solid" data-app="signup" href="#start">Start free trial</a>
+      <button class="menu-btn" type="button" aria-label="Open menu" aria-controls="sheet" aria-expanded="false" data-menu><span aria-hidden="true"></span></button>
+    </div>
+  </div>
+</header>
+<nav class="sheet" id="sheet" aria-label="Menu" hidden>
+  <details><summary>Product <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5L6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></summary>
+    <a href="/product/">Product tour</a><a href="/product/#approvals">Approvals</a><a href="/product/#inventory">Inventory &amp; parts</a><a href="/product/#money">Money &amp; payroll</a><a href="/product/#go">Tekly Go app</a><a href="/product/#ai">AI &amp; Sense</a><a href="/product/#features">All features</a><a href="/changelog/">What's new</a>
+  </details>
+  <details><summary>Industries <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5L6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></summary>
+    <a href="/phone-repair-software/">Phone &amp; computer repair</a><a href="/auto-repair-shop-software/">Auto repair</a><a href="/small-engine-repair-software/">Small engine &amp; tools</a><a href="/marine-repair-software/">Marine repair</a>
+  </details>
+  <a href="/pricing/">Pricing</a>
+  <details><summary>Resources <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5L6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></summary>
+    <a href="/compare/">Compare Tekly</a><a href="/guides/choose-repair-shop-software/">How to choose repair shop software</a><a href="/pricing/#faq">FAQ</a><a href="/about/">About Tekly</a>
+  </details>
+  <div class="sheet-ctas">
+    <a class="btn btn-solid" data-app="signup" href="#start">Start free trial</a>
+    <button class="btn btn-outline" type="button" data-open-demo>Book a demo</button>
+    <a class="text-link" data-app="signin" href="#start">Sign in</a>
+  </div>
+</nav>
 
 <main id="main">
 
-<!-- ════════ HERO ════════ -->
-<section class="hero on-dark" id="top" aria-label="Tekly">
-  <div class="hero-plate" id="heroPlate"><picture>
-    <source media="(max-width: 639px)" srcset="/assets/photos/bench-hero-tall-750.webp" width="750" height="1333">
-    <img src="/assets/photos/bench-hero-1600.webp" srcset="/assets/photos/bench-hero-960.webp 960w, /assets/photos/bench-hero-1600.webp 1600w, /assets/photos/bench-hero-2400.webp 2400w" sizes="100vw" width="1600" height="1000" alt="" fetchpriority="high">
-  </picture></div>
-  <header class="hdr">
-    <nav class="hdr-nav" aria-label="Primary">
-      <a href="/product/">Product</a>
-      <a href="/#industries">Every trade</a>
-      <a href="/pricing/">Pricing</a>
-      <a href="/compare/">Compare</a>
-      <a href="/about/">About</a>
-    </nav>
-    <a href="/" aria-current="page" class="wordmark" aria-label="Tekly home"><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#mark"/></svg>tekly</a>
-    <div class="hdr-right">
-      <a class="text-btn" data-app="signin" href="#start">Sign in</a>
-      <button class="text-btn" type="button" data-open-demo data-spring="nudge">Book a demo <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></button>
-      <button class="burger glass" type="button" aria-label="Open menu" aria-controls="menu" aria-expanded="false" data-open-menu><span class="burger-lines" aria-hidden="true"><span></span><span></span></span></button>
+<!-- ════════ HERO (light) ════════ -->
+<section class="hero" id="top" aria-labelledby="heroTitle">
+  <div>
+    <h1 id="heroTitle"><span class="hero-kicker">Repair shop software for every trade · electronics, vehicles, tools &amp; marine</span><span class="sr">: </span><span class="hero-words">Diagnose. Approve. Get paid.</span></h1>
+    <p class="hero-lede">Tekly drafts the estimate, gets the customer's yes on their phone, books the parts to the job and pays out the commission — at every location, for every bench from phones to fleets.</p>
+    <div class="hero-ctas">
+      <a class="btn btn-solid" data-app="signup" href="#start" data-spring="nudge">Start free trial <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
+      <button class="btn btn-outline" type="button" data-open-demo>Book a demo</button>
     </div>
-  </header>
-
-  <div class="hero-body">
-    <div>
-      <h1 id="heroTitle"><span class="hero-kicker" data-hero-fade>Repair shop software for every trade · electronics, vehicles, tools &amp; marine</span><span class="sr">: </span><span class="hero-words" data-hero-words>Diagnose. <br>Approve. <br>Get paid.</span></h1>
-      <div class="hero-foot">
-        <p class="hero-tag" id="heroTag"><span class="ln"><span class="lni">From the first complaint</span></span><span class="ln"><span class="lni">to the final payment.</span></span></p>
-        <div data-hero-fade>
-          <div class="hero-ctas">
-            <a class="btn btn-light" data-app="signup" href="#start" data-spring="nudge">Start free trial <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
-            <button class="btn btn-outline" type="button" data-open-demo>Book a demo</button>
-          </div>
-          <p class="hero-fine"><a href="/pricing/" class="hero-price">See pricing · from $29/mo</a> · <b><span data-trial>14</span>-day trial</b> · no card · free data migration</p>
-        </div>
-      </div>
+    <p class="hero-fine"><span data-trial>14</span>-day trial · no card · free data migration · <a href="/pricing/">plans from $29/mo</a></p>
+    <div class="trades-row">
+      <span>Built for</span>
+      <a href="/phone-repair-software/">Phone &amp; computer</a>
+      <a href="/auto-repair-shop-software/">Auto</a>
+      <a href="/small-engine-repair-software/">Small engine &amp; tools</a>
+      <a href="/marine-repair-software/">Marine</a>
     </div>
-
-    <!-- glass card carousel: complaint → AI-drafted estimate (auto-advancing) -->
-    <aside class="gcar glass" id="gcar" aria-label="Examples: customer complaint to AI-drafted estimate" aria-roledescription="carousel">
-      <div class="gcar-top"><span>Customer says → Tekly AI drafts</span><span id="gcarCount">01 / 04</span></div>
-      <div class="gcar-stage" id="gcarStage" aria-live="off"></div>
-      <div class="gcar-foot">
-        <p>AI estimate drafting is on Pro and in every trial · prices from your own catalog · nothing is sent until you approve it</p>
-        <div class="dots" id="gcarDots" role="group" aria-label="Choose example"></div>
-      </div>
-    </aside>
   </div>
+  <figure class="hero-visual">
+    <img src="/assets/photos/bench-hero-1600.webp" srcset="/assets/photos/bench-hero-960.webp 960w, /assets/photos/bench-hero-1600.webp 1600w" sizes="(max-width: 1024px) 92vw, 36rem" width="1600" height="1000" alt="A technician's hands repairing a phone circuit board at the bench" fetchpriority="high">
+    <figcaption class="est" aria-label="Example: an estimate Tekly AI drafted from the customer's words (sample data)">
+      <div class="est-top"><span>Customer says → Tekly AI drafts</span><span class="tag ghost">Sample</span></div>
+      <p class="q">“iPhone 14 Pro dropped in water, won't charge and the screen flickers”</p>
+      <ol>
+        <li><span>Liquid-damage diagnostic</span><b>$49.00</b></li>
+        <li><span>Ultrasonic board clean</span><b>$65.00</b></li>
+        <li><span>Charging port flex</span><b>$89.00</b></li>
+        <li><span>Display assembly</span><b>$279.00</b></li>
+      </ol>
+      <div class="tot"><span>4 lines · from your catalog</span><b>$482.00</b></div>
+      <p class="est-cap">AI estimate drafting is on Pro and in every trial. Nothing is sent until you approve it.</p>
+    </figcaption>
+  </figure>
 </section>
 
-<!-- ════════ INTRO + WORKS WITH ════════ -->
-<section class="card-sec overlap" aria-labelledby="introTitle">
-  <div class="intro-grid">
-    <p class="eyebrow">What Tekly does</p>
-    <div>
-      <h2 class="sr" id="introTitle">Repair shop management software</h2>
-      <p class="intro-statement" data-reveal="words">Repair shop software that drafts the estimate, gets the customer's yes on their phone, books the parts to the job and pays out the commission <span class="dim">— for every bench from phones to fleets.</span></p>
-    </div>
-  </div>
-  <ul class="works" aria-label="Works with the tools you already use">
+<!-- ════════ WORKS WITH ════════ -->
+<section class="card-sec tint works-sec" aria-label="Works with the tools you already use">
+  <ul class="works">
     <li data-rise><span class="k">Payments</span><span class="v">Stripe · Square</span></li>
     <li data-rise><span class="k">Accounting</span><span class="v">QuickBooks · Xero</span></li>
     <li data-rise><span class="k">Messaging</span><span class="v">SMS · WhatsApp</span></li>
@@ -248,15 +319,58 @@
   <div class="works-cap" data-rise><span>Works with the tools you already use.</span><span class="note">No contracts · export anytime · free migration · AI never sends on its own</span></div>
 </section>
 
-<!-- ════════ EVERY REPAIR BUSINESS (ghost words + live tiles; carousel below 1025px) ════════ -->
+<!-- ════════ HOME: PRODUCT TOUR TEASERS (full tour on /product/) ════════ -->
+<section class="card-sec" id="tour" aria-labelledby="tourTitle">
+  <div class="sec-head">
+    <div>
+      <h2 class="h2" id="tourTitle" data-reveal="words">Everything from the counter to the payout.</h2>
+      <p class="lede" data-rise>Five handoffs where repairs usually stall, kept in one flow. Start with the parts shops ask about most.</p>
+    </div>
+  </div>
+  <div class="tease-grid">
+    <a class="tease" href="/product/#approvals" data-rise>
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M10 11.5l1.6 1.6 3-3.2"/></svg></span>
+      <h3>Customers say yes on their phone, one line at a time.</h3>
+      <p>They tick what they want and sign. Nothing is added without a yes.</p>
+      <span class="tease-go">See approvals <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></span>
+    </a>
+    <a class="tease" href="/product/#inventory" data-rise>
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M4 8l8 4 8-4M12 12v8"/></svg></span>
+      <h3>Parts that know which job they're for.</h3>
+      <span class="tease-go">See inventory <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></span>
+    </a>
+    <a class="tease" href="/product/#money" data-rise>
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><path d="M7 16V10M12 16V6M17 16v-4"/></svg></span>
+      <h3>Know your numbers without a spreadsheet.</h3>
+      <span class="tease-go">See money &amp; payroll <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></span>
+    </a>
+    <a class="tease" href="/product/#go" data-rise>
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></svg></span>
+      <h3>The whole bench in every technician's pocket.</h3>
+      <span class="tease-go">See Tekly Go <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></span>
+    </a>
+    <a class="tease" href="/product/#ai" data-rise>
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v5M12 16v5M3 12h5M16 12h5M6 6l3 3M15 15l3 3M18 6l-3 3M9 15l-3 3"/></svg></span>
+      <h3>It drafts the paperwork. Your team decides what's sent.</h3>
+      <span class="tease-go">See AI &amp; Sense <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></span>
+    </a>
+    <a class="tease" href="/product/#security" data-rise>
+      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg></span>
+      <h3>Roles, audit log and two-factor sign-in.</h3>
+      <span class="tease-go">See security <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></span>
+    </a>
+  </div>
+  <div class="tour-cta" data-rise><a class="btn btn-dark" href="/product/" data-spring="nudge">Take the full product tour <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a><a class="link" href="/product/#features">Or see every feature at a glance</a></div>
+</section>
+
+<!-- ════════ EVERY REPAIR BUSINESS (trade cards; a swipeable row below 1025px) ════════ -->
 <section class="card-sec tint" id="industries" aria-labelledby="indTitle">
-  <div class="ghostwords" aria-hidden="true"><span id="ghostA">Phones · Cars · Boats ·</span><span id="ghostB">Mowers · Bikes · Fleets</span></div>
   <div class="ind-head">
     <div>
       <p class="eyebrow">Every repair business</p>
       <h2 class="h2" id="indTitle" data-reveal="words">Built for your bench, whatever is on it.</h2>
       <p class="lede" data-rise>Four templates cover every bench. Each one asks for the right details at intake — and if you fix more than one kind of thing, use several in one account.</p>
-      <p class="note" data-rise>Each card cycles through example jobs from that kind of shop. Tap a job type to see what Tekly asks for at check-in. Hover or tap a card to pause.</p>
+      <p class="note" data-rise>Pick a job type on any card to see an example job and what Tekly asks for at check-in.</p>
     </div>
     <div class="car-ctrl">
       <button class="circ" type="button" id="carPrev" aria-label="Previous template" data-spring="pop"><svg aria-hidden="true"><use href="#arl"/></svg></button>
@@ -266,7 +380,7 @@
   <div class="car" id="car" aria-roledescription="carousel" aria-label="Templates">
     <div class="car-track" id="tradesGrid">
     <article class="tpl" role="group" aria-roledescription="slide" aria-label="Electronics, 1 of 4">
-      <div class="tile" data-tile><img src="/assets/photos/iphone-mat-600.webp" srcset="/assets/photos/iphone-mat-600.webp 600w, /assets/photos/iphone-mat-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="An iPhone opened up for repair on a blue work mat" loading="lazy" decoding="async" draggable="false" class="on"><img src="/assets/photos/repair-lab-1-600.webp" srcset="/assets/photos/repair-lab-1-600.webp 600w, /assets/photos/repair-lab-1-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A technician replacing parts inside a smartphone" loading="lazy" decoding="async" draggable="false"><img src="/assets/photos/repair-lab-2-600.webp" srcset="/assets/photos/repair-lab-2-600.webp 600w, /assets/photos/repair-lab-2-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A technician repairing a phone at a workbench" loading="lazy" decoding="async" draggable="false"><span class="tile-dots" aria-hidden="true"><i class="on"></i><i></i><i></i></span><div class="board"><div class="board-h"><span>Example jobs</span><span class="board-n">1 of 4</span></div><span class="board-prog" aria-hidden="true"></span><div class="board-win"><ol class="board-list"><li data-k="0" data-fields='[[&quot;Device&quot;, &quot;iPhone 14 Pro&quot;], [&quot;IMEI&quot;, &quot;35 291811 402177 3&quot;], [&quot;Passcode&quot;, &quot;•••••• encrypted&quot;], [&quot;Storage&quot;, &quot;256 GB&quot;]]'><div><b>Phones · Apple iPhone 14 Pro</b><span>Dropped in the pool, won&#x27;t charge · $482</span></div><em class="st st-repair">In repair</em></li><li data-k="1" data-fields='[[&quot;Device&quot;, &quot;iPad Air (5th gen)&quot;], [&quot;Serial&quot;, &quot;DMPH2LL7Q1GC&quot;], [&quot;Passcode&quot;, &quot;•••••• encrypted&quot;], [&quot;Accessories&quot;, &quot;Case, pencil&quot;]]'><div><b>Tablets · iPad Air (5th gen)</b><span>Charges only at an angle · $129</span></div><em class="st st-parts">Waiting parts</em></li><li data-k="2" data-fields='[[&quot;Device&quot;, &quot;MacBook Air M2&quot;], [&quot;Serial number&quot;, &quot;C02FK3XYQ6L4&quot;], [&quot;Password&quot;, &quot;•••••• encrypted&quot;], [&quot;Charger&quot;, &quot;Received&quot;]]'><div><b>Laptops · MacBook Air M2</b><span>Coffee on the keyboard, keys sticking · $349</span></div><em class="st st-approved">Approved</em></li><li data-k="3" data-fields='[[&quot;Device&quot;, &quot;Custom tower, RTX 4070&quot;], [&quot;Serial&quot;, &quot;Self-built&quot;], [&quot;Password&quot;, &quot;Not needed&quot;], [&quot;Accessories&quot;, &quot;Power cable&quot;]]'><div><b>Desktops · Custom gaming PC</b><span>No display after a GPU swap · $89</span></div><em class="st st-diag">Diagnosing</em></li></ol></div></div></div>
+      <div class="tile" data-tile><img src="/assets/photos/iphone-mat-600.webp" srcset="/assets/photos/iphone-mat-600.webp 600w, /assets/photos/iphone-mat-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="An iPhone opened up for repair on a blue work mat" loading="lazy" decoding="async" draggable="false" class="on"><div class="board"><div class="board-h"><span>Example job</span><span class="board-n">1 of 4</span></div><div class="board-win"><ol class="board-list"><li data-k="0" data-fields='[[&quot;Device&quot;, &quot;iPhone 14 Pro&quot;], [&quot;IMEI&quot;, &quot;35 291811 402177 3&quot;], [&quot;Passcode&quot;, &quot;•••••• encrypted&quot;], [&quot;Storage&quot;, &quot;256 GB&quot;]]'><div><b>Phones · Apple iPhone 14 Pro</b><span>Dropped in the pool, won&#x27;t charge · $482</span></div><em class="st st-repair">In repair</em></li><li data-k="1" data-fields='[[&quot;Device&quot;, &quot;iPad Air (5th gen)&quot;], [&quot;Serial&quot;, &quot;DMPH2LL7Q1GC&quot;], [&quot;Passcode&quot;, &quot;•••••• encrypted&quot;], [&quot;Accessories&quot;, &quot;Case, pencil&quot;]]'><div><b>Tablets · iPad Air (5th gen)</b><span>Charges only at an angle · $129</span></div><em class="st st-parts">Waiting parts</em></li><li data-k="2" data-fields='[[&quot;Device&quot;, &quot;MacBook Air M2&quot;], [&quot;Serial number&quot;, &quot;C02FK3XYQ6L4&quot;], [&quot;Password&quot;, &quot;•••••• encrypted&quot;], [&quot;Charger&quot;, &quot;Received&quot;]]'><div><b>Laptops · MacBook Air M2</b><span>Coffee on the keyboard, keys sticking · $349</span></div><em class="st st-approved">Approved</em></li><li data-k="3" data-fields='[[&quot;Device&quot;, &quot;Custom tower, RTX 4070&quot;], [&quot;Serial&quot;, &quot;Self-built&quot;], [&quot;Password&quot;, &quot;Not needed&quot;], [&quot;Accessories&quot;, &quot;Power cable&quot;]]'><div><b>Desktops · Custom gaming PC</b><span>No display after a GPU swap · $89</span></div><em class="st st-diag">Diagnosing</em></li></ol></div></div></div>
       <div class="tpl-icons"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></svg><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg></div>
       <h3>Electronics</h3>
       <p class="tpl-desc">One template for every device on the bench.</p>
@@ -276,7 +390,7 @@
       <a class="link" href="/phone-repair-software/" data-spring="nudge">Phone &amp; computer repair software <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
     </article>
     <article class="tpl" role="group" aria-roledescription="slide" aria-label="Vehicles, 2 of 4">
-      <div class="tile" data-tile><img src="/assets/photos/motorcycle-600.webp" srcset="/assets/photos/motorcycle-600.webp 600w, /assets/photos/motorcycle-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A mechanic working on a motorcycle in a garage" loading="lazy" decoding="async" draggable="false" class="on"><img src="/assets/photos/mechanic-stool-600.webp" srcset="/assets/photos/mechanic-stool-600.webp 600w, /assets/photos/mechanic-stool-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A mechanic working on the front suspension of a raised pickup truck" loading="lazy" decoding="async" draggable="false"><img src="/assets/photos/workshop-garage-600.webp" srcset="/assets/photos/workshop-garage-600.webp 600w, /assets/photos/workshop-garage-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A mechanic at work in a vehicle workshop" loading="lazy" decoding="async" draggable="false"><span class="tile-dots" aria-hidden="true"><i class="on"></i><i></i><i></i></span><div class="board"><div class="board-h"><span>Example jobs</span><span class="board-n">1 of 4</span></div><span class="board-prog" aria-hidden="true"></span><div class="board-win"><ol class="board-list"><li data-k="0" data-fields='[[&quot;Vehicle&quot;, &quot;2019 Honda CR-V&quot;], [&quot;VIN&quot;, &quot;2HKRW2H5…KH604117&quot;], [&quot;Plate&quot;, &quot;8KXM 214&quot;], [&quot;Mileage&quot;, &quot;61,240 mi&quot;]]'><div><b>Cars · 2019 Honda CR-V EX</b><span>Grinding noise when braking · $393</span></div><em class="st st-repair">In repair</em></li><li data-k="1" data-fields='[[&quot;Vehicle&quot;, &quot;2021 Ford F-150&quot;], [&quot;VIN&quot;, &quot;1FTFW1E5…MFA21877&quot;], [&quot;Unit&quot;, &quot;Fleet 14&quot;], [&quot;Mileage&quot;, &quot;48,915 mi&quot;]]'><div><b>Trucks · 2021 Ford F-150 XLT</b><span>Check engine light, rough idle when cold · $612</span></div><em class="st st-parts">Waiting parts</em></li><li data-k="2" data-fields='[[&quot;Vehicle&quot;, &quot;2018 Winnebago Vista&quot;], [&quot;VIN&quot;, &quot;1F66F5DY…J0A06612&quot;], [&quot;Plate&quot;, &quot;RV 4471&quot;], [&quot;Generator&quot;, &quot;612 hrs&quot;]]'><div><b>RVs · 2018 Winnebago Vista 31B</b><span>Slide-out won&#x27;t retract · $1,240</span></div><em class="st st-approved">Approved</em></li><li data-k="3" data-fields='[[&quot;Bike&quot;, &quot;Commuter e-bike&quot;], [&quot;Frame serial&quot;, &quot;WTU294C3318K&quot;], [&quot;Battery&quot;, &quot;500 Wh&quot;], [&quot;Odometer&quot;, &quot;1,840 mi&quot;]]'><div><b>Bikes · Commuter e-bike, 500 Wh</b><span>Cuts out on hills, battery drops to zero · $118</span></div><em class="st st-ready">Ready</em></li></ol></div></div></div>
+      <div class="tile" data-tile><img src="/assets/photos/motorcycle-600.webp" srcset="/assets/photos/motorcycle-600.webp 600w, /assets/photos/motorcycle-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A mechanic working on a motorcycle in a garage" loading="lazy" decoding="async" draggable="false" class="on"><div class="board"><div class="board-h"><span>Example job</span><span class="board-n">1 of 4</span></div><div class="board-win"><ol class="board-list"><li data-k="0" data-fields='[[&quot;Vehicle&quot;, &quot;2019 Honda CR-V&quot;], [&quot;VIN&quot;, &quot;2HKRW2H5…KH604117&quot;], [&quot;Plate&quot;, &quot;8KXM 214&quot;], [&quot;Mileage&quot;, &quot;61,240 mi&quot;]]'><div><b>Cars · 2019 Honda CR-V EX</b><span>Grinding noise when braking · $393</span></div><em class="st st-repair">In repair</em></li><li data-k="1" data-fields='[[&quot;Vehicle&quot;, &quot;2021 Ford F-150&quot;], [&quot;VIN&quot;, &quot;1FTFW1E5…MFA21877&quot;], [&quot;Unit&quot;, &quot;Fleet 14&quot;], [&quot;Mileage&quot;, &quot;48,915 mi&quot;]]'><div><b>Trucks · 2021 Ford F-150 XLT</b><span>Check engine light, rough idle when cold · $612</span></div><em class="st st-parts">Waiting parts</em></li><li data-k="2" data-fields='[[&quot;Vehicle&quot;, &quot;2018 Winnebago Vista&quot;], [&quot;VIN&quot;, &quot;1F66F5DY…J0A06612&quot;], [&quot;Plate&quot;, &quot;RV 4471&quot;], [&quot;Generator&quot;, &quot;612 hrs&quot;]]'><div><b>RVs · 2018 Winnebago Vista 31B</b><span>Slide-out won&#x27;t retract · $1,240</span></div><em class="st st-approved">Approved</em></li><li data-k="3" data-fields='[[&quot;Bike&quot;, &quot;Commuter e-bike&quot;], [&quot;Frame serial&quot;, &quot;WTU294C3318K&quot;], [&quot;Battery&quot;, &quot;500 Wh&quot;], [&quot;Odometer&quot;, &quot;1,840 mi&quot;]]'><div><b>Bikes · Commuter e-bike, 500 Wh</b><span>Cuts out on hills, battery drops to zero · $118</span></div><em class="st st-ready">Ready</em></li></ol></div></div></div>
       <div class="tpl-icons"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15l2-5a2 2 0 0 1 2-1.5h10a2 2 0 0 1 2 1.5l2 5v2H3z"/><circle cx="7.5" cy="18" r="1.8"/><circle cx="16.5" cy="18" r="1.8"/></svg><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="7" width="12" height="9" rx="1"/><path d="M14 10h4l3 3v3h-7"/><circle cx="6" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5.5" cy="16.5" r="3"/><circle cx="18.5" cy="16.5" r="3"/><path d="M5.5 16.5l4-6h4l2 3h3M13.5 10.5l-2-3h-2"/></svg></div>
       <h3>Vehicles</h3>
       <p class="tpl-desc">From a family hatchback to a fleet truck or an RV.</p>
@@ -286,7 +400,7 @@
       <a class="link" href="/auto-repair-shop-software/" data-spring="nudge">Auto repair shop software <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
     </article>
     <article class="tpl" role="group" aria-roledescription="slide" aria-label="Tools &amp; small engine, 3 of 4">
-      <div class="tile" data-tile><img src="/assets/photos/generator-red-600.webp" srcset="/assets/photos/generator-red-600.webp 600w, /assets/photos/generator-red-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A portable petrol generator" loading="lazy" decoding="async" draggable="false" class="on"><img src="/assets/photos/tools-wall-600.webp" srcset="/assets/photos/tools-wall-600.webp 600w, /assets/photos/tools-wall-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="Spanners and sockets hanging on a workshop wall" loading="lazy" decoding="async" draggable="false"><img src="/assets/photos/generator-yard-600.webp" srcset="/assets/photos/generator-yard-600.webp 600w, /assets/photos/generator-yard-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A small-engine generator outdoors" loading="lazy" decoding="async" draggable="false"><span class="tile-dots" aria-hidden="true"><i class="on"></i><i></i><i></i></span><div class="board"><div class="board-h"><span>Example jobs</span><span class="board-n">1 of 4</span></div><span class="board-prog" aria-hidden="true"></span><div class="board-win"><ol class="board-list"><li data-k="0" data-fields='[[&quot;Item&quot;, &quot;DeWalt 20V drill&quot;], [&quot;Serial&quot;, &quot;2203 1145&quot;], [&quot;Voltage&quot;, &quot;20 V&quot;], [&quot;Warranty&quot;, &quot;In warranty&quot;]]'><div><b>Power tools · DeWalt 20V hammer drill</b><span>Won&#x27;t hold a charge, chuck slips · $64</span></div><em class="st st-repair">In repair</em></li><li data-k="1" data-fields='[[&quot;Item&quot;, &quot;21-inch push mower&quot;], [&quot;Serial&quot;, &quot;2214 0938 7712&quot;], [&quot;Engine&quot;, &quot;OHV 163 cc&quot;], [&quot;Hours&quot;, &quot;212&quot;]]'><div><b>Mowers · 21-inch push mower</b><span>Hard to start, surges at full throttle · $96</span></div><em class="st st-ready">Ready</em></li><li data-k="2" data-fields='[[&quot;Item&quot;, &quot;Stihl MS 250&quot;], [&quot;Serial&quot;, &quot;1823 4471&quot;], [&quot;Engine&quot;, &quot;45.4 cc&quot;], [&quot;Hours&quot;, &quot;96&quot;]]'><div><b>Saws · Stihl MS 250 chainsaw</b><span>Chain won&#x27;t oil, bogs under load · $142</span></div><em class="st st-parts">Waiting parts</em></li><li data-k="3" data-fields='[[&quot;Item&quot;, &quot;7,500 W portable&quot;], [&quot;Serial&quot;, &quot;GN75-0912&quot;], [&quot;Engine&quot;, &quot;420 cc&quot;], [&quot;Hours&quot;, &quot;338&quot;]]'><div><b>Generators · 7,500 W portable generator</b><span>Surges under load · $185</span></div><em class="st st-approved">Approved</em></li></ol></div></div></div>
+      <div class="tile" data-tile><img src="/assets/photos/generator-red-600.webp" srcset="/assets/photos/generator-red-600.webp 600w, /assets/photos/generator-red-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A portable petrol generator" loading="lazy" decoding="async" draggable="false" class="on"><div class="board"><div class="board-h"><span>Example job</span><span class="board-n">1 of 4</span></div><div class="board-win"><ol class="board-list"><li data-k="0" data-fields='[[&quot;Item&quot;, &quot;DeWalt 20V drill&quot;], [&quot;Serial&quot;, &quot;2203 1145&quot;], [&quot;Voltage&quot;, &quot;20 V&quot;], [&quot;Warranty&quot;, &quot;In warranty&quot;]]'><div><b>Power tools · DeWalt 20V hammer drill</b><span>Won&#x27;t hold a charge, chuck slips · $64</span></div><em class="st st-repair">In repair</em></li><li data-k="1" data-fields='[[&quot;Item&quot;, &quot;21-inch push mower&quot;], [&quot;Serial&quot;, &quot;2214 0938 7712&quot;], [&quot;Engine&quot;, &quot;OHV 163 cc&quot;], [&quot;Hours&quot;, &quot;212&quot;]]'><div><b>Mowers · 21-inch push mower</b><span>Hard to start, surges at full throttle · $96</span></div><em class="st st-ready">Ready</em></li><li data-k="2" data-fields='[[&quot;Item&quot;, &quot;Stihl MS 250&quot;], [&quot;Serial&quot;, &quot;1823 4471&quot;], [&quot;Engine&quot;, &quot;45.4 cc&quot;], [&quot;Hours&quot;, &quot;96&quot;]]'><div><b>Saws · Stihl MS 250 chainsaw</b><span>Chain won&#x27;t oil, bogs under load · $142</span></div><em class="st st-parts">Waiting parts</em></li><li data-k="3" data-fields='[[&quot;Item&quot;, &quot;7,500 W portable&quot;], [&quot;Serial&quot;, &quot;GN75-0912&quot;], [&quot;Engine&quot;, &quot;420 cc&quot;], [&quot;Hours&quot;, &quot;338&quot;]]'><div><b>Generators · 7,500 W portable generator</b><span>Surges under load · $185</span></div><em class="st st-approved">Approved</em></li></ol></div></div></div>
       <div class="tpl-icons"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h11l3 2v2l-3 2H8z"/><path d="M8 14l-2 6h4l1-6M17 11h4"/></svg><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15h14l2-5h-5l-2 2H5z"/><circle cx="7" cy="18" r="2"/><circle cx="16" cy="18" r="2"/><path d="M19 10l2-6"/></svg></div>
       <h3>Tools &amp; small engine</h3>
       <p class="tpl-desc">Workshop gear and outdoor power equipment in one template.</p>
@@ -296,7 +410,7 @@
       <a class="link" href="/small-engine-repair-software/" data-spring="nudge">Small engine repair software <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
     </article>
     <article class="tpl" role="group" aria-roledescription="slide" aria-label="Marine, 4 of 4">
-      <div class="tile" data-tile><img src="/assets/photos/outboard-students-600.webp" srcset="/assets/photos/outboard-students-600.webp 600w, /assets/photos/outboard-students-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="Technicians servicing an outboard motor on a test stand" loading="lazy" decoding="async" draggable="false" class="on"><img src="/assets/photos/boat-engine-600.webp" srcset="/assets/photos/boat-engine-600.webp 600w, /assets/photos/boat-engine-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="A mechanic working on a boat's outboard engine on the water" loading="lazy" decoding="async" draggable="false"><span class="tile-dots" aria-hidden="true"><i class="on"></i><i></i></span><div class="board"><div class="board-h"><span>Example jobs</span><span class="board-n">1 of 4</span></div><span class="board-prog" aria-hidden="true"></span><div class="board-win"><ol class="board-list"><li data-k="0" data-fields='[[&quot;Vessel&quot;, &quot;19 ft centre console&quot;], [&quot;HIN&quot;, &quot;ABC12345D707&quot;], [&quot;Engine serial&quot;, &quot;1B3L-401229&quot;], [&quot;Length&quot;, &quot;19 ft&quot;]]'><div><b>Outboards · 150 hp four-stroke outboard</b><span>Won&#x27;t idle, stalls shifting into gear · $590</span></div><em class="st st-repair">In repair</em></li><li data-k="1" data-fields='[[&quot;Vessel&quot;, &quot;21 ft bowrider&quot;], [&quot;HIN&quot;, &quot;XYZ45021J818&quot;], [&quot;Engine serial&quot;, &quot;5.7-B88231&quot;], [&quot;Hours&quot;, &quot;410&quot;]]'><div><b>Inboards · 5.7 L sterndrive</b><span>Overheats above 3,000 rpm · $780</span></div><em class="st st-parts">Waiting parts</em></li><li data-k="2" data-fields='[[&quot;Vessel&quot;, &quot;19 ft centre console&quot;], [&quot;HIN&quot;, &quot;ABC12345D707&quot;], [&quot;Material&quot;, &quot;Fibreglass&quot;], [&quot;Length&quot;, &quot;19 ft&quot;]]'><div><b>Hulls · 19 ft centre console</b><span>Gelcoat crack at the transom · $640</span></div><em class="st st-approved">Approved</em></li><li data-k="3" data-fields='[[&quot;Trailer&quot;, &quot;Single-axle, 2,000 lb&quot;], [&quot;VIN&quot;, &quot;4M8BS1218…&quot;], [&quot;Plate&quot;, &quot;TR 7720&quot;], [&quot;Carries&quot;, &quot;19 ft centre console&quot;]]'><div><b>Trailers · Single-axle boat trailer</b><span>Lights out, bearing noise · $165</span></div><em class="st st-ready">Ready</em></li></ol></div></div></div>
+      <div class="tile" data-tile><img src="/assets/photos/outboard-students-600.webp" srcset="/assets/photos/outboard-students-600.webp 600w, /assets/photos/outboard-students-960.webp 960w" sizes="(max-width: 639px) 85vw, 31rem" width="960" height="640" alt="Technicians servicing an outboard motor on a test stand" loading="lazy" decoding="async" draggable="false" class="on"><div class="board"><div class="board-h"><span>Example job</span><span class="board-n">1 of 4</span></div><div class="board-win"><ol class="board-list"><li data-k="0" data-fields='[[&quot;Vessel&quot;, &quot;19 ft centre console&quot;], [&quot;HIN&quot;, &quot;ABC12345D707&quot;], [&quot;Engine serial&quot;, &quot;1B3L-401229&quot;], [&quot;Length&quot;, &quot;19 ft&quot;]]'><div><b>Outboards · 150 hp four-stroke outboard</b><span>Won&#x27;t idle, stalls shifting into gear · $590</span></div><em class="st st-repair">In repair</em></li><li data-k="1" data-fields='[[&quot;Vessel&quot;, &quot;21 ft bowrider&quot;], [&quot;HIN&quot;, &quot;XYZ45021J818&quot;], [&quot;Engine serial&quot;, &quot;5.7-B88231&quot;], [&quot;Hours&quot;, &quot;410&quot;]]'><div><b>Inboards · 5.7 L sterndrive</b><span>Overheats above 3,000 rpm · $780</span></div><em class="st st-parts">Waiting parts</em></li><li data-k="2" data-fields='[[&quot;Vessel&quot;, &quot;19 ft centre console&quot;], [&quot;HIN&quot;, &quot;ABC12345D707&quot;], [&quot;Material&quot;, &quot;Fibreglass&quot;], [&quot;Length&quot;, &quot;19 ft&quot;]]'><div><b>Hulls · 19 ft centre console</b><span>Gelcoat crack at the transom · $640</span></div><em class="st st-approved">Approved</em></li><li data-k="3" data-fields='[[&quot;Trailer&quot;, &quot;Single-axle, 2,000 lb&quot;], [&quot;VIN&quot;, &quot;4M8BS1218…&quot;], [&quot;Plate&quot;, &quot;TR 7720&quot;], [&quot;Carries&quot;, &quot;19 ft centre console&quot;]]'><div><b>Trailers · Single-axle boat trailer</b><span>Lights out, bearing noise · $165</span></div><em class="st st-ready">Ready</em></li></ol></div></div></div>
       <div class="tpl-icons"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 15h18l-2.5 4.5h-13z"/><path d="M12 15V4l6 9h-6"/></svg></div>
       <h3>Marine</h3>
       <p class="tpl-desc">Built for boatyards, from winterising to a full repower.</p>
@@ -323,100 +437,46 @@
   </div>
 </section>
 
-<!-- ════════ HOME: PRODUCT TOUR TEASERS (full tour on /product/) ════════ -->
-<section class="card-sec" id="tour" aria-labelledby="tourTitle">
+<!-- ════════ HOME: SWITCHING ════════ -->
+<section class="card-sec" id="switching" aria-labelledby="swTitle">
   <div class="sec-head">
-    <p class="eyebrow">The product</p>
-    <div>
-      <h2 class="h2" id="tourTitle" data-reveal="words">Everything from the counter to the payout.</h2>
-      <p class="lede" data-rise>Five handoffs where repairs usually stall, kept in one flow. Start with the parts shops ask about most — each has a full tour.</p>
-    </div>
+    <h2 class="h2" id="swTitle" data-reveal>Switching from RepairDesk, Shopmonkey or spreadsheets?</h2>
+    <p class="lede" data-rise>Most single-location shops are set up in a day.</p>
   </div>
-  <div class="tease-grid">
-    <a class="tease tease-lg" href="/product/#approvals" data-rise data-spring="lift">
-      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M10 11.5l1.6 1.6 3-3.2"/></svg></span>
-      <span class="tease-k">Approvals</span>
-      <h3>Customers say yes on their phone, one line at a time.</h3>
-      <p>They tick what they want and sign. Nothing is added without a yes, and declined work waits for next time.</p>
-      <span class="tease-go">See approvals <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></span>
-    </a>
-    <a class="tease" href="/product/#inventory" data-rise data-spring="lift">
-      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M4 8l8 4 8-4M12 12v8"/></svg></span>
-      <span class="tease-k">Inventory</span>
-      <h3>Parts that know which job they're for.</h3>
-      <span class="tease-go">See inventory <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></span>
-    </a>
-    <a class="tease" href="/product/#money" data-rise data-spring="lift">
-      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><path d="M7 16V10M12 16V6M17 16v-4"/></svg></span>
-      <span class="tease-k">Money &amp; people</span>
-      <h3>Know your numbers without a spreadsheet.</h3>
-      <span class="tease-go">See money &amp; payroll <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></span>
-    </a>
-    <a class="tease" href="/product/#go" data-rise data-spring="lift">
-      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></svg></span>
-      <span class="tease-k">Tekly Go app</span>
-      <h3>The whole bench in every technician's pocket.</h3>
-      <span class="tease-go">See Tekly Go <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></span>
-    </a>
-    <a class="tease" href="/product/#ai" data-rise data-spring="lift">
-      <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v5M12 16v5M3 12h5M16 12h5M6 6l3 3M15 15l3 3M18 6l-3 3M9 15l-3 3"/></svg></span>
-      <span class="tease-k">AI &amp; Sense</span>
-      <h3>It drafts the paperwork. Your team decides what's sent.</h3>
-      <span class="tease-go">See AI &amp; Sense <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></span>
-    </a>
-  </div>
-  <div class="tour-cta" data-rise><a class="btn btn-dark" href="/product/" data-spring="nudge">Take the full product tour <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a><a class="link" href="/product/#features">Or see every feature at a glance</a></div>
+  <ul class="switch-grid">
+    <li data-rise><b>We move your data, free</b><span>Send us an export from your current system or spreadsheets. We bring customers, devices and stock across as part of onboarding, on every plan.</span></li>
+    <li data-rise><b>No contract, no setup fee</b><span>Month to month, and cancel in two clicks. Try every Pro feature free for <span data-trial>14</span> days, no card.</span></li>
+    <li data-rise><b>Your data stays yours</b><span>Export everything to CSV or Excel at any time, even after you leave.</span></li>
+  </ul>
+  <div class="tour-cta" data-rise><a class="link" href="/compare/" data-spring="nudge">See how Tekly compares <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a><a class="link" href="/guides/choose-repair-shop-software/" data-spring="nudge">How to choose repair shop software <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a></div>
 </section>
 
-<!-- ════════ WHAT'S NEW ════════
-     Sourced from the feature PRs (#8–#13: Tekly Go phases, tablet intake, PIN/Face ID, Orderry parity).
-     Card readers and calling are marked "Rolling out" because they run in sandbox until live keys are set. -->
-<section class="card-sec" id="new" aria-labelledby="newTitle">
-  <div class="sec-head">
-    <p class="eyebrow">New in Tekly</p>
-    <div>
-      <h2 class="h2" id="newTitle" data-reveal="words">Coming next to Tekly.</h2>
-      <p class="lede" data-rise>We ship in small, careful steps and say exactly what's changing. Three highlights from what's coming next:</p>
-    </div>
-  </div>
-  <div class="new-grid">
-    <article class="new-card" data-rise data-spring="lift">
-      <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1z"/></svg></span><span class="tag soon">Coming soon</span></div>
-      <h3>Missed calls become inquiries</h3>
-      <p>An unanswered call turns into a follow-up with a “Call back” task, so the lead isn&#x27;t lost.</p>
-      <ul><li>Whoever is clocked in is alerted first</li><li>Repeat calls from one number join the same inquiry</li><li>Works with Twilio and Aircall phone systems</li></ul>
-    </article>
-    <article class="new-card" data-rise data-spring="lift">
-      <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><path d="M7 16V10M12 16V6M17 16v-4"/></svg></span><span class="tag soon">Coming soon</span></div>
-      <h3>Total profit report</h3>
-      <p>One number for what the shop earned, after tax and commissions.</p>
-      <ul><li>Jobs, dropped jobs and counter sales together</li><li>Filter by period, location and technician</li><li>Click through to the jobs and sales behind each figure</li></ul>
-    </article>
-    <article class="new-card" data-rise data-spring="lift">
-      <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V5h3M17 5h3v3M20 16v3h-3M7 19H4v-3"/><path d="M8 9v6M11 9v6M14 9v6M16.5 9v6"/></svg></span><span class="tag soon">Coming soon</span></div>
-      <h3>Scan IMEIs and serials as stock arrives</h3>
-      <p>Every phone or serial-tracked unit is recorded and checked on the way in.</p>
-      <ul><li>One code per unit when receiving a purchase order</li><li>Duplicates and units already in stock are blocked</li><li>Warns on a wrong IMEI or a unit you sold before</li></ul>
-    </article>
-  </div>
-  <p class="new-more" data-rise><a class="link" href="/changelog/" data-spring="nudge">See everything new and coming soon <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a></p>
-</section>
-
-<!-- ════════ HOME: PRICING TEASER (full plans on /pricing/) ════════ -->
+<!-- ════════ HOME: PRICING LINE (plans on /pricing/) ════════ -->
 <section class="card-sec tint" id="pricing" aria-labelledby="ptTitle">
-  <div class="sec-head">
-    <p class="eyebrow">Pricing</p>
+  <div class="price-line">
     <div>
-      <h2 class="h2" id="ptTitle" data-reveal="words">Plans from $29 a month. Prices on the page.</h2>
-      <p class="lede" data-rise>Month to month, no setup fee. Every trial includes every Pro feature for <span data-trial>14</span> days, no card.</p>
+      <h2 id="ptTitle" data-reveal>Plans from $29 a month. Prices on the page.</h2>
+      <div class="price-chips" data-rise><span><b>Solo</b> $29/mo</span><span><b>Shop</b> $69/mo · extra locations $49</span><span><b>Pro</b> $129/mo · extra locations $79</span></div>
+    </div>
+    <a class="btn btn-dark" href="/pricing/" data-spring="nudge" data-rise>Compare plans <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
+  </div>
+</section>
+
+<!-- ════════ HOME: TOP QUESTIONS (all on /pricing/#faq) ════════ -->
+<section class="card-sec" id="faq" aria-labelledby="faqTitle">
+  <div class="faq">
+    <div>
+      <h2 class="h2" id="faqTitle" data-reveal>Questions shops ask first.</h2>
+      <p class="lede">More answers on the <a class="link" href="/pricing/#faq">pricing page</a>, or <button class="link text-btn" type="button" data-open-demo>ask a person</button>.</p>
+    </div>
+    <div>
+      <details><summary>Which kinds of repair shops is Tekly for?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Tekly has four templates: Electronics (phones, tablets and computers), Vehicles (cars, trucks, RVs and bikes), Tools &amp; small engine (power tools, mowers, saws and generators) and Marine (outboards, inboards and hulls). Shops that fix more than one kind of thing can use several templates in one account.</p></details>
+      <details><summary>Can customers approve estimates on their phone?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Yes. Customers get a link, approve each line of the estimate and sign on their phone. If you find more work mid-repair, they choose what to add; nothing is added unless they approve it.</p></details>
+      <details><summary>Can I switch from RepairDesk, Shopmonkey or another system?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Yes. Send us an export from your current system or spreadsheets and we bring customers, devices and stock across as part of onboarding, free on every plan. Most single-location shops are set up in a day. <a href="/compare/">See how Tekly compares</a> with RepairDesk, RepairShopr, Shopmonkey, Tekmetric and Orderry.</p></details>
+      <details><summary>What's the difference between Solo, Shop and Pro?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Solo ($29 a month) is for up to 2 people at one location and 150 new jobs a month: work orders, estimates, invoices, POS, the customer portal and booking, the Tekly Go phone app and messaging. Shop ($69 for the first location, $49 for each extra) includes 8 team members you can split across your locations, $4 a month for each extra person, and unlimited jobs. It adds inventory, barcodes and scanning, the time clock, reports and automatic notifications. Pro ($129 for the first location, $79 for each extra) has unlimited people and jobs and adds purchase orders, payroll and commissions, stock transfers between locations, AI estimate drafting, QuickBooks and Xero, single sign-on and API keys. Yearly billing gets 2 months free.</p></details>
+      <details><summary>What happens to my data if I leave?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>It's yours. Export everything to CSV or Excel at any time, including after you cancel.</p></details>
     </div>
   </div>
-  <div class="ptease">
-    <a class="pt" href="/pricing/" data-rise data-spring="lift"><b>Solo</b><span class="pt-p"><i>$</i>29<small>/mo</small></span><span>One technician and a helper. Up to 2 people, 150 new jobs a month.</span></a>
-    <a class="pt pt-feat" href="/pricing/" data-rise data-spring="lift"><b>Shop <em>Best for most shops</em></b><span class="pt-p"><i>$</i>69<small>/mo</small></span><span>8 people shared across your locations, unlimited jobs, inventory and reports. Extra locations $49.</span></a>
-    <a class="pt" href="/pricing/" data-rise data-spring="lift"><b>Pro</b><span class="pt-p"><i>$</i>129<small>/mo</small></span><span>Unlimited people, payroll, purchase orders, AI estimates and accounting sync. Extra locations $79.</span></a>
-  </div>
-  <div class="tour-cta" data-rise><a class="btn btn-dark" href="/pricing/" data-spring="nudge">Compare plans <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a><a class="link" href="/compare/">How Tekly compares with RepairDesk, Shopmonkey and others</a></div>
 </section>
 
 <!-- ════════ CTA FOOTER ════════ -->
@@ -462,49 +522,17 @@
 
   <footer class="foot">
     <div><a href="/" class="wordmark"><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#mark"/></svg>tekly</a><p class="about-f">Repair shop software, from the first complaint to the final payment.</p></div>
-    <div><p class="foot-h">Product</p><ul><li><a href="/product/#flow">How a job moves</a></li><li><a href="/product/#ai">Tekly AI</a></li><li><a href="/changelog/">What's new</a></li><li><a href="/#industries">Every trade</a></li><li><a href="/pricing/">Pricing</a></li></ul></div>
-    <div><p class="foot-h">Software for</p><ul><li><a href="/phone-repair-software/">Phone &amp; computer repair</a></li><li><a href="/auto-repair-shop-software/">Auto repair shops</a></li><li><a href="/small-engine-repair-software/">Small engine &amp; tools</a></li><li><a href="/marine-repair-software/">Marine repair</a></li></ul></div>
-    <div><p class="foot-h">Compare</p><ul><li><a href="/compare/tekly-vs-repairdesk/">Tekly vs RepairDesk</a></li><li><a href="/compare/tekly-vs-shopmonkey/">Tekly vs Shopmonkey</a></li><li><a href="/compare/tekly-vs-tekmetric/">Tekly vs Tekmetric</a></li><li><a href="/compare/">All comparisons</a></li><li><a href="/guides/choose-repair-shop-software/">How to choose</a></li></ul></div>
-    <div><p class="foot-h">Company</p><ul><li><a href="/about/">About us</a></li><li><a href="#start" data-open-demo>Book a demo</a></li><li><a data-mail href="#start">Contact</a></li><li><a href="/pricing/#faq">FAQ</a></li></ul></div>
-    <div><p class="foot-h">Account</p><ul><li><a data-app="signin" href="#start">Sign in</a></li><li><a data-app="signup" href="#start">Start free trial</a></li></ul></div>
+    <div><p class="foot-h">Product</p><ul><li><a href="/product/">Product tour</a></li><li><a href="/product/#features">All features</a></li><li><a href="/pricing/">Pricing</a></li><li><a href="/changelog/">What's new</a></li></ul></div>
+    <div><p class="foot-h">Industries</p><ul><li><a href="/phone-repair-software/">Phone &amp; computer repair</a></li><li><a href="/auto-repair-shop-software/">Auto repair</a></li><li><a href="/small-engine-repair-software/">Small engine &amp; tools</a></li><li><a href="/marine-repair-software/">Marine repair</a></li></ul></div>
+    <div><p class="foot-h">Compare</p><ul><li><a href="/compare/tekly-vs-repairdesk/">Tekly vs RepairDesk</a></li><li><a href="/compare/tekly-vs-shopmonkey/">Tekly vs Shopmonkey</a></li><li><a href="/compare/tekly-vs-repairshopr/">Tekly vs RepairShopr</a></li><li><a href="/compare/tekly-vs-tekmetric/">Tekly vs Tekmetric</a></li><li><a href="/compare/tekly-vs-orderry/">Tekly vs Orderry</a></li></ul></div>
+    <div><p class="foot-h">Resources</p><ul><li><a href="/guides/choose-repair-shop-software/">How to choose</a></li><li><a href="/pricing/#faq">FAQ</a></li><li><a href="/compare/">All comparisons</a></li></ul></div>
+    <div><p class="foot-h">Company</p><ul><li><a href="/about/">About us</a></li><li><a href="#start" data-open-demo>Book a demo</a></li><li><a data-mail href="#start">Contact</a></li><li><a data-app="signin" href="#start">Sign in</a></li></ul></div>
   </footer>
   <div class="legal"><span>© <span id="yr">2026</span> Tekly</span><span><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a></span><span>Product screens show sample data.</span></div>
   <details class="credits"><summary>Photo credits</summary><ul><li>Repair lab 1: <a href="https://commons.wikimedia.org/wiki/File:Repair_Lab_(48115787881).jpg" rel="noopener">Redaktion NdW</a>, CC BY 2.0 (<a href="https://creativecommons.org/licenses/by/2.0" rel="noopener license">licence</a>)</li><li>Repair lab 2: <a href="https://commons.wikimedia.org/wiki/File:Repair_Lab_(48115819418).jpg" rel="noopener">Redaktion NdW</a>, CC BY 2.0 (<a href="https://creativecommons.org/licenses/by/2.0" rel="noopener license">licence</a>)</li><li>Mechanic stool: <a href="https://commons.wikimedia.org/wiki/File:DSC_6745_A_mechanic_sitting_on_a_small_wooden_stool_working_on_the_front_suspension_of_a_raised_pickup_truck_in_a_garage.jpg" rel="noopener">PattayaPatrol</a>, CC BY-SA 4.0 (<a href="https://creativecommons.org/licenses/by-sa/4.0" rel="noopener license">licence</a>)</li><li>Generator red: <a href="https://commons.wikimedia.org/wiki/File:Portable_electrical_generator_side.jpg" rel="noopener">Wikimedia Commons</a>, CC BY-SA 3.0 (<a href="http://creativecommons.org/licenses/by-sa/3.0/" rel="noopener license">licence</a>)</li><li>Generator yard: <a href="https://commons.wikimedia.org/wiki/File:Let%27s_Generate!_(29004208321).jpg" rel="noopener">Alan Levine from Strawberry, United States</a>, CC BY 2.0 (<a href="https://creativecommons.org/licenses/by/2.0" rel="noopener license">licence</a>)</li><li>Outboard students: <a href="https://commons.wikimedia.org/wiki/File:Students_work_on_an_outboard_motor._(21258483309).jpg" rel="noopener">Official U.S. Navy Page from United States of America</a>, Public domain</li><li>Boat engine: <a href="https://commons.wikimedia.org/wiki/File:Engineer_person_working_on_boat_engine.jpg" rel="noopener">Hillebrand Steve, U.S. Fish and Wildlife Service</a>, Public domain</li><li>Hero, phone teardown, motorcycle, workshop, tool wall and screwdriver photos: Unsplash, <a href="https://unsplash.com/license" rel="noopener license">Unsplash License</a></li></ul></details>
-  <div class="foot-word" aria-hidden="true">tekly</div>
 </section>
 
 </main>
-
-<!-- ════════ FULLSCREEN MENU ════════ -->
-<div class="menu on-dark" id="menu" role="dialog" aria-modal="true" aria-label="Menu" hidden>
-  <div class="menu-bg"></div>
-  <div class="menu-in">
-    <div class="menu-top">
-      <a href="/" aria-current="page" class="wordmark" data-close-menu><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#mark"/></svg>tekly</a>
-      <button class="menu-x" type="button" aria-label="Close menu" data-close-menu data-spring="spin"><svg aria-hidden="true"><use href="#x"/></svg></button>
-    </div>
-    <nav class="menu-links" aria-label="Site">
-      <a href="/#industries" data-close-menu><span class="n">01</span>Every trade</a>
-      <a href="/product/" data-close-menu><span class="n">02</span>Product</a>
-      <a href="/pricing/" data-close-menu><span class="n">03</span>Pricing</a>
-      <a href="/product/#go" data-close-menu><span class="n">04</span>Tekly Go app</a>
-      <a href="/product/#ai" data-close-menu><span class="n">05</span>AI &amp; Sense</a>
-      <a href="/changelog/" data-close-menu><span class="n">06</span>What's new</a>
-      <a href="/compare/" data-close-menu><span class="n">07</span>Compare</a>
-      <a href="/about/" data-close-menu><span class="n">08</span>About us</a>
-      <a href="/product/#features" data-close-menu><span class="n">09</span>All features</a>
-      <a href="/pricing/#faq" data-close-menu><span class="n">10</span>FAQ</a>
-    </nav>
-    <div class="menu-bottom">
-      <div class="hero-ctas">
-        <a class="btn btn-light" data-app="signup" href="#start" data-spring="nudge">Start free trial <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
-        <button class="btn btn-outline" type="button" data-open-demo>Book a demo</button>
-      </div>
-      <div class="menu-social"><a data-app="signin" href="#start">Sign in</a><a data-mail href="#start">hello@tekly.app</a><a href="/privacy/">Privacy</a></div>
-    </div>
-  </div>
-</div>
-
 
 <!-- ════════ DEMO MODAL ════════ -->
 <div class="modal" id="demoModal" role="dialog" aria-modal="true" aria-labelledby="demoTitle" hidden>
@@ -523,6 +551,7 @@
         <div><label for="d-loc">Locations</label><select class="in" id="d-loc" name="locations"><option>1</option><option>2–3</option><option>4–10</option><option>10+</option></select></div>
         <div class="full"><label for="d-now">Using today <span class="opt">optional</span></label><input class="in" id="d-now" name="current" placeholder="Spreadsheets, RepairDesk, Shopmonkey…"></div>
         <div class="full"><label for="d-msg">Anything we should know? <span class="opt">optional</span></label><input class="in" id="d-msg" name="message" placeholder="Best days, what you'd like to see…"></div>
+        <p class="full mail-note" id="mailNote" hidden>Sending opens your email app with these details filled in — press send there and we'll reply to find a time.</p>
         <div class="full"><button class="btn btn-solid btn-wide" type="submit">Request a demo</button></div>
         <p class="full form-note">We use these details only to arrange your demo. See our <a class="link" href="/privacy/">privacy policy</a>.</p>
       </form>
@@ -538,6 +567,6 @@
 
 <script defer src="/site.config.js"></script>
 <script defer src="/marketing.js"></script>
-<script type="module" src="/assets/site.js"></script>
+<script type="module" src="/assets/site.js?v=94d9eab2"></script>
 </body>
 </html>

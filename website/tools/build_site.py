@@ -14,6 +14,7 @@ and the demo modal (src/partials/ and src/sections/cta.html). Edit those files, 
 
 The industry, comparison, guide and legal pages are built by tools/build_pages.py.
 """
+import hashlib
 import html
 import json
 import re
@@ -37,6 +38,10 @@ LD = json.loads(read("jsonld.json"))
 ORG, WEBSITE, APP, FAQ = (next(b for b in LD if b["@type"] == t) for t in ("Organization", "WebSite", "SoftwareApplication", "FAQPage"))
 
 
+HOME_FAQ = {**FAQ, "mainEntity": [q for q in FAQ["mainEntity"] if q["name"] in json.loads(read("home-faq.json"))]}
+assert len(HOME_FAQ["mainEntity"]) == 5
+
+
 def crumbs_ld(name, path):
     return {"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [
         {"@type": "ListItem", "position": 1, "name": "Tekly", "item": DOMAIN + "/"},
@@ -47,12 +52,11 @@ def phero(crumb, h1, lede, extra="", crumbs_html=None):
     """The navy title card at the top of every page except home."""
     crumbs_html = crumbs_html or f'<a href="/">Tekly</a><span aria-hidden="true">/</span><span aria-current="page">{crumb}</span>'
     return f'''<!-- ════════ PAGE TITLE ════════ -->
-<section class="phero on-dark" id="top" aria-labelledby="pageTitle">
-{{{{hdr}}}}
+<section class="phero" id="top" aria-labelledby="pageTitle">
   <div class="phero-body">
     <nav class="crumbs" aria-label="Breadcrumb">{crumbs_html}</nav>
-    <h1 id="pageTitle" data-reveal="words">{h1}</h1>
-    <p class="phero-lede" data-hero-fade>{lede}</p>
+    <h1 id="pageTitle">{h1}</h1>
+    <p class="phero-lede">{lede}</p>
     {extra}
   </div>
 </section>
@@ -61,7 +65,7 @@ def phero(crumb, h1, lede, extra="", crumbs_html=None):
 
 
 SUBNAV = '''<nav class="subnav" aria-label="On this page" data-subnav>
-  <a href="#flow">How a job moves</a><a href="#approvals">Approvals</a><a href="#inventory">Inventory</a><a href="#money">Money</a><a href="#go">Tekly Go</a><a href="#ai">AI</a><a href="#sense">Sense</a><a href="#security">Security</a><a href="#features">All features</a>
+  <a href="#flow">How a job moves</a><a href="#approvals">Approvals</a><a href="#inventory">Inventory</a><a href="#money">Money</a><a href="#go">Tekly Go app</a><a href="#ai">AI &amp; Sense</a><a href="#security">Security</a><a href="#features">All features</a>
 </nav>
 
 '''
@@ -77,10 +81,10 @@ def pricing_body():
 
 def compare_band():
     return '''<!-- ════════ COMPARE BAND ════════ -->
-<section class="card-sec navy compare-band" aria-labelledby="cmpTitle">
+<section class="card-sec tint compare-band" aria-labelledby="cmpTitle">
   <div>
     <p class="eyebrow">Comparing tools?</p>
-    <h2 class="h3" id="cmpTitle" data-reveal="words">See Tekly side by side with the software you use today.</h2>
+    <h2 class="h3" id="cmpTitle" data-reveal>See Tekly side by side with the software you use today.</h2>
   </div>
   <ul class="cmp-links">
     <li><a href="/compare/tekly-vs-repairdesk/" data-spring="nudge">Tekly vs RepairDesk <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a></li>
@@ -122,8 +126,8 @@ PAGES = [
         "og_title": "Tekly — Repair shop software. Diagnose, approve, get paid.",
         "og_desc": "Estimates, line-by-line approval on the customer's phone, parts and POS for electronics, auto, small engine and marine shops. Every trade and location in one account. From $29 a month.",
         "hero_preload": True,
-        "ld": [ORG, WEBSITE, APP],
-        "body": lambda: "".join(section(n) for n in ["hero", "intro", "industries", "home-tour", "new", "home-pricing"]),
+        "ld": [ORG, WEBSITE, APP, HOME_FAQ],
+        "body": lambda: "".join(section(n) for n in ["hero", "intro", "home-tour", "industries", "home-switch", "home-pricing", "home-faq"]),
     },
     {
         "path": "/product/", "out": "product/index.html", "nav": "/product/",
@@ -166,9 +170,13 @@ PAGES = [
 ]
 
 
-HERO_PRELOAD = '''  <link rel="preload" as="image" type="image/webp" href="/assets/photos/bench-hero-1600.webp" imagesrcset="/assets/photos/bench-hero-960.webp 960w, /assets/photos/bench-hero-1600.webp 1600w, /assets/photos/bench-hero-2400.webp 2400w" imagesizes="100vw" media="(min-width: 640px)" fetchpriority="high">
-  <link rel="preload" as="image" type="image/webp" href="/assets/photos/bench-hero-tall-750.webp" media="(max-width: 639px)" fetchpriority="high">
+HERO_PRELOAD = '''  <link rel="preload" as="image" type="image/webp" href="/assets/photos/bench-hero-1600.webp" imagesrcset="/assets/photos/bench-hero-960.webp 960w, /assets/photos/bench-hero-1600.webp 1600w" imagesizes="(max-width: 1024px) 92vw, 36rem" fetchpriority="high">
 '''
+
+
+def ver(rel):
+    """A short content hash, so browsers fetch a changed file instead of a cached one."""
+    return hashlib.sha1((ROOT / rel).read_bytes()).hexdigest()[:8]
 
 
 def head(p):
@@ -202,21 +210,9 @@ def head(p):
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
   <link rel="manifest" href="/site.webmanifest">
   <link rel="preload" href="/assets/fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
-{HERO_PRELOAD if p.get("hero_preload") else ""}  <link rel="modulepreload" href="/assets/site.js">
-  <link rel="stylesheet" href="/assets/site.css">
-{p.get("css", "")}  <script>
-    document.documentElement.classList.add("js");
-    /* Above 1920px the rem grid keeps growing (the CSS media queries cover everything below). */
-    (function () {{
-      var fit = function () {{
-        var w = innerWidth, h = document.documentElement;
-        if (w <= 1920) {{ h.style.fontSize = ""; return; }}
-        var reduction = ((1920 - w) / 1920) * 100 * 0.6666, size = 16 - 16 * reduction / 100;
-        h.style.fontSize = size > 16 ? size + "px" : "";
-      }};
-      fit(); addEventListener("resize", fit);
-    }})();
-  </script>
+{HERO_PRELOAD if p.get("hero_preload") else ""}  <link rel="modulepreload" href="/assets/site.js?v={ver("assets/site.js")}">
+  <link rel="stylesheet" href="/assets/site.css?v={ver("assets/site.css")}">
+{p.get("css", "")}  <script>document.documentElement.classList.add("js")</script>
   <script type="application/ld+json">
 {json.dumps(p["ld"] if len(p["ld"]) > 1 else p["ld"][0], indent=1, ensure_ascii=False)}
   </script>
@@ -227,19 +223,19 @@ def head(p):
 
 def mark_current(markup, nav):
     """aria-current on the header/menu links that point at this page."""
-    return re.sub(rf'(<a href="{re.escape(nav)}")(?=[ >])', r'\1 aria-current="page"', markup)
+    return re.sub(rf'(<a (?:class="[^"]*" )?href="{re.escape(nav)}")(?=[ >])', r'\1 aria-current="page"', markup) if nav else markup
 
 
 def render(p, body=None):
     """A whole page: shared head, header, floating bar, footer, menu and demo form around `body`."""
     hdr = mark_current(read("partials/hdr.html"), p.get("nav", ""))
-    body = (body if body is not None else p["body"]()).replace("{{hdr}}", hdr.rstrip("\n"))
-    menu = mark_current(read("partials/menu.html"), p.get("nav", ""))
-    out = (head(p) + read("partials/sprite.html") + "\n" + read("partials/minibar.html") + "\n<main id=\"main\">\n\n"
-           + body + section("cta") + "</main>\n\n" + menu + "\n" + read("partials/modal.html")
+    body = body if body is not None else p["body"]()
+    out = (head(p).replace("<body>", '<body class="has-subnav">' if "data-subnav" in body else "<body>")
+           + read("partials/sprite.html") + "\n" + hdr + "\n<main id=\"main\">\n\n"
+           + body + section("cta") + "</main>\n\n" + read("partials/modal.html")
            + '''<script defer src="/site.config.js"></script>
 <script defer src="/marketing.js"></script>
-<script type="module" src="/assets/site.js"></script>
+<script type="module" src="/assets/site.js?v=''' + ver("assets/site.js") + '''"></script>
 </body>
 </html>
 ''')

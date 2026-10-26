@@ -26,22 +26,10 @@
   <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
   <link rel="manifest" href="/site.webmanifest">
   <link rel="preload" href="/assets/fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="modulepreload" href="/assets/site.js">
-  <link rel="stylesheet" href="/assets/site.css">
-  <link rel="stylesheet" href="/assets/sub.css">
-  <script>
-    document.documentElement.classList.add("js");
-    /* Above 1920px the rem grid keeps growing (the CSS media queries cover everything below). */
-    (function () {
-      var fit = function () {
-        var w = innerWidth, h = document.documentElement;
-        if (w <= 1920) { h.style.fontSize = ""; return; }
-        var reduction = ((1920 - w) / 1920) * 100 * 0.6666, size = 16 - 16 * reduction / 100;
-        h.style.fontSize = size > 16 ? size + "px" : "";
-      };
-      fit(); addEventListener("resize", fit);
-    })();
-  </script>
+  <link rel="modulepreload" href="/assets/site.js?v=94d9eab2">
+  <link rel="stylesheet" href="/assets/site.css?v=17abdd83">
+  <link rel="stylesheet" href="/assets/sub.css?v=11d4eb8d">
+  <script>document.documentElement.classList.add("js")</script>
   <script type="application/ld+json">
 {
  "@context": "https://schema.org",
@@ -69,35 +57,80 @@
 </svg>
 
 
-<!-- Floating bar after the hero -->
-<div class="minibar" id="minibar">
-  <a href="/" class="wordmark" aria-label="Tekly home"><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#mark" class="nut"/></svg>tekly</a>
-  <a class="btn btn-solid btn-sm" data-app="signup" href="#start" data-spring="nudge">Start free trial <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
-  <button class="burger" type="button" aria-label="Open menu" aria-controls="menu" aria-expanded="false" data-open-menu><span class="burger-lines" aria-hidden="true"><span></span><span></span></span></button>
-</div>
+<header class="site-hdr" id="siteHdr">
+  <div class="hdr-in">
+    <a href="/" class="wordmark" aria-label="Tekly home"><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#mark" class="nut"/></svg>tekly</a>
+    <nav class="hdr-nav" aria-label="Primary">
+      <div class="nav-item" data-dd>
+        <button class="nav-link" type="button" aria-expanded="false" aria-controls="dd-product">Product <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5L6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <div class="dd" id="dd-product">
+          <a href="/product/"><b>Product tour</b><span>Everything Tekly does, from check-in to payout</span></a>
+          <a href="/product/#approvals"><b>Approvals</b><span>Customers approve each line on their phone</span></a>
+          <a href="/product/#inventory"><b>Inventory &amp; parts</b><span>Parts booked to the job, stock across locations</span></a>
+          <a href="/product/#money"><b>Money &amp; payroll</b><span>POS, invoices, commissions, profit per job</span></a>
+          <a href="/product/#go"><b>Tekly Go app</b><span>The phone app for technicians</span></a>
+          <a href="/product/#ai"><b>AI &amp; Sense</b><span>Drafts and suggestions; a person always sends</span></a>
+          <hr>
+          <a href="/product/#features"><b>All features</b></a>
+          <a href="/changelog/"><b>What's new</b></a>
+        </div>
+      </div>
+      <div class="nav-item" data-dd>
+        <button class="nav-link" type="button" aria-expanded="false" aria-controls="dd-ind">Industries <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5L6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <div class="dd" id="dd-ind">
+          <a href="/phone-repair-software/"><b>Phone &amp; computer repair</b><span>IMEI or serial at intake, passcodes encrypted</span></a>
+          <a href="/auto-repair-shop-software/"><b>Auto repair</b><span>Cars, trucks, RVs and bikes by VIN or plate</span></a>
+          <a href="/small-engine-repair-software/"><b>Small engine &amp; tools</b><span>Mowers, saws, generators, power tools</span></a>
+          <a href="/marine-repair-software/"><b>Marine repair</b><span>Outboards, inboards and hulls by HIN</span></a>
+          <hr>
+          <a href="/#industries"><b>More than one trade or location?</b><span>Several templates and locations in one account</span></a>
+        </div>
+      </div>
+      <div class="nav-item"><a class="nav-link" href="/pricing/">Pricing</a></div>
+      <div class="nav-item" data-dd>
+        <button class="nav-link" type="button" aria-expanded="false" aria-controls="dd-res">Resources <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5L6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <div class="dd" id="dd-res">
+          <a href="/compare/"><b>Compare Tekly</b><span>With RepairDesk, Shopmonkey, RepairShopr and more</span></a>
+          <a href="/guides/choose-repair-shop-software/"><b>How to choose repair shop software</b><span>A checklist before you switch</span></a>
+          <a href="/pricing/#faq"><b>FAQ</b></a>
+          <a href="/about/"><b>About Tekly</b></a>
+        </div>
+      </div>
+    </nav>
+    <div class="hdr-right">
+      <a class="text-link" data-app="signin" href="#start">Sign in</a>
+      <button class="btn btn-outline" type="button" data-open-demo>Book a demo</button>
+      <a class="btn btn-solid" data-app="signup" href="#start">Start free trial</a>
+      <button class="menu-btn" type="button" aria-label="Open menu" aria-controls="sheet" aria-expanded="false" data-menu><span aria-hidden="true"></span></button>
+    </div>
+  </div>
+</header>
+<nav class="sheet" id="sheet" aria-label="Menu" hidden>
+  <details><summary>Product <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5L6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></summary>
+    <a href="/product/">Product tour</a><a href="/product/#approvals">Approvals</a><a href="/product/#inventory">Inventory &amp; parts</a><a href="/product/#money">Money &amp; payroll</a><a href="/product/#go">Tekly Go app</a><a href="/product/#ai">AI &amp; Sense</a><a href="/product/#features">All features</a><a href="/changelog/">What's new</a>
+  </details>
+  <details><summary>Industries <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5L6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></summary>
+    <a href="/phone-repair-software/">Phone &amp; computer repair</a><a href="/auto-repair-shop-software/">Auto repair</a><a href="/small-engine-repair-software/">Small engine &amp; tools</a><a href="/marine-repair-software/">Marine repair</a>
+  </details>
+  <a href="/pricing/">Pricing</a>
+  <details><summary>Resources <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5L6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></summary>
+    <a href="/compare/">Compare Tekly</a><a href="/guides/choose-repair-shop-software/">How to choose repair shop software</a><a href="/pricing/#faq">FAQ</a><a href="/about/">About Tekly</a>
+  </details>
+  <div class="sheet-ctas">
+    <a class="btn btn-solid" data-app="signup" href="#start">Start free trial</a>
+    <button class="btn btn-outline" type="button" data-open-demo>Book a demo</button>
+    <a class="text-link" data-app="signin" href="#start">Sign in</a>
+  </div>
+</nav>
 
 <main id="main">
 
 <!-- ════════ PAGE TITLE ════════ -->
-<section class="phero on-dark" id="top" aria-labelledby="pageTitle">
-  <header class="hdr">
-    <nav class="hdr-nav" aria-label="Primary">
-      <a href="/product/">Product</a>
-      <a href="/#industries">Every trade</a>
-      <a href="/pricing/">Pricing</a>
-      <a href="/compare/">Compare</a>
-      <a href="/about/">About</a>
-    </nav>
-    <a href="/" class="wordmark" aria-label="Tekly home"><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#mark"/></svg>tekly</a>
-    <div class="hdr-right">
-      <a class="text-btn" data-app="signin" href="#start">Sign in</a>
-      <button class="text-btn" type="button" data-open-demo data-spring="nudge">Book a demo <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></button>
-      <button class="burger glass" type="button" aria-label="Open menu" aria-controls="menu" aria-expanded="false" data-open-menu><span class="burger-lines" aria-hidden="true"><span></span><span></span></span></button>
-    </div>
-  </header>
+<section class="phero" id="top" aria-labelledby="pageTitle">
   <div class="phero-body">
     <nav class="crumbs" aria-label="Breadcrumb"><a href="/">Tekly</a><span aria-hidden="true">/</span><span aria-current="page">Terms of service</span></nav>
-    <h1 id="pageTitle" data-reveal="words">Terms of service</h1>
+    <h1 id="pageTitle">Terms of service</h1>
+    <p class="phero-lede"></p>
     
   </div>
 </section>
@@ -189,49 +222,17 @@
 
   <footer class="foot">
     <div><a href="/" class="wordmark"><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#mark"/></svg>tekly</a><p class="about-f">Repair shop software, from the first complaint to the final payment.</p></div>
-    <div><p class="foot-h">Product</p><ul><li><a href="/product/#flow">How a job moves</a></li><li><a href="/product/#ai">Tekly AI</a></li><li><a href="/changelog/">What's new</a></li><li><a href="/#industries">Every trade</a></li><li><a href="/pricing/">Pricing</a></li></ul></div>
-    <div><p class="foot-h">Software for</p><ul><li><a href="/phone-repair-software/">Phone &amp; computer repair</a></li><li><a href="/auto-repair-shop-software/">Auto repair shops</a></li><li><a href="/small-engine-repair-software/">Small engine &amp; tools</a></li><li><a href="/marine-repair-software/">Marine repair</a></li></ul></div>
-    <div><p class="foot-h">Compare</p><ul><li><a href="/compare/tekly-vs-repairdesk/">Tekly vs RepairDesk</a></li><li><a href="/compare/tekly-vs-shopmonkey/">Tekly vs Shopmonkey</a></li><li><a href="/compare/tekly-vs-tekmetric/">Tekly vs Tekmetric</a></li><li><a href="/compare/">All comparisons</a></li><li><a href="/guides/choose-repair-shop-software/">How to choose</a></li></ul></div>
-    <div><p class="foot-h">Company</p><ul><li><a href="/about/">About us</a></li><li><a href="#start" data-open-demo>Book a demo</a></li><li><a data-mail href="#start">Contact</a></li><li><a href="/pricing/#faq">FAQ</a></li></ul></div>
-    <div><p class="foot-h">Account</p><ul><li><a data-app="signin" href="#start">Sign in</a></li><li><a data-app="signup" href="#start">Start free trial</a></li></ul></div>
+    <div><p class="foot-h">Product</p><ul><li><a href="/product/">Product tour</a></li><li><a href="/product/#features">All features</a></li><li><a href="/pricing/">Pricing</a></li><li><a href="/changelog/">What's new</a></li></ul></div>
+    <div><p class="foot-h">Industries</p><ul><li><a href="/phone-repair-software/">Phone &amp; computer repair</a></li><li><a href="/auto-repair-shop-software/">Auto repair</a></li><li><a href="/small-engine-repair-software/">Small engine &amp; tools</a></li><li><a href="/marine-repair-software/">Marine repair</a></li></ul></div>
+    <div><p class="foot-h">Compare</p><ul><li><a href="/compare/tekly-vs-repairdesk/">Tekly vs RepairDesk</a></li><li><a href="/compare/tekly-vs-shopmonkey/">Tekly vs Shopmonkey</a></li><li><a href="/compare/tekly-vs-repairshopr/">Tekly vs RepairShopr</a></li><li><a href="/compare/tekly-vs-tekmetric/">Tekly vs Tekmetric</a></li><li><a href="/compare/tekly-vs-orderry/">Tekly vs Orderry</a></li></ul></div>
+    <div><p class="foot-h">Resources</p><ul><li><a href="/guides/choose-repair-shop-software/">How to choose</a></li><li><a href="/pricing/#faq">FAQ</a></li><li><a href="/compare/">All comparisons</a></li></ul></div>
+    <div><p class="foot-h">Company</p><ul><li><a href="/about/">About us</a></li><li><a href="#start" data-open-demo>Book a demo</a></li><li><a data-mail href="#start">Contact</a></li><li><a data-app="signin" href="#start">Sign in</a></li></ul></div>
   </footer>
   <div class="legal"><span>© <span id="yr">2026</span> Tekly</span><span><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a></span><span>Product screens show sample data.</span></div>
   <details class="credits"><summary>Photo credits</summary><ul><li>Repair lab 1: <a href="https://commons.wikimedia.org/wiki/File:Repair_Lab_(48115787881).jpg" rel="noopener">Redaktion NdW</a>, CC BY 2.0 (<a href="https://creativecommons.org/licenses/by/2.0" rel="noopener license">licence</a>)</li><li>Repair lab 2: <a href="https://commons.wikimedia.org/wiki/File:Repair_Lab_(48115819418).jpg" rel="noopener">Redaktion NdW</a>, CC BY 2.0 (<a href="https://creativecommons.org/licenses/by/2.0" rel="noopener license">licence</a>)</li><li>Mechanic stool: <a href="https://commons.wikimedia.org/wiki/File:DSC_6745_A_mechanic_sitting_on_a_small_wooden_stool_working_on_the_front_suspension_of_a_raised_pickup_truck_in_a_garage.jpg" rel="noopener">PattayaPatrol</a>, CC BY-SA 4.0 (<a href="https://creativecommons.org/licenses/by-sa/4.0" rel="noopener license">licence</a>)</li><li>Generator red: <a href="https://commons.wikimedia.org/wiki/File:Portable_electrical_generator_side.jpg" rel="noopener">Wikimedia Commons</a>, CC BY-SA 3.0 (<a href="http://creativecommons.org/licenses/by-sa/3.0/" rel="noopener license">licence</a>)</li><li>Generator yard: <a href="https://commons.wikimedia.org/wiki/File:Let%27s_Generate!_(29004208321).jpg" rel="noopener">Alan Levine from Strawberry, United States</a>, CC BY 2.0 (<a href="https://creativecommons.org/licenses/by/2.0" rel="noopener license">licence</a>)</li><li>Outboard students: <a href="https://commons.wikimedia.org/wiki/File:Students_work_on_an_outboard_motor._(21258483309).jpg" rel="noopener">Official U.S. Navy Page from United States of America</a>, Public domain</li><li>Boat engine: <a href="https://commons.wikimedia.org/wiki/File:Engineer_person_working_on_boat_engine.jpg" rel="noopener">Hillebrand Steve, U.S. Fish and Wildlife Service</a>, Public domain</li><li>Hero, phone teardown, motorcycle, workshop, tool wall and screwdriver photos: Unsplash, <a href="https://unsplash.com/license" rel="noopener license">Unsplash License</a></li></ul></details>
-  <div class="foot-word" aria-hidden="true">tekly</div>
 </section>
 
 </main>
-
-<!-- ════════ FULLSCREEN MENU ════════ -->
-<div class="menu on-dark" id="menu" role="dialog" aria-modal="true" aria-label="Menu" hidden>
-  <div class="menu-bg"></div>
-  <div class="menu-in">
-    <div class="menu-top">
-      <a href="/" class="wordmark" data-close-menu><svg viewBox="0 0 64 64" aria-hidden="true"><use href="#mark"/></svg>tekly</a>
-      <button class="menu-x" type="button" aria-label="Close menu" data-close-menu data-spring="spin"><svg aria-hidden="true"><use href="#x"/></svg></button>
-    </div>
-    <nav class="menu-links" aria-label="Site">
-      <a href="/#industries" data-close-menu><span class="n">01</span>Every trade</a>
-      <a href="/product/" data-close-menu><span class="n">02</span>Product</a>
-      <a href="/pricing/" data-close-menu><span class="n">03</span>Pricing</a>
-      <a href="/product/#go" data-close-menu><span class="n">04</span>Tekly Go app</a>
-      <a href="/product/#ai" data-close-menu><span class="n">05</span>AI &amp; Sense</a>
-      <a href="/changelog/" data-close-menu><span class="n">06</span>What's new</a>
-      <a href="/compare/" data-close-menu><span class="n">07</span>Compare</a>
-      <a href="/about/" data-close-menu><span class="n">08</span>About us</a>
-      <a href="/product/#features" data-close-menu><span class="n">09</span>All features</a>
-      <a href="/pricing/#faq" data-close-menu><span class="n">10</span>FAQ</a>
-    </nav>
-    <div class="menu-bottom">
-      <div class="hero-ctas">
-        <a class="btn btn-light" data-app="signup" href="#start" data-spring="nudge">Start free trial <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
-        <button class="btn btn-outline" type="button" data-open-demo>Book a demo</button>
-      </div>
-      <div class="menu-social"><a data-app="signin" href="#start">Sign in</a><a data-mail href="#start">hello@tekly.app</a><a href="/privacy/">Privacy</a></div>
-    </div>
-  </div>
-</div>
-
 
 <!-- ════════ DEMO MODAL ════════ -->
 <div class="modal" id="demoModal" role="dialog" aria-modal="true" aria-labelledby="demoTitle" hidden>
@@ -250,6 +251,7 @@
         <div><label for="d-loc">Locations</label><select class="in" id="d-loc" name="locations"><option>1</option><option>2–3</option><option>4–10</option><option>10+</option></select></div>
         <div class="full"><label for="d-now">Using today <span class="opt">optional</span></label><input class="in" id="d-now" name="current" placeholder="Spreadsheets, RepairDesk, Shopmonkey…"></div>
         <div class="full"><label for="d-msg">Anything we should know? <span class="opt">optional</span></label><input class="in" id="d-msg" name="message" placeholder="Best days, what you'd like to see…"></div>
+        <p class="full mail-note" id="mailNote" hidden>Sending opens your email app with these details filled in — press send there and we'll reply to find a time.</p>
         <div class="full"><button class="btn btn-solid btn-wide" type="submit">Request a demo</button></div>
         <p class="full form-note">We use these details only to arrange your demo. See our <a class="link" href="/privacy/">privacy policy</a>.</p>
       </form>
@@ -265,6 +267,6 @@
 
 <script defer src="/site.config.js"></script>
 <script defer src="/marketing.js"></script>
-<script type="module" src="/assets/site.js"></script>
+<script type="module" src="/assets/site.js?v=94d9eab2"></script>
 </body>
 </html>

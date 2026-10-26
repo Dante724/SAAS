@@ -93,8 +93,8 @@ Home, `/product/`, `/pricing/`, `/about/` and `/changelog/` are built from `src/
 
 | Change | File |
 |---|---|
-| A section's copy or layout | `src/sections/<name>.html` (home: hero, intro, industries, home-tour, new, home-pricing; product: flow, feats, go, stats, ai, sense, switch, everything; pricing: pricing, faq; about: about, quotes) |
-| Header, floating bar, menu, demo form | `src/partials/` |
+| A section's copy or layout | `src/sections/<name>.html` (home: hero, intro, home-tour, industries, home-switch, home-pricing, home-faq; product: flow, feats, go, stats, ai, sense, switch, everything; pricing: pricing, faq; about: about, quotes) |
+| Header, phone menu, demo form | `src/partials/` (`hdr.html`, `modal.html`) |
 | Footer and the closing call to action | `src/sections/cta.html` |
 | Which sections each page shows, titles, descriptions, structured data | `PAGES` in `tools/build_site.py` |
 | Changelog cards | `src/sections/changelog-soon.cards.html` (coming soon) and `changelog-oct.cards.html` (shipped) |
@@ -104,11 +104,15 @@ Plans and prices still come from `site.config.js` (the pricing page renders them
 pricing strip has them written in, so update both). The FAQ's structured data lives in
 `src/jsonld.json` and must match the visible FAQ in `src/sections/faq.html`.
 
-- **Look and motion:** a light page of rounded card sections, Geist and midnight sapphire; a photo
-  hero on home and a navy title card on the other pages; spring hovers, compositor reveals,
-  a CSS scroll-timeline hero parallax (no JavaScript on scroll, native scrolling), the trade cards' example-job boards (all four change together every 7s),
-  sticky tabs on the product page. `prefers-reduced-motion` turns motion off.
-- **Coming soon:** the changelog's "Coming soon" cards and the three on home describe features
+- **Look and motion ("Daylight", chosen with the design council, Oct 2026):** a white page with
+  full-width sections in a 1200px column, Geist and midnight sapphire, navy only for the closing call to
+  action and footer. One sticky header on every page (Product, Industries, Pricing, Resources dropdowns;
+  a menu sheet on phones). Nothing changes on its own: content fades in once as it scrolls into view;
+  trade cards and job steps change only when clicked. Native scrolling; `prefers-reduced-motion` turns
+  the fade off. Stylesheet and script links carry a content hash (`?v=`) so updates aren't cached.
+- **Home order:** hero (with links to the four industry pages) → works-with strip → product tour →
+  every trade → switching → pricing line → top questions (FAQPage data matches them) → call to action.
+- **Coming soon:** the changelog's "Coming soon" cards describe features
   from open PRs #12–#28; move them to a shipped month as they merge.
 - **Placeholders:** the founder note on About and the customer-quotes section stay `hidden` until
   real, permissioned words exist (`PLACEHOLDER` comments).

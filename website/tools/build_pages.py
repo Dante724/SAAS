@@ -224,7 +224,7 @@ def page(p):
     main = f'''
 <section class="hero sub-hero">
   <div class="wrap">
-    <nav class="crumbs" aria-label="Breadcrumb"><a href="/">Tekly</a><span aria-hidden="true">/</span><span>{e(p["template"])} template</span></nav>
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="/">Tekly</a><span aria-hidden="true">/</span><span>{e(p["h1"])}</span></nav>
     <h1 class="h-display">{e(p["h1"])}</h1>
     <p class="hero-sub">{e(p["lead"])}</p>
     <div class="hero-ctas"><a class="btn btn-brand btn-lg" data-app="signup" data-cta="hero_trial" href="/#start">Start free trial</a><a class="btn btn-ghost btn-lg" href="/#start" data-cta="hero_demo">Book a demo</a></div>
@@ -308,7 +308,7 @@ def shell(p, url, main, ld):
         main = main.replace(t.group(0), "")
         crumbs = f'<a href="/">Tekly</a><span aria-hidden="true">/</span><span>{h1}</span>'
     crumbs = re.sub(r'<span>([^<]*)</span>$', r'<span aria-current="page">\1</span>', crumbs.strip())
-    ctas = ('<div class="hero-ctas phero-ctas" data-hero-fade><a class="btn btn-light" data-app="signup" href="#start" data-spring="nudge">Start free trial '
+    ctas = ('<div class="hero-ctas phero-ctas"><a class="btn btn-solid" data-app="signup" href="#start" data-spring="nudge">Start free trial '
             '<svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a><button class="btn btn-outline" type="button" data-open-demo>Book a demo</button></div>'
             + (f'<p class="hero-fine">{fine}</p>' if fine else ""))
     top = build_site.phero("", h1, lead, ctas if m else "", crumbs_html=crumbs)
@@ -316,7 +316,7 @@ def shell(p, url, main, ld):
         top = top.replace('    <p class="phero-lede" data-hero-fade></p>\n', "")
     nav = "/compare/" if path.startswith("/compare/") else "/#industries" if p.get("slug") in {x["slug"] for x in PAGES} else ""
     page = {"path": path, "title": html.unescape(p["title"]), "desc": html.unescape(p["desc"]), "nav": nav, "ld": ld if isinstance(ld, list) else [ld],
-            "css": '  <link rel="stylesheet" href="/assets/sub.css">\n'}
+            "css": f'  <link rel="stylesheet" href="/assets/sub.css?v={build_site.ver("assets/sub.css")}">\n'}
     return build_site.render(page, top + wrap_legacy(main))
 
 
@@ -398,10 +398,9 @@ LEGACY_FIXES = """
 .legacy { color: var(--ink-2); }
 .js .legacy .rv { transition-duration: .55s; }
 /* The card itself keeps the shell's shape (styles.css redefines --r-lg inside .legacy). */
-.card-sec.legacy { border-radius: 2rem; }
-.legacy .eyebrow { display: inline-flex; align-items: center; gap: .625rem; letter-spacing: .22em; }
-.legacy .eyebrow::before { content: ""; width: .4375rem; height: .4375rem; border-radius: 50%; background: #1c5fd6; flex: none; }
-@media (max-width: 639px) { .card-sec.legacy { border-radius: 1.5rem; } }
+.card-sec.legacy { border-radius: 0; }
+.legacy .eyebrow { display: inline-block; font-family: "Geist", system-ui, sans-serif; font-size: 14px; font-weight: 500; letter-spacing: 0; text-transform: none; color: #1c5fd6; }
+.legacy .eyebrow::before { content: none; }
 """
 
 def faq_ld(items):
