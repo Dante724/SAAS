@@ -828,7 +828,7 @@ class CompanyIn(BaseModel):
     default_due_days: Optional[int] = None
     default_comment_visibility: Optional[str] = None
     default_file_visibility: Optional[str] = None
-    public_employee_name: Optional[str] = None          # WS-C #18: full | first | first_initial
+    public_employee_name: Optional[str] = None          # full | first | first_initial | custom
     warranty_count_from: Optional[str] = None
     asset_one_open_ticket: Optional[bool] = None
     multi_asset_jobs: Optional[bool] = None            # several items per job (eligible industries only)
@@ -865,8 +865,10 @@ async def update_company(
     for k in ("default_comment_visibility", "default_file_visibility"):
         if k in payload and payload[k] not in ("private", "public"):
             raise HTTPException(422, "Visibility must be private or public")
-    if "public_employee_name" in payload and payload["public_employee_name"] not in ("full", "first", "first_initial"):
-        raise HTTPException(422, "Name display must be full, first or first_initial")
+    if "public_employee_name" in payload:
+        from backend.services.public_name import MODES as _name_modes
+        if payload["public_employee_name"] not in _name_modes:
+            raise HTTPException(422, f"public_employee_name must be one of {list(_name_modes)}")
     if payload.get("max_sessions_per_login") is not None:
         from backend.services.sessions import LIMIT_CHOICES
         if payload["max_sessions_per_login"] not in LIMIT_CHOICES:
@@ -1025,6 +1027,7 @@ async def get_public_pages(
         "oe_allow_recommend": getattr(org, "oe_allow_recommend", True),
         "oe_show_scheduled": getattr(org, "oe_show_scheduled", False),
         "book_show_employee_step": getattr(org, "book_show_employee_step", True),
+        "public_employee_name": getattr(org, "public_employee_name", None) or "full",
         "auto_draft_invoice_on_close": getattr(org, "auto_draft_invoice_on_close", False),
         "default_invoice_display": getattr(org, "default_invoice_display", "detailed"),
         "oe_allow_staff_reply": getattr(org, "oe_allow_staff_reply", True),
@@ -1064,6 +1067,7 @@ class PublicPagesIn(BaseModel):
     oe_allow_staff_reply: Optional[bool] = None
     oe_show_scheduled: Optional[bool] = None            # 144dr
     book_show_employee_step: Optional[bool] = None      # 144dr
+    public_employee_name: Optional[str] = None          # full | first | first_initial | custom
     oe_wo_allow_approval: Optional[bool] = None         # 144ih
     oe_approval_statuses: Optional[str] = None          # 144ih comma-separated status keys
     oe_wo_approval_statuses: Optional[str] = None       # 144ih
@@ -1092,7 +1096,12 @@ async def update_public_pages(
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
     if not org:
         raise HTTPException(404, "Company not found")
-    for k, v in data.model_dump(exclude_unset=True).items():
+    payload = data.model_dump(exclude_unset=True)
+    if "public_employee_name" in payload:
+        from backend.services.public_name import MODES
+        if payload["public_employee_name"] not in MODES:
+            raise HTTPException(422, f"public_employee_name must be one of {list(MODES)}")
+    for k, v in payload.items():
         setattr(org, k, v)
     await db.commit()
     return {"ok": True}

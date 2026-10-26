@@ -12,9 +12,6 @@ from backend.core.jobs import job_runner
 
 log = logging.getLogger("tekly.jobs")
 
-_MAX_ATTEMPTS = 5
-
-
 @job_runner.every(600, "status-sla-sweep")
 async def sweep_status_sla() -> None:
     """Flag work orders that have exceeded their status time limit.
@@ -89,40 +86,15 @@ async def sweep_contact_lifecycle() -> None:
             log.info("contact-lifecycle-sweep: sent %d birthday message(s)", sent)
 
 
-@job_runner.every(300, "webhook-retry-sweep")
+@job_runner.every(60, "webhook-retry-sweep")
 async def retry_failed_webhooks() -> None:
-    """Re-attempt webhook deliveries that failed, with a hard attempt cap.
+    """Re-attempt webhook deliveries on the backoff schedule (1m, 5m, 30m, 2h, 8h, 24h), reclaim
+    rows a crashed worker left in "sending", and switch off endpoints that have failed for 24 hours.
+    The work lives in services.webhooks.retry_sweep (concurrent, bounded per endpoint)."""
+    from backend.services.webhooks import retry_sweep
 
-    Moves transient webhook failures off the request path: the original POST is
-    best-effort during the request; this sweep gives it durable retries.
-    """
-    from backend.db.database import AsyncSessionLocal
-    from backend.models import WebhookDelivery, WebhookEndpoint
-    from backend.services.webhooks import _attempt, claim_delivery
-
-    async with AsyncSessionLocal() as db:
-        rows = (await db.execute(
-            select(WebhookDelivery).where(
-                WebhookDelivery.status.in_(("failed", "pending")),
-                WebhookDelivery.attempts < _MAX_ATTEMPTS,
-            ).limit(100)
-        )).scalars().all()
-        if not rows:
-            return
-        retried = 0
-        for d in rows:
-            ep = (await db.execute(
-                select(WebhookEndpoint).where(WebhookEndpoint.id == d.endpoint_id)
-            )).scalar_one_or_none()
-            if not ep or not ep.active:
-                d.status = "abandoned"
-                continue
-            if not await claim_delivery(db, d, ("failed", "pending")):
-                continue      # another worker (or the post-commit outbox) is on it
-            await _attempt(d, ep.url, ep.secret, d.payload)
-            await db.commit()
-            retried += 1
-        await db.commit()
+    retried = await retry_sweep()
+    if retried:
         log.info("webhook-retry-sweep: re-attempted %d delivery(ies)", retried)
 
 

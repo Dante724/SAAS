@@ -183,6 +183,8 @@ async def list_assets(
     n_all = (await db.execute(select(func.count(Device.id)).where(*conds))).scalar() or 0
     n_wo = (await db.execute(select(func.count(Device.id)).where(*conds, written_off))).scalar() or 0
     state_counts = {"active": n_all - n_wo, "written_off": n_wo, "all": n_all}
+    if state not in (None, "", "all", "active", "written_off"):
+        raise HTTPException(422, "state must be active, written_off or all")
     q = select(Device).where(*conds)
     if state == "active":
         q = q.where(or_(Device.asset_status.is_(None), Device.asset_status != "written_off"))

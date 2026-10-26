@@ -33,11 +33,13 @@ async def test_inbox_webhook_rejects_missing_or_wrong_token(client, tenant):
 
 
 @pytest.mark.asyncio
-async def test_unknown_org_is_404_not_401(client):
-    """Probing with a fabricated org id must not reveal whether ids exist."""
+async def test_unknown_org_gets_the_same_401(client):
+    """Probing with a fabricated org id must not reveal whether ids exist (whh1 B8: the same
+    401 as a wrong token, rather than a telltale 404)."""
     r = await client.post("/api/inbox/webhook/not-a-real-org", json={
-        "channel": "sms", "handle": "+1", "body": "x"})
-    assert r.status_code == 404
+        "channel": "sms", "handle": "+1", "body": "x"}, headers={"X-Webhook-Token": "guess"})
+    assert r.status_code == 401
+    assert r.json()["detail"] == "Invalid or missing X-Webhook-Token"
 
 
 @pytest.mark.asyncio

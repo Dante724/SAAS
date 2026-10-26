@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime as _dt
 from backend.db.database import get_db
-from backend.services.public_names import display_name as _public_name
 from backend.models import (
     Order, Client, Device, Organisation, Location,
     OrderStatusLog, EventFeedItem, DocumentSignature,
@@ -131,6 +130,13 @@ async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
     estimate to the appropriate status, auto-converting on accept when configured.
     """
     verb = "accepted" if decision == "accept" else "declined"
+    if decision == "accept" and order.is_estimate:
+        try:
+            from backend.services.webhooks import emit_event
+            await emit_event(db, order.org_id, "estimate.accepted", {
+                "id": order.id, "number": order.order_number, "total": order.total})
+        except Exception:  # noqa: BLE001 — webhooks never block the customer's decision
+            pass
     db.add(EventFeedItem(
         org_id=order.org_id, entity_type="order", entity_id=order.id,
         item_type="comment", body=f"Customer {verb} the estimate",
@@ -147,9 +153,6 @@ async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
 
     # 144ig — always record a tamper-evident signed-approval certificate (estimate OR work order)
     await _record_signature(db, order, decision, signature, who, request)
-    if decision == "accept" and order.is_estimate:   # WS-C: was registered but never fired
-        from backend.services.webhooks import emit_event
-        await emit_event(db, order.org_id, "estimate.accepted", {"id": order.id, "number": order.order_number})
 
     from backend.models import OrderStatus, OrderStatusLog
     converted_id = None
@@ -934,6 +937,7 @@ async def portal_decide_recs(token: str, order_id: str, data: RecDecideIn, reque
 # ════════════════════════════════════════════════════════════
 from datetime import datetime, timedelta, time as dt_time
 from backend.models import Organisation as _Org, Service, Employee, Appointment, Client, Order
+from backend.services.public_name import public_staff_name
 from backend.services.money import q2
 
 
@@ -1105,7 +1109,9 @@ async def appointment_config(slug: str, response: Response, db: AsyncSession = D
                       "employee_ids": getattr(s, "allowed_employee_ids", None) or [],
                       "category": (_svc_cats.get(s.category_id) if s.category_id else None) or s.category}
                      for s in services],
-        "staff": [{"id": e.id, "name": _public_name(e, getattr(org, "public_employee_name", None))}
+        # Customers see the name the shop chose (Settings › Public pages): full, first,
+        # first + initial, or custom.
+        "staff": [{"id": e.id, "name": public_staff_name(e, getattr(org, "public_employee_name", None))}
                   for e in staff],
         "locations": [{"id": l.id, "name": l.name,
                        "address": l.address, "phone": l.phone,

@@ -190,6 +190,13 @@ async def _closed_ready_keys(db, org_id):
     return {s.key for s in rows}
 
 
+async def _dropped_keys(db, org_id) -> list:
+    """Status keys in the Dropped group. A dropped job earned nothing (its unpaid balance is
+    written off), so profit reports leave it out instead of counting its lines as revenue."""
+    return [k for (k,) in (await db.execute(select(OrderStatus.key).where(
+        OrderStatus.org_id == org_id, OrderStatus.status_group == "dropped"))).all()]
+
+
 # ── The report builders. Each returns (columns, rows). ──
 
 def _loc_filter(q, kw):
@@ -333,7 +340,9 @@ async def _rep_technicians(db, org, df, dt, **kw):
     """Per-technician: orders closed, revenue, line-level profit."""
     lines = (await db.execute(
         select(OrderLine, Order).join(Order, OrderLine.order_id == Order.id)
-        .where(Order.org_id == org, Order.created_at >= df, Order.created_at <= dt))).all()
+        .where(Order.org_id == org, Order.created_at >= df, Order.created_at <= dt,
+               Order.is_estimate == False,                              # noqa: E712
+               Order.status.notin_(await _dropped_keys(db, org))))).all()
     emp = {e.id: e.name for e in (await db.execute(select(Employee).where(Employee.org_id == org))).scalars().all()}
     # 144aw — attribute revenue/cost by the SAME split rule payroll uses (co_technicians →
     # single tech → order assignee), so this report reconciles with the commission ledger.

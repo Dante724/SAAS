@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
-import { autoPrintAfterCreate } from "../../lib/autoPrint";
+import { autoPrintForJob } from "../../lib/autoPrint";
 import InquiryFields from "./InquiryFields";
 import { callsLabel, changes, channelLabel, fmt, sla, SRC_ICON, type FeedItem, type Lead, type LeadType } from "./inquiries";
 
@@ -72,7 +72,7 @@ export default function InquiryDrawer({ lead, types, onClose, onChanged, onOpenO
   const convert = (estimate: boolean) => run(async () => {
     if (dirty) await api.patch(`/leads/${lead.id}`, diff);
     const r = await api.post<any>(`/leads/${lead.id}/convert?is_estimate=${estimate}`, {});
-    if (!estimate && r?.order_id) void autoPrintAfterCreate(r.order_id);
+    if (!estimate && r?.order_id) void autoPrintForJob(r.order_id);
     return r;
   }, (r) => `${estimate ? "Estimate" : "Job"} ${r.order_number} created`);
 

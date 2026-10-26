@@ -167,7 +167,12 @@ from backend.core.client_source import ClientSourceMiddleware  # noqa: E402
 
 app.add_middleware(ClientSourceMiddleware)
 app.add_middleware(RequestContextMiddleware)
-from backend.core.observability import MetricsMiddleware, RateLimitMiddleware, SecurityHeadersMiddleware
+from backend.core.observability import (  # noqa: E402
+    MetricsMiddleware,
+    RateLimitMiddleware,
+    SecurityHeadersMiddleware,
+    is_public_api_path,
+)
 
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(MetricsMiddleware)
@@ -176,8 +181,23 @@ from backend.core.body_limit import BodySizeLimitMiddleware
 
 # Inside CORS so a 413 still carries CORS headers and the browser can show the message.
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.MAX_REQUEST_BYTES)
+class _CorsExceptPublicApi(CORSMiddleware):
+    """CORS for the app's own browser screens only. /api/v1 is called server to server with a
+    secret key, so browsers on other sites get no CORS grant for it (A11): a key pasted into a
+    web page can't be used from there, and preflights get no allow headers."""
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            if is_public_api_path(scope.get("path", "")):
+                return await self.app(scope, receive, send)
+        return await super().__call__(scope, receive, send)
+
+
+from backend.core.observability import PublicApiTransportMiddleware  # noqa: E402
+
+# Deployed: /api/v1 and /api/v2 over plain HTTP are refused with 403 (A11).
+app.add_middleware(PublicApiTransportMiddleware)
 app.add_middleware(
-    CORSMiddleware,
+    _CorsExceptPublicApi,
     allow_origins=settings.cors_origin_list,
     # Credentials cannot be combined with a wildcard origin (CORS spec); only
     # enable them for an explicit allowlist.

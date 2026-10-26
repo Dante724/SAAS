@@ -25,10 +25,10 @@ import LocationsPage from "./LocationsPage";
 import { TeamPage, RoleEditor, Avatar } from "./TeamSettings";
 import { ChecklistList, ChecklistEditor } from "./ChecklistSettings";
 import CardReadersCard from "./CardReadersCard";
+import ApiKeysCard from "./ApiKeysCard";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
 import TelephonySettings from "./TelephonySettings";
-import ApiKeysCard from "./ApiKeysCard";
-
+import WebhooksSettings from "./WebhooksSettings";
 
 // Full section set = the registry sections + a few that have no nav entry of their own.
 type Section = SectionId | "overview" | "automation" | "payroll-rules";
@@ -259,6 +259,8 @@ export default function SettingsHub() {
         prohibit_dup_phone: co.prohibit_dup_phone, prohibit_dup_email: co.prohibit_dup_email,
         require_mfa: co.require_mfa, clock_wo_enabled: co.clock_wo_enabled, clock_attendance_enabled: co.clock_attendance_enabled,
         clock_labour_billing: co.clock_labour_billing, rounding_enabled: co.rounding_enabled,
+        default_comment_visibility: co.default_comment_visibility || "private",
+        default_file_visibility: co.default_file_visibility || "private",
       });
       // Switching industry also seeds its starter brands/models and refreshes the app's wording.
       const prevInd = coSaved.current?.industry_template;
@@ -448,7 +450,7 @@ export default function SettingsHub() {
               <IntegrationsHub data={integrations} goSection={setSec} reload={() => setIntegrations(null)} />
               <CardReadersCard />
               <TelephonySettings />
-              <ApiKeysSection />
+              <ApiKeysCard />
               <WebhooksCard />
             </div>
           )}
@@ -1233,28 +1235,9 @@ function CredDrawer({ provider, status, onClose, onSaved }: {
     </div>, document.body);
 }
 
-/* ── API keys → ./ApiKeysCard (WS-C: scoped keys, per-key limits) ── */
-function ApiKeysSection() { return <ApiKeysCard Card={SectionCard} />; }
-
-/* ── Webhooks (create / delete) → /webhooks ── */
+/* ── Webhooks → /webhooks (B15: endpoints, events, delivery log, test, secret) ── */
 function WebhooksCard() {
-  const [hooks, setHooks] = useState<any[] | null>(null);
-  const [events, setEvents] = useState<string[]>([]);
-  const [nf, setNf] = useState({ url: "", events: "*" }); const [busy, setBusy] = useState(false);
-  const load = () => api.get<any>("/webhooks").then((r) => { setHooks(r.items || []); setEvents(r.available_events || []); }).catch(() => setHooks([]));
-  useEffect(() => { load(); }, []);
-  async function create() { if (!nf.url.trim()) return; setBusy(true); try { await api.post("/webhooks", { url: nf.url.trim(), events: nf.events }); setNf({ url: "", events: nf.events }); load(); } catch (e: any) { alertDialog(e.message); } finally { setBusy(false); } }
-  async function remove(id: string) { if (!(await confirmDialog("Delete this webhook?", { danger: true, confirmLabel: "Delete" }))) return; try { await api.del(`/webhooks/${id}`); load(); } catch (e: any) { alertDialog(e.message); } }
-  return (
-    <SectionCard title="Webhooks" count={hooks?.length ?? undefined}>
-      <div className="p-4 flex items-end gap-2">
-        <div className="flex-1"><label className={lbl}>Endpoint URL</label><input value={nf.url} onChange={(e) => setNf({ ...nf, url: e.target.value })} placeholder="https://example.com/hook" className={field} /></div>
-        <div><label className={lbl}>Events</label><select value={nf.events} onChange={(e) => setNf({ ...nf, events: e.target.value })} className={field}><option value="*">All events</option>{events.map((e) => <option key={e} value={e}>{e}</option>)}</select></div>
-        <button onClick={create} disabled={busy} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">Create</button>
-      </div>
-      <SecTable rows={hooks} onDelete={(w) => remove(w.id)} cols={[["URL", (w) => w?.url || "—"], ["Events", (w) => w?.events || "*"], ["Active", (w) => (w?.active === false ? "Off" : "On")]]} />
-    </SectionCard>
-  );
+  return <WebhooksSettings />;
 }
 
 function SectionCard({ title, count, onAdd, children }: { title: string; count?: number; onAdd?: () => void; children: React.ReactNode }) {

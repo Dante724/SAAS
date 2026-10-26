@@ -56,13 +56,6 @@ async def credited(db: AsyncSession, order_id: str) -> float:
     return q2(total)
 
 
-async def balance_due(db: AsyncSession, order: Order) -> float:
-    """Amount still owed on the order (never negative), net of payments, credit notes and what
-    was written off when the job was dropped."""
-    return q2(max(0.0, float(order.total or 0) - float(getattr(order, "written_off", 0) or 0)
-                  - await net_paid(db, order.id) - await credited(db, order.id)))
-
-
 async def resync_write_off(db: AsyncSession, order: Order, actor_id: str | None = None) -> None:
     """A dropped job's write-off follows the money the shop actually kept: when money comes back
     to the customer (a refund) after the job was dropped, the written-off part grows by the same
@@ -83,6 +76,45 @@ async def resync_write_off(db: AsyncSession, order: Order, actor_id: str | None 
             await post_contact_ledger(db, order.org_id, order.client_id, "charge", delta,
                                       note=f"Order {order.order_number} dropped: write-off updated",
                                       ref_type="order", ref_id=order.id, created_by_id=actor_id)
+
+
+async def _unsettled(db: AsyncSession, order: Order) -> float:
+    return q2(max(0.0, float(order.total or 0) - await net_paid(db, order.id) - await credited(db, order.id)))
+
+
+async def balance_due(db: AsyncSession, order: Order) -> float:
+    """Amount still owed on the order (never negative), net of payments, credit notes and any
+    balance written off when the job was dropped."""
+    return q2(max(0.0, await _unsettled(db, order) - float(getattr(order, "written_off", 0) or 0)))
+
+
+async def sync_write_off(db: AsyncSession, order: Order, *, dropped: bool,
+                         actor_id: str | None = None) -> float:
+    """Keep a dropped job's write-off equal to what was still unpaid, so it stops showing as
+    owed. Leaving the dropped group (reopen, or moving on to a closed status) reverses it.
+    The write-off is recorded on the order, in the client's ledger and in the order feed.
+    Idempotent. Returns the change (+ = more written off). Caller commits."""
+    current = q2(float(getattr(order, "written_off", 0) or 0))
+    target = await _unsettled(db, order) if dropped else 0.0
+    delta = q2(target - current)
+    if not delta:
+        return 0.0
+    order.written_off = target
+    from backend.services.ledger import post_contact_ledger
+    if order.client_id and not order.is_estimate:
+        await post_contact_ledger(
+            db, order.org_id, order.client_id, "write_off", -delta,
+            note=(f"Unpaid balance on {order.order_number} written off (job dropped)" if delta > 0
+                  else f"Write-off on {order.order_number} reversed"),
+            ref_type="order", ref_id=order.id, created_by_id=actor_id)
+    from backend.routers.feed import log_system_event
+    await log_system_event(db, order.org_id, "order", order.id,
+                           f"Unpaid balance {target:.2f} written off" if delta > 0
+                           else f"Write-off of {current:.2f} reversed")
+    from backend.services.audit import record as _audit
+    await _audit(db, org_id=order.org_id, actor_id=actor_id, action="order.write_off",
+                 entity_type="order", entity_id=order.id, diff={"written_off": [current, target]})
+    return delta
 
 
 async def overpaid(db: AsyncSession, order: Order) -> float:

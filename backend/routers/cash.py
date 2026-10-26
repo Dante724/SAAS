@@ -547,6 +547,7 @@ async def order_payment_context(
         "prepaid": prepaid,
         "remaining": await balance_due(db, o),
         "overpaid": await overpaid(db, o),   # refund due if prepayments exceed total
+        "written_off": float(o.written_off or 0),   # unpaid balance of a dropped job
         "accounts_by_method": by_method,
     }
 

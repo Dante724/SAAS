@@ -113,8 +113,8 @@ class Organisation(Base):
     default_due_days: Mapped[int] = mapped_column(Integer, default=0)
     default_comment_visibility: Mapped[str] = mapped_column(String(10), default="private")
     default_file_visibility: Mapped[str] = mapped_column(String(10), default="private")
-    # WS-C: how staff names show on public pages (booking, portal). An employee's own
-    # "Name on documents" always wins. full | first | first_initial
+    # How staff names show on the booking page, portal and customer messages:
+    # full | first | first_initial | custom (custom = Employee.public_name, falling back to the full name).
     public_employee_name: Mapped[str] = mapped_column(String(16), default="full", server_default="full")
     warranty_count_from: Mapped[str] = mapped_column(String(10), default="closure")  # closure|created
     asset_one_open_ticket: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -203,7 +203,9 @@ class Organisation(Base):
     cash_category_sales_id: Mapped[Optional[str]] = mapped_column(String)
     # Build 110: shared secret for inbound provider webhooks (inbox, comms). Generated at
     # registration; rotatable from Settings -> API. Inbound posts must present it.
-    webhook_secret: Mapped[Optional[str]] = mapped_column(String(64))
+    # whh1 (B8): every org gets one at creation, whatever the path (registration, platform admin,
+    # seed); the migration backfilled orgs that had none, and inbound posts now fail closed.
+    webhook_secret: Mapped[Optional[str]] = mapped_column(String(64), default=lambda: secrets.token_urlsafe(24))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     locations: Mapped[list["Location"]] = relationship(back_populates="org")
@@ -596,6 +598,8 @@ class Order(Base):
     tax: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     prepayment_total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    # Unpaid balance written off when the job moved to a dropped status (reversed on reopen).
+    written_off: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     deposit_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # requested deposit (e.g. on an estimate) the client can pay via pay-link
     warranty_until: Mapped[Optional[date]] = mapped_column(Date)
     due_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -2283,16 +2287,36 @@ class TimeEntryAudit(Base):
     at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 
+def _new_webhook_secret() -> str:
+    """A fresh endpoint signing secret, encrypted for storage (see services.webhooks)."""
+    from backend.services.crypto import encrypt
+    return encrypt("whsec_" + secrets.token_urlsafe(32))
+
+
 class WebhookEndpoint(Base):
-    """A customer-registered URL that receives event callbacks."""
+    """A customer-registered URL that receives event callbacks.
+
+    whh1: the signing secret is a `whsec_` token stored encrypted (services.crypto) and shown only
+    on create / rotate. A rotation keeps the previous secret signing alongside the new one until
+    previous_secret_expires_at. kind="automation" rows are the hidden targets of automation-rule
+    webhook actions (source_id = the rule) so those go through the same signed, pinned outbox.
+    Deleting is a soft delete (deleted_at) so the delivery log keeps its rows."""
     __tablename__ = "webhook_endpoints"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     url: Mapped[str] = mapped_column(String(500))
-    secret: Mapped[str] = mapped_column(String(64), default=_uuid)
+    secret: Mapped[str] = mapped_column(String(500), default=lambda: _new_webhook_secret())
     events: Mapped[str] = mapped_column(String(500), default="*")  # csv of events or *
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    description: Mapped[Optional[str]] = mapped_column(String(200))
+    kind: Mapped[str] = mapped_column(String(20), default="endpoint", server_default="endpoint")  # endpoint|automation
+    source_id: Mapped[Optional[str]] = mapped_column(String, index=True)   # automation rule id
+    previous_secret: Mapped[Optional[str]] = mapped_column(String(500))
+    previous_secret_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    failing_since: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    disabled_reason: Mapped[Optional[str]] = mapped_column(String(200))
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
 class WebhookDelivery(Base):
@@ -2303,12 +2327,17 @@ class WebhookDelivery(Base):
     endpoint_id: Mapped[str] = mapped_column(String, ForeignKey("webhook_endpoints.id"), index=True)
     event: Mapped[str] = mapped_column(String(60))
     payload: Mapped[str] = mapped_column(Text, default="{}")
-    status: Mapped[str] = mapped_column(String(12), default="pending")  # pending|sent|failed
+    status: Mapped[str] = mapped_column(String(12), default="pending")  # pending|sending|sent|failed|abandoned
     response_code: Mapped[Optional[int]] = mapped_column(Integer)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
     delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # whh1 (B5): when the retry sweep may try a failed row again (None = due now, or given up
+    # once attempts reach the schedule's end); claimed_at lets the sweep reclaim rows a crashed
+    # worker left in "sending".
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
 class Lead(Base):
@@ -2628,6 +2657,12 @@ class ApiKey(Base):
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # apih1: keys can expire (None = never, which is what keys made before apih1 keep), and a
+    # rotation keeps the previous secret working until previous_expires_at so callers can swap.
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    previous_key_hash: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    previous_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    rotated_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
 class PaymentIntent(Base):
@@ -3200,7 +3235,9 @@ class Call(Base):
     Populated by the provider webhook; the provider itself is a gated seam."""
     __tablename__ = "calls"
     # D1: one row per provider call (Twilio CallSid), so webhook retries never duplicate.
-    __table_args__ = (Index("uq_calls_org_provider_sid", "org_id", "provider_sid", unique=True),)
+    # whh1 (B9): the generic call webhook upserts on the provider's own call id.
+    __table_args__ = (Index("uq_calls_org_provider_sid", "org_id", "provider_sid", unique=True),
+                      Index("uq_calls_org_provider_external", "org_id", "provider", "external_id", unique=True))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     provider: Mapped[str] = mapped_column(String(20), default="manual")   # aircall|twilio|zadarma|manual
@@ -3795,3 +3832,20 @@ class MessageHandoff(Base):
     state: Mapped[str] = mapped_column(String(12), default="opened")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+
+class ApiIdempotencyKey(Base):
+    """apih1: a public-API write sent with an Idempotency-Key header. The same key with the same
+    body replays the stored response; with a different body it is refused. Kept for 24 hours.
+    status_code is None while the first request is still running."""
+    __tablename__ = "api_idempotency_keys"
+    __table_args__ = (UniqueConstraint("org_id", "key_id", "idem_key", name="uq_api_idempotency_key"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    key_id: Mapped[str] = mapped_column(String, ForeignKey("api_keys.id"), index=True)
+    idem_key: Mapped[str] = mapped_column(String(255))
+    route: Mapped[str] = mapped_column(String(80))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    status_code: Mapped[Optional[int]] = mapped_column(Integer)
+    response_body: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
