@@ -42,7 +42,7 @@ A key with only resource scopes can't call v1 at all: v1 needs `read` or `write`
 | [Contacts](#contacts) | `GET /contacts` (with search), `GET /contacts/{id}` | `POST /contacts`, `PATCH /contacts/{id}` | `contacts` |
 | [Locations](#locations) | `GET /locations`, `GET /locations/{id}` | | `locations` |
 | [Employees](#employees) | `GET /employees`, `GET /employees/{id}` | | `employees` |
-| [Work orders](#work-orders) | `GET /orders`, `GET /orders/{id}`, `GET /orders/{id}/lines` | `PATCH /orders/{id}`, `POST /orders/{id}/status` | `orders` |
+| [Work orders](#work-orders) | `GET /orders`, `GET /orders/{id}`, `GET /orders/{id}/lines` | `PATCH /orders/{id}`, `POST /orders/{id}/status`, `POST /orders/{id}/comments` | `orders` |
 | [Invoices](#invoices) | `GET /invoices`, `GET /invoices/{id}`, `GET /invoices/{id}/payments` | | `invoices` |
 | [Inquiries](#inquiries) | `GET /inquiries`, `GET /inquiries/{id}` | `POST /inquiries`, `PATCH /inquiries/{id}`, `POST /inquiries/{id}/convert` | `inquiries` |
 | [Inquiry types](#inquiry-types) | `GET /inquiry-types` | | `inquiries` |
@@ -547,6 +547,26 @@ Returns `200` with the order after the change. `change.is_closing` is `true` whe
 The change is in the shop's audit log and the order's history, attributed to the key (`via_api_key`), with no employee. Unlike staff, a key isn't limited to its own orders and can reopen a closed order: `orders:write` is the permission.
 
 Send an `Idempotency-Key` to make a retry safe: the same key and body replays the first response, and a change a gate stopped can be retried with the same key. Scope: `orders:write` (or `write`).
+
+### `POST /orders/{id}/comments`
+
+Adds a comment to the job, as staff can in the app. Scope: `orders:write`. Send an `Idempotency-Key` to make retries safe.
+
+| Field | Type | Notes |
+|---|---|---|
+| `body` | string, 1–5000 | Required. |
+| `visible_to_client` | boolean? | Shows the comment on the customer's tracking page. Left out: the shop's default visibility. |
+
+A client-visible comment also runs the shop's "comment added" notifications. Post a comment before moving a job to a status that requires one; otherwise the status change returns `409`.
+
+```bash
+curl -X POST "$TEKLY_BASE_URL_V2/orders/a83d5f2c-…/comments" \
+  -H "Authorization: Bearer $TEKLY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"body": "Customer approved the battery quote by phone.", "visible_to_client": false}'
+```
+
+`201` → `{"data": {"id": "c41e…", "order_id": "a83d5f2c-…", "body": "…", "visible_to_client": false, "created_at": "2026-10-26T15:02:11Z"}}`
 
 ---
 

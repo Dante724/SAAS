@@ -558,3 +558,31 @@ async def test_invoice_lines_balance_and_payments(client, db):
     for path in (f"/api/v2/invoices/{inv.id}", f"/api/v2/invoices/{inv.id}/payments"):
         assert (await client.get(path, headers=B)).status_code == 404
     assert (await client.get("/api/v2/invoices", headers=B)).json()["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_order_comment_unlocks_require_comment_status(client, db):
+    H, org_id = await _register(client)
+    A = await _key(client, H, ["orders:write"])
+    R = await _key(client, H, ["orders:read"])
+    r = await client.post("/api/statuses", json={"name": "Waiting on customer", "key": "wait_cust",
+                                                 "status_group": "in_progress", "require_comment": True}, headers=H)
+    assert r.status_code in (200, 201), r.text
+    _, oid = await _job(client, H)
+    assert (await client.post(f"/api/v2/orders/{oid}/status", json={"status": "wait_cust"}, headers=A)).status_code == 409
+    # Read-only keys can't comment.
+    assert (await client.post(f"/api/v2/orders/{oid}/comments", json={"body": "x"}, headers=R)).status_code == 403
+    r = await client.post(f"/api/v2/orders/{oid}/comments", headers={**A, "Idempotency-Key": "c-1"},
+                          json={"body": "Asked the customer to confirm the quote", "visible_to_client": False})
+    assert r.status_code == 201, r.text
+    assert r.json()["data"]["visible_to_client"] is False
+    again = await client.post(f"/api/v2/orders/{oid}/comments", headers={**A, "Idempotency-Key": "c-1"},
+                              json={"body": "Asked the customer to confirm the quote", "visible_to_client": False})
+    assert again.status_code == 201 and again.headers.get("Idempotent-Replayed") == "true"
+    assert again.json()["data"]["id"] == r.json()["data"]["id"]
+    assert (await client.post(f"/api/v2/orders/{oid}/comments", json={"body": ""}, headers=A)).status_code == 422
+    assert (await client.post(f"/api/v2/orders/{oid}/status", json={"status": "wait_cust"}, headers=A)).status_code == 200
+    # Another shop's order is a 404.
+    H2, _ = await _register(client)
+    _, other = await _job(client, H2)
+    assert (await client.post(f"/api/v2/orders/{other}/comments", json={"body": "x"}, headers=A)).status_code == 404

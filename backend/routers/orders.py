@@ -1931,23 +1931,26 @@ async def add_comment(
                            body=data.body, visible_to_client=data.visible_to_client)
     db.add(comment)
     await db.commit()
-    # Fire comment_added notifications (only for client-visible comments).
-    # 144jc: rules engine first (client + staff), legacy template fallback.
     if data.visible_to_client:
-        c_matched = 0
-        try:
-            from backend.services import notification_rules as _nr
-            _cr = await _nr.evaluate(db, org_id=current.org_id, order_id=order_id, event="comment_added")
-            c_matched = (_cr or {}).get("matched", 0)
-            await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order_id,
-                                         event="comment_added", actor_id=current.id)
-        except Exception:  # noqa: BLE001
-            pass
-        if c_matched == 0:
-            from backend.services.notifications import dispatch_order_notifications
-            await dispatch_order_notifications(
-                db, org_id=current.org_id, order_id=order_id, trigger_event="comment_added")
+        await notify_comment_added(db, current.org_id, order_id, actor_id=current.id)
     return {"ok": True}
+
+
+async def notify_comment_added(db: AsyncSession, org_id: str, order_id: str, actor_id: Optional[str]) -> None:
+    """comment_added notifications for a client-visible comment (shared by the app and the API).
+    144jc: rules engine first (client + staff), legacy template fallback."""
+    c_matched = 0
+    try:
+        from backend.services import notification_rules as _nr
+        _cr = await _nr.evaluate(db, org_id=org_id, order_id=order_id, event="comment_added")
+        c_matched = (_cr or {}).get("matched", 0)
+        await _nr.notify_staff_order(db, org_id=org_id, order_id=order_id,
+                                     event="comment_added", actor_id=actor_id)
+    except Exception:  # noqa: BLE001
+        pass
+    if c_matched == 0:
+        from backend.services.notifications import dispatch_order_notifications
+        await dispatch_order_notifications(db, org_id=org_id, order_id=order_id, trigger_event="comment_added")
 
 
 class SignatureIn(BaseModel):

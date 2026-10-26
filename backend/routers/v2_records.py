@@ -45,7 +45,8 @@ from backend.services import leads as lsvc
 from backend.services.apikeys import ApiPrincipal
 
 # Discovery (GET /api/v2) lists these too.
-v2.RESOURCE_PATHS = tuple(dict.fromkeys(v2.RESOURCE_PATHS + ("locations", "employees", "orders", "invoices")))
+v2.RESOURCE_PATHS = tuple(dict.fromkeys(v2.RESOURCE_PATHS + ("locations", "employees", "orders", "invoices",
+                                                              "appointments")))
 v2._OPENAPI_DESCRIPTION += """
 **Records.** Locations and employees (lookups), contact search by phone, email or text, work
 orders (read, update, change status through the shop's own rules) and invoices (lines as printed,
@@ -574,6 +575,47 @@ async def change_order_status(oid: str, data: StatusIn, db: AsyncSession = Depen
         return {"data": await _order_detail(db, p.org_id, order.id),
                 "change": {"from": prev, "to": data.status, "is_closing": bool(res.get("is_closing"))}}
     return await _idempotent(db, p, idempotency_key, f"POST /v2/orders/{oid}/status", data, run, status=200)
+
+
+class OrderCommentIn(_In):
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [
+        {"body": "Customer approved the battery quote by phone.", "visible_to_client": False}]})
+    body: str = Field(..., min_length=1, max_length=5000, description="The comment text.")
+    visible_to_client: Optional[bool] = Field(
+        None, description="Show it on the customer's tracking page. Left out: the shop's default visibility.")
+
+
+@router.post("/orders/{oid}/comments", status_code=201, summary="Add a comment to a work order",
+             description="Adds a comment to the job, as staff can on screen. A client-visible comment shows on "
+                         "the tracking page and runs the shop's \"comment added\" notifications. Use it before a "
+                         "status that requires a comment. Send an `Idempotency-Key` to make retries safe. "
+                         "Scope: `orders:write` (or `write`).",
+             responses=_ok({"data": {"id": "c41e…", "order_id": "a83d5f2c-…",
+                                     "body": "Customer approved the battery quote by phone.",
+                                     "visible_to_client": False, "created_at": "2026-10-26T15:02:11Z"}},
+                           {**_WRITE_ERRORS, **_NOT_FOUND}))
+async def add_order_comment(oid: str, data: OrderCommentIn, db: AsyncSession = Depends(get_db),
+                            p: ApiPrincipal = W("orders"), idempotency_key: Optional[str] = _idem_h()):
+    from backend.models import OrderComment
+    from backend.routers.feed import default_visibility
+    from backend.routers.orders import notify_comment_added
+    o = await _own_order(db, p.org_id, oid)
+
+    async def run():
+        visible = data.visible_to_client
+        if visible is None:
+            visible = await default_visibility(db, p.org_id, "comment") == "client"
+        c = OrderComment(order_id=o.id, author_id=None, body=data.body.strip(), visible_to_client=bool(visible))
+        db.add(c)
+        await db.flush()
+        await _audit(db, p, "order.comment", "order", o.id, comment_id=c.id, visible_to_client=bool(visible))
+        await v1._commit(db)
+        if visible:
+            await notify_comment_added(db, p.org_id, o.id, actor_id=None)
+        created = getattr(c, "created_at", None)
+        return {"data": {"id": c.id, "order_id": o.id, "body": c.body, "visible_to_client": bool(visible),
+                         "created_at": created.replace(microsecond=0).isoformat() + "Z" if created else None}}
+    return await _idempotent(db, p, idempotency_key, f"POST /v2/orders/{oid}/comments", data, run)
 
 
 # ── invoices ─────────────────────────────────────────────────────────────────
