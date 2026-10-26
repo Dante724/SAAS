@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-10-26: API v2 records: lookups, contact search, work orders and invoices
+
+Integrations no longer need to read ids off existing records or keep their own copy of who's a customer. [API v2](10-api-v2.md) can now look up locations and employees, find a contact by phone or email, update a work order and move it through the shop's statuses, and read invoices with their lines and payments.
+
+### New
+
+- **Locations**: [`GET /api/v2/locations`](10-api-v2.md#locations) and `/locations/{id}`, scope `locations:read`.
+- **Employees**: [`GET /api/v2/employees`](10-api-v2.md#employees) and `/employees/{id}`, scope `employees:read`, with `?location_id=` and `?active=`. A directory only: name, the name customers see, role, home location. Never contact details, pay or sign-in data.
+- **Contact search**: [`GET /api/v2/contacts`](10-api-v2.md#get-contacts) takes `phone` (ignores formatting and the country code, and returns every match), `email` (exact, ignoring case) and `q` (text in the name, phone or email).
+- **Contact updates**: [`PATCH /api/v2/contacts/{id}`](10-api-v2.md#patch-contactsid), and the new [`contact.updated`](06-events.md#contactupdated) event.
+- **Work orders** under the `orders` scope: [`GET /api/v2/orders`](10-api-v2.md#get-orders) (filters `status`, `client_id`, `location_id`, `updated_since`, `created_since`), `GET /orders/{id}` with the device, the customer's tracking link and a lines summary, `GET /orders/{id}/lines` (`cost_price` with `costs:read`), and `PATCH /orders/{id}` for the complaint, priority, assignee, manager, due date, scheduled times (shop wall-clock) and location.
+- **Status changes**: [`POST /api/v2/orders/{id}/status`](10-api-v2.md#post-ordersidstatus) runs the app's own status change, so the shop's transfer rules, required comment / checklist / payment, close gates, dropped-job write-off, notifications and webhooks all apply. A gate that stops it is `409` with the shop's message.
+- **Invoices** under the `invoices` scope: [`GET /api/v2/invoices`](10-api-v2.md#get-invoices) (filters `status`, `client_id`, `issued_since`, `updated_since`), `GET /invoices/{id}` with its lines as printed, `amount_paid`, `credited`, `balance_due` and the jobs it bills, and `GET /invoices/{id}/payments` for payments and refunds.
+- **v1 `GET /orders` takes `updated_since`.**
+- Discovery (`GET /api/v2`) lists the new resources.
+
+### Behaviour notes
+
+| Note | What to do |
+|---|---|
+| A status change made with a key is attributed to the key, not an employee. Status transfer rules set for one role don't apply to it; rules for all roles do. | If a move must be limited, set the rule for all roles. |
+| A closed or locked order can't be changed with `PATCH /orders/{id}` (`409`). | Reopen it with `POST /orders/{id}/status` first. |
+| `contact.updated` fires for changes made through the API only, not in the app. | Re-read the contact when you need the latest. |
+
 ## 2026-10-25: API v2 and resource scopes
 
 [API v2](10-api-v2.md) adds inquiries, inquiry types, tags, services, bundles, writable products, contacts with structured addresses, and webhook subscriptions managed with a key. It has every protection v1 has. Keys can now be limited to single resources, and each key has its own rate limit.

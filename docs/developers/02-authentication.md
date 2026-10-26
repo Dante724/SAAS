@@ -34,13 +34,13 @@ A key's scopes are fixed when it's created. There are **broad** scopes, which co
 |---|---|---|
 | `read` | Read only | Every `GET` on `/api/v1`, and every `GET` on `/api/v2` except webhooks. |
 | `write` | Read and write | Everything `read` allows, plus every write on `/api/v1` and on `/api/v2` except webhooks. **Includes `read`.** |
-| `costs:read` | Include cost prices | Adds cost fields to responses: product and service `cost_price`, and time-entry `cost_rate` and `billable_rate`. Without it those fields are **left out**, not set to `null`. It doesn't allow reading on its own, so combine it with other scopes. |
+| `costs:read` | Include cost prices | Adds cost fields to responses: product, service and work-order line `cost_price`, and time-entry `cost_rate` and `billable_rate`. Without it those fields are **left out**, not set to `null`. It doesn't allow reading on its own, so combine it with other scopes. |
 
 ### Resource scopes (API v2)
 
 `<resource>:read` and `<resource>:write`, shown in the app as **Only some things**. `<resource>:write` includes `<resource>:read`. The resources are:
 
-`contacts`, `orders`, `estimates`, `products`, `appointments`, `invoices`, `credit_notes`, `time_entries`, `inquiries`, `tags`, `services`, `bundles`, `webhooks`.
+`contacts`, `orders`, `estimates`, `products`, `appointments`, `invoices`, `credit_notes`, `time_entries`, `inquiries`, `tags`, `services`, `bundles`, `locations`, `employees`, `webhooks`.
 
 - Resource scopes work on **`/api/v2` only**. A key that holds only resource scopes gets `403` on every `/api/v1` route.
 - `orders`, `estimates` and `contacts` are also checked when an inquiry is [converted](10-api-v2.md#post-inquiriesidconvert) on v2.

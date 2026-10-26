@@ -48,7 +48,10 @@ EVENT_CATALOGUE: dict[str, str] = {
     "estimate.accepted": "A customer accepted an estimate.",
     "payment.recorded": "An online payment succeeded.",
     "appointment.created": "An appointment was booked online, by staff or through the API.",
+    "appointment.updated": "An appointment was rescheduled or its note changed through the API. The event lists which fields.",
+    "appointment.cancelled": "An appointment was cancelled through the API.",
     "contact.created": "A customer or company contact was added.",
+    "contact.updated": "A contact's details were changed through API v2.",
     "inquiry.created": "A new inquiry was added: web form, missed call, staff, Tekly Go or the API.",
     "inquiry.updated": "An inquiry's details or status changed.",
     "inquiry.converted": "An inquiry was turned into a work order or estimate.",
@@ -289,7 +292,8 @@ def _builders():
     return {
         "order.created": (Order, order_data), "order.updated": (Order, order_data),
         "appointment.created": (Appointment, appointment_data),
-        "contact.created": (Client, contact_data), "inquiry.created": (Lead, lead_data),
+        "contact.created": (Client, contact_data), "contact.updated": (Client, contact_data),
+        "inquiry.created": (Lead, lead_data),
         "invoice.created": (Invoice, invoice_data), "invoice.paid": (Invoice, invoice_data),
     }
 

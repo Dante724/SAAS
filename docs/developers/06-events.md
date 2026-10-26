@@ -11,7 +11,10 @@ Every event you can subscribe to. Each delivery wraps the event's payload in the
 | [`estimate.accepted`](#estimateaccepted) | A customer accepts an estimate. |
 | [`payment.recorded`](#paymentrecorded) | An online payment succeeds. |
 | [`appointment.created`](#appointmentcreated) | An appointment is booked online, by staff or through the API. |
+| [`appointment.updated`](#appointmentupdated) | An appointment is rescheduled, or its note changes, through API v2. The event lists which fields. |
+| [`appointment.cancelled`](#appointmentcancelled) | An appointment is cancelled through API v2. |
 | [`contact.created`](#contactcreated) | A customer or company contact is added. |
+| [`contact.updated`](#contactupdated) | A contact's details are changed through API v2. |
 | [`inquiry.created`](#inquirycreated) | A new inquiry is added, from any source. |
 | [`inquiry.updated`](#inquiryupdated) | An inquiry's details or status change. |
 | [`inquiry.converted`](#inquiryconverted) | An inquiry is turned into a work order or estimate. |
@@ -213,6 +216,54 @@ An appointment was booked.
 
 Subscribed as `booking.created`? You get this same payload, labelled `booking.created`.
 
+## `appointment.updated`
+
+An appointment was rescheduled, moved to another employee, or its note changed, through [`PATCH /api/v2/appointments/{id}`](11-booking-api.md#reschedule). `changed_fields` lists what changed: any of `scheduled_for`, `duration_min`, `employee_id` and `note`. The rest is the `appointment.created` payload, showing the appointment after the change.
+
+```json
+{
+  "id": "e02f7c4a-9b1d-4e6f-a83c-5d2b0f9e7c16",
+  "scheduled_for": "2026-10-29T14:00:00",
+  "duration_min": 60,
+  "status": "booked",
+  "client_id": "6f1c2a9d-3e4b-4c8a-9f17-5b2d8e0a6c31",
+  "client_name": "Dana Whitfield",
+  "service_id": "5c7d1e2f-8a9b-4c3d-b6e5-0f1a2b3c4d5e",
+  "employee_id": "41be7d2c-6a5f-4b3e-9d81-2c0f7e6a5b49",
+  "location_id": "2b9e4c71-5d3a-4f8e-a1b6-7c0d9e2f3a48",
+  "order_id": null,
+  "created_at": "2026-10-25T18:06:36Z",
+  "changed_fields": ["scheduled_for", "employee_id"]
+}
+```
+
+**Not yet:** changes made by staff in the app don't fire this event yet. Poll [`GET /api/v2/appointments?updated_since=`](11-booking-api.md#keeping-in-sync) to catch those.
+
+## `appointment.cancelled`
+
+An appointment was cancelled through [`POST /api/v2/appointments/{id}/cancel`](11-booking-api.md#cancel). It fires once: cancelling again doesn't fire it again. `reason` is what the caller sent, or `null`.
+
+```json
+{
+  "id": "e02f7c4a-9b1d-4e6f-a83c-5d2b0f9e7c16",
+  "scheduled_for": "2026-10-28T10:30:00",
+  "duration_min": 60,
+  "status": "canceled",
+  "client_id": null,
+  "client_name": "Dana Whitfield",
+  "service_id": "5c7d1e2f-8a9b-4c3d-b6e5-0f1a2b3c4d5e",
+  "employee_id": "9d0a6b3e-2c8f-4e1d-b75a-3f9c1e8d4a27",
+  "location_id": "2b9e4c71-5d3a-4f8e-a1b6-7c0d9e2f3a48",
+  "order_id": null,
+  "created_at": "2026-10-25T18:06:36Z",
+  "reason": "Customer called to cancel"
+}
+```
+
+The event is spelled `cancelled`; the appointment's `status` value is `canceled`, as everywhere in the app and the API.
+
+**Not yet:** cancellations made by staff in the app don't fire this event yet. Poll `GET /api/v2/appointments?status=canceled&updated_since=` to catch those.
+
 ## `contact.created`
 
 A contact was added.
@@ -233,6 +284,12 @@ A contact was added.
 ```
 
 `type` is `person` or `organization`.
+
+## `contact.updated`
+
+A contact was changed through [`PATCH /api/v2/contacts/{id}`](10-api-v2.md#patch-contactsid). The payload is the [`contact.created`](#contactcreated) one, showing the contact after the change.
+
+**Not yet:** changes made by staff in the app don't fire this event. Re-read the contact (`GET /api/v2/contacts/{id}`) when you need the latest.
 
 ## `inquiry.created`
 
