@@ -167,7 +167,7 @@ A work order is a repair job. Estimates share the same object (see [Estimates](#
 | `scheduled_for` | string? | Shop wall-clock time. |
 | `created_at` | string | UTC timestamp. |
 
-Line items, devices and payments aren't part of the v1 object.
+Line items, devices and payments aren't part of the v1 object. [API v2](10-api-v2.md#work-orders) has them, and can update an order and change its status.
 
 ### `GET /orders`
 
@@ -176,6 +176,7 @@ Scope: `read`. Lists **work orders only** (no estimates), newest first.
 | Query | Type | Description |
 |---|---|---|
 | `status` | string | Optional. An exact status key, up to 40 characters, for example `ready`. |
+| `updated_since` | string | Optional. Only orders changed at or after this time. ISO 8601; an offset (`Z`, `+02:00`) is converted to UTC, without one it's taken as UTC. A bad value is `422`. |
 | `page` | integer | 1–10000, default 1. |
 | `page_size` | integer | 1–100, default 25. |
 
@@ -613,12 +614,13 @@ curl -X POST "$TEKLY_BASE_URL/time-entries" \
 
 ## Finding ids
 
-v1 has no endpoints for locations, employees or services yet, and their ids aren't shown in the app. Until they're added, you can read them from existing records:
+Look ids up with [API v2](10-api-v2.md). The same key works there if it has `read`:
 
-| You need | Read it from |
+| You need | Look it up with |
 |---|---|
-| `location_id` | `location_id` on any work order from `GET /orders`. |
-| `employee_id` | `assigned_to_id` on a work order, or `employee_id` on a time entry or appointment. |
-| `service_id` | `service_id` on an existing appointment from `GET /appointments`. |
+| `location_id` | [`GET /api/v2/locations`](10-api-v2.md#locations) |
+| `employee_id`, `assigned_to_id` | [`GET /api/v2/employees`](10-api-v2.md#employees), filtered by `?location_id=` and `?active=true` |
+| `service_id` | [`GET /api/v2/services`](10-api-v2.md#services) |
+| `client_id` | [`GET /api/v2/contacts?phone=…`](10-api-v2.md#get-contacts) or `?email=…` |
 
-Store them in your integration's configuration. They don't change.
+Locations, employees and services rarely change: store their ids in your integration's configuration. Look contacts up each time.

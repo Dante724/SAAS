@@ -14,6 +14,7 @@ Tekly is software for running a repair shop. The Tekly API and webhooks let your
 | [Recipes](08-recipes.md) | Contact forms, booking sites, Zapier and Make, accounting sync |
 | [Changelog](09-changelog.md) | The 2026-10-25 releases, breaking changes and deprecations |
 | [API v2](10-api-v2.md) | Inquiries, tags, services, bundles, writable products, addresses, webhooks by API, resource scopes |
+| [Booking API](11-booking-api.md) | Build a booking site: free slots, booking with Idempotency-Key, rescheduling, cancelling, appointment webhooks |
 
 ## At a glance
 

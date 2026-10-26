@@ -13,17 +13,17 @@ End-to-end guides for the integrations repair shops ask for most. Each uses only
 
 A visitor fills in "What's wrong with your device?" on the shop's website. You want a customer and a job in Tekly, ready for the front desk.
 
-**You need:** a key with **Read and write** access, and the `location_id` of the shop that should get the job.
+**You need:** a key with **Read and write** access, and the `location_id` of the shop that should get the job. The steps use v1 for the job and v2 to find the customer; one key with `read` and `write` works on both.
 
 If you'd rather web requests land on the **Inquiries** board than as jobs, use [`POST /api/v2/inquiries`](10-api-v2.md#post-inquiries) with a key limited to **Inquiries** (`inquiries:write`), and send an `Idempotency-Key`. It fires [`inquiry.created`](06-events.md#inquirycreated). Tekly's own **Online booking** page (**Settings → Public pages**) does the same from its request form.
 
 ### 1. Find your `location_id` (once)
 
-There's no locations endpoint yet. Read the id from any existing work order, and keep it in your configuration:
+List the shop's locations and keep the id in your configuration:
 
 ```bash
-curl "$TEKLY_BASE_URL/orders?page_size=1" -H "Authorization: Bearer $TEKLY_API_KEY"
-# → "location_id": "2b9e4c71-5d3a-4f8e-a1b6-7c0d9e2f3a48"
+curl "$TEKLY_BASE_URL_V2/locations?active=true" -H "Authorization: Bearer $TEKLY_API_KEY"
+# → {"data": [{"id": "2b9e4c71-5d3a-4f8e-a1b6-7c0d9e2f3a48", "name": "Main Street", "timezone": "America/New_York", …}], …}
 ```
 
 ### 2. On each form submission, on your server
@@ -33,27 +33,39 @@ import os
 
 import requests
 
-BASE_URL = os.environ["TEKLY_BASE_URL"]
+BASE_URL = os.environ["TEKLY_BASE_URL"]          # https://<your-shop-domain>/api/v1
+BASE_URL_V2 = os.environ["TEKLY_BASE_URL_V2"]    # https://<your-shop-domain>/api/v2
 LOCATION_ID = os.environ["TEKLY_LOCATION_ID"]
 session = requests.Session()
 session.headers["Authorization"] = f"Bearer {os.environ['TEKLY_API_KEY']}"
 
 
+def find_contact(email: str | None, phone: str | None) -> str | None:
+    """A returning customer: match on email first, then on phone (any formatting)."""
+    for params in ({"email": email}, {"phone": phone}):
+        if not next(iter(params.values())):
+            continue
+        found = session.get(f"{BASE_URL_V2}/contacts", params={**params, "page_size": 1}, timeout=10)
+        found.raise_for_status()
+        if found.json()["data"]:
+            return found.json()["data"][0]["id"]       # newest match
+    return None
+
+
 def submit_repair_request(form: dict, submission_id: str) -> str:
-    # 1. The customer. The Idempotency-Key ties it to this submission, so a retry or a
-    #    double-click doesn't create a second contact.
-    contact = session.post(
-        f"{BASE_URL}/contacts",
-        headers={"Idempotency-Key": f"webform-{submission_id}-contact"},
-        json={
-            "name": form["name"],
-            "phone": form.get("phone") or None,
-            "email": form.get("email") or None,
-        },
-        timeout=10,
-    )
-    contact.raise_for_status()
-    client_id = contact.json()["data"]["id"]
+    email, phone = form.get("email") or None, form.get("phone") or None
+    # 1. The customer: reuse the contact if they've been here before. Otherwise create one; the
+    #    Idempotency-Key ties it to this submission, so a retry or a double-click doesn't create two.
+    client_id = find_contact(email, phone)
+    if client_id is None:
+        contact = session.post(
+            f"{BASE_URL}/contacts",
+            headers={"Idempotency-Key": f"webform-{submission_id}-contact"},
+            json={"name": form["name"], "phone": phone, "email": email},
+            timeout=10,
+        )
+        contact.raise_for_status()
+        client_id = contact.json()["data"]["id"]
 
     # 2. The job. Put the device and the problem in the complaint: v1 has no device fields.
     complaint = f"{form['device']}: {form['problem']}"[:5000]
@@ -69,7 +81,7 @@ def submit_repair_request(form: dict, submission_id: str) -> str:
 
 ### What to know
 
-- **Duplicates.** You can't search contacts by email or phone yet, so a returning customer gets a new contact each time. Staff can merge them in Tekly. The idempotency keys stop duplicates from retries, not from repeat visitors.
+- **Returning customers.** [`GET /api/v2/contacts`](10-api-v2.md#get-contacts) finds them by `email` (exact, ignoring case) or `phone` (ignoring formatting and the country code), so a repeat visitor's job lands on their existing contact. A phone search can return more than one contact; the code above takes the newest. Anyone can type someone else's email into a form, so don't show the visitor anything from the contact you found.
 - **No customer message.** API-created orders don't trigger the shop's notification rules, so send your own confirmation email from the website if you want one.
 - **Validation.** Check your form against the [limits](03-requests-and-errors.md#validation-limits) (name up to 200 characters, a valid email), or show the `422` field errors to the visitor.
 - **Never call Tekly from the browser.** The form posts to your server, and your server calls Tekly. The key must not reach the page.
@@ -81,7 +93,7 @@ def submit_repair_request(form: dict, submission_id: str) -> str:
 
 Your own booking site, or a booking platform, puts appointments into the Tekly calendar.
 
-**You need:** a key with **Read and write** access, the `location_id`, and the `employee_id` of each bookable technician, if you book per technician.
+**You need:** a key with **Read and write** access, the `location_id` ([`GET /api/v2/locations`](10-api-v2.md#locations)), and the `employee_id` of each bookable technician, if you book per technician ([`GET /api/v2/employees?active=true`](10-api-v2.md#employees); show customers each one's `public_name`).
 
 ### Create the appointment
 
@@ -120,7 +132,7 @@ export async function book({ bookingId, startLocal, minutes, customer, technicia
 
 - **Time zones.** Send `scheduled_for` as the shop's local time, without an offset. If your system works in UTC, send it with `Z` and Tekly converts it to the location's clock.
 - **Double-booking.** With an `employee_id`, Tekly refuses an overlapping `booked` or `confirmed` appointment for that employee with `409`. Show the visitor another time. Without an `employee_id`, nothing is checked.
-- **Linking the customer.** To link the appointment to a contact, create the contact first (`POST /contacts`) and pass its `client_id`. Otherwise `client_name` is enough for the calendar.
+- **Linking the customer.** To link the appointment to a contact, look the customer up first ([`GET /api/v2/contacts?phone=…`](10-api-v2.md#get-contacts) or `?email=…`), create them if they're new (`POST /contacts`), and pass the `client_id`. Otherwise `client_name` is enough for the calendar.
 - **Status.** API appointments are created as `confirmed`.
 - **Hearing about other bookings.** Subscribe to [`appointment.created`](06-events.md#appointmentcreated) to learn about appointments booked in Tekly itself, for example to block those times on your site. Its `scheduled_for` is wall-clock time, despite the `Z`.
 
@@ -129,7 +141,6 @@ export async function book({ bookingId, startLocal, minutes, customer, technicia
 - Reading free slots: there's no availability endpoint.
 - Rescheduling or cancelling through the API.
 - Fetching one appointment by id, or filtering appointments by date.
-- Listing services or employees.
 
 If you need those, consider Tekly's own **Online booking** page, which handles slots, working hours and services for you.
 
@@ -179,56 +190,60 @@ Push Tekly invoices into an accounting system: the books, a data warehouse, or a
 
 > If you use **QuickBooks Online** or **Xero**, look in **Settings → Integrations** first. Tekly has built-in connections for those. This recipe is for everything else.
 
-**You need:** a **Read only** key, and a webhook endpoint subscribed to `invoice.created` and `invoice.paid`.
+**You need:** a key with `invoices:read` (a key limited to **Invoices**, read only), and a webhook endpoint subscribed to `invoice.created` and `invoice.paid`. The calls below are [API v2](10-api-v2.md#invoices).
 
 ### The approach
 
 Use webhooks for speed and a scheduled sweep for completeness.
 
-1. **On `invoice.created` or `invoice.paid`:** fetch the invoice with `GET /invoices/{data.id}` and upsert it in your system, keyed on Tekly's invoice `id`. Re-fetching matters: invoices are often created as `draft` and edited afterwards, and there's no `invoice.updated` event.
-2. **Every night:** page through `GET /invoices` (newest first) and upsert each one, to catch edits and anything a webhook missed. Stop once you reach invoices older than your look-back window, for example 60 days.
-3. **Credit notes:** page through `GET /credit-notes` on the same schedule. There's no credit-note webhook.
+1. **On `invoice.created` or `invoice.paid`:** fetch the invoice with `GET /api/v2/invoices/{data.id}` and upsert it in your system, keyed on Tekly's invoice `id`. Re-fetching matters: invoices are often created as `draft` and edited afterwards, and there's no `invoice.updated` event.
+2. **Every few minutes or hours:** page through `GET /api/v2/invoices?updated_since=<your last run>` and upsert each one. It returns invoices created, issued, paid or refunded since then.
+3. **Every night:** a wider sweep over the last 60 days, to catch other edits (a changed due date, a cancellation) and anything a webhook missed.
+4. **Credit notes:** page through v1 `GET /credit-notes` on the nightly schedule. There's no credit-note webhook.
 
 ```python
-from datetime import datetime, timedelta, timezone
-
-LOOKBACK = timedelta(days=60)
+from datetime import datetime, timezone
 
 
-def nightly_invoice_sweep(session, base_url, upsert):
-    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - LOOKBACK   # Tekly timestamps are naive UTC
+def sync_invoices(session, base_url_v2, since: datetime, upsert):
+    """Upsert every invoice changed since `since` (UTC). Returns the time to pass next run."""
+    started = datetime.now(timezone.utc)
     page = 1
     while True:
-        resp = session.get(f"{base_url}/invoices", params={"page": page, "page_size": 100}, timeout=10)
+        resp = session.get(f"{base_url_v2}/invoices",
+                           params={"updated_since": since.isoformat(), "page": page, "page_size": 100},
+                           timeout=10)
         resp.raise_for_status()
         body = resp.json()
-        for invoice in body["data"]:
-            upsert(invoice)                        # idempotent on invoice["id"]
-        oldest = body["data"][-1]["issued_at"] if body["data"] else None
-        done = page * body["page_size"] >= body["total"]
-        if done or (oldest and datetime.fromisoformat(oldest) < cutoff):
-            return
+        for summary in body["data"]:
+            invoice = session.get(f"{base_url_v2}/invoices/{summary['id']}", timeout=10).json()["data"]
+            payments = session.get(f"{base_url_v2}/invoices/{summary['id']}/payments", timeout=10).json()["data"]
+            upsert(invoice, payments)              # idempotent on invoice["id"]
+        if page * body["page_size"] >= body["total"]:
+            return started
         page += 1
 ```
 
-The sweep stops on `issued_at`, which can be empty on some invoices. If your shop has many of those, page all the way through instead.
+Save `started` only after the run succeeds, so a failed run is retried from the same point.
 
 ### Mapping
 
 | Accounting field | Tekly field |
 |---|---|
 | Invoice number | `number` |
-| Customer | `client_id`, read from `GET /contacts/{id}` |
+| Customer | `client_id`, read from `GET /api/v2/contacts/{id}` |
+| Lines | `lines`: `description`, `qty`, `unit_price`, `total`, as printed on the invoice |
 | Net, tax, gross | `subtotal`, `tax`, `total` |
 | Paid / outstanding | `amount_paid`, `balance_due` |
-| Credited | `credited` (details in `/credit-notes`) |
-| Date | `issued_at` |
-| Due date | `due_at`, from the webhook payload only |
+| Payments and refunds | `GET /api/v2/invoices/{id}/payments`: `kind`, `method`, `amount`, `paid_at` |
+| Credited | `credited` (details in v1 `/credit-notes`) |
+| Date / due date | `issued_at` / `due_at` |
+| Jobs billed | `order_ids` |
 | Status | `status` (`draft`, `issued`, `partial`, `paid`, `cancelled`) |
 
 ### What to know
 
-- **No invoice lines.** v1 returns invoice totals, not line items or per-line tax. Post each invoice as one summary line, or wait for line support.
-- **No payments endpoint.** You can see `amount_paid` and `balance_due`, and [`payment.recorded`](06-events.md#paymentrecorded) for online payments, but you can't list individual payments, methods or refunds.
-- **No `updated_since` filter.** The nightly sweep re-reads a window of invoices rather than only changed ones. At 100 per page and 120 requests a minute (the default per key), that's quick even for busy shops.
+- **Lines follow the shop's display mode.** An invoice set to `simplified` or `one_line` shows one line per job, or one line in all, exactly as the customer's copy does. Per-line tax isn't on invoice lines: post the invoice's `tax` as one tax line, or read the job's lines (`GET /api/v2/orders/{id}/lines`, which needs `orders:read`) for the tax per line.
+- **`updated_since` sees money, not every edit.** It catches new, issued, paid and refunded invoices. Keep the nightly sweep for the rest.
+- **Rate limits.** Each changed invoice costs two more calls. If a run has many, pace them under the key's limit (120 a minute by default; watch `X-RateLimit-Remaining`), or create the key with a higher **Requests a minute**.
 - **Skip drafts** if your books shouldn't contain them: post on `invoice.paid`, or once `status` is past `draft`.
