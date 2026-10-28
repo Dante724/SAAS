@@ -133,7 +133,8 @@ async def slots_for_day(db, org, day: date, *, location_id: Optional[str] = None
     slots: ['HH:MM', ...], reason: None | 'in the past' | 'beyond the N-day appointment window' |
     'closed'}. `duration_min`, when given, replaces the service's (API v2 only)."""
     location = await resolve_location(db, org, location_id)
-    now = local_now(location.timezone if location else "UTC")
+    from backend.services.dates import location_tz
+    now = local_now(location_tz(location, org))
     step = org.appointment_time_slot or 60
     window_days = org.appointment_window_days or 30
     out = {"location": location, "now": now, "step": step, "window_days": window_days,

@@ -50,11 +50,16 @@ async def payments_config(
     from backend.services import org_creds
     from backend.services.payment_guard import test_mode as _test_mode
     test_mode = name in ("simulated", "unconfigured") or _test_mode(
-        name, await org_creds.effective(db, current.org_id, name, read_only=True))
+        name, await org_creds.effective(db, current.org_id, name, read_only=True, own_only=True))
+    base = settings.public_base.rstrip("/")
     return {"gateway": name, "test_mode": test_mode,
             "org_provider": prov,
             "available": await pay.available_gateways_org(db, current.org_id),
-            "live": name not in ("simulated", "unconfigured")}
+            "live": name not in ("simulated", "unconfigured"),
+            # B7: the shop pastes these into its own Stripe / Square dashboard, so paid links flip
+            # to paid straight away (the pay page also polls, as a fallback).
+            "webhook_urls": {"stripe": f"{base}/api/payments/stripe/webhook/{current.org_id}",
+                             "square": f"{base}/api/payments/square/webhook/{current.org_id}"}}
 
 
 class CheckoutIn(BaseModel):
@@ -73,7 +78,15 @@ async def create_checkout(
     await assert_perm(db, current, "can_create_payment_links")
     if data.amount <= 0:
         raise HTTPException(400, "Amount must be positive")
-    if data.order_id and not data.currency:
+    if data.currency:
+        # Every stored amount is in the shop's own currency: a 100 JPY link for a 100 USD job used to
+        # skip the cap below and mark the job paid (B3). Only the shop's currency is accepted.
+        from backend.models import Organisation
+        base_ccy = (await db.execute(select(Organisation.currency_code).where(
+            Organisation.id == current.org_id))).scalar_one_or_none() or "usd"
+        if data.currency.strip().lower() != base_ccy.lower():
+            raise HTTPException(422, f"Payment links are in the shop's currency ({base_ccy.upper()}).")
+    if data.order_id:
         # A checkout for an order asks at most for what's still owed on it.
         from backend.models import Order
         from backend.services.order_money import balance_due

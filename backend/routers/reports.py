@@ -1146,7 +1146,9 @@ async def company_dashboard(
     new_count = sum(1 for o in orders if grp.get(o.status) == "new")
     urgent = sum(1 for o in orders if o.priority >= 1 and is_open(o))
     overdue = sum(1 for o in orders if o.due_at and o.due_at < now and is_open(o))
-    receivables = sum((o.total or 0) for o in orders if is_open(o))
+    # "To collect" is what open jobs still owe, not their totals: money already taken counts (B3).
+    from backend.services.order_money import open_receivables
+    receivables = await open_receivables(db, [o.id for o in orders if is_open(o)])
 
     # accounts (cash vs cashless)
     accounts = (await db.execute(select(Account).where(Account.org_id == oid, Account.active == True))).scalars().all()  # noqa: E712

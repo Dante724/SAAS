@@ -14,9 +14,13 @@ import { newKey } from "../lib/photos";
 import { haptic } from "../lib/scanner";
 import { useToast } from "../lib/useGo";
 import { useLock } from "./Lock";
+import AccountPicker, { type PayAccount, type PaymentOption, accountsFor, pickDefaultAccount } from "../../components/AccountPicker";
 
-type Account = { id: string; name: string };
-type Ctx = { remaining: number; order_total: number; already_paid: number; accounts_by_method: Record<string, Account[]> };
+type Ctx = { remaining: number; order_total: number; already_paid: number; location_id?: string | null; accounts_by_method: Record<string, PayAccount[]> };
+// Card covers card readers and cashless (bank / UPI) accounts on the phone.
+const OPTIONS: Record<"cash" | "card", PaymentOption[]> = { cash: ["cash"], card: ["card", "cashless"] };
+const allAccounts = (c: Ctx | null): PayAccount[] =>
+  c ? Object.entries(c.accounts_by_method || {}).flatMap(([k, list]) => (list || []).map((a) => ({ ...a, payment_option: a.payment_option || k }))) : [];
 type Method = "cash" | "card" | "link";
 
 export default function PaySheet({ open, onClose, orderId, orderNumber, customer, onPaid, finishTo, onFinished }: {
@@ -66,8 +70,11 @@ export default function PaySheet({ open, onClose, orderId, orderNumber, customer
   const remaining = ctx?.remaining ?? 0;
   // Finishing takes the whole balance: a job can't close with money still owed.
   const amount = finishTo ? (remaining > 0 ? remaining : null) : clampAmount(amountRaw, remaining);
-  const accounts = method === "cash" ? ctx?.accounts_by_method.cash ?? [] : method === "card" ? [...(ctx?.accounts_by_method.card ?? []), ...(ctx?.accounts_by_method.cashless ?? [])] : [];
-  useEffect(() => { setAccountId(accounts.length === 1 ? accounts[0].id : ""); setConfirming(false); key.current = newKey(); }, [method]);
+  const all = allAccounts(ctx);
+  const accounts = method === "cash" || method === "card" ? accountsFor(all, OPTIONS[method]) : [];
+  // Preselect the cashbox at the job's location (else a company-wide one) so the button is ready.
+  useEffect(() => { setAccountId(pickDefaultAccount(accounts, ctx?.location_id)); setConfirming(false); key.current = newKey(); }, [method]);
+  const addAccount = (a: PayAccount) => setCtx((c) => c && ({ ...c, accounts_by_method: { ...c.accounts_by_method, [a.payment_option || "cash"]: [...(c.accounts_by_method[a.payment_option || "cash"] || []), a] } }));
   useEffect(() => { setConfirming(false); key.current = newKey(); }, [amountRaw]);
 
   async function pay() {
@@ -118,8 +125,6 @@ export default function PaySheet({ open, onClose, orderId, orderNumber, customer
   }
 
   const tile = (on: boolean) => `min-h-[4.5rem] rounded-xl border flex flex-col items-center justify-center gap-1 text-go-body font-semibold ${on ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`;
-  const hasCash = !!ctx?.accounts_by_method.cash?.length;
-  const hasCard = !!(ctx?.accounts_by_method.card?.length || ctx?.accounts_by_method.cashless?.length);
 
   return (
     <Sheet open={open} onClose={onClose} title={`Payment · ${orderNumber}`}>
@@ -140,11 +145,10 @@ export default function PaySheet({ open, onClose, orderId, orderNumber, customer
             </div>
 
             <div className="mt-4 grid grid-cols-3 gap-2">
-              {hasCash && <button onClick={() => setMethod("cash")} className={tile(method === "cash")}><Banknote size={22} />Cash</button>}
-              {hasCard && <button onClick={() => setMethod("card")} className={tile(method === "card")}><CreditCard size={22} />Card</button>}
+              <button onClick={() => setMethod("cash")} className={tile(method === "cash")}><Banknote size={22} />Cash</button>
+              <button onClick={() => setMethod("card")} className={tile(method === "card")}><CreditCard size={22} />Card</button>
               {mayLink && <button onClick={() => { setMethod("link"); if (!link) makeLink(); }} className={tile(method === "link")}><QrCode size={22} />Pay link</button>}
             </div>
-            {!hasCash && !hasCard && !mayLink && <p className="mt-3 text-go-sub text-ink-secondary">No cashbox or card account is set up. Add one in Tekly → Finance.</p>}
 
             {method === "cash" && amount && (
               <div className="mt-4">
@@ -158,12 +162,11 @@ export default function PaySheet({ open, onClose, orderId, orderNumber, customer
               </div>
             )}
 
-            {(method === "cash" || method === "card") && accounts.length > 1 && (
+            {(method === "cash" || method === "card") && accounts.length !== 1 && (
               <div className="mt-4">
-                <p className="mb-2 text-go-sub font-semibold text-ink-tertiary">{method === "cash" ? "Cashbox" : "Card account"}</p>
-                <div className="flex flex-wrap gap-2">
-                  {accounts.map((a) => <button key={a.id} onClick={() => setAccountId(a.id)} className={`min-h-[2.75rem] px-4 rounded-full border font-medium ${accountId === a.id ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`}>{a.name}</button>)}
-                </div>
+                {accounts.length > 1 && <p className="mb-2 text-go-sub font-semibold text-ink-tertiary">{method === "cash" ? "Cashbox" : "Card account"}</p>}
+                <AccountPicker variant="pills" accounts={all} paymentOption={OPTIONS[method]} locationId={ctx?.location_id}
+                  value={accountId} onChange={setAccountId} onCreated={addAccount} />
               </div>
             )}
 

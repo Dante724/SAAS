@@ -7,6 +7,7 @@ import DateField from "../../components/DateField";
 import { api, openAuthedDoc } from "../../api/client";
 import Pager from "../../components/Pager";
 import { currencySymbol, money } from "../orders/types";
+import { balanceView } from "../../lib/balance";
 import { alertDialog, confirmDialog, promptDialog, selectDialog } from "../../lib/dialog";
 import { isoMonth } from "../../lib/localDate";
 import { useMe } from "../../context/Me";
@@ -310,7 +311,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
                   <tr key={b.id} className="hover:bg-blue-50/30">
                     <td className="py-2.5 px-4 font-bold text-ink-primary">{b.name}</td>
                     <td className="py-2.5 px-4 tabular-nums">{b.phone || "—"}</td>
-                    <td className={`py-2.5 px-4 text-right tabular-nums font-bold ${(b.balance || 0) < 0 ? "text-rose-600" : "text-emerald-600"}`}>{(b.balance || 0) < 0 ? "Owes " : "Credit "}{money(Math.abs(b.balance || 0))}</td>
+                    {(() => { const bv = balanceView(b.balance); return <td className={`py-2.5 px-4 text-right tabular-nums font-bold ${bv.className}`}>{bv.label} {money(bv.amount)}</td>; })()}
                   </tr>
                 ))}
               </tbody>
