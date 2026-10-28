@@ -31,6 +31,7 @@ import JobCardFields from "../../components/JobCardFields";
 import ReaderCharge from "../../components/ReaderCharge";
 import AccountPicker, { type PayAccount, type PaymentOption, accountsFor, pickDefaultAccount } from "../../components/AccountPicker";
 import CardPaymentsList from "../../components/CardPaymentsList";
+import { jobTypeLabel, type WOTypeRef } from "./jobType";
 
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
 type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean; order_item_id?: string | null };
@@ -98,6 +99,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   }, [order.id]);
   useEffect(() => { api.get<Timing>(`/orders/${order.id}/timing`).then(setTiming).catch(() => setTiming(null)); }, [order.id, d.status]);
   useEffect(() => { api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(() => {}); }, []);
+  const [woTypes, setWoTypes] = useState<WOTypeRef[] | null>(null);
+  useEffect(() => { api.get<any>("/forms/types").then((r) => setWoTypes(r.items || [])).catch(() => setWoTypes([])); }, []);
 
   async function changeStatus(key: string) {
     let reason: string | null = null;
@@ -430,7 +433,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-clay-sm space-y-4">
                 <h4 className="text-sm font-semibold text-ink-primary">Job details</h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <Ro label="Job type"><Sel value={d.is_estimate ? "Estimate" : "Hardware Repair"} opts={["Hardware Repair", "Diagnostics", "Warranty", "Maintenance", "Estimate"]} /></Ro>
+                  <Ro label="Job type"><Sel value={jobTypeLabel({ is_estimate: d.is_estimate, type_id: (d as any).type_id }, woTypes)} /></Ro>
                   <Ro label="Priority"><Sel value={(d.priority ?? 0) >= 2 ? "Urgent, same day" : urgent ? "High" : "Normal"} opts={["Normal", "High", "Urgent, same day"]} red={urgent} /></Ro>
                   <Ro label="Manager"><SelEmp label="Manager" value={d.manager?.id || ""} emps={emps.filter((e) => e.in_managers !== false || e.id === d.manager?.id)} onChange={(id) => reassign("manager_id", id)} /></Ro>
                   <Ro label="Technician"><SelEmp label="Technician" value={d.assigned_to?.id || ""} emps={emps.filter((e) => e.in_assignees !== false || e.id === d.assigned_to?.id)} onChange={(id) => reassign("assigned_to_id", id)} /></Ro>

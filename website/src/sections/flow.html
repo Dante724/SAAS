@@ -11,7 +11,7 @@
   <div class="flow">
     <div class="rows" id="steps" role="tablist" aria-label="Job stages" aria-orientation="vertical">
       <button class="row" role="tab" id="st-0" aria-controls="sc-0" aria-selected="true" tabindex="0" data-rise><span class="num">01</span><span><span class="t">Intake</span><span class="d">Intake asks for exactly what your trade needs — IMEI, VIN or HIN — with condition photos and passcodes stored encrypted.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
-      <button class="row" role="tab" id="st-1" aria-controls="sc-1" aria-selected="false" tabindex="-1" data-rise><span class="num">02</span><span><span class="t">Estimate</span><span class="d">On Pro, Tekly AI drafts labour and parts from the customer's words, using your own catalog and prices. You review and send.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
+      <button class="row" role="tab" id="st-1" aria-controls="sc-1" aria-selected="false" tabindex="-1" data-rise><span class="num">02</span><span><span class="t">Estimate</span><span class="d">On Pro, Tekly AI drafts labour and parts lines from the customer's words. You check the prices, then send.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
       <button class="row" role="tab" id="st-2" aria-controls="sc-2" aria-selected="false" tabindex="-1" data-rise><span class="num">03</span><span><span class="t">Approval</span><span class="d">The customer approves line by line on their phone and signs. Declined work is saved for next time.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
       <button class="row" role="tab" id="st-3" aria-controls="sc-3" aria-selected="false" tabindex="-1" data-rise><span class="num">04</span><span><span class="t">Parts</span><span class="d">Scan the box when it arrives and the part is charged to the right job — and the customer's ready time updates.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
       <button class="row" role="tab" id="st-4" aria-controls="sc-4" aria-selected="false" tabindex="-1" data-rise><span class="num">05</span><span><span class="t">Paid</span><span class="d">Payment at the counter or by link. Revenue, margin and the technician's commission post the moment the job closes.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
@@ -50,7 +50,7 @@
         </div>
 
         <div class="scene" id="sc-1" role="tabpanel" aria-labelledby="st-1" hidden>
-          <p class="scene-k"><span class="ai">AI</span>Drafted from the customer's words · your catalog prices · tap a line to include or skip it</p>
+          <p class="scene-k"><span class="ai">AI</span>Drafted from the customer's words · check each price · tap a line to include or skip it</p>
           <ul class="lines" id="estLines">
             <li><button type="button" class="line on" data-amt="49"><i><svg><use href="#check"/></svg></i><span>Liquid-damage diagnostic<em>Labour · 0.5 h</em></span><b>$49.00</b></button></li>
             <li><button type="button" class="line on" data-amt="65"><i><svg><use href="#check"/></svg></i><span>Ultrasonic board clean<em>Labour · 0.75 h</em></span><b>$65.00</b></button></li>

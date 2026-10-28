@@ -85,6 +85,38 @@ async def _location_window(db: AsyncSession, location_id: Optional[str],
     return _m(day.get("open"), WORK_START_MIN), _m(day.get("close"), WORK_END_MIN)
 
 
+async def _into_working_hours(db: AsyncSession, org_id: str, location_id: Optional[str],
+                              send_at: datetime) -> datetime:
+    """Launch B6: send_at is UTC but opening hours are the shop's own clock. Shift on the shop's
+    clock, then hand back UTC (a 09:00 opening in New York is 13:00 or 14:00 UTC, not 09:00)."""
+    from backend.services.dates import shop_tzname, utc_to_wall, wall_to_utc
+    tz = await shop_tzname(db, org_id, location_id)
+    local = utc_to_wall(send_at, tz)
+    s, e = await _location_window(db, location_id, local)
+    return wall_to_utc(shift_into_working_hours(local, s, e), tz)
+
+
+# Scheduled times are shop wall-clock, `now` and send_at are UTC. No shop is more than 14 hours
+# from UTC, so a SQL window this much wider than the lead time can't miss an appointment; each
+# row is then checked exactly on its own shop's clock.
+_TZ_SLACK = timedelta(hours=14)
+
+
+async def _reminder_send_at(db: AsyncSession, org_id: str, location_id: Optional[str],
+                            start: datetime, lead: timedelta, now: datetime, tz_cache: dict):
+    """When a reminder for a `start` (shop wall-clock) should go out, in UTC, or None when the
+    start isn't inside the lead window yet (or has passed) on the shop's own clock."""
+    from backend.services.dates import shop_tzname, utc_to_wall, wall_to_utc
+    key = location_id or ""
+    if key not in tz_cache:
+        tz_cache[key] = await shop_tzname(db, org_id, location_id)
+    tz = tz_cache[key]
+    local_now = utc_to_wall(now, tz)
+    if not (local_now < start <= local_now + lead):
+        return None
+    return wall_to_utc(start - lead, tz)
+
+
 async def _latest_chat_channel(db: AsyncSession, org_id: str, client_id: str) -> Optional[str]:
     """The channel of the client's most recent conversation, if any (whatsapp|sms|email).
     Used by rules with chat_first=True so a reply lands where the client last talked to us."""
@@ -206,8 +238,7 @@ async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
 
         send_at = now + timedelta(minutes=rule.delay_min or 0)
         if rule.working_hours_only:
-            s, e = await _location_window(db, order.location_id, send_at)
-            send_at = shift_into_working_hours(send_at, s, e)
+            send_at = await _into_working_hours(db, org_id, order.location_id, send_at)
 
         log = NotificationLog(
             org_id=org_id, scope="client", channel=channel, trigger_event=event,
@@ -243,17 +274,21 @@ async def queue_reminders(db: AsyncSession, *, org_id: str,
         NotificationRule.org_id == org_id, NotificationRule.event == "reminder",
         NotificationRule.active == True))).scalars().all()  # noqa: E712
     queued = 0
+    tz_cache: dict = {}
     for rule in rules:
         lead = timedelta(minutes=rule.reminder_offset_min or 0)
-        horizon = now + lead
         orders = (await db.execute(select(Order).where(
             Order.org_id == org_id, Order.scheduled_for.isnot(None),
-            Order.scheduled_for > now, Order.scheduled_for <= horizon,
+            Order.scheduled_for > now - _TZ_SLACK, Order.scheduled_for <= now + lead + _TZ_SLACK,
             Order.archived == False)  # noqa: E712
             .options(selectinload(Order.client), selectinload(Order.lines),
                      selectinload(Order.device), selectinload(Order.assigned_to)))).scalars().all()
         for order in orders:
             if rule.location_id and rule.location_id != order.location_id:
+                continue
+            send_at = await _reminder_send_at(db, org_id, order.location_id, order.scheduled_for,
+                                              lead, now, tz_cache)
+            if send_at is None:
                 continue
             dupe = (await db.execute(select(NotificationLog.id).where(
                 NotificationLog.rule_id == rule.id, NotificationLog.order_id == order.id,
@@ -264,7 +299,6 @@ async def queue_reminders(db: AsyncSession, *, org_id: str,
             client = order.client
             recipient = (client.email if rule.channel == "email" else client.phone) if client else None
             body = await with_opt_out(db, org_id, order.client_id, rule.channel, body)
-            send_at = order.scheduled_for - lead
             if not recipient:
                 status, err = "skipped", f"Client has no {rule.channel} on file"
             elif not channel_consented(client, rule.channel):
@@ -383,8 +417,7 @@ async def evaluate_appointment(db: AsyncSession, *, org_id: str, appointment_id:
             subject, body = "Your appointment", f"Your appointment is booked for {when}."
         send_at = now + timedelta(minutes=rule.delay_min or 0)
         if rule.working_hours_only:
-            s, e = await _location_window(db, b.location_id, send_at)
-            send_at = shift_into_working_hours(send_at, s, e)
+            send_at = await _into_working_hours(db, org_id, b.location_id, send_at)
 
         log = NotificationLog(
             org_id=org_id, scope="client", channel=rule.channel, trigger_event=event,
@@ -440,14 +473,19 @@ async def queue_appointment_reminders(db: AsyncSession, *, org_id: str,
         NotificationRule.event == "reminder",
         NotificationRule.active == True))).scalars().all()  # noqa: E712
     queued = 0
+    tz_cache: dict = {}
     for rule in rules:
         lead = timedelta(minutes=rule.reminder_offset_min or 0)
         rows = (await db.execute(select(Appointment).where(
             Appointment.org_id == org_id, Appointment.status == "booked",
-            Appointment.scheduled_for > now,
-            Appointment.scheduled_for <= now + lead))).scalars().all()
+            Appointment.scheduled_for > now - _TZ_SLACK,
+            Appointment.scheduled_for <= now + lead + _TZ_SLACK))).scalars().all()
         for b in rows:
             if rule.location_id and rule.location_id != b.location_id:
+                continue
+            send_at = await _reminder_send_at(db, org_id, b.location_id, b.scheduled_for,
+                                              lead, now, tz_cache)
+            if send_at is None:
                 continue
             dupe = (await db.execute(select(NotificationLog.id).where(
                 NotificationLog.rule_id == rule.id,
@@ -463,7 +501,7 @@ async def queue_appointment_reminders(db: AsyncSession, *, org_id: str,
                 recipient=recipient, subject="Appointment reminder",
                 body=(f"Reminder: your appointment is at "
                       f"{b.scheduled_for.strftime('%Y-%m-%d %H:%M')}."),
-                send_at=b.scheduled_for - lead,
+                send_at=send_at,
                 status="scheduled" if recipient else "skipped",
                 error=None if recipient else f"No {rule.channel} on file"))
             queued += 1

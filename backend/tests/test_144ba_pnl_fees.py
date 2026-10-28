@@ -15,8 +15,8 @@ async def _order_total(client, h, total=100):
 @pytest.mark.asyncio
 async def test_card_fee_reduces_net_profit_and_shows_as_a_line(client, tenant):
     # a card account with a 2.9% processing fee
-    await client.post("/api/cash/accounts", json={"name": "Card", "payment_option": "card", "fee_pct": 2.9}, headers=tenant)
-    aid = [a for a in (await client.get("/api/cash/accounts", headers=tenant)).json()["items"] if a["name"] == "Card"][0]["id"]
+    aid = (await client.post("/api/cash/accounts", json={"name": "Card", "payment_option": "card",
+                                                         "fee_pct": 2.9}, headers=tenant)).json()["id"]
 
     oid = await _order_total(client, tenant, 100)
     r = await client.post(f"/api/cash/orders/{oid}/pay", json={"method": "card", "account_id": aid, "amount": 100}, headers=tenant)

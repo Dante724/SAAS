@@ -5,6 +5,7 @@ import { confirmDialog, promptDialog } from "../../lib/dialog";
 import { readAsDataUrl } from "../../lib/files";
 import { Gate, useMe } from "../../context/Me";
 import { money } from "./types";
+import { serverDate } from "../../lib/serverTime";
 
 /* Recommendations on a job: the extra work the technician thinks the customer should do.
    Staff add them here (title, price, why, urgency, photo), send them to the customer's
@@ -27,7 +28,7 @@ const STATUS: Record<string, { label: string; cls: string }> = {
   approved: { label: "Added to the job", cls: "bg-emerald-50 text-emerald-700" },
   declined: { label: "Saved for later", cls: "bg-amber-50 text-amber-800" },
 };
-const fmtDay = (iso?: string | null) => (iso ? new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + "Z").toLocaleDateString([], { month: "short", day: "numeric" }) : "");
+const fmtDay = (iso?: string | null) => serverDate(iso)?.toLocaleDateString([], { month: "short", day: "numeric" }) || "";
 
 // Shrink a photo before upload (long edge 1400px, JPEG) so proof photos stay light.
 async function shrinkPhoto(f: File): Promise<string> {

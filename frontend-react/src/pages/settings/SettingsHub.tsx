@@ -12,6 +12,7 @@ import { resetTerminology } from "../../lib/useTerminology";
 import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
 import { useMe } from "../../context/Me";
 import { NAV, CATS, SEC_CAT, searchSections, type SectionId } from "./settingsRegistry";
+import { FEATURES } from "../../lib/features";
 import { SetupChecklist } from "./SetupChecklist";
 import { StatusList, StatusEditor } from "./StatusesSettings";
 import GeneralSettings from "./GeneralSettings";
@@ -413,7 +414,7 @@ export default function SettingsHub() {
 
           {sec === "finance" && <InvoiceSettings />}
           {sec === "finance" && <FinanceNumbering currency={co?.currency || "$"} shop={{ name: co?.name, address: co?.company_address, phone: co?.company_phone, email: co?.company_email, logo: co?.logo_data }} />}
-          {sec === "ecommerce" && <EcommerceSettings />}
+          {sec === "ecommerce" && FEATURES.ecommerce && <EcommerceSettings />}
           {sec === "sso" && <SsoSettings />}
           {sec === "approvals" && <ApprovalsSettings />}
 
@@ -1094,7 +1095,7 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
   type Badge = { text: string; tone: "on" | "off" | "neutral" };
   const B = { on: "bg-emerald-100 text-emerald-700", off: "bg-slate-100 text-ink-secondary", neutral: "bg-indigo-50 text-indigo-700" } as const;
   type Webhook = { url: string; help: string };
-  const groups: { group: string; cards: { name: string; desc: string; badge: Badge; hint?: string; action?: { label: string; onClick: () => void }; webhook?: Webhook }[] }[] = [
+  const allGroups: { group: string; cards: { name: string; desc: string; badge: Badge; hint?: string; action?: { label: string; onClick: () => void }; webhook?: Webhook }[] }[] = [
     { group: "Payments", cards: [
       { name: "Online payments (Stripe)", desc: "Hosted checkout & payment links; reconciles into your cashboxes.",
         badge: payLive ? { text: `Live: ${payGw}`, tone: "on" } : keyBadge("stripe"),
@@ -1107,7 +1108,7 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
       { name: "SumUp", desc: "Card terminal & hosted checkout with SumUp.",
         badge: keyBadge("sumup"), action: keyAction("sumup") } ] },
     { group: "Accounting", cards: [
-      { name: "QuickBooks Online", desc: "Two-way sync of invoices, payments and contacts.",
+      { name: "QuickBooks Online", desc: "Send invoices, payments and contacts to QuickBooks.",
         badge: data.qbo?.connected ? { text: "Connected", tone: "on" } : { text: data.qbo?.configured ? "Not connected" : "Not configured", tone: "off" },
         hint: data.qbo?.configured ? undefined : "Set QBO_CLIENT_ID / SECRET on the server" },
       { name: "Xero", desc: "Sync invoices, payments and clients both ways.",
@@ -1139,6 +1140,9 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
       { name: "Repair-status widget", desc: "Embed a status checker on your site — customers look up a job by order # + phone.",
         badge: { text: "Available", tone: "on" }, action: { label: "Copy embed code", onClick: copyWidget } } ] },
   ];
+  // Xero and E-commerce stay hidden until their sync is real (see lib/features).
+  const hidden = new Set([...(FEATURES.xero ? [] : ["Xero"]), ...(FEATURES.ecommerce ? [] : ["Shopify / WooCommerce"])]);
+  const groups = allGroups.map((g) => ({ ...g, cards: g.cards.filter((c) => !hidden.has(c.name)) })).filter((g) => g.cards.length > 0);
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
       <div className="px-5 pt-4 pb-1">

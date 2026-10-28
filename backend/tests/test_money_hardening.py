@@ -13,8 +13,9 @@ async def _order_with_total(client, h, total=100):
 
 
 async def _account(client, h):
-    await client.post("/api/cash/accounts", json={"name": "Till", "payment_option": "cash"}, headers=h)
-    return (await client.get("/api/cash/accounts", headers=h)).json()["items"][0]["id"]
+    # The id of the till made here (a new shop also has seeded "Card" / "Cash drawer" accounts).
+    return (await client.post("/api/cash/accounts", json={"name": "Till", "payment_option": "cash"},
+                              headers=h)).json()["id"]
 
 
 @pytest.mark.asyncio

@@ -141,9 +141,9 @@ async def _tenant(client):
 
 
 async def _card_account(client, h, fee_pct=0):
-    await client.post("/api/cash/accounts", json={"name": "Card", "payment_option": "card", "fee_pct": fee_pct},
-                      headers=h)
-    return [a for a in (await client.get("/api/cash/accounts", headers=h)).json()["items"] if a["name"] == "Card"][0]["id"]
+    # The id of the account made here: a new shop also has its own seeded "Card" account.
+    return (await client.post("/api/cash/accounts", json={"name": "Card", "payment_option": "card",
+                                                           "fee_pct": fee_pct}, headers=h)).json()["id"]
 
 
 async def _order(client, h, total=100):
