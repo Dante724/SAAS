@@ -379,7 +379,7 @@ select.in { appearance: none; background: var(--canvas) url("data:image/svg+xml,
 
 /* footer */
 .foot { border-top: 1px solid var(--line); padding: 48px 0 32px; }
-.foot-grid { display: grid; grid-template-columns: 1.6fr 1fr 1fr 1fr; gap: 32px; }
+.foot-grid { display: grid; grid-template-columns: 1.4fr repeat(5, 1fr); gap: 32px; }
 .foot-about { font-size: 14px; color: var(--ink-muted); max-width: 30ch; margin: 12px 0 0; }
 .foot-h { font-size: 12px; color: var(--ink-muted); text-transform: uppercase; letter-spacing: .5px; margin: 0 0 12px; font-weight: 400; }
 .foot ul { list-style: none; margin: 0; padding: 0; }
@@ -651,7 +651,7 @@ select.in { appearance: none; background: var(--canvas) url("data:image/svg+xml,
 .tpl-more { margin-top: 18px; }
 @media (max-width: 1023px) { .sub-price { grid-template-columns: 1fr; } .sub-price-ctas { align-items: flex-start; } .others { grid-template-columns: 1fr; } }
 @media (max-width: 767px) { .sub-hero { padding: 56px 0 64px; } .sub-hero .h-display { font-size: 38px; letter-spacing: -1.3px; } .sub-dl { grid-template-columns: minmax(0, 1fr); } .sub-dl div { border-left: 0 !important; border-top: 1px solid var(--line) !important; } .sub-dl div:first-child { border-top: 0 !important; } .sub-price { padding: 24px 20px; } }
-.foot-grid { grid-template-columns: 1.4fr 1fr 1fr 1fr 1fr; } @media (max-width: 1023px) { .foot-grid { grid-template-columns: 1fr 1fr; } } .sub .foot-grid { grid-template-columns: 1.6fr 1fr 1fr 1fr 1fr; } @media (max-width: 1023px) { .sub .foot-grid { grid-template-columns: 1fr 1fr; } }
+.foot-grid { grid-template-columns: 1.4fr 1fr 1fr 1fr 1fr; } @media (max-width: 1023px) { .foot-grid { grid-template-columns: 1fr 1fr; } } .sub .foot-grid { grid-template-columns: 1.4fr repeat(5, 1fr); } @media (max-width: 1023px) { .sub .foot-grid { grid-template-columns: 1fr 1fr; } }
 
 /* ══ Tekly Assistant ══ */
 .ta { position: fixed; right: 20px; bottom: 20px; z-index: 80; font-family: var(--text); }
