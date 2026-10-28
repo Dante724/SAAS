@@ -13,6 +13,8 @@ import { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import FloatingMenu from "../../components/FloatingMenu";
 import PrintMenu from "./PrintMenu";
+import AutoPrintPicker from "../../components/AutoPrintPicker";
+import { autoPrintIfClosed } from "../../lib/autoPrint";
 import { Order, deviceName, money } from "./types";
 import { Avatar, deviceIcon, dueText, friendlyDate } from "./look";
 import { api, openAuthedDoc } from "../../api/client";
@@ -106,7 +108,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
     let reason: string | null = null;
     { const ds = droppedStatus(statuses as any[], key); if (ds) { reason = await askCancelReason(ds.name); if (reason === null) return; } }
     const prev = d.status; setD({ ...d, status: key });
-    try { await api.patch(`/orders/${order.id}/status`, { status: key, reason: reason || undefined }); flash("Status updated"); onChanged?.(); reload(); }
+    try { const r = await api.patch<any>(`/orders/${order.id}/status`, { status: key, reason: reason || undefined }); flash("Status updated"); void autoPrintIfClosed(order.id, r); onChanged?.(); reload(); }
     catch (e: any) { setD({ ...d, status: prev }); flash(`Failed: ${e.message}`); }
   }
   const nav = useNavigate();
@@ -524,6 +526,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               {(d as any).public_token && <a href={`/track/${(d as any).public_token}`} target="_blank" rel="noopener noreferrer" className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-0.5 hover:underline">Open<M n="open_in_new" c="text-xs" /></a>}
             </span>
             <PrintMenu key={order.id} orderId={order.id} status={d.status} canInvoices={can("can_view_invoices")} onSticker={printWO} onError={flash} />
+            {!(order as any).is_estimate && <AutoPrintPicker event="close" />}
             <button onClick={del} className="text-xs text-rose-600 hover:text-rose-700 font-semibold flex items-center gap-1 hover:bg-rose-50 rounded-lg px-2 py-1 transition-colors"><M n="delete" c="text-xs" />Delete</button>
           </div>
           <div className="flex items-center gap-2">
