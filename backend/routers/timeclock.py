@@ -858,7 +858,7 @@ async def my_work(
     my_order_ids = list(dict.fromkeys(l["order_id"] for l in my_lines))
     if my_order_ids:
         from backend.models import OrderChecklistItem, OrderStatus, Client, Device
-        from backend.routers.statuses import ensure_seeded
+        from backend.routers.statuses import ensure_seeded, is_transition_allowed
         await ensure_seeded(db, current.org_id)
         wf = (await db.execute(select(OrderStatus).where(
             OrderStatus.org_id == current.org_id, OrderStatus.record_type == "work_order",
@@ -882,8 +882,13 @@ async def my_work(
             cur = by_key.get(o.status)
             nxt = None
             if cur and not cur.is_terminal:
-                nxt = next((s for s in wf if s.sort_order > cur.sort_order and not s.is_terminal), None) \
-                    or next((s for s in wf if s.sort_order > cur.sort_order), None)
+                # B11: the next step is the next main-path status this role may move to. A
+                # "pending" status (Waiting parts…) is a detour, not the next step for every job.
+                later = [s for s in wf if s.sort_order > cur.sort_order]
+                ok = [s for s in later if await is_transition_allowed(
+                    db, current.org_id, current.role_id, o.status, s.key)]
+                nxt = next((s for s in ok if not s.is_terminal and s.status_group != "pending"), None) \
+                    or next((s for s in ok if not s.is_terminal), None) or next(iter(ok), None)
             dv = devices.get(o.device_id)
             done, total = prog.get(oid, (0, 0))
             orders.append({
