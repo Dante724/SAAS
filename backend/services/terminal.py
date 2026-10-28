@@ -641,6 +641,14 @@ async def refund(db: AsyncSession, ch: TerminalCharge, *, amount: Optional[float
         raise TerminalError(400, "Refund amount must be positive")
     if amount > left + 0.005:
         raise TerminalError(422, f"Only {left:.2f} is left to refund on this charge.")
+    if ch.order_id:
+        # One cap for every refund path (B3): money already handed back in cash (Refunds, an
+        # overpayment refund) counts too, or the same 100 went back once in cash and again here.
+        from backend.services.order_money import net_paid
+        kept = await net_paid(db, ch.order_id)
+        if amount > kept + 0.005:
+            raise TerminalError(422, f"Only {max(kept, 0):.2f} paid for this job hasn't been refunded yet."
+                                if kept > 0 else "Everything paid for this job has already been refunded.")
     # Claim the refund before calling the provider so two clicks can't both refund.
     claimed = await db.execute(sa_update(TerminalCharge)
         .where(TerminalCharge.id == ch.id, TerminalCharge.refunded_amount == ch.refunded_amount)

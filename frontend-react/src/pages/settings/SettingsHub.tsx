@@ -1083,6 +1083,7 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
   const emailOn = (data.email?.accounts?.length || 0) > 0;
   const payGw = data.pay?.gateway; const payLive = !!data.pay?.live;
   const payAvail = Object.entries(data.pay?.available || {}).filter(([, v]) => v).map(([k]) => k);
+  const hooks: { stripe?: string; square?: string } = data.pay?.webhook_urls || {};
   const telOn = !!data.tel?.enabled; const telProv = data.tel?.provider;
   const ecomN = data.ecom?.length || 0;
   const origin = typeof window !== "undefined" ? window.location.origin : "";
@@ -1093,14 +1094,17 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
   };
   type Badge = { text: string; tone: "on" | "off" | "neutral" };
   const B = { on: "bg-emerald-100 text-emerald-700", off: "bg-slate-100 text-ink-secondary", neutral: "bg-indigo-50 text-indigo-700" } as const;
-  const allGroups: { group: string; cards: { name: string; desc: string; badge: Badge; hint?: string; action?: { label: string; onClick: () => void } }[] }[] = [
+  type Webhook = { url: string; help: string };
+  const allGroups: { group: string; cards: { name: string; desc: string; badge: Badge; hint?: string; action?: { label: string; onClick: () => void }; webhook?: Webhook }[] }[] = [
     { group: "Payments", cards: [
       { name: "Online payments (Stripe)", desc: "Hosted checkout & payment links; reconciles into your cashboxes.",
         badge: payLive ? { text: `Live: ${payGw}`, tone: "on" } : keyBadge("stripe"),
         hint: payAvail.length ? `Configured: ${payAvail.join(", ")}` : "Add your own Stripe secret key to go live",
-        action: keyAction("stripe") },
+        action: keyAction("stripe"),
+        webhook: hooks.stripe ? { url: hooks.stripe, help: "Paste this into Stripe under Developers › Webhooks › Add endpoint, and pick the event checkout.session.completed, so paid links mark jobs as paid." } : undefined },
       { name: "Square", desc: "In-person & online card payments with Square.",
-        badge: keyBadge("square"), action: keyAction("square") },
+        badge: keyBadge("square"), action: keyAction("square"),
+        webhook: hooks.square ? { url: hooks.square, help: "Paste this into your Square Developer Dashboard under Webhooks › Subscriptions, so Square payments show up in Tekly." } : undefined },
       { name: "SumUp", desc: "Card terminal & hosted checkout with SumUp.",
         badge: keyBadge("sumup"), action: keyAction("sumup") } ] },
     { group: "Accounting", cards: [
@@ -1158,6 +1162,7 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
                   </div>
                   <p className="text-[12px] text-ink-secondary leading-snug">{c.desc}</p>
                   {c.hint && <p className="text-[11px] text-ink-tertiary mt-0.5">{c.hint}</p>}
+                  {c.webhook && <WebhookUrl {...c.webhook} />}
                   {c.action && <button type="button" onClick={c.action.onClick} className="mt-1 self-start px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[11px] font-semibold text-ink-primary">{c.action.label}</button>}
                 </div>
               ))}
@@ -1168,6 +1173,25 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
       {keyProv && <CredDrawer provider={keyProv} status={creds[keyProv]}
         onClose={() => setKeyProv(null)}
         onSaved={() => { setKeyProv(null); reload && reload(); }} />}
+    </div>
+  );
+}
+
+/* The shop's own webhook address for a payment provider, with a copy button and where to paste it. */
+function WebhookUrl({ url, help }: { url: string; help: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try { await navigator.clipboard.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 2000); }
+    catch { await promptDialog("Copy your webhook address:", { defaultValue: url }); }
+  }
+  return (
+    <div className="mt-1 rounded-lg bg-slate-50 border border-slate-200 p-2 space-y-1">
+      <p className="text-[11px] font-semibold text-ink-secondary">Your webhook address</p>
+      <div className="flex items-center gap-1.5">
+        <code className="flex-1 min-w-0 truncate text-[11px] font-mono text-ink-primary" title={url}>{url}</code>
+        <button type="button" onClick={copy} aria-label="Copy webhook address" className="shrink-0 px-2 py-0.5 rounded-md bg-white border border-slate-200 hover:bg-slate-100 text-[11px] font-semibold text-ink-primary">{copied ? "Copied" : "Copy"}</button>
+      </div>
+      <p className="text-[11px] text-ink-tertiary leading-snug">{help}</p>
     </div>
   );
 }

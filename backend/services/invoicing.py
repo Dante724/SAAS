@@ -349,6 +349,8 @@ async def auto_draft_on_close(db: AsyncSession, order: Order) -> Invoice | None:
     from backend.models import InvoiceOrder
     db.add(InvoiceOrder(invoice_id=inv.id, order_id=order.id, sort_order=0))
     await db.flush()
+    from backend.services.order_money import apply_deposits
+    await apply_deposits(db, inv, order)   # deposits taken before the invoice count on it
     return inv
 
 

@@ -29,6 +29,7 @@ import StatusControl, { type FullStatus } from "../../components/StatusControl";
 import { escapeHtml, printHtmlInFrame } from "../../lib/safeHtml";
 import JobCardFields from "../../components/JobCardFields";
 import ReaderCharge from "../../components/ReaderCharge";
+import AccountPicker, { type PayAccount, type PaymentOption, accountsFor, pickDefaultAccount } from "../../components/AccountPicker";
 import CardPaymentsList from "../../components/CardPaymentsList";
 import { jobTypeLabel, type WOTypeRef } from "./jobType";
 
@@ -1466,7 +1467,10 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
 }
 
 /* ---- Invoices tab ---- */
-type PayCtx = { order_total: number; already_paid: number; prepaid: number; remaining: number; accounts_by_method: Record<string, { id: string; name: string }[]> };
+type PayCtx = { order_total: number; already_paid: number; prepaid: number; remaining: number; location_id?: string | null; accounts_by_method: Record<string, PayAccount[]> };
+// Every account from the payment context in one list, each tagged with the method it sits under.
+const ctxAccounts = (c: PayCtx | null): PayAccount[] =>
+  c ? Object.entries(c.accounts_by_method || {}).flatMap(([k, list]) => (list || []).map((a) => ({ ...a, payment_option: a.payment_option || k }))) : [];
 export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash }: { orderId: string; total?: number; writtenOff?: number; deposit?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: (m: string) => void }) {
   const { base, opts: curOpts, multi: multiCurrency } = useCurrencies();
   const { can } = useMe();
@@ -1527,8 +1531,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
 
   const openPay = async (kind: "pay" | "prepay") => {
     try { const c = await api.get<PayCtx>(`/cash/orders/${orderId}/payment-context`); setCtx(c);
-      const firstAcc = (c.accounts_by_method[method] || c.accounts_by_method.cash || [])[0];
-      setAccount(firstAcc?.id || ""); setAmount(String(kind === "pay" ? c.remaining : "")); setModal(kind);
+      setAccount(pickDefaultAccount(accountsFor(ctxAccounts(c), method as PaymentOption), c.location_id)); setAmount(String(kind === "pay" ? c.remaining : "")); setModal(kind);
     } catch (e: any) { onFlash(`Cannot open payment: ${e.message}`); }
   };
   // Busy guard: the ref blocks a second click landing before React re-renders the disabled button,
@@ -1551,7 +1554,9 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
   // A dropped job's unpaid part was written off (orders.written_off), so it isn't owed any more.
   const t = total ?? 0; const due = Math.max(t - paid - (writtenOff || 0), 0);
   const settled = t > 0 && due <= 0;   // fully paid: no payment or deposit actions to offer
-  const accts = ctx ? (ctx.accounts_by_method[method] || ctx.accounts_by_method.cash || []) : [];
+  const allAccts = ctxAccounts(ctx);
+  // A cashbox made from the dialog's inline "Set up a cashbox" form joins its method's list.
+  const addAccount = (a: PayAccount) => setCtx((c) => c && ({ ...c, accounts_by_method: { ...c.accounts_by_method, [a.payment_option || method]: [...(c.accounts_by_method[a.payment_option || method] || []), a] } }));
 
   return (
     <div className="space-y-5">
@@ -1672,16 +1677,19 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
               {isForeign && amount && !isNaN(parseFloat(amount)) && (
                 <p className="mt-1 text-[11px] text-ink-tertiary tabular-nums">≈ {currencySymbol}{conv(parseFloat(amount)).toFixed(2)} {currencyCode} <span className="text-ink-placeholder">at the document rate</span></p>
               )}</div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-3 items-start">
               <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Method</label>
-                <select value={method} onChange={(e) => { setMethod(e.target.value); const a = (ctx.accounts_by_method[e.target.value] || [])[0]; setAccount(a?.id || ""); }} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl"><option value="cash">Cash</option><option value="cashless">Cashless / UPI</option><option value="card">Card</option></select></div>
-              <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Account</label>
-                <select value={account} onChange={(e) => setAccount(e.target.value)} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl">{accts.length === 0 && <option value="">No account</option>}{accts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
+                <select value={method} onChange={(e) => { setMethod(e.target.value); setAccount(pickDefaultAccount(accountsFor(allAccts, e.target.value as PaymentOption), ctx.location_id)); }} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl"><option value="cash">Cash</option><option value="cashless">Cashless / UPI</option><option value="card">Card</option></select></div>
+              {accountsFor(allAccts, method as PaymentOption).length > 0 && <div><label htmlFor="wo-pay-account" className="block text-[11px] font-bold text-ink-tertiary mb-1">Account</label>
+                <AccountPicker id="wo-pay-account" accounts={allAccts} paymentOption={method as PaymentOption} locationId={ctx.location_id} value={account} onChange={setAccount} onCreated={addAccount} /></div>}
             </div>
+            {accountsFor(allAccts, method as PaymentOption).length === 0 && (
+              <AccountPicker accounts={allAccts} paymentOption={method as PaymentOption} locationId={ctx.location_id} value={account} onChange={setAccount} onCreated={addAccount} />
+            )}
             {modal === "pay" && method === "card" && can("can_take_card_payments") && (
               <button onClick={() => setOnReader(true)} disabled={!(parseFloat(amount) > 0)} className="w-full py-2 rounded-xl border border-primary/30 bg-white text-primary text-xs font-bold hover:bg-blue-50 disabled:opacity-50 flex items-center justify-center gap-2"><M n="contactless" c="text-base" />Charge on reader</button>
             )}
-            <div className="flex justify-end gap-2 pt-1"><button onClick={() => setModal(null)} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button><button onClick={submit} disabled={payBusy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{payBusy ? "Recording…" : `Record ${modal === "prepay" ? "prepayment" : "payment"}`}</button></div>
+            <div className="flex justify-end gap-2 pt-1"><button onClick={() => setModal(null)} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button><button onClick={submit} disabled={payBusy || !account} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{payBusy ? "Recording…" : `Record ${modal === "prepay" ? "prepayment" : "payment"}`}</button></div>
           </div>
         </div>
       , document.body)}

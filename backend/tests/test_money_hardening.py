@@ -84,8 +84,9 @@ async def test_archive_restocks_consumed_parts(client, tenant):
 
 @pytest.mark.asyncio
 async def test_archive_does_not_cash_refund_on_account_payment(client, tenant):
-    _cid, oid = await _order_with_total(client, tenant, 100)
-    # Settle on the client's balance — no cash ever entered the till.
+    cid, oid = await _order_with_total(client, tenant, 100)
+    # Settle on the client's balance (credit they already hold) — no cash ever entered the till.
+    await client.post(f"/api/clients/{cid}/balance", json={"kind": "advance", "amount": 100}, headers=tenant)
     assert (await client.post(f"/api/cash/orders/{oid}/pay", json={"method": "balance", "amount": 100}, headers=tenant)).status_code in (200, 201)
     # Archiving with refund must NOT pay out cash for a balance-settled order.
     r = await client.delete(f"/api/orders/{oid}?refund=true", headers=tenant)
