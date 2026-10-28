@@ -1744,6 +1744,8 @@ class CustomField(Base):
     # Forms step 2 — "Shows on": the work order screen (job card) and the customer portal / tracking page
     show_on_job_card: Mapped[bool] = mapped_column(Boolean, default=True)
     show_in_portal: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Self check-in: ask this field on the customer's check-in page (customer-facing fields only)
+    ask_at_checkin: Mapped[bool] = mapped_column(Boolean, default=False)
     # 144gq — auto-fill source: "asset.<attr>" (from the linked device) or
     # "last_order.<field_key>" (from the client's most recent order). Pre-fills on open.
     autofill_source: Mapped[Optional[str]] = mapped_column(String(80))
@@ -2373,6 +2375,75 @@ class Lead(Base):
     call_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # missed calls merged in
     last_call_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(64))
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class CheckinPoint(Base):
+    """Self check-in: a place where customers arrive (front door, key box, dock, counter
+    tablet). A location can have several; each has its own unguessable QR token, which is
+    all the public page ever sees — the server works out the shop and location from it."""
+    __tablename__ = "checkin_points"
+    __table_args__ = (
+        Index("uq_checkin_points_token", "token", unique=True),
+        Index("ix_checkin_points_org_loc", "org_id", "location_id"),
+    )
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
+    location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
+    name: Mapped[str] = mapped_column(String(80))
+    mode: Mapped[str] = mapped_column(String(12), default="auto")   # walk_in|key_drop|auto (by working hours)
+    kiosk: Mapped[bool] = mapped_column(Boolean, default=False)      # shared tablet: resets after each check-in
+    job_type_ids: Mapped[Optional[list]] = mapped_column(JSON, default=list)   # offered job types; empty = default
+    welcome_text: Mapped[Optional[str]] = mapped_column(Text)
+    terms_template_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("document_templates.id"))
+    require_photo: Mapped[bool] = mapped_column(Boolean, default=False)
+    show_wait: Mapped[bool] = mapped_column(Boolean, default=True)
+    token: Mapped[str] = mapped_column(String(64), default=lambda: secrets.token_urlsafe(24))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    scans: Mapped[int] = mapped_column(Integer, default=0)
+    submits: Mapped[int] = mapped_column(Integer, default=0)
+    rotated_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class Checkin(Base):
+    """One customer's self check-in. The inquiry (Lead, source walk_in) is the record staff
+    work with; this row keeps what only a check-in has: the queue number, the scanned
+    identifier, the reading, the answers against the form as it was, the signature."""
+    __tablename__ = "checkins"
+    __table_args__ = (
+        Index("uq_checkins_status_token", "status_token", unique=True),
+        Index("uq_checkins_lead", "lead_id", unique=True),
+        Index("uq_checkins_queue", "org_id", "location_id", "queue_day", "queue_no", unique=True),
+    )
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
+    location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
+    point_id: Mapped[str] = mapped_column(String, ForeignKey("checkin_points.id"))
+    lead_id: Mapped[str] = mapped_column(String, ForeignKey("leads.id"))
+    kind: Mapped[str] = mapped_column(String(10), default="walk_in")      # walk_in|key_drop
+    queue_no: Mapped[int] = mapped_column(Integer)
+    queue_day: Mapped[date] = mapped_column(Date)                          # shop-local day; numbers restart daily
+    state: Mapped[str] = mapped_column(String(12), default="waiting")     # waiting|called|no_show|converted|cancelled
+    job_type_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("work_order_types.id"))
+    asset_group: Mapped[Optional[str]] = mapped_column(String(40))
+    identifier_kind: Mapped[Optional[str]] = mapped_column(String(20))
+    identifier_value: Mapped[Optional[str]] = mapped_column(String(100))
+    decoded: Mapped[Optional[dict]] = mapped_column(JSON)                  # make / model / year from the decoders
+    reading_kind: Mapped[Optional[str]] = mapped_column(String(20))       # template field key: mileage|hours|…
+    reading_value: Mapped[Optional[float]] = mapped_column(Float)
+    answers: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)   # field key -> value
+    form_snapshot: Mapped[Optional[dict]] = mapped_column(JSON)          # the form as the customer saw it
+    signature_png: Mapped[Optional[str]] = mapped_column(Text)
+    signer_name: Mapped[Optional[str]] = mapped_column(String(200))
+    signer_ip: Mapped[Optional[str]] = mapped_column(String(64))
+    terms_hash: Mapped[Optional[str]] = mapped_column(String(64))
+    photo_ids: Mapped[Optional[list]] = mapped_column(JSON, default=list)  # media blob ids (key drop)
+    key_tag: Mapped[Optional[str]] = mapped_column(String(40))
+    status_token: Mapped[str] = mapped_column(String(64), default=lambda: secrets.token_urlsafe(24))
+    called_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    converted_order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
