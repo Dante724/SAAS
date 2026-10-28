@@ -43,6 +43,22 @@ the kit's name and price, but parts a tech adds on top must still show. Orderry'
 - **Region warning.** Vehicle-repair shops and US shops see a reminder before choosing one line.
   Kits never default to one line.
 
+## Review fixes (security + tester subagents)
+
+- **No giveaways.** In a fixed-price kit, more of a part or a new part at the same price needs
+  `can_change_kit_price`. Fewer parts keeps the customer's price, and anyone may do that.
+- **No hidden charges.** Adding into a one-line kit priced as the sum of its parts needs
+  `can_change_kit_print`. Only catalog services and products can join a kit. A line that joins
+  takes the kit's tax and item, and its share is weighted by its catalog price, never a price the
+  client sent.
+- **Invoices freeze kits.** Once a kit's lines are on a live invoice (partial or whole-job), its
+  price and parts can't change. Once a customer has an issued invoice, it keeps printing the same way.
+- **Exact to the cent.** `spread()` counts each line as it will be stored (float maths included),
+  never goes negative, and re-shares after any edit to a locked line. A seeded property test runs
+  5,000 cases.
+- **Real amounts.** Kit prices must be finite, 0 or more, and fit Numeric(12, 2).
+- **Audit.** Every re-share that moves a price, and every itemised copy printed, writes an audit row.
+
 ## Follow-ups (out of scope)
 
 - India GST package tax (composite supply at one rate, HSN/SAC codes). Tekly has no HSN/SAC fields yet.
@@ -51,3 +67,8 @@ the kit's name and price, but parts a tech adds on top must still show. Orderry'
 - An optional, never-automatic tool to tag old "(Kit)" lines.
 - `/api/v2/bundles` should expose `print_mode` once API v2 lands (it is not on this branch).
 - A Tekly Go badge on kit lines once Go is on this branch (the order API already returns the tags).
+- The margin floor isn't re-checked after a re-share. A kit priced below cost can put a line under
+  the floor, and with the guard set to "block", that would refuse later edits to it.
+- Found in passing, not from this change: `/documents/render-invoice` has no invoice permission
+  check; editing ordinary lines after a whole-job invoice changes its rows but not its stored total;
+  the e-invoice's TaxAmount comes from the invoice's own tax field.
