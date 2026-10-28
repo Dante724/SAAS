@@ -1115,6 +1115,9 @@ async def render_document(
         raise HTTPException(404, "Template not found")
     if itemised:
         await assert_perm(db, current, "can_print_itemised_copy")
+        from backend.services.audit import record as _audit
+        await _audit(db, org_id=current.org_id, actor_id=current.id, action="order.itemised_copy",
+                     entity_type="order", entity_id=order.id, diff={"template": tpl.name})
     doc, rows = await _resolve(db, current.org_id, order, current, itemised=itemised)
     body = await _expand_components(db, current.org_id, tpl.body_html)
     html = _render(body, doc, rows)
@@ -1424,6 +1427,10 @@ async def render_invoice_document(
         raise HTTPException(404, "Invoice not found")
     if itemised:
         await assert_perm(db, current, "can_print_itemised_copy")
+        from backend.services.audit import record as _audit
+        await _audit(db, org_id=current.org_id, actor_id=current.id, action="invoice.itemised_copy",
+                     entity_type="invoice", entity_id=inv.id, diff={"template": tpl.name})
+        await db.commit()
     doc, rows = await _resolve_invoice(db, current.org_id, inv, itemised=itemised)
     html = _render(tpl.body_html, doc, rows)
     return {"html": html, "name": tpl.name}

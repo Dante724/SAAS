@@ -439,3 +439,94 @@ def test_kit1p01_grants_on_existing_roles(tmp_path):
     assert got["tech"]["can_print_itemised_copy"] is True
     assert got["legacy_no_kits"]["can_change_kit_print"] is False
     assert "can_change_kit_print" not in got["legacy"] and got["legacy"]["can_change_kit_price"] is False
+
+
+# ── security review fixes ──────────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_no_giveaways_inside_a_fixed_kit_without_the_kit_price_right(client, tenant, db):
+    s = await _shop(client, tenant)
+    oid, _cid, gid = await _job_with_kit_and_charger(client, tenant, s)
+    tech = await _person(client, tenant, {})              # no can_change_kit_price (opt-in)
+    scr = [l for l in await k.lines(client, tenant, oid) if l["ref_id"] == s.screen][0]
+    r = await client.patch(f"/api/orders/{oid}/lines/{scr['id']}", headers=tech, json={"qty": 8})
+    assert r.status_code == 403 and "extra" in r.text
+    assert await k.stock(client, tenant, s.screen) == 9
+    r = await client.post(f"/api/orders/{oid}/lines", headers=tech, json={
+        "kind": "product", "line_type": "part", "ref_id": s.glue, "description": "glue",
+        "qty": 1, "unit_price": 10, "bundle_group_id": gid})
+    assert r.status_code == 403
+    # fewer parts keeps the customer's price: allowed, and the re-share is audited
+    glue = [l for l in await k.lines(client, tenant, oid) if l["ref_id"] == s.glue][0]
+    assert (await client.delete(f"/api/orders/{oid}/lines/{glue['id']}", headers=tech)).status_code == 200
+    from backend.models import AuditLog
+    acts = (await db.execute(select(AuditLog.action, AuditLog.diff).where(AuditLog.entity_id == oid))).all()
+    resp = [d for a, d in acts if a == "order.kit_respread"]
+    assert resp and resp[-1]["kit_price"] == 149.99 and resp[-1]["change"].startswith("Removed")
+
+
+@pytest.mark.asyncio
+async def test_only_catalog_items_join_a_kit_with_catalog_weights_and_kit_tax(client, tenant):
+    s = await _shop(client, tenant)
+    oid, _cid, gid = await _job_with_kit_and_charger(client, tenant, s)
+    r = await client.post(f"/api/orders/{oid}/lines", headers=tenant, json={
+        "kind": "custom", "line_type": "fee", "description": "Hidden fee", "qty": 1,
+        "unit_price": 1000000, "bundle_group_id": gid})
+    assert r.status_code == 400
+    await k.add_line(client, tenant, oid, kind="product", line_type="part", ref_id=s.glue, description="glue",
+                     qty=1, unit_price=1000000, tax_rate=50, bundle_group_id=gid)
+    ls = [l for l in await k.lines(client, tenant, oid) if l["bundle_group_id"] == gid]
+    assert round(sum(l["total"] for l in ls), 2) == 149.99
+    assert max(l["unit_price"] for l in ls) < 100           # weights came from the catalog
+    assert {l["tax_rate"] for l in ls} == {0}
+
+
+@pytest.mark.asyncio
+async def test_hidden_charge_in_a_one_line_sum_kit_needs_the_print_right(client, tenant):
+    s = await _shop(client, tenant, price_mode="sum", price=0)
+    oid, _cid, gid = await _job_with_kit_and_charger(client, tenant, s)
+    tech = await _person(client, tenant, {"can_change_kit_print": False})
+    r = await client.post(f"/api/orders/{oid}/lines", headers=tech, json={
+        "kind": "product", "line_type": "part", "ref_id": s.glue, "description": "glue", "qty": 1,
+        "unit_price": 10, "bundle_group_id": gid})
+    assert r.status_code == 403 and "one line" in r.text
+
+
+@pytest.mark.asyncio
+async def test_invoiced_kit_lines_are_frozen(client, tenant):
+    s = await _shop(client, tenant)
+    oid, _cid, gid = await _job_with_kit_and_charger(client, tenant, s)
+    ls = await k.lines(client, tenant, oid)
+    scr = [l for l in ls if l["ref_id"] == s.screen][0]
+    glue = [l for l in ls if l["ref_id"] == s.glue][0]
+    r = await client.post(f"/api/cash/orders/{oid}/invoices", headers=tenant, json={"line_ids": [scr["id"]]})
+    assert r.status_code == 201
+    assert (await client.delete(f"/api/orders/{oid}/lines/{glue['id']}", headers=tenant)).status_code == 409
+    assert (await client.patch(f"/api/orders/{oid}/kits/{gid}", headers=tenant,
+                               json={"price": 100, "reason": "goodwill"})).status_code == 409
+    assert (await client.patch(f"/api/orders/{oid}/kits/{gid}", headers=tenant,
+                               json={"print_mode": "itemized"})).status_code == 200   # printing only
+
+
+@pytest.mark.parametrize("price", ["NaN", "Infinity", 1e15, -1])
+@pytest.mark.asyncio
+async def test_kit_price_must_be_a_real_amount(client, tenant, price):
+    s = await _shop(client, tenant)
+    oid, _cid, gid = await _job_with_kit_and_charger(client, tenant, s)
+    body = '{"price": %s, "reason": "test"}' % (price if isinstance(price, str) else repr(price))
+    r = await client.patch(f"/api/orders/{oid}/kits/{gid}", headers={**tenant, "Content-Type": "application/json"},
+                           content=body)
+    assert r.status_code == 400, r.text
+    r = await client.post("/api/bundles", headers={**tenant, "Content-Type": "application/json"}, content=(
+        '{"name": "Bad", "price_mode": "fixed", "price": %s, "components": [{"ref_type": "service", "ref_id": "%s"}]}'
+        % (price if isinstance(price, str) else repr(price), s.fit)))
+    assert r.status_code == 400, r.text
+
+
+@pytest.mark.asyncio
+async def test_kit_lines_stay_with_their_kit_item(client, tenant):
+    s = await _shop(client, tenant)
+    oid, _cid, _gid = await _job_with_kit_and_charger(client, tenant, s)
+    scr = [l for l in await k.lines(client, tenant, oid) if l["ref_id"] == s.screen][0]
+    r = await client.patch(f"/api/orders/{oid}/lines/{scr['id']}", headers=tenant, json={"order_item_id": "x"})
+    assert r.status_code in (404, 409)

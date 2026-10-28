@@ -27,6 +27,15 @@ MODE_LABELS = {ITEMIZED: "Item by item", ONE_LINE: "One line",
                ONE_LINE_INCLUDES: "One line and what's included"}
 
 
+MAX_PRICE = 9_999_999_999.99
+
+
+def price_ok(v) -> bool:
+    """A kit price must be a real amount: finite, not negative, fits Numeric(12, 2)."""
+    import math
+    return v is not None and math.isfinite(v) and 0 <= v <= MAX_PRICE
+
+
 def norm_mode(mode: Optional[str]) -> str:
     return mode if mode in PRINT_MODES else ITEMIZED
 

@@ -1,5 +1,5 @@
 """Bundles — catalog kits that explode into components on the order."""
-from typing import Optional
+from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -104,11 +104,17 @@ class CompIn(BaseModel):
 
 class BundleIn(BaseModel):
     name: str
-    price_mode: str = "sum"
+    price_mode: Literal["sum", "fixed"] = "sum"
     price: float = 0.0
     category_id: Optional[str] = None
     print_mode: Optional[str] = None   # itemized (default) | one_line | one_line_includes
     components: list[CompIn] = []
+
+
+def _check_price(price):
+    from backend.services.kit_print import price_ok
+    if not price_ok(price):
+        raise HTTPException(400, "Enter a kit price of 0 or more")
 
 
 def _check_mode(mode):
@@ -127,6 +133,7 @@ async def create_bundle(
         raise HTTPException(400, "A bundle needs at least one component")
     await _validate_components(db, current.org_id, data.components)
     _check_mode(data.print_mode)
+    _check_price(data.price)
     b = Bundle(org_id=current.org_id, name=data.name,
                price_mode=data.price_mode, price=data.price,
                category_id=data.category_id or None, print_mode=norm_mode(data.print_mode))
@@ -159,6 +166,7 @@ async def update_bundle(
     if "price_mode" in sent:
         b.price_mode = data.price_mode
     if "price" in sent:
+        _check_price(data.price)
         b.price = data.price
     if "category_id" in sent:
         b.category_id = data.category_id or None
