@@ -161,9 +161,10 @@ WAGE_AUDIT_FIELDS = ("wage_type", "wage_value", "hourly_basis", "weekly_hours",
 # everything the actor is denied — i.e. never hand out or take over more access than they have.
 
 async def _denied_for_role(db: AsyncSession, org_id: str, role_id: Optional[str]) -> set:
-    from backend.services.permissions import ALL_CODES
+    # No role grants nothing through has_perm, but a few older checks still read "no role" as
+    # the owner (record scope, POS overrides), so handing it out stays an owner-only action.
     if not role_id:
-        return set(ALL_CODES)      # no role = no permissions (only the shop owner has everything)
+        return set()
     role = (await db.execute(select(Role).where(Role.id == role_id, Role.org_id == org_id))).scalar_one_or_none()
     if not role:
         raise HTTPException(400, "Unknown role")

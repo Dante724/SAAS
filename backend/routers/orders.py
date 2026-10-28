@@ -3547,7 +3547,9 @@ async def _assert_listed(db, org_id, employee_id, code, list_name) -> None:
         return
     emp = (await db.execute(select(Employee).where(
         Employee.id == employee_id, Employee.org_id == org_id))).scalar_one_or_none()
-    if emp and not await has_perm(db, emp, code):
+    # Being listed is a display setting, not access: someone with no role is listed, as in the
+    # Team screen's pickers (staff._picker_lists), even though they have no permissions.
+    if emp and emp.role_id and not await has_perm(db, emp, code):
         raise HTTPException(422, f"{emp.name} isn't in the {list_name} list.")
 
 

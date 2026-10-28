@@ -205,6 +205,8 @@ async def has_perm(db: AsyncSession, employee: Employee, perm_key: str) -> bool:
     """Does this person's role grant the permission? (services/permissions.role_allows.)
     The shop owner has every permission. Anyone else with no role has none: an invitee
     accepted without a role used to be treated as the owner."""
+    if getattr(employee, "api_key_id", None):
+        return True           # an API v2 key (orders.ApiActor): its key scope is its permission
     if await is_shop_owner(db, employee):
         return True
     if not employee.role_id:

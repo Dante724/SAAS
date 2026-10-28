@@ -13,15 +13,15 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy import event, insert, select
 
-from backend.tests.conftest import test_engine
-
 N = 300            # rows per shop: enough that a per-row IN list or load is obvious
 MAX_PARAMS = 50    # a fixed-shape query never needs more than this
 
 
 @contextmanager
-def _watch(*models):
-    """Record every statement's bound-parameter count and how many ORM rows of `models` loaded."""
+def _watch(db, *models):
+    """Record every statement's bound-parameter count and how many ORM rows of `models` loaded.
+    `db` is the test session: the app's requests run on the same engine."""
+    engine = db.bind.sync_engine
     stats = {"max_params": 0, "loaded": 0, "statements": 0}
 
     def _before(conn, cursor, statement, parameters, context, executemany):
@@ -32,13 +32,13 @@ def _watch(*models):
     def _load(target, ctx):
         stats["loaded"] += 1
 
-    event.listen(test_engine.sync_engine, "before_cursor_execute", _before)
+    event.listen(engine, "before_cursor_execute", _before)
     for m in models:
         event.listen(m, "load", _load)
     try:
         yield stats
     finally:
-        event.remove(test_engine.sync_engine, "before_cursor_execute", _before)
+        event.remove(engine, "before_cursor_execute", _before)
         for m in models:
             event.remove(m, "load", _load)
 
@@ -71,7 +71,7 @@ async def test_company_dashboard_is_sql_aggregates(client, tenant, db):
     loc = (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]
     await _bulk_orders(db, me["org_id"], loc, N, assigned_to_id=me["id"])
 
-    with _watch(Order) as s:
+    with _watch(db, Order) as s:
         r = await client.get("/api/reports/company-dashboard", headers=tenant)
         r_loc = await client.get(f"/api/reports/company-dashboard?location_id={loc}", headers=tenant)
     assert r.status_code == 200, r.text
@@ -98,7 +98,7 @@ async def test_home_feed_low_stock_has_no_per_part_in_list(client, tenant, db):
     await db.execute(insert(Part), [dict(id=str(uuid.uuid4()), org_id=me["org_id"], name=f"P{i}",
                                          min_stock=1, active=True) for i in range(N)])
     await db.commit()
-    with _watch(Part) as s:
+    with _watch(db, Part) as s:
         r = await client.get("/api/reports/home-feed", headers=tenant)
     assert r.status_code == 200, r.text
     assert s["loaded"] == 0, f"the feed loaded {s['loaded']} parts into memory"
@@ -131,7 +131,7 @@ async def test_my_work_is_scoped_to_the_techs_own_jobs(client, tenant, db):
                      qty=1, unit_price=50, technician_id=me["id"]))
     await db.commit()
 
-    with _watch(Order) as s:
+    with _watch(db, Order) as s:
         r = await client.get("/api/timeclock/my-work", headers=tenant)
     assert r.status_code == 200, r.text
     assert s["max_params"] <= MAX_PARAMS, f"My Work bound {s['max_params']} parameters"
@@ -153,7 +153,7 @@ async def test_tech_dashboard_does_not_load_every_finished_job(client, tenant, d
     await db.execute(update(Order).where(Order.id.in_(closed)).values(closed_at=datetime.utcnow()))
     await db.commit()
 
-    with _watch(Order) as s:
+    with _watch(db, Order) as s:
         r = await client.get("/api/tech/dashboard", headers=tenant)
     assert r.status_code == 200, r.text
     body = r.json()
@@ -186,7 +186,7 @@ async def test_one_shops_db_error_does_not_stall_the_sweep(client, db, monkeypat
     from backend.core import scheduled
     from backend.models import NotificationLog
     from backend.services import notification_rules as nr
-    from backend.tests.conftest import TestSession
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
     orgs = [await _org_with_due_message(client, db, f"shop{i}@b8.dev") for i in range(4)]
     seen = []
@@ -205,7 +205,8 @@ async def test_one_shops_db_error_does_not_stall_the_sweep(client, db, monkeypat
 
     monkeypatch.setattr(nr, "queue_reminders", _queue)
     monkeypatch.setattr(nr, "_send", _send)
-    monkeypatch.setattr("backend.db.database.AsyncSessionLocal", TestSession)
+    monkeypatch.setattr("backend.db.database.AsyncSessionLocal",
+                        async_sessionmaker(db.bind, expire_on_commit=False))
     await scheduled.sweep_notifications()
 
     db.expire_all()
