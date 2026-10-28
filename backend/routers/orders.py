@@ -183,6 +183,10 @@ class StatusChange(BaseModel):
     status: str
     note: Optional[str] = None
     reason: Optional[str] = Field(None, max_length=300)   # cancellation reason when moving into a dropped status
+    # B11: a status that needs a comment can take it with the change, so the drawer can meet the gate.
+    comment: Optional[str] = Field(None, max_length=5000)
+    # B11: finishing a job that still owes money needs this, and finance access (a manager's call).
+    allow_unpaid: bool = False
 
 class CommentIn(BaseModel):
     body: str
@@ -642,7 +646,7 @@ async def bulk_action(
                     await _restore_order(db, current, oid)
                 done += 1
             except HTTPException as e:
-                skipped.append({"id": oid, "reason": e.detail})
+                skipped.append({"id": oid, "reason": e.detail.get("message") if isinstance(e.detail, dict) else e.detail})
         msg = f"{'Archived' if data.action == 'archive' else 'Restored'} {done} order{'s' if done != 1 else ''}"
         if skipped:
             msg += f", skipped {len(skipped)}"
@@ -683,7 +687,7 @@ async def bulk_action(
                 done += 1
             except HTTPException as e:
                 await db.rollback()
-                skipped.append({"id": oid, "reason": e.detail})
+                skipped.append({"id": oid, "reason": e.detail.get("message") if isinstance(e.detail, dict) else e.detail})
         msg = f"Updated {done} order{'s' if done != 1 else ''}"
         if skipped:
             msg += f", skipped {len(skipped)}"
@@ -1416,7 +1420,55 @@ async def change_status(
     order = result.scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
-    return await _apply_status_change(db, current, order, data.status, note=data.note, reason=data.reason)
+    return await _apply_status_change(db, current, order, data.status, note=data.note, reason=data.reason,
+                                      comment=data.comment, allow_unpaid=data.allow_unpaid)
+
+
+@router.post("/{order_id}/status/check")
+async def check_status_change(
+    order_id: str,
+    data: StatusChange,
+    assume_paid: bool = False,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """B11: would this status change go through? Runs every gate and changes nothing, so a screen
+    can ask before it takes money ("Finish & take payment") or show the comment box up front.
+    ``assume_paid`` skips the money-owed check, for a close that takes the payment with it."""
+    order = (await db.execute(
+        select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
+        .options(selectinload(Order.lines)))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    try:
+        await _apply_status_change(db, current, order, data.status, note=data.note, reason=data.reason,
+                                   comment=data.comment, allow_unpaid=data.allow_unpaid,
+                                   check_only=True, assume_paid=assume_paid)
+    except HTTPException as e:
+        await db.rollback()
+        d = e.detail if isinstance(e.detail, dict) else {"message": e.detail}
+        return {"ok": False, "status_code": e.status_code, "code": d.get("code") or "blocked", **d}
+    await db.rollback()
+    return {"ok": True}
+
+
+async def _stop_job_timers(db, order_id: str) -> None:
+    """Stop every timer still running on this job, the same way the Stop button does."""
+    from backend.models import TimeEntry
+    from backend.routers.timeclock import _apply_labour_billing, _maybe_emit_stop, _stop
+    for e in (await db.execute(select(TimeEntry).where(
+            TimeEntry.order_id == order_id, TimeEntry.state == "running",
+            TimeEntry.ended_at.is_(None)))).scalars().all():
+        _stop(e)
+        await _maybe_emit_stop(db, e)
+        await _apply_labour_billing(db, e)
+    await db.flush()
+
+
+def _gate(code: str, message: str, status_code: int = 409, **extra) -> HTTPException:
+    """A refused status change the screens can act on: ``code`` says which gate, ``message`` is
+    the sentence to show (the API client reads ``detail.message``)."""
+    return HTTPException(status_code, {"code": code, "message": message, **extra})
 
 
 @dataclass(frozen=True)
@@ -1433,7 +1485,8 @@ class ApiActor:
     role_id: Optional[str] = None
 
 
-async def _apply_status_change(db, current, order, new_status, note=None, reason=None):
+async def _apply_status_change(db, current, order, new_status, note=None, reason=None, *,
+                               comment=None, allow_unpaid=False, check_only=False, assume_paid=False):
     """Shared gate + side-effect flow for a single-step status change, used by the
     single-order PATCH endpoint, the bulk set_status path and API v2
     (POST /api/v2/orders/{id}/status, with an ApiActor as ``current``) so all of them enforce
@@ -1441,7 +1494,7 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     audit, ledger, commissions and (best-effort) notifications. The original endpoint
     body is preserved verbatim; it is simply reached via ``data`` rebuilt from the
     arguments so both callers share one code path."""
-    data = StatusChange(status=new_status, note=note, reason=reason)
+    data = StatusChange(status=new_status, note=note, reason=reason, comment=comment, allow_unpaid=allow_unpaid)
     via_api = isinstance(current, ApiActor)
     if not via_api:
         await _guard_order_access(db, current, order)
@@ -1485,24 +1538,46 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         if _block:
             raise HTTPException(409, _block)
 
+    # B11: the clock stops when the job does. Running timers on a finished job are stopped (and
+    # billed as labour where the shop bills tracked time, before the money check so it counts),
+    # as if each technician pressed Stop. A refused change rolls this back with the rest.
+    if is_closing and order.status != data.status and not check_only:
+        await _stop_job_timers(db, order.id)
     # 144gj — Orderry requirement gates on ENTERING the target status.
     if target and order.status != data.status:
         from backend.models import OrderChecklistItem, OrderComment
         if target.require_comment:
             n = (await db.execute(select(func.count()).select_from(OrderComment).where(
                 OrderComment.order_id == order.id))).scalar() or 0
-            if not n:
-                raise HTTPException(409, f"'{target.name}' requires a comment on the order first.")
+            if not n and not (data.comment or "").strip():
+                _msg = f"'{target.name}' needs a comment on the job. Add one to move it."
+                raise HTTPException(409, _msg) if via_api else _gate("comment_required", _msg)
         if target.require_checklist:
+            # Only required items hold a job back; optional ones are a reminder, not a gate.
             items = (await db.execute(select(OrderChecklistItem).where(
-                OrderChecklistItem.order_id == order.id))).scalars().all()
+                OrderChecklistItem.order_id == order.id,
+                OrderChecklistItem.required == True))).scalars().all()  # noqa: E712
             undone = [c for c in items if not c.done]
             if undone:
-                raise HTTPException(409, f"'{target.name}' requires all {len(items)} checklist item(s) done ({len(undone)} left).")
-        if target.require_payment:
+                raise HTTPException(409, f"'{target.name}' needs every required checklist item done ({len(undone)} left).")
+        if target.require_payment and not assume_paid:
+            # B11: e.g. Delivered (on by default) — the device can't leave with money owed unless a
+            # manager says so, and the refusal says how much and what to do.
             from backend.services.order_money import balance_due as _due
-            if await _due(db, order) > 0:          # payments, refunds and credit notes all count
-                raise HTTPException(409, f"'{target.name}' requires the order to be fully paid first.")
+            _owed_now = q2(await _due(db, order))   # payments, refunds and credit notes all count
+            if _owed_now > 0:
+                if via_api:
+                    raise HTTPException(409, f"'{target.name}' requires the order to be fully paid first.")
+                from backend.services.auth import has_perm as _hp
+                _mgr = await _hp(db, current, "can_view_finance")
+                if not data.allow_unpaid:
+                    _who = ("Take the payment first, or move it on unpaid if the customer will pay later."
+                            if _mgr else "Take the payment first, or ask a manager to move it on unpaid.")
+                    raise _gate("unpaid", f"This job still has {_owed_now:,.2f} to pay before '{target.name}'. {_who}",
+                                owed=_owed_now, can_override=_mgr)
+                if not _mgr:
+                    raise _gate("unpaid", f"This job still has {_owed_now:,.2f} to pay. Only a manager can move it "
+                                          f"to '{target.name}' unpaid.", status_code=403, owed=_owed_now, can_override=False)
 
     # Completion gate: when closing, enforce required checklist items + (optional)
     # customer signature. Only bites when the work has required checklist items or
@@ -1538,6 +1613,13 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
                 f"Cannot close: {pending:g} unit(s) still pending stock write-off. "
                 f"Receive the stock or reduce the quantity first."
             )
+    if check_only:
+        return {"ok": True}
+    if target and target.require_comment and (data.comment or "").strip() and order.status != data.status:
+        from backend.models import OrderComment as _OC
+        from backend.routers.feed import default_visibility
+        _vis = await default_visibility(db, current.org_id, "comment") == "client"
+        db.add(_OC(order_id=order.id, author_id=current.id, body=data.comment.strip(), visible_to_client=_vis))
     prev = order.status
     prev_terminal = (await db.execute(select(OrderStatus.is_terminal).where(
         OrderStatus.org_id == current.org_id, OrderStatus.key == prev,
@@ -2403,6 +2485,105 @@ async def complete_order(
             raise HTTPException(409, "No terminal status configured to complete into.")
         target = term.key
     return await change_status(order_id, StatusChange(status=target), db, current)
+
+
+class FinishPaymentIn(BaseModel):
+    method: str = "cash"               # cash|cashless|card
+    account_id: str
+    amount: float
+
+
+class FinishIn(BaseModel):
+    status: Optional[str] = None       # finishing status (default: the first one in the closed group)
+    payment: Optional[FinishPaymentIn] = None
+
+
+@router.post("/{order_id}/finish")
+async def finish_order(
+    order_id: str,
+    data: FinishIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """B11: take the payment and finish the job in one step (Tekly Go's "Finish & take").
+    Every close gate runs before any money moves, and the payment and the close save in one
+    commit: if the job can't close, no money is taken; if the payment fails, the job stays open."""
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "orders.finish")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _finish_order(order_id, data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _finish_order(order_id: str, data: FinishIn, db: AsyncSession, current: Employee):
+    order = (await db.execute(
+        select(Order).where(Order.id == order_id, Order.org_id == current.org_id).with_for_update()
+        .options(selectinload(Order.client), selectinload(Order.device), selectinload(Order.assigned_to),
+                 selectinload(Order.manager), selectinload(Order.lines)))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    target = data.status
+    if not target:
+        term = (await db.execute(select(OrderStatus).where(
+            OrderStatus.org_id == current.org_id, OrderStatus.is_terminal == True,  # noqa: E712
+            OrderStatus.active == True, OrderStatus.status_group == "closed",  # noqa: E712
+            OrderStatus.record_type == "work_order").order_by(OrderStatus.sort_order))).scalars().first()
+        if not term:
+            raise HTTPException(409, "No finishing status is set up for jobs.")
+        target = term.key
+    p = data.payment
+    # Every gate first, with the payment counted as taken: a job that can't close takes no money.
+    await _apply_status_change(db, current, order, target, check_only=True, assume_paid=bool(p))
+    paid = None
+    if p:
+        from backend.services.auth import has_perm
+        if not await has_perm(db, current, "can_take_payments"):
+            raise HTTPException(403, "Your role can't take payments.")
+        from backend.models import Account
+        from backend.routers.cash import post_order_payment
+        from backend.services.order_money import balance_due, reader_charge_in_flight
+        if await reader_charge_in_flight(db, order.id):
+            raise HTTPException(409, "A card reader charge for this job is still in progress. "
+                                     "Finish or cancel it on the reader first.")
+        if p.method not in ("cash", "cashless", "card"):
+            raise HTTPException(400, "Pay by cash or card here.")
+        remaining = q2(await balance_due(db, order))
+        if not p.amount or p.amount <= 0:
+            raise HTTPException(400, "Payment amount must be positive")
+        if q2(p.amount) > remaining:
+            raise HTTPException(400, f"That's more than is owed. The balance due is {max(remaining, 0):.2f}.")
+        acc = (await db.execute(select(Account).where(
+            Account.id == p.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
+        if not acc:
+            raise HTTPException(404, "Account not found")
+        _pay, fee = await post_order_payment(db, current.org_id, order, q2(p.amount), acc, p.method,
+                                             actor_id=current.id)
+        from backend.routers.feed import log_system_event
+        await log_system_event(db, current.org_id, "order", order.id,
+                               f"Payment {q2(p.amount)} via {p.method} to {acc.name}")
+        await db.flush()
+        paid = {"amount": q2(p.amount), "method": p.method, "fee": fee, "account": acc.name}
+    # The close commits the payment with it (a part payment that leaves money owed is refused here,
+    # and rolls the payment back).
+    res = await _apply_status_change(db, current, order, target)
+    if paid:
+        try:
+            from backend.services import notification_rules as _nr
+            await _nr.evaluate(db, org_id=current.org_id, order_id=order.id, event="payment_received")
+            await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
+                                         event="payment_received", actor_id=current.id)
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            pass
+    return {"ok": True, "status": target, "payment": paid,
+            "order": res if isinstance(res, dict) else None}
 
 
 class NotifyIn(BaseModel):
