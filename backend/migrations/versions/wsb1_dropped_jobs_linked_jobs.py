@@ -18,8 +18,10 @@ depends_on = None
 
 
 def upgrade() -> None:
+    has = "written_off" in {c["name"] for c in sa.inspect(op.get_bind()).get_columns("orders")}
     with op.batch_alter_table("orders") as b:
-        b.add_column(sa.Column("written_off", sa.Numeric(12, 2, asdecimal=False), nullable=False, server_default="0"))
+        if not has:   # preview: ojj1 adds the same column; whichever runs second skips it
+            b.add_column(sa.Column("written_off", sa.Numeric(12, 2, asdecimal=False), nullable=False, server_default="0"))
         b.add_column(sa.Column("continued_from_order_id", sa.String(), nullable=True))
         b.create_foreign_key("fk_orders_continued_from_order_id_orders", "orders",
                              ["continued_from_order_id"], ["id"], ondelete="SET NULL")

@@ -17,10 +17,16 @@ branch_labels = None
 depends_on = None
 
 
+def _has_written_off() -> bool:
+    # Preview: workstream B's wsb1 adds the same column; whichever runs second skips it.
+    return "written_off" in {c["name"] for c in sa.inspect(op.get_bind()).get_columns("orders")}
+
+
 def upgrade() -> None:
-    with op.batch_alter_table("orders") as b:
-        b.add_column(sa.Column("written_off", sa.Numeric(12, 2, asdecimal=False), nullable=False,
-                               server_default="0"))
+    if not _has_written_off():
+        with op.batch_alter_table("orders") as b:
+            b.add_column(sa.Column("written_off", sa.Numeric(12, 2, asdecimal=False), nullable=False,
+                                   server_default="0"))
     with op.batch_alter_table("organisations") as b:
         b.add_column(sa.Column("public_employee_name", sa.String(length=10), nullable=False,
                                server_default="full"))
