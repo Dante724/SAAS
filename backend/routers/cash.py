@@ -541,6 +541,7 @@ async def order_payment_context(
     )).scalar() or 0
     return {
         "order_total": o.total or 0,
+        "location_id": o.location_id,
         "item_cost": (o.labour_total or 0) + (o.parts_total or 0),
         "already_paid": await net_paid(db, order_id),
         "credited": await credited(db, order_id),
@@ -566,6 +567,8 @@ async def _order_invoice(db, org_id, o, *, check_backdating=True):
         await db.flush()
         db.add(InvoiceOrder(invoice_id=inv.id, order_id=o.id, sort_order=0))   # every billed order is linked
         await db.flush()
+    from backend.services.order_money import apply_deposits
+    await apply_deposits(db, inv, o)   # a deposit taken before the invoice existed counts on it
     return inv
 
 
@@ -679,23 +682,22 @@ async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, curr
     from backend.routers.feed import log_system_event
 
     if data.method == "balance":
+        # Paid out of credit the client already has with the shop (an advance, an overpayment).
+        # No money moves and the ledger already holds that credit, so nothing is posted to it:
+        # posting "income" here erased real debt when the client had no credit at all (B3).
+        from backend.services.ledger import available_credit
+        credit = await available_credit(db, current.org_id, o.client_id, order_id)
+        if q2(amount) > credit:
+            raise HTTPException(400, f"This client has only {credit:.2f} of credit to pay from. "
+                                     "Take the rest in cash or by card.")
         inv = await _order_invoice(db, current.org_id, o)
-        # Close on account — no cash movement; the payment reduces the client's receivable.
-        # Build 124: post it through the unified ledger so the balance moves *and* the
-        # movement is auditable (was a silent Client.balance write before).
         pay = Payment(invoice_id=inv.id, order_id=order_id, client_id=o.client_id, method="balance",
-                      kind="payment", amount=amount, received_by_id=current.id, reference="Closed on account")
+                      kind="payment", amount=amount, received_by_id=current.id, reference="Paid from client credit")
         db.add(pay)
-        if o.client_id:
-            await db.flush()
-            from backend.services.ledger import post_contact_ledger
-            await post_contact_ledger(db, current.org_id, o.client_id, "income", -abs(amount),
-                                      note=f"Payment for {o.order_number}", ref_type="payment",
-                                      ref_id=pay.id, created_by_id=current.id)
         inv.amount_paid = q2((inv.amount_paid or 0) + amount)   # quantize: float sums left paid invoices "partial"
         settle_status(inv)
         await log_system_event(db, current.org_id, "order", order_id,
-                               f"Closed on client balance: {amount}")
+                               f"Paid from client credit: {amount}")
         await db.flush()
         await cancel_open_pay_links(db, o)
         await db.commit()
@@ -765,8 +767,11 @@ async def prepay_order(
     o.prepayment_total = (o.prepayment_total or 0) + data.amount
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order_id, f"Prepayment {data.amount} to {acc.name}")
-    from backend.services.order_money import cancel_open_pay_links
+    from backend.services.order_money import apply_deposits, cancel_open_pay_links, primary_invoice
     await db.flush()
+    inv = await primary_invoice(db, order_id)
+    if inv is not None:
+        await apply_deposits(db, inv, o)   # the job is already invoiced: the deposit lands on it
     await cancel_open_pay_links(db, o)
     await db.commit()
     return {"ok": True, "prepaid": o.prepayment_total}
@@ -942,18 +947,23 @@ async def _txn_summary(db, q, day: Optional[str]) -> dict:
 
     from sqlalchemy import case
     sub = q.where(func.coalesce(Transaction.status, "") != "deleted").subquery()
+    # Money in or out is the sign, whatever the type: sales post as invoice_payment and refunds as
+    # refund/expense, and counting only "income" showed a day of sales as "In today 0" (B3).
+    # Transfers between the shop's own accounts are neither.
     absamt = func.abs(sub.c.amount)
+    moves = func.coalesce(sub.c.txn_type, "") != "transfer"
+    is_in, is_out = moves & (sub.c.amount > 0), moves & (sub.c.amount < 0)
     cols = [func.count(),
-            func.coalesce(func.sum(case((sub.c.txn_type == "income", sub.c.amount), else_=0)), 0),
-            func.coalesce(func.sum(case((sub.c.txn_type == "expense", absamt), else_=0)), 0)]
+            func.coalesce(func.sum(case((is_in, sub.c.amount), else_=0)), 0),
+            func.coalesce(func.sum(case((is_out, absamt), else_=0)), 0)]
     if day:
         try:
             d0 = datetime.combine(_date.fromisoformat(day), datetime.min.time())
         except ValueError:
             raise HTTPException(422, "day must be YYYY-MM-DD")
         on_day = (sub.c.actual_date >= d0) & (sub.c.actual_date < d0 + timedelta(days=1))
-        cols += [func.coalesce(func.sum(case((on_day & (sub.c.txn_type == "income"), absamt), else_=0)), 0),
-                 func.coalesce(func.sum(case((on_day & (sub.c.txn_type == "expense"), absamt), else_=0)), 0)]
+        cols += [func.coalesce(func.sum(case((on_day & is_in, absamt), else_=0)), 0),
+                 func.coalesce(func.sum(case((on_day & is_out, absamt), else_=0)), 0)]
     r = (await db.execute(select(*cols).select_from(sub))).one()
     out = {"count": r[0], "income": float(r[1] or 0), "expense": float(r[2] or 0)}
     if day:
@@ -982,8 +992,9 @@ async def cash_summary(
 ):
     accts = (await db.execute(select(Account).where(Account.org_id == current.org_id, Account.active == True))).scalars().all()  # noqa: E712
     total = sum(a.balance for a in accts if not a.is_virtual)
+    # Client balance > 0 means the client owes the shop (services/ledger.py sign convention).
     debt = (await db.execute(
-        select(func.coalesce(func.sum(Client.balance), 0)).where(Client.org_id == current.org_id, Client.balance < 0)
+        select(func.coalesce(func.sum(Client.balance), 0)).where(Client.org_id == current.org_id, Client.balance > 0)
     )).scalar() or 0
     return {
         "total_cash": total,

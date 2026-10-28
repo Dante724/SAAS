@@ -1161,7 +1161,20 @@ async def company_dashboard(
     new_count = sum(r[1] for r in per_status if grp.get(r[0]) == "new")
     urgent = sum(r[3] for r in open_rows)
     overdue = sum(r[4] for r in open_rows)
-    receivables = sum(float(r[5] or 0) for r in open_rows)
+    # "To collect" is what open jobs still owe, not their totals: money already taken counts (B3).
+    # Same rule as order_money.open_receivables (total − written off − payments net of refunds,
+    # never below zero per job), summed in one query rather than over a list of every open job.
+    closed_keys = [k for k, g in grp.items() if g in closed_groups]
+    paid = (select(Payment.order_id.label("order_id"), func.sum(case(
+        (Payment.kind == "refund", -func.abs(Payment.amount)), else_=Payment.amount)).label("paid"))
+        .where(Payment.order_id.in_(select(Order.id).where(*scope)))
+        .group_by(Payment.order_id).subquery())
+    owed = (func.coalesce(Order.total, 0) - func.coalesce(Order.written_off, 0)
+            - func.coalesce(paid.c.paid, 0))
+    receivables = q2(float((await db.execute(
+        select(func.coalesce(func.sum(case((owed > 0, owed), else_=0)), 0))
+        .select_from(Order).outerjoin(paid, paid.c.order_id == Order.id)
+        .where(*scope, *([Order.status.notin_(closed_keys)] if closed_keys else [])))).scalar() or 0))
 
     # accounts (cash vs cashless)
     accounts = (await db.execute(select(Account).where(Account.org_id == oid, Account.active == True))).scalars().all()  # noqa: E712

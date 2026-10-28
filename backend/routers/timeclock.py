@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import Employee, Order, TimeEntry, TimeEntryAudit
-from backend.services.dates import parse_dt
+from backend.services.dates import parse_dt, utc_iso
 
 
 def _udt(value, field: str):
@@ -67,8 +67,8 @@ def _shift_elapsed(s) -> int:
 
 def _ser_shift(s) -> dict:
     return {"id": s.id, "location_id": s.location_id,
-            "started_at": s.started_at.isoformat() if s.started_at else None,
-            "ended_at": s.ended_at.isoformat() if s.ended_at else None,
+            "started_at": utc_iso(s.started_at),
+            "ended_at": utc_iso(s.ended_at),
             "elapsed_sec": _shift_elapsed(s),
             "hours_worked": q2(s.hours_worked or 0), "open": s.ended_at is None}
 
@@ -150,7 +150,7 @@ async def roster(db: AsyncSession = Depends(get_db),
     on_shift = [{
         "employee_id": s.employee_id, "employee_name": names.get(s.employee_id, "—"),
         "location_id": s.location_id, "location_name": locs.get(s.location_id, "—"),
-        "started_at": s.started_at.isoformat() if s.started_at else None,
+        "started_at": utc_iso(s.started_at),
         "elapsed_sec": _shift_elapsed(s),
     } for s in open_shifts]
     # running job/task timers across the org
@@ -163,7 +163,7 @@ async def roster(db: AsyncSession = Depends(get_db),
             "employee_id": e.employee_id, "employee_name": names.get(e.employee_id, "—"),
             "order_number": await _order_no(db, e.order_id),
             "category": e.category, "location_name": locs.get(e.location_id, "—"),
-            "started_at": e.started_at.isoformat() if e.started_at else None,
+            "started_at": utc_iso(e.started_at),
             "elapsed_sec": _elapsed_sec(e),
         })
     return {"on_shift": on_shift, "timers": timers,
@@ -196,8 +196,8 @@ def _ser(e: TimeEntry, order_no: Optional[str] = None, emp_name: Optional[str] =
     out = {
         "id": e.id, "employee_id": e.employee_id, "employee_name": emp_name,
         "order_id": e.order_id, "order_line_id": getattr(e, "order_line_id", None), "task_id": e.task_id, "order_number": order_no, "task_title": task_title, "category": e.category,
-        "started_at": e.started_at.isoformat() if e.started_at else None,
-        "ended_at": e.ended_at.isoformat() if e.ended_at else None,
+        "started_at": utc_iso(e.started_at),
+        "ended_at": utc_iso(e.ended_at),
         "duration_sec": sec, "duration_min": round(sec / 60, 1),
         "running": e.ended_at is None and e.state == "running",
         "billable": e.billable, "cost_rate": e.cost_rate, "billable_rate": e.billable_rate,
@@ -737,7 +737,7 @@ async def entry_audit(
     rows = (await db.execute(select(TimeEntryAudit).where(
         TimeEntryAudit.time_entry_id == eid).order_by(TimeEntryAudit.at.asc()))).scalars().all()
     return {"items": [{"action": a.action, "field": a.field, "old": a.old_value, "new": a.new_value,
-                       "actor": names.get(a.actor_id, "—"), "at": a.at.isoformat()} for a in rows]}
+                       "actor": names.get(a.actor_id, "—"), "at": utc_iso(a.at)} for a in rows]}
 
 
 @router.post("/entries/{eid}/reopen")

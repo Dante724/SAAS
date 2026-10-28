@@ -67,8 +67,10 @@ async def test_viewed_pay_link_is_cancelled_and_stripe_checkout_expired(client, 
     # checkout: catch the call that closes it
     intent.status, intent.provider, intent.provider_ref = "viewed", "stripe", "cs_test_123"
     await db.commit()
-    from backend.config import settings
-    monkeypatch.setattr(settings, "STRIPE_SECRET_KEY", "sk_test_x")
+    # the shop's own Stripe keys: links are never closed with the operator's account (B7)
+    r = await client.put("/api/integrations/credentials", headers=tenant,
+                         json={"provider": "stripe", "data": {"secret_key": "sk_test_x"}})
+    assert r.status_code == 200, r.text
     calls = []
 
     class _Resp:

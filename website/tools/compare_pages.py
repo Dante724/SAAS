@@ -144,7 +144,7 @@ COMPETITORS = [
             "You want more people included: Shop has 8 people for $69 a month, against 3 on Orderry's Startup.",
             "You'd like a longer trial: 14 days of every Pro feature, against Orderry's 7.",
             "Customers should approve or decline each line of an estimate on their phone and sign, including extra work found mid-repair.",
-            "Tekly AI drafts the estimate from the customer's words on Pro, from your own catalog and prices.",
+            "On Pro, Tekly AI drafts estimate lines from the customer's words, and you set the prices.",
         ],
     },
 ]

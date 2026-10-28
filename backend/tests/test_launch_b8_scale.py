@@ -216,6 +216,12 @@ async def test_one_shops_db_error_does_not_stall_the_sweep(client, db, monkeypat
     assert sorted(s for _, s in rows) == ["sent"] * 3, rows
 
 
+async def _shop_now(db, org_id):
+    """Job and appointment times are the shop's wall clock, not UTC."""
+    from backend.services.dates import local_now, shop_tzname
+    return local_now(await shop_tzname(db, org_id, None))
+
+
 # ── SMS retry dedup ─────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -231,7 +237,7 @@ async def test_failed_reminder_is_not_requeued_every_tick(client, tenant, db, mo
     await db.flush()
     loc = (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]
     o = Order(org_id=oid, location_id=loc, order_number="R-1", client_id=c.id, status="new",
-              scheduled_for=datetime.utcnow() + timedelta(minutes=30))
+              scheduled_for=await _shop_now(db, oid) + timedelta(minutes=30))
     db.add(o)
     db.add(NotificationRule(org_id=oid, module="order", event="reminder", channel="sms",
                             reminder_offset_min=60, active=True))
@@ -261,7 +267,7 @@ async def test_failed_appointment_reminder_is_not_requeued(client, tenant, db, m
     db.add(c)
     await db.flush()
     db.add(Appointment(org_id=oid, client_id=c.id, status="booked",
-                       scheduled_for=datetime.utcnow() + timedelta(minutes=30)))
+                       scheduled_for=await _shop_now(db, oid) + timedelta(minutes=30)))
     db.add(NotificationRule(org_id=oid, module="appointment", event="reminder", channel="sms",
                             reminder_offset_min=60, active=True))
     await db.commit()

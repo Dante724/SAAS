@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import settings
 from backend.db.database import get_db
 from backend.models import Employee, Location, Organisation, Role
+from backend.services import shop_setup as _shop_setup
 from backend.services import tokens as _tok
 from backend.services.audit import record as _audit
 from backend.services.currency import symbol_for as _symbol_for  # sign-up sends a code; we store its symbol
@@ -145,6 +146,9 @@ async def signup_options(request: Request):
         ],
         "region_defaults": REGION_DEFAULTS,
         "region_hint": _region_hint(country),
+        # Launch B4: the Country picker. country_hint pre-selects it the same way region_hint does.
+        "countries": _shop_setup.country_options(),
+        "country_hint": (country or "").strip().upper() or None,
         "employee_brackets": ["1", "2-5", "6-20", "21-50", "50+"],
     }
 
@@ -191,6 +195,15 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
     from datetime import date as _date
     org = Organisation(name=data.org_name, webhook_secret=_sec.token_urlsafe(24),
                        sub_status="trial", sub_start=_date.today())   # build 144ce
+    # Launch B4/B6: the sign-up Country picker decides currency, timezone and tax. What the form
+    # sends explicitly still wins; the country fills in the rest.
+    cdef = _shop_setup.country_defaults(data.country)
+    if cdef:
+        data.country = data.country.strip().upper()
+        data.region = data.region or cdef["region"]
+        data.currency_code = data.currency_code or cdef["currency_code"]
+        data.currency = data.currency or cdef["currency"]
+        data.timezone = data.timezone or cdef["timezone"]
     # Build 144cg — apply onboarding choices with region-based defaults.
     if data.region:
         org.region = data.region
@@ -226,6 +239,8 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
     location = Location(org_id=org.id, name="Main location")
     db.add(location)
     await db.flush()
+    # B6: on the shop's clock, not UTC. B2: a Cash drawer and a Card account to take money into.
+    await _shop_setup.setup_location(db, location, org, first=True)
 
     # Build 84: every location owns one default product warehouse. It's what makes the
     # location_id → warehouse compatibility shim resolve, so it must exist from day one.
@@ -243,12 +258,14 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
     await db.flush()
 
     # Build 144cl: seed a region-appropriate default tax rate (owner can edit/disable it).
-    _tax = _default_tax_for(data.region, data.country)
+    # Launch B4: the tax goes on the sales stack too, or it is never charged.
+    if cdef:
+        _n, _r, _m = cdef["tax"]
+        _tax = {"name": _n, "rate": _r, "mode": _m}
+    else:
+        _tax = _default_tax_for(data.region, data.country)
     if _tax is not None:
-        from backend.models import Tax
-        db.add(Tax(org_id=org.id, name=_tax["name"], rate=_tax["rate"], mode=_tax["mode"],
-                   is_default=True, active=True))
-        await db.flush()
+        await _shop_setup.seed_default_tax(db, org.id, _tax["name"], _tax["rate"], _tax["mode"])
 
     employee = Employee(
         org_id=org.id,

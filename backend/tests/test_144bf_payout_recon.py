@@ -5,8 +5,8 @@ import pytest
 
 
 async def _card_sale(client, h, total=100, fee_pct=2.9):
-    await client.post("/api/cash/accounts", json={"name": "Card", "payment_option": "card", "fee_pct": fee_pct}, headers=h)
-    aid = [a for a in (await client.get("/api/cash/accounts", headers=h)).json()["items"] if a["name"] == "Card"][0]["id"]
+    aid = (await client.post("/api/cash/accounts", json={"name": "Card", "payment_option": "card",
+                                                         "fee_pct": fee_pct}, headers=h)).json()["id"]
     cid = (await client.post("/api/clients", json={"name": "C", "phone": "+1"}, headers=h)).json()["id"]
     oid = (await client.post("/api/orders", json={"client_id": cid}, headers=h)).json()["id"]
     await client.post(f"/api/orders/{oid}/lines", json={"line_type": "labour", "description": "Fix", "qty": 1, "unit_price": total}, headers=h)

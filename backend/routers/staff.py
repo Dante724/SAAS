@@ -714,6 +714,10 @@ async def create_location(
                   receipt_header=data.receipt_header, working_hours=data.working_hours,
                   legal_entity_id=data.legal_entity_id, price_type_id=data.price_type_id)
     db.add(ln)
+    await db.flush()
+    # Launch B2/B6: the shop's timezone (unless one was picked) and a Cash drawer + Card account.
+    from backend.services.shop_setup import setup_location
+    await setup_location(db, ln)
     await db.commit()
     await db.refresh(ln)
     return _ser_location(ln)
@@ -887,8 +891,20 @@ async def update_company(
     # Build 121: the API field is 'currencies' but the column is 'currencies_json'
     if "currencies" in payload:
         org.currencies_json = payload.pop("currencies")
+    old_tz = org.timezone
     for k, v in payload.items():
         setattr(org, k, v)
+    # Launch B6: locations that followed the company clock (or never had one) follow the change;
+    # a branch given its own zone keeps it.
+    if payload.get("timezone") and payload["timezone"] != old_tz:
+        from sqlalchemy import or_ as _or
+        from sqlalchemy import update as _update
+
+        from backend.models import Location
+        await db.execute(_update(Location).where(
+            Location.org_id == org.id,
+            _or(Location.timezone.is_(None), Location.timezone.in_(["UTC", old_tz or "UTC"])))
+            .values(timezone=payload["timezone"]).execution_options(synchronize_session=False))
     # Several items per job is strictly for tools / equipment / phone / computer shops:
     # moving to any other industry switches it off (moving back needs a fresh opt-in).
     if "industry_template" in payload and not _ma.available(org):

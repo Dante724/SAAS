@@ -13,7 +13,7 @@ export type InvoiceDetail = {
   subtotal?: number; discount?: number; tax?: number; total?: number;
   amount_paid?: number; credited?: number; balance_due?: number;
   issued_at?: string | null; due_at?: string | null; comment?: string;
-  client_id?: string | null; customer?: { id: string; name?: string; email?: string } | null;
+  client_id?: string | null; location_id?: string | null; customer?: { id: string; name?: string; email?: string } | null;
   payer?: { id: string; name?: string; email?: string } | null;
   lines?: InvoiceLine[]; orders?: { id: string; order_number?: string }[];
   payments?: Payment[]; credit_notes?: CreditNoteRef[];
