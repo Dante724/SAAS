@@ -31,6 +31,19 @@ def norm_mode(mode: Optional[str]) -> str:
     return mode if mode in PRINT_MODES else ITEMIZED
 
 
+def itemise_warning(country: Optional[str], industry_template: Optional[str]) -> Optional[str]:
+    """Where itemising parts and labour on a repair invoice may be the law, say so before a shop
+    picks One line. Kits always default to Item by item, for vehicle shops too."""
+    from backend.services.industry import normalize_template_key
+    if normalize_template_key(industry_template) == "auto":
+        return ("Vehicle repair invoices often have to list parts and labour separately. "
+                "Check your local rules before printing a kit as one line.")
+    if (country or "").upper() == "US":
+        return ("Some US states require repair invoices to list parts and labour separately. "
+                "Check your state's rules before printing a kit as one line.")
+    return None
+
+
 @dataclass
 class KitLine:
     """A folded kit as the customer sees it. Duck-types the OrderLine attributes the document

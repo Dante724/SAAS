@@ -65,7 +65,23 @@ async def list_bundles(
     if category_id:
         q = q.where(Bundle.category_id == category_id)
     rows = (await db.execute(q.order_by(Bundle.created_at))).scalars().all()
-    return {"items": [await _ser(db, b) for b in rows]}
+    from backend.models import Organisation
+    from backend.services.kit_print import itemise_warning
+    org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
+    return {"items": [await _ser(db, b) for b in rows],
+            "print_warning": itemise_warning(getattr(org, "country", None), getattr(org, "industry_template", None))}
+
+
+@router.get("/print-warning")
+async def print_warning(
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """The itemising-law reminder shown before a kit is set to print as one line (or null)."""
+    from backend.models import Organisation
+    from backend.services.kit_print import itemise_warning
+    org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
+    return {"warning": itemise_warning(getattr(org, "country", None), getattr(org, "industry_template", None))}
 
 
 @router.get("/using")
