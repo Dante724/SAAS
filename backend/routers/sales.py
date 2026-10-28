@@ -80,91 +80,215 @@ class SaleIn(BaseModel):
     account_id: Optional[str] = None  # cashbox to take payment into
     discount: float = 0               # whole-sale flat amount
     lines: list[SaleLineIn] = []
-    coupon_code: Optional[str] = None     # 144bb — POS rewards: fold into discount + decrement
-    gift_card_code: Optional[str] = None
+    coupon_code: Optional[str] = None     # 144bb — POS rewards
+    gift_card_code: Optional[str] = None  # B5: a tender, not a discount
     redeem_points: float = 0
+    cash_tendered: Optional[float] = None   # B5: cash the customer handed over → change due
+    expected_due: Optional[float] = None    # B5: what the Charge button showed; a different charge is refused
+
+    @field_validator("discount", "redeem_points")
+    @classmethod
+    def _not_negative(cls, v):
+        if v < 0:
+            raise ValueError("Can't be negative")
+        return v
 
 
-async def _pos_redemptions(db, org_id, sale, client_id, gross, data):
-    """144bb — resolve coupon / gift card / loyalty at POS into a single extra discount, and
-    decrement the gift-card and loyalty ledgers (ref_type='sale'). Returns (amount, detail).
-    Mirrors the order-based engage.py rules; no-op when no reward fields are passed so plain
-    sales are byte-identical to before."""
-    from backend.models import Client, GiftCard, GiftCardLedger, Coupon, LoyaltyLedger, Organisation
-    from sqlalchemy import func as _f
-    extra = 0.0
-    detail: dict = {}
-    remaining = max(gross - (data.discount or 0), 0)
-    if data.coupon_code:
-        c = (await db.execute(select(Coupon).where(
-            Coupon.org_id == org_id, Coupon.code == data.coupon_code.strip().upper()))).scalar_one_or_none()
-        now = datetime.utcnow()
-        if not c or not c.active:
-            raise HTTPException(404, "Coupon not found or inactive")
-        if c.client_id and c.client_id != client_id:
-            raise HTTPException(403, "This coupon was issued to a different customer")
-        if (c.starts_at and now < c.starts_at) or (c.ends_at and now > c.ends_at):
-            raise HTTPException(400, "Coupon is not valid at this time")
-        if c.max_uses and c.uses >= c.max_uses:
-            raise HTTPException(400, "Coupon usage limit reached")
-        if gross < c.min_total:
-            raise HTTPException(400, f"Order total below coupon minimum ({c.min_total:.2f})")
-        amt = q2(gross * c.value / 100.0) if c.kind == "pct" else q2(c.value)
-        amt = min(amt, remaining)
-        # guarded atomic increment (like the gift-card path) — refuse if a concurrent
-        # redemption hit max_uses between the read above and this write.
-        res = await db.execute(sa_update(Coupon)
-            .where(Coupon.id == c.id, or_(Coupon.max_uses.is_(None), Coupon.max_uses == 0,   # 0 = unlimited
-                                       Coupon.uses < Coupon.max_uses))
-            .values(uses=Coupon.uses + 1))
-        if res.rowcount == 0:
-            raise HTTPException(400, "Coupon usage limit reached")
-        sale.coupon_id = c.id
-        extra += amt; remaining -= amt; detail["coupon"] = amt
-    if data.gift_card_code:
-        g = (await db.execute(select(GiftCard).where(
-            GiftCard.org_id == org_id, GiftCard.code == data.gift_card_code.strip().upper()))).scalar_one_or_none()
-        if not g or not g.active:
-            raise HTTPException(404, "Gift card not found or inactive")
-        if g.expires_at and g.expires_at < datetime.utcnow():
-            raise HTTPException(400, "Gift card has expired")
-        amt = q2(min(g.balance, max(remaining, 0)))
-        if amt > 0:
-            # 144bc — guarded atomic decrement: refuse to drive the balance negative if a
-            # concurrent redemption drained the card between the read above and this write.
-            res = await db.execute(sa_update(GiftCard)
-                .where(GiftCard.id == g.id, GiftCard.balance >= amt)
-                .values(balance=GiftCard.balance - amt))
-            if res.rowcount == 0:
-                raise HTTPException(409, "Gift card balance changed — please retry")
-            db.add(GiftCardLedger(org_id=org_id, gift_card_id=g.id, amount=-amt,
-                                  ref_type="sale", ref_id=sale.id, note=f"Redeemed on {sale.sale_number}"))
-            extra += amt; remaining -= amt; detail["gift_card"] = amt
+async def _check_coupon(db, org_id, code, client_id, gross):
+    """The coupon, or (status, message) saying why it can't be used. Reads only."""
+    from backend.models import Coupon
+    c = (await db.execute(select(Coupon).where(
+        Coupon.org_id == org_id, Coupon.code == code.strip().upper()))).scalar_one_or_none()
+    now = datetime.utcnow()
+    if not c or not c.active:
+        return None, (404, "Coupon not found or inactive")
+    if c.client_id and c.client_id != client_id:
+        return None, (403, "This coupon was issued to a different customer")
+    if (c.starts_at and now < c.starts_at) or (c.ends_at and now > c.ends_at):
+        return None, (400, "Coupon is not valid at this time")
+    if c.max_uses and c.uses >= c.max_uses:
+        return None, (400, "Coupon usage limit reached")
+    if gross < c.min_total:
+        return None, (400, f"Order total below coupon minimum ({c.min_total:.2f})")
+    return c, None
+
+
+async def _check_gift_card(db, org_id, code):
+    from backend.models import GiftCard
+    g = (await db.execute(select(GiftCard).where(
+        GiftCard.org_id == org_id, GiftCard.code == code.strip().upper()))).scalar_one_or_none()
+    if not g or not g.active:
+        return None, (404, "Gift card not found or inactive")
+    if g.expires_at and g.expires_at < datetime.utcnow():
+        return None, (400, "Gift card has expired")
+    return g, None
+
+
+async def _price_sale(db, org_id, data: SaleIn, *, location_id, sale: Optional[Sale] = None) -> dict:
+    """B5 — the one way a counter sale is priced, shared by the quote and the charge so the Charge
+    button always shows what is saved. Order: line discounts → whole-sale discount → coupon →
+    loyalty points → line tax on what is left (the tax engine, doc family tickets_sales) → the
+    gift card pays part of the total, like cash would.
+
+    sale=None is the quote: a dry run that writes nothing and reports a bad code in `problems`
+    (priced without it). With a sale it is the charge: a bad code is refused, and the coupon use,
+    gift-card spend and loyalty points are taken (guarded, ref_type='sale')."""
+    from backend.models import Client, Coupon, GiftCard, GiftCardLedger, LoyaltyLedger, Organisation, Service
+    from backend.services.tax import resolve_taxes
+    problems: dict = {}
+    status: dict = {}
+
+    def refuse(field, err):
+        if sale is not None:
+            raise HTTPException(*err)
+        problems[field], status[field] = err[1], err[0]
+
+    nets = [q2(li.unit_price * li.qty * (1 - (li.discount or 0) / 100)) for li in data.lines]
+    gross = q2(sum(nets))
+    discount = q2(min(data.discount or 0, gross))
+    remaining = gross - discount
+
+    coupon = 0.0
+    if data.coupon_code and data.coupon_code.strip():
+        c, err = await _check_coupon(db, org_id, data.coupon_code, data.client_id, gross)
+        if err:
+            refuse("coupon", err)
+        else:
+            coupon = min(q2(gross * c.value / 100.0) if c.kind == "pct" else q2(c.value), q2(remaining))
+            if sale is not None:
+                # guarded atomic increment: refuse if a concurrent redemption hit max_uses meanwhile
+                res = await db.execute(sa_update(Coupon)
+                    .where(Coupon.id == c.id, or_(Coupon.max_uses.is_(None), Coupon.max_uses == 0,   # 0 = unlimited
+                                               Coupon.uses < Coupon.max_uses))
+                    .values(uses=Coupon.uses + 1))
+                if res.rowcount == 0:
+                    raise HTTPException(400, "Coupon usage limit reached")
+                sale.coupon_id = c.id
+            remaining -= coupon
+
+    loyalty = 0.0
     if data.redeem_points and data.redeem_points > 0:
-        if not client_id:
-            raise HTTPException(400, "Select a customer to redeem points")
         org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one()
-        if org.loyalty_point_value <= 0:
-            raise HTTPException(400, "Loyalty redemption is not configured")
-        # Lock the client so two concurrent redemptions can't both read the same point balance and
-        # over-spend (no-op on SQLite; real serialization on Postgres).
-        await db.execute(select(Client.id).where(
-            Client.id == client_id, Client.org_id == org_id).with_for_update())
-        bal = float((await db.execute(select(_f.coalesce(_f.sum(LoyaltyLedger.points), 0.0)).where(
-            LoyaltyLedger.org_id == org_id, LoyaltyLedger.client_id == client_id))).scalar_one())
-        if data.redeem_points > bal:
-            raise HTTPException(400, f"Client has only {bal:.0f} points")
-        # 144bc — cap redeemed value at what's still owed so points past the bill aren't burned.
-        amt = q2(data.redeem_points * org.loyalty_point_value)
-        used_points = data.redeem_points
-        if amt > remaining:
-            amt = q2(max(remaining, 0))
-            used_points = q2(amt / org.loyalty_point_value) if org.loyalty_point_value else 0
-        if used_points > 0:
-            db.add(LoyaltyLedger(org_id=org_id, client_id=client_id, points=-used_points,
-                                 ref_type="sale", ref_id=sale.id, note=f"Redeemed on {sale.sale_number}"))
-            extra += amt; remaining -= amt; detail["loyalty"] = amt
-    return q2(extra), detail
+        if not data.client_id:
+            refuse("loyalty", (400, "Select a customer to redeem points"))
+        elif org.loyalty_point_value <= 0:
+            refuse("loyalty", (400, "Loyalty redemption is not configured"))
+        else:
+            if sale is not None:
+                # Lock the client so two redemptions can't both spend the same points (Postgres).
+                await db.execute(select(Client.id).where(
+                    Client.id == data.client_id, Client.org_id == org_id).with_for_update())
+            bal = float((await db.execute(select(func.coalesce(func.sum(LoyaltyLedger.points), 0.0)).where(
+                LoyaltyLedger.org_id == org_id, LoyaltyLedger.client_id == data.client_id))).scalar_one())
+            if data.redeem_points > bal:
+                refuse("loyalty", (400, f"Client has only {bal:.0f} points"))
+            else:
+                # 144bc — cap the value at what's still owed so points past the bill aren't burned.
+                loyalty = q2(data.redeem_points * org.loyalty_point_value)
+                used_points = data.redeem_points
+                if loyalty > remaining:
+                    loyalty = q2(max(remaining, 0))
+                    used_points = q2(loyalty / org.loyalty_point_value)
+                if sale is not None and used_points > 0:
+                    db.add(LoyaltyLedger(org_id=org_id, client_id=data.client_id, points=-used_points,
+                                         ref_type="sale", ref_id=sale.id, note=f"Redeemed on {sale.sale_number}"))
+                remaining -= loyalty
+
+    # Line tax on each line's share of what is left after the discounts.
+    after = q2(max(remaining, 0))
+    share = after / gross if gross else 0.0
+    cats: dict = {}
+    pids = [li.ref_id for li in data.lines if li.kind == "product" and li.ref_id]
+    sids = [li.ref_id for li in data.lines if li.kind == "service" and li.ref_id]
+    if pids:
+        cats.update(dict((await db.execute(select(Part.id, Part.category_id).where(
+            Part.org_id == org_id, Part.id.in_(pids)))).all()))
+    if sids:
+        cats.update(dict((await db.execute(select(Service.id, Service.category_id).where(
+            Service.org_id == org_id, Service.id.in_(sids)))).all()))
+    taxes: dict = {}
+    added = included = 0.0
+    for li, net in zip(data.lines, nets):
+        res = await resolve_taxes(db, org_id, doc_family="tickets_sales", net_amount=q2(net * share),
+                                  item_type=li.kind, item_id=li.ref_id, category_id=cats.get(li.ref_id),
+                                  location_id=location_id)
+        for t in res["taxes"]:
+            row = taxes.setdefault((t["name"], t["rate"], t["mode"]),
+                                   {"name": t["name"], "rate": t["rate"], "mode": t["mode"], "amount": 0.0})
+            row["amount"] = q2(row["amount"] + t["amount"])
+            if t["mode"] == "included":
+                included += t["amount"]
+            else:
+                added += t["amount"]
+    total = q2(after + added)
+
+    gift = 0.0
+    if data.gift_card_code and data.gift_card_code.strip():
+        g, err = await _check_gift_card(db, org_id, data.gift_card_code)
+        if err:
+            refuse("gift_card", err)
+        else:
+            gift = q2(min(g.balance or 0, total))
+            if sale is not None and gift > 0:
+                # 144bc — guarded atomic decrement: never drive the balance negative.
+                res = await db.execute(sa_update(GiftCard)
+                    .where(GiftCard.id == g.id, GiftCard.balance >= gift)
+                    .values(balance=GiftCard.balance - gift))
+                if res.rowcount == 0:
+                    raise HTTPException(409, "Gift card balance changed — please retry")
+                db.add(GiftCardLedger(org_id=org_id, gift_card_id=g.id, amount=-gift,
+                                      ref_type="sale", ref_id=sale.id, note=f"Paid on {sale.sale_number}"))
+    due = q2(total - gift)
+    tendered = data.cash_tendered
+    return {
+        "subtotal": gross, "discount": discount, "coupon": coupon, "loyalty": loyalty,
+        "discount_total": q2(discount + coupon + loyalty),
+        "taxes": list(taxes.values()), "tax_total": q2(added), "tax_included": q2(included),
+        "total": total, "gift_card": gift, "due": due,
+        "cash_tendered": tendered, "change_due": q2(max(tendered - due, 0)) if tendered is not None else None,
+        "problems": problems, "_status": status,
+    }
+
+
+async def sale_gift_card_paid(db, sale_id: str) -> float:
+    """What gift cards paid towards a sale (their 'sale' ledger legs)."""
+    from backend.models import GiftCardLedger
+    return q2(-float((await db.execute(select(func.coalesce(func.sum(GiftCardLedger.amount), 0.0)).where(
+        GiftCardLedger.ref_type == "sale", GiftCardLedger.ref_id == sale_id))).scalar_one()))
+
+
+async def sale_amount_due(db, sale: Sale) -> float:
+    """What is still to collect on a sale: nothing once paid, else the total less the gift card."""
+    if sale.paid or sale.voided_at:
+        return 0.0
+    return q2(max(float(sale.total or 0) - await sale_gift_card_paid(db, sale.id), 0))
+
+
+async def _sale_location(db, current) -> str:
+    # A seller without a home location (e.g. the org owner) still needs a location on the sale —
+    # sales.location_id is NOT NULL. Fall back to the org's first location rather than 500.
+    if current.location_id:
+        return current.location_id
+    from backend.models import Location
+    loc_id = (await db.execute(select(Location.id).where(
+        Location.org_id == current.org_id).order_by(Location.created_at).limit(1))).scalar_one_or_none()
+    if not loc_id:
+        raise HTTPException(400, "No location is set up for this sale")
+    return loc_id
+
+
+@router.post("/quote")
+async def quote_sale(
+    data: SaleIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_create_sales")),
+):
+    """B5 — price the cart exactly as a charge would save it, without saving anything. The POS
+    calls this on every cart or tender change and shows its `due` on the Charge button."""
+    out = await _price_sale(db, current.org_id, data, location_id=await _sale_location(db, current))
+    out.pop("_status")
+    await db.rollback()
+    return out
 
 
 @router.get("/lookup")
@@ -227,9 +351,15 @@ async def list_sales(
     if location_id:
         _q = _q.where(Sale.location_id == location_id)
     rows = (await db.execute(_q.order_by(Sale.created_at.desc()).limit(200))).scalars().all()
+    from backend.models import GiftCardLedger
+    unpaid = [s.id for s in rows if not s.paid and not s.voided_at]
+    gift = dict((await db.execute(select(GiftCardLedger.ref_id, func.sum(GiftCardLedger.amount)).where(
+        GiftCardLedger.ref_type == "sale", GiftCardLedger.ref_id.in_(unpaid))
+        .group_by(GiftCardLedger.ref_id))).all()) if unpaid else {}
     return {"items": [{
         "id": s.id, "sale_number": s.sale_number, "client_id": s.client_id,
         "total": s.total, "total_cost": s.total_cost, "profit": q2(s.total - s.total_cost),
+        "due": q2(max(float(s.total or 0) + float(gift.get(s.id) or 0), 0)) if s.id in unpaid else 0.0,
         "paid": s.paid, "created_at": s.created_at.isoformat() if s.created_at else None,
         "voided_at": s.voided_at.isoformat() if s.voided_at else None, "void_reason": s.void_reason,
     } for s in rows]}
@@ -264,6 +394,8 @@ async def delete_sale(
     reason = (reason or "Deleted").strip()[:300]
 
     lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id))).scalars().all()
+    if any(_returned(ln) > 0 for ln in lines):   # B5: the return already put stock and money back
+        raise HTTPException(409, "Items from this sale were returned, so it can't be deleted.")
     for ln in lines:
         if ln.kind != "product" or not ln.ref_id:
             continue
@@ -334,15 +466,18 @@ async def create_sale(
         raise HTTPException(400, "A sale needs at least one line")
     if any(ln.kind == "service" for ln in data.lines):
         await assert_perm(db, current, "can_sell_services")
-    # A seller without a home location (e.g. the org owner) still needs a location on the sale —
-    # sales.location_id is NOT NULL. Fall back to the org's first location rather than 500.
-    loc_id = current.location_id
-    if not loc_id:
-        from backend.models import Location
-        loc_id = (await db.execute(select(Location.id).where(
-            Location.org_id == current.org_id).order_by(Location.created_at).limit(1))).scalar_one_or_none()
-        if not loc_id:
-            raise HTTPException(400, "No location is set up for this sale")
+    loc_id = await _sale_location(db, current)
+    # B5: price it first, before anything is written: a bad code, a total that isn't the one on the
+    # cashier's screen, or too little cash is refused with nothing saved.
+    pre = await _price_sale(db, current.org_id, data, location_id=loc_id)
+    if pre["problems"]:
+        field = next(iter(pre["problems"]))
+        raise HTTPException(pre["_status"][field], pre["problems"][field])
+    if data.expected_due is not None and abs(pre["due"] - data.expected_due) > 0.005:
+        raise HTTPException(409, f"The total changed to {pre['due']:.2f}. Check the sale and charge again.")
+    if data.account_id and data.cash_tendered is not None and data.cash_tendered + 0.005 < pre["due"]:
+        raise HTTPException(400, f"Cash received ({data.cash_tendered:.2f}) is less than the "
+                                 f"{pre['due']:.2f} due.")
     sale = Sale(org_id=current.org_id, location_id=loc_id,
                 sale_number=await next_number(db, current.org_id, "sale"), client_id=data.client_id,
                 seller_id=current.id, account_id=data.account_id, discount=data.discount)
@@ -351,16 +486,10 @@ async def create_sale(
 
     total = 0.0
     total_cost = 0.0
-    tax_total = 0.0
     from backend.services.tax import pos_line_tax
+    sale_lines = []
     for li in data.lines:
         line_total = q2(li.unit_price * li.qty * (1 - (li.discount or 0) / 100))
-        # Launch B4: the shop's sales tax stack, the same rules a work order line uses.
-        tx = await pos_line_tax(db, current.org_id, kind=li.kind, ref_id=li.ref_id,
-                                net_amount=line_total, location_id=loc_id)
-        if tx["mode"] != "included":
-            line_total = q2(line_total + tx["amount"])
-        tax_total += tx["amount"]
         cost = 0.0
         draws = None
         if li.kind == "product" and li.ref_id:
@@ -408,38 +537,217 @@ async def create_sale(
                                  ref_type="sale", ref_id=sale.id))
             from backend.services import inventory_alerts as _alerts  # 144bo: low-stock alert
             await _alerts.maybe_low_stock_by_id(db, current.org_id, li.ref_id)
-        db.add(SaleLine(sale_id=sale.id, kind=li.kind, ref_id=li.ref_id,
-                        description=li.description, qty=li.qty, unit_price=li.unit_price,
-                        cost_price=cost / li.qty if li.qty else 0, discount=li.discount,
-                        tax_rate=tx["rate"], tax_mode=tx["mode"], tax=tx["amount"],
-                        total=line_total, stock_draws=draws))
+        ln = SaleLine(sale_id=sale.id, kind=li.kind, ref_id=li.ref_id,
+                      description=li.description, qty=li.qty, unit_price=li.unit_price,
+                      cost_price=cost / li.qty if li.qty else 0, discount=li.discount,
+                      total=line_total, stock_draws=draws)
+        db.add(ln)
+        sale_lines.append(ln)
         total += line_total
         total_cost += cost
 
-    # 144bb — POS rewards: coupon / gift card / loyalty fold into the sale discount and
-    # decrement their ledgers. No-op (and byte-identical) when no reward fields are passed.
-    reward_amt, reward_detail = await _pos_redemptions(db, current.org_id, sale, data.client_id, total, data)
-    sale.discount = q2((data.discount or 0) + reward_amt)
-    sale.total = q2(max(total - sale.discount, 0))
-    # A whole-sale discount lowers the tax with it: the tax inside what was actually charged.
-    sale.tax = q2(tax_total * (sale.total / total)) if total else 0.0
+    # B5 — the same pricing as the quote, now taking the coupon, points and gift card. The gift
+    # card is a tender: it pays part of the total; the rest is due in the cashbox.
+    priced = await _price_sale(db, current.org_id, data, location_id=loc_id, sale=sale)
+    sale.discount = priced["discount_total"]
+    sale.total = priced["total"]
+    # Launch B4: store the tax charged — on the sale (tax added on top + VAT inside the price) and on
+    # each line (its rate, and its tax on its share of what is left after the discounts).
+    sale.tax = q2(priced["tax_total"] + priced["tax_included"])
+    gross = priced["subtotal"]
+    share = (gross - priced["discount_total"]) / gross if gross else 0.0
+    for ln in sale_lines:
+        tx = await pos_line_tax(db, current.org_id, kind=ln.kind, ref_id=ln.ref_id,
+                                net_amount=q2(float(ln.total or 0) * share), location_id=loc_id)
+        ln.tax_rate, ln.tax_mode, ln.tax = tx["rate"], tx["mode"], tx["amount"]
     sale.total_cost = q2(total_cost)
 
     # Payment straight into a cashbox (signed ledger entry linked to the sale)
-    if data.account_id:
+    if data.account_id and priced["due"] > 0:
         from backend.routers.cash import post_transaction
-        await post_transaction(db, current.org_id, data.account_id, "income", sale.total,
+        await post_transaction(db, current.org_id, data.account_id, "income", priced["due"],
                                comment=f"Sale {sale.sale_number}", ref_type="sale",
                                ref_id=sale.id, employee_id=current.id)
-        sale.paid = True
+    sale.paid = bool(data.account_id) or priced["due"] <= 0
 
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "sale", sale.id,
                            f"Sale {sale.sale_number}: {len(data.lines)} line(s), total {sale.total:g}")
     await db.commit()
+    redeemed = {k: priced[k] for k in ("coupon", "gift_card", "loyalty") if priced[k]}
     return {"id": sale.id, "sale_number": sale.sale_number, "total": sale.total, "tax": sale.tax,
             "total_cost": sale.total_cost, "profit": q2(sale.total - sale.total_cost),
-            "paid": sale.paid, "redeemed": reward_detail}
+            "paid": sale.paid, "redeemed": redeemed, "due": priced["due"], "gift_card": priced["gift_card"],
+            "tax_total": priced["tax_total"], "change_due": priced["change_due"] if sale.paid else None}
+
+
+@router.get("/{sale_id}")
+async def get_sale(
+    sale_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_create_sales")),
+):
+    """One sale with its lines and how many of each can still be returned."""
+    sale = await _load_sale(db, current, sale_id)
+    lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id))).scalars().all()
+    return {
+        "id": sale.id, "sale_number": sale.sale_number, "client_id": sale.client_id, "total": sale.total,
+        "discount": sale.discount, "paid": sale.paid, "account_id": sale.account_id,
+        "voided_at": sale.voided_at.isoformat() if sale.voided_at else None,
+        "created_at": sale.created_at.isoformat() if sale.created_at else None,
+        "gift_card": await sale_gift_card_paid(db, sale.id), "due": await sale_amount_due(db, sale),
+        "lines": [{"id": ln.id, "kind": ln.kind, "ref_id": ln.ref_id, "description": ln.description,
+                   "qty": ln.qty, "unit_price": ln.unit_price, "total": ln.total, "returned": _returned(ln),
+                   "returnable": q4(max((ln.qty or 0) - _returned(ln), 0))} for ln in lines],
+    }
+
+
+async def _load_sale(db, current, sale_id, lock=False) -> Sale:
+    q = select(Sale).where(Sale.id == sale_id, Sale.org_id == current.org_id)
+    sale = (await db.execute(q.with_for_update() if lock else q)).scalar_one_or_none()
+    if not sale:
+        raise HTTPException(404, "Sale not found")
+    return sale
+
+
+def _returned(ln: SaleLine) -> float:
+    """How much of a line has come back (kept beside its stock draws)."""
+    return float((ln.stock_draws or {}).get("returned") or 0)
+
+
+class SalePayIn(BaseModel):
+    account_id: str
+    cash_tendered: Optional[float] = None
+
+
+@router.post("/{sale_id}/pay")
+async def pay_sale(
+    sale_id: str, data: SalePayIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_create_sales")),
+):
+    """B5 — take payment for a parked sale, or one whose card was declined: what is still due
+    (the total less any gift card) goes into the chosen cashbox."""
+    from backend.models import Account
+    sale = await _load_sale(db, current, sale_id, lock=True)
+    if sale.voided_at:
+        raise HTTPException(409, "This sale was deleted")
+    if sale.paid:
+        raise HTTPException(409, "This sale is already paid")
+    from backend.services.terminal import open_sale_charge
+    if await open_sale_charge(db, sale.id):
+        raise HTTPException(409, "A card reader is still waiting for this sale's payment. Cancel that charge first.")
+    acc = (await db.execute(select(Account).where(
+        Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
+    if not acc:
+        raise HTTPException(404, "Cashbox not found")
+    due = await sale_amount_due(db, sale)
+    if data.cash_tendered is not None and data.cash_tendered + 0.005 < due:
+        raise HTTPException(400, f"Cash received ({data.cash_tendered:.2f}) is less than the {due:.2f} due.")
+    if due > 0:
+        from backend.routers.cash import post_transaction
+        await post_transaction(db, current.org_id, acc.id, "income", due, comment=f"Sale {sale.sale_number}",
+                               ref_type="sale", ref_id=sale.id, employee_id=current.id)
+    sale.paid = True
+    sale.account_id = acc.id
+    from backend.routers.feed import log_system_event
+    await log_system_event(db, current.org_id, "sale", sale.id, f"Sale {sale.sale_number} paid {due:g} into {acc.name}")
+    await db.commit()
+    change = q2(max(data.cash_tendered - due, 0)) if data.cash_tendered is not None else None
+    return {"id": sale.id, "paid": True, "due": due, "change_due": change}
+
+
+class SaleReturnLineIn(BaseModel):
+    line_id: str
+    qty: float = Field(gt=0)
+
+
+class SaleReturnIn(BaseModel):
+    lines: list[SaleReturnLineIn]
+    account_id: Optional[str] = None   # the cashbox the money goes back out of
+    reason: Optional[str] = Field(default=None, max_length=300)
+
+
+@router.post("/{sale_id}/returns", status_code=201)
+async def return_sale_items(
+    sale_id: str, data: SaleReturnIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_create_sales")),
+):
+    """B5 — the customer brings items back. Products go back on the shelf (a client return), and
+    the customer gets the items' share of what they paid: discounts and tax included, the cash part
+    as a refund out of the chosen cashbox and any gift-card part back onto the card."""
+    from backend.models import Account, ClientReturn, ClientReturnLine, GiftCard, GiftCardLedger, Refund
+    await assert_perm(db, current, "can_create_returns")
+    if not data.lines:
+        raise HTTPException(400, "Pick at least one item to return")
+    sale = await _load_sale(db, current, sale_id, lock=True)
+    if sale.voided_at:
+        raise HTTPException(409, "This sale was deleted")
+    if not sale.paid:
+        raise HTTPException(409, "This sale isn't paid. Take payment or delete it instead.")
+    lines = {ln.id: ln for ln in (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id))).scalars()}
+    base = q2(sum(float(ln.total or 0) for ln in lines.values()))
+    value = 0.0
+    for r in data.lines:
+        ln = lines.get(r.line_id)
+        if not ln:
+            raise HTTPException(404, "That item isn't on this sale")
+        left = (ln.qty or 0) - _returned(ln)
+        if r.qty > left + 1e-9:
+            raise HTTPException(400, f"Only {left:g} of '{ln.description}' can still be returned")
+        value += float(ln.total or 0) * r.qty / ln.qty
+    value = q2(value * float(sale.total or 0) / base) if base else 0.0
+    gift_paid = await sale_gift_card_paid(db, sale.id)
+    gift_back = q2(value * gift_paid / float(sale.total)) if sale.total else 0.0
+    money_back = q2(value - gift_back)
+    acc = None
+    if money_back > 0:
+        if not data.account_id:
+            raise HTTPException(422, "Choose the cashbox the refund comes out of")
+        acc = (await db.execute(select(Account).where(
+            Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
+        if not acc:
+            raise HTTPException(404, "Cashbox not found")
+    reason = (data.reason or "").strip()
+
+    ret = ClientReturn(org_id=current.org_id, client_id=sale.client_id, location_id=sale.location_id,
+                       reason=f"Sale {sale.sale_number}" + (f": {reason}" if reason else ""), created_by_id=current.id)
+    db.add(ret)
+    await db.flush()
+    for r in data.lines:
+        ln = lines[r.line_id]
+        ln.stock_draws = {**(ln.stock_draws or {}), "returned": q4(_returned(ln) + r.qty)}
+        if ln.kind == "product" and ln.ref_id:
+            db.add(ClientReturnLine(return_id=ret.id, part_id=ln.ref_id, qty=r.qty, restock=True))
+            await stock_rows.add(db, ln.ref_id, sale.location_id, r.qty)
+            db.add(StockMovement(part_id=ln.ref_id, location_id=sale.location_id, movement_type="return",
+                                 qty=r.qty, unit_cost=ln.cost_price or 0, ref_type="client_return",
+                                 ref_id=ret.id, created_by_id=current.id))
+    refund = None
+    if money_back > 0:
+        refund = Refund(org_id=current.org_id, return_id=ret.id, account_id=acc.id, amount=money_back,
+                        reason=ret.reason, created_by_id=current.id)
+        db.add(refund)
+        await db.flush()
+        from backend.routers.cash import post_transaction
+        await post_transaction(db, current.org_id, acc.id, "refund", -money_back,
+                               comment=f"Refund for sale {sale.sale_number}", ref_type="refund",
+                               ref_id=refund.id, employee_id=current.id)
+    if gift_back > 0:
+        leg = (await db.execute(select(GiftCardLedger).where(
+            GiftCardLedger.ref_type == "sale", GiftCardLedger.ref_id == sale.id))).scalars().first()
+        await db.execute(sa_update(GiftCard).where(GiftCard.id == leg.gift_card_id)
+                         .values(balance=GiftCard.balance + gift_back))
+        db.add(GiftCardLedger(org_id=current.org_id, gift_card_id=leg.gift_card_id, amount=gift_back,
+                              ref_type="sale_return", ref_id=sale.id, note=f"Items returned from {sale.sale_number}"))
+    from backend.routers.feed import log_system_event
+    await log_system_event(db, current.org_id, "sale", sale.id,
+                           f"Items returned from sale {sale.sale_number}: refunded {money_back:g}"
+                           + (f", {gift_back:g} back on the gift card" if gift_back else ""))
+    await db.commit()
+    return {"return_id": ret.id, "refund_id": refund.id if refund else None,
+            "refunded": money_back, "gift_card": gift_back}
 
 
 # ───────────────────────────── RECEIPT ─────────────────────────────
@@ -447,7 +755,14 @@ class ReceiptEmailIn(BaseModel):
     email: Optional[str] = Field(default=None, max_length=254)   # blank → the sale's client's email
 
 
-def receipt_text(org_name: str, sale: Sale, lines: list, sym: str, tz: Optional[str] = None) -> str:
+def sale_tax_added(sale: Sale, lines: list) -> float:
+    """Tax added on top of the lines: the total less the lines after the discount (B5)."""
+    tax = q2(float(sale.total or 0) - (sum(float(ln.total or 0) for ln in lines) - float(sale.discount or 0)))
+    return tax if tax > 0.005 else 0.0
+
+
+def receipt_text(org_name: str, sale: Sale, lines: list, sym: str, tz: Optional[str] = None,
+                 gift_card: float = 0) -> str:
     """The customer's receipt in plain words — what was bought and what was paid. Never cost
     or profit (that's the shop's business, not the customer's)."""
     def m(v):
@@ -470,9 +785,13 @@ def receipt_text(org_name: str, sale: Sale, lines: list, sym: str, tz: Optional[
         out.append(f"{qty_s}{ln.description or ln.kind}  {m(ln.total)}")
     if float(sale.discount or 0):
         out.append(f"Discount  −{m(sale.discount)}")
-    if float(getattr(sale, "tax", 0) or 0):
-        out.append(f"Tax  {m(sale.tax)}")
-    out += ["", f"Total  {m(sale.total)}", "Paid" if sale.paid else "Not paid yet", "", "Thank you!"]
+    tax = sale_tax_added(sale, lines)
+    if tax:
+        out.append(f"Tax  {m(tax)}")
+    out += ["", f"Total  {m(sale.total)}"]
+    if gift_card:
+        out.append(f"Gift card  −{m(gift_card)}")
+    out += ["Paid" if sale.paid else "Not paid yet", "", "Thank you!"]
     return "\n".join(out)
 
 
@@ -494,13 +813,15 @@ async def sale_receipt(
     from backend.services.currency import _base
     from backend.services.dates import utc_iso
     sym = _base(org)["symbol"]
+    gift = await sale_gift_card_paid(db, sale.id)
     return {
         "sale_number": sale.sale_number, "shop_name": org.name if org else "",
-        "total": sale.total, "discount": sale.discount, "tax": sale.tax, "paid": sale.paid,
+        "total": sale.total, "discount": sale.discount, "paid": sale.paid,
+        "tax": sale_tax_added(sale, lines), "gift_card": gift,
         "created_at": utc_iso(sale.created_at),   # launch B6: "Z" so the browser reads UTC
         "lines": [{"description": ln.description, "qty": ln.qty, "total": ln.total, "tax": ln.tax} for ln in lines],
         "client_email": client.email if client else None, "client_phone": client.phone if client else None,
-        "text": receipt_text(org.name if org else "", sale, lines, sym, getattr(org, "timezone", None)),
+        "text": receipt_text(org.name if org else "", sale, lines, sym, getattr(org, "timezone", None), gift),
     }
 
 

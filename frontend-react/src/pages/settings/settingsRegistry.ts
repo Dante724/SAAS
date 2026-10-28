@@ -3,13 +3,15 @@
 // 3,600-line SettingsHub so it is trivially unit-testable (see settingsRegistry.test.ts)
 // and so the one data model drives nav + search without duplication.
 
+import { FEATURES } from "../../lib/features";
+
 export type SectionId =
   | "general" | "team" | "locations" | "statuses" | "checklists" | "forms"
   | "industry" | "pricing" | "finance" | "warehouses" | "directories"
   | "templates" | "feedback" | "public" | "notifications" | "integrations"
   | "ecommerce" | "sso" | "approvals";
 
-export const NAV: { id: SectionId; label: string; icon: string }[] = [
+const ALL_NAV: { id: SectionId; label: string; icon: string }[] = [
   { id: "general", label: "General", icon: "tune" },
   { id: "team", label: "Team & roles", icon: "group" },
   { id: "locations", label: "Locations", icon: "storefront" },
@@ -30,6 +32,9 @@ export const NAV: { id: SectionId; label: string; icon: string }[] = [
   { id: "sso", label: "Single sign-on", icon: "lock" },
   { id: "approvals", label: "Approvals", icon: "fact_check" },
 ];
+
+// E-commerce stays hidden until its sync is real (see lib/features).
+export const NAV = ALL_NAV.filter((n) => n.id !== "ecommerce" || FEATURES.ecommerce);
 
 export const CATS: { id: string; label: string; icon: string }[] = [
   { id: "workspace", label: "Workspace", icon: "tune" },
@@ -61,14 +66,14 @@ export const SEC_KW: Record<SectionId, string> = {
   industry: "asset device template vin imei serial category industry",
   approvals: "approval discount refund threshold limit",
   pricing: "price rate labour labor tax vat discount price list",
-  finance: "invoice number estimate numbering sequence prefix payment accounting quickbooks xero finance",
+  finance: "invoice number estimate numbering sequence prefix payment accounting quickbooks finance",
   warehouses: "inventory warehouse bin stock reorder moq supplier",
   public: "public online appointment booking page link branding slot window",
   notifications: "notification sms email reminder rule appointment status",
   templates: "template document estimate invoice receipt label print",
   feedback: "feedback review nps rating survey",
   directories: "directory document export knowledge base files",
-  integrations: "integration connect api webhook stripe quickbooks xero email",
+  integrations: "integration connect api webhook stripe quickbooks email",
   ecommerce: "ecommerce shop product sync online store shopify",
 };
 

@@ -148,7 +148,7 @@
    "Inventory, purchase orders and stock transfers between locations",
    "POS, payment links, Stripe and Square",
    "Payroll, commissions and time clock",
-   "QuickBooks and Xero sync",
+   "QuickBooks Online export",
    "Tekly Go technician phone app"
   ],
   "@id": "https://tekly.app/#software"
@@ -186,7 +186,7 @@
     "name": "What's the difference between Solo, Shop and Pro?",
     "acceptedAnswer": {
      "@type": "Answer",
-     "text": "Solo ($29 a month) is for up to 2 people at one location and 150 new jobs a month: work orders, estimates, invoices, POS, the customer portal and booking, the Tekly Go phone app and messaging. Shop ($69 for the first location, $49 for each extra) includes 8 team members you can split across your locations, $4 a month for each extra person, and unlimited jobs. It adds inventory, barcodes and scanning, the time clock, reports and automatic notifications. Pro ($129 for the first location, $79 for each extra) has unlimited people and jobs and adds purchase orders, payroll and commissions, stock transfers between locations, AI estimate drafting, QuickBooks and Xero, single sign-on and API keys. Yearly billing gets 2 months free."
+     "text": "Solo ($29 a month) is for up to 2 people at one location and 150 new jobs a month: work orders, estimates, invoices, POS, the customer portal and booking, the Tekly Go phone app and messaging. Shop ($69 for the first location, $49 for each extra) includes 8 team members you can split across your locations, $4 a month for each extra person, and unlimited jobs. It adds inventory, barcodes and scanning, the time clock, reports and automatic notifications. Pro ($129 for the first location, $79 for each extra) has unlimited people and jobs and adds purchase orders, payroll and commissions, stock transfers between locations, AI estimate drafting, sending invoices and payments to QuickBooks Online, single sign-on and API keys. Yearly billing gets 2 months free."
     }
    },
    {
@@ -321,7 +321,7 @@
         <li><span>Display assembly, OEM grade</span><span>$279.00</span></li>
       </ol>
       <div class="gest-sum"><span>Estimate total</span><b class="tnum" data-to="482">$482.00</b></div>
-      <p class="gest-fine">Prices from your own catalog · nothing is sent until you approve it</p>
+      <p class="gest-fine">A draft to check · nothing is sent until you approve it</p>
     </aside>
   </div>
 
@@ -339,7 +339,7 @@
 <section class="card-sec tint works-sec dense" aria-label="Works with the tools you already use">
   <ul class="works">
     <li data-rise><span class="k">Payments</span><span class="v">Stripe · Square</span></li>
-    <li data-rise><span class="k">Accounting</span><span class="v">QuickBooks · Xero</span></li>
+    <li data-rise><span class="k">Accounting</span><span class="v">QuickBooks Online</span></li>
     <li data-rise><span class="k">Messaging</span><span class="v">SMS · WhatsApp</span></li>
     <li data-rise><span class="k">Email</span><span class="v">Gmail · Outlook</span></li>
   </ul>
@@ -359,7 +359,7 @@
   <div class="flow">
     <div class="rows" id="steps" role="tablist" aria-label="Job stages" aria-orientation="vertical">
       <button class="row" role="tab" id="st-0" aria-controls="sc-0" aria-selected="true" tabindex="0" data-rise><span class="num">01</span><span><span class="t">Intake</span><span class="d">Intake asks for exactly what your trade needs — IMEI, VIN or HIN — with condition photos and passcodes stored encrypted.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
-      <button class="row" role="tab" id="st-1" aria-controls="sc-1" aria-selected="false" tabindex="-1" data-rise><span class="num">02</span><span><span class="t">Estimate</span><span class="d">On Pro, Tekly AI drafts labour and parts from the customer's words, using your own catalog and prices. You review and send.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
+      <button class="row" role="tab" id="st-1" aria-controls="sc-1" aria-selected="false" tabindex="-1" data-rise><span class="num">02</span><span><span class="t">Estimate</span><span class="d">On Pro, Tekly AI drafts labour and parts lines from the customer's words. You check the prices, then send.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
       <button class="row" role="tab" id="st-2" aria-controls="sc-2" aria-selected="false" tabindex="-1" data-rise><span class="num">03</span><span><span class="t">Approval</span><span class="d">The customer approves line by line on their phone and signs. Declined work is saved for next time.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
       <button class="row" role="tab" id="st-3" aria-controls="sc-3" aria-selected="false" tabindex="-1" data-rise><span class="num">04</span><span><span class="t">Parts</span><span class="d">Scan the box when it arrives and the part is charged to the right job — and the customer's ready time updates.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
       <button class="row" role="tab" id="st-4" aria-controls="sc-4" aria-selected="false" tabindex="-1" data-rise><span class="num">05</span><span><span class="t">Paid</span><span class="d">Payment at the counter or by link. Revenue, margin and the technician's commission post the moment the job closes.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
@@ -398,7 +398,7 @@
         </div>
 
         <div class="scene" id="sc-1" role="tabpanel" aria-labelledby="st-1" hidden>
-          <p class="scene-k"><span class="ai">AI</span>Drafted from the customer's words · your catalog prices · tap a line to include or skip it</p>
+          <p class="scene-k"><span class="ai">AI</span>Drafted from the customer's words · check each price · tap a line to include or skip it</p>
           <ul class="lines" id="estLines">
             <li><button type="button" class="line on" data-amt="49"><i><svg><use href="#check"/></svg></i><span>Liquid-damage diagnostic<em>Labour · 0.5 h</em></span><b>$49.00</b></button></li>
             <li><button type="button" class="line on" data-amt="65"><i><svg><use href="#check"/></svg></i><span>Ultrasonic board clean<em>Labour · 0.75 h</em></span><b>$65.00</b></button></li>
@@ -574,7 +574,7 @@
       <details><summary>Which kinds of repair shops is Tekly for?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Tekly has four templates: Electronics (phones, tablets and computers), Vehicles (cars, trucks, RVs and bikes), Tools &amp; small engine (power tools, mowers, saws and generators) and Marine (outboards, inboards and hulls). Shops that fix more than one kind of thing can use several templates in one account.</p></details>
       <details><summary>Can customers approve estimates on their phone?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Yes. Customers get a link, approve each line of the estimate and sign on their phone. If you find more work mid-repair, they choose what to add; nothing is added unless they approve it.</p></details>
       <details><summary>Can I switch from RepairDesk, Shopmonkey or another system?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Yes. Send us an export from your current system or spreadsheets and we bring customers, devices and stock across as part of onboarding, free on every plan. You can take your first job the day you sign up. <a href="/compare/">See how Tekly compares</a> with RepairDesk, RepairShopr, Shopmonkey, Tekmetric and Orderry.</p></details>
-      <details><summary>What's the difference between Solo, Shop and Pro?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Solo ($29 a month) is for up to 2 people at one location and 150 new jobs a month: work orders, estimates, invoices, POS, the customer portal and booking, the Tekly Go phone app and messaging. Shop ($69 for the first location, $49 for each extra) includes 8 team members you can split across your locations, $4 a month for each extra person, and unlimited jobs. It adds inventory, barcodes and scanning, the time clock, reports and automatic notifications. Pro ($129 for the first location, $79 for each extra) has unlimited people and jobs and adds purchase orders, payroll and commissions, stock transfers between locations, AI estimate drafting, QuickBooks and Xero, single sign-on and API keys. Yearly billing gets 2 months free.</p></details>
+      <details><summary>What's the difference between Solo, Shop and Pro?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>Solo ($29 a month) is for up to 2 people at one location and 150 new jobs a month: work orders, estimates, invoices, POS, the customer portal and booking, the Tekly Go phone app and messaging. Shop ($69 for the first location, $49 for each extra) includes 8 team members you can split across your locations, $4 a month for each extra person, and unlimited jobs. It adds inventory, barcodes and scanning, the time clock, reports and automatic notifications. Pro ($129 for the first location, $79 for each extra) has unlimited people and jobs and adds purchase orders, payroll and commissions, stock transfers between locations, AI estimate drafting, sending invoices and payments to QuickBooks Online, single sign-on and API keys. Yearly billing gets 2 months free.</p></details>
       <details><summary>What happens to my data if I leave?<span class="pm"><svg aria-hidden="true"><use href="#plus"/></svg></span></summary><p>It's yours. Export everything to CSV or Excel at any time, including after you cancel.</p></details>
     </div>
   </div>

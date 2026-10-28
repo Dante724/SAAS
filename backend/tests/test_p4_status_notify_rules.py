@@ -37,7 +37,8 @@ async def _move(client, h, oid, key):
 async def _logs(db, oid, event):
     db.expire_all()
     return (await db.execute(select(NotificationLog).where(
-        NotificationLog.order_id == oid, NotificationLog.trigger_event == event))).scalars().all()
+        NotificationLog.order_id == oid, NotificationLog.trigger_event == event)
+        .order_by(NotificationLog.created_at))).scalars().all()   # Postgres has no implicit order
 
 
 # ── planner (pure) ──────────────────────────────────────────────────────────────────────────

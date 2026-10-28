@@ -171,7 +171,7 @@
   <div class="flow">
     <div class="rows" id="steps" role="tablist" aria-label="Job stages" aria-orientation="vertical">
       <button class="row" role="tab" id="st-0" aria-controls="sc-0" aria-selected="true" tabindex="0" data-rise><span class="num">01</span><span><span class="t">Intake</span><span class="d">Intake asks for exactly what your trade needs — IMEI, VIN or HIN — with condition photos and passcodes stored encrypted.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
-      <button class="row" role="tab" id="st-1" aria-controls="sc-1" aria-selected="false" tabindex="-1" data-rise><span class="num">02</span><span><span class="t">Estimate</span><span class="d">On Pro, Tekly AI drafts labour and parts from the customer's words, using your own catalog and prices. You review and send.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
+      <button class="row" role="tab" id="st-1" aria-controls="sc-1" aria-selected="false" tabindex="-1" data-rise><span class="num">02</span><span><span class="t">Estimate</span><span class="d">On Pro, Tekly AI drafts labour and parts lines from the customer's words. You check the prices, then send.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
       <button class="row" role="tab" id="st-2" aria-controls="sc-2" aria-selected="false" tabindex="-1" data-rise><span class="num">03</span><span><span class="t">Approval</span><span class="d">The customer approves line by line on their phone and signs. Declined work is saved for next time.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
       <button class="row" role="tab" id="st-3" aria-controls="sc-3" aria-selected="false" tabindex="-1" data-rise><span class="num">04</span><span><span class="t">Parts</span><span class="d">Scan the box when it arrives and the part is charged to the right job — and the customer's ready time updates.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
       <button class="row" role="tab" id="st-4" aria-controls="sc-4" aria-selected="false" tabindex="-1" data-rise><span class="num">05</span><span><span class="t">Paid</span><span class="d">Payment at the counter or by link. Revenue, margin and the technician's commission post the moment the job closes.</span></span><span class="go" aria-hidden="true"><svg><use href="#arr"/></svg></span><span class="bar"><i></i></span></button>
@@ -210,7 +210,7 @@
         </div>
 
         <div class="scene" id="sc-1" role="tabpanel" aria-labelledby="st-1" hidden>
-          <p class="scene-k"><span class="ai">AI</span>Drafted from the customer's words · your catalog prices · tap a line to include or skip it</p>
+          <p class="scene-k"><span class="ai">AI</span>Drafted from the customer's words · check each price · tap a line to include or skip it</p>
           <ul class="lines" id="estLines">
             <li><button type="button" class="line on" data-amt="49"><i><svg><use href="#check"/></svg></i><span>Liquid-damage diagnostic<em>Labour · 0.5 h</em></span><b>$49.00</b></button></li>
             <li><button type="button" class="line on" data-amt="65"><i><svg><use href="#check"/></svg></i><span>Ultrasonic board clean<em>Labour · 0.75 h</em></span><b>$65.00</b></button></li>
@@ -363,7 +363,7 @@
       <ul class="checks" data-rise>
         <li><svg aria-hidden="true"><use href="#check"/></svg>Payroll with commissions and time clock</li>
         <li><svg aria-hidden="true"><use href="#check"/></svg>Job profitability, cash flow and P&amp;L</li>
-        <li><svg aria-hidden="true"><use href="#check"/></svg>Two-way sync with QuickBooks and Xero</li>
+        <li><svg aria-hidden="true"><use href="#check"/></svg>Invoices and payments sent to QuickBooks Online</li>
       </ul>
     </div>
   </article>
@@ -417,7 +417,7 @@
     </div>
   </div>
   <div class="rows">
-    <article class="ai-row" data-rise><span class="num">01</span><div><p class="what">Estimate drafting</p><h3>From the customer's words to priced lines.</h3></div><p>Labour and parts from your own catalog, at your prices, in seconds.</p><span class="tag">Pro</span></article>
+    <article class="ai-row" data-rise><span class="num">01</span><div><p class="what">Estimate drafting</p><h3>From the customer's words to a draft estimate.</h3></div><p>Draft labour and parts lines in seconds. You check every line and set the prices.</p><span class="tag">Pro</span></article>
     <article class="ai-row" data-rise><span class="num">02</span><div><p class="what">Job summaries</p><h3>Catch up on any job in one read.</h3></div><p>Notes, status changes and messages, summarised for whoever picks it up next.</p><span class="tag ghost">All plans</span></article>
     <article class="ai-row" data-rise><span class="num">03</span><div><p class="what">Reply suggestions</p><h3>Answer “is it ready?” in one tap.</h3></div><p>Replies that know the job's real status, written the way your shop talks.</p><span class="tag ghost">All plans</span></article>
     <article class="ai-row" data-rise><span class="num">04</span><div><p class="what">Call insights</p><h3>Spot the unhappy call before the review.</h3></div><p>Calls transcribed, summarised and tagged positive, neutral or negative.</p><span class="tag ghost">All plans</span></article>
@@ -515,7 +515,7 @@
     <div class="fx-group" data-rise><h3>Workshop</h3><ul><li>Intake templates: IMEI, VIN, HIN, serial</li><li>Photo capture and annotation</li><li>Checklists with required steps</li><li>Labour timer and time in each status</li><li>Tasks linked to jobs and customers</li><li>Tekly Go phone app for techs</li></ul></div>
     <div class="fx-group" data-rise><h3>Sales &amp; stock</h3><ul><li>Quick POS, cash drawer and shift counts</li><li>Payment links via Stripe or Square</li><li>Returns and refunds as separate documents</li><li>Inventory, stock and suppliers<span class="fx-pro">Shop</span></li><li>Barcodes, labels and scanning<span class="fx-pro">Shop</span></li><li>Purchase orders<span class="fx-pro biz">Pro</span></li></ul></div>
     <div class="fx-group" data-rise><h3>Growth</h3><ul><li>Gift cards, coupons and loyalty points</li><li>Declined work saved for the next visit</li><li>Branded documents and warranty certificates</li><li>Tekly Sense suggestions and Morning Brief</li><li>Automations for overdue jobs and low stock<span class="fx-pro">Shop</span></li><li>Reports, analytics and custom reports<span class="fx-pro">Shop</span></li></ul></div>
-    <div class="fx-group" data-rise><h3>Money &amp; people</h3><ul><li>Invoices, deposits and partial payments</li><li>Multi-currency with rate history</li><li>Time clock and timesheets<span class="fx-pro">Shop</span></li><li>Payroll and commissions<span class="fx-pro biz">Pro</span></li><li>Refunds claw back commission automatically<span class="fx-pro biz">Pro</span></li><li>QuickBooks and Xero sync<span class="fx-pro biz">Pro</span></li></ul></div>
+    <div class="fx-group" data-rise><h3>Money &amp; people</h3><ul><li>Invoices, deposits and partial payments</li><li>Multi-currency with rate history</li><li>Time clock and timesheets<span class="fx-pro">Shop</span></li><li>Payroll and commissions<span class="fx-pro biz">Pro</span></li><li>Refunds claw back commission automatically<span class="fx-pro biz">Pro</span></li><li>QuickBooks Online export<span class="fx-pro biz">Pro</span></li></ul></div>
     <div class="fx-group" data-rise><h3>Control</h3><ul><li>Role editor and approval limits</li><li>Full audit log and two-factor sign-in</li><li>Export everything, any time</li><li>Extra locations at $49 each<span class="fx-pro">Shop</span></li><li>Stock transfers between locations<span class="fx-pro biz">Pro</span></li><li>Single sign-on<span class="fx-pro biz">Pro</span></li><li>API keys<span class="fx-pro biz">Pro</span></li></ul></div>
   </div>
 </section>
