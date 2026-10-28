@@ -458,9 +458,11 @@ async def test_dropped_job_write_off_via_api(client, db):
     assert r.status_code == 200, r.text           # dropping skips the "finish the work" gates
     d = r.json()["data"]
     assert d["written_off"] == pytest.approx(70) and d["cancel_reason"] == "Customer declined"
+    # The client is charged only what wasn't written off (workstream B), so the drop leaves no debt.
     rows = (await db.execute(select(ClientLedgerEntry).where(
-        ClientLedgerEntry.client_id == cid, ClientLedgerEntry.entry_type == "write_off"))).scalars().all()
-    assert [float(x.amount) for x in rows] == [-70.0]
+        ClientLedgerEntry.client_id == cid, ClientLedgerEntry.ref_id == oid,
+        ClientLedgerEntry.entry_type == "charge"))).scalars().all()
+    assert sum(float(x.amount) for x in rows) == pytest.approx(30)
     wo = (await db.execute(select(AuditLog).where(AuditLog.action == "order.write_off",
                                                   AuditLog.entity_id == oid))).scalar_one()
     assert wo.actor_id is None
