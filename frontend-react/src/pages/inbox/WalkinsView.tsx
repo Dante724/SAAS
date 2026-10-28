@@ -50,7 +50,8 @@ export default function WalkinsView() {
   const [code, setCode] = useState("");
 
   const load = useCallback(() => {
-    api.get<Queue>("/checkins").then(setQ).catch((e: any) => setMsg(e?.message || "Couldn't load the queue"));
+    api.get<Queue>("/checkins").then((r) => { setQ(r); window.dispatchEvent(new Event("tekly:checkins")); })
+      .catch((e: any) => setMsg(e?.message || "Couldn't load the queue"));
   }, []);
   useEffect(() => { load(); const t = setInterval(load, 20000); return () => clearInterval(t); }, [load]);
 

@@ -132,7 +132,8 @@ function SignaturePad({ onChange }: { onChange: (png: string | null) => void }) 
   function clear() { const c = ref.current!; c.getContext("2d")?.clearRect(0, 0, c.width, c.height); onChange(null); }
   return (
     <div>
-      <canvas ref={ref} aria-label="Sign here" className="h-[140px] w-full touch-none rounded-lg border-[1.5px] border-dashed border-slate-400 bg-white" />
+      {/* Always white, like paper: dark ink stays visible in dark mode and the saved signature has a white background. */}
+      <canvas ref={ref} aria-label="Sign here" style={{ background: "#ffffff" }} className="h-[140px] w-full touch-none rounded-lg border-[1.5px] border-dashed border-slate-400" />
       <button type="button" onClick={clear} className="mt-1 text-[13px] font-medium text-ink-secondary underline">Clear signature</button>
     </div>
   );

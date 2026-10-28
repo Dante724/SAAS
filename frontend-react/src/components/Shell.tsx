@@ -30,7 +30,7 @@ import {
   CircleDollarSign, Percent, ShieldAlert, Globe, Gift, RotateCcw, SearchCheck, VideoOff,
   ShieldCheck, Target, EyeOff, Car, Sailboat, Bike, Laptop, Cog, Upload,
   ShoppingBag, Split, Nfc, Phone, PhoneIncoming, PhoneOutgoing, PhoneMissed, Network, HelpCircle,
-  LogOut, Menu as MenuIcon, UserCheck, KeyRound,
+  LogOut, Menu as MenuIcon, UserCheck, KeyRound, MapPin,
 } from "lucide-react";
 import { fmtServerTime } from "../lib/serverTime";
 
@@ -72,7 +72,7 @@ const ICONS: Record<string, any> = {
   open_in_new: ExternalLink, link: LinkIcon,
   search: Search, table_rows: Rows3, view_kanban: KanbanSquare,
   notifications: Bell, pause: Pause, play_arrow: Play, more_vert: MoreVertical, more_horiz: MoreHorizontal,
-  print: Printer, how_to_reg: UserCheck, key: KeyRound, save: Save, send: Send, campaign: Send, smartphone: Smartphone,
+  print: Printer, location_on: MapPin, how_to_reg: UserCheck, key: KeyRound, save: Save, send: Send, campaign: Send, smartphone: Smartphone,
   photo_camera: Camera, add_a_photo: Camera, image: ImageIcon,
   barcode: Barcode, qr_code_scanner: QrCode, scan: ScanLine, contactless: Nfc,
   call: Phone, phone: Phone, call_received: PhoneIncoming, phone_missed: PhoneMissed, hub: Network, help: HelpCircle, call_made: PhoneOutgoing,
@@ -182,11 +182,17 @@ export default function Shell({ title, children }: { title: string; children: Re
   }, 60000);
   // Self check-in: people waiting at this location, shown on the Inquiries item.
   const [walkins, setWalkins] = useState(0);
-  useVisibleInterval(() => {
+  const loadWalkins = () => {
     if (!can(NAV_PERM["/inquiries"])) return;
     api.get<{ waiting: number }>("/checkins/count")
       .then((r) => { if (liveRef.current) setWalkins(Number(r?.waiting) || 0); }).catch(() => {});
-  }, 30000);
+  };
+  useVisibleInterval(loadWalkins, 30000);
+  // The Walk-ins view says when the queue changed (call, no-show, convert) so the badge doesn't lag.
+  useEffect(() => {
+    window.addEventListener("tekly:checkins", loadWalkins);
+    return () => window.removeEventListener("tekly:checkins", loadWalkins);
+  });
 
   // Below 900px the sidebar becomes a slide-in drawer opened from the top bar's menu button.
   const [navOpen, setNavOpen] = useState(false);
