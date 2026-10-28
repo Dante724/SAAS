@@ -45,10 +45,10 @@ function KitPrintChoice({ value, onChange }: { value: string; onChange: (v: stri
   const [warning, setWarning] = useState<string | null>(null);
   useEffect(() => { api.get<{ warning: string | null }>("/bundles/print-warning").then((r) => setWarning(r.warning)).catch(() => {}); }, []);
   return (
-    <fieldset className="space-y-1.5">
-      <legend className="text-[11px] font-semibold text-ink-tertiary mb-1">On the customer's invoice</legend>
+    <fieldset className="p-3 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-1.5">
+      <legend className="px-1 text-[11px] font-bold text-ink-primary">On the customer's invoice</legend>
       {KIT_PRINT_LABELS.map((o) => (
-        <label key={o.value} className={`flex items-start gap-2 p-2 rounded-lg border cursor-pointer ${value === o.value ? "border-primary/40 bg-blue-50/50" : "border-slate-200 hover:bg-slate-50"}`}>
+        <label key={o.value} className={`flex items-start gap-2 p-2 rounded-lg border cursor-pointer bg-white ${value === o.value ? "border-primary/40 shadow-clay-sm" : "border-slate-200 hover:border-slate-300"}`}>
           <input type="radio" name="kit-print" value={o.value} checked={value === o.value} onChange={() => onChange(o.value)} className="mt-0.5" />
           <span><span className="block text-xs font-semibold text-ink-primary">{o.label}</span><span className="block text-[11px] text-ink-tertiary">{o.hint}</span></span>
         </label>

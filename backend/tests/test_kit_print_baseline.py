@@ -31,10 +31,10 @@ async def test_sum_kit_explodes_into_named_component_lines(client, tenant):
     r = await k.add_kit(client, tenant, oid, b["id"])
     assert r["lines_created"] == 3 and r["bundle"] == "Screen Replacement"
     ls = await k.lines(client, tenant, oid)
-    assert sorted(l["description"] for l in ls) == [
+    assert sorted(ln["description"] for ln in ls) == [
         "Adhesive strip (Screen Replacement)", "Screen fitting (Screen Replacement)",
         "iPhone 13 Screen (Screen Replacement)"]
-    by = {l["description"].split(" (")[0]: l for l in ls}
+    by = {ln["description"].split(" (")[0]: ln for ln in ls}
     assert by["iPhone 13 Screen"]["unit_price"] == 120 and by["iPhone 13 Screen"]["kind"] == "product"
     assert by["iPhone 13 Screen"]["line_type"] == "part"
     assert by["Screen fitting"]["line_type"] == "labour" and by["Screen fitting"]["kind"] == "service"
@@ -49,7 +49,7 @@ async def test_fixed_kit_scales_components_to_the_price(client, tenant):
     await k.add_kit(client, tenant, oid, b["id"])
     ls = await k.lines(client, tenant, oid)
     # 150 / 200 = 0.75 on every component
-    assert sorted(l["unit_price"] for l in ls) == [7.5, 52.5, 90]
+    assert sorted(ln["unit_price"] for ln in ls) == [7.5, 52.5, 90]
     assert (await k.order(client, tenant, oid))["total"] == 150
 
 
@@ -66,7 +66,7 @@ async def test_fixed_price_kit_hits_price_exactly(client, tenant):
     oid, _ = await k.job(client, tenant, loc)
     await k.add_kit(client, tenant, oid, b["id"])
     assert (await k.order(client, tenant, oid))["total"] == 100
-    assert round(sum(l["total"] for l in await k.lines(client, tenant, oid)), 2) == 100
+    assert round(sum(ln["total"] for ln in await k.lines(client, tenant, oid)), 2) == 100
 
 
 @pytest.mark.asyncio
@@ -88,7 +88,7 @@ async def test_kit_qty_two_doubles_components_and_stock(client, tenant):
     oid, _ = await k.job(client, tenant, loc)
     await k.add_kit(client, tenant, oid, b["id"], qty=2)
     ls = await k.lines(client, tenant, oid)
-    assert all(l["qty"] == 2 for l in ls)
+    assert all(ln["qty"] == 2 for ln in ls)
     assert await k.stock(client, tenant, screen) == 8
     assert (await k.order(client, tenant, oid))["total"] == 300
 
@@ -99,7 +99,7 @@ async def test_removing_a_kit_part_returns_its_stock(client, tenant):
     b = await k.kit(client, tenant, _comps(screen, glue, fit))
     oid, _ = await k.job(client, tenant, loc)
     await k.add_kit(client, tenant, oid, b["id"])
-    scr = [l for l in await k.lines(client, tenant, oid) if l["ref_id"] == screen][0]
+    scr = [ln for ln in await k.lines(client, tenant, oid) if ln["ref_id"] == screen][0]
     r = await client.delete(f"/api/orders/{oid}/lines/{scr['id']}", headers=tenant)
     assert r.status_code == 200, r.text
     assert await k.stock(client, tenant, screen) == 10
@@ -112,7 +112,7 @@ async def test_kit_lines_carry_the_technician_for_commission(client, tenant):
     b = await k.kit(client, tenant, _comps(screen, glue, fit))
     oid, _ = await k.job(client, tenant, loc)
     await k.add_kit(client, tenant, oid, b["id"], technician_id=me["id"])
-    assert all(l["technician_id"] == me["id"] for l in await k.lines(client, tenant, oid))
+    assert all(ln["technician_id"] == me["id"] for ln in await k.lines(client, tenant, oid))
 
 
 @pytest.mark.asyncio
@@ -122,10 +122,10 @@ async def test_invoice_display_modes_for_an_exploded_kit(client, tenant):
     oid, cid = await k.job(client, tenant, loc)
     await k.add_kit(client, tenant, oid, b["id"])
     det = await k.invoice_lines(client, tenant, await k.invoice(client, tenant, oid, cid, "detailed"))
-    assert sorted(l["description"] for l in det) == [
+    assert sorted(ln["description"] for ln in det) == [
         "Adhesive strip (Screen Replacement)", "Screen fitting (Screen Replacement)",
         "iPhone 13 Screen (Screen Replacement)"]
-    assert round(sum(l["total"] for l in det), 2) == 200
+    assert round(sum(ln["total"] for ln in det), 2) == 200
     simp = await k.invoice_lines(client, tenant, await k.invoice(client, tenant, oid, cid, "simplified"))
     assert len(simp) == 1 and simp[0]["total"] == 200 and "cracked screen" in simp[0]["description"]
     one = await k.invoice_lines(client, tenant, await k.invoice(client, tenant, oid, cid, "one_line"))
@@ -139,11 +139,11 @@ async def test_partial_invoice_lists_only_billed_kit_lines(client, tenant):
     oid, _ = await k.job(client, tenant, loc)
     await k.add_kit(client, tenant, oid, b["id"])
     ls = await k.lines(client, tenant, oid)
-    scr = [l for l in ls if l["ref_id"] == screen][0]
+    scr = [ln for ln in ls if ln["ref_id"] == screen][0]
     r = await client.post(f"/api/cash/orders/{oid}/invoices", headers=tenant, json={"line_ids": [scr["id"]]})
     assert r.status_code == 201, r.text
     got = await k.invoice_lines(client, tenant, r.json()["invoice_id"])
-    assert [l["description"] for l in got] == ["iPhone 13 Screen (Screen Replacement)"]
+    assert [ln["description"] for ln in got] == ["iPhone 13 Screen (Screen Replacement)"]
     assert got[0]["total"] == 120
 
 
@@ -170,7 +170,7 @@ async def test_sold_products_report_lists_each_kit_part(client, tenant):
     oid, _ = await k.job(client, tenant, loc)
     await k.add_kit(client, tenant, oid, b["id"])
     ls = await k.lines(client, tenant, oid)
-    assert {l["ref_id"] for l in ls if l["kind"] == "product"} == {screen, glue}
+    assert {ln["ref_id"] for ln in ls if ln["kind"] == "product"} == {screen, glue}
 
 
 @pytest.mark.asyncio
@@ -182,4 +182,4 @@ async def test_duplicating_a_kit_job_copies_its_lines(client, tenant):
     r = await client.post(f"/api/orders/{oid}/duplicate", headers=tenant, json={})
     assert r.status_code in (200, 201), r.text
     new = await k.lines(client, tenant, r.json()["id"])
-    assert sorted(l["total"] for l in new) == sorted(l["total"] for l in await k.lines(client, tenant, oid))
+    assert sorted(ln["total"] for ln in new) == sorted(ln["total"] for ln in await k.lines(client, tenant, oid))

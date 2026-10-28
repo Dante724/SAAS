@@ -45,38 +45,46 @@ export default function KitGroupHeader({ orderId, groupId, name, qty, mode, lock
 
   return (
     <div className="border-b border-slate-100 last:border-b-0" data-testid="kit-group">
-      <div className="flex flex-wrap items-center gap-2 px-3.5 py-2.5 bg-slate-50/80">
-        <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-label={`${open ? "Hide" : "Show"} what's in ${name}`}
-          className="w-6 h-6 grid place-items-center rounded-md text-ink-tertiary hover:text-ink-primary hover:bg-white">
-          <M n={open ? "expand_more" : "chevron_right"} c="text-base" />
-        </button>
-        <div className="w-8 h-8 rounded-lg grid place-items-center flex-none bg-amber-50 text-amber-700"><M n="package_2" c="text-base" /></div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h5 className="text-xs font-bold text-ink-primary truncate">{name}{qty > 1 ? ` × ${qty}` : ""}</h5>
-            <span className="text-[11px] px-1.5 py-0.5 rounded font-bold bg-amber-50 text-amber-700">Kit</span>
-            {locked != null && <span className="text-[11px] px-1.5 py-0.5 rounded font-semibold bg-slate-100 text-ink-secondary" title="The customer's price for this kit stays the same when its parts change.">Fixed price</span>}
+      {/* Row 1: what the kit is and what it costs. Row 2: its controls — they wrap under the name
+          on a phone instead of squeezing it. */}
+      <div className="px-3.5 py-2.5 bg-slate-50/80 space-y-2">
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-label={`${open ? "Hide" : "Show"} what's in ${name}`}
+            className="w-6 h-6 grid place-items-center rounded-md flex-none text-ink-tertiary hover:text-ink-primary hover:bg-white">
+            <M n={open ? "expand_more" : "chevron_right"} c="text-base" />
+          </button>
+          <div className="w-8 h-8 rounded-lg grid place-items-center flex-none bg-amber-50 text-amber-700"><M n="package_2" c="text-base" /></div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-x-2 gap-y-1 flex-wrap">
+              <h5 className="text-xs font-bold text-ink-primary">{name}{qty > 1 ? ` × ${qty}` : ""}</h5>
+              <span className="text-[11px] px-1.5 py-0.5 rounded font-bold bg-amber-50 text-amber-700">Kit</span>
+              {locked != null && <span className="text-[11px] px-1.5 py-0.5 rounded font-semibold bg-slate-100 text-ink-secondary whitespace-nowrap" title="The customer's price for this kit stays the same when its parts change.">Fixed price</span>}
+            </div>
+            <p className="text-[11px] text-ink-tertiary">{count} {count === 1 ? "item" : "items"} · Customer sees: {kitPrintLabel(mode)}</p>
           </div>
-          <p className="text-[11px] text-ink-tertiary">{count} {count === 1 ? "item" : "items"} · Customer sees: {kitPrintLabel(mode)}</p>
+          {seePrices && <span className="tabular-nums text-xs font-bold text-ink-primary flex-none">{money(total)}</span>}
         </div>
-        {canPrint && (
-          <select value={mode} onChange={(e) => save({ print_mode: e.target.value }, "Kit print setting saved")} aria-label={`How ${name} prints for the customer`}
-            className="text-[11px] font-semibold text-ink-secondary bg-white border border-slate-200 rounded-md px-1.5 py-1">
-            {KIT_PRINT_LABELS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
+        {(canPrint || canPrice || (onAddInto && !closed)) && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pl-16">
+            {canPrint && (
+              <select value={mode} onChange={(e) => save({ print_mode: e.target.value }, "Kit print setting saved")} aria-label={`How ${name} prints for the customer`}
+                className="glass-input appearance-none text-[11px] font-semibold text-ink-secondary rounded-lg pl-2 pr-6 py-1 max-w-full">
+                {KIT_PRINT_LABELS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            )}
+            {canPrice && (
+              <button type="button" onClick={changePrice} className="text-[11px] font-semibold text-primary hover:underline">Change price</button>
+            )}
+            {onAddInto && !closed && (
+              <button type="button" onClick={() => onAddInto(groupId)} className="text-[11px] font-semibold text-primary hover:underline">Add to kit</button>
+            )}
+          </div>
         )}
-        {canPrice && (
-          <button type="button" onClick={changePrice} className="text-[11px] font-semibold text-primary hover:underline px-1">Change price</button>
-        )}
-        {onAddInto && !closed && (
-          <button type="button" onClick={() => onAddInto(groupId)} className="text-[11px] font-semibold text-primary hover:underline px-1">Add to kit</button>
-        )}
-        {seePrices && <span className="tabular-nums text-xs font-bold text-ink-primary">{money(total)}</span>}
       </div>
       {canPrint && warning && mode !== "itemized" && (
         <p role="note" className="px-4 py-1.5 text-[11px] text-amber-800 bg-amber-50 border-t border-amber-100 flex items-start gap-1.5"><M n="info" c="text-[13px] mt-px" />{warning}</p>
       )}
-      {open && <div className="divide-y divide-slate-100 pl-6 border-l-2 border-amber-100 ml-5">{children}</div>}
+      {open && <div className="divide-y divide-slate-100 pl-1 ml-3 sm:pl-6 sm:ml-5 border-l-2 border-amber-100">{children}</div>}
     </div>
   );
 }

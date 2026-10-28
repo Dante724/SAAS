@@ -67,7 +67,7 @@ def test_fold_one_line_keeps_extras_and_position():
     ls = [_ol("Case", 5), _ol("Screen (Kit)", 90, "g", "one_line", "Kit"),
           _ol("Fit (Kit)", 60, "g", "one_line", "Kit", lt="labour"), _ol("Charger", 25)]
     out = kp.customer_lines(ls)
-    assert [getattr(x, "description") for x in out] == ["Case", "Kit", "Charger"]
+    assert [x.description for x in out] == ["Case", "Kit", "Charger"]
     assert out[1].total == 150 and out[1].includes == [] and out[1].ref_id is None
     assert out[0] is ls[0] and out[2] is ls[3]                       # extras untouched
     assert kp.customer_lines(ls, itemised=True) == ls                 # itemised copy
@@ -96,7 +96,7 @@ def test_fold_is_per_job_item():
 
 def test_tax_summary_splits_by_rate():
     ls = [_ol("a", 110, rate=10), _ol("b", 120, rate=20), _ol("c", 50, rate=10)]
-    got = kp.tax_by_rate(ls, lambda l: {"base": l.total, "tax": l.total * l.tax_rate / 100})
+    got = kp.tax_by_rate(ls, lambda ln: {"base": ln.total, "tax": ln.total * ln.tax_rate / 100})
     assert [(r["rate"], r["base"]) for r in got] == [(10, 160), (20, 120)]
 
 
@@ -148,7 +148,7 @@ async def test_package_line_plus_charger_everywhere(client, tenant, db):
     oid, cid, _gid = await _job_with_kit_and_charger(client, tenant, s)
     assert (await k.order(client, tenant, oid))["total"] == 174.99
     inv = await k.invoice_lines(client, tenant, await k.invoice(client, tenant, oid, cid))
-    assert [(l["description"], l["total"]) for l in inv] == [("Screen Replacement", 149.99), ("USB-C charger", 25)]
+    assert [(ln["description"], ln["total"]) for ln in inv] == [("Screen Replacement", 149.99), ("USB-C charger", 25)]
     html = await k.job_print(client, tenant, oid)
     assert "Screen Replacement" in html and "USB-C charger" in html and "174.99" in html
     t = await k.track(client, db, oid)
@@ -157,7 +157,7 @@ async def test_package_line_plus_charger_everywhere(client, tenant, db):
     assert await k.stock(client, tenant, s.screen) == 9 and await k.stock(client, tenant, s.charger) == 9
     ls = await k.lines(client, tenant, oid)
     assert len(ls) == 4
-    scr = [l for l in ls if l["ref_id"] == s.screen][0]
+    scr = [ln for ln in ls if ln["ref_id"] == s.screen][0]
     assert scr["cost_price"] == 50                      # profit reports see the part's cost
 
 
@@ -189,9 +189,9 @@ async def test_partial_invoices_fold_only_billed_lines_and_never_double_bill(cli
     s = await _shop(client, tenant)
     oid, _cid, _gid = await _job_with_kit_and_charger(client, tenant, s)
     ls = await k.lines(client, tenant, oid)
-    kit_ids = [l["id"] for l in ls if l["bundle_group_id"]]
+    kit_ids = [ln["id"] for ln in ls if ln["bundle_group_id"]]
     first = kit_ids[:2]
-    rest = [l["id"] for l in ls if l["id"] not in first]
+    rest = [ln["id"] for ln in ls if ln["id"] not in first]
     totals = []
     for ids in (first, rest):
         r = await client.post(f"/api/cash/orders/{oid}/invoices", headers=tenant, json={"line_ids": ids})
@@ -208,9 +208,9 @@ async def test_price_lock_qty_change_add_and_remove(client, tenant):
     oid, _cid, gid = await _job_with_kit_and_charger(client, tenant, s)
 
     async def kit_total():
-        return round(sum(l["total"] for l in await k.lines(client, tenant, oid) if l["bundle_group_id"] == gid), 2)
+        return round(sum(ln["total"] for ln in await k.lines(client, tenant, oid) if ln["bundle_group_id"] == gid), 2)
 
-    glue = [l for l in await k.lines(client, tenant, oid) if l["ref_id"] == s.glue][0]
+    glue = [ln for ln in await k.lines(client, tenant, oid) if ln["ref_id"] == s.glue][0]
     r = await client.patch(f"/api/orders/{oid}/lines/{glue['id']}", headers=tenant, json={"qty": 3})
     assert r.status_code == 200, r.text
     assert await kit_total() == 149.99 and await k.stock(client, tenant, s.glue) == 7
@@ -224,7 +224,7 @@ async def test_price_lock_qty_change_add_and_remove(client, tenant):
                      bundle_group_id=gid)
     assert await kit_total() == 149.99 and await k.stock(client, tenant, extra_glue) == 9
     # remove the screen from the kit: its stock comes back, the kit price holds
-    scr = [l for l in await k.lines(client, tenant, oid) if l["ref_id"] == s.screen][0]
+    scr = [ln for ln in await k.lines(client, tenant, oid) if ln["ref_id"] == s.screen][0]
     assert (await client.delete(f"/api/orders/{oid}/lines/{scr['id']}", headers=tenant)).status_code == 200
     assert await kit_total() == 149.99 and await k.stock(client, tenant, s.screen) == 10
     assert (await k.order(client, tenant, oid))["total"] == 174.99
@@ -242,9 +242,9 @@ async def test_extra_same_part_never_merges_into_the_kit(client, tenant):
     await k.add_line(client, tenant, oid, kind="product", line_type="part", ref_id=s.screen,
                      description="iPhone 13 Screen", qty=1, unit_price=120)
     ls = await k.lines(client, tenant, oid)
-    assert len([l for l in ls if l["ref_id"] == s.screen]) == 2
+    assert len([ln for ln in ls if ln["ref_id"] == s.screen]) == 2
     inv = await k.invoice_lines(client, tenant, await k.invoice(client, tenant, oid, cid))
-    assert ("iPhone 13 Screen", 120) in [(l["description"], l["total"]) for l in inv]
+    assert ("iPhone 13 Screen", 120) in [(ln["description"], ln["total"]) for ln in inv]
 
 
 @pytest.mark.asyncio
@@ -273,9 +273,9 @@ async def test_duplicate_keeps_kit_tags_with_a_new_group(client, tenant):
     oid, _cid, gid = await _job_with_kit_and_charger(client, tenant, s)
     r = await client.post(f"/api/orders/{oid}/duplicate", headers=tenant, json={})
     new = await k.lines(client, tenant, r.json()["id"])
-    gids = {l["bundle_group_id"] for l in new if l["bundle_group_id"]}
+    gids = {ln["bundle_group_id"] for ln in new if ln["bundle_group_id"]}
     assert len(gids) == 1 and gid not in gids
-    assert {l["bundle_print_mode"] for l in new if l["bundle_group_id"]} == {"one_line"}
+    assert {ln["bundle_print_mode"] for ln in new if ln["bundle_group_id"]} == {"one_line"}
 
 
 @pytest.mark.asyncio
@@ -289,7 +289,7 @@ async def test_old_untagged_kit_lines_print_as_before(client, tenant, db):
         line.bundle_price_locked = line.bundle_qty = line.bundle_std_price = None
     await db.commit()
     inv = await k.invoice_lines(client, tenant, await k.invoice(client, tenant, oid, cid))
-    assert len(inv) == 4 and not any(l.get("kit") for l in inv)
+    assert len(inv) == 4 and not any(ln.get("kit") for ln in inv)
 
 
 # ── roles ──────────────────────────────────────────────────────────────────────────────────────
@@ -359,10 +359,10 @@ def _money_strings(v):
 async def test_no_surface_leaks_component_prices_costs_or_names(client, tenant, db, mode):
     s = await _shop(client, tenant, mode=mode)
     oid, cid, gid = await _job_with_kit_and_charger(client, tenant, s)
-    comps = [l for l in await k.lines(client, tenant, oid) if l["bundle_group_id"] == gid]
+    comps = [ln for ln in await k.lines(client, tenant, oid) if ln["bundle_group_id"] == gid]
     secrets = set()
-    for l in comps:
-        secrets |= _money_strings(l["unit_price"]) | _money_strings(l["total"])
+    for ln in comps:
+        secrets |= _money_strings(ln["unit_price"]) | _money_strings(ln["total"])
         secrets |= _money_strings(50) | _money_strings(1)          # component costs
     secrets -= _money_strings(25) | _money_strings(149.99) | _money_strings(174.99)
     names = ["iPhone 13 Screen", "Adhesive strip", "Screen fitting"]
@@ -448,7 +448,7 @@ async def test_no_giveaways_inside_a_fixed_kit_without_the_kit_price_right(clien
     s = await _shop(client, tenant)
     oid, _cid, gid = await _job_with_kit_and_charger(client, tenant, s)
     tech = await _person(client, tenant, {})              # no can_change_kit_price (opt-in)
-    scr = [l for l in await k.lines(client, tenant, oid) if l["ref_id"] == s.screen][0]
+    scr = [ln for ln in await k.lines(client, tenant, oid) if ln["ref_id"] == s.screen][0]
     r = await client.patch(f"/api/orders/{oid}/lines/{scr['id']}", headers=tech, json={"qty": 8})
     assert r.status_code == 403 and "extra" in r.text
     assert await k.stock(client, tenant, s.screen) == 9
@@ -457,7 +457,7 @@ async def test_no_giveaways_inside_a_fixed_kit_without_the_kit_price_right(clien
         "qty": 1, "unit_price": 10, "bundle_group_id": gid})
     assert r.status_code == 403
     # fewer parts keeps the customer's price: allowed, and the re-share is audited
-    glue = [l for l in await k.lines(client, tenant, oid) if l["ref_id"] == s.glue][0]
+    glue = [ln for ln in await k.lines(client, tenant, oid) if ln["ref_id"] == s.glue][0]
     assert (await client.delete(f"/api/orders/{oid}/lines/{glue['id']}", headers=tech)).status_code == 200
     from backend.models import AuditLog
     acts = (await db.execute(select(AuditLog.action, AuditLog.diff).where(AuditLog.entity_id == oid))).all()
@@ -475,10 +475,10 @@ async def test_only_catalog_items_join_a_kit_with_catalog_weights_and_kit_tax(cl
     assert r.status_code == 400
     await k.add_line(client, tenant, oid, kind="product", line_type="part", ref_id=s.glue, description="glue",
                      qty=1, unit_price=1000000, tax_rate=50, bundle_group_id=gid)
-    ls = [l for l in await k.lines(client, tenant, oid) if l["bundle_group_id"] == gid]
-    assert round(sum(l["total"] for l in ls), 2) == 149.99
-    assert max(l["unit_price"] for l in ls) < 100           # weights came from the catalog
-    assert {l["tax_rate"] for l in ls} == {0}
+    ls = [ln for ln in await k.lines(client, tenant, oid) if ln["bundle_group_id"] == gid]
+    assert round(sum(ln["total"] for ln in ls), 2) == 149.99
+    assert max(ln["unit_price"] for ln in ls) < 100           # weights came from the catalog
+    assert {ln["tax_rate"] for ln in ls} == {0}
 
 
 @pytest.mark.asyncio
@@ -497,8 +497,8 @@ async def test_invoiced_kit_lines_are_frozen(client, tenant):
     s = await _shop(client, tenant)
     oid, _cid, gid = await _job_with_kit_and_charger(client, tenant, s)
     ls = await k.lines(client, tenant, oid)
-    scr = [l for l in ls if l["ref_id"] == s.screen][0]
-    glue = [l for l in ls if l["ref_id"] == s.glue][0]
+    scr = [ln for ln in ls if ln["ref_id"] == s.screen][0]
+    glue = [ln for ln in ls if ln["ref_id"] == s.glue][0]
     r = await client.post(f"/api/cash/orders/{oid}/invoices", headers=tenant, json={"line_ids": [scr["id"]]})
     assert r.status_code == 201
     assert (await client.delete(f"/api/orders/{oid}/lines/{glue['id']}", headers=tenant)).status_code == 409
@@ -513,13 +513,14 @@ async def test_invoiced_kit_lines_are_frozen(client, tenant):
 async def test_kit_price_must_be_a_real_amount(client, tenant, price):
     s = await _shop(client, tenant)
     oid, _cid, gid = await _job_with_kit_and_charger(client, tenant, s)
-    body = '{"price": %s, "reason": "test"}' % (price if isinstance(price, str) else repr(price))
+    raw = price if isinstance(price, str) else repr(price)
+    body = f'{{"price": {raw}, "reason": "test"}}'
     r = await client.patch(f"/api/orders/{oid}/kits/{gid}", headers={**tenant, "Content-Type": "application/json"},
                            content=body)
     assert r.status_code == 400, r.text
     r = await client.post("/api/bundles", headers={**tenant, "Content-Type": "application/json"}, content=(
-        '{"name": "Bad", "price_mode": "fixed", "price": %s, "components": [{"ref_type": "service", "ref_id": "%s"}]}'
-        % (price if isinstance(price, str) else repr(price), s.fit)))
+        f'{{"name": "Bad", "price_mode": "fixed", "price": {raw}, '
+        f'"components": [{{"ref_type": "service", "ref_id": "{s.fit}"}}]}}'))
     assert r.status_code == 400, r.text
 
 
@@ -527,6 +528,6 @@ async def test_kit_price_must_be_a_real_amount(client, tenant, price):
 async def test_kit_lines_stay_with_their_kit_item(client, tenant):
     s = await _shop(client, tenant)
     oid, _cid, _gid = await _job_with_kit_and_charger(client, tenant, s)
-    scr = [l for l in await k.lines(client, tenant, oid) if l["ref_id"] == s.screen][0]
+    scr = [ln for ln in await k.lines(client, tenant, oid) if ln["ref_id"] == s.screen][0]
     r = await client.patch(f"/api/orders/{oid}/lines/{scr['id']}", headers=tenant, json={"order_item_id": "x"})
     assert r.status_code in (404, 409)
