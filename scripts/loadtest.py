@@ -11,10 +11,18 @@ they would for 100 real shops. Run the server with TRUSTED_PROXY_HOPS=1 so it re
   python scripts/loadtest.py --base http://127.0.0.1:8101 --shops 10 --users 10 --duration 180
 
 Prints per-request counts, errors and response times (p50 / p95 / p99), and requests per second.
-Only run it against a local or test server: it creates real shops, staff and jobs.
+Only run it against a local or test server: it creates real shops, staff and jobs. It refuses any
+host that isn't local or named as a test environment (staging / dev / test / qa / preview).
+
+Staging behind a real proxy: the proxy records the true address, so the fake X-Forwarded-For is
+ignored (as it should be) and sign-up's limit of 10 per address per hour applies. Use at most 9
+shops there and put more people in each, e.g. --shops 6 --users 50 for 300 people.
 """
 import argparse
 import asyncio
+import re
+import sys
+from urllib.parse import urlparse
 import random
 import statistics
 import string
@@ -216,6 +224,16 @@ async def main():
     ap.add_argument("--ramp", type=int, default=20, help="seconds to bring everyone in")
     ap.add_argument("--think", type=float, default=2.0, help="average pause between actions (0 = none)")
     a = ap.parse_args()
+
+    host = (urlparse(a.base).hostname or "").lower()
+    local = host in ("localhost", "127.0.0.1", "::1") or host.endswith((".localhost", ".test"))
+    test_env = any(re.fullmatch(r"(staging|stage|dev|test|qa|preview|sandbox)(-[a-z0-9]+)?", lab)
+                   for lab in host.split(".")[:-1])
+    if not (local or test_env):
+        sys.exit(f"Refusing to load-test {host}: only local hosts or a staging/dev/test host.")
+    if not local and a.shops > 9:
+        sys.exit("Sign-up allows 10 per address per hour on a deployed server: use --shops 9 or fewer "
+                 "and more --users per shop.")
 
     limits = httpx.Limits(max_connections=a.shops * a.users + 20, max_keepalive_connections=a.shops * a.users)
     async with httpx.AsyncClient(base_url=a.base, timeout=30, limits=limits) as client:
