@@ -358,7 +358,7 @@ async def list_sales(
         .group_by(GiftCardLedger.ref_id))).all()) if unpaid else {}
     return {"items": [{
         "id": s.id, "sale_number": s.sale_number, "client_id": s.client_id,
-        "total": s.total, "total_cost": s.total_cost, "profit": q2(s.total - s.total_cost),
+        "total": s.total, "total_cost": s.total_cost, "profit": q2(s.total - (s.tax or 0) - s.total_cost),
         "due": q2(max(float(s.total or 0) + float(gift.get(s.id) or 0), 0)) if s.id in unpaid else 0.0,
         "paid": s.paid, "created_at": s.created_at.isoformat() if s.created_at else None,
         "voided_at": s.voided_at.isoformat() if s.voided_at else None, "void_reason": s.void_reason,
@@ -576,7 +576,7 @@ async def create_sale(
     await db.commit()
     redeemed = {k: priced[k] for k in ("coupon", "gift_card", "loyalty") if priced[k]}
     return {"id": sale.id, "sale_number": sale.sale_number, "total": sale.total, "tax": sale.tax,
-            "total_cost": sale.total_cost, "profit": q2(sale.total - sale.total_cost),
+            "total_cost": sale.total_cost, "profit": q2(sale.total - (sale.tax or 0) - sale.total_cost),   # tax is owed on, not earned
             "paid": sale.paid, "redeemed": redeemed, "due": priced["due"], "gift_card": priced["gift_card"],
             "tax_total": priced["tax_total"], "change_due": priced["change_due"] if sale.paid else None}
 
