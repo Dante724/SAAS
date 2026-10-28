@@ -6,7 +6,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Bundle, BundleComponent, Part, Service, Employee
+from backend.services.audit import record as _audit
 from backend.services.auth import assert_perm, get_current_employee, require_perm
+from backend.services.kit_print import PRINT_MODES, norm_mode
 from backend.services.money import q2
 
 router = APIRouter(prefix="/api/bundles", tags=["bundles"])
@@ -37,6 +39,7 @@ async def _ser(db, b: Bundle) -> dict:
                     "device_variant": bool(getattr(c, "device_variant", False))})
     return {"id": b.id, "name": b.name, "price_mode": b.price_mode, "price": b.price,
             "category_id": getattr(b, "category_id", None),
+            "print_mode": norm_mode(getattr(b, "print_mode", None)),
             "components": out, "sum_price": q2(total_std),
             "broken": any(c["missing"] for c in out),
             "effective_price": q2(b.price if b.price_mode == "fixed" else total_std)}
@@ -88,7 +91,13 @@ class BundleIn(BaseModel):
     price_mode: str = "sum"
     price: float = 0.0
     category_id: Optional[str] = None
+    print_mode: Optional[str] = None   # itemized (default) | one_line | one_line_includes
     components: list[CompIn] = []
+
+
+def _check_mode(mode):
+    if mode is not None and mode not in PRINT_MODES:
+        raise HTTPException(400, "Choose One line, One line and what's included, or Item by item")
 
 
 @router.post("", status_code=201)
@@ -101,11 +110,15 @@ async def create_bundle(
     if not data.components:
         raise HTTPException(400, "A bundle needs at least one component")
     await _validate_components(db, current.org_id, data.components)
+    _check_mode(data.print_mode)
     b = Bundle(org_id=current.org_id, name=data.name,
                price_mode=data.price_mode, price=data.price,
-               category_id=data.category_id or None)
+               category_id=data.category_id or None, print_mode=norm_mode(data.print_mode))
     db.add(b)
     await db.flush()
+    if b.print_mode != "itemized":
+        await _audit(db, org_id=current.org_id, actor_id=current.id, action="bundle.print_mode",
+                     entity_type="bundle", entity_id=b.id, diff={"print_mode": [None, b.print_mode]})
     for c in data.components:
         db.add(BundleComponent(bundle_id=b.id, ref_type=c.ref_type, ref_id=c.ref_id, qty=c.qty, device_variant=bool(getattr(c, "device_variant", False))))
     await db.commit()
@@ -133,6 +146,14 @@ async def update_bundle(
         b.price = data.price
     if "category_id" in sent:
         b.category_id = data.category_id or None
+    if "print_mode" in sent and data.print_mode is not None:
+        _check_mode(data.print_mode)
+        before = norm_mode(b.print_mode)
+        if before != data.print_mode:
+            b.print_mode = data.print_mode
+            # Only new jobs pick this up; kits already on jobs keep how they print.
+            await _audit(db, org_id=current.org_id, actor_id=current.id, action="bundle.print_mode",
+                         entity_type="bundle", entity_id=b.id, diff={"print_mode": [before, data.print_mode]})
     if "components" in sent:
         if not data.components:
             raise HTTPException(400, "A bundle needs at least one component")
