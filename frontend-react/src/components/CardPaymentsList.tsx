@@ -5,6 +5,7 @@ import { useMe } from "../context/Me";
 import { money } from "../pages/orders/types";
 import { promptDialog } from "../lib/dialog";
 import type { Charge } from "./ReaderCharge";
+import { serverDate } from "../lib/serverTime";
 
 // F2/F3 — approved card-reader payments with a Refund action: for one work order (orderId),
 // or for counter sales (sales). The refund goes back to the customer's card through the provider.
@@ -63,7 +64,7 @@ export default function CardPaymentsList({ orderId, sales, reloadKey, onChanged 
               <li key={r.id} className="flex flex-wrap items-center gap-2 px-3.5 py-2.5 text-xs">
                 <div className="min-w-0 flex-1">
                   <div className="font-bold text-ink-primary">{sales && r.document ? `${r.document} · ` : ""}{r.terminal_label || "Card reader"}</div>
-                  <div className="text-[11px] text-ink-tertiary">{r.created_at ? new Date(r.created_at + (r.created_at.endsWith("Z") ? "" : "Z")).toLocaleString() : ""}
+                  <div className="text-[11px] text-ink-tertiary">{serverDate(r.created_at)?.toLocaleString() || ""}
                     {r.refunded_amount > 0 ? ` · refunded ${money(r.refunded_amount)}` : ""}</div>
                 </div>
                 <span className="tabular-nums font-bold text-ink-primary">{money(r.amount)}</span>

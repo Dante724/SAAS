@@ -163,9 +163,10 @@ async def bill_lines(db: AsyncSession, order, lines: list, *, display_mode: str 
     names = await item_names(db, order.org_id, [l.order_item_id for l in lines])
     lines = sort_by_item(lines, names, key=lambda l: l.order_item_id)
     subtotal = msum([float(l.total or 0) for l in lines])
+    from backend.routers.orders import order_tax
     inv = Invoice(invoice_number=await next_number(db, order.org_id, "invoice"), org_id=order.org_id,
                   order_id=order.id, client_id=order.client_id, display_mode=display_mode, status="draft",
-                  subtotal=subtotal, discount=0.0, tax=0.0, total=subtotal, amount_paid=0.0,
+                  subtotal=subtotal, discount=0.0, tax=order_tax(lines), total=subtotal, amount_paid=0.0,
                   issued_at=datetime.utcnow())
     db.add(inv)
     await db.flush()

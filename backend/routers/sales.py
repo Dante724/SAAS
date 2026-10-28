@@ -351,8 +351,16 @@ async def create_sale(
 
     total = 0.0
     total_cost = 0.0
+    tax_total = 0.0
+    from backend.services.tax import pos_line_tax
     for li in data.lines:
         line_total = q2(li.unit_price * li.qty * (1 - (li.discount or 0) / 100))
+        # Launch B4: the shop's sales tax stack, the same rules a work order line uses.
+        tx = await pos_line_tax(db, current.org_id, kind=li.kind, ref_id=li.ref_id,
+                                net_amount=line_total, location_id=loc_id)
+        if tx["mode"] != "included":
+            line_total = q2(line_total + tx["amount"])
+        tax_total += tx["amount"]
         cost = 0.0
         draws = None
         if li.kind == "product" and li.ref_id:
@@ -403,6 +411,7 @@ async def create_sale(
         db.add(SaleLine(sale_id=sale.id, kind=li.kind, ref_id=li.ref_id,
                         description=li.description, qty=li.qty, unit_price=li.unit_price,
                         cost_price=cost / li.qty if li.qty else 0, discount=li.discount,
+                        tax_rate=tx["rate"], tax_mode=tx["mode"], tax=tx["amount"],
                         total=line_total, stock_draws=draws))
         total += line_total
         total_cost += cost
@@ -412,6 +421,8 @@ async def create_sale(
     reward_amt, reward_detail = await _pos_redemptions(db, current.org_id, sale, data.client_id, total, data)
     sale.discount = q2((data.discount or 0) + reward_amt)
     sale.total = q2(max(total - sale.discount, 0))
+    # A whole-sale discount lowers the tax with it: the tax inside what was actually charged.
+    sale.tax = q2(tax_total * (sale.total / total)) if total else 0.0
     sale.total_cost = q2(total_cost)
 
     # Payment straight into a cashbox (signed ledger entry linked to the sale)
@@ -426,7 +437,7 @@ async def create_sale(
     await log_system_event(db, current.org_id, "sale", sale.id,
                            f"Sale {sale.sale_number}: {len(data.lines)} line(s), total {sale.total:g}")
     await db.commit()
-    return {"id": sale.id, "sale_number": sale.sale_number, "total": sale.total,
+    return {"id": sale.id, "sale_number": sale.sale_number, "total": sale.total, "tax": sale.tax,
             "total_cost": sale.total_cost, "profit": q2(sale.total - sale.total_cost),
             "paid": sale.paid, "redeemed": reward_detail}
 
@@ -459,6 +470,8 @@ def receipt_text(org_name: str, sale: Sale, lines: list, sym: str, tz: Optional[
         out.append(f"{qty_s}{ln.description or ln.kind}  {m(ln.total)}")
     if float(sale.discount or 0):
         out.append(f"Discount  −{m(sale.discount)}")
+    if float(getattr(sale, "tax", 0) or 0):
+        out.append(f"Tax  {m(sale.tax)}")
     out += ["", f"Total  {m(sale.total)}", "Paid" if sale.paid else "Not paid yet", "", "Thank you!"]
     return "\n".join(out)
 
@@ -479,12 +492,13 @@ async def sale_receipt(
     client = (await db.execute(select(Client).where(
         Client.id == sale.client_id, Client.org_id == current.org_id))).scalar_one_or_none() if sale.client_id else None
     from backend.services.currency import _base
+    from backend.services.dates import utc_iso
     sym = _base(org)["symbol"]
     return {
         "sale_number": sale.sale_number, "shop_name": org.name if org else "",
-        "total": sale.total, "discount": sale.discount, "paid": sale.paid,
-        "created_at": sale.created_at.isoformat() if sale.created_at else None,
-        "lines": [{"description": ln.description, "qty": ln.qty, "total": ln.total} for ln in lines],
+        "total": sale.total, "discount": sale.discount, "tax": sale.tax, "paid": sale.paid,
+        "created_at": utc_iso(sale.created_at),   # launch B6: "Z" so the browser reads UTC
+        "lines": [{"description": ln.description, "qty": ln.qty, "total": ln.total, "tax": ln.tax} for ln in lines],
         "client_email": client.email if client else None, "client_phone": client.phone if client else None,
         "text": receipt_text(org.name if org else "", sale, lines, sym, getattr(org, "timezone", None)),
     }

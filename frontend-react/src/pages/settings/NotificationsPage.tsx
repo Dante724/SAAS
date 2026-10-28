@@ -3,6 +3,7 @@ import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { selectDialog } from "../../lib/dialog";
 import { cellRules, inView, isCustomerRule, toggleCell } from "../../lib/notifRules";
+import { serverDate } from "../../lib/serverTime";
 
 /* Settings › Notifications › Customers — "what your customer gets": a journey strip (comes in,
    in the shop, ready and done, updates and payment), then one card per moment. Each message
@@ -62,7 +63,7 @@ const MOMENTS: { key: Moment; label: string; icon: string; hint: string }[] = [
 
 function ago(iso: string | null) {
   if (!iso) return "";
-  const min = Math.max(0, Math.round((Date.now() - new Date(iso.endsWith("Z") ? iso : iso + "Z").getTime()) / 60000));
+  const min = Math.max(0, Math.round((Date.now() - (serverDate(iso)?.getTime() ?? Date.now())) / 60000));
   if (min < 60) return min <= 1 ? "just now" : `${min} min ago`;
   if (min < 1440) return `${Math.round(min / 60)} h ago`;
   return `${Math.round(min / 1440)} d ago`;

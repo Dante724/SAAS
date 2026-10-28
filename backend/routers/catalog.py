@@ -436,6 +436,9 @@ async def create_tax(
             location_ids=_j2.dumps(data.location_ids) if data.location_ids else None,
             is_default=data.is_default)
     db.add(t)
+    await db.flush()
+    from backend.services.shop_setup import ensure_default_on_stack
+    await ensure_default_on_stack(db, current.org_id, t)   # launch B4: a default tax is charged
     await db.commit()
     await db.refresh(t)
     return _ser_tax(t)
@@ -462,6 +465,8 @@ async def update_tax(
             setattr(t, k, getattr(data, k))
     if "location_ids" in sent:
         t.location_ids = _j3.dumps(data.location_ids) if data.location_ids else None
+    from backend.services.shop_setup import ensure_default_on_stack
+    await ensure_default_on_stack(db, current.org_id, t)
     await db.commit()
     return _ser_tax(t)
 

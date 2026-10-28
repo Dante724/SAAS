@@ -966,6 +966,7 @@ from backend.services.booking_slots import (  # noqa: E402
     slot_is_free as _slot_is_free,  # noqa: F401
     slots_for_day as _slots_for_day,
 )
+from backend.services.dates import location_tz as _location_tz  # noqa: E402
 
 
 # ── Back-compat (144dx): old /api/public/booking/* → /api/public/appointment/* ──
@@ -1107,7 +1108,7 @@ async def appointment_days(slug: str, response: Response, start: Optional[str] =
     # appointments, so it is never cached/shared. Indexed reads keep it cheap.
     response.headers["Cache-Control"] = "no-store"
     location = await _resolve_location(db, org, location_id)
-    now = _local_now(location.timezone if location else "UTC")
+    now = _local_now(_location_tz(location, org))
     try:
         first = datetime.fromisoformat(start).date() if start else now.date()
     except ValueError:
@@ -1160,7 +1161,7 @@ async def create_public_appointment(slug: str, data: PublicAppointmentIn, reques
 
     # the location taking the appointment + its working hours for that weekday
     loc = await _resolve_location(db, org, data.location_id)
-    now = _local_now(loc.timezone if loc else "UTC")
+    now = _local_now(_location_tz(loc, org))
     # lead time + appointment window (server re-validates; never trust the client)
     if start < now + timedelta(minutes=org.appointment_lead_min or 0):
         raise HTTPException(409, "That time is too soon to book — please pick a later slot")
