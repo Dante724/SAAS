@@ -321,7 +321,8 @@ async def start_charge(db: AsyncSession, *, org_id: str, actor_id: str, terminal
             raise TerminalError(409, "This sale was deleted.")
         if s.paid:
             raise TerminalError(409, "This sale is already paid.")
-        amount = float(s.total or 0)   # a sale is always charged in full
+        from backend.routers.sales import sale_amount_due
+        amount = await sale_amount_due(db, s)   # in full, less what a gift card already paid (B5)
         if amount <= 0:
             raise TerminalError(400, "Nothing to charge on this sale.")
         what = f"Sale {s.sale_number}"
