@@ -598,8 +598,6 @@ class Order(Base):
     tax: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     prepayment_total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    # Unpaid balance written off when the job moved to a dropped status (reversed on reopen).
-    written_off: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     deposit_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # requested deposit (e.g. on an estimate) the client can pay via pay-link
     warranty_until: Mapped[Optional[date]] = mapped_column(Date)
     due_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
