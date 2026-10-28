@@ -8,7 +8,6 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -272,9 +271,10 @@ async def rotate_point(pid: str, db: AsyncSession = Depends(get_db),
     return _point_out(p, name)
 
 
-@router.get("/points/{pid}/poster", response_class=HTMLResponse)
+@router.get("/points/{pid}/poster")
 async def poster(pid: str, db: AsyncSession = Depends(get_db), current: Employee = Depends(get_current_employee)):
-    """A printable A4/Letter poster: shop, point, and the QR."""
+    """A printable A4/Letter poster (shop, point and the QR) as HTML the app prints through its
+    hidden print frame."""
     from html import escape
 
     from backend.models import Organisation
@@ -283,7 +283,7 @@ async def poster(pid: str, db: AsyncSession = Depends(get_db), current: Employee
     org = (await db.execute(select(Organisation).where(Organisation.id == p.org_id))).scalar_one()
     url = f"{_public_base()}/c/{p.token}"
     head = "Leave your keys here" if p.mode == "key_drop" else "Check in here"
-    return HTMLResponse(
+    return {"html": (
         "<!doctype html><html><head><meta charset='utf-8'><title>Check-in poster</title><style>"
         "@page{size:auto;margin:16mm}body{font-family:Arial,sans-serif;text-align:center;color:#111}"
         "h1{font-size:40px;margin:24px 0 6px}h2{font-size:22px;font-weight:normal;margin:0 0 24px}"
@@ -292,7 +292,7 @@ async def poster(pid: str, db: AsyncSession = Depends(get_db), current: Employee
         f"<h1>{escape(head)}</h1><h2>{escape(org.name)} · {escape(p.name)}</h2>"
         f"<div class='qr'>{qr_svg(url, module=6)}</div>"
         "<p>Scan with your phone camera. We'll text you when it's your turn.</p>"
-        f"<p><small>{escape(url)}</small></p></body></html>")
+        f"<p><small>{escape(url)}</small></p></body></html>")}
 
 
 @router.get("/points/{pid}/qr.svg")

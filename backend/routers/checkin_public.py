@@ -82,6 +82,17 @@ async def checkin_status(status_token: str, db: AsyncSession = Depends(get_db)):
     }
 
 
+@router.get("/s/{status_token}/qr.svg")
+async def checkin_qr(status_token: str, db: AsyncSession = Depends(get_db)):
+    """The code the customer shows at the counter; staff scan it to open their check-in."""
+    from fastapi.responses import Response
+
+    from backend.services.codes import qr_svg
+    c = await _by_status(db, status_token)
+    return Response(qr_svg(c.status_token, module=6), media_type="image/svg+xml",
+                    headers={"Cache-Control": "private, max-age=3600"})
+
+
 @router.post("/s/{status_token}/cancel")
 async def cancel_checkin(status_token: str, db: AsyncSession = Depends(get_db)):
     c = await _by_status(db, status_token)

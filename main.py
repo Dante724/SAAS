@@ -338,6 +338,13 @@ async def serve_admin():
     return HTMLResponse(_NOT_BUILT, status_code=503)
 
 
+@app.get("/c/{token}", include_in_schema=False)
+@app.get("/c/s/{token}", include_in_schema=False)
+async def serve_checkin(token: str):
+    # Self check-in page and the customer's status page (main.tsx detects "/c/").
+    return _serve_react()
+
+
 @app.get("/book/{slug}", include_in_schema=False)
 async def serve_book(slug: str):
     # Appointment 2.0 — React page (main.tsx detects "/book/" and renders <PublicAppointment/>).

@@ -296,7 +296,7 @@ async def test_honeypot_and_phone_rate_limit(client, tenant):
 async def test_poster_and_points_need_settings_permission(client, tenant):
     s = await _setup(client, tenant)
     html = await client.get(f"/api/checkins/points/{s['point']['id']}/poster", headers=tenant)
-    assert html.status_code == 200 and "<svg" in html.text and "Check in here" in html.text
+    assert html.status_code == 200 and "<svg" in html.json()["html"] and "Check in here" in html.json()["html"]
     role = (await client.post("/api/settings/rbac/roles", json={
         "name": "Counter", "permissions": {"can_manage_settings": False}}, headers=tenant)).json()["id"]
     email = f"ctr-{uuid.uuid4().hex[:8]}@t.dev"
