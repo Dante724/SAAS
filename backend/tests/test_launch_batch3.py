@@ -84,8 +84,10 @@ async def test_settling_an_order_deletes_the_square_link(client, tenant, db, mon
     intent = (await db.execute(select(PaymentIntent).where(PaymentIntent.id == link["intent_id"]))).scalar_one()
     intent.provider, intent.provider_ref, intent.provider_link_id = "square", "sq_order_1", "sq_link_9"
     await db.commit()
-    from backend.config import settings
-    monkeypatch.setattr(settings, "SQUARE_ACCESS_TOKEN", "sq-test-token")
+    # the shop's own Square keys: links are never closed with the operator's account (B7)
+    r = await client.put("/api/integrations/credentials", headers=tenant, json={
+        "provider": "square", "data": {"access_token": "sq-test-token", "env": "sandbox"}})
+    assert r.status_code == 200, r.text
     calls = []
 
     class _Resp:

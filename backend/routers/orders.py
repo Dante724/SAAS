@@ -124,6 +124,14 @@ class LineIn(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _fixed_within_line(self):
+        # B3: an amount off can't be more than the line itself.
+        if (self.discount_type or "pct") == "fixed" and \
+                (self.discount or 0) > q2((self.qty or 0) * (self.unit_price or 0)) + 0.005:
+            raise ValueError("A discount can't be more than the line's price")
+        return self
+
+    @model_validator(mode="after")
     def _fill_line_type(self):
         if not self.line_type:
             self.line_type = _LINE_TYPE_FROM_KIND.get((self.kind or "").lower())
@@ -221,7 +229,8 @@ def _calc_line(line: "LineIn") -> float:
     if dtype == "fixed":
         after_discount = max(base - line.discount, 0)
     else:
-        after_discount = base * (1 - line.discount / 100)
+        # B3: clamped, so no path (old rows, imports) can turn a discount into a negative job.
+        after_discount = base * (1 - min(max(line.discount or 0, 0), 100) / 100)
     mode = getattr(line, "tax_mode", "imposed")
     if mode == "included":
         # price already contains tax; customer total does not change
@@ -1601,6 +1610,9 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
                            order_id=order.id, client_id=order.client_id, status="draft",
                            subtotal=order.total or 0, total=order.total or 0, issued_at=datetime.utcnow())
             db.add(_inv)
+            await db.flush()
+            from backend.services.order_money import apply_deposits
+            await apply_deposits(db, _inv, order)   # a fully prepaid job's invoice is paid, not "Remind"
             await log_system_event(db, current.org_id, "order", order.id, "Invoice auto-created on status change")
             # Build 144z: mirror the new invoice (and its customer) to QuickBooks if connected.
             try:
@@ -4044,6 +4056,11 @@ async def update_line(
     if _mg["blocked"]:
         raise HTTPException(409, f"Margin {_mg['margin_pct']}% is below the {_mg['floor']}% floor. "
                                  f"Lower the discount or raise the price.")
+    if (line.discount_type or "pct") == "fixed" and \
+            (line.discount or 0) > q2((line.qty or 0) * (line.unit_price or 0)) + 0.005:
+        raise HTTPException(422, "A discount can't be more than the line's price")
+    if (line.discount_type or "pct") == "pct" and (line.discount or 0) > 100:
+        raise HTTPException(422, "A percentage discount can't exceed 100%")
     tmp = LineIn(line_type=line.line_type, description=line.description or "", qty=line.qty,
                  unit_price=line.unit_price, cost_price=line.cost_price or 0,
                  discount=line.discount or 0, discount_type=line.discount_type or "pct",
