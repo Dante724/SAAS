@@ -15,6 +15,7 @@ and keeps a fixed kit price exact:
 Nothing here touches the database; callers pass lines in and write results back.
 """
 from dataclasses import dataclass, field
+import math
 from math import gcd
 from typing import Any, Optional
 
@@ -177,6 +178,16 @@ def tax_by_rate(lines, numbers) -> list[dict]:
 
 # ── fixed kit price: spread a total across the kit's lines, exactly ─────────────────────────────
 
+def _half_up(x: float) -> int:
+    return int(math.floor(x + 0.5))
+
+
+def _stored_cents(unit_cents: int, qty: float) -> int:
+    """Cents of the line total as the order code stores it: q2(qty * unit_price), float maths
+    and all (1.5 × 38.41 stores 57.61, not 57.62)."""
+    return int(round(q2(float(qty) * (unit_cents / 100.0)) * 100))
+
+
 def _int_qty(q: float) -> Optional[int]:
     return int(round(q)) if q and abs(q - round(q)) < 1e-9 else None
 
@@ -215,19 +226,26 @@ def spread(target: float, members: list) -> list[tuple[Any, float, float]]:
     anchor = next((i for i in reversed(idx) if units[i] == 1 and weights[i] > 0), None)
     if anchor is None:
         anchor = next((i for i in reversed(idx) if weights[i] > 0), idx[-1])
+    # Count each line as it will be STORED (qty × unit, rounded half-up), so fractional qtys
+    # (1.5 h of labour) can't drift a cent. A unit price is never negative: if the other lines'
+    # rounding overshoots the total, take cents back from the biggest of them first.
     unit_cents = [0] * len(members)
-    used = 0
-    for i in idx:
-        if i == anchor:
-            continue
-        u = round(scaled * weights[i] / total_w / units[i]) if units[i] else 0
-        unit_cents[i] = u
-        used += u * units[i]
-    rest = scaled - used
+    stored = [0] * len(members)
+    others = [i for i in idx if i != anchor]
+    for i in others:
+        unit_cents[i] = _half_up(scaled * weights[i] / total_w / units[i]) if units[i] else 0
+        stored[i] = _stored_cents(unit_cents[i], units[i])
+    rest = scaled - sum(stored)
+    while rest < 0:
+        i = max((j for j in others if unit_cents[j] > 0), key=lambda j: unit_cents[j])
+        unit_cents[i] -= 1
+        rest += stored[i]
+        stored[i] = _stored_cents(unit_cents[i], units[i])
+        rest -= stored[i]
     adjust = [0.0] * len(members)
     ua = units[anchor] or 1
-    unit_cents[anchor] = round(rest / ua)
-    leftover = rest - unit_cents[anchor] * ua          # in reduced units; 0 when it divides
+    unit_cents[anchor] = max(_half_up(rest / ua), 0)
+    leftover = rest - _stored_cents(unit_cents[anchor], ua)   # 0 when it divides
     if leftover:
         adjust[anchor] = round(leftover * g) / 100.0
     return [(m, unit_cents[i] / 100.0, adjust[i]) for i, m in enumerate(members)]

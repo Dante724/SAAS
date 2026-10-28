@@ -351,7 +351,12 @@ async def _customer_surfaces(client, h, db, oid, cid):
 
 
 def _money_strings(v):
-    return {f"{v:,.2f}", f"{v:.2f}"}
+    """Every way an amount can show up: 7.50, 7.5 (a JSON/str float), 1,234.50 and 7,50."""
+    v = float(v)
+    out = {f"{v:,.2f}", f"{v:.2f}", f"{v:.2f}".replace(".", ",")}
+    if v != int(v):                  # "7.5"; a bare "1" would match every qty of 1
+        out |= {f"{v:g}", repr(v)}
+    return out
 
 
 @pytest.mark.parametrize("mode", ["one_line", "one_line_includes"])
@@ -531,3 +536,80 @@ async def test_kit_lines_stay_with_their_kit_item(client, tenant):
     scr = [ln for ln in await k.lines(client, tenant, oid) if ln["ref_id"] == s.screen][0]
     r = await client.patch(f"/api/orders/{oid}/lines/{scr['id']}", headers=tenant, json={"order_item_id": "x"})
     assert r.status_code in (404, 409)
+
+
+# ── tester review fixes ────────────────────────────────────────────────────────────────────────
+
+def test_spread_property_through_stored_totals():
+    """Seeded random kits with fractional and large qtys: what gets STORED adds up to the kit
+    price exactly, and no unit price is ever negative."""
+    import random
+
+    from backend.services.money import q2
+    rnd = random.Random(144)
+    for _ in range(5000):
+        t = round(rnd.uniform(0, 500), 2)
+        ms = [_ln(rnd.choice([0.25, 0.5, 1, 1.5, 2, 2.5, 3, 20]), round(rnd.uniform(0, 200), 2))
+              for _ in range(rnd.randint(1, 5))]
+        res = kp.spread(t, ms)
+        assert round(sum(q2(q2(m.qty * u) + a) for m, u, a in res), 2) == t, (t, [(m.qty, u, a) for m, u, a in res])
+        assert all(u >= 0 for _m, u, _a in res)
+
+
+async def _custom_kit(client, h, parts, price):
+    loc = await k.loc(client, h)
+    comps = []
+    for name, std, qty, kind in parts:
+        rid = (await k.part(client, h, loc, name, sell=std, cost=0, qty=100)) if kind == "product" \
+            else await k.service(client, h, name, std)
+        comps.append({"ref_type": kind, "ref_id": rid, "qty": qty})
+    b = await k.kit(client, h, comps, name="QA Kit", price_mode="fixed", price=price, print_mode="one_line")
+    oid, cid = await k.job(client, h, loc)
+    gid = (await k.add_kit(client, h, oid, b["id"]))["bundle_group_id"]
+    return oid, cid, gid
+
+
+async def _kit_total(client, h, oid, gid):
+    return round(sum(ln["total"] for ln in await k.lines(client, h, oid) if ln["bundle_group_id"] == gid), 2)
+
+
+@pytest.mark.asyncio
+async def test_fractional_labour_and_cheap_part_kits_are_exact(client, tenant):
+    oid, _c, gid = await _custom_kit(client, tenant, [("Screen", 120, 1, "product"), ("Labour hour", 25, 1.5, "service")], 49.99)
+    assert await _kit_total(client, tenant, oid, gid) == 49.99
+    oid, _c, gid = await _custom_kit(client, tenant, [("Filter", 10, 20, "product"), ("Label", 0.05, 1, "product")], 99.99)
+    assert await _kit_total(client, tenant, oid, gid) == 99.99
+    assert all(ln["unit_price"] >= 0 for ln in await k.lines(client, tenant, oid))
+
+
+@pytest.mark.asyncio
+async def test_last_cent_survives_other_edits(client, tenant):
+    oid, _c, gid = await _custom_kit(client, tenant, [("Screw", 1, 3, "product"), ("Washer", 1, 3, "product")], 10)
+    for ln in await k.lines(client, tenant, oid):
+        r = await client.patch(f"/api/orders/{oid}/lines/{ln['id']}", headers=tenant, json={"cost_price": 0.02})
+        assert r.status_code == 200, r.text
+    assert await _kit_total(client, tenant, oid, gid) == 10
+
+
+@pytest.mark.asyncio
+async def test_issued_invoice_keeps_how_the_kit_prints(client, tenant, db):
+    oid, cid, gid = await _custom_kit(client, tenant, [("Screen", 120, 1, "product"), ("Fit", 30, 1, "service")], 149.99)
+    iid = await k.invoice(client, tenant, oid, cid)
+    from backend.models import Invoice
+    inv = (await db.execute(select(Invoice).where(Invoice.id == iid))).scalar_one()
+    inv.status = "sent"
+    await db.commit()
+    before = await k.invoice_lines(client, tenant, iid)
+    r = await client.patch(f"/api/orders/{oid}/kits/{gid}", headers=tenant, json={"print_mode": "itemized"})
+    assert r.status_code == 409 and "itemised copy" in r.text
+    assert await k.invoice_lines(client, tenant, iid) == before
+
+
+@pytest.mark.asyncio
+async def test_whole_job_invoice_freezes_the_kit_price(client, tenant):
+    oid, cid, gid = await _custom_kit(client, tenant, [("Screen", 120, 1, "product"), ("Fit", 30, 1, "service")], 149.99)
+    await k.invoice(client, tenant, oid, cid)
+    r = await client.patch(f"/api/orders/{oid}/kits/{gid}", headers=tenant, json={"price": 99, "reason": "goodwill"})
+    assert r.status_code == 409
+    ln = (await k.lines(client, tenant, oid))[0]
+    assert (await client.delete(f"/api/orders/{oid}/lines/{ln['id']}", headers=tenant)).status_code == 409

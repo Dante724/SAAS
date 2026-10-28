@@ -3553,6 +3553,8 @@ async def add_line(
         from backend.services import kit_print
         group_id = str(_uuid.uuid4())
         locked = q2((bundle.price or 0) * data.qty) if bundle.price_mode == "fixed" else None
+        if locked is not None and not kit_print.price_ok(locked):
+            raise HTTPException(400, "That many kits comes to more than one job can hold")
         made = []
         for c, eff_ref_id, name, price, ltype, kind in std:
             li = LineIn(line_type=ltype, kind=kind, ref_id=eff_ref_id,
@@ -3827,12 +3829,28 @@ async def _respread_kit(db, order_id, group_id, *, actor=None, change: str = "")
         m.total = q2(_calc_line(_line_as_in(m)) + adjust)
         if before != unit:
             moved[m.description or m.id] = [before, unit]
-    if actor is not None:
+    if actor is not None and moved:
         from backend.services.audit import record as _audit
         await _audit(db, org_id=actor.org_id, actor_id=actor.id, action="order.kit_respread",
                      entity_type="order", entity_id=order_id,
                      diff={"kit": members[0].bundle_name if members else None, "group_id": group_id,
                            "change": change[:300], "kit_price": locked, "unit_prices": moved})
+
+
+async def _kit_invoice_statuses(db, order_id, members) -> list[str]:
+    """Statuses of the live (not cancelled) invoices that bill this kit's lines: a partial invoice
+    listing one of them, or an invoice for the whole job (one that lists no job lines of its own)."""
+    from backend.models import Invoice, InvoiceLine, InvoiceOrder
+    from backend.services.invoicing import VOID_STATUSES
+    ids = [m.id for m in members]
+    out = list((await db.execute(select(Invoice.status).join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id).where(
+        InvoiceLine.order_line_id.in_(ids), Invoice.status.notin_(VOID_STATUSES)))).scalars().all())
+    linked = select(InvoiceOrder.invoice_id).where(InvoiceOrder.order_id == order_id)
+    partial = select(InvoiceLine.invoice_id).where(InvoiceLine.order_line_id.isnot(None))
+    out += list((await db.execute(select(Invoice.status).where(
+        (Invoice.order_id == order_id) | Invoice.id.in_(linked),
+        Invoice.id.notin_(partial), Invoice.status.notin_(VOID_STATUSES)))).scalars().all())
+    return [x or "draft" for x in out]
 
 
 async def _guard_kit_change(db, current, order_id, group_id, *, adds_value: bool):
@@ -3842,17 +3860,12 @@ async def _guard_kit_change(db, current, order_id, group_id, *, adds_value: bool
       it needs the kit-price permission. Fewer parts keeps the customer's price; anyone may.
     - In a kit priced as the sum of its parts that prints as one line, adding a line puts a charge
       under the kit's name: it needs the kit print permission."""
-    from backend.models import Invoice, InvoiceLine
     from backend.services import kit_print
-    from backend.services.invoicing import VOID_STATUSES
     members = (await db.execute(select(OrderLine).where(
         OrderLine.order_id == order_id, OrderLine.bundle_group_id == group_id))).scalars().all()
     if not members:
         return
-    billed = (await db.execute(select(InvoiceLine.id).join(Invoice, Invoice.id == InvoiceLine.invoice_id).where(
-        InvoiceLine.order_line_id.in_([m.id for m in members]),
-        Invoice.status.notin_(VOID_STATUSES)).limit(1))).scalar_one_or_none()
-    if billed:
+    if await _kit_invoice_statuses(db, order_id, members):
         raise HTTPException(409, "Part of this kit is already on an invoice. Cancel that invoice to change the kit.")
     locked = any(m.bundle_price_locked is not None for m in members)
     if adds_value and locked and not await has_perm(db, current, "can_change_kit_price"):
@@ -3897,6 +3910,10 @@ async def update_kit(
         if data.print_mode not in kit_print.PRINT_MODES:
             raise HTTPException(400, "Choose One line, One line and what's included, or Item by item")
         before = kit_print.norm_mode(members[0].bundle_print_mode)
+        if before != data.print_mode and any(
+                st != "draft" for st in await _kit_invoice_statuses(db, order_id, members)):
+            raise HTTPException(409, "This kit is on an invoice the customer already has, so it keeps printing "
+                                     "the same way. Print an itemised copy instead.")
         if before != data.print_mode:
             for m in members:
                 m.bundle_print_mode = data.print_mode
@@ -4060,9 +4077,11 @@ async def update_line(
                  discount=line.discount or 0, discount_type=line.discount_type or "pct",
                  tax_rate=line.tax_rate or 0, tax_mode=line.tax_mode or "imposed")
     line.total = _calc_line(tmp)
-    if line.bundle_group_id and "qty" in payload and (line.qty or 0) != old_qty:
-        await _respread_kit(db, order_id, line.bundle_group_id, actor=current,
-                            change=f"{line.description}: qty {old_qty:g} → {line.qty:g}")
+    if line.bundle_group_id and line.bundle_price_locked is not None:
+        # Any edit re-shares the locked price, so its last-cent correction isn't lost.
+        change = (f"{line.description}: qty {old_qty:g} → {line.qty:g}" if (line.qty or 0) != old_qty
+                  else f"{line.description} edited")
+        await _respread_kit(db, order_id, line.bundle_group_id, actor=current, change=change)
     await _recalc_order(db, order)
     await db.commit()
     resp = {"ok": True, "total": line.total, "order_total": order.total}
