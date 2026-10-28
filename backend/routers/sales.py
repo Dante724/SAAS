@@ -486,6 +486,8 @@ async def create_sale(
 
     total = 0.0
     total_cost = 0.0
+    from backend.services.tax import pos_line_tax
+    sale_lines = []
     for li in data.lines:
         line_total = q2(li.unit_price * li.qty * (1 - (li.discount or 0) / 100))
         cost = 0.0
@@ -535,10 +537,12 @@ async def create_sale(
                                  ref_type="sale", ref_id=sale.id))
             from backend.services import inventory_alerts as _alerts  # 144bo: low-stock alert
             await _alerts.maybe_low_stock_by_id(db, current.org_id, li.ref_id)
-        db.add(SaleLine(sale_id=sale.id, kind=li.kind, ref_id=li.ref_id,
-                        description=li.description, qty=li.qty, unit_price=li.unit_price,
-                        cost_price=cost / li.qty if li.qty else 0, discount=li.discount,
-                        total=line_total, stock_draws=draws))
+        ln = SaleLine(sale_id=sale.id, kind=li.kind, ref_id=li.ref_id,
+                      description=li.description, qty=li.qty, unit_price=li.unit_price,
+                      cost_price=cost / li.qty if li.qty else 0, discount=li.discount,
+                      total=line_total, stock_draws=draws)
+        db.add(ln)
+        sale_lines.append(ln)
         total += line_total
         total_cost += cost
 
@@ -547,6 +551,15 @@ async def create_sale(
     priced = await _price_sale(db, current.org_id, data, location_id=loc_id, sale=sale)
     sale.discount = priced["discount_total"]
     sale.total = priced["total"]
+    # Launch B4: store the tax charged — on the sale (tax added on top + VAT inside the price) and on
+    # each line (its rate, and its tax on its share of what is left after the discounts).
+    sale.tax = q2(priced["tax_total"] + priced["tax_included"])
+    gross = priced["subtotal"]
+    share = (gross - priced["discount_total"]) / gross if gross else 0.0
+    for ln in sale_lines:
+        tx = await pos_line_tax(db, current.org_id, kind=ln.kind, ref_id=ln.ref_id,
+                                net_amount=q2(float(ln.total or 0) * share), location_id=loc_id)
+        ln.tax_rate, ln.tax_mode, ln.tax = tx["rate"], tx["mode"], tx["amount"]
     sale.total_cost = q2(total_cost)
 
     # Payment straight into a cashbox (signed ledger entry linked to the sale)
@@ -562,7 +575,7 @@ async def create_sale(
                            f"Sale {sale.sale_number}: {len(data.lines)} line(s), total {sale.total:g}")
     await db.commit()
     redeemed = {k: priced[k] for k in ("coupon", "gift_card", "loyalty") if priced[k]}
-    return {"id": sale.id, "sale_number": sale.sale_number, "total": sale.total,
+    return {"id": sale.id, "sale_number": sale.sale_number, "total": sale.total, "tax": sale.tax,
             "total_cost": sale.total_cost, "profit": q2(sale.total - sale.total_cost),
             "paid": sale.paid, "redeemed": redeemed, "due": priced["due"], "gift_card": priced["gift_card"],
             "tax_total": priced["tax_total"], "change_due": priced["change_due"] if sale.paid else None}
@@ -798,14 +811,15 @@ async def sale_receipt(
     client = (await db.execute(select(Client).where(
         Client.id == sale.client_id, Client.org_id == current.org_id))).scalar_one_or_none() if sale.client_id else None
     from backend.services.currency import _base
+    from backend.services.dates import utc_iso
     sym = _base(org)["symbol"]
     gift = await sale_gift_card_paid(db, sale.id)
     return {
         "sale_number": sale.sale_number, "shop_name": org.name if org else "",
         "total": sale.total, "discount": sale.discount, "paid": sale.paid,
         "tax": sale_tax_added(sale, lines), "gift_card": gift,
-        "created_at": sale.created_at.isoformat() if sale.created_at else None,
-        "lines": [{"description": ln.description, "qty": ln.qty, "total": ln.total} for ln in lines],
+        "created_at": utc_iso(sale.created_at),   # launch B6: "Z" so the browser reads UTC
+        "lines": [{"description": ln.description, "qty": ln.qty, "total": ln.total, "tax": ln.tax} for ln in lines],
         "client_email": client.email if client else None, "client_phone": client.phone if client else None,
         "text": receipt_text(org.name if org else "", sale, lines, sym, getattr(org, "timezone", None), gift),
     }

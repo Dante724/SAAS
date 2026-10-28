@@ -1,9 +1,6 @@
-// The API sends two kinds of naive timestamps: event times (started_at, status changes) are UTC
-// without a "Z", while scheduled/due times are shop-local wall-clock. Parse each the right way.
-export function utc(iso?: string | null): Date | null {
-  if (!iso) return null;
-  return new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + "Z");
-}
+// Event times (started_at, status changes) are UTC instants; scheduled/due times are shop-local
+// wall-clock. One parser for the whole app lives in lib/serverTime.
+export { serverDate as utc } from "../../lib/serverTime";
 
 export function hm(sec: number): string {
   const s = Math.max(0, Math.floor(sec));

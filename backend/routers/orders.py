@@ -264,6 +264,15 @@ def _line_tax_amount(line: "LineIn") -> float:
         return q2(after_discount - after_discount / (1 + rate)) if rate else 0.0
     return q2(after_discount * rate)
 
+def order_tax(lines) -> float:
+    """Launch B4: the tax inside an order's total (imposed tax added on top plus VAT contained in
+    VAT-inclusive prices), stored on Order.tax so invoices, the PDF and reports can show it."""
+    from backend.services.tax import line_tax
+    return q2(sum(line_tax(qty=l.qty, unit_price=l.unit_price, discount=l.discount,
+                           discount_type=getattr(l, "discount_type", None), tax_rate=l.tax_rate,
+                           tax_mode=getattr(l, "tax_mode", None)) for l in lines))
+
+
 def _order_totals(lines: list[OrderLine]):
     labour = sum(l.total for l in lines if l.line_type == "labour")
     parts = sum(l.total for l in lines if l.line_type == "part")
@@ -703,7 +712,7 @@ async def bulk_action(
             inv = Invoice(
                 invoice_number=await next_number(db, current.org_id, "invoice"),
                 org_id=current.org_id, order_id=o.id, client_id=o.client_id,
-                status="draft", subtotal=o.total or 0, total=o.total or 0,
+                status="draft", subtotal=o.total or 0, tax=o.tax or 0, total=o.total or 0,
                 issued_at=datetime.utcnow(),
             )
             db.add(inv)
@@ -729,7 +738,8 @@ async def bulk_action(
             inv = Invoice(
                 invoice_number=await next_number(db, current.org_id, "invoice"),
                 org_id=current.org_id, order_id=grp[0].id, client_id=client_id,
-                status="draft", subtotal=total, total=total, issued_at=datetime.utcnow())
+                status="draft", subtotal=total, tax=q2(sum((o.tax or 0) for o in grp)), total=total,
+                issued_at=datetime.utcnow())
             db.add(inv)
             for o in grp:
                 await log_system_event(db, current.org_id, "order", o.id,
@@ -779,9 +789,11 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
             select(Location).where(Location.org_id == current.org_id, Location.active == True)  # noqa: E712
             .order_by(Location.created_at))).scalars().first()
         if not loc:
-            loc = Location(org_id=current.org_id, name="Main", timezone="UTC")
+            loc = Location(org_id=current.org_id, name="Main")
             db.add(loc)
             await db.flush()
+            from backend.services.shop_setup import setup_location
+            await setup_location(db, loc, first=True)
         data.location_id = loc.id
 
     # Item 2: role location-scope enforcement (no-op for unscoped roles/owners).
@@ -815,6 +827,7 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
         if _hide_cost or _fixed_cost:
             li.cost_price = await _catalog_cost(db, current.org_id, li.kind, li.ref_id)
         await _apply_client_discount(db, current.org_id, data.client_id, li)
+        await _auto_apply_tax(db, current.org_id, li)   # launch B4: lines on a new job were never taxed
         await _guard_discount_approval(db, current.org_id, _perms_create, li.discount, li.discount_type, is_owner=not current.role_id,
                                           base=(li.qty or 0) * (li.unit_price or 0))
         # 144ha — margin-floor guardrail on create (block a below-floor line)
@@ -958,6 +971,7 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
         labour_total=labour_total,
         parts_total=parts_total,
         total=labour_total + parts_total,
+        tax=order_tax(lines),
         currency_code=_cinfo["code"],
         fx_rate=_cinfo["rate"],
         lines=lines,
@@ -1599,7 +1613,8 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         if not existing_inv:
             _inv = Invoice(invoice_number=await next_number(db, current.org_id, "invoice"), org_id=current.org_id,
                            order_id=order.id, client_id=order.client_id, status="draft",
-                           subtotal=order.total or 0, total=order.total or 0, issued_at=datetime.utcnow())
+                           subtotal=order.total or 0, tax=order.tax or 0, total=order.total or 0,
+                           issued_at=datetime.utcnow())
             db.add(_inv)
             await log_system_event(db, current.org_id, "order", order.id, "Invoice auto-created on status change")
             # Build 144z: mirror the new invoice (and its customer) to QuickBooks if connected.
@@ -3478,6 +3493,7 @@ async def _recalc_order(db, order):
     if _org and getattr(_org, "rounding_enabled", False):
         total = q2(round(total / 0.05) * 0.05)
     order.total = total
+    order.tax = order_tax(lines)
 
 
 def _all_codes():
@@ -3723,9 +3739,11 @@ async def add_line(
             li = LineIn(line_type=ltype, kind=kind, ref_id=eff_ref_id,
                         description=f"{name} ({bundle.name})",
                         qty=c.qty * data.qty, unit_price=q2(price * factor))
+            await _auto_apply_tax(db, current.org_id, li)
             t = _calc_line(li)
             nl = OrderLine(order_id=order_id, line_type=li.line_type, kind=li.kind, ref_id=li.ref_id,
                            description=li.description, qty=li.qty, unit_price=li.unit_price,
+                           tax_id=li.tax_id, tax_rate=li.tax_rate, tax_mode=li.tax_mode,
                            technician_id=data.technician_id, order_item_id=data.order_item_id, total=t)
             db.add(nl)
             await db.flush()

@@ -46,6 +46,33 @@ describe("auth pages", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("sign up asks for the country, which sets currency and timezone", async () => {
+    replies["/api/auth/signup-options"] = { status: 200, body: {
+      templates: [{ key: "phones", label: "Phones" }], regions: [{ key: "eu", label: "Europe" }], region_defaults: {}, employee_brackets: ["1"],
+      countries: [{ code: "US", label: "United States", currency_code: "USD", timezone: "America/New_York" },
+                  { code: "GB", label: "United Kingdom", currency_code: "GBP", timezone: "Europe/London" }],
+      country_hint: "GB" } };
+    replies["/api/auth/register"] = { status: 200, body: { access_token: "tok-uk" } };
+    const u = userEvent.setup();
+    render(<Signup />);
+    const country = await screen.findByLabelText("Country") as HTMLSelectElement;
+    await vi.waitFor(() => expect(country.value).toBe("GB"));
+    expect((screen.getByLabelText("Currency") as HTMLInputElement).value).toBe("GBP");
+    await u.selectOptions(country, "US");
+    expect((screen.getByLabelText("Currency") as HTMLInputElement).value).toBe("USD");
+    await u.type(screen.getByLabelText("Shop name"), "Fix-It NYC");
+    await u.click(screen.getByRole("button", { name: "Continue" }));
+    await u.type(await screen.findByLabelText("Your name"), "Sam");
+    await u.type(screen.getByLabelText("Email"), "sam@fixit.us");
+    await u.type(screen.getByLabelText("Password (8+ characters)"), "pw-12345678");
+    await u.click(screen.getByLabelText(/I agree to the/));
+    await u.click(screen.getByRole("button", { name: "Create shop" }));
+    await vi.waitFor(() => expect(localStorage.getItem("ros_tok")).toBe("tok-uk"));
+    const reg = calls.find((c) => c.url === "/api/auth/register")!.body;
+    expect(reg).toMatchObject({ country: "US", currency_code: "USD", region: null });
+    expect(String(reg.timezone).startsWith("America/")).toBe(true);
+  });
+
   it("sign up takes the shop first, then the person, and creates both", async () => {
     replies["/api/auth/signup-options"] = { status: 200, body: { templates: [{ key: "tools", label: "Tools Repair" }], regions: [{ key: "in", label: "India" }], region_defaults: { in: { currency_code: "INR" } }, employee_brackets: ["1-5"] } };
     replies["/api/auth/register"] = { status: 200, body: { access_token: "tok-9" } };

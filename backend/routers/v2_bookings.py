@@ -44,7 +44,7 @@ from backend.routers.v2 import R, W, router
 from backend.services import booking_slots as bs
 from backend.services import leads as lsvc
 from backend.services.apikeys import ApiPrincipal
-from backend.services.dates import parse_dt, parse_wall_dt
+from backend.services.dates import location_tz, parse_dt, parse_wall_dt
 from backend.services.public_name import public_staff_name
 
 _ID = Field(None, min_length=1, max_length=64)
@@ -317,7 +317,7 @@ async def appointment_slots(
 
     return {"data": {
         "date": day.isoformat(), "location_id": location.id if location else None,
-        "timezone": (location.timezone if location and location.timezone else "UTC"),
+        "timezone": location_tz(location, org),
         "service_id": service_id, "employee_id": employee_id, "duration_min": dur,
         "step_min": ans["step"], "reason": ans["reason"],
         "slots": [{"start": s.isoformat(), "end": (s + timedelta(minutes=dur)).isoformat(),

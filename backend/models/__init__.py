@@ -2423,6 +2423,8 @@ class Sale(Base):
     total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     total_cost: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     discount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # whole-sale discount amount
+    # Launch B4: the tax inside `total` (imposed tax added on top + VAT contained in the price).
+    tax: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0, server_default="0")
     paid: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     coupon_id: Mapped[Optional[str]] = mapped_column(String)          # the coupon used, so a void can give the use back
@@ -2443,6 +2445,10 @@ class SaleLine(Base):
     cost_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # exact FIFO COGS for products
     discount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)    # pct
     total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    # Launch B4: the tax the line carried (services/tax.pos_line_tax). total includes imposed tax.
+    tax_rate: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
+    tax_mode: Mapped[str] = mapped_column(String(10), default="imposed", server_default="imposed")
+    tax: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0, server_default="0")
     # What the line drew, so a void puts it back exactly: {"layers": [{batch_id, qty}],
     # "holds": [{hold_id, qty}]} — FIFO cost layers and other jobs' reservations (override).
     stock_draws: Mapped[Optional[dict]] = mapped_column(JSON)
