@@ -58,7 +58,7 @@ A check-in point is a physical place where people arrive. Each point belongs to 
 |---|---|
 | name | Shown to staff and on the poster: "Front door", "Key box", "Dock 3" |
 | mode | `walk_in` · `key_drop` · `auto` (walk-in during working hours, key drop outside them) |
-| kiosk | The page runs on a shared tablet. It goes full screen and clears itself 30 s after each check-in. |
+| kiosk | The page runs on a shared tablet. It goes full screen, clears itself 30 s after each check-in, and only a staff sign-in from the same shop can turn kiosk mode off (§14.2). |
 | job_type_ids | Which job types the point offers. If empty, the shop's default job type is used. |
 | welcome_text, terms_template_id, require_photo, show_wait | Optional per-point overrides; otherwise the shop default applies |
 | token | Unguessable public code (≥ 128 bits, URL-safe). Encoded in the QR. Can be rotated. |
@@ -138,7 +138,7 @@ A **sidebar badge** on Inquiries shows the number of waiting check-ins for the u
 ### 7.2 Actions (signed-in staff, the same as inquiries today; Convert also needs `can_create_tickets`, as `POST /api/leads/{id}/convert` does)
 | Action | Route | Effect |
 |---|---|---|
-| Call next | `POST /api/checkins/{id}/call` | state → `called`, SMS "You're up, please come to the counter". Optional `convert=true` converts in the same call. |
+| Call next | `POST /api/checkins/{id}/call` | state → `called`, SMS "You're up, please come to the counter". It never converts; staff convert after talking to the customer (§14.1). |
 | No-show | `POST /api/checkins/{id}/no-show` | state → `no_show`; the Lead is marked lost with reason "No-show". |
 | Convert / Start job | `POST /api/checkins/{id}/convert` | See §7.3. Returns `order_id`; the frontend then runs `autoPrintForJob(order_id, "create")` (from PR #41). |
 | Lookup by code | `GET /api/checkins/by-code/{status_token}` | Used by the counter scan (§7.4). |
@@ -186,7 +186,7 @@ These go through the existing rules engine (`services/notification_rules.py`) as
 | `checkin.called` | SMS: "You're up at {Location}, please come to the counter." | Customer |
 | `checkin.key_drop` | In-app alert: "Overnight drop-off: {Name}, key tag {Tag}" | Staff at that location (sent when the shop opens) |
 
-SMS goes out with the shop's own SMS credentials; without them it falls back to the simulated adapter, as the other messages do today. The webhook `inquiry.created` fires as today (source `walk_in`).
+SMS goes out only with the shop's own SMS credentials. If none are connected, the check-in SMS is skipped (no simulated message) and the page shows the status link and QR with a "save this page" hint (§14.3). The webhook `inquiry.created` fires as today (source `walk_in`).
 
 ## 10. Security and multi-tenancy
 
@@ -257,16 +257,16 @@ SMS goes out with the shop's own SMS credentials; without them it falls back to 
    - **Frontend**:
      - the form renders from a resolved definition;
      - required and show-when rules;
-     - kiosk reset;
+     - kiosk reset, and leaving kiosk mode needs a sign-in from the same shop;
      - Walk-ins actions;
      - the badge;
      - Settings points CRUD.
    - **E2E** (Playwright): scan QR → check in → staff Call next → work order prefilled.
 4. **Checks**: ruff, alembic single head, full pytest (SQLite and Postgres shards), tsc, UI-text lint, vitest, and the CI E2E job.
 
-## 14. Open questions
+## 14. Decisions (agreed with the owner)
 
-1. Should **Call next convert immediately**, or only mark the customer as called so staff can convert after talking to them? *Proposed:* only mark as called by default, with a per-location setting to convert straight away.
-2. Should a **counter tablet in kiosk mode** need a staff PIN to leave kiosk mode? *Proposed:* yes, reusing the Tekly Go PIN.
-3. Should the **check-in SMS** be sent when the shop has no SMS provider connected? *Proposed:* no; the status page link is shown on screen instead.
-4. Memberships: once that spec lands, check-in recognises members by phone and shows included benefits. It's kept out of this PR.
+1. **Call next only marks the customer as called.** It sends the "you're up" text and moves them to *Being served*. Staff then convert after talking to them, using **Convert** in the drawer. Call next never creates a job by itself, so there is no `convert=true` option and no per-location setting.
+2. **Leaving kiosk mode needs a full staff sign-in.** Neither a PIN nor the tablet's own lock is enough. The kiosk page has an *Exit kiosk* control that opens the normal staff login. Only a signed-in employee of **the same shop** can turn kiosk mode off on that tablet.
+3. **The check-in text is sent only when the shop has texting connected.** Otherwise there is no simulated message: the status link and QR are shown on screen, with a "save this page" hint.
+4. **Memberships stay out of this PR.** Once that spec lands, check-in recognises members by phone and shows their included benefits.
