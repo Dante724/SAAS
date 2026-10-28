@@ -33,7 +33,9 @@ four real templates — Electronics (IMEI or serial, with a Phone/Computer toggl
 (cars, trucks, RVs, bikes), Tools & small engine, and Marine — with line icons and example intake.
 
 Trust content is factual: a "works with" strip lists integrations that exist in the codebase
-(Stripe, Square, QuickBooks, Xero, SMS via Twilio, WhatsApp, Gmail, Outlook) and a promises row
+(Stripe, Square, QuickBooks Online, SMS via Twilio, WhatsApp, Gmail, Outlook). Xero and
+Shopify/WooCommerce are hidden in the app until their sync is real, so the site doesn't mention them;
+QuickBooks is described as a one-way send of invoices and payments, which is what it does and a promises row
 (no contracts, export anytime, free migration, AI never sends on its own).
 
 ## SEO & marketing
@@ -114,8 +116,13 @@ pricing strip has them written in, so update both). The FAQ's structured data li
   every trade → switching → pricing line → top questions (FAQPage data matches them) → call to action.
 - **Coming soon:** the changelog's "Coming soon" cards describe features
   from open PRs #12–#28; move them to a shipped month as they merge.
-- **Placeholders:** the founder note on About and the customer-quotes section stay `hidden` until
-  real, permissioned words exist (`PLACEHOLDER` comments).
+- **No invented proof:** there is no founder note and no customer-quotes section. Add quotes only
+  from real customers who agreed to be quoted (name, shop, city).
+- **Honest claims:** Tekly AI drafts estimate lines; the shop checks and sets the prices. Don't say
+  "priced from your catalog" or "two-way sync" until the product does it.
+- **Legal placeholders:** `tools/legal/` has `[[CAPITALISED]]` tokens the founder must fill in.
+  `build_pages.py` lists them and **fails** while any remain, so use it as the host's build command.
+  `--allow-placeholders` makes a draft build for previewing only.
 - **Photos:** `assets/photos/` from Unsplash (Unsplash License) and Wikimedia Commons (public
   domain, CC BY 2.0, CC BY-SA 3.0/4.0); credits under "Photo credits" in the footer.
 - `/v2/` (an old preview URL) forwards to `/`.
