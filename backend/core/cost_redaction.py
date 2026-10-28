@@ -49,11 +49,13 @@ async def _role_can_see_costs(role_id: str) -> bool:
 
 
 async def _viewer_can_see_costs(state: dict) -> bool:
-    if not state.get("employee_id") or not state.get("employee_role_id"):
-        return True                       # not signed in as staff, or the owner
+    if not state.get("employee_id"):
+        return True                       # not signed in as staff
     decided = state.get("can_see_costs")
     if decided is not None:
         return bool(decided)
+    if not state.get("employee_role_id"):
+        return True                       # the owner (auth decides a roleless non-owner above)
     return await _role_can_see_costs(state["employee_role_id"])
 
 

@@ -134,6 +134,9 @@ async def get_current_employee(
         from backend.services.permissions import role_allows
         from backend.services.redact import COST_PERM
         request.state.can_see_costs = role is not None and role_allows(role, COST_PERM)
+    else:
+        # No role: the shop owner sees everything, a roleless invitee nothing.
+        request.state.can_see_costs = await is_shop_owner(db, employee)
     # Lost-device logout: a token carrying a stale version is rejected. Tokens
     # minted before this feature have no "tv" claim and stay valid until expiry.
     tv = payload.get("tv")
@@ -200,9 +203,12 @@ async def assert_not_self(db: AsyncSession, current: Employee, employee_id: str,
 
 async def has_perm(db: AsyncSession, employee: Employee, perm_key: str) -> bool:
     """Does this person's role grant the permission? (services/permissions.role_allows.)
-    Employees with no role (org owners) have every permission."""
-    if not employee.role_id or await is_shop_owner(db, employee):
+    The shop owner has every permission. Anyone else with no role has none: an invitee
+    accepted without a role used to be treated as the owner."""
+    if await is_shop_owner(db, employee):
         return True
+    if not employee.role_id:
+        return False
     from backend.models import Role
     from backend.services.permissions import role_allows
     role = (await db.execute(select(Role).where(Role.id == employee.role_id))).scalar_one_or_none()
@@ -219,8 +225,8 @@ async def assert_perm(db: AsyncSession, employee: Employee, perm_key: str) -> No
 
 
 def require_perm(perm_key: str):
-    """Dependency factory for role-based gating (see has_perm). Employees with no role
-    (org owners) are always allowed."""
+    """Dependency factory for role-based gating (see has_perm). The shop owner is always
+    allowed."""
     async def _checker(
         db: AsyncSession = Depends(get_db),
         current: Employee = Depends(get_current_employee),

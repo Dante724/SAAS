@@ -52,6 +52,18 @@ export function marginOf(p: Pick<Product, "margin_pct" | "sell_price" | "cost_pr
 
 // Exception-only stock status: healthy rows show a plain number (returns null),
 // only out/low get a coloured pill — so the eye lands on what needs action.
+// A failed load must not look like an empty shop: "No stock yet" after a server error sent
+// people to re-enter stock they already had (launch review B9).
+export function StockLoadError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div role="alert" className="flex flex-col items-center text-center gap-3 max-w-sm mx-auto">
+      <div className="w-11 h-11 rounded-full bg-slate-100 text-ink-tertiary flex items-center justify-center"><M n="cloud_off" c="text-2xl" /></div>
+      <div><div className="font-semibold text-ink-primary text-sm">Couldn't load your stock</div><div className="text-ink-tertiary mt-0.5">Your parts are safe. Check your connection and try again.</div></div>
+      <button onClick={onRetry} className={`${ghostBtn} mt-1`}><M n="refresh" c="text-sm" />Try again</button>
+    </div>
+  );
+}
+
 const primaryBtn = "h-9 px-4 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container flex items-center gap-1.5";
 const ghostBtn = "h-9 px-3.5 rounded-lg bg-white border border-slate-200 text-ink-secondary text-xs font-semibold hover:bg-slate-50 flex items-center gap-1.5";
 
@@ -88,6 +100,7 @@ export default function InventoryHub() {
   const { can } = useMe();
   const [tab, setTab] = useState<Tab>("stock");
   const [products, setProducts] = useState<Product[] | null>(null);
+  const [productsFailed, setProductsFailed] = useState(false);
   // Devices tab pages on the server (the API serves at most 200 rows per request).
   const [aq, setAq] = useState("");
   const daq = useDebounced(aq.trim());
@@ -196,7 +209,9 @@ export default function InventoryHub() {
     if (cat) qs.set("category_id", cat);
     if (wh) qs.set("warehouse_id", wh);
     const q = qs.toString();
-    api.get<{ items: Product[] }>(`/catalog/products${q ? "?" + q : ""}`).then((r) => setProducts(r.items || [])).catch(() => setProducts([]));
+    api.get<{ items: Product[] }>(`/catalog/products${q ? "?" + q : ""}`)
+      .then((r) => { setProductsFailed(false); setProducts(r.items || []); })
+      .catch(() => { setProductsFailed(true); setProducts([]); });
   }
   function loadServices() { api.get<{ items: Service[] }>("/catalog/services").then((r) => setServices(r.items || [])).catch(() => setServices([])); }
   useEffect(() => { loadProducts(); }, [cat, wh]); // eslint-disable-line
@@ -487,7 +502,10 @@ export default function InventoryHub() {
                     <td className="py-3.5 pr-5 pl-2" />
                   </tr>
                 ))}
-                {products && shownProducts.length === 0 && (
+                {products && productsFailed && (
+                  <tr><td colSpan={stockCols} className="py-14 px-5"><StockLoadError onRetry={loadProducts} /></td></tr>
+                )}
+                {products && !productsFailed && shownProducts.length === 0 && (
                   <tr><td colSpan={stockCols} className="py-14 px-5">
                     {products.length === 0 ? (
                       <div className="flex flex-col items-center text-center gap-3 max-w-sm mx-auto">

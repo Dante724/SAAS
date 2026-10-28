@@ -255,9 +255,11 @@ async def queue_reminders(db: AsyncSession, *, org_id: str,
         for order in orders:
             if rule.location_id and rule.location_id != order.location_id:
                 continue
+            # Any earlier row is a duplicate, whatever its status: a send that failed (a Twilio
+            # timeout) used to be queued again on every 2-minute tick, ~30 texts an hour.
             dupe = (await db.execute(select(NotificationLog.id).where(
                 NotificationLog.rule_id == rule.id, NotificationLog.order_id == order.id,
-                NotificationLog.status.in_(["scheduled", "sent"])))).scalar_one_or_none()
+            ).limit(1))).scalar_one_or_none()
             if dupe:
                 continue
             subject, body, tpl_id = await _render(db, org_id, order, rule)
@@ -449,11 +451,12 @@ async def queue_appointment_reminders(db: AsyncSession, *, org_id: str,
         for b in rows:
             if rule.location_id and rule.location_id != b.location_id:
                 continue
+            # Any earlier row for this appointment's slot is a duplicate, failed ones included.
             dupe = (await db.execute(select(NotificationLog.id).where(
                 NotificationLog.rule_id == rule.id,
                 NotificationLog.client_id == b.client_id,
                 NotificationLog.trigger_event == "reminder",
-                NotificationLog.status.in_(["scheduled", "sent"])))).scalar_one_or_none()
+                NotificationLog.send_at == b.scheduled_for - lead).limit(1))).scalar_one_or_none()
             if dupe:
                 continue
             recipient = await _appointment_recipient(db, b, rule.channel)

@@ -26,7 +26,7 @@ def low_stock_count_query(org_id: str):
                .group_by(StockLevel.part_id).subquery())
     return (select(func.count()).select_from(Part)
             .outerjoin(on_hand, on_hand.c.part_id == Part.id)
-            .where(Part.org_id == org_id, func.coalesce(on_hand.c.qty, 0) <= Part.min_stock))
+            .where(Part.org_id == org_id, func.coalesce(on_hand.c.qty, 0) <= func.coalesce(Part.min_stock, 0)))
 
 
 @router.get("/dashboard")
@@ -1118,22 +1118,35 @@ async def company_dashboard(
     today0 = now.replace(hour=0, minute=0, second=0, microsecond=0)
     month0 = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    _oq = select(Order).where(Order.org_id == oid, Order.is_estimate == False)  # noqa: E712
+    # Everything below is aggregated in the database, per status (a shop has a handful): Home
+    # used to load every work order the shop ever had, and ten opens on a 30k-order shop took
+    # both workers to 4.8 GB. The status groups are applied to those few rows in Python.
+    from sqlalchemy import case, or_
+    scope = [Order.org_id == oid, Order.is_estimate == False]  # noqa: E712
     if location_id:
-        _oq = _oq.where(Order.location_id == location_id)
-    orders = (await db.execute(_oq.options(selectinload(Order.assigned_to)))).scalars().all()
+        scope.append(Order.location_id == location_id)
     statuses = (await db.execute(select(OrderStatus).where(OrderStatus.org_id == oid, OrderStatus.record_type == "work_order"))).scalars().all()
     grp = {s.key: s.status_group for s in statuses}
     closed_groups = {"closed", "dropped"}
 
-    def is_open(o): return grp.get(o.status) not in closed_groups
+    def is_open(status): return grp.get(status) not in closed_groups
 
-    wo_today = sum(1 for o in orders if o.created_at >= today0)
+    def n_if(cond): return func.coalesce(func.sum(case((cond, 1), else_=0)), 0)
+
+    per_status = (await db.execute(select(
+        Order.status, func.count(),
+        n_if(Order.created_at >= today0),
+        n_if(Order.priority >= 1),
+        n_if(Order.due_at < now),
+        func.coalesce(func.sum(Order.total), 0),
+        n_if(Order.created_at >= month0),
+    ).where(*scope).group_by(Order.status))).all()
+
+    wo_today = sum(r[2] for r in per_status)
     # Payments carry no org_id: they belong to this shop through their job, invoice or account
     # (one branch: through that branch's jobs). Every money total below uses the same scope.
-    from sqlalchemy import or_
     if location_id:
-        mine = Payment.order_id.in_([o.id for o in orders] or ['_'])
+        mine = Payment.order_id.in_(select(Order.id).where(*scope))
     else:
         mine = or_(Payment.order_id.in_(select(Order.id).where(Order.org_id == oid)),
                    Payment.invoice_id.in_(select(Invoice.id).where(Invoice.org_id == oid)),
@@ -1143,10 +1156,12 @@ async def company_dashboard(
     refunds_today = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0))
         .where(mine, Payment.kind == "refund", Payment.paid_at >= today0))).scalar() or 0
 
-    new_count = sum(1 for o in orders if grp.get(o.status) == "new")
-    urgent = sum(1 for o in orders if o.priority >= 1 and is_open(o))
-    overdue = sum(1 for o in orders if o.due_at and o.due_at < now and is_open(o))
-    receivables = sum((o.total or 0) for o in orders if is_open(o))
+    open_rows = [r for r in per_status if is_open(r[0])]
+    closed_rows = [r for r in per_status if grp.get(r[0]) in closed_groups]
+    new_count = sum(r[1] for r in per_status if grp.get(r[0]) == "new")
+    urgent = sum(r[3] for r in open_rows)
+    overdue = sum(r[4] for r in open_rows)
+    receivables = sum(float(r[5] or 0) for r in open_rows)
 
     # accounts (cash vs cashless)
     accounts = (await db.execute(select(Account).where(Account.org_id == oid, Account.active == True))).scalars().all()  # noqa: E712
@@ -1164,33 +1179,33 @@ async def company_dashboard(
 
     # status mix (open orders only, by group)
     mix = {}
-    for o in orders:
-        if is_open(o):
-            g = grp.get(o.status, "new")
-            mix[g] = mix.get(g, 0) + 1
+    for r in open_rows:
+        g = grp.get(r[0], "new")
+        mix[g] = mix.get(g, 0) + r[1]
 
     # orders by assignee (open)
     by_assignee = {}
-    for o in orders:
-        if is_open(o):
-            who = o.assigned_to.name if o.assigned_to else "Unassigned"
-            b = by_assignee.setdefault(who, {"new": 0, "in_progress": 0})
-            g = grp.get(o.status)
-            if g == "new": b["new"] += 1
-            else: b["in_progress"] += 1
+    for name, status, n in (await db.execute(
+            select(Employee.name, Order.status, func.count())
+            .select_from(Order).outerjoin(Employee, Employee.id == Order.assigned_to_id)
+            .where(*scope).group_by(Employee.name, Order.status))).all():
+        if not is_open(status):
+            continue
+        b = by_assignee.setdefault(name or "Unassigned", {"new": 0, "in_progress": 0})
+        b["new" if grp.get(status) == "new" else "in_progress"] += n
     assignee_rows = sorted(
         [{"name": k, "new": v["new"], "in_progress": v["in_progress"], "total": v["new"] + v["in_progress"]}
          for k, v in by_assignee.items()], key=lambda r: -r["total"])[:8]
 
     # monthly KPIs
-    wo_month = [o for o in orders if o.created_at >= month0]
-    won_month = [o for o in wo_month if grp.get(o.status) in closed_groups]
+    wo_month = sum(r[6] for r in per_status)
+    won_month = sum(r[6] for r in closed_rows)
     revenue_month = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0))
         .where(mine, Payment.kind != "refund", Payment.paid_at >= month0))).scalar() or 0
-    closed_total = sum((o.total or 0) for o in orders if grp.get(o.status) in closed_groups)
-    closed_n = sum(1 for o in orders if grp.get(o.status) in closed_groups)
+    closed_total = sum(float(r[5] or 0) for r in closed_rows)
+    closed_n = sum(r[1] for r in closed_rows)
     avg_wo = q2(closed_total / closed_n) if closed_n else 0
-    conversion = round(len(won_month) / len(wo_month) * 100, 0) if wo_month else 0
+    conversion = round(won_month / wo_month * 100, 0) if wo_month else 0
 
     # Money on Home follows the role: balances need "see balance", takings and amounts owed
     # need finance access. Counts stay visible to everyone.
@@ -1213,8 +1228,8 @@ async def company_dashboard(
         "status_mix": [{"group": g, "count": c} for g, c in mix.items()],
         "by_assignee": assignee_rows,
         "monthly": {
-            "work_orders_created": len(wo_month),
-            "work_orders_won": len(won_month),
+            "work_orders_created": wo_month,
+            "work_orders_won": won_month,
             "revenue": q2(revenue_month) if see_fin else None,
             "conversion": conversion,
             "avg_work_order": avg_wo if see_fin else None,
@@ -1449,14 +1464,8 @@ async def home_feed(
         Invoice.org_id == oid, Invoice.status.in_(["draft", "partial", "issued"]),
         (Invoice.total - Invoice.amount_paid - Invoice.credited) > 0))).scalar() or 0
 
-    parts = (await db.execute(select(Part).where(Part.org_id == oid, Part.active == True))).scalars().all()  # noqa: E712
-    low = 0
-    if parts:
-        rows = (await db.execute(select(StockLevel.part_id, func.sum(StockLevel.qty_available))
-                                 .where(StockLevel.part_id.in_([p.id for p in parts]))
-                                 .group_by(StockLevel.part_id))).all()
-        onhand = {pid: (q or 0) for pid, q in rows}
-        low = sum(1 for p in parts if onhand.get(p.id, 0) <= (p.min_stock or 0))
+    # Counted in the database: this used to load every part and bind each id into an IN list.
+    low = (await db.execute(low_stock_count_query(oid).where(Part.active == True))).scalar() or 0  # noqa: E712
 
     task_conds = [Task.org_id == oid, Task.status != "done"]
     if own:

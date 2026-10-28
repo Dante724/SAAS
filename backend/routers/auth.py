@@ -772,7 +772,7 @@ async def me(current: Employee = Depends(get_current_employee),
         "currency": (org.currency if org else None) or _symbol_for(org.currency_code if org else None, ""),
         "currency_code": (org.currency_code if org else None) or "",
         "role": role_name,
-        "is_owner": current.role_id is None,
+        "is_owner": current.role_id is None and shop_owner,   # a roleless invitee is not the owner
         # The shop's creator (organisations.owner_id), who may also hold a role: owner-only
         # screens such as Tekly Sense settings key off this, matching the server's check.
         "is_shop_owner": shop_owner,

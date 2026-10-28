@@ -965,6 +965,11 @@ async def drawer_movement(
         raise HTTPException(409, "This drawer is closed")
     if data.direction not in ("in", "out"):
         raise HTTPException(422, "direction must be in|out")
+    if data.direction == "out":
+        # Cash leaving the till is an expense: the same rights as recording one in Cash.
+        # "View the cash drawer" alone let a Specialist pay money out.
+        await assert_perm(db, current, "can_view_finance")
+        await assert_perm(db, current, "can_create_expenses")
     amt = q2(data.amount)
     if amt <= 0:
         raise HTTPException(422, "Amount must be positive")
