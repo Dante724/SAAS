@@ -115,7 +115,7 @@
    "Inventory, purchase orders and stock transfers between locations",
    "POS, payment links, Stripe and Square",
    "Payroll, commissions and time clock",
-   "QuickBooks and Xero sync",
+   "QuickBooks Online export",
    "Tekly Go technician phone app"
   ],
   "@id": "https://tekly.app/#software"
@@ -169,15 +169,15 @@
     "name": "What's the difference between Solo, Shop and Pro?",
     "acceptedAnswer": {
      "@type": "Answer",
-     "text": "Solo ($29 a month) is for up to 2 people at one location and 150 new jobs a month: work orders, estimates, invoices, POS, the customer portal and booking, the Tekly Go phone app and messaging. Shop ($69 for the first location, $49 for each extra) includes 8 team members you can split across your locations, $4 a month for each extra person, and unlimited jobs. It adds inventory, barcodes and scanning, the time clock, reports and automatic notifications. Pro ($129 for the first location, $79 for each extra) has unlimited people and jobs and adds purchase orders, payroll and commissions, stock transfers between locations, AI estimate drafting, QuickBooks and Xero, single sign-on and API keys. Yearly billing gets 2 months free."
+     "text": "Solo ($29 a month) is for up to 2 people at one location and 150 new jobs a month: work orders, estimates, invoices, POS, the customer portal and booking, the Tekly Go phone app and messaging. Shop ($69 for the first location, $49 for each extra) includes 8 team members you can split across your locations, $4 a month for each extra person, and unlimited jobs. It adds inventory, barcodes and scanning, the time clock, reports and automatic notifications. Pro ($129 for the first location, $79 for each extra) has unlimited people and jobs and adds purchase orders, payroll and commissions, stock transfers between locations, AI estimate drafting, sending invoices and payments to QuickBooks Online, single sign-on and API keys. Yearly billing gets 2 months free."
     }
    },
    {
     "@type": "Question",
-    "name": "Does Tekly work with QuickBooks, Xero, Stripe or Square?",
+    "name": "Does Tekly work with QuickBooks, Stripe or Square?",
     "acceptedAnswer": {
      "@type": "Answer",
-     "text": "Yes. Tekly syncs with QuickBooks and Xero on Pro, takes card payments through Stripe or Square, and sends customer updates by SMS, WhatsApp and email from Gmail or Outlook."
+     "text": "Yes. On Pro, Tekly sends invoices and payments to QuickBooks Online. It takes card payments through Stripe or Square, and sends customer updates by SMS, WhatsApp and email from Gmail or Outlook."
     }
    },
    {

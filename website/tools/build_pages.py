@@ -5,6 +5,7 @@ Run from the repo root:  python3 website/tools/build_pages.py
 Change DOMAIN below (or run the sed one-liner in website/README.md) once the domain is final.
 """
 import html
+import sys
 import json
 import subprocess
 from datetime import date
@@ -38,7 +39,7 @@ PAGES = [
         "lead": "One electronics template for phones, tablets, laptops and desktops. Tekly asks for the IMEI or the serial number depending on the device, drafts the estimate from the customer's words and gets their approval by phone.",
         "fields": [("Device type", "Phone, tablet, laptop or desktop"), ("Brand and model", "e.g. iPhone 14 Pro"), ("IMEI or serial", "IMEI for phones and tablets, serial for computers"), ("Passcode", "Stored encrypted"), ("Storage", "e.g. 256 GB"), ("Condition photos", "Taken at the counter")],
         "features": [
-            ("AI estimates from the complaint", "“Dropped in water, won't charge” becomes priced lines for diagnostics, board cleaning and parts, from your own catalog."),
+            ("AI estimates from the complaint", "“Dropped in water, won't charge” becomes draft lines for diagnostics, board cleaning and parts. You check each line and set your prices."),
             ("Approval on the customer's phone", "Found a cracked back glass mid-repair? The customer ticks it and signs. Nothing is added unless they approve."),
             ("Screens and batteries booked to the job", "Order parts from the ticket. When they arrive and you scan them, they're written off to the right repair."),
             ("Sell accessories and refurbs", "Quick POS for cases, chargers and refurbished devices, with AI-written product descriptions."),
@@ -48,7 +49,7 @@ PAGES = [
         "who": ["Cell phone repair stores", "Computer and laptop repair shops", "Tablet and console repair benches", "Refurbishers that sell devices too", "Repair chains with several stores", "Shops with a counter and a separate workshop"],
         "steps": [
             ("Check in", "Pick Phone, Tablet, Laptop or Desktop. Tekly asks for the IMEI or serial, stores the passcode encrypted and takes condition photos at the counter."),
-            ("Estimate", "On Pro, Tekly AI turns “dropped in the pool, won't charge” into priced lines from your own catalog. You review and send."),
+            ("Estimate", "On Pro, Tekly AI turns “dropped in the pool, won't charge” into draft labour and parts lines. You check the prices, then send."),
             ("Approval", "The customer approves each line on their phone and signs. A cracked back glass found mid-repair waits for their tick."),
             ("Parts", "Order the screen from the ticket. Scan the box when it arrives and it's charged to that repair, with the cost in the margin."),
             ("Pickup and pay", "The tracking link says it's ready. They pay at the counter or online, and the technician's commission posts when the job closes."),
@@ -91,9 +92,9 @@ PAGES = [
         ],
         "photo": ("mechanic-stool", "A mechanic on a low wooden stool working on the front brake of a raised pickup truck", 'Photo: <a href="https://commons.wikimedia.org/wiki/File:DSC_6745_A_mechanic_sitting_on_a_small_wooden_stool_working_on_the_front_suspension_of_a_raised_pickup_truck_in_a_garage.jpg" rel="noopener">PattayaPatrol</a>, CC BY-SA 4.0 (<a href="https://creativecommons.org/licenses/by-sa/4.0" rel="noopener license">licence</a>)'),
         "more_faq": [
-            ("How much does auto repair shop software cost with Tekly?", "Plans start at $29 a month for up to 2 people. Shop is $69 a month for 8 people across your locations and adds inventory, scanning, the time clock and reports; Pro is $129 and adds purchase orders, payroll and commissions, AI estimate drafting and QuickBooks or Xero sync. Prices are published and month to month."),
+            ("How much does auto repair shop software cost with Tekly?", "Plans start at $29 a month for up to 2 people. Shop is $69 a month for 8 people across your locations and adds inventory, scanning, the time clock and reports; Pro is $129 and adds purchase orders, payroll and commissions, AI estimate drafting and sending invoices to QuickBooks Online. Prices are published and month to month."),
             ("Can I switch from Shopmonkey or another shop system?", "Yes. Send an export from your current system or spreadsheets and we bring customers, vehicles and stock across, free on every plan."),
-            ("Does Tekly work with QuickBooks?", "Yes. Pro syncs invoices and payments with QuickBooks or Xero both ways."),
+            ("Does Tekly work with QuickBooks?", "Yes. On Pro, Tekly sends invoices and payments to QuickBooks Online. It doesn't bring changes made in QuickBooks back into Tekly."),
         ],
         "faq": [
             ("Does Tekly work for truck, fleet and RV repair?", "Yes. The vehicle template covers cars, trucks, RVs and bikes, with unit numbers and account billing for fleets."),
@@ -110,7 +111,7 @@ PAGES = [
         "lead": "One template for outdoor power equipment and workshop tools. Capture engine hours or voltage at intake, separate warranty from paid work, and keep the seasonal rush moving.",
         "fields": [("Item", "e.g. 21-inch push mower"), ("Brand and model", "Quick-pick common brands"), ("Serial number", "Kept on the item's history"), ("Engine model or voltage", "Engine for mowers, voltage for tools"), ("Hours", "For engines"), ("Warranty status", "Warranty or paid")],
         "features": [
-            ("AI estimates in seconds", "“Won't start after winter” becomes a tune-up, carburettor clean and parts, from your catalog."),
+            ("AI estimates in seconds", "“Won't start after winter” becomes draft lines for a tune-up, carburettor clean and parts. You set the prices."),
             ("Warranty and paid jobs side by side", "Mark each job warranty or paid and keep the paperwork straight."),
             ("Seasonal bookings", "Online booking with real time slots so tune-ups are scheduled before spring."),
             ("Approval on the customer's phone", "Customers approve extra work line by line. Nothing is added unless they choose it."),
@@ -120,7 +121,7 @@ PAGES = [
         "who": ["Lawn mower and outdoor power equipment shops", "Chainsaw and trimmer dealers with a service bench", "Generator repair and service", "Power tool repair centres", "Rental yards that service their own fleet", "Seasonal repair shops"],
         "steps": [
             ("Check in", "Record the item, serial and engine hours for small engines, or voltage for cordless tools, and mark the job warranty or paid."),
-            ("Estimate", "On Pro, Tekly AI turns “won't start after winter” into a tune-up, carburettor clean and parts from your catalog. You review and send."),
+            ("Estimate", "On Pro, Tekly AI turns “won't start after winter” into draft lines for a tune-up, carburettor clean and parts. You check the prices, then send."),
             ("Approval", "The customer approves extra work line by line on their phone. Nothing is added unless they choose it."),
             ("Parts", "Order from the ticket. Received parts are booked to the right repair automatically, and low stock drafts the reorder."),
             ("Pickup and pay", "The tracking link says it's ready. Sell blades, oil and filters at the same counter with the quick POS."),
@@ -282,7 +283,7 @@ def page(p):
 
 <section class="sec sec-tight">
   <div class="wrap"><div class="sub-price rv">
-    <div><p class="eyebrow">Pricing</p><h2 class="h-sub">Plans from $29 a month.</h2><p class="lede">Solo is $29 for up to 2 people. Shop is $69 for 8 people shared across locations ($49 per extra location, $4 per extra person) and adds inventory, scanning, the time clock and reports. Pro is $129 for the first location ($79 each extra) with no limits, plus purchase orders, payroll, AI estimate drafting and accounting sync. Every trial includes all Pro features for 14 days, no card.</p></div>
+    <div><p class="eyebrow">Pricing</p><h2 class="h-sub">Plans from $29 a month.</h2><p class="lede">Solo is $29 for up to 2 people. Shop is $69 for 8 people shared across locations ($49 per extra location, $4 per extra person) and adds inventory, scanning, the time clock and reports. Pro is $129 for the first location ($79 each extra) with no limits, plus purchase orders, payroll, AI estimate drafting and QuickBooks Online export. Every trial includes all Pro features for 14 days, no card.</p></div>
     <div class="sub-price-ctas"><a class="btn btn-brand btn-lg" data-app="signup" data-cta="pricing_trial" href="/#start">Start free trial</a><a class="link" href="/pricing/">Compare plans</a></div>
   </div></div>
 </section>
@@ -661,10 +662,7 @@ def main():
         d.mkdir(exist_ok=True)
         out = legal_page(doc)
         (d / "index.html").write_text(out, encoding="utf-8")
-        if "[[" in out:
-            placeholders.append(doc["slug"])
-    if placeholders:
-        print("WARNING: fill in the [[…]] placeholders in tools/legal/ before launch:", ", ".join(placeholders))
+        placeholders += [(doc["slug"], t) for t in legal_placeholders(out)]
     urls = ([("/", "1.0"), ("/product/", "0.9"), ("/pricing/", "0.9"), ("/about/", "0.5"), ("/changelog/", "0.6")] + [(f"/{p['slug']}/", "0.8") for p in PAGES] + [(f"/{MULTI['slug']}/", "0.8")]
             + [("/compare/", "0.6")] + [(f"/compare/tekly-vs-{c['slug']}/", "0.7") for c in COMPETITORS]
             + [(f"/{GUIDE['slug']}/", "0.7")]
@@ -680,6 +678,30 @@ def main():
         "icons": [{"src": "/assets/icon-192.png", "sizes": "192x192", "type": "image/png"},
                   {"src": "/assets/icon-512.png", "sizes": "512x512", "type": "image/png"}]}, indent=2), encoding="utf-8")
     print("built", len(PAGES), "pages + sitemap.xml, robots.txt, site.webmanifest")
+    check_placeholders(placeholders, "--allow-placeholders" in sys.argv)
+
+
+# The legal pages carry [[COMPANY LEGAL NAME]]-style tokens until the founder supplies the real
+# details. Shipping Terms people agree to at sign-up with a blank where the company's name goes is a
+# legal exposure, so the build fails while any remain. Only capitalised tokens count: the trade
+# boards' data-fields JSON also starts with "[[".
+PLACEHOLDER = re.compile(r"\[\[[A-Z][^\]]*\]\]")
+
+
+def legal_placeholders(text):
+    return PLACEHOLDER.findall(text)
+
+
+def check_placeholders(placeholders, allow):
+    if not placeholders:
+        return
+    print("Fill in these placeholders in tools/legal/ before launch:")
+    for slug, token in placeholders:
+        print(f"  /{slug}/  {token}")
+    if not allow:
+        sys.exit("Build failed: the legal pages still have placeholders. "
+                 "Use --allow-placeholders for a draft build that must not be deployed.")
+    print("WARNING: draft build (--allow-placeholders). Do not deploy it.")
 
 
 if __name__ == "__main__":
