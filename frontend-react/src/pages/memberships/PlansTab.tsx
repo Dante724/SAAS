@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
@@ -10,7 +10,11 @@ import { type Plan, type PlanItem } from "./shared";
 // included; the editor keeps the everyday fields up front and the season options tucked away.
 
 type Svc = { id: string; name: string; price?: number };
-const STARTER_TEMPLATES = [{ k: "marine", label: "Marine" }, { k: "auto", label: "Auto" }, { k: "electronics", label: "Electronics" }];
+const STARTER_TEMPLATES = [
+  { k: "marine", label: "Boat Care", icon: "sailing", hint: "Spring launch, winterisation, haul-out, 10% off labour" },
+  { k: "auto", label: "Auto Care", icon: "directions_car", hint: "3 oil changes, 2 tyre rotations, an inspection, 10% off labour" },
+  { k: "electronics", label: "Device Protect", icon: "devices", hint: "A screen repair, 2 battery checks, 15% off labour, a loaner" },
+];
 const SWATCHES = ["#0059ba", "#0f766e", "#7c3aed", "#b45309", "#be123c", "#334155"];
 
 const blankItem = (kind: PlanItem["kind"]): PlanItem => ({ kind, service_id: null, label: "", qty: 1, pct: 10, applies_to: "labour", window_start: null, window_end: null, rollover: false });
@@ -23,6 +27,7 @@ export default function PlansTab() {
   const [plans, setPlans] = useState<Plan[] | null>(null);
   const [edit, setEdit] = useState<(Omit<Plan, "id" | "members"> & { id?: string }) | null>(null);
   const [starter, setStarter] = useState(false);
+  const starterRef = useRef<HTMLDivElement>(null);
   const [report, setReport] = useState<Record<string, { money_in: number; value_given: number }>>({});
   const load = () => api.get<{ items: Plan[] }>("/memberships/plans").then((r) => setPlans(r.items || [])).catch(() => setPlans([]));
   useEffect(() => {
@@ -31,6 +36,15 @@ export default function PlansTab() {
     if (can("can_see_profit")) api.get<{ plans: { plan_id: string; money_in: number; value_given: number }[] }>("/memberships/reports/profitability")
       .then((r) => setReport(Object.fromEntries((r.plans || []).map((p) => [p.plan_id, p])))).catch(() => {});
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {   // the template menu closes on an outside click or Escape
+    if (!starter) return;
+    const onDoc = (e: MouseEvent) => { if (!starterRef.current?.contains(e.target as Node)) setStarter(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setStarter(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [starter]);
 
   async function fromStarter(k: string) {
     const r = await api.get<{ items: any[] }>(`/memberships/plans/starters?template=${k}`);
@@ -46,15 +60,30 @@ export default function PlansTab() {
           <div className="text-xs text-ink-tertiary">Sell included services and member discounts monthly or yearly. Plans go on a customer's boat, vehicle or device.</div>
         </div>
         {canEdit && <div className="flex gap-2">
-          <button onClick={() => setStarter((x) => !x)} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 whitespace-nowrap">From a template</button>
+          <div ref={starterRef} className="relative">
+            <button onClick={() => setStarter((x) => !x)} aria-haspopup="menu" aria-expanded={starter}
+              className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 whitespace-nowrap flex items-center gap-1">
+              From a template<M n={starter ? "expand_less" : "expand_more"} c="text-base text-ink-tertiary" />
+            </button>
+            {starter && (
+              <div role="menu" className="absolute right-0 top-full mt-1.5 z-40 w-80 bg-raised rounded-2xl border border-slate-200/80 shadow-clay-card p-1.5">
+                <div className="px-3 pt-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Start from your trade</div>
+                {STARTER_TEMPLATES.map((t) => (
+                  <button key={t.k} role="menuitem" onClick={() => fromStarter(t.k)}
+                    className="w-full flex items-start gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-slate-50 focus-visible:outline-none focus-visible:bg-slate-50">
+                    <span className="h-9 w-9 shrink-0 rounded-xl grid place-items-center bg-primary/10 text-primary"><M n={t.icon} c="text-lg" /></span>
+                    <span className="min-w-0">
+                      <span className="block text-sm font-semibold text-ink-primary">{t.label}</span>
+                      <span className="block text-xs text-ink-tertiary leading-snug">{t.hint}</span>
+                    </span>
+                  </button>))}
+                <div className="px-3 pt-1.5 pb-2 text-[11px] text-ink-tertiary border-t border-slate-100 mt-1">You can change every price and item before saving.</div>
+              </div>
+            )}
+          </div>
           <button onClick={() => setEdit(blankPlan())} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm flex items-center gap-1.5 whitespace-nowrap"><M n="add" c="text-sm" />New plan</button>
         </div>}
       </div>
-      {starter && (
-        <div className="flex flex-wrap gap-2">{STARTER_TEMPLATES.map((t) => (
-          <button key={t.k} onClick={() => fromStarter(t.k)} className="h-9 px-4 rounded-full border border-slate-200 bg-white text-xs font-semibold text-ink-primary hover:border-primary/50">{t.label} starter plan</button>))}
-        </div>
-      )}
       {plans === null && <p className="text-xs text-ink-tertiary">Loading…</p>}
       {plans && plans.length === 0 && (
         <div className="rounded-2xl border border-dashed border-slate-300 bg-white/60 p-8 text-center">

@@ -20,13 +20,39 @@ function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) =
   );
 }
 
-function Num({ id, value, onChange, suffix, disabled }: { id: string; value: number; onChange: (v: number) => void; suffix: string; disabled?: boolean }) {
+function Num({ id, value, onChange, unit, disabled, max }: { id: string; value: number; onChange: (v: number) => void; unit: string; disabled?: boolean; max?: number }) {
   return (
-    <span className="inline-flex items-center gap-1.5">
-      <input id={id} inputMode="numeric" disabled={disabled} value={value} onChange={(e) => onChange(Number(e.target.value.replace(/[^\d.]/g, "")) || 0)}
-        className="glass-input h-9 w-16 rounded-lg px-2 text-center text-sm tabular-nums" />
-      <span className="text-xs text-ink-tertiary">{suffix}</span>
-    </span>
+    <div className={`glass-input h-9 w-28 rounded-xl flex items-center pr-3 focus-within:ring-2 focus-within:ring-primary/30 ${disabled ? "opacity-50" : ""}`}>
+      <input id={id} inputMode="numeric" disabled={disabled} value={value}
+        onChange={(e) => { const n = Number(e.target.value.replace(/[^\d]/g, "")) || 0; onChange(max ? Math.min(n, max) : n); }}
+        className="w-full min-w-0 bg-transparent pl-3 text-sm font-medium tabular-nums text-ink-primary outline-none disabled:cursor-not-allowed" />
+      <span className="text-xs text-ink-tertiary shrink-0">{unit}</span>
+    </div>
+  );
+}
+
+// One setting: what it is and why on the left, its control on the right.
+function Row({ label, help, htmlFor, children, dim }: { label: string; help?: string; htmlFor?: string; children: React.ReactNode; dim?: boolean }) {
+  return (
+    <div className={`flex items-center gap-6 py-4 first:pt-0 last:pb-0 ${dim ? "opacity-60" : ""}`}>
+      <div className="min-w-0 flex-1">
+        <label htmlFor={htmlFor} className="block text-sm font-medium text-ink-primary">{label}</label>
+        {help && <p className="mt-0.5 text-xs text-ink-tertiary leading-relaxed">{help}</p>}
+      </div>
+      <div className="shrink-0">{children}</div>
+    </div>
+  );
+}
+
+function Group({ icon, title, children }: { icon: string; title: string; children: React.ReactNode }) {
+  return (
+    <div className="px-6 py-5">
+      <div className="mb-4 flex items-center gap-2">
+        <M n={icon} c="text-base text-ink-tertiary" />
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-tertiary">{title}</h3>
+      </div>
+      <div className="divide-y divide-slate-100">{children}</div>
+    </div>
   );
 }
 
@@ -35,70 +61,73 @@ export default function MembershipSettings() {
   const canEdit = can("can_manage_membership_plans");
   const [s, setS] = useState<S | null>(null);
   const [saved, setSaved] = useState<S | null>(null);
-  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   useEffect(() => { api.get<S>("/memberships/settings/shop").then((r) => { setS(r); setSaved(r); }).catch(() => {}); }, []);
   if (!s) return <p className="text-xs text-ink-tertiary">Loading…</p>;
-  const set = (patch: Partial<S>) => setS({ ...s, ...patch });
+  const set = (patch: Partial<S>) => { if (canEdit) { setS({ ...s, ...patch }); setMsg(null); } };
   const dirty = JSON.stringify(s) !== JSON.stringify(saved);
   async function save() {
-    try { const r = await api.put<S>("/memberships/settings/shop", s); setS(r); setSaved(r); setMsg("Saved"); }
-    catch (e: any) { setMsg(e?.message || "Couldn't save"); }
-    setTimeout(() => setMsg(""), 2500);
+    setBusy(true);
+    try { const r = await api.put<S>("/memberships/settings/shop", s); setS(r); setSaved(r); setMsg({ ok: true, text: "Saved" }); }
+    catch (e: any) { setMsg({ ok: false, text: e?.message || "Couldn't save" }); }
+    setBusy(false);
   }
-  const card = "rounded-2xl border border-slate-200/90 bg-white shadow-clay-sm p-5";
-  const row = "flex items-start gap-4";
+  const offer = s.membership_checkout_prompt;
   return (
-    <section className="max-w-2xl space-y-4 pb-10">
-      <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1 basis-64">
+    <section className="max-w-3xl space-y-5 pb-10">
+      <div className="flex items-start gap-4">
+        <div className="h-10 w-10 shrink-0 rounded-xl grid place-items-center bg-primary/10 text-primary"><M n="workspace_premium" c="text-xl" /></div>
+        <div className="min-w-0 flex-1">
           <h2 className="text-base font-semibold text-ink-primary">Memberships</h2>
-          <p className="text-xs text-ink-tertiary">How plans are offered, what happens when a payment is missed, and how plan money shows in your books. Plans themselves are in Catalog › Plans.</p>
+          <p className="mt-0.5 text-sm text-ink-tertiary">How plans are offered, what happens when a payment is missed, and how plan money shows in your books.</p>
         </div>
-        <a href="/catalog?tab=plans" className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex items-center gap-1.5"><M n="workspace_premium" c="text-sm" />Plans</a>
+        <a href="/catalog?tab=plans" className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex items-center gap-1.5 whitespace-nowrap">
+          Manage plans<M n="arrow_forward" c="text-sm" />
+        </a>
       </div>
 
-      <div className={card}>
-        <div className={row}>
-          <div className="flex-1"><div className="text-sm font-semibold text-ink-primary">Offer a plan at checkout</div>
-            <div className="text-xs text-ink-tertiary">When a non-member pays, show what a plan would have saved them, with one tap to join.</div></div>
-          <Toggle label="Offer a plan at checkout" on={s.membership_checkout_prompt} onChange={(v) => canEdit && set({ membership_checkout_prompt: v })} />
-        </div>
-        {s.membership_checkout_prompt && (
-          <div className="mt-4 space-y-2 border-t border-slate-100 pt-4 text-xs text-ink-secondary">
-            <div className="flex flex-wrap items-center gap-2"><label htmlFor="ms-thr">Only when today's saving is at least</label>
-              <Num id="ms-thr" disabled={!canEdit} value={s.membership_prompt_threshold_pct} onChange={(v) => set({ membership_prompt_threshold_pct: v })} suffix="% of the yearly price" /></div>
-            <div className="flex flex-wrap items-center gap-2"><label htmlFor="ms-snooze">After "Not now", hide it for</label>
-              <Num id="ms-snooze" disabled={!canEdit} value={s.membership_prompt_snooze_days} onChange={(v) => set({ membership_prompt_snooze_days: v })} suffix="days" /></div>
+      <div className="rounded-2xl border border-slate-200/90 bg-white shadow-clay-sm divide-y divide-slate-100">
+        <Group icon="point_of_sale" title="Checkout offer">
+          <Row label="Offer a plan at checkout" help="When a non-member pays, show what a plan would have saved them, with one tap to join.">
+            <Toggle label="Offer a plan at checkout" on={offer} onChange={(v) => set({ membership_checkout_prompt: v })} />
+          </Row>
+          <Row htmlFor="ms-thr" dim={!offer} label="Minimum saving to show it" help="Only offer a plan when today's bill would save at least this share of the yearly price.">
+            <Num id="ms-thr" disabled={!canEdit || !offer} max={100} value={s.membership_prompt_threshold_pct} onChange={(v) => set({ membership_prompt_threshold_pct: v })} unit="%" />
+          </Row>
+          <Row htmlFor="ms-snooze" dim={!offer} label={'After "Not now"'} help="Don't offer it to the same customer again for this long.">
+            <Num id="ms-snooze" disabled={!canEdit || !offer} value={s.membership_prompt_snooze_days} onChange={(v) => set({ membership_prompt_snooze_days: v })} unit="days" />
+          </Row>
+        </Group>
+
+        <Group icon="schedule" title="Missed payments">
+          <Row htmlFor="ms-grace" label="Pause benefits" help="Days a payment can be overdue before benefits stop. The manager is alerted.">
+            <Num id="ms-grace" disabled={!canEdit} value={s.membership_grace_days} onChange={(v) => set({ membership_grace_days: v })} unit="days" />
+          </Row>
+          <Row htmlFor="ms-lapse" label="End the plan" help="Days overdue before the membership ends.">
+            <Num id="ms-lapse" disabled={!canEdit} value={s.membership_lapse_days} onChange={(v) => set({ membership_lapse_days: v })} unit="days" />
+          </Row>
+          <Row htmlFor="ms-renew" label="Renewal invoice" help="How long before a plan year ends the renewal invoice goes out.">
+            <Num id="ms-renew" disabled={!canEdit} value={s.membership_renewal_notice_days} onChange={(v) => set({ membership_renewal_notice_days: v })} unit="days" />
+          </Row>
+        </Group>
+
+        <Group icon="account_balance" title="Accounting">
+          <Row label="Spread yearly payments over the plan's months"
+            help="Off: plan money counts when it's paid. On: a yearly payment is earned month by month, and the unearned part shows as prepaid. Ask your accountant if unsure.">
+            <Toggle label="Spread yearly payments" on={s.membership_spread_revenue} onChange={(v) => set({ membership_spread_revenue: v })} />
+          </Row>
+        </Group>
+
+        {canEdit && (
+          <div className="px-6 py-3.5 flex items-center gap-2">
+            {msg && <span role="status" className={`text-xs ${msg.ok ? "text-emerald-700" : "text-rose-600"}`}>{msg.text}</span>}
+            <span className="ml-auto text-[11px] text-ink-tertiary">{dirty ? "Unsaved changes" : ""}</span>
+            {dirty && <button onClick={() => { setS(saved); setMsg(null); }} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Discard</button>}
+            <button onClick={save} disabled={busy || !dirty} className="px-5 py-2 rounded-xl bg-ink-primary text-white font-semibold text-xs hover:opacity-90 disabled:opacity-40">{busy ? "Saving…" : "Save"}</button>
           </div>
         )}
       </div>
-
-      <div className={card}>
-        <div className="text-sm font-semibold text-ink-primary">Missed payments</div>
-        <div className="mt-3 space-y-2 text-xs text-ink-secondary">
-          <div className="flex flex-wrap items-center gap-2"><label htmlFor="ms-grace">Pause benefits after</label>
-            <Num id="ms-grace" disabled={!canEdit} value={s.membership_grace_days} onChange={(v) => set({ membership_grace_days: v })} suffix="days unpaid, and alert the manager" /></div>
-          <div className="flex flex-wrap items-center gap-2"><label htmlFor="ms-lapse">End the plan after</label>
-            <Num id="ms-lapse" disabled={!canEdit} value={s.membership_lapse_days} onChange={(v) => set({ membership_lapse_days: v })} suffix="days unpaid" /></div>
-          <div className="flex flex-wrap items-center gap-2"><label htmlFor="ms-renew">Send the renewal invoice</label>
-            <Num id="ms-renew" disabled={!canEdit} value={s.membership_renewal_notice_days} onChange={(v) => set({ membership_renewal_notice_days: v })} suffix="days before a plan year ends" /></div>
-        </div>
-      </div>
-
-      <div className={card}>
-        <div className={row}>
-          <div className="flex-1"><div className="text-sm font-semibold text-ink-primary">Spread yearly payments over the plan's months</div>
-            <div className="text-xs text-ink-tertiary">Off: plan money counts when it's paid. On: a yearly payment is earned month by month, and the unearned part shows as prepaid. Ask your accountant if unsure.</div></div>
-          <Toggle label="Spread yearly payments" on={s.membership_spread_revenue} onChange={(v) => canEdit && set({ membership_spread_revenue: v })} />
-        </div>
-      </div>
-
-      {canEdit && (
-        <div className="flex items-center gap-3">
-          <button onClick={save} disabled={!dirty} className="h-10 px-5 rounded-xl bg-primary text-white text-sm font-semibold shadow-clay-sm disabled:opacity-40">Save</button>
-          {msg && <span role="status" className="text-xs text-ink-secondary">{msg}</span>}
-        </div>
-      )}
     </section>
   );
 }
