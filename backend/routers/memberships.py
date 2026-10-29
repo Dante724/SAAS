@@ -367,7 +367,7 @@ async def for_order(order_id: str, db: AsyncSession = Depends(get_db),
     if not plans and await has_perm(db, current, "can_sell_memberships"):
         org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one()
         offer = await svc.offer_for_order(db, org, order)
-    return {"plans": plans, "coverable": coverable,
+    return {"plans": plans, "coverable": coverable, "client_id": order.client_id, "device_id": order.device_id,
             "can_apply": await has_perm(db, current, "can_apply_membership_benefits"), "offer": offer}
 
 

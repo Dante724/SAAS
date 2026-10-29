@@ -30,7 +30,7 @@ import {
   CircleDollarSign, Percent, ShieldAlert, Globe, Gift, RotateCcw, SearchCheck, VideoOff,
   ShieldCheck, Target, EyeOff, Car, Sailboat, Bike, Laptop, Cog, Upload,
   ShoppingBag, Split, Nfc, Phone, PhoneIncoming, PhoneOutgoing, PhoneMissed, Network, HelpCircle,
-  LogOut, Menu as MenuIcon,
+  LogOut, Menu as MenuIcon, Crown,
 } from "lucide-react";
 import { fmtServerTime } from "../lib/serverTime";
 
@@ -67,7 +67,7 @@ const ICONS: Record<string, any> = {
   lock_open: LockOpen, merge: Merge, paid: CircleDollarSign, percent: Percent, privacy_tip: ShieldAlert,
   public: Globe, redeem: Gift, refresh: RefreshCw, report: Flag, restore: RotateCcw, rule: ListChecks,
   search_check: SearchCheck, sell: Tag, stop: Square, table_view: Table, tag: Tag, target: Target,
-  verified: BadgeCheck, verified_user: ShieldCheck, videocam_off: VideoOff, web: Globe,
+  verified: BadgeCheck, workspace_premium: Crown, verified_user: ShieldCheck, videocam_off: VideoOff, web: Globe,
   qr_code_2: QrCode, sticky_note_2: StickyNote, receipt: Receipt,
   open_in_new: ExternalLink, link: LinkIcon,
   search: Search, table_rows: Rows3, view_kanban: KanbanSquare,

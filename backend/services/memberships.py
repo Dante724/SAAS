@@ -162,18 +162,18 @@ def eligible(plan: MembershipPlan, device: Optional[Device]) -> bool:
 # Starter plans per industry template (§6.1). Services are matched to the shop's catalog by name;
 # anything not found becomes a perk so the shop can link it after.
 STARTERS: dict[str, list[dict]] = {
-    "marine": [{"name": "Boat Care", "price_monthly": 45, "price_yearly": 449, "items": [
+    "marine": [{"name": "Boat Care", "color": "#0f766e", "price_monthly": 45, "price_yearly": 449, "items": [
         {"kind": "service", "match": "launch", "label": "Spring launch", "qty": 1, "window": ("03-01", "05-31")},
         {"kind": "service", "match": "winteri", "label": "Winterisation", "qty": 1, "window": ("10-01", "11-30")},
         {"kind": "service", "match": "haul", "label": "Haul-out", "qty": 1},
         {"kind": "discount", "pct": 10, "applies_to": "labour", "label": "10% off labour"},
         {"kind": "perk", "label": "Priority slot when the yard is busy"}]}],
-    "auto": [{"name": "Auto Care", "price_monthly": 19, "price_yearly": 199, "items": [
+    "auto": [{"name": "Auto Care", "color": "#b45309", "price_monthly": 19, "price_yearly": 199, "items": [
         {"kind": "service", "match": "oil", "label": "Oil change", "qty": 3},
         {"kind": "service", "match": "rotat", "label": "Tyre rotation", "qty": 2},
         {"kind": "service", "match": "inspect", "label": "Inspection", "qty": 1},
         {"kind": "discount", "pct": 10, "applies_to": "labour", "label": "10% off labour"}]}],
-    "electronics": [{"name": "Device Protect", "price_monthly": 9, "price_yearly": 89, "items": [
+    "electronics": [{"name": "Device Protect", "color": "#7c3aed", "price_monthly": 9, "price_yearly": 89, "items": [
         {"kind": "service", "match": "screen", "label": "Screen repair", "qty": 1},
         {"kind": "service", "match": "battery", "label": "Battery health check", "qty": 2},
         {"kind": "discount", "pct": 15, "applies_to": "labour", "label": "15% off labour"},

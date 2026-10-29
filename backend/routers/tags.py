@@ -27,7 +27,7 @@ class AttachIn(BaseModel):
 
 
 def _ser(t: Tag) -> dict:
-    return {"id": t.id, "name": t.name, "color": t.color}
+    return {"id": t.id, "name": t.name, "color": t.color, "system": bool(getattr(t, "system", False))}
 
 
 @router.get("")
