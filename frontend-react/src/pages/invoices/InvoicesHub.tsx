@@ -10,11 +10,10 @@ import { api, openAuthedDoc } from "../../api/client";
 import { humanize } from "../../lib/humanize";
 import { alertDialog, confirmDialog } from "../../lib/dialog";
 import { useMe } from "../../context/Me";
-import { money } from "../orders/types";
 import InvoiceDrawer from "./InvoiceDrawer";
 import CreditNotesList from "./CreditNotesList";
 import { Avatar } from "../orders/look";
-import { DISPLAY_MODES, Drawer, ErrorNote, MoreMenu, StatusPill, btnGhost, btnPrimary, daysLate, fmtDate, inputCls, labelCls, lateText, type MenuItem } from "./billing";
+import { DISPLAY_MODES, Drawer, cash, ErrorNote, MoreMenu, StatusPill, btnGhost, btnPrimary, daysLate, fmtDate, inputCls, labelCls, lateText, type MenuItem } from "./billing";
 
 // Invoices are day-to-day front-desk work (issue, take payment, resend), so they get their own
 // page next to Sales instead of a tab inside Finance — which also kept staff who only need
@@ -84,11 +83,11 @@ export default function InvoicesHub() {
             </div>
           )}
           {view === "credit_notes" ? <CreditNotesList /> : <>
-          <div className="flex justify-end items-center gap-2">
-            {invSel.size > 0 && (
-              <button onClick={() => setInvPrint(true)} className={btnGhost + " bg-white"}><M n="print" c="text-sm" />Print {invSel.size} selected</button>
-            )}
+          <div className="flex items-center gap-2">
             <button onClick={() => setNewInv(true)} className={btnPrimary}><M n="add" c="text-sm" />New invoice</button>
+            {invSel.size > 0 && (
+              <button onClick={() => setInvPrint(true)} className={btnGhost}><M n="print" c="text-sm" />Print {invSel.size} selected</button>
+            )}
           </div>
           {invoices?.length === 0 && !ip.err ? (
             <div className="bg-white rounded-2xl border border-slate-200/90 px-6 py-12 text-center">
@@ -115,12 +114,12 @@ export default function InvoicesHub() {
                       </span>
                       <span className="flex items-baseline gap-2">
                         <span className="text-[13px] font-semibold text-ink-primary truncate">{i.client_name || "Walk-in"}</span>
-                        <span className="ml-auto tabular-nums font-semibold text-ink-primary text-sm">{money(i.total)}</span>
+                        <span className="ml-auto tabular-nums font-semibold text-ink-primary text-sm">{cash(i.total)}</span>
                       </span>
                       <span className="flex items-baseline gap-2 text-xs">
                         <span className="text-ink-tertiary truncate">{i.order_number ? <span className="font-mono">{i.order_number}</span> : "No job"}</span>
                         <span className={`ml-auto tabular-nums whitespace-nowrap ${late ? "text-rose-600 font-semibold" : "text-ink-tertiary"}`}>
-                          {(i.balance_due || 0) > 0 ? <>{money(i.balance_due)} owed{late ? ` · ${lateText(late)}` : ""}</> : "Nothing owed"}
+                          {(i.balance_due || 0) > 0 ? <>{cash(i.balance_due)} owed{late ? ` · ${lateText(late)}` : ""}</> : "Nothing owed"}
                         </span>
                       </span>
                     </button>
@@ -151,15 +150,15 @@ export default function InvoicesHub() {
                       <td className="py-2.5 px-4 whitespace-nowrap tabular-nums">{fmtDate(i.issued_at || i.created_at)}</td>
                       <td className="py-2.5 px-4 font-mono text-ink-tertiary">{i.order_number || "—"}</td>
                       <td className="py-2.5 px-4"><StatusPill status={i.status} label={humanize(i.status)} /></td>
-                      <td className="py-2.5 px-4 text-right tabular-nums font-semibold text-ink-primary">{money(i.total)}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums text-ink-secondary">{money(i.amount_paid)}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums font-semibold text-ink-primary">{cash(i.total)}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums text-ink-secondary">{cash(i.amount_paid)}</td>
                       <td className="py-2.5 px-4 text-right whitespace-nowrap">
-                        <span data-testid="row-balance" className={`block tabular-nums ${late ? "font-semibold text-rose-600" : owed ? "font-semibold text-ink-primary" : "text-ink-tertiary"}`}>{money(i.balance_due)}</span>
+                        <span data-testid="row-balance" className={`block tabular-nums ${late ? "font-semibold text-rose-600" : owed ? "font-semibold text-ink-primary" : "text-ink-tertiary"}`}>{cash(i.balance_due)}</span>
                         {late > 0 && <span className="block text-xs text-rose-600">{lateText(late)}</span>}
                       </td>
                       {einv && <td className="py-2.5 px-4" onClick={(e) => e.stopPropagation()}>
                         {(!i.einvoice_status || i.einvoice_status === "none") ? (
-                          <button onClick={() => issueEinvoice(i.id)} disabled={!!issuingId} className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-ink-secondary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50">{issuingId === i.id ? "Issuing…" : "Issue e-invoice"}</button>
+                          <button onClick={() => issueEinvoice(i.id)} disabled={!!issuingId} className="h-8 px-3 rounded-xl border border-slate-200 bg-white text-ink-secondary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50">{issuingId === i.id ? "Issuing…" : "Issue e-invoice"}</button>
                         ) : (
                           <div className="flex items-center gap-1.5">
                             <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${i.einvoice_status === "cleared" ? "bg-emerald-50 text-emerald-700" : i.einvoice_status === "rejected" ? "bg-rose-50 text-rose-700" : "bg-slate-100 text-ink-secondary"}`}>{humanize(i.einvoice_status)}</span>
@@ -246,10 +245,10 @@ function NewInvoiceDrawer({ onClose, onCreated }: { onClose: () => void; onCreat
           <div><label htmlFor="ni-tax" className={labelCls}>Tax %</label><input id="ni-tax" type="number" min={0} value={tax} onChange={(e) => setTax(Number(e.target.value))} className={`${inputCls} text-right tabular-nums`} /></div>
         </div>
         <dl className="mt-3 rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-1.5 text-sm">
-          <div className="flex justify-between text-ink-secondary"><dt>Subtotal</dt><dd className="tabular-nums text-ink-primary">{money(subtotal)}</dd></div>
-          {discountAmt > 0 && <div className="flex justify-between text-ink-secondary"><dt>Discount ({discount}%)</dt><dd className="tabular-nums text-ink-primary">−{money(discountAmt)}</dd></div>}
-          {taxAmt > 0 && <div className="flex justify-between text-ink-secondary"><dt>Tax ({tax}%)</dt><dd className="tabular-nums text-ink-primary">{money(taxAmt)}</dd></div>}
-          <div className="pt-1.5 border-t border-slate-200 flex justify-between items-baseline"><dt className="font-semibold text-ink-primary">Total</dt><dd className="tabular-nums text-base font-semibold text-ink-primary">{money(total)}</dd></div>
+          <div className="flex justify-between text-ink-secondary"><dt>Subtotal</dt><dd className="tabular-nums text-ink-primary">{cash(subtotal)}</dd></div>
+          {discountAmt > 0 && <div className="flex justify-between text-ink-secondary"><dt>Discount ({discount}%)</dt><dd className="tabular-nums text-ink-primary">−{cash(discountAmt)}</dd></div>}
+          {taxAmt > 0 && <div className="flex justify-between text-ink-secondary"><dt>Tax ({tax}%)</dt><dd className="tabular-nums text-ink-primary">{cash(taxAmt)}</dd></div>}
+          <div className="pt-1.5 border-t border-slate-200 flex justify-between items-baseline"><dt className="font-semibold text-ink-primary">Total</dt><dd className="tabular-nums text-base font-semibold text-ink-primary">{cash(total)}</dd></div>
         </dl>
       </div>
       <div>

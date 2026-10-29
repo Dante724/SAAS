@@ -176,7 +176,7 @@ export function MembershipDrawer({ id, onClose, onChanged }: { id: string; onClo
             {canChange && <button disabled={busy} className={btn} onClick={() => act(() => api.post(`/memberships/${m.id}/billing`, { billing: m.billing === "monthly" ? "yearly" : "monthly" }), `Switches to ${m.billing === "monthly" ? "yearly" : "monthly"} from the next payment`)}>
               Switch to {m.billing === "monthly" ? "yearly" : "monthly"}</button>}
             {canChange && (!m.renews || m.status === "paused") && <button disabled={busy} className={btn} onClick={() => act(() => api.post(`/memberships/${m.id}/resume`, {}), "Back on")}>Resume</button>}
-            {canChange && m.renews && <button disabled={busy} onClick={() => setAsking(true)} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 ml-auto">Cancel plan</button>}
+            {canChange && m.renews && <button disabled={busy} onClick={() => setAsking(true)} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Cancel plan</button>}
           </footer>
         )}
       </div>

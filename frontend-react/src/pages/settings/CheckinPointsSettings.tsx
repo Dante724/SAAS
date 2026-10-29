@@ -4,6 +4,8 @@ import { api, openAuthedDoc } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
 import { printHtmlInFrame } from "../../lib/safeHtml";
 import { useMe } from "../../context/Me";
+import Switch from "../../components/Switch";
+import SaveFooter from "../../components/SaveFooter";
 
 // Settings › Public pages › Self check-in: the check-in points of each location. Every point has
 // its own QR (unique, replaceable), a mode and the job types it offers; the form itself comes
@@ -25,15 +27,6 @@ const MODE_HINT: Record<Point["mode"], string> = {
   walk_in: "Walk-in queue",
   key_drop: "Key drop only",
 };
-
-function Switch({ on, onChange, label, disabled }: { on: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
-  return (
-    <button type="button" role="switch" aria-checked={on} aria-label={label} disabled={disabled} onClick={() => onChange(!on)}
-      className={`relative h-6 w-11 shrink-0 rounded-full transition disabled:opacity-50 ${on ? "bg-primary" : "bg-slate-300"}`}>
-      <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${on ? "left-[22px]" : "left-0.5"}`} />
-    </button>
-  );
-}
 
 // One setting: label and why on the left, its control on the right.
 function Row({ label, help, htmlFor, children }: { label: string; help?: string; htmlFor?: string; children: React.ReactNode }) {
@@ -159,11 +152,7 @@ function PointRow({ p, types, canEdit, onSaved, onFlash }: { p: Point; types: Jo
               <Switch label="Active" disabled={!canEdit} on={f.active} onChange={(v) => set({ active: v })} /></Row>
           </div>
           {canEdit && (
-            <div className="mt-3 flex items-center gap-2">
-              <span className="ml-auto text-[11px] text-ink-tertiary">{dirty ? "Unsaved changes" : ""}</span>
-              {dirty && <button onClick={() => setF(p)} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Discard</button>}
-              <button onClick={save} disabled={!dirty || busy} className="px-5 py-2 rounded-xl bg-ink-primary text-white font-semibold text-xs hover:opacity-90 disabled:opacity-40">{busy ? "Saving…" : "Save"}</button>
-            </div>
+            <SaveFooter className="!px-0 !pb-0 !pt-3" dirty={dirty} busy={busy} onSave={save} onDiscard={() => setF(p)} />
           )}
         </div>
       )}
@@ -204,19 +193,19 @@ export default function CheckinPointsSettings() {
           <h2 className="text-base font-semibold text-ink-primary">Self check-in</h2>
           <p className="mt-0.5 text-sm text-ink-tertiary">Customers scan a QR at the door, key box or counter and check themselves in. Check-ins appear in Inquiries › Walk-ins.</p>
         </div>
-        {canEdit && <button onClick={() => setAdd({ location_id: locs[0]?.id || "", name: "", mode: "walk_in" })} className="h-9 px-3.5 rounded-xl bg-ink-primary text-white text-xs font-semibold flex-shrink-0 flex items-center gap-1.5"><M n="add" c="text-sm" />Add check-in point</button>}
+        {canEdit && <button onClick={() => setAdd({ location_id: locs[0]?.id || "", name: "", mode: "walk_in" })} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90 flex-shrink-0 flex items-center gap-1.5"><M n="add" c="text-sm" />Add check-in point</button>}
       </div>
       {msg && <p role="status" className="text-xs text-ink-secondary">{msg}</p>}
       {add && (
         <div className="rounded-2xl border border-slate-200 bg-white p-4 flex flex-wrap items-end gap-2 text-xs">
-          <div><label htmlFor="new-pt-loc" className="block font-semibold text-ink-secondary mb-1">Location</label>
-            <select id="new-pt-loc" value={add.location_id} onChange={(e) => setAdd({ ...add, location_id: e.target.value })} className="glass-input px-3 py-2 rounded-lg">{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
-          <div><label htmlFor="new-pt-name" className="block font-semibold text-ink-secondary mb-1">Name</label>
-            <input id="new-pt-name" value={add.name} onChange={(e) => setAdd({ ...add, name: e.target.value })} placeholder="Key box" className="glass-input px-3 py-2 rounded-lg" /></div>
-          <div><label htmlFor="new-pt-mode" className="block font-semibold text-ink-secondary mb-1">How it works</label>
-            <select id="new-pt-mode" value={add.mode} onChange={(e) => setAdd({ ...add, mode: e.target.value as Point["mode"] })} className="glass-input px-3 py-2 rounded-lg">{MODES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></div>
-          <button onClick={create} disabled={!add.name.trim()} className="h-9 px-4 rounded-lg bg-primary text-white font-bold disabled:opacity-40">Add</button>
-          <button onClick={() => setAdd(null)} className="h-9 px-3 rounded-lg text-ink-secondary">Cancel</button>
+          <div><label htmlFor="new-pt-loc" className="block text-sm font-medium text-ink-primary mb-1.5">Location</label>
+            <select id="new-pt-loc" value={add.location_id} onChange={(e) => setAdd({ ...add, location_id: e.target.value })} className="glass-input rounded-xl px-3 py-2 text-sm">{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+          <div><label htmlFor="new-pt-name" className="block text-sm font-medium text-ink-primary mb-1.5">Name</label>
+            <input id="new-pt-name" value={add.name} onChange={(e) => setAdd({ ...add, name: e.target.value })} placeholder="Key box" className="glass-input rounded-xl px-3 py-2 text-sm" /></div>
+          <div><label htmlFor="new-pt-mode" className="block text-sm font-medium text-ink-primary mb-1.5">How it works</label>
+            <select id="new-pt-mode" value={add.mode} onChange={(e) => setAdd({ ...add, mode: e.target.value as Point["mode"] })} className="glass-input rounded-xl px-3 py-2 text-sm">{MODES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></div>
+          <button onClick={create} disabled={!add.name.trim()} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90 disabled:opacity-40">Add</button>
+          <button onClick={() => setAdd(null)} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
         </div>
       )}
       {points === null && <p className="text-xs text-ink-tertiary">Loading…</p>}

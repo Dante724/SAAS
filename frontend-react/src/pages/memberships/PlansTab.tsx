@@ -5,6 +5,7 @@ import { useMe } from "../../context/Me";
 import { money } from "../orders/types";
 import { tint, hueText } from "../../lib/tint";
 import { type Plan, type PlanItem } from "./shared";
+import { NumField } from "../../components/SettingRow";
 
 // Catalog › Plans: what the shop sells as a membership. Each plan is a short list of what's
 // included; the editor keeps the everyday fields up front and the season options tucked away.
@@ -90,6 +91,7 @@ export default function PlansTab() {
           <div className="mx-auto h-11 w-11 rounded-2xl grid place-items-center bg-primary/10 text-primary"><M n="workspace_premium" c="text-xl" /></div>
           <div className="mt-3 text-sm font-semibold text-ink-primary">No plans yet</div>
           <div className="mt-1 text-xs text-ink-tertiary">Start from a template for your trade, then adjust the prices.</div>
+          {canEdit && <button onClick={() => setStarter(true)} className="mt-4 h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 inline-flex items-center gap-1.5"><M n="workspace_premium" c="text-sm text-ink-tertiary" />Choose a template</button>}
         </div>
       )}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -206,12 +208,12 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Omit<Plan, "id" | "membe
                     <button aria-label="Remove" onClick={() => set({ items: p.items.filter((_, j) => j !== i) })} className="h-8 w-8 rounded-lg grid place-items-center text-ink-tertiary hover:bg-slate-100"><M n="close" c="text-base" /></button>
                   </div>
                   {it.kind === "service" && more && (
-                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-ink-secondary">
-                      <span>Book between</span>
-                      <input aria-label="Window start" placeholder="10-01" value={it.window_start || ""} onChange={(e) => setItem(i, { window_start: e.target.value || null })} className="glass-input h-8 w-20 rounded-lg px-2 text-center" />
-                      <span>and</span>
-                      <input aria-label="Window end" placeholder="11-30" value={it.window_end || ""} onChange={(e) => setItem(i, { window_end: e.target.value || null })} className="glass-input h-8 w-20 rounded-lg px-2 text-center" />
-                      <label className="ml-auto flex items-center gap-1.5"><input type="checkbox" checked={it.rollover} onChange={(e) => setItem(i, { rollover: e.target.checked })} />Unused carries over</label>
+                    <div className="mt-2 flex flex-wrap items-end gap-3 text-xs text-ink-secondary">
+                      <div><label htmlFor={`win-start-${i}`} className={lbl}>Book from (month-day)</label>
+                        <input id={`win-start-${i}`} placeholder="10-01" value={it.window_start || ""} onChange={(e) => setItem(i, { window_start: e.target.value || null })} className={`${box} w-24 text-center`} /></div>
+                      <div><label htmlFor={`win-end-${i}`} className={lbl}>Book until (month-day)</label>
+                        <input id={`win-end-${i}`} placeholder="11-30" value={it.window_end || ""} onChange={(e) => setItem(i, { window_end: e.target.value || null })} className={`${box} w-24 text-center`} /></div>
+                      <label className="ml-auto flex items-center gap-1.5 pb-2.5"><input type="checkbox" checked={it.rollover} onChange={(e) => setItem(i, { rollover: e.target.checked })} />Unused carries over</label>
                     </div>
                   )}
                 </div>
@@ -237,18 +239,18 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Omit<Plan, "id" | "membe
               {p.term === "season" && (<>
                 <div className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary">
                   <span>Runs</span>
-                  <input aria-label="Season start" placeholder="04-01" value={p.season_start || ""} onChange={(e) => set({ season_start: e.target.value })} className="glass-input h-9 w-20 rounded-lg px-2 text-center" />
+                  <input aria-label="Season start" placeholder="04-01" value={p.season_start || ""} onChange={(e) => set({ season_start: e.target.value })} className="glass-input h-9 w-20 rounded-xl px-2 text-center" />
                   <span>to</span>
-                  <input aria-label="Season end" placeholder="03-31" value={p.season_end || ""} onChange={(e) => set({ season_end: e.target.value })} className="glass-input h-9 w-20 rounded-lg px-2 text-center" />
+                  <input aria-label="Season end" placeholder="03-31" value={p.season_end || ""} onChange={(e) => set({ season_end: e.target.value })} className="glass-input h-9 w-20 rounded-xl px-2 text-center" />
                   <span className="text-ink-tertiary">(month-day)</span>
                 </div>
-                <div className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary">
-                  <span>On sale</span>
-                  <input aria-label="Days before the season" inputMode="numeric" value={p.presale_days} onChange={(e) => set({ presale_days: Number(e.target.value) || 0 })} className="glass-input h-9 w-16 rounded-lg px-2 text-center" />
-                  <span>days before it starts. Late joiners pay</span>
-                  <select aria-label="Late joiners pay" value={p.late_join} onChange={(e) => set({ late_join: e.target.value as Plan["late_join"] })} className="glass-input h-9 rounded-lg px-2">
-                    <option value="prorated">for the months left</option><option value="full">the full price</option>
-                  </select>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div><label htmlFor="plan-presale" className={lbl}>On sale before the season starts</label>
+                    <NumField id="plan-presale" value={p.presale_days} onChange={(v) => set({ presale_days: v })} unit="days" /></div>
+                  <div><label htmlFor="plan-late" className={lbl}>Late joiners pay</label>
+                    <select id="plan-late" value={p.late_join} onChange={(e) => set({ late_join: e.target.value as Plan["late_join"] })} className={inp}>
+                      <option value="prorated">For the months left</option><option value="full">The full price</option>
+                    </select></div>
                 </div>
               </>)}
             </section>

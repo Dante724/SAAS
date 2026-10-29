@@ -37,10 +37,10 @@ export function TypesManager({ types, onClose, onChanged }: { types: LeadType[];
           ))}
         </ul>
         <div className="flex items-end gap-2">
-          <div className="flex-1"><label htmlFor="type-name" className="block font-semibold text-ink-secondary mb-1">New type</label><input id="type-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Repair" className="glass-input w-full px-3 py-2 rounded-lg" /></div>
-          <div className="w-28"><label htmlFor="type-mins" className="block font-semibold text-ink-secondary mb-1">Respond within (min)</label><input id="type-mins" type="number" min={1} value={mins} onChange={(e) => setMins(e.target.value)} className="glass-input w-full px-3 py-2 rounded-lg font-mono" /></div>
+          <div className="flex-1"><label htmlFor="type-name" className="block font-semibold text-ink-secondary mb-1">New type</label><input id="type-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Repair" className="glass-input w-full rounded-xl px-3 py-2 text-sm" /></div>
+          <div className="w-28"><label htmlFor="type-mins" className="block font-semibold text-ink-secondary mb-1">Respond within (min)</label><input id="type-mins" type="number" min={1} value={mins} onChange={(e) => setMins(e.target.value)} className="glass-input w-full rounded-xl px-3 py-2 text-sm font-mono" /></div>
           <button disabled={!name.trim()} onClick={() => act(async () => { await api.post("/leads/types", { name: name.trim(), sla_minutes: Number(mins) || 60 }); setName(""); })}
-            className="px-4 py-2 rounded-lg bg-primary text-white font-bold disabled:opacity-40">Add</button>
+            className="h-9 px-4 rounded-xl bg-primary text-white text-xs font-bold disabled:opacity-40">Add</button>
         </div>
         {err && <p role="alert" className="text-rose-600 font-semibold">{err}</p>}
       </div>
@@ -93,6 +93,13 @@ export default function InquiriesHub() {
   const leadPages = Math.max(1, Math.ceil(allLeads.length / LEAD_PAGE));
   const pageLeads = allLeads.slice((Math.min(leadPage, leadPages) - 1) * LEAD_PAGE, Math.min(leadPage, leadPages) * LEAD_PAGE);
 
+  const EmptyLeads = () => (
+    <div className="text-center text-xs text-ink-tertiary">
+      <p className="font-semibold text-ink-secondary">No inquiries yet.</p>
+      <p className="mt-1">Missed calls show up here on their own. Create a work order from one to start the job.</p>
+      <button onClick={() => { setCreate(true); setCreateErr(null); }} className="mt-3 h-9 px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 inline-flex items-center gap-1.5"><M n="add" c="text-sm" />New inquiry</button>
+    </div>
+  );
   const Chips = ({ l }: { l: Lead }) => {
     const s = sla(l); const calls = callsLabel(l);
     return <>
@@ -105,14 +112,13 @@ export default function InquiriesHub() {
     <Shell title="Inquiries">
       <div className="flex-1 overflow-hidden flex flex-col">
         <div className="px-6 pt-4 pb-2 flex flex-wrap items-center gap-2 flex-shrink-0">
-          <button onClick={() => { setCreate(true); setCreateErr(null); }} className="h-[38px] px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New inquiry</button>
-          <div className="flex items-center bg-slate-100/90 p-0.5 rounded-lg border border-slate-200/60 text-xs ml-1">
-            <button onClick={() => setView("board")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1.5 ${view === "board" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="view_kanban" c="text-xs" />Pipeline</button>
-            <button onClick={() => setView("list")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1.5 ${view === "list" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="table_rows" c="text-xs" />List</button>
-            <button onClick={() => setView("walkins")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1.5 ${view === "walkins" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="how_to_reg" c="text-xs" />Walk-ins</button>
+          <button onClick={() => { setCreate(true); setCreateErr(null); }} className="h-9 px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New inquiry</button>
+          <div className="h-9 flex items-center bg-slate-100/90 p-0.5 rounded-xl border border-slate-200/60 text-xs">
+            <button onClick={() => setView("board")} className={`h-full px-2.5 rounded-lg font-semibold flex items-center gap-1.5 ${view === "board" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="view_kanban" c="text-xs" />Pipeline</button>
+            <button onClick={() => setView("list")} className={`h-full px-2.5 rounded-lg font-semibold flex items-center gap-1.5 ${view === "list" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="table_rows" c="text-xs" />List</button>
+            <button onClick={() => setView("walkins")} className={`h-full px-2.5 rounded-lg font-semibold flex items-center gap-1.5 ${view === "walkins" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="how_to_reg" c="text-xs" />Walk-ins</button>
           </div>
-          <button onClick={() => setShowTypes(true)} className="h-[30px] px-3 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100 flex items-center gap-1"><M n="label" c="text-sm" />Types</button>
-          {view !== "walkins" && <p className="text-[11px] text-ink-tertiary ml-1">Missed calls show up here on their own. Convert one to open a job.</p>}
+          <button onClick={() => setShowTypes(true)} className="h-9 px-3 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100 flex items-center gap-1"><M n="label" c="text-sm" />Types</button>
         </div>
 
         {view === "walkins" && <WalkinsView />}
@@ -125,7 +131,7 @@ export default function InquiriesHub() {
                   <th className="py-3 px-4">Inquiry</th><th className="py-3 px-4">Channel</th><th className="py-3 px-4">Device</th><th className="py-3 px-4">Message</th><th className="py-3 px-4">Status</th><th className="py-3 px-4">Respond by</th><th className="py-3 px-4">Result</th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
-                  {allLeads.length === 0 && <tr><td colSpan={7} className="py-8 px-4 text-ink-tertiary text-center">No inquiries.</td></tr>}
+                  {cols && allLeads.length === 0 && <tr><td colSpan={7} className="py-8 px-4"><EmptyLeads /></td></tr>}
                   {pageLeads.map((l) => (
                     <tr key={l.id} onClick={() => setSel(l)} className="hover:bg-blue-50/30 cursor-pointer">
                       <td className="py-3 px-4 font-bold text-ink-primary">{l.name || "Inquiry"}{l.lead_type && <span className="block text-[11px] font-semibold text-ink-tertiary">{l.lead_type}</span>}</td>
@@ -147,7 +153,8 @@ export default function InquiriesHub() {
         {view === "board" && <div className="flex-1 overflow-x-auto overflow-y-hidden px-6 pb-6">
           <div className="flex gap-4 h-full min-w-max">
             {!cols && <div className="text-xs text-ink-tertiary p-4">Loading…</div>}
-            {cols?.map((c) => (
+            {cols && allLeads.length === 0 && <div className="w-[80vw] sm:w-96 py-12"><EmptyLeads /></div>}
+            {allLeads.length > 0 && cols?.map((c) => (
               <div key={c.key} className="w-[80vw] sm:w-72 flex-shrink-0 flex flex-col">
                 <div className="flex items-center gap-2 px-1 pb-2">
                   <span className={`w-2 h-2 rounded-full ${COL_ACCENT[c.key] || "bg-slate-400"}`} />

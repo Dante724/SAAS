@@ -74,7 +74,7 @@ export default function InquiryDrawer({ lead, types, onClose, onChanged, onOpenO
     const r = await api.post<any>(`/leads/${lead.id}/convert?is_estimate=${estimate}`, {});
     if (!estimate && r?.order_id) void autoPrintForJob(r.order_id);
     return r;
-  }, (r) => `${estimate ? "Estimate" : "Job"} ${r.order_number} created`);
+  }, (r) => `${estimate ? "Estimate" : "Work order"} ${r.order_number} created`);
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
@@ -96,7 +96,7 @@ export default function InquiryDrawer({ lead, types, onClose, onChanged, onOpenO
           {closed && (
             <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-between">
               <span className="text-xs font-bold text-emerald-800 flex items-center gap-1.5"><M n="check_circle" c="text-sm" />Converted to {lead.converted_order_number}</span>
-              <button onClick={() => onOpenOrder(lead.converted_order_id!)} className="text-xs font-bold text-primary hover:underline">Open job</button>
+              <button onClick={() => onOpenOrder(lead.converted_order_id!)} className="text-xs font-bold text-primary hover:underline">Open work order</button>
             </div>
           )}
           <InquiryFields value={form} onChange={setForm} types={types} creating={false} />
@@ -118,12 +118,12 @@ export default function InquiryDrawer({ lead, types, onClose, onChanged, onOpenO
                 {lead.status === "new" && <button onClick={() => move("in_progress", "Moved to In progress")} disabled={busy} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs flex items-center gap-1.5"><M n="play_arrow" c="text-sm" />Start</button>}
                 <button onClick={() => move("lost", "Marked lost")} disabled={busy} className="px-4 py-2 rounded-lg text-rose-600 hover:bg-rose-50 font-semibold text-xs">Mark lost</button>
                 <div className="ml-auto relative flex">
-                  <button onClick={() => convert(false)} disabled={busy} className="px-4 py-2 rounded-l-lg bg-primary text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-50 flex items-center gap-1.5"><M n="check" c="text-sm" />Convert to job</button>
-                  <button aria-label="More ways to convert" onClick={() => setMenu((v) => !v)} disabled={busy} className="px-2 py-2 rounded-r-lg bg-primary-container text-white border-l border-white/25 hover:brightness-110 disabled:opacity-50"><M n="expand_more" c="text-sm" /></button>
+                  <button onClick={() => convert(false)} disabled={busy} className="px-4 py-2 rounded-l-lg bg-primary text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-50 flex items-center gap-1.5"><M n="check" c="text-sm" />Create work order</button>
+                  <button aria-label="More ways to create" onClick={() => setMenu((v) => !v)} disabled={busy} className="px-2 py-2 rounded-r-lg bg-primary-container text-white border-l border-white/25 hover:brightness-110 disabled:opacity-50"><M n="expand_more" c="text-sm" /></button>
                   {menu && (
                     <div className="absolute bottom-full right-0 mb-1.5 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 w-48">
-                      <button onClick={() => convert(false)} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-xs font-semibold text-ink-primary"><M n="handyman" c="text-sm text-primary" />Convert to job</button>
-                      <button onClick={() => convert(true)} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-xs font-semibold text-ink-primary"><M n="request_quote" c="text-sm text-primary" />Convert to estimate</button>
+                      <button onClick={() => convert(false)} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-xs font-semibold text-ink-primary"><M n="handyman" c="text-sm text-primary" />Create work order</button>
+                      <button onClick={() => convert(true)} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-xs font-semibold text-ink-primary"><M n="request_quote" c="text-sm text-primary" />Create estimate</button>
                     </div>
                   )}
                 </div>

@@ -54,7 +54,7 @@ describe("WalkinsView", () => {
 
   it("Convert opens the filled work order and prints what's set to print", async () => {
     render(<WalkinsView />);
-    await userEvent.click(await screen.findByRole("button", { name: "Convert to work order" }));
+    await userEvent.click((await screen.findAllByRole("button", { name: "Create work order" }))[0]);
     await waitFor(() => expect(navigate).toHaveBeenCalledWith("/orders?open=o9"));
     expect(calls).toContain("POST /api/checkins/c3/convert");
     expect(printed).toEqual(["o9"]);
@@ -64,8 +64,7 @@ describe("WalkinsView", () => {
     allow = false;
     render(<WalkinsView />);
     await screen.findByText("Mark Chu");
-    expect(screen.queryByRole("button", { name: "Convert to work order" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Start job" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Create work order" })).toBeNull();
   });
 
   it("opens a check-in from the customer's scanned code", async () => {

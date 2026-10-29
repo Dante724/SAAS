@@ -61,15 +61,13 @@ export default function CardReadersCard() {
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-      <div className="p-3.5 border-b border-slate-100 flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h3 className="text-sm font-semibold text-ink-primary">Card readers</h3>
-            {cfg && <ModePill mode={cfg.test_mode ? "test" : "live"} />}
-          </div>
-          {readers && <div className="text-xs text-ink-tertiary mt-0.5 tabular-nums">{readers.length} {readers.length === 1 ? "reader" : "readers"}</div>}
+      <div className="p-3.5 border-b border-slate-100">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-ink-primary">Card readers</h3>
+          {cfg && <ModePill mode={cfg.test_mode ? "test" : "live"} />}
         </div>
-        {readers && readers.length > 0 && canManage && anyKeys && <button onClick={() => setEdit("new")} className={`${btnGhost} bg-white`}><M n="add" c="text-sm" />Add reader</button>}
+        {readers && <div className="text-xs text-ink-tertiary mt-0.5 tabular-nums">{readers.length} {readers.length === 1 ? "reader" : "readers"}</div>}
+        {readers && readers.length > 0 && addBtn && <div className="mt-3">{addBtn}</div>}
       </div>
 
       {!cfg && !err && <div className="p-4 text-xs text-ink-tertiary">Loading card readers…</div>}

@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback } from "react";
 import Shell, { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { promptDialog } from "../../lib/dialog";
+import { fmtServerTime } from "../../lib/serverTime";
 import BayChecklist from "./BayChecklist";
 import { autoPrintIfClosed } from "../../lib/autoPrint";
 
@@ -28,7 +29,10 @@ const hmMin = (min?: number) => { const m = Math.round(min || 0); return `${Math
 export default function MyWorkHub() {
   const [w, setW] = useState<Work | null>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
-  const [flash, setFlash] = useState("");
+  const [flash, setFlashRaw] = useState("");
+  const [flashErr, setFlashErr] = useState(false);
+  const setFlash = (m: string) => { setFlashErr(false); setFlashRaw(m); };
+  const fail = (m: string) => { setFlashErr(true); setFlashRaw(m); };
   const [auditFor, setAuditFor] = useState<string | null>(null);
   const [audit, setAudit] = useState<any[]>([]);
   const [openChecklist, setOpenChecklist] = useState<string | null>(null);
@@ -40,33 +44,33 @@ export default function MyWorkHub() {
         api.get<any>("/timeclock/entries?limit=20"),
       ]);
       setW(mw); setEntries((es.items || es || []).slice(0, 20));
-    } catch (e: any) { setFlash(e.message || "Could not load"); }
+    } catch (e: any) { fail(e.message || "Could not load"); }
   }, []);
   useEffect(() => { load(); }, [load]);
 
   async function clockIn(l: MyLine) {
     try { await api.post(`/timeclock/start?switch=true`, { order_id: l.order_id, order_line_id: l.line_id, category: "job" }); setFlash(`Clocked into ${l.description || "line"}`); load(); }
-    catch (e: any) { setFlash(e.message || "Could not start"); }
+    catch (e: any) { fail(e.message || "Could not start"); }
   }
   async function stop() {
     try { await api.post(`/timeclock/stop`, {}); setFlash("Timer stopped"); load(); }
-    catch (e: any) { setFlash(e.message || "Could not stop"); }
+    catch (e: any) { fail(e.message || "Could not stop"); }
   }
   async function advance(o: BayOrder) {
     if (!o.next_status) return;
     try { const r = await api.patch<any>(`/orders/${o.order_id}/status`, { status: o.next_status }); void autoPrintIfClosed(o.order_id, r); setFlash(`${o.order_number} → ${o.next_label}`); load(); }
-    catch (e: any) { setFlash(e.message || "Could not advance"); }  // surfaces 409 gate messages (checklist/comment/payment)
+    catch (e: any) { fail(e.message || "Could not advance"); }  // surfaces 409 gate messages (checklist/comment/payment)
   }
   async function dispute(e: Entry) {
     const note = await promptDialog("What's wrong with these hours?", { defaultValue: e.dispute_note || "" });
     if (note === null) return;
     try { await api.post(`/timeclock/entries/${e.id}/dispute`, { note }); setFlash("Flagged for your manager"); load(); }
-    catch (err: any) { setFlash(err.message || "Could not flag"); }
+    catch (err: any) { fail(err.message || "Could not flag"); }
   }
   async function showAudit(id: string) {
     if (auditFor === id) { setAuditFor(null); return; }
     try { const r = await api.get<any>(`/timeclock/entries/${id}/audit`); setAudit(r.items || []); setAuditFor(id); }
-    catch (e: any) { setFlash(e.message || "Could not load history"); }
+    catch (e: any) { fail(e.message || "Could not load history"); }
   }
 
   const card = "bg-white rounded-2xl border border-slate-200/90 shadow-sm";
@@ -74,10 +78,10 @@ export default function MyWorkHub() {
     <Shell title="My work">
       <div className="flex-1 overflow-y-auto p-6">
       <div className="max-w-4xl mx-auto space-y-5">
-        {flash && <div className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">{flash}</div>}
+        {flash && <div role={flashErr ? "alert" : "status"} className={`text-xs font-semibold rounded-lg px-3 py-2 border ${flashErr ? "text-rose-700 bg-rose-50 border-rose-200" : "text-emerald-700 bg-emerald-50 border-emerald-200"}`}>{flash}</div>}
 
         {/* live timer + totals */}
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div className={`${card} p-4`}>
             <div className="text-[11px] font-bold text-ink-tertiary">On the clock</div>
             {w?.active ? (
@@ -175,7 +179,7 @@ export default function MyWorkHub() {
                     <div className="mt-2 ml-1 border-l-2 border-slate-200 pl-3 space-y-1">
                       {audit.length === 0 ? <div className="text-[11px] text-ink-tertiary">No history.</div> : audit.map((a, i) => (
                         <div key={i} className="text-[11px] text-ink-tertiary tabular-nums">
-                          <b className="text-ink-secondary">{a.action}</b>{a.field ? ` ${a.field}` : ""}{a.old != null || a.new != null ? `: ${a.old ?? "—"} → ${a.new ?? "—"}` : ""} · {a.actor} · {(a.at || "").slice(0, 16).replace("T", " ")}
+                          <b className="text-ink-secondary">{a.action}</b>{a.field ? ` ${a.field}` : ""}{a.old != null || a.new != null ? `: ${a.old ?? "—"} → ${a.new ?? "—"}` : ""} · {a.actor} · {fmtServerTime(a.at)}
                         </div>
                       ))}
                     </div>

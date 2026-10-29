@@ -85,7 +85,13 @@ export default function TasksHub() {
             </tr></thead>
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
               {!tasks && <SkeletonRows cols={6} />}
-              {shown.length === 0 && tasks && <tr><td colSpan={6} className="py-10 px-4 text-center text-ink-tertiary">No tasks here.</td></tr>}
+              {shown.length === 0 && tasks && <tr><td colSpan={6} className="py-10 px-4 text-center text-ink-tertiary">
+                <p>No tasks here.</p>
+                <div className="mt-3 flex items-center justify-center gap-2">
+                  <button onClick={() => setCreate(true)} className="h-9 px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 inline-flex items-center gap-1.5"><M n="add" c="text-sm" />New task</button>
+                  {filter !== "all" && <button onClick={() => setFilter("all")} className="h-9 px-4 rounded-xl bg-white border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50">Show all tasks</button>}
+                </div>
+              </td></tr>}
               {pageTasks.map((t) => (
                 <tr key={t.id} className="hover:bg-blue-50/30 cursor-pointer" onClick={() => openTask(t)}>
                   <td className="py-3 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><button onClick={() => toggleDone(t)} aria-label={t.completed_at ? `Mark "${t.title}" not done` : `Mark "${t.title}" done`} aria-pressed={!!t.completed_at} className={`w-6 h-6 rounded-md border-2 flex items-center justify-center ${t.completed_at ? "bg-emerald-500 border-emerald-500 text-white" : "border-slate-300 hover:border-primary"}`}>{t.completed_at && <M n="check" c="text-xs" />}</button></td>

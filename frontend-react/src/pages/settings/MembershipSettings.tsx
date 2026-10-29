@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
+import Switch from "../../components/Switch";
+import SaveFooter from "../../components/SaveFooter";
+import { SettingRow as Row, SettingGroup as Group, NumField as Num } from "../../components/SettingRow";
 
 // Settings › Memberships: the few shop-wide choices — the checkout offer, how forgiving unpaid
 // plans are, when renewals go out, and how plan money shows in the books.
@@ -10,51 +13,6 @@ type S = {
   membership_checkout_prompt: boolean; membership_prompt_threshold_pct: number; membership_prompt_snooze_days: number;
   membership_grace_days: number; membership_lapse_days: number; membership_renewal_notice_days: number; membership_spread_revenue: boolean;
 };
-
-function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
-  return (
-    <button type="button" role="switch" aria-checked={on} aria-label={label} onClick={() => onChange(!on)}
-      className={`relative h-6 w-11 shrink-0 rounded-full transition ${on ? "bg-primary" : "bg-slate-300"}`}>
-      <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${on ? "left-[22px]" : "left-0.5"}`} />
-    </button>
-  );
-}
-
-function Num({ id, value, onChange, unit, disabled, max }: { id: string; value: number; onChange: (v: number) => void; unit: string; disabled?: boolean; max?: number }) {
-  return (
-    <div className={`glass-input h-9 w-28 rounded-xl flex items-center pr-3 focus-within:ring-2 focus-within:ring-primary/30 ${disabled ? "opacity-50" : ""}`}>
-      <input id={id} inputMode="numeric" disabled={disabled} value={value}
-        onChange={(e) => { const n = Number(e.target.value.replace(/[^\d]/g, "")) || 0; onChange(max ? Math.min(n, max) : n); }}
-        className="w-full min-w-0 bg-transparent pl-3 text-sm font-medium tabular-nums text-ink-primary outline-none disabled:cursor-not-allowed" />
-      <span className="text-xs text-ink-tertiary shrink-0">{unit}</span>
-    </div>
-  );
-}
-
-// One setting: what it is and why on the left, its control on the right.
-function Row({ label, help, htmlFor, children, dim }: { label: string; help?: string; htmlFor?: string; children: React.ReactNode; dim?: boolean }) {
-  return (
-    <div className={`flex items-center gap-6 py-4 first:pt-0 last:pb-0 ${dim ? "opacity-60" : ""}`}>
-      <div className="min-w-0 flex-1">
-        <label htmlFor={htmlFor} className="block text-sm font-medium text-ink-primary">{label}</label>
-        {help && <p className="mt-0.5 text-xs text-ink-tertiary leading-relaxed">{help}</p>}
-      </div>
-      <div className="shrink-0">{children}</div>
-    </div>
-  );
-}
-
-function Group({ icon, title, children }: { icon: string; title: string; children: React.ReactNode }) {
-  return (
-    <div className="px-6 py-5">
-      <div className="mb-4 flex items-center gap-2">
-        <M n={icon} c="text-base text-ink-tertiary" />
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-tertiary">{title}</h3>
-      </div>
-      <div className="divide-y divide-slate-100">{children}</div>
-    </div>
-  );
-}
 
 export default function MembershipSettings() {
   const { can } = useMe();
@@ -90,7 +48,7 @@ export default function MembershipSettings() {
       <div className="rounded-2xl border border-slate-200/90 bg-white shadow-clay-sm divide-y divide-slate-100">
         <Group icon="point_of_sale" title="Checkout offer">
           <Row label="Offer a plan at checkout" help="When a non-member pays, show what a plan would have saved them, with one tap to join.">
-            <Toggle label="Offer a plan at checkout" on={offer} onChange={(v) => set({ membership_checkout_prompt: v })} />
+            <Switch label="Offer a plan at checkout" on={offer} onChange={(v) => set({ membership_checkout_prompt: v })} />
           </Row>
           <Row htmlFor="ms-thr" dim={!offer} label="Minimum saving to show it" help="Only offer a plan when today's bill would save at least this share of the yearly price.">
             <Num id="ms-thr" disabled={!canEdit || !offer} max={100} value={s.membership_prompt_threshold_pct} onChange={(v) => set({ membership_prompt_threshold_pct: v })} unit="%" />
@@ -115,18 +73,11 @@ export default function MembershipSettings() {
         <Group icon="account_balance" title="Accounting">
           <Row label="Spread yearly payments over the plan's months"
             help="Off: plan money counts when it's paid. On: a yearly payment is earned month by month, and the unearned part shows as prepaid. Ask your accountant if unsure.">
-            <Toggle label="Spread yearly payments" on={s.membership_spread_revenue} onChange={(v) => set({ membership_spread_revenue: v })} />
+            <Switch label="Spread yearly payments" on={s.membership_spread_revenue} onChange={(v) => set({ membership_spread_revenue: v })} />
           </Row>
         </Group>
 
-        {canEdit && (
-          <div className="px-6 py-3.5 flex items-center gap-2">
-            {msg && <span role="status" className={`text-xs ${msg.ok ? "text-emerald-700" : "text-rose-600"}`}>{msg.text}</span>}
-            <span className="ml-auto text-[11px] text-ink-tertiary">{dirty ? "Unsaved changes" : ""}</span>
-            {dirty && <button onClick={() => { setS(saved); setMsg(null); }} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Discard</button>}
-            <button onClick={save} disabled={busy || !dirty} className="px-5 py-2 rounded-xl bg-ink-primary text-white font-semibold text-xs hover:opacity-90 disabled:opacity-40">{busy ? "Saving…" : "Save"}</button>
-          </div>
-        )}
+        {canEdit && <SaveFooter dirty={dirty} busy={busy} msg={msg} onSave={save} onDiscard={() => { setS(saved); setMsg(null); }} />}
       </div>
     </section>
   );

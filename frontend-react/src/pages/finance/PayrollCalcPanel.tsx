@@ -97,20 +97,18 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
   const set = (k: keyof PayrollFilters) => (e: React.ChangeEvent<HTMLSelectElement>) => setFilters((f) => ({ ...f, [k]: e.target.value }));
   const active = Object.values(filters).filter(Boolean).length;
   const total = (rows || []).reduce((s, r) => s + (r.computed_total || 0), 0);
-  const sel = "bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-ink-primary outline-none focus:border-primary max-w-[11rem]";
+  const sel = "bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm text-ink-primary outline-none focus:border-primary max-w-[11rem]";
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="flex items-center gap-2 flex-wrap">
-          <h3 className="text-sm font-semibold text-ink-primary">Payroll calculation</h3>
-          <input type="month" value={month} onChange={(e) => e.target.value && onMonth(e.target.value)} aria-label="Month" className={sel} />
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {can("can_view_own_payroll") && can("can_view_own_compensation") && <Link to="/my-earnings" className={`${btnGhost} bg-white`}><M n="payments" c="text-sm" />My earnings</Link>}
-          {can("can_export_payroll") && <button onClick={exportCsv} disabled={exporting || !rows?.length} className={`${btnGhost} bg-white`}><M n="download" c="text-sm" />{exporting ? "Exporting…" : "Export"}</button>}
-          {headerAction}
-        </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <h3 className="text-sm font-semibold text-ink-primary">Payroll calculation</h3>
+        <input type="month" value={month} onChange={(e) => e.target.value && onMonth(e.target.value)} aria-label="Month" className={sel} />
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        {headerAction}
+        {can("can_export_payroll") && <button onClick={exportCsv} disabled={exporting || !rows?.length} className={btnGhost}><M n="download" c="text-sm" />{exporting ? "Exporting…" : "Export"}</button>}
+        {can("can_view_own_payroll") && can("can_view_own_compensation") && <Link to="/my-earnings" className={btnGhost}><M n="payments" c="text-sm" />My earnings</Link>}
       </div>
 
       <div className="flex items-center gap-2 flex-wrap" role="group" aria-label="Payroll filters">

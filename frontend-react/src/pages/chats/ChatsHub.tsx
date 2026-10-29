@@ -1,5 +1,6 @@
 import SkeletonRows from "../../components/SkeletonRows";
 import { humanize } from "../../lib/humanize";
+import { fmtServerTime } from "../../lib/serverTime";
 import { useEffect, useRef, useState } from "react";
 import Shell, { M } from "../../components/Shell";
 import { api } from "../../api/client";
@@ -30,8 +31,8 @@ const EMPTY: Record<Tab, string> = {
   all: "No conversations yet. Messages from customers land here.", new: "No new conversations.", reply_needed: "Nobody is waiting on a reply.",
   replied: "No replied conversations.", completed: "No completed conversations.", spam: "Spam is empty.",
 };
-const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
-const fieldCls = "bg-white border border-slate-200 rounded-lg text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
+const fmt = (iso?: string) => fmtServerTime(iso);
+const fieldCls = "glass-input rounded-xl px-3 py-2 text-sm text-ink-primary";
 
 function Pill({ hue, children }: { hue: string; children: React.ReactNode }) {
   return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap" style={{ background: tint(hue), color: hueText(hue) }}>{children}</span>;
@@ -150,18 +151,18 @@ export default function ChatsHub() {
   return (
     <Shell title="Chats">
       <div className="px-4 md:px-6 pt-3 pb-2 border-b border-slate-200/60 flex items-center gap-2 flex-shrink-0">
-        <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200/60 text-xs">
-          <button onClick={() => setLayout("split")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1.5 ${layout === "split" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="chat_bubble" c="text-xs" />Conversation</button>
-          <button onClick={() => setLayout("list")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1.5 ${layout === "list" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="table_rows" c="text-xs" />List</button>
+        <div className="h-9 flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200/60 text-xs">
+          <button onClick={() => setLayout("split")} className={`h-full px-2.5 rounded-lg font-semibold flex items-center gap-1.5 ${layout === "split" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="chat_bubble" c="text-xs" />Conversation</button>
+          <button onClick={() => setLayout("list")} className={`h-full px-2.5 rounded-lg font-semibold flex items-center gap-1.5 ${layout === "list" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="table_rows" c="text-xs" />List</button>
         </div>
-        <select aria-label="Channel" value={channel} onChange={(e) => setChannel(e.target.value)} className={`${fieldCls} ml-auto text-xs font-medium pl-2.5 pr-7 py-1.5`}><option value="">All channels</option>{Object.entries(CH).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+        <select aria-label="Channel" value={channel} onChange={(e) => setChannel(e.target.value)} className={`${fieldCls} h-9 pr-8`}><option value="">All channels</option>{Object.entries(CH).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
       </div>
       <div role="tablist" aria-label="Chat status" className="px-4 md:px-6 py-2 border-b border-slate-200/60 flex items-center gap-1 overflow-x-auto flex-shrink-0">
         {TABS.map(([k, label]) => {
           const n = counts[k] ?? 0;
           return (
             <button key={k} role="tab" aria-selected={tab === k} onClick={() => pickTab(k)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap flex items-center gap-1.5 border transition-colors ${tab === k ? "bg-white text-ink-primary border-slate-300 shadow-2xs" : "border-transparent text-ink-secondary hover:text-ink-primary hover:bg-slate-100"} ${k === "spam" ? "md:ml-auto" : ""}`}>
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap flex items-center gap-1.5 border transition-colors ${tab === k ? "bg-white text-ink-primary border-slate-300 shadow-2xs" : "border-transparent text-ink-secondary hover:text-ink-primary hover:bg-slate-100"}`}>
               {k === "spam" && <M n="report" c="text-xs" />}{label}
               {n > 0 && <span className="tabular-nums text-[11px] font-medium text-ink-tertiary">{n}</span>}
             </button>
@@ -288,7 +289,7 @@ export default function ChatsHub() {
                           <div className="px-2.5 pb-2">
                             <select id="chat-status" aria-label="Chat status" value={sel.status || "new"} disabled={busy}
                               onChange={(e) => update({ status: e.target.value as ChatStatus }, `Marked as ${STATUS[e.target.value as ChatStatus].label.toLowerCase()}`)}
-                              className={`${fieldCls} w-full text-xs font-medium px-2.5 py-1.5`}>
+                              className={`${fieldCls} w-full`}>
                               {(Object.keys(STATUS) as ChatStatus[]).map((k) => <option key={k} value={k}>{STATUS[k].label}</option>)}
                             </select>
                           </div>
@@ -319,7 +320,7 @@ export default function ChatsHub() {
               </div>
               <div className="p-3 md:p-4 pt-2 bg-white flex items-center gap-2">
                 {/* No channel can send images yet, so there is no attach button (it could only ever fail). */}
-                <input ref={composerRef} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} className={`${fieldCls} flex-1 min-w-0 h-10 px-3 text-sm rounded-xl`} placeholder="Message…" />
+                <input ref={composerRef} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} className={`${fieldCls} flex-1 min-w-0 h-10`} placeholder="Message…" />
                 <button onClick={() => send()} disabled={!text.trim()} className="h-10 px-4 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center gap-1.5"><span>Send</span><M n="send" c="text-sm" /></button>
               </div>
             </>

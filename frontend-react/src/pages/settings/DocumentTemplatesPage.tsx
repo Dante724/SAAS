@@ -3,6 +3,7 @@ import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
 import PrintSetupCard from "../../components/PrintSetupCard";
+import FloatingMenu from "../../components/FloatingMenu";
 
 /* Settings › Document templates — a gallery of what you print, one section per kind of document,
    each template shown as a real page filled with a recent job (/documents/preview). Kinds with no
@@ -55,11 +56,6 @@ export default function DocumentTemplatesPage({ templates, onOpen, onChanged, on
   templates: any[] | null | undefined; onOpen: (row: any) => void; onChanged: () => void; onFlash: (m: string) => void;
 }) {
   const [menu, setMenu] = useState<string | null>(null);
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
-    window.addEventListener("click", close); return () => window.removeEventListener("click", close);
-  }, [menu]);
   const all = templates || [];
   const blocks = all.filter((t) => t.doc_type === "component");
 
@@ -80,8 +76,9 @@ export default function DocumentTemplatesPage({ templates, onOpen, onChanged, on
     catch (e: any) { onFlash(e?.message || "Couldn't delete"); }
   }
 
-  const Card = ({ t }: { t: any }) => (
-    <div className="group relative rounded-2xl border border-slate-200/90 bg-white shadow-clay-card overflow-hidden hover:border-slate-300 hover:shadow-clay-drawer transition-shadow">
+  // A plain function (not a component), so the previews aren't remounted (and re-fetched) on every render.
+  const card = (t: any) => (
+    <div key={t.id} className="group relative rounded-2xl border border-slate-200/90 bg-white shadow-clay-card overflow-hidden hover:border-slate-300 hover:shadow-clay-drawer transition-shadow">
       <button onClick={() => onOpen(t)} className="block w-full text-left" aria-label={`Edit ${t.name}`}>
         <Thumb t={t} />
         <div className="px-3.5 py-3 border-t border-slate-100">
@@ -92,27 +89,27 @@ export default function DocumentTemplatesPage({ templates, onOpen, onChanged, on
           <div className="text-[11px] text-ink-tertiary">{t.doc_type === "label" ? "Label" : (t.page_size || "a4").toUpperCase()}{(t.print_statuses || []).length ? ` · only in ${(t.print_statuses || []).length} status${(t.print_statuses || []).length === 1 ? "" : "es"}` : ""}{autoText(t.auto_print_events)}</div>
         </div>
       </button>
-      <button aria-label={`More actions for ${t.name}`} onClick={(e) => { e.stopPropagation(); setMenu(menu === t.id ? null : t.id); }}
+      <button aria-label={`More actions for ${t.name}`} data-template-menu={t.id} onClick={(e) => { e.stopPropagation(); setMenu(menu === t.id ? null : t.id); }}
         className="absolute top-2 right-2 w-8 h-8 rounded-lg grid place-items-center bg-white/90 border border-slate-200 text-ink-secondary opacity-0 group-hover:opacity-100 focus:opacity-100 shadow-sm"><M n="more_horiz" c="text-base" /></button>
       {menu === t.id && (
-        <div className="absolute top-11 right-2 z-20 w-44 bg-white rounded-xl border border-slate-200 shadow-clay-drawer py-1 text-xs" onClick={(e) => e.stopPropagation()}>
-          <button onClick={() => { setMenu(null); onOpen(t); }} className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2"><M n="edit" c="text-sm" />Edit</button>
-          {!t.is_default && <button onClick={() => makeDefault(t)} className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2"><M n="check_circle" c="text-sm" />Use by default</button>}
-          <button onClick={() => duplicate(t)} className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2"><M n="content_copy" c="text-sm" />Duplicate</button>
-          <button onClick={() => remove(t)} className="w-full text-left px-3 py-2 hover:bg-rose-50 text-rose-600 flex items-center gap-2"><M n="delete" c="text-sm" />Delete</button>
-        </div>
+        <FloatingMenu anchorSel={`[data-template-menu="${t.id}"]`} onClose={() => setMenu(null)} width={192}>
+          <div className="text-xs" onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => { setMenu(null); onOpen(t); }} className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-50 flex items-center gap-2"><M n="edit" c="text-sm" />Edit</button>
+            {!t.is_default && <button onClick={() => makeDefault(t)} className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-50 flex items-center gap-2"><M n="check_circle" c="text-sm" />Use by default</button>}
+            <button onClick={() => duplicate(t)} className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-50 flex items-center gap-2"><M n="content_copy" c="text-sm" />Duplicate</button>
+            <button onClick={() => remove(t)} className="w-full text-left px-3 py-2 rounded-lg hover:bg-rose-50 text-rose-600 flex items-center gap-2"><M n="delete" c="text-sm" />Delete</button>
+          </div>
+        </FloatingMenu>
       )}
     </div>
   );
 
   return (
     <div className="max-w-5xl space-y-6 pb-10">
-      <div className="flex items-start gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-ink-primary">Documents you print</h2>
-          <p className="text-xs text-ink-tertiary">Receipts, estimates, invoices and labels. Each preview is filled with your latest job so you see exactly what customers get.</p>
-        </div>
-        <button onClick={() => onOpen(null)} className="ml-auto inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-ink-primary text-white text-xs font-semibold hover:opacity-90 flex-shrink-0"><M n="add" c="text-sm" />New template</button>
+      <div>
+        <h2 className="text-base font-semibold text-ink-primary">Documents you print</h2>
+        <p className="text-xs text-ink-tertiary">Receipts, estimates, invoices and labels. Each preview is filled with your latest job so you see exactly what customers get.</p>
+        <button onClick={() => onOpen(null)} className="mt-3 inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n="add" c="text-sm" />New template</button>
       </div>
 
       <PrintSetupCard />
@@ -129,7 +126,7 @@ export default function DocumentTemplatesPage({ templates, onOpen, onChanged, on
               <span className="text-[11px] text-ink-tertiary">{k.hint}</span>
             </div>
             <div className={`grid gap-3 ${k.key === "label" ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}>
-              {mine.map((t) => <Card key={t.id} t={t} />)}
+              {mine.map((t) => card(t))}
               <button onClick={() => onOpen({ doc_type: k.key, name: mine.length ? "" : k.label })}
                 className={`rounded-2xl border border-dashed border-slate-300 grid place-items-center text-xs font-semibold text-ink-secondary hover:bg-white hover:border-slate-400 transition-colors ${k.key === "label" ? "min-h-[170px]" : "min-h-[262px]"}`}>
                 <span className="flex flex-col items-center gap-1.5 px-4 text-center">
