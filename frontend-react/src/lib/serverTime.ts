@@ -24,6 +24,14 @@ export function wallDate(iso?: string | null): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
+/** "Oct 29, 2026" for a shop date or wall-clock time ("2026-10-29" or "2026-10-29T11:00"), the app's
+ *  one date format. A bare date is read as local midnight, not UTC (which can show the day before). */
+export function fmtDay(iso?: string | null): string {
+  if (!iso) return "";
+  const d = wallDate(iso.length <= 10 ? iso + "T00:00" : iso);
+  return d ? d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) : "";
+}
+
 /** "Nov 4, 3:05 PM" for an instant, in the viewer's clock. Empty when missing. */
 export function fmtServerTime(iso?: string | null, opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }): string {
   const d = serverDate(iso);
