@@ -1741,13 +1741,42 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
 
   return (
     <div className="space-y-5">
-      <section aria-label="Balance" className={`${sectionCard} p-5`}>
-        <span className="text-xs font-medium text-ink-secondary">Still to pay</span>
-        <div className="flex flex-wrap items-baseline gap-3 mt-1">
-          <h2 className="text-3xl font-semibold tabular-nums tracking-tight text-ink-primary">{money(due)}</h2>
-          <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ring-1 ring-inset ${settled ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-amber-50 text-amber-800 ring-amber-200"}`}>{settled ? (writtenOff > 0 ? "Written off" : "Settled") : "Balance due"}</span>
-        </div>
-        <p className="text-xs text-ink-tertiary mt-1 tabular-nums">Grand total {money(t)} · {money(paid)} collected{writtenOff > 0 ? ` · ${money(writtenOff)} written off` : ""}</p>
+      {/* Balance hero (design council, option C): the figure stays ink and large; the state shows in a
+          thin top edge, a pill with words, and a bar of how much is collected — never in the digits. */}
+      {(() => {
+        const state = !settled ? "due" : writtenOff > 0 ? "written_off" : "settled";
+        const tone = {
+          due: { edge: "bg-amber-400", pill: "bg-amber-50 text-amber-800 ring-amber-200", dot: "bg-amber-500", label: "Balance due" },
+          settled: { edge: "bg-emerald-500", pill: "bg-emerald-50 text-emerald-700 ring-emerald-200", dot: "bg-emerald-500", label: "Settled" },
+          written_off: { edge: "bg-slate-300", pill: "bg-slate-100 text-ink-secondary ring-slate-200", dot: "bg-slate-400", label: "Written off" },
+        }[state];
+        const shown = money(due);
+        const m = /^([^\d-]+)(.*)$/.exec(shown);   // "€9,000" -> "€" + "9,000"; leave suffix-style currencies whole
+        const pct = (n: number) => (t > 0 ? Math.min(100, Math.max(0, (n / t) * 100)) : 0);
+        return (
+          <section aria-label="Balance" className={`${sectionCard} relative overflow-hidden p-6`}>
+            <div aria-hidden="true" className={`absolute inset-x-0 top-0 h-0.5 ${tone.edge}`} />
+            <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-ink-tertiary">Still to pay</span>
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-2">
+              <h2 className={`flex items-start tabular-nums ${state === "due" ? "text-ink-primary" : "text-ink-tertiary"}`} aria-label={`Still to pay ${shown}`}>
+                {m ? <><span className="mt-1.5 mr-0.5 text-xl font-medium text-ink-tertiary">{m[1].trim()}</span><span className="text-[44px] leading-none font-medium tracking-[-0.035em]">{m[2]}</span></>
+                  : <span className="text-[44px] leading-none font-medium tracking-[-0.035em]">{shown}</span>}
+              </h2>
+              <span className={`inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full text-xs font-semibold ring-1 ring-inset ${tone.pill}`}>
+                <span aria-hidden="true" className={`size-1.5 rounded-full ${tone.dot}`} />{tone.label}
+              </span>
+            </div>
+            {t > 0 && (
+              <div className="mt-4 h-1.5 rounded-full bg-slate-100 overflow-hidden flex" role="img"
+                aria-label={`${money(paid)} of ${money(t)} collected${writtenOff > 0 ? `, ${money(writtenOff)} written off` : ""}`}>
+                <div className="h-full bg-emerald-500" style={{ width: `${pct(paid)}%` }} />
+                {writtenOff > 0 && <div className="h-full bg-slate-300" style={{ width: `${pct(writtenOff)}%` }} />}
+              </div>
+            )}
+            <p className="mt-2 text-xs text-ink-tertiary tabular-nums">
+              <span className="font-medium text-ink-secondary">{money(paid)}</span> of <span className="font-medium text-ink-secondary">{money(t)}</span> collected
+              {writtenOff > 0 && <> · <span className="font-medium text-ink-secondary">{money(writtenOff)}</span> written off</>}
+            </p>
         {isForeign && (
           <p className="text-xs text-ink-secondary mt-1 tabular-nums">≈ {currencySymbol}{conv(due).toFixed(2)} {currencyCode} <span className="text-ink-tertiary">(1 {currencyCode} = {fxRate && (1 / fxRate).toFixed(4)} {base?.code})</span></p>
         )}
@@ -1775,7 +1804,9 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
             )}
           </div>
         )}
-      </section>
+          </section>
+        );
+      })()}
 
       {!settled && <Section title="Requested deposit" meta={dep > 0 ? <span className="font-semibold text-emerald-700">{money(conv(dep))} requested</span> : null}
         description={`The customer pays this through the payment link or portal.${total ? ` Total ${money(conv(total))}.` : ""}`}>
