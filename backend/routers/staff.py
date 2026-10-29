@@ -785,6 +785,7 @@ async def get_company(
         "default_due_days": org.default_due_days,
         "default_comment_visibility": org.default_comment_visibility,
         "default_file_visibility": org.default_file_visibility,
+        "public_employee_name": getattr(org, "public_employee_name", None) or "full",
         "warranty_count_from": org.warranty_count_from,
         "asset_one_open_ticket": org.asset_one_open_ticket,
         "multi_asset_jobs": _ma.enabled(org),
@@ -825,6 +826,7 @@ class CompanyIn(BaseModel):
     default_due_days: Optional[int] = None
     default_comment_visibility: Optional[str] = None
     default_file_visibility: Optional[str] = None
+    public_employee_name: Optional[str] = None          # WS-C #18: full | first | first_initial
     warranty_count_from: Optional[str] = None
     asset_one_open_ticket: Optional[bool] = None
     multi_asset_jobs: Optional[bool] = None            # several items per job (eligible industries only)
@@ -857,6 +859,11 @@ async def update_company(
         valid = set(_ind.TEMPLATE_KEYS) | set(_ind.LEGACY_ALIASES)
         if payload["industry_template"] not in valid:
             raise HTTPException(422, f"Unknown industry_template. Valid: {sorted(valid)}")
+    for k in ("default_comment_visibility", "default_file_visibility"):
+        if k in payload and payload[k] not in ("private", "public"):
+            raise HTTPException(422, "Visibility must be private or public")
+    if "public_employee_name" in payload and payload["public_employee_name"] not in ("full", "first", "first_initial"):
+        raise HTTPException(422, "Name display must be full, first or first_initial")
     if "payment_provider" in payload:
         valid = ("auto", "stripe", "square", "sumup", "simulated")
         if payload["payment_provider"] not in valid:

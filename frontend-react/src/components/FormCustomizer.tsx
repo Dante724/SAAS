@@ -7,7 +7,7 @@ import { confirmDialog, promptDialog } from "../lib/dialog";
 // the arrows) to move it, click it to edit, "+ Add a field" to add one exactly where it belongs —
 // from suggestions for the shop's industry, a hidden field, or a blank one. Built-in and custom
 // fields live in one list; a "section" is a heading that groups the fields under it. Saves itself.
-export type FormKey = "order" | "client" | "device" | "product";
+export type FormKey = "order" | "client" | "device" | "product" | "lead";
 type Field = { id: string; field_label: string; field_type: string; required: boolean; placeholder?: string | null;
   options?: string[]; directory_key?: string | null; [k: string]: any };
 // required: "" optional · "intake" when the record is created · "close" before a work order closes.

@@ -128,6 +128,51 @@ describe("TelephonySettings", () => {
     await u.type(screen.getByLabelText("Caller's number"), "+14155550100");
     await u.click(btn);
     expect(await screen.findByText(/new contact was created/)).toBeInTheDocument();
-    expect(calls.find((c) => c.url.endsWith("/simulate/inbound"))?.body).toEqual({ from_number: "+14155550100", extension: null });
+    expect(calls.find((c) => c.url.endsWith("/simulate/inbound"))?.body).toEqual({ from_number: "+14155550100", extension: null, missed: false });
+  });
+
+  it("a simulated missed call says it went to Inquiries", async () => {
+    const u = userEvent.setup();
+    serve(base((m, url) => (m === "POST" && url.endsWith("/simulate/inbound") ? { id: "c1", client_id: null, client_created: false, matched: false, lead_id: "l1" } : undefined)));
+    render(<TelephonySettings />);
+    await u.type(await screen.findByLabelText("Caller's number"), "+14155550100");
+    await u.click(screen.getByLabelText("Nobody answers (a missed call)"));
+    await u.click(screen.getByRole("button", { name: /Simulate call/ }));
+    expect(await screen.findByText(/in Inquiries with a call-back task/)).toBeInTheDocument();
+    expect(calls.find((c) => c.url.endsWith("/simulate/inbound"))?.body.missed).toBe(true);
+  });
+
+  it("saves the missed-call settings", async () => {
+    const u = userEvent.setup();
+    serve(base((m, url, b) => {
+      if (url.endsWith("/leads/missed-call-settings")) return m === "PUT" ? { enabled: b.enabled, config: b } : { enabled: true, config: { merge_hours: 24, sla_minutes: 30, notify: true, fallback_employee_id: null } };
+      if (url.endsWith("/staff/employees")) return [{ id: "e1", name: "Sam" }];
+      return undefined;
+    }));
+    render(<TelephonySettings />);
+    const merge = await screen.findByLabelText("Add repeat calls within (hours)");
+    await u.clear(merge); await u.type(merge, "48");
+    await u.selectOptions(screen.getByLabelText("When nobody is clocked in, alert"), "e1");
+    await u.click(screen.getByRole("button", { name: "Save missed-call settings" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "PUT" && c.url.endsWith("/leads/missed-call-settings"))).toBe(true));
+    expect(calls.find((c) => c.method === "PUT" && c.url.endsWith("/leads/missed-call-settings"))!.body)
+      .toEqual({ enabled: true, merge_hours: 48, sla_minutes: 30, notify: true, fallback_employee_id: "e1" });
+  });
+
+  it("offers Aircall only when the server has it switched on", async () => {
+    const ac = { available: true, connected: false, webhook_url: "https://shop.example/api/telephony/aircall/webhook?org_id=o1" };
+    serve(base((m, url) => (url.endsWith("/telephony/config") ? cfg({ aircall: ac }) : undefined)));
+    const u = userEvent.setup();
+    render(<TelephonySettings />);
+    await u.selectOptions(await screen.findByLabelText("Provider"), "aircall");
+    expect(screen.getByText(ac.webhook_url)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save token" })).toBeDisabled();
+  });
+
+  it("hides Aircall when the server switch is off", async () => {
+    serve(base((m, url) => (url.endsWith("/telephony/config") ? cfg({ aircall: { available: false, connected: false, webhook_url: "" } }) : undefined)));
+    render(<TelephonySettings />);
+    await screen.findByLabelText("Provider");
+    expect(screen.queryByRole("option", { name: "Aircall" })).toBeNull();
   });
 });
