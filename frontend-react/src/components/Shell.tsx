@@ -31,12 +31,20 @@ import {
   ShieldCheck, Target, EyeOff, Car, Sailboat, Bike, Laptop, Cog, Upload,
   ShoppingBag, Split, Nfc, Phone, PhoneIncoming, PhoneOutgoing, PhoneMissed, Network, HelpCircle,
   LogOut, Menu as MenuIcon, PackageOpen, Info, UserCheck, KeyRound, MapPin, Crown,
+  CircleDot, CloudOff, Footprints, Hand, Infinity as InfinityIcon, LayoutGrid, LogIn, MessageSquareText, MessagesSquare, MoveRight, Redo2, SquareCheck, Star, ThumbsUp, TriangleAlert, UserX,
 } from "lucide-react";
 import { fmtServerTime } from "../lib/serverTime";
 
 // Map the old Material-Symbols ligature names to bundled Lucide icons (no web font,
 // works under the app's Content-Security-Policy, and needs no server restart).
 const ICONS: Record<string, any> = {
+  // Names used in the app that had no mapping (they drew as an empty circle).
+  forum: MessagesSquare, grid_view: LayoutGrid, summarize: FileText, reviews: Star,
+  check_box: SquareCheck, check_box_outline_blank: Square, sms: MessageSquareText, thumb_up: ThumbsUp,
+  directions_walk: Footprints, insert_chart: BarChart3, login: LogIn, all_inclusive: InfinityIcon, bedtime: Moon,
+  list_alt: ClipboardList, back_hand: Hand, cloud_off: CloudOff, sync_problem: TriangleAlert,
+  trending_flat: MoveRight, person_off: UserX, redo: Redo2, replay: RotateCcw, print_disabled: Printer,
+  currency_exchange: ArrowLeftRight, fiber_manual_record: CircleDot, radio_button_unchecked: Circle,
   package_2: PackageOpen, info: Info,
   build: Wrench, handyman: Wrench, engineering: HardHat, hammer: Hammer,
   task_alt: CheckCircle2, mail: Mail, chat: MessageSquare, chat_bubble: MessageCircle,

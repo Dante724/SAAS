@@ -306,7 +306,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
           </div>
           <div className="flex flex-wrap gap-1.5 px-1">
             {country && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="public" c="text-[12px]" />{country[1]}</span>}
-            {co.timezone && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="schedule" c="text-[12px]" />{co.timezone.replace(/_/g, " ")}</span>}
+            {co.timezone && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="public" c="text-[12px]" />{co.timezone.replace(/_/g, " ")}</span>}
             {co.currency_code && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="payments" c="text-[12px]" />{co.currency_code}</span>}
           </div>
         </aside>
