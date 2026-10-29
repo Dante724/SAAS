@@ -409,3 +409,26 @@ def test_existing_roles_keep_the_access_they_would_expect():
     assert not changed
     _, changed = grant_membership_codes({"can_create_tickets": True}, False)
     assert not changed
+
+
+@pytest.mark.asyncio
+async def test_list_totals_plan_worth_attention_and_welcome_text(client, db):
+    H, org_id = await _register(client)
+    oil = await _service(client, H, "Oil change", 80)
+    plan = await _plan(client, H, oil)
+    assert plan["value_yearly"] == 160                                    # 2 oil changes at 80
+    cid, boat = await _client_and_boat(client, H)
+    await _sell(client, H, plan["id"], cid, boat)                        # yearly 449, unpaid today
+    cid2, boat2 = await _client_and_boat(client, H, name="Lee", phone="5550100001")
+    await _sell(client, H, plan["id"], cid2, boat2, billing="monthly")   # 45 a month
+    r = (await client.get("/api/memberships", headers=H)).json()
+    assert r["totals"]["mrr"] == round(449 / 12 + 45, 2)
+    assert r["totals"]["owed"] == 449 + 45
+    assert all(i["attention"]["text"] == "Payment due today" for i in r["items"])
+    from backend.models import NotificationLog
+    sent = (await db.execute(select(NotificationLog).where(NotificationLog.client_id == cid))).scalars().all()
+    assert any(s.subject == "Welcome to Boat Care" and "Oil change × 2" in s.body for s in sent)
+    # Staff without client money access see counts, not money.
+    T = await _teammate(client, H, "can_view_client_info")
+    r = (await client.get("/api/memberships", headers=T)).json()
+    assert r["totals"] is None and "owed" not in r["items"][0]

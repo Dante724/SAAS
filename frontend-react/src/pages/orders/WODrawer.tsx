@@ -1126,7 +1126,10 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                 : <button type="button" onClick={() => onClockIn(l.id)} title={`Clock into ${l.description || "this line"}`}
                     className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-emerald-700 border border-emerald-200 hover:bg-emerald-50"><M n="play_arrow" c="text-[13px]" />clock in</button>
             )}
-            {seePrices && <div className="text-right"><p className="tabular-nums font-bold text-xs text-ink-primary">{money(l.total)}</p></div>}
+            {seePrices && <div className="text-right">
+              {/* A plan-covered line shows what the member would have paid, struck through. */}
+              {(l as any).membership_id && Number(l.discount) > 0 && <p className="tabular-nums text-[11px] text-ink-tertiary line-through">{money((l.qty ?? 1) * (l.unit_price ?? 0))}</p>}
+              <p className="tabular-nums font-bold text-xs text-ink-primary">{money(l.total)}</p></div>}
           </div>
         </div>
         {/* 144av — assignee + booked/actual on service & labour lines only */}

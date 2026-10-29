@@ -4,7 +4,7 @@ import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import { money } from "../orders/types";
 import { tint, hueText } from "../../lib/tint";
-import { type Plan, type PlanItem, priceLine } from "./shared";
+import { type Plan, type PlanItem } from "./shared";
 
 // Catalog › Plans: what the shop sells as a membership. Each plan is a short list of what's
 // included; the editor keeps the everyday fields up front and the season options tucked away.
@@ -23,8 +23,14 @@ export default function PlansTab() {
   const [plans, setPlans] = useState<Plan[] | null>(null);
   const [edit, setEdit] = useState<(Omit<Plan, "id" | "members"> & { id?: string }) | null>(null);
   const [starter, setStarter] = useState(false);
+  const [report, setReport] = useState<Record<string, { money_in: number; value_given: number }>>({});
   const load = () => api.get<{ items: Plan[] }>("/memberships/plans").then((r) => setPlans(r.items || [])).catch(() => setPlans([]));
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    // Owners see what each plan brought in against the work it gave away (last 12 months).
+    if (can("can_see_profit")) api.get<{ plans: { plan_id: string; money_in: number; value_given: number }[] }>("/memberships/reports/profitability")
+      .then((r) => setReport(Object.fromEntries((r.plans || []).map((p) => [p.plan_id, p])))).catch(() => {});
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   async function fromStarter(k: string) {
     const r = await api.get<{ items: any[] }>(`/memberships/plans/starters?template=${k}`);
@@ -58,19 +64,38 @@ export default function PlansTab() {
         </div>
       )}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {plans?.map((p) => (
-          <button key={p.id} type="button" onClick={() => canEdit && setEdit(p)} className={`text-left rounded-2xl border border-slate-200/90 bg-white shadow-clay-card p-5 transition ${canEdit ? "hover:border-slate-300" : "cursor-default"} ${p.active ? "" : "opacity-60"}`}>
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-xl grid place-items-center" style={{ background: tint(p.color), color: hueText(p.color) }}><M n="workspace_premium" c="text-lg" /></div>
-              <div className="min-w-0"><div className="text-sm font-semibold text-ink-primary truncate">{p.name}</div>
-                <div className="text-xs text-ink-tertiary">{priceLine(p)}</div></div>
-              <div className="ml-auto text-right"><div className="text-lg font-semibold text-ink-primary tabular-nums leading-none">{p.members}</div><div className="text-[11px] text-ink-tertiary">members</div></div>
-            </div>
-            <ul className="mt-4 space-y-1.5">{p.items.map((i) => (
-              <li key={i.id} className="flex items-center gap-2 text-xs text-ink-secondary"><span style={{ color: p.color }}><M n="check_circle" c="text-[14px]" /></span>{i.text}</li>))}</ul>
-            {(!p.active || p.term === "season") && <div className="mt-3 text-[11px] text-ink-tertiary">{[!p.active && "Not on sale", p.term === "season" && `Season ${p.season_start} → ${p.season_end}`].filter(Boolean).join(" · ")}</div>}
-          </button>
-        ))}
+        {plans?.map((p) => {
+          const r = report[p.id];
+          const hero = p.price_yearly ? { n: p.price_yearly, per: "/yr" } : { n: p.price_monthly || 0, per: "/mo" };
+          return (
+            <button key={p.id} type="button" onClick={() => canEdit && setEdit(p)} className={`text-left rounded-2xl border border-slate-200/90 bg-white shadow-clay-card overflow-hidden transition ${canEdit ? "hover:border-slate-300" : "cursor-default"} ${p.active ? "" : "opacity-60"}`}>
+              <div className="px-5 pt-4 pb-3.5" style={{ background: tint(p.color, 14) }}>
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-xl grid place-items-center bg-white/75" style={{ color: hueText(p.color) }}><M n="workspace_premium" c="text-lg" /></div>
+                  <div className="min-w-0 flex-1"><div className="text-sm font-semibold text-ink-primary truncate">{p.name}</div>
+                    <div className="text-xs text-ink-secondary">{p.members} member{p.members === 1 ? "" : "s"}{!p.active ? " · not on sale" : ""}</div></div>
+                </div>
+                <div className="mt-3 flex items-baseline gap-1.5">
+                  <span className="text-2xl font-semibold tracking-tight tabular-nums text-ink-primary">{money(hero.n)}</span>
+                  <span className="text-sm text-ink-tertiary">{hero.per}</span>
+                  {p.price_yearly && p.price_monthly ? <span className="ml-auto text-xs text-ink-secondary">or {money(p.price_monthly)}/mo</span> : null}
+                </div>
+              </div>
+              <div className="px-5 py-4">
+                <ul className="space-y-1.5">{p.items.map((i) => (
+                  <li key={i.id} className="flex items-center gap-2 text-xs text-ink-secondary"><span style={{ color: p.color }}><M n="check_circle" c="text-[14px]" /></span>{i.text}</li>))}</ul>
+                {p.value_yearly ? <div className="mt-3 text-[11px] font-semibold text-emerald-700">Worth {money(p.value_yearly)} a year in services</div> : null}
+                {r && (r.money_in > 0 || r.value_given > 0) && (
+                  <div className="mt-3 flex items-center gap-2 border-t border-slate-100 pt-3 text-[11px] text-ink-tertiary">
+                    <span>12 months: <b className="text-ink-primary tabular-nums">{money(r.money_in)}</b> in · <b className="text-ink-primary tabular-nums">{money(r.value_given)}</b> work given</span>
+                    <span className={`ml-auto rounded-full px-1.5 py-px font-semibold ${r.money_in >= r.value_given ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{r.money_in >= r.value_given ? "Paying off" : "Giving more"}</span>
+                  </div>
+                )}
+                {p.term === "season" && <div className="mt-2 text-[11px] text-ink-tertiary">Season {p.season_start} → {p.season_end}</div>}
+              </div>
+            </button>
+          );
+        })}
       </div>
       {edit && <PlanEditor plan={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); load(); }} />}
     </div>

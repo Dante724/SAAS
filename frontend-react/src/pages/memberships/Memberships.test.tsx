@@ -46,7 +46,7 @@ describe("MemberCard", () => {
     render(<MemberCard m={member() as any} />);
     expect(screen.getByText("Boat Care")).toBeInTheDocument();
     expect(screen.getByText("Active")).toBeInTheDocument();
-    expect(screen.getByText("1 left")).toBeInTheDocument();
+    expect(screen.getByText("1 of 2 left")).toBeInTheDocument();
     expect(screen.getByText("10% off labour")).toBeInTheDocument();
     expect(screen.getByText(/Bayliner VR5 · Yearly · renews/)).toBeInTheDocument();
   });
@@ -87,7 +87,7 @@ describe("MembershipsView", () => {
     routes = { "/memberships?": { items: [member()], counts: { all: 3, unpaid: 1 } } };
     render(<MembershipsView />);
     expect(await screen.findByText("Sam Rivera")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /Unpaid/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^Unpaid/ }));
     await waitFor(() => expect(calls.some((c) => c.url.includes("view=unpaid"))).toBe(true));
   });
 });
@@ -113,9 +113,10 @@ describe("CheckoutOffer", () => {
     routes = { "/memberships/order/o1": { plans: [], coverable: 0, can_apply: true, client_id: "c1", device_id: "d1",
       offer: { plan_id: "p1", name: "Boat Care", saving: 300, price_yearly: 449, includes: ["Haul-out × 1"] } } };
     render(<CheckoutOffer orderId="o1" onJoined={() => {}} />);
-    expect(await screen.findByText("Boat Care would save $300 today")).toBeInTheDocument();
+    expect(await screen.findByText("$300 today")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Join · $449/yr" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Not now" }));
-    expect(screen.queryByText(/would save/)).toBeNull();
+    expect(screen.queryByText("$300 today")).toBeNull();
     expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/memberships/order/o1/snooze"))).toBe(true);
   });
 });

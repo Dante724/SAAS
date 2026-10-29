@@ -328,6 +328,13 @@ async def sell(db: AsyncSession, *, org_id: str, actor: Employee, plan_id: str, 
     await sync_tags(db, org_id, client.id)
     if order and order.device_id and device and order.device_id == device.id and status == "active":
         await apply_to_order(db, order)
+    # Welcome text: what's included and when it renews, so the customer leaves feeling a member.
+    included = [label_of(it) for it in await plan_items(db, plan.id) if it.kind != "perk"][:4]
+    first = (client.name or "there").split()[0]
+    when = f"starts {term_start:%d %b}" if status == "scheduled" else f"renews {term_end:%d %b %Y}"
+    await tell_client(db, org_id, client, f"membership.joined:{m.id}", f"Welcome to {plan.name}",
+                      f"Welcome to {plan.name}, {first}! Included: {', '.join(included)}. "
+                      f"Your plan {when}. — {await _shop(db, org_id)}")
     return m
 
 

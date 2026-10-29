@@ -14,7 +14,8 @@ export type Member = {
   id: string; plan_id: string; plan: string; color: string; client_id: string; client: string;
   device_id?: string | null; asset: string; billing: "monthly" | "yearly"; status: string; renews: boolean;
   renews_on: string; starts_on: string; period_end: string; ended_on?: string | null; ended_reason?: string | null;
-  manager_id?: string | null; unpaid: boolean; price?: number; owed?: number; items?: Item[];
+  manager_id?: string | null; unpaid: boolean; price?: number; owed?: number; items?: Item[]; saved?: number;
+  attention?: { kind: "unpaid" | "window"; text: string } | null;
   value_given?: number; paid?: number; refund_if_cancelled_now?: number;
   periods?: { id: string; start: string; end: string; amount: number; paid: boolean; invoice_id?: string | null; order_id?: string | null; due_on: string }[];
 };
@@ -24,7 +25,7 @@ export type Plan = {
   id: string; name: string; description: string; template_key?: string | null; asset_group_ids: string[];
   price_monthly?: number | null; price_yearly?: number | null; term: "rolling" | "season"; season_start?: string | null;
   season_end?: string | null; presale_days: number; late_join: "prorated" | "full"; color: string; active: boolean;
-  members: number; items: PlanItem[];
+  members: number; items: PlanItem[]; value_yearly?: number;
 };
 
 export const fmtDate = (iso?: string | null) => {
@@ -49,43 +50,65 @@ export function StatusPill({ m }: { m: Pick<Member, "status" | "renews" | "start
   return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap" style={{ background: tint(s.hue), color: hueText(s.hue) }}>{label}</span>;
 }
 
-/** What's left of one included item, as a few dots — 3 of 3 reads at a glance. */
-function ItemLine({ it }: { it: Item }) {
-  if (it.kind !== "service") {
-    return <li className="flex items-center gap-2 text-xs text-ink-secondary"><M n={it.kind === "discount" ? "redeem" : "verified"} c="text-[15px] text-ink-tertiary" />{it.text}</li>;
-  }
+/** A thin ring for what's left of an included service, with the count inside (same look as the
+    work-order checklist rings). */
+export function Ring({ left, of, color, size = 34 }: { left: number; of: number; color: string; size?: number }) {
+  const sw = 3, r = (size - sw) / 2, len = 2 * Math.PI * r;
+  const pct = of > 0 ? Math.max(0, Math.min(1, left / of)) : 0;
+  return (
+    <span className="relative grid place-items-center shrink-0" style={{ width: size, height: size }} role="img" aria-label={`${left} of ${of} left`}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90" aria-hidden>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" strokeWidth={sw} className="stroke-slate-200" />
+        {pct > 0 && <circle cx={size / 2} cy={size / 2} r={r} fill="none" strokeWidth={sw} strokeLinecap="round" stroke={color}
+          strokeDasharray={len} strokeDashoffset={len * (1 - pct)} />}
+      </svg>
+      <span className="absolute text-[11px] font-semibold tabular-nums text-ink-primary">{left}</span>
+    </span>
+  );
+}
+
+function ServiceRing({ it, color }: { it: Item; color: string }) {
   const of = Math.max(0, Math.round(it.of ?? 0)), left = Math.max(0, Math.round(it.left ?? 0));
   return (
-    <li className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
-      <span className="flex gap-0.5">{Array.from({ length: Math.min(of, 6) }).map((_, i) => (
-        <span key={i} className={`h-2 w-2 rounded-full ${i < left ? "bg-primary" : "bg-slate-200"}`} />))}</span>
-      <span className="font-medium text-ink-primary">{it.text.replace(/ × \d+$/, "")}</span>
-      <span className="text-ink-tertiary">{left === 0 ? "none left" : `${left} left`}</span>
-      {it.window && left > 0 && <span className="text-ink-tertiary">· book {fmtDate(it.window[0])}–{fmtDate(it.window[1])}</span>}
-    </li>
+    <div className="flex items-center gap-2.5 min-w-0">
+      <Ring left={left} of={of} color={color} />
+      <div className="min-w-0">
+        <div className="text-xs font-semibold text-ink-primary truncate">{it.text.replace(/ × \d+$/, "")}</div>
+        <div className="text-[11px] text-ink-tertiary">{left === 0 ? "none left" : `${left} of ${of} left`}
+          {it.window && left > 0 ? ` · book ${fmtDate(it.window[0])}–${fmtDate(it.window[1])}` : ""}</div>
+      </div>
+    </div>
   );
 }
 
 export function MemberCard({ m, onOpen }: { m: Member; onOpen?: () => void }) {
+  const services = (m.items || []).filter((i) => i.kind === "service");
+  const extras = (m.items || []).filter((i) => i.kind !== "service");
+  const sub = [m.asset, m.billing === "monthly" ? "Monthly" : "Yearly",
+    m.status === "scheduled" ? "" : !m.renews ? `ends ${fmtDate(dayBefore(m.renews_on))}`
+      : m.billing === "monthly" ? `next payment ${fmtDate(m.period_end)}` : `renews ${fmtDate(m.renews_on)}`].filter(Boolean).join(" · ");
+  const Tag = onOpen ? "button" : "div";
   return (
-    <button type="button" onClick={onOpen} className="w-full text-left rounded-2xl border border-slate-200/90 bg-white shadow-clay-sm overflow-hidden hover:border-slate-300 transition">
-      <div className="flex">
-        <div className="w-1.5 shrink-0" style={{ background: m.color }} />
-        <div className="flex-1 p-4">
-          <div className="flex items-start gap-3">
-            <div className="h-9 w-9 shrink-0 rounded-xl grid place-items-center" style={{ background: tint(m.color), color: hueText(m.color) }}><M n="workspace_premium" c="text-[18px]" /></div>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2"><span className="text-sm font-semibold text-ink-primary">{m.plan}</span><StatusPill m={m} /></div>
-              <div className="text-xs text-ink-tertiary leading-snug">{[m.asset, m.billing === "monthly" ? "Monthly" : "Yearly",
-                m.status === "scheduled" ? "" : !m.renews ? `ends ${fmtDate(dayBefore(m.renews_on))}`
-                  : m.billing === "monthly" ? `next payment ${fmtDate(m.period_end)}` : `renews ${fmtDate(m.renews_on)}`].filter(Boolean).join(" · ")}</div>
-            </div>
-            {m.owed ? <span className="text-xs font-semibold text-amber-700">{money(m.owed)} due</span> : null}
-          </div>
-          {!!m.items?.length && <ul className="mt-3 space-y-1.5">{m.items.map((it) => <ItemLine key={it.id} it={it} />)}</ul>}
+    <Tag type={onOpen ? "button" : undefined} onClick={onOpen}
+      className={`block w-full text-left rounded-2xl border border-slate-200/90 bg-white shadow-clay-sm overflow-hidden ${onOpen ? "hover:border-slate-300 transition" : ""}`}>
+      <div className="flex items-start gap-3 px-4 py-3" style={{ background: tint(m.color, 10) }}>
+        <div className="h-10 w-10 shrink-0 rounded-xl grid place-items-center bg-white/70" style={{ color: hueText(m.color) }}><M n="workspace_premium" c="text-[20px]" /></div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2"><span className="text-sm font-semibold text-ink-primary">{m.plan}</span><StatusPill m={m} /></div>
+          <div className="text-xs text-ink-secondary leading-snug">{sub}</div>
         </div>
+        {m.owed ? <span className="shrink-0 rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-semibold text-amber-700 tabular-nums">{money(m.owed)} due</span> : null}
       </div>
-    </button>
+      {(services.length > 0 || extras.length > 0) && (
+        <div className="px-4 py-3 space-y-3">
+          {services.length > 0 && <div className="grid gap-3 sm:grid-cols-2">{services.map((it) => <ServiceRing key={it.id} it={it} color={m.color} />)}</div>}
+          {extras.length > 0 && <div className="flex flex-wrap gap-1.5">{extras.map((it) => (
+            <span key={it.id} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: tint(m.color, 10), color: hueText(m.color) }}>
+              <M n={it.kind === "discount" ? "redeem" : "verified"} c="text-[12px]" />{it.text}</span>))}</div>}
+        </div>
+      )}
+      {m.saved ? <div className="border-t border-slate-100 px-4 py-2 text-[11px] text-emerald-700 font-semibold">Saved {money(m.saved)} this plan year</div> : null}
+    </Tag>
   );
 }
 
@@ -180,21 +203,29 @@ export function SellPlanDialog({ clientId, deviceId, devices, orderId, presetPla
         {plans === null ? <p className="mt-4 text-xs text-ink-tertiary">Loading…</p>
           : plans.length === 0 ? <p className="mt-4 text-sm text-ink-secondary">No plans yet. Set one up in Catalog › Plans.</p> : (<>
           <div className="mt-4 space-y-2">
-            {plans.map((p) => (
-              <button key={p.id} type="button" onClick={() => setPlanId(p.id)} aria-pressed={p.id === planId}
-                className={`w-full text-left rounded-xl border p-3 transition ${p.id === planId ? "border-primary ring-2 ring-primary/15 bg-primary/[0.03]" : "border-slate-200 hover:border-slate-300"}`}>
-                <div className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full" style={{ background: p.color }} />
-                  <span className="text-sm font-semibold text-ink-primary">{p.name}</span><span className="ml-auto text-xs text-ink-tertiary">{priceLine(p)}</span></div>
-                <div className="mt-1 text-xs text-ink-tertiary line-clamp-1">{p.items.map((i) => i.text).join(" · ")}</div>
-              </button>
-            ))}
+            {plans.map((p) => {
+              const on = p.id === planId;
+              return (
+                <button key={p.id} type="button" onClick={() => setPlanId(p.id)} aria-pressed={on}
+                  className={`w-full text-left rounded-xl border p-3 transition flex items-start gap-3 ${on ? "border-primary ring-2 ring-primary/15" : "border-slate-200 hover:border-slate-300"}`}>
+                  <span className="h-9 w-9 shrink-0 rounded-lg grid place-items-center" style={{ background: tint(p.color, 14), color: hueText(p.color) }}><M n="workspace_premium" c="text-[18px]" /></span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-baseline gap-2"><span className="text-sm font-semibold text-ink-primary">{p.name}</span>
+                      <span className="ml-auto text-xs font-semibold text-ink-primary tabular-nums">{priceLine(p)}</span></span>
+                    <span className="block mt-0.5 text-xs text-ink-tertiary line-clamp-2">{p.items.map((i) => i.text).join(" · ")}</span>
+                    {p.value_yearly ? <span className="block mt-1 text-[11px] font-semibold text-emerald-700">Worth {money(p.value_yearly)} a year in services</span> : null}
+                  </span>
+                </button>
+              );
+            })}
           </div>
           {plan && plan.price_monthly && plan.price_yearly ? (
             <div className="mt-4 grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1 text-xs font-semibold">
               {(["monthly", "yearly"] as const).map((b) => (
                 <button key={b} type="button" onClick={() => setBilling(b)} aria-pressed={billing === b}
                   className={`h-9 rounded-lg transition ${billing === b ? "bg-white shadow-sm text-ink-primary" : "text-ink-tertiary"}`}>
-                  {b === "monthly" ? `${money(plan.price_monthly!)} a month` : `${money(plan.price_yearly!)} a year`}
+                  {b === "monthly" ? `${money(plan.price_monthly!)} a month`
+                    : `${money(plan.price_yearly!)} a year${plan.price_monthly! * 12 > plan.price_yearly! ? ` · save ${money(plan.price_monthly! * 12 - plan.price_yearly!)}` : ""}`}
                 </button>
               ))}
             </div>

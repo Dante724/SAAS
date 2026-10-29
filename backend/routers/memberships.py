@@ -123,6 +123,8 @@ async def _service_names(db: AsyncSession, org_id: str, ids: list[str]) -> dict:
 async def _plan_out(db: AsyncSession, p: MembershipPlan) -> dict:
     items = await svc.plan_items(db, p.id)
     names = await _service_names(db, p.org_id, [i.service_id for i in items if i.service_id])
+    prices = dict((await db.execute(select(Service.id, Service.price).where(
+        Service.id.in_([i.service_id for i in items if i.service_id] or ["-"])))).all())
     members = (await db.execute(select(func.count()).select_from(Membership).where(
         Membership.plan_id == p.id, Membership.status.in_(svc.LIVE)))).scalar_one()
     return {
@@ -131,6 +133,9 @@ async def _plan_out(db: AsyncSession, p: MembershipPlan) -> dict:
         "price_yearly": p.price_yearly, "term": p.term, "season_start": p.season_start,
         "season_end": p.season_end, "presale_days": p.presale_days, "late_join": p.late_join,
         "color": p.color, "active": p.active, "members": members,
+        # What the included services would cost a non-member over a year (the plan's "worth").
+        "value_yearly": round(sum(float(prices.get(i.service_id) or 0) * (i.qty or 0)
+                                  for i in items if i.kind == "service"), 2),
         "items": [{"id": i.id, "kind": i.kind, "service_id": i.service_id, "label": i.label,
                    "service_name": names.get(i.service_id), "qty": i.qty, "pct": i.pct,
                    "applies_to": i.applies_to, "window_start": i.window_start,
@@ -154,6 +159,11 @@ async def _membership_out(db: AsyncSession, m: Membership, *, detail: bool = Fal
     unpaid = (await db.execute(select(func.coalesce(func.sum(MembershipPeriod.amount), 0)).where(
         MembershipPeriod.membership_id == m.id, MembershipPeriod.paid_at.is_(None),
         MembershipPeriod.due_on <= date.today()))).scalar_one() or 0
+    saved = (await db.execute(select(func.coalesce(func.sum(MembershipUsage.value), 0)).where(
+        MembershipUsage.membership_id == m.id, MembershipUsage.term_start == m.term_start))).scalar_one() or 0
+    oldest_due = (await db.execute(select(func.min(MembershipPeriod.due_on)).where(
+        MembershipPeriod.membership_id == m.id, MembershipPeriod.paid_at.is_(None),
+        MembershipPeriod.due_on <= date.today()))).scalar_one()
     row = {
         "id": m.id, "plan_id": plan.id, "plan": plan.name, "color": plan.color,
         "client_id": m.client_id, "client": client.name if client else "",
@@ -162,7 +172,13 @@ async def _membership_out(db: AsyncSession, m: Membership, *, detail: bool = Fal
         "starts_on": m.term_start.isoformat(), "period_end": m.period_end.isoformat(),
         "ended_on": m.ended_on.isoformat() if m.ended_on else None, "ended_reason": m.ended_reason,
         "manager_id": m.manager_id, "unpaid": bool(unpaid),
+        "attention": None,
     }
+    if show_money:
+        row["saved"] = float(saved)
+    if m.status in svc.LIVE and oldest_due and unpaid:
+        days = (date.today() - oldest_due).days
+        row["attention"] = {"kind": "unpaid", "text": "Payment due today" if days == 0 else f"Unpaid {days} day{'s' if days != 1 else ''}"}
     if show_money:
         row.update({"price": m.price, "owed": float(unpaid)})
     if detail or m.status in svc.LIVE:
@@ -179,6 +195,11 @@ async def _membership_out(db: AsyncSession, m: Membership, *, detail: bool = Fal
                 win = svc.window_around(it, m.term_start)
                 if win:
                     entry["window"] = [win[0].isoformat(), (win[1] - timedelta(days=1)).isoformat()]
+                    closes = win[1] - timedelta(days=1)
+                    if row["attention"] is None and entry["left"] > 0 and win[0] <= date.today() <= closes \
+                            and (closes - date.today()).days <= 30:
+                        row["attention"] = {"kind": "window",
+                                            "text": f"{entry['text'].split(' × ')[0]} not booked · closes {closes:%d %b}"}
             items.append(entry)
         row["items"] = items
     if detail and show_money:
@@ -310,7 +331,23 @@ async def list_memberships(
         Membership, Membership.id == MembershipPeriod.membership_id).where(
         Membership.org_id == current.org_id, Membership.status.in_(svc.LIVE),
         MembershipPeriod.paid_at.is_(None), MembershipPeriod.due_on <= today))).scalar_one()
-    return {"items": [await _membership_out(db, m, show_money=money) for m in rows], "counts": counts}
+    totals = None
+    if money:
+        live = (await db.execute(select(Membership.billing, Membership.price, Membership.status, Membership.term_end,
+                                        Membership.renews).where(
+            Membership.org_id == current.org_id, Membership.status.in_(svc.LIVE)))).all()
+        owed = (await db.execute(select(func.coalesce(func.sum(MembershipPeriod.amount), 0)).join(
+            Membership, Membership.id == MembershipPeriod.membership_id).where(
+            Membership.org_id == current.org_id, Membership.status.in_(svc.LIVE),
+            MembershipPeriod.paid_at.is_(None), MembershipPeriod.due_on <= today))).scalar_one() or 0
+        totals = {
+            # Monthly recurring revenue: active plans only; a yearly plan counts a twelfth.
+            "mrr": round(sum(float(p or 0) / (12 if b == "yearly" else 1) for b, p, st, _, _ in live if st == "active"), 2),
+            "renewing_value": round(sum(float(p or 0) for b, p, st, end, rn in live
+                                        if rn and end <= today + timedelta(days=30)), 2),
+            "owed": float(owed),
+        }
+    return {"items": [await _membership_out(db, m, show_money=money) for m in rows], "counts": counts, "totals": totals}
 
 
 @router.get("/for")
@@ -367,6 +404,8 @@ async def for_order(order_id: str, db: AsyncSession = Depends(get_db),
     if not plans and await has_perm(db, current, "can_sell_memberships"):
         org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one()
         offer = await svc.offer_for_order(db, org, order)
+        if offer:
+            offer["order_total"] = float(order.total or 0)
     return {"plans": plans, "coverable": coverable, "client_id": order.client_id, "device_id": order.device_id,
             "can_apply": await has_perm(db, current, "can_apply_membership_benefits"), "offer": offer}
 

@@ -5,28 +5,42 @@ import { useMe } from "../../context/Me";
 import { money } from "../orders/types";
 import { tint, hueText } from "../../lib/tint";
 import { type Member, MemberCard, StatusPill, fmtDate } from "./shared";
+import PageSummary from "../../components/PageSummary";
+import { Avatar } from "../orders/look";
 
 // Contacts › Memberships: the list a manager works from. Five filters, one row per plan, and a
 // side panel with what's left, the payments and the few changes a plan needs.
 
 type View = "all" | "renewing" | "unpaid" | "paused" | "former";
+// Renewing and Unpaid are the summary numbers above; the chips keep the rest.
 const VIEWS: { k: View; label: string }[] = [
-  { k: "all", label: "All members" }, { k: "renewing", label: "Renewing soon" }, { k: "unpaid", label: "Unpaid" },
-  { k: "paused", label: "Paused" }, { k: "former", label: "Former" },
+  { k: "all", label: "All members" }, { k: "paused", label: "Paused" }, { k: "former", label: "Former" },
 ];
 
 export default function MembershipsView({ q = "" }: { q?: string }) {
   const [view, setView] = useState<View>("all");
-  const [data, setData] = useState<{ items: Member[]; counts: Record<string, number> } | null>(null);
+  type Totals = { mrr: number; renewing_value: number; owed: number } | null;
+  const [data, setData] = useState<{ items: Member[]; counts: Record<string, number>; totals?: Totals } | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [n, setN] = useState(0);
   useEffect(() => {
     const qs = new URLSearchParams({ view, ...(q.trim() ? { q: q.trim() } : {}) });
-    api.get<{ items: Member[]; counts: Record<string, number> }>(`/memberships?${qs}`).then(setData).catch(() => setData({ items: [], counts: {} }));
+    api.get<{ items: Member[]; counts: Record<string, number>; totals?: Totals }>(`/memberships?${qs}`).then(setData).catch(() => setData({ items: [], counts: {} }));
   }, [view, q, n]);
 
+  const c = data?.counts || {};
+  const t = data?.totals;
+  const go = (v: View) => () => setView(v);
   return (
     <div className="space-y-4">
+      {data && (
+        <PageSummary stats={[
+          { label: "Active members", value: c.all ?? 0, hint: c.paused ? `${c.paused} paused` : "on a plan today", onClick: go("all"), active: view === "all" },
+          ...(t ? [{ label: "Monthly recurring", value: money(Math.round(t.mrr)), hint: "yearly plans count a twelfth" }] : []),
+          { label: "Renewing in 30 days", value: t ? money(Math.round(t.renewing_value)) : (c.renewing ?? 0), zero: !c.renewing, hint: c.renewing ? `${c.renewing} member${c.renewing === 1 ? "" : "s"}` : "none this month", onClick: go("renewing"), active: view === "renewing" },
+          { label: "Unpaid", value: t ? money(t.owed) : (c.unpaid ?? 0), hint: `${c.unpaid ?? 0} member${c.unpaid === 1 ? "" : "s"}`, tone: "bad" as const, zero: !(c.unpaid), onClick: go("unpaid"), active: view === "unpaid" },
+        ]} />
+      )}
       <div className="flex flex-wrap gap-2">
         {VIEWS.map((v) => {
           const c = data?.counts?.[v.k];
@@ -51,10 +65,15 @@ export default function MembershipsView({ q = "" }: { q?: string }) {
         )}
         {data?.items.map((m) => (
           <button key={m.id} onClick={() => setOpen(m.id)} className="w-full text-left flex items-center gap-3 px-4 py-3 border-t border-slate-100 first:border-t-0 hover:bg-slate-50/70">
-            <div className="h-9 w-9 shrink-0 rounded-xl grid place-items-center" style={{ background: tint(m.color), color: hueText(m.color) }}><M n="workspace_premium" c="text-[17px]" /></div>
+            <Avatar name={m.client} size={36} />
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-semibold text-ink-primary truncate">{m.client}</div>
-              <div className="text-xs text-ink-tertiary truncate">{[m.plan, m.asset, m.billing === "monthly" ? "Monthly" : "Yearly"].filter(Boolean).join(" · ")}</div>
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-sm font-semibold text-ink-primary truncate">{m.client}</span>
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-px text-[11px] font-semibold" style={{ background: tint(m.color, 12), color: hueText(m.color) }}>
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: m.color }} />{m.plan}</span>
+              </div>
+              <div className="text-xs text-ink-tertiary truncate">{[m.asset, m.billing === "monthly" ? "Monthly" : "Yearly"].filter(Boolean).join(" · ")}</div>
+              {m.attention && <div className="mt-0.5 inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700"><M n="schedule" c="text-[12px]" />{m.attention.text}</div>}
             </div>
             <div className="hidden sm:block text-right text-xs text-ink-tertiary">
               {view === "former" ? `Ended ${fmtDate(m.ended_on)}` : m.status === "scheduled" ? ""
@@ -108,6 +127,7 @@ export function MembershipDrawer({ id, onClose, onChanged }: { id: string; onClo
       <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
       <div className="relative h-full w-full max-w-[520px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90">
         <header className="px-6 py-4 border-b border-slate-200/90 flex items-center gap-2">
+          {m && <Avatar name={m.client} size={44} />}
           <div className="min-w-0"><div className="text-base font-semibold text-ink-primary truncate">{m?.client || "Membership"}</div>
             {m && <div className="text-xs text-ink-tertiary">Member since {fmtDate(m.starts_on)}</div>}</div>
           <button aria-label="Close" onClick={onClose} className="ml-auto h-8 w-8 rounded-full grid place-items-center text-ink-tertiary hover:bg-slate-100"><M n="close" c="text-lg" /></button>
@@ -115,10 +135,11 @@ export function MembershipDrawer({ id, onClose, onChanged }: { id: string; onClo
         <div className="flex-1 overflow-y-auto bg-canvas p-6 space-y-4">
           {m && <MemberCard m={m} />}
           {m && (m.paid != null || m.value_given != null) && (
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-2xl bg-white border border-slate-200/90 p-4"><div className="text-[11px] font-bold text-ink-tertiary">Paid</div><div className="text-lg font-semibold tabular-nums">{money(m.paid || 0)}</div></div>
-              <div className="rounded-2xl bg-white border border-slate-200/90 p-4"><div className="text-[11px] font-bold text-ink-tertiary">Work given</div><div className="text-lg font-semibold tabular-nums">{money(m.value_given || 0)}</div></div>
-            </div>
+            <PageSummary stats={[
+              { label: "Paid so far", value: money(m.paid || 0), hint: m.owed ? `${money(m.owed)} due now` : "all settled" },
+              { label: "Saved so far", value: money(m.value_given || 0), tone: "good", zero: !m.value_given,
+                hint: (m.paid || 0) > 0 && (m.value_given || 0) > (m.paid || 0) ? "more than they've paid" : "work covered by the plan" },
+            ]} />
           )}
           {!!m?.periods?.length && (
             <div className="rounded-2xl bg-white border border-slate-200/90 overflow-hidden">
