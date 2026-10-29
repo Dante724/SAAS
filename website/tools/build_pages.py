@@ -56,7 +56,7 @@ PAGES = [
         ],
         "photo": ("iphone-mat", "An iPhone opened up for repair on a blue work mat", 'Photo: Unsplash (<a href="https://unsplash.com/license" rel="noopener license">Unsplash License</a>)'),
         "more_faq": [
-            ("How much does phone repair software cost?", "Tekly starts at $29 a month for up to 2 people. Shop is $69 a month for 8 people and adds inventory and barcode scanning; Pro is $129 and adds purchase orders, payroll and AI estimate drafting. Every trial includes all Pro features for 14 days with no card."),
+            ("How much does phone repair software cost?", "Tekly starts at $29 a month for up to 2 people. Shop is $69 a month for 4 people and adds inventory and barcode scanning; Pro is $129 and adds purchase orders, payroll and AI estimate drafting. Every trial includes all Pro features for 14 days with no card."),
             ("Can I move my customers and devices from my current system?", "Yes. Send an export from your current system or spreadsheets and we bring customers, devices and stock across, free on every plan. You can take your first job the day you sign up."),
             ("Do customers get updates without calling the shop?", "Yes. Each repair has a tracking link with status, photos and the ready time, and updates go out by SMS, WhatsApp or email."),
         ],
@@ -92,7 +92,7 @@ PAGES = [
         ],
         "photo": ("mechanic-stool", "A mechanic on a low wooden stool working on the front brake of a raised pickup truck", 'Photo: <a href="https://commons.wikimedia.org/wiki/File:DSC_6745_A_mechanic_sitting_on_a_small_wooden_stool_working_on_the_front_suspension_of_a_raised_pickup_truck_in_a_garage.jpg" rel="noopener">PattayaPatrol</a>, CC BY-SA 4.0 (<a href="https://creativecommons.org/licenses/by-sa/4.0" rel="noopener license">licence</a>)'),
         "more_faq": [
-            ("How much does auto repair shop software cost with Tekly?", "Plans start at $29 a month for up to 2 people. Shop is $69 a month for 8 people across your locations and adds inventory, scanning, the time clock and reports; Pro is $129 and adds purchase orders, payroll and commissions, AI estimate drafting and sending invoices to QuickBooks Online. Prices are published and month to month."),
+            ("How much does auto repair shop software cost with Tekly?", "Plans start at $29 a month for up to 2 people. Shop is $69 a month for 4 people across your locations and adds inventory, scanning, the time clock and reports; Pro is $129 and adds purchase orders, payroll and commissions, AI estimate drafting and sending invoices to QuickBooks Online. Prices are published and month to month."),
             ("Can I switch from Shopmonkey or another shop system?", "Yes. Send an export from your current system or spreadsheets and we bring customers, vehicles and stock across, free on every plan."),
             ("Does Tekly work with QuickBooks?", "Yes. On Pro, Tekly sends invoices and payments to QuickBooks Online. It doesn't bring changes made in QuickBooks back into Tekly."),
         ],
@@ -283,7 +283,7 @@ def page(p):
 
 <section class="sec sec-tight">
   <div class="wrap"><div class="sub-price rv">
-    <div><p class="eyebrow">Pricing</p><h2 class="h-sub">Plans from $29 a month.</h2><p class="lede">Solo is $29 for up to 2 people. Shop is $69 for 8 people shared across locations ($49 per extra location, $4 per extra person) and adds inventory, scanning, the time clock and reports. Pro is $129 for the first location ($79 each extra) with no limits, plus purchase orders, payroll, AI estimate drafting and QuickBooks Online export. Every trial includes all Pro features for 14 days, no card.</p></div>
+    <div><p class="eyebrow">Pricing</p><h2 class="h-sub">Plans from $29 a month.</h2><p class="lede">Solo is $29 for up to 2 people. Shop is $69 for 4 people shared across locations ($49 per extra location, $6 per extra person) and adds inventory, scanning, the time clock and reports. Pro is $129 for the first location ($79 each extra) with 8 people, plus purchase orders, payroll, AI estimate drafting and QuickBooks Online export. Every trial includes all Pro features for 14 days, no card.</p></div>
     <div class="sub-price-ctas"><a class="btn btn-brand btn-lg" data-app="signup" data-cta="pricing_trial" href="/#start">Start free trial</a><a class="link" href="/pricing/">Compare plans</a></div>
   </div></div>
 </section>
@@ -446,7 +446,7 @@ def compare_page(c):
     url = f"{DOMAIN}/compare/tekly-vs-{c['slug']}/"
     name = c["name"]
     faq = [
-        (f"Is Tekly cheaper than {name}?", f"Going by published prices as of {CHECKED}: Tekly starts at $29 a month (Solo, up to 2 people), or $69 for 8 people on Shop. {name}'s published starting price is {c['rows'][0][2]}. Compare what your whole team would pay, including extra people and locations."),
+        (f"Is Tekly cheaper than {name}?", f"Going by published prices as of {CHECKED}: Tekly starts at $29 a month (Solo, up to 2 people), or $69 for 4 people on Shop. {name}'s published starting price is {c['rows'][0][2]}. Compare what your whole team would pay, including extra people and locations."),
         (f"What is a good alternative to {name}?", f"It depends on your trade and team. Tekly is an alternative to {name} for {c['alt_for']}: published prices from $29 a month, a 14-day free trial with no card, and free data migration. The comparison above lists where {name} may suit you better."),
         (f"Can I switch from {name} to Tekly?", f"Yes. Send an export from {name} or your spreadsheets and Tekly brings customers, devices or vehicles and stock across, free on every plan. You can take your first job the day you sign up."),
         (f"Where do these {name} details come from?", f"From {name}'s own public website, checked on {CHECKED}. Prices and features change, so check their site for current terms."),
@@ -573,7 +573,7 @@ MULTI = {
     "lead": "Two counters across town, a depot and a storefront, or a phone shop next to a boatyard: Tekly runs every location and every trade in one account, with one login.",
     "faq": [
         ("How is multi-location pricing worked out?", "You pay for the first location on your plan, then a flat price for each extra one: Shop is $69 a month plus $49 per extra location, Pro is $129 a month plus $79 per extra location. Solo covers one location."),
-        ("Can my team work at more than one location?", "Yes. On Shop, 8 team members are shared across all your locations, and each extra person is $4 a month. Pro has no limit on people."),
+        ("Can my team work at more than one location?", "Yes. Team members are shared across all your locations: 4 on Shop and 8 on Pro, and each extra person is $6 a month."),
         ("Can I move stock between locations?", "Every location on Shop and Pro keeps its own stock, bins and serial numbers. Transfers between locations are on Pro."),
         ("Can each location run a different trade?", "Yes. Use the Electronics, Vehicles, Tools & small engine and Marine templates side by side in one account."),
         ("Can I see each location's numbers separately?", "Yes. Profit per job, per technician and per location is always current, and roles limit who sees what."),
@@ -588,8 +588,8 @@ def multi_location_page():
     plans = {x["id"]: x for x in cfg["plans"]}
     shop, pro = plans["shop"], plans["pro"]
     cost = lambda pl, n: pl["monthly"] + (n - 1) * pl["extraLocation"]
-    rows = "".join(f'<tr><th scope="row">{n} location{"s" if n > 1 else ""}</th><td>${cost(shop, n):,}/mo <span class="dim">· 8 people shared</span></td>'
-                   f'<td>${cost(pro, n):,}/mo <span class="dim">· unlimited people</span></td></tr>' for n in (1, 2, 3, 5))
+    rows = "".join(f'<tr><th scope="row">{n} location{"s" if n > 1 else ""}</th><td>${cost(shop, n):,}/mo <span class="dim">· 4 people shared</span></td>'
+                   f'<td>${cost(pro, n):,}/mo <span class="dim">· 8 people shared</span></td></tr>' for n in (1, 2, 3, 5))
     ld = [{"@context": "https://schema.org", "@type": "WebPage", "name": p["h1"], "url": url, "description": p["desc"],
            "isPartOf": {"@id": DOMAIN + "/#website"}, "about": {"@id": DOMAIN + "/#software"}},
           crumbs_ld([("Tekly", DOMAIN + "/"), (p["h1"], url)]), faq_ld(p["faq"])]
@@ -602,7 +602,7 @@ def multi_location_page():
       <p class="lede rv">Add a location when you open one. Customers, jobs and history stay in the same account, so the owner sees the whole business and each counter sees its own work.</p></div>
     <div class="ai-grid" style="grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr))">
       <article class="card rv"><h3>Several trades, one login</h3><p>Use the Electronics, Vehicles, Tools &amp; small engine and Marine templates side by side.</p></article>
-      <article class="card rv"><h3>Team seats that travel</h3><p>Shop's 8 team members are shared across your locations. Pro has no limit.</p></article>
+      <article class="card rv"><h3>Team seats that travel</h3><p>Shop's 4 team members and Pro's 8 are shared across your locations.</p></article>
       <article class="card rv"><h3>Stock per site</h3><p>Each location keeps its own stock, bins and serial numbers. Pro moves stock between them.</p></article>
       <article class="card rv"><h3>Numbers for each location</h3><p>Profit per job, per technician and per location, with roles that limit who sees what.</p></article>
     </div>
@@ -618,7 +618,7 @@ def multi_location_page():
       <thead><tr><th scope="col">Locations</th><th scope="col">Shop</th><th scope="col">Pro</th></tr></thead>
       <tbody>{rows}</tbody>
     </table></div>
-    <p class="fine-print">Shop adds ${shop["extraSeat"]} a month for each person past 8. Pro adds purchase orders, payroll, stock transfers between locations and AI estimate drafting. <a class="link" href="/pricing/">Compare plans</a></p>
+    <p class="fine-print">Each extra person is ${shop["extraSeat"]} a month, past 4 on Shop or 8 on Pro. Pro adds purchase orders, payroll, stock transfers between locations and AI estimate drafting. <a class="link" href="/pricing/">Compare plans</a></p>
   </div>
 </section>
 
