@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Checkin, CheckinPoint, Device, Employee, Lead, Location, WorkOrderType
 from backend.services import checkin as svc
-from backend.services.auth import assert_perm, get_current_employee, require_perm
+from backend.services.auth import get_current_employee, require_perm
 
 router = APIRouter(prefix="/api/checkins", tags=["checkins"])
 
@@ -162,10 +162,9 @@ async def no_show(cid: str, db: AsyncSession = Depends(get_db),
 
 @router.post("/{cid}/convert")
 async def convert(cid: str, db: AsyncSession = Depends(get_db),
-                  current: Employee = Depends(get_current_employee)):
+                  current: Employee = Depends(require_perm("can_create_tickets"))):
     """Make the work order with everything the customer entered. Doing it twice returns the
     same job."""
-    await assert_perm(db, current, "can_create_tickets")
     c = await _own(db, current, cid)
     return await svc.convert(db, c, actor=current)
 
