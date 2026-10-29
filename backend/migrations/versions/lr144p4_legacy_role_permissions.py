@@ -84,6 +84,11 @@ REAL_CODES = frozenset({
     "can_use_sense_suggestions", "can_approve_agent_sends", "can_approve_rec_for_customer",
     "can_view_own_payroll",
 })
+# Plus whatever the catalog holds when this runs. Branches that add codes (kits, memberships…)
+# may migrate before this one; their codes are real, so a role's grants for them must survive.
+from backend.services.permissions import ALL_CODES as _CATALOG  # noqa: E402
+
+REAL_CODES = REAL_CODES | frozenset(_CATALOG)
 
 # legacy area -> (codes denied when the area is "read", extra codes denied when it is "none").
 # "none" denies both tuples.
