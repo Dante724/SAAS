@@ -69,17 +69,12 @@ async def _reset_rate_limits():
     # The in-process rate limiters count every test's requests as one client IP within a 60s window,
     # so a fast run (e.g. Postgres without the per-test rebuild) trips the app-wide 600/min limit
     # partway through and unrelated tests get 429s. Start each test with empty counters.
-    from backend.core.observability import RateLimitMiddleware
+    # RateLimitMiddleware counts through services.ratelimit here, so clearing _HITS covers it too.
     from backend.core.webhook_security import lookup_limiter
     from backend.services import ratelimit
 
     ratelimit._HITS.clear()
     lookup_limiter.reset()
-    node = app.middleware_stack   # built on the first request; None before that
-    while node is not None:
-        if isinstance(node, RateLimitMiddleware):
-            node._hits.clear()
-        node = getattr(node, "app", None)
     yield
 
 
