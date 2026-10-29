@@ -701,6 +701,8 @@ async def _post_refund(db: AsyncSession, ch: TerminalCharge, amount: float, ref:
             await post_contact_ledger(db, ch.org_id, o.client_id, "refund", abs(amount),
                                       note=f"Card refund for {o.order_number}", ref_type="payment",
                                       ref_id=rp.id, created_by_id=actor_id)
+        from backend.services.order_money import resync_write_off   # dropped job: no debt comes back
+        await resync_write_off(db, o, actor_id)
         await log_system_event(db, ch.org_id, "order", o.id, f"Card reader refund {amount:.2f}")
     else:
         s = (await db.execute(select(Sale).where(Sale.id == ch.sale_id))).scalar_one()

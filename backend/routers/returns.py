@@ -142,6 +142,8 @@ async def create_refund(
                 await post_contact_ledger(db, current.org_id, order.client_id, "refund", abs(data.amount),
                                           note=f"Refund for {order.order_number}", ref_type="refund",
                                           ref_id=refund.id, created_by_id=current.id)
+            from backend.services.order_money import resync_write_off   # dropped job: no debt comes back
+            await resync_write_off(db, order, current.id)
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "refund", refund.id,
                            f"Refund {data.amount:g} from {acct.name}")

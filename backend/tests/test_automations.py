@@ -56,7 +56,7 @@ async def test_status_change_creates_task(client, tenant):
     # no task yet
     assert (await client.get(f"/api/tasks?order_id={oid}", headers=tenant)).json()["items"] == []
     # transition into the trigger status
-    r = await client.patch(f"/api/orders/{oid}/status", json={"status": key}, headers=tenant)
+    r = await client.patch(f"/api/orders/{oid}/status", json={"status": key, "reason": "Test"}, headers=tenant)
     assert r.status_code == 200, r.text
     tasks = (await client.get(f"/api/tasks?order_id={oid}", headers=tenant)).json()["items"]
     assert any(t["title"] == "Prep pickup" for t in tasks)
@@ -73,13 +73,13 @@ async def test_conditions_gate_firing(client, tenant):
 
     # cheap order — condition fails, no tag
     cheap = await _order(client, tenant, lines=[{"line_type": "part", "description": "cable", "qty": 1, "unit_price": 5}])
-    await client.patch(f"/api/orders/{cheap}/status", json={"status": key}, headers=tenant)
+    await client.patch(f"/api/orders/{cheap}/status", json={"status": key, "reason": "Test"}, headers=tenant)
     o1 = (await client.get(f"/api/orders/{cheap}", headers=tenant)).json()
     assert "high-value" not in ((o1.get("custom_data") or {}).get("tags") or [])
 
     # pricey order — condition passes, tag applied
     rich = await _order(client, tenant, lines=[{"line_type": "part", "description": "board", "qty": 1, "unit_price": 250}])
-    await client.patch(f"/api/orders/{rich}/status", json={"status": key}, headers=tenant)
+    await client.patch(f"/api/orders/{rich}/status", json={"status": key, "reason": "Test"}, headers=tenant)
     o2 = (await client.get(f"/api/orders/{rich}", headers=tenant)).json()
     assert "high-value" in ((o2.get("custom_data") or {}).get("tags") or [])
 
@@ -91,7 +91,7 @@ async def test_test_endpoint_dry_run(client, tenant):
         "name": "match ready", "event": "status_changed", "trigger_status": key,
         "action_type": "create_task", "action_config": {}}, headers=tenant)).json()["id"]
     oid = await _order(client, tenant)
-    await client.patch(f"/api/orders/{oid}/status", json={"status": key}, headers=tenant)
+    await client.patch(f"/api/orders/{oid}/status", json={"status": key, "reason": "Test"}, headers=tenant)
     res = (await client.get(f"/api/automations/{rid}/test", headers=tenant)).json()
     assert res["would_match"] >= 1
 
