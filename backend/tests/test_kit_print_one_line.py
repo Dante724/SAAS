@@ -181,7 +181,9 @@ async def test_two_kits_correct_to_the_cent(client, tenant):
     oid, cid, _gid = await _job_with_kit_and_charger(client, tenant, s, qty=2)
     assert (await k.order(client, tenant, oid))["total"] == round(149.99 * 2 + 25, 2)
     inv = await k.invoice_lines(client, tenant, await k.invoice(client, tenant, oid, cid))
-    assert inv[0] == {"description": "Screen Replacement", "qty": 2, "unit_price": 149.99, "total": 299.98, "kit": True}
+    # Line order isn't fixed on Postgres, so find the kit line rather than reading inv[0].
+    assert [ln for ln in inv if ln.get("kit")] == [
+        {"description": "Screen Replacement", "qty": 2, "unit_price": 149.99, "total": 299.98, "kit": True}]
     assert await k.stock(client, tenant, s.screen) == 8
 
 
