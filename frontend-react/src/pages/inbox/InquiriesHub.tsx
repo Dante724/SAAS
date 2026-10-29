@@ -112,7 +112,7 @@ export default function InquiriesHub() {
             <button onClick={() => setView("walkins")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1.5 ${view === "walkins" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="how_to_reg" c="text-xs" />Walk-ins</button>
           </div>
           <button onClick={() => setShowTypes(true)} className="h-[30px] px-3 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100 flex items-center gap-1"><M n="label" c="text-sm" />Types</button>
-          <p className="text-[11px] text-ink-tertiary ml-1">Missed calls show up here on their own. Convert one to open a job.</p>
+          {view !== "walkins" && <p className="text-[11px] text-ink-tertiary ml-1">Missed calls show up here on their own. Convert one to open a job.</p>}
         </div>
 
         {view === "walkins" && <WalkinsView />}

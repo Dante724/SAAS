@@ -19,7 +19,7 @@ export type Form = {
 };
 type Page = {
   shop: { name: string; logo?: string | null; color?: string | null };
-  location: { name: string; phone?: string | null }; point: { name: string; kiosk: boolean };
+  location: { name: string; phone?: string | null }; point: { name: string; kiosk: boolean; closed?: boolean };
   mode: "walk_in" | "key_drop"; form: Form; waiting: number; wait_min: number | null;
 };
 type Done = { status_token: string; queue_no: number; kind: string; ahead: number; wait_min: number | null; texted: boolean };
@@ -86,12 +86,26 @@ function Shell({ shop, children }: { shop?: Page["shop"]; children: React.ReactN
 
 const input = "w-full h-11 rounded-[10px] border border-slate-300 bg-white px-3 text-[15px] text-ink-primary dark:bg-slate-900";
 const label = "block text-[13px] font-medium text-ink-secondary mb-1";
+const chip = "h-10 rounded-full border border-slate-300 bg-white px-4 text-[14px] font-medium text-ink-primary dark:border-slate-600 dark:bg-slate-900";
+
+/** One step of the form as a card, so a long template reads as four short parts. */
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white/70 p-4 dark:border-slate-700 dark:bg-white/5">
+      <h2 className="mb-3 text-[15px] font-semibold">{title}</h2>
+      <div className="grid grid-cols-2 gap-x-3 gap-y-4">{children}</div>
+    </section>
+  );
+}
+const wide = "col-span-2";
 
 function FieldInput({ f, value, onChange }: { f: Field; value: unknown; onChange: (v: unknown) => void }) {
   const id = `f-${f.key}`;
   const v = value == null ? "" : String(value);
+  // Short answers (make, year, plate…) sit two to a row; free text and long labels take the full width.
+  const full = f.type === "textarea" || f.type === "bool" || f.label.length > 22;
   return (
-    <div>
+    <div className={full ? wide : undefined}>
       <label htmlFor={id} className={label}>{f.label}{f.required ? " *" : ""}</label>
       {f.type === "select" ? (
         <select id={id} value={v} onChange={(e) => onChange(e.target.value)} className={input}>
@@ -133,6 +147,7 @@ function SignaturePad({ onChange }: { onChange: (png: string | null) => void }) 
   return (
     <div>
       {/* Always white, like paper: dark ink stays visible in dark mode and the saved signature has a white background. */}
+      <div className="mb-1 text-[13px] font-medium text-ink-secondary">Sign with your finger</div>
       <canvas ref={ref} aria-label="Sign here" style={{ background: "#ffffff" }} className="h-[140px] w-full touch-none rounded-lg border-[1.5px] border-dashed border-slate-400" />
       <button type="button" onClick={clear} className="mt-1 text-[13px] font-medium text-ink-secondary underline">Clear signature</button>
     </div>
@@ -266,101 +281,112 @@ export default function PublicCheckin({ token }: { token: string }) {
     );
   }
 
+  const intro = form.welcome_text || (!keyDrop ? `${page.location.name} · We'll text you when it's your turn.`
+    : page.point.closed ? `${page.location.name} is closed right now. Leave your details here and your keys in the drop box.`
+      : "Leave your details here and your keys in the drop box.");
+
   return (
     <Shell shop={shop}>
       <h1 className="text-[22px] font-semibold">{keyDrop ? "Dropping off keys" : "Check in"}</h1>
       <p className="mt-1 text-[14px] text-ink-secondary">
-        {form.welcome_text || (keyDrop ? `${page.location.name} is closed right now. Leave your details and your keys in the drop box.`
-          : `${page.location.name} · We'll text you when it's your turn.`)}
+        {intro}
         {!keyDrop && page.wait_min ? ` About ${page.wait_min} min wait.` : ""}
       </p>
 
       <div className="mt-5 space-y-4">
-        {form.job_types.length > 1 && (
-          <fieldset>
-            <legend className={label}>What do you need? *</legend>
-            <div className="flex flex-wrap gap-2">
-              {form.job_types.map((t) => (
-                <button key={t.id} type="button" aria-pressed={jobType === t.id} onClick={() => setJobType(t.id)}
-                  className="h-10 rounded-full border px-4 text-[14px] font-medium"
-                  style={jobType === t.id ? { background: accent, color: onAccent, borderColor: accent } : undefined}>{t.name}</button>
-              ))}
+        <Section title={`Your ${form.asset_label.toLowerCase()}`}>
+          {form.groups.length > 1 && (
+            <fieldset className={wide}>
+              <legend className={label}>What are we looking at?</legend>
+              <div className="flex flex-wrap gap-2">
+                {form.groups.map((x) => (
+                  <button key={x.key} type="button" aria-pressed={group === x.key} onClick={() => setGroup(x.key)} className={chip}
+                    style={group === x.key ? { background: accent, color: onAccent, borderColor: accent } : undefined}>{x.label}</button>
+                ))}
+              </div>
+            </fieldset>
+          )}
+
+          <div className={wide}>
+            <label htmlFor="ci-ident" className={label}>{ID_LABEL[idKind] || "Serial number"}</label>
+            <div className="flex gap-2">
+              <input id="ci-ident" value={ident} onChange={(e) => setIdent(e.target.value)} onBlur={() => identify(ident)}
+                className={input} autoCapitalize="characters" />
+              <ScanButton onScan={(code) => { setIdent(code); identify(code); }} title={`Scan the ${ID_LABEL[idKind] || "code"}`} />
             </div>
-          </fieldset>
-        )}
+            <div className="mt-1 text-[12px] text-ink-tertiary">{decoded || ID_HINT[idKind] || ""}</div>
+          </div>
 
-        {form.groups.length > 1 && (
-          <fieldset>
-            <legend className={label}>What are we looking at?</legend>
-            <div className="flex flex-wrap gap-2">
-              {form.groups.map((x) => (
-                <button key={x.key} type="button" aria-pressed={group === x.key} onClick={() => setGroup(x.key)}
-                  className="h-10 rounded-full border px-4 text-[14px] font-medium"
-                  style={group === x.key ? { background: accent, color: onAccent, borderColor: accent } : undefined}>{x.label}</button>
-              ))}
+          {form.fields.map((f) => <FieldInput key={f.key} f={f} value={answers[f.key]} onChange={(v) => setAnswer(f.key, v)} />)}
+
+          {form.reading && (
+            <div>
+              <label htmlFor="ci-reading" className={label}>{form.reading.label}</label>
+              <input id="ci-reading" value={reading} onChange={(e) => setReading(e.target.value)} inputMode="numeric" className={input} />
             </div>
-          </fieldset>
-        )}
+          )}
+        </Section>
 
-        <div>
-          <label htmlFor="ci-ident" className={label}>{ID_LABEL[idKind] || "Serial number"}</label>
-          <div className="flex gap-2">
-            <input id="ci-ident" value={ident} onChange={(e) => setIdent(e.target.value)} onBlur={() => identify(ident)}
-              className={input} autoCapitalize="characters" />
-            <ScanButton onScan={(code) => { setIdent(code); identify(code); }} title={`Scan the ${ID_LABEL[idKind] || "code"}`} />
+        <Section title="What's going on">
+          {form.job_types.length > 1 && (
+            <fieldset className={wide}>
+              <legend className={label}>What do you need? *</legend>
+              <div className="flex flex-wrap gap-2">
+                {form.job_types.map((t) => (
+                  <button key={t.id} type="button" aria-pressed={jobType === t.id} onClick={() => setJobType(t.id)} className={chip}
+                    style={jobType === t.id ? { background: accent, color: onAccent, borderColor: accent } : undefined}>{t.name}</button>
+                ))}
+              </div>
+            </fieldset>
+          )}
+
+          {extraFields.map((f) => <FieldInput key={f.key} f={f} value={answers[f.key]} onChange={(v) => setAnswer(f.key, v)} />)}
+
+          <div className={wide}>
+            <label htmlFor="ci-issue" className={label}>What's wrong? *</label>
+            <textarea id="ci-issue" value={issue} onChange={(e) => setIssue(e.target.value)} className={`${input} h-24 py-2`} />
           </div>
-          <div className="mt-1 text-[12px] text-ink-tertiary">{decoded || ID_HINT[idKind] || ""}</div>
-        </div>
 
-        {form.fields.map((f) => <FieldInput key={f.key} f={f} value={answers[f.key]} onChange={(v) => setAnswer(f.key, v)} />)}
+          {keyDrop && (<>
+            <div>
+              <label htmlFor="ci-tag" className={label}>Key tag number</label>
+              <input id="ci-tag" value={keyTag} onChange={(e) => setKeyTag(e.target.value)} className={input} />
+            </div>
+            <div className={wide}>
+              <div className={label}>Photo of the dashboard{form.require_photo ? " *" : ""}</div>
+              <label className="inline-flex h-11 cursor-pointer items-center rounded-[10px] border border-slate-300 bg-white px-4 text-[14px] font-medium dark:border-slate-600 dark:bg-slate-900">
+                {photos.length ? "Add another photo" : "Take a photo"}
+                <input id="ci-photo" type="file" accept="image/*" capture="environment" onChange={(e) => addPhoto(e.target.files)} className="sr-only" />
+              </label>
+              {photos.length > 0 && <div className="mt-1 text-[12px] text-ink-tertiary">{photos.length} photo{photos.length > 1 ? "s" : ""} added</div>}
+            </div>
+          </>)}
+        </Section>
 
-        {form.reading && (
-          <div>
-            <label htmlFor="ci-reading" className={label}>{form.reading.label}</label>
-            <input id="ci-reading" value={reading} onChange={(e) => setReading(e.target.value)} inputMode="numeric" className={input} />
+        <Section title="About you">
+          <div className={wide}>
+            <label htmlFor="ci-name" className={label}>Your name *</label>
+            <input id="ci-name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" className={input} />
           </div>
-        )}
-
-        {extraFields.map((f) => <FieldInput key={f.key} f={f} value={answers[f.key]} onChange={(v) => setAnswer(f.key, v)} />)}
-
-        <div>
-          <label htmlFor="ci-issue" className={label}>What's wrong? *</label>
-          <textarea id="ci-issue" value={issue} onChange={(e) => setIssue(e.target.value)} className={`${input} h-24 py-2`} />
-        </div>
-
-        {keyDrop && (<>
-          <div>
-            <label htmlFor="ci-tag" className={label}>Key tag number</label>
-            <input id="ci-tag" value={keyTag} onChange={(e) => setKeyTag(e.target.value)} className={input} />
+          <div className={wide}>
+            <label htmlFor="ci-phone" className={label}>Mobile *</label>
+            <input id="ci-phone" value={phone} onChange={(e) => setPhone(e.target.value)} type="tel" autoComplete="tel" className={input} />
           </div>
-          <div>
-            <label htmlFor="ci-photo" className={label}>Photo of the dashboard{form.require_photo ? " *" : ""}</label>
-            <input id="ci-photo" type="file" accept="image/*" capture="environment" onChange={(e) => addPhoto(e.target.files)} className="text-[14px]" />
-            {photos.length > 0 && <div className="mt-1 text-[12px] text-ink-tertiary">{photos.length} photo{photos.length > 1 ? "s" : ""} added</div>}
+          <div className={wide}>
+            <label htmlFor="ci-email" className={label}>Email</label>
+            <input id="ci-email" value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoComplete="email" className={input} />
           </div>
-        </>)}
+        </Section>
 
-        <div>
-          <label htmlFor="ci-name" className={label}>Your name *</label>
-          <input id="ci-name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" className={input} />
-        </div>
-        <div>
-          <label htmlFor="ci-phone" className={label}>Mobile *</label>
-          <input id="ci-phone" value={phone} onChange={(e) => setPhone(e.target.value)} type="tel" autoComplete="tel" className={input} />
-        </div>
-        <div>
-          <label htmlFor="ci-email" className={label}>Email</label>
-          <input id="ci-email" value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoComplete="email" className={input} />
-        </div>
+        <Section title="Agree and sign">
+          <div className={wide}>
+            <div className="max-h-32 overflow-y-auto whitespace-pre-line rounded-lg border border-slate-200 bg-white p-3 text-[13px] text-ink-secondary dark:border-slate-700 dark:bg-slate-900">{form.terms}</div>
+            <div className="mt-3"><SignaturePad onChange={setSig} /></div>
+            <label className="mt-3 flex items-start gap-2.5 text-[15px]"><input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} className="mt-0.5 h-5 w-5 flex-shrink-0" />I agree to the shop's terms</label>
+          </div>
+        </Section>
 
-        <div>
-          <div className={label}>Shop terms</div>
-          <div className="max-h-32 overflow-y-auto whitespace-pre-line rounded-lg border border-slate-200 bg-white p-3 text-[13px] text-ink-secondary dark:bg-slate-900">{form.terms}</div>
-          <div className="mt-3"><SignaturePad onChange={setSig} /></div>
-          <label className="mt-2 flex items-start gap-2 text-[14px]"><input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} className="mt-1" />I agree to the shop's terms</label>
-        </div>
-
-        {err && <p role="alert" className="text-[14px] text-rose-700">{err}</p>}
+        {err && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-[14px] text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">{err}</p>}
         <button type="button" onClick={submit} disabled={busy}
           className="h-12 w-full rounded-xl text-[16px] font-semibold disabled:opacity-60" style={{ background: accent, color: onAccent }}>
           {busy ? "Checking in…" : keyDrop ? "Leave my keys" : "Check in"}

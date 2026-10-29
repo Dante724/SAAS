@@ -18,7 +18,7 @@ type JobType = { id: string; name: string };
 type Loc = { id: string; name: string };
 
 const MODES: [Point["mode"], string][] = [
-  ["auto", "Automatic: walk-in when open, key drop when closed"], ["walk_in", "Walk-in queue"], ["key_drop", "Key drop only"],
+  ["auto", "Automatic (follows opening hours)"], ["walk_in", "Walk-in queue"], ["key_drop", "Key drop only"],
 ];
 
 function PointCard({ p, types, canEdit, onSaved, onFlash }: { p: Point; types: JobType[]; canEdit: boolean; onSaved: (p: Point) => void; onFlash: (m: string) => void }) {
@@ -64,6 +64,7 @@ function PointCard({ p, types, canEdit, onSaved, onFlash }: { p: Point; types: J
           <select id={`mode-${p.id}`} value={f.mode} disabled={!canEdit} onChange={(e) => set({ mode: e.target.value as Point["mode"] })} className={inp}>
             {MODES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
           </select>
+          {f.mode === "auto" && <p className="mt-1 text-[11px] text-ink-tertiary">Walk-in queue while open, key drop when closed.</p>}
         </div>
         <div>
           <div className="block font-semibold text-ink-secondary mb-1">Job types offered</div>
@@ -76,17 +77,18 @@ function PointCard({ p, types, canEdit, onSaved, onFlash }: { p: Point; types: J
               </label>
             ))}
           </div>
-          <p className="mt-1 text-[11px] text-ink-tertiary">None ticked: the default job type. Fields ticked "Ask at check-in" on these job types appear on the form.</p>
+          <p className="mt-1 text-[11px] text-ink-tertiary">None ticked uses the default job type.</p>
         </div>
       </div>
       <div>
         <label htmlFor={`welcome-${p.id}`} className="block font-semibold text-ink-secondary mb-1">Welcome text (optional)</label>
-        <input id={`welcome-${p.id}`} value={f.welcome_text} disabled={!canEdit} onChange={(e) => set({ welcome_text: e.target.value })} placeholder="Check in and we'll text you when it's your turn." className={inp} />
+        <input id={`welcome-${p.id}`} value={f.welcome_text} disabled={!canEdit} onChange={(e) => set({ welcome_text: e.target.value })} placeholder="Shown under the heading" className={inp} />
       </div>
       <div className="flex flex-wrap gap-x-5 gap-y-1.5">
-        <label className="flex items-center gap-1.5"><input type="checkbox" disabled={!canEdit} checked={f.kiosk} onChange={(e) => set({ kiosk: e.target.checked })} />Counter tablet (clears after each customer; staff sign-in to exit)</label>
-        <label className="flex items-center gap-1.5"><input type="checkbox" disabled={!canEdit} checked={f.show_wait} onChange={(e) => set({ show_wait: e.target.checked })} />Show estimated wait</label>
-        <label className="flex items-center gap-1.5"><input type="checkbox" disabled={!canEdit} checked={f.require_photo} onChange={(e) => set({ require_photo: e.target.checked })} />Key drop needs a dashboard photo</label>
+        {/* Only the options this mode can use: a key-drop-only point has no queue, a walk-in-only point no key drops. */}
+        {f.mode !== "key_drop" && <label className="flex items-center gap-1.5"><input type="checkbox" disabled={!canEdit} checked={f.kiosk} onChange={(e) => set({ kiosk: e.target.checked })} />Counter tablet (clears after each customer; staff sign-in to exit)</label>}
+        {f.mode !== "key_drop" && <label className="flex items-center gap-1.5"><input type="checkbox" disabled={!canEdit} checked={f.show_wait} onChange={(e) => set({ show_wait: e.target.checked })} />Show estimated wait</label>}
+        {f.mode !== "walk_in" && <label className="flex items-center gap-1.5"><input type="checkbox" disabled={!canEdit} checked={f.require_photo} onChange={(e) => set({ require_photo: e.target.checked })} />Key drop needs a dashboard photo</label>}
         <label className="flex items-center gap-1.5"><input type="checkbox" disabled={!canEdit} checked={f.active} onChange={(e) => set({ active: e.target.checked })} />Active</label>
       </div>
       {canEdit && (
@@ -127,10 +129,10 @@ export default function CheckinPointsSettings() {
 
   return (
     <section className="max-w-4xl space-y-4 pb-10">
-      <div className="flex items-start gap-3">
-        <div>
+      <div className="flex flex-wrap items-start gap-3">
+        <div className="min-w-0 flex-1 basis-64">
           <h2 className="text-base font-semibold text-ink-primary">Self check-in</h2>
-          <p className="text-xs text-ink-tertiary">Customers scan a QR at the door, key box or counter tablet and check themselves in. Each point has its own code. Check-ins appear in Inquiries › Walk-ins.</p>
+          <p className="text-xs text-ink-tertiary">Customers scan a QR at the door, key box or counter tablet and check themselves in. Each point has its own code. Check-ins appear in Inquiries › Walk-ins. To ask job-specific questions, tick "Self check-in" on a field in Settings › Forms.</p>
         </div>
         {canEdit && <button onClick={() => setAdd({ location_id: locs[0]?.id || "", name: "", mode: "walk_in" })} className="ml-auto h-9 px-3.5 rounded-xl bg-ink-primary text-white text-xs font-semibold flex-shrink-0 flex items-center gap-1.5"><M n="add" c="text-sm" />Add check-in point</button>}
       </div>

@@ -128,7 +128,8 @@ async def checkin_page(token: str, db: AsyncSession = Depends(get_db)):
         "shop": {"name": org.name, "logo": getattr(org, "logo_data", None),
                  "color": getattr(org, "brand_primary_color", None)},
         "location": {"name": loc.name if loc else "", "phone": getattr(loc, "phone", None) if loc else None},
-        "point": {"name": point.name, "kiosk": bool(point.kiosk)},
+        "point": {"name": point.name, "kiosk": bool(point.kiosk),
+                  "closed": point.mode == "auto" and mode == "key_drop"},
         "mode": mode, "form": form, "waiting": waiting, "wait_min": wait,
     }
 
