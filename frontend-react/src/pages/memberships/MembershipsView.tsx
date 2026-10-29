@@ -57,7 +57,8 @@ export default function MembershipsView({ q = "" }: { q?: string }) {
               <div className="text-xs text-ink-tertiary truncate">{[m.plan, m.asset, m.billing === "monthly" ? "Monthly" : "Yearly"].filter(Boolean).join(" · ")}</div>
             </div>
             <div className="hidden sm:block text-right text-xs text-ink-tertiary">
-              {view === "former" ? `Ended ${fmtDate(m.ended_on)}` : m.status === "scheduled" ? "" : `${m.renews ? "Renews" : "Ends"} ${fmtDate(m.renews_on)}`}
+              {view === "former" ? `Ended ${fmtDate(m.ended_on)}` : m.status === "scheduled" ? ""
+                : m.billing === "monthly" && m.renews ? `Next payment ${fmtDate(m.period_end)}` : `${m.renews ? "Renews" : "Ends"} ${fmtDate(m.renews_on)}`}
             </div>
             {m.owed ? <span className="text-xs font-semibold text-amber-700 tabular-nums">{money(m.owed)}</span> : null}
             <StatusPill m={m} />

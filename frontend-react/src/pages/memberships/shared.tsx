@@ -77,7 +77,8 @@ export function MemberCard({ m, onOpen }: { m: Member; onOpen?: () => void }) {
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2"><span className="text-sm font-semibold text-ink-primary">{m.plan}</span><StatusPill m={m} /></div>
               <div className="text-xs text-ink-tertiary leading-snug">{[m.asset, m.billing === "monthly" ? "Monthly" : "Yearly",
-                m.status === "scheduled" ? "" : m.renews ? `renews ${fmtDate(m.renews_on)}` : `ends ${fmtDate(dayBefore(m.renews_on))}`].filter(Boolean).join(" · ")}</div>
+                m.status === "scheduled" ? "" : !m.renews ? `ends ${fmtDate(dayBefore(m.renews_on))}`
+                  : m.billing === "monthly" ? `next payment ${fmtDate(m.period_end)}` : `renews ${fmtDate(m.renews_on)}`].filter(Boolean).join(" · ")}</div>
             </div>
             {m.owed ? <span className="text-xs font-semibold text-amber-700">{money(m.owed)} due</span> : null}
           </div>

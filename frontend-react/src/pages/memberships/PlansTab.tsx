@@ -86,7 +86,8 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Omit<Plan, "id" | "membe
   useEffect(() => { api.get<{ items: Svc[] }>("/catalog/services").then((r) => setSvcs(r.items || [])).catch(() => {}); }, []);
   const set = (patch: Partial<typeof p>) => setP((x) => ({ ...x, ...patch }));
   const setItem = (i: number, patch: Partial<PlanItem>) => set({ items: p.items.map((it, j) => (j === i ? { ...it, ...patch } : it)) });
-  const inp = "glass-input w-full h-10 rounded-xl px-3 text-sm";
+  const box = "glass-input h-10 rounded-xl px-3 text-sm";
+  const inp = `${box} w-full`;
   const lbl = "block text-[11px] font-bold text-ink-tertiary mb-1";
 
   async function save() {
@@ -133,20 +134,20 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Omit<Plan, "id" | "membe
                 <div key={i} className="rounded-xl border border-slate-200 p-3">
                   <div className="flex items-center gap-2">
                     {it.kind === "service" ? (<>
-                      <select aria-label="Included service" value={it.service_id || ""} onChange={(e) => setItem(i, { service_id: e.target.value, label: svcs.find((s) => s.id === e.target.value)?.name || "" })} className={`${inp} flex-1`}>
+                      <select aria-label="Included service" value={it.service_id || ""} onChange={(e) => setItem(i, { service_id: e.target.value, label: svcs.find((s) => s.id === e.target.value)?.name || "" })} className={`${box} min-w-0 flex-1`}>
                         <option value="">Choose a service…</option>
                         {svcs.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                       </select>
                       <span className="text-xs text-ink-tertiary">×</span>
-                      <input aria-label="Times per year" inputMode="numeric" value={it.qty} onChange={(e) => setItem(i, { qty: Math.max(0, Number(e.target.value) || 0) })} className={`${inp} w-16 text-center`} />
+                      <input aria-label="Times per year" inputMode="numeric" value={it.qty} onChange={(e) => setItem(i, { qty: Math.max(0, Number(e.target.value) || 0) })} className={`${box} w-16 shrink-0 text-center`} />
                     </>) : it.kind === "discount" ? (<>
-                      <input aria-label="Discount percent" inputMode="decimal" value={it.pct} onChange={(e) => setItem(i, { pct: Number(e.target.value) || 0 })} className={`${inp} w-20 text-center`} />
+                      <input aria-label="Discount percent" inputMode="decimal" value={it.pct} onChange={(e) => setItem(i, { pct: Number(e.target.value) || 0 })} className={`${box} w-20 shrink-0 text-center`} />
                       <span className="text-xs text-ink-tertiary">% off</span>
-                      <select aria-label="Discount applies to" value={it.applies_to} onChange={(e) => setItem(i, { applies_to: e.target.value as PlanItem["applies_to"] })} className={`${inp} flex-1`}>
+                      <select aria-label="Discount applies to" value={it.applies_to} onChange={(e) => setItem(i, { applies_to: e.target.value as PlanItem["applies_to"] })} className={`${box} min-w-0 flex-1`}>
                         <option value="labour">labour</option><option value="parts">parts</option><option value="both">labour and parts</option>
                       </select>
                     </>) : (
-                      <input aria-label="Perk" value={it.label} onChange={(e) => setItem(i, { label: e.target.value })} placeholder="Priority slot when the yard is busy" className={`${inp} flex-1`} />
+                      <input aria-label="Perk" value={it.label} onChange={(e) => setItem(i, { label: e.target.value })} placeholder="Priority slot when the yard is busy" className={`${box} min-w-0 flex-1`} />
                     )}
                     <button aria-label="Remove" onClick={() => set({ items: p.items.filter((_, j) => j !== i) })} className="h-8 w-8 rounded-lg grid place-items-center text-ink-tertiary hover:bg-slate-100"><M n="close" c="text-base" /></button>
                   </div>
