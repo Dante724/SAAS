@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { M } from "./Shell";
 
 /**
  * Date / time / datetime field. Drop-in replacement for the native
@@ -39,11 +40,11 @@ function joinVal(mode: Mode, date: string, time: string): string {
 function pad(n: number) { return String(n).padStart(2, "0"); }
 function ymd(d: Date) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
 
+// The app's date format ("Oct 29, 2026"). A bare date is read as local midnight, not UTC.
 function fmtDate(iso: string): string {
   if (!iso) return "";
-  const [y, m, d] = iso.split("-").map(Number);
-  if (!y || !m || !d) return "";
-  return `${d} ${MONTHS[m - 1]} ${y}`;
+  const d = new Date(iso.length <= 10 ? iso + "T00:00" : iso);
+  return isNaN(d.getTime()) ? "" : d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
 }
 function fmtTime(hm: string): string {
   if (!hm) return "";
@@ -64,6 +65,7 @@ export default function DateField({
   placeholder,
   min,
   disabled = false,
+  label: ariaName,
 }: {
   mode?: Mode;
   value: string;
@@ -72,6 +74,7 @@ export default function DateField({
   placeholder?: string;
   min?: string; // "YYYY-MM-DD" lower bound for date selection
   disabled?: boolean;
+  label?: string; // accessible name when the field has no visible <label>
 }) {
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<View>("days");
@@ -169,7 +172,7 @@ export default function DateField({
         <>
           <div className="flex items-center justify-between mb-2">
             <button type="button" aria-label="Previous" onClick={() => shift(-1)} className={navBtn}>
-              <span className="material-symbols-outlined text-lg">chevron_left</span>
+              <M n="chevron_left" c="text-lg" />
             </button>
             <div className="flex items-center gap-0.5">
               {view === "days" && (
@@ -182,7 +185,7 @@ export default function DateField({
               </button>
             </div>
             <button type="button" aria-label="Next" onClick={() => shift(1)} className={navBtn}>
-              <span className="material-symbols-outlined text-lg">chevron_right</span>
+              <M n="chevron_right" c="text-lg" />
             </button>
           </div>
 
@@ -237,7 +240,7 @@ export default function DateField({
 
       {showTime && (
         <div className={`flex items-center gap-2 ${showCal ? "mt-3 pt-3 border-t border-slate-100" : ""}`}>
-          <span className="material-symbols-outlined text-base text-ink-tertiary">schedule</span>
+          <M n="schedule" c="text-base text-ink-tertiary" />
           <select aria-label="Hour" value={th ?? "09"} onChange={(e) => pickTime(`${e.target.value}:${tm ?? "00"}`)} className="glass-input rounded-lg px-2 py-1.5 text-sm text-ink-primary">
             {Array.from({ length: 24 }, (_, h) => <option key={h} value={pad(h)}>{pad(h)}</option>)}
           </select>
@@ -266,12 +269,13 @@ export default function DateField({
         type="button"
         disabled={disabled}
         aria-haspopup="dialog"
+        aria-label={ariaName ? `${ariaName}: ${label}` : undefined}
         aria-expanded={open}
         onClick={toggle}
         className={`glass-input rounded-xl px-3 py-2 text-sm w-full flex items-center justify-between gap-2 text-left disabled:opacity-50 disabled:cursor-not-allowed ${empty ? "text-ink-tertiary" : "text-ink-primary"}`}
       >
         <span className="truncate">{label}</span>
-        <span className="material-symbols-outlined text-[18px] text-ink-tertiary shrink-0">{mode === "time" ? "schedule" : "calendar_today"}</span>
+        <M n={mode === "time" ? "schedule" : "calendar_today"} c="text-lg text-ink-tertiary shrink-0" />
       </button>
       {popover}
     </div>
