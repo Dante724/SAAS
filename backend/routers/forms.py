@@ -90,6 +90,7 @@ class FieldIn(BaseModel):
     show_on_print: bool = False
     show_on_job_card: Optional[bool] = None   # None = leave as is (older editors don't send it)
     show_in_portal: Optional[bool] = None
+    ask_at_checkin: Optional[bool] = None   # self check-in: ask the customer this field
     autofill_source: Optional[str] = None
     placeholder: Optional[str] = None
     options: List[str] = []
@@ -129,6 +130,7 @@ class EntityFieldIn(BaseModel):
     show_on_print: bool = False
     show_on_job_card: Optional[bool] = None   # None = leave as is (older editors don't send it)
     show_in_portal: Optional[bool] = None
+    ask_at_checkin: Optional[bool] = None   # self check-in: ask the customer this field
     autofill_source: Optional[str] = None
     placeholder: Optional[str] = None
     options: List[str] = []
@@ -162,6 +164,7 @@ def _ser_field(f: CustomField) -> dict:
         "show_on_print": getattr(f, "show_on_print", False),
         "show_on_job_card": getattr(f, "show_on_job_card", True) is not False,
         "show_in_portal": bool(getattr(f, "show_in_portal", False)),
+        "ask_at_checkin": bool(getattr(f, "ask_at_checkin", False)),
         "autofill_source": getattr(f, "autofill_source", None),
         "placeholder": f.placeholder,
         "options": f.options or [], "directory_key": getattr(f, "directory_key", None),
@@ -194,6 +197,10 @@ def _apply_shows_on(f: CustomField, data) -> None:
         f.show_in_portal = data.show_in_portal
     elif f.show_in_portal is None:
         f.show_in_portal = False
+    if getattr(data, "ask_at_checkin", None) is not None:
+        f.ask_at_checkin = data.ask_at_checkin
+    elif f.ask_at_checkin is None:
+        f.ask_at_checkin = False
 
 
 def _apply_upsell_cfg(f: CustomField, data) -> None:
