@@ -130,13 +130,68 @@ async def test_required_field_internal_field_and_signature(client, tenant):
 
 
 @pytest.mark.asyncio
-async def test_same_phone_again_updates_its_check_in(client, tenant):
+async def test_same_phone_never_takes_over_a_check_in_without_its_token(client, tenant):
     s = await _setup(client, tenant)
     url = f"/api/public/checkin/{s['token']}"
     a = (await client.post(url, json=_body(s))).json()
-    b = (await client.post(url, json=_body(s, issue="Also the handbrake"))).json()
-    assert b["updated"] is True and b["status_token"] == a["status_token"] and b["queue_no"] == a["queue_no"]
-    assert len((await client.get("/api/checkins", headers=tenant)).json()["waiting"]) == 1
+    # Someone who only knows the phone number gets a check-in of their own, not Sam's
+    b = (await client.post(url, json=_body(s, name="Mallory", issue="Hijack"))).json()
+    assert b["updated"] is False and b["status_token"] != a["status_token"] and b["queue_no"] != a["queue_no"]
+    sam = (await client.get(f"/api/public/checkin/s/{a['status_token']}")).json()
+    assert sam["first_name"] == "Sam" and "Hijack" not in sam["summary"]["issue"]
+    # The owner, sending their status token, updates their own
+    c = (await client.post(url, json=_body(s, issue="Also the handbrake", status_token=a["status_token"]))).json()
+    assert c["updated"] is True and c["status_token"] == a["status_token"] and c["queue_no"] == a["queue_no"]
+    assert len((await client.get("/api/checkins", headers=tenant)).json()["waiting"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_signature_must_be_a_real_png_and_caps_hold(client, tenant, monkeypatch):
+    from backend.routers import checkin_public as cp
+    from backend.services import ratelimit
+    s = await _setup(client, tenant)
+    url = f"/api/public/checkin/{s['token']}"
+    fake = "data:image/png;base64," + __import__("base64").b64encode(b"<svg onload=x>").decode()
+    assert (await client.post(url, json=_body(s, signature=fake))).status_code == 422
+    assert (await client.post(url, json=_body(s, signature="data:image/png;base64,!!"))).status_code == 422
+    ratelimit._HITS.clear()        # (the per-IP submit limit counts those two)
+    # One IP can't text an endless list of numbers
+    codes = [(await client.post(url, json=_body(s, phone=f"+1 555 010 00{i:02d}"))).status_code for i in range(6)]
+    assert codes[:5] == [201] * 5 and codes[5] == 429
+    # A point takes so many check-ins a day
+    monkeypatch.setattr(cp, "MAX_PER_POINT_DAY", 5)
+    ratelimit._HITS.clear()
+    r = await client.post(url, json=_body(s, phone="+1 555 019 9999"))
+    assert r.status_code == 429 and "ask at the counter" in r.text
+
+
+@pytest.mark.asyncio
+async def test_location_scoped_role_sees_only_its_locations(client, tenant):
+    s = await _setup(client, tenant)
+    st = (await client.post(f"/api/public/checkin/{s['token']}", json=_body(s))).json()
+    item = (await client.get("/api/checkins", headers=tenant)).json()["waiting"][0]
+    other = (await client.post("/api/staff/locations", json={"name": "Elsewhere"}, headers=tenant)).json()["id"]
+    rid = await client.post("/api/settings/rbac/roles", json={
+        "name": f"R-{uuid.uuid4().hex[:4]}", "location_scope": "selected", "location_ids": [other],
+        "permissions": {"can_create_tickets": True, "can_manage_settings": True}}, headers=tenant)
+    assert rid.status_code == 201, rid.text
+    email = f"tm-{uuid.uuid4().hex[:8]}@t.dev"
+    r = await client.post("/api/staff/employees", json={
+        "name": "Tm", "email": email, "password": "pw-test-12345", "role_id": rid.json()["id"]}, headers=tenant)
+    assert r.status_code == 201, r.text
+    tok = await client.post("/api/auth/token", data={"username": email, "password": "pw-test-12345"})
+    T = {"Authorization": f"Bearer {tok.json()['access_token']}"}
+    assert (await client.get("/api/checkins", headers=T)).json()["waiting"] == []
+    assert (await client.get("/api/checkins/count", headers=T)).json()["waiting"] == 0
+    assert (await client.get(f"/api/checkins?location_id={s['loc']['id']}", headers=T)).status_code == 403
+    assert (await client.post(f"/api/checkins/{item['id']}/call", headers=T)).status_code == 403
+    assert (await client.post(f"/api/checkins/{item['id']}/convert", headers=T)).status_code == 403
+    assert (await client.get(f"/api/checkins/by-code/{st['status_token']}", headers=T)).status_code == 403
+    assert (await client.put(f"/api/checkins/points/{s['point']['id']}", json=s["point"],
+                             headers=T)).status_code == 403
+    assert (await client.get(f"/api/checkins/points/{s['point']['id']}/qr.svg", headers=T)).status_code == 403
+    pts = (await client.get("/api/checkins/points", headers=T)).json()["items"]
+    assert pts and all(p["location_id"] == other for p in pts)
 
 
 @pytest.mark.asyncio

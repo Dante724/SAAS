@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Checkin, CheckinPoint, Device, Employee, Lead, Location, WorkOrderType
 from backend.services import checkin as svc
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import check_location_access, get_current_employee, require_perm
 
 router = APIRouter(prefix="/api/checkins", tags=["checkins"])
 
@@ -25,11 +25,21 @@ def _public_base() -> str:
     return (getattr(settings, "PUBLIC_BASE_URL", "") or "").rstrip("/")
 
 
+async def _allowed_locs(db: AsyncSession, current: Employee) -> Optional[list]:
+    """Location ids the role may see; None = all (no role, or scope "all")."""
+    from backend.services.scoping import _ids, role_for
+    role = await role_for(db, current)
+    if not role or (role.location_scope or "all") != "selected":
+        return None
+    return _ids(role.location_ids)
+
+
 async def _own(db: AsyncSession, current: Employee, cid: str) -> Checkin:
     c = (await db.execute(select(Checkin).where(
         Checkin.id == cid, Checkin.org_id == current.org_id))).scalar_one_or_none()
     if not c:
         raise HTTPException(404, "Check-in not found")
+    await check_location_access(db, current, c.location_id)
     return c
 
 
@@ -39,8 +49,10 @@ async def _location_for(db: AsyncSession, current: Employee, location_id: Option
             Location.id == location_id, Location.org_id == current.org_id))).scalar_one_or_none()
         if not ok:
             raise HTTPException(404, "Location not found")
+        await check_location_access(db, current, location_id)
         return location_id
-    return current.location_id
+    allowed = await _allowed_locs(db, current)   # a home location outside the role falls back to "all I may see"
+    return current.location_id if allowed is None or current.location_id in allowed else None
 
 
 async def _item(db: AsyncSession, c: Checkin, lead: Lead, points: dict) -> dict:
@@ -81,6 +93,9 @@ async def list_checkins(location_id: Optional[str] = None, db: AsyncSession = De
             (Checkin.kind == "key_drop") & (Checkin.state == "waiting")))
     else:
         q = q.where(Checkin.state.in_(("waiting", "called")))
+        allowed = await _allowed_locs(db, current)
+        if allowed is not None:
+            q = q.where(Checkin.location_id.in_(allowed))
     rows = (await db.execute(q.order_by(Checkin.queue_day, Checkin.queue_no))).all()
     points = {p.id: p.name for p in (await db.execute(select(CheckinPoint).where(
         CheckinPoint.org_id == current.org_id))).scalars().all()}
@@ -104,6 +119,8 @@ async def waiting_count(location_id: Optional[str] = None, db: AsyncSession = De
         Checkin.org_id == current.org_id, Checkin.state == "waiting")
     if loc:
         q = q.where(Checkin.location_id == loc)
+    elif (allowed := await _allowed_locs(db, current)) is not None:
+        q = q.where(Checkin.location_id.in_(allowed))
     return {"waiting": int((await db.execute(q)).scalar() or 0)}
 
 
@@ -117,6 +134,7 @@ async def by_code(code: str, db: AsyncSession = Depends(get_db),
         Checkin.status_token == code, Checkin.org_id == current.org_id))).scalar_one_or_none()
     if not c:
         raise HTTPException(404, "No check-in with that code")
+    await check_location_access(db, current, c.location_id)
     lead = (await db.execute(select(Lead).where(Lead.id == c.lead_id))).scalar_one()
     p = (await db.execute(select(CheckinPoint).where(CheckinPoint.id == c.point_id))).scalar_one()
     return await _item(db, c, lead, {p.id: p.name})
@@ -214,6 +232,7 @@ async def _own_point(db: AsyncSession, current: Employee, pid: str) -> CheckinPo
         CheckinPoint.id == pid, CheckinPoint.org_id == current.org_id))).scalar_one_or_none()
     if not p:
         raise HTTPException(404, "Check-in point not found")
+    await check_location_access(db, current, p.location_id)
     return p
 
 
@@ -223,8 +242,10 @@ async def list_points(db: AsyncSession = Depends(get_db), current: Employee = De
     await db.commit()
     locs = {loc.id: loc.name for loc in (await db.execute(select(Location).where(
         Location.org_id == current.org_id))).scalars().all()}
-    rows = (await db.execute(select(CheckinPoint).where(CheckinPoint.org_id == current.org_id)
-                             .order_by(CheckinPoint.location_id, CheckinPoint.created_at))).scalars().all()
+    q = select(CheckinPoint).where(CheckinPoint.org_id == current.org_id)
+    if (allowed := await _allowed_locs(db, current)) is not None:
+        q = q.where(CheckinPoint.location_id.in_(allowed))
+    rows = (await db.execute(q.order_by(CheckinPoint.location_id, CheckinPoint.created_at))).scalars().all()
     return {"items": [_point_out(p, locs.get(p.location_id, "")) for p in rows]}
 
 
@@ -296,9 +317,12 @@ async def poster(pid: str, db: AsyncSession = Depends(get_db), current: Employee
 
 @router.get("/points/{pid}/qr.svg")
 async def qr(pid: str, db: AsyncSession = Depends(get_db), current: Employee = Depends(get_current_employee)):
+    from urllib.parse import quote
+
     from fastapi.responses import Response
 
     from backend.services.codes import qr_svg
     p = await _own_point(db, current, pid)
+    fname = quote(f"checkin-{p.name}".replace("\\", "_").replace("/", "_")[:120] + ".svg")
     return Response(qr_svg(f"{_public_base()}/c/{p.token}", module=8), media_type="image/svg+xml",
-                    headers={"Content-Disposition": f'attachment; filename="checkin-{p.name}.svg"'})
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{fname}"})

@@ -4,6 +4,8 @@ Everything is reached by a token: a check-in point's QR token, or a check-in's o
 token. The shop and location always come from the token on the server — the page never sends
 an org, location or point id — so one shop's page can't read or write another's queue.
 """
+import base64
+import binascii
 import hashlib
 from datetime import datetime, timedelta
 from typing import Optional
@@ -23,6 +25,10 @@ router = APIRouter(prefix="/api/public/checkin", tags=["public"])
 MAX_SIGNATURE = 400_000          # data-URL characters
 MAX_PHOTO = 7_000_000            # data-URL characters (~5 MB image)
 MAX_PHOTOS = 3
+MAX_PER_POINT_DAY = 150          # new check-ins a point takes per queue day
+MAX_PER_ORG_DAY = 500            # new check-ins a shop takes per 24 h, all points
+MAX_PHONES_PER_IP = 5            # distinct numbers one IP may check in per 24 h (each one is a text)
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
 async def _limit(bucket: str, key: str, limit: int, window: int) -> None:
@@ -33,6 +39,34 @@ async def _limit(bucket: str, key: str, limit: int, window: int) -> None:
 def _ip(request: Request) -> str:
     from backend.services.ratelimit import client_ip
     return client_ip(request)
+
+
+async def _limit_phones_per_ip(ip: str, phone: str) -> None:
+    """Counts each distinct number once per IP: the first sight of (ip, phone) bumps the IP's
+    count, repeats of the same number don't."""
+    try:
+        await _limit("checkin_ip_phone_seen", f"{ip}:{phone}", 1, 86400)
+    except HTTPException:
+        return                                   # seen already: not a new number
+    await _limit("checkin_ip_phones", ip, MAX_PHONES_PER_IP, 86400)
+
+
+def _is_png(data_url: str) -> bool:
+    try:
+        raw = base64.b64decode(data_url.split(",", 1)[1], validate=True)
+    except (binascii.Error, ValueError, IndexError):
+        return False
+    return raw.startswith(PNG_MAGIC)
+
+
+async def _check_caps(db: AsyncSession, point: CheckinPoint, day) -> None:
+    from sqlalchemy import func
+    n_point = (await db.execute(select(func.count()).select_from(Checkin).where(
+        Checkin.point_id == point.id, Checkin.queue_day == day))).scalar() or 0
+    n_org = (await db.execute(select(func.count()).select_from(Checkin).where(
+        Checkin.org_id == point.org_id, Checkin.created_at >= datetime.utcnow() - timedelta(days=1)))).scalar() or 0
+    if n_point >= MAX_PER_POINT_DAY or n_org >= MAX_PER_ORG_DAY:
+        raise HTTPException(429, "Check-in is full for today. Please ask at the counter.")
 
 
 async def _waiting(db: AsyncSession, point: CheckinPoint, day) -> int:
@@ -181,6 +215,7 @@ class CheckinIn(BaseModel):
     identifier_kind: Optional[str] = Field(None, max_length=20)
     identifier: Optional[str] = Field(None, max_length=100)
     reading: Optional[float] = Field(None, ge=0, le=10_000_000)
+    status_token: Optional[str] = Field(None, max_length=100)   # proves it's their own check-in to update
     issue: str = Field("", max_length=2000)
     answers: dict = {}
     signature: Optional[str] = None
@@ -231,6 +266,8 @@ async def submit_checkin(token: str, data: CheckinIn, request: Request, db: Asyn
         raise HTTPException(422, "Sign to agree to the shop's terms")
     if len(data.signature) > MAX_SIGNATURE:
         raise HTTPException(422, "That signature is too large. Clear it and sign again.")
+    if not _is_png(data.signature):
+        raise HTTPException(422, "Sign to agree to the shop's terms")
     if len(data.photos) > MAX_PHOTOS:
         raise HTTPException(422, f"Add up to {MAX_PHOTOS} photos")
     if mode == "key_drop" and point.require_photo and not data.photos:
@@ -241,6 +278,7 @@ async def submit_checkin(token: str, data: CheckinIn, request: Request, db: Asyn
 
     # Counted only once the form is valid, so a customer fixing a mistake isn't locked out.
     await _limit("checkin_phone", f"{point.id}:{phone_digits}", 3, 1800)
+    await _limit_phones_per_ip(ip, phone_digits)
 
     decoded = None
     if ident_value and ident_kind in ("vin", "hin", "imei"):
@@ -251,10 +289,15 @@ async def submit_checkin(token: str, data: CheckinIn, request: Request, db: Asyn
     reading_kind = form["reading"]["key"] if form["reading"] and data.reading is not None else None
     day = await svc.queue_day(db, point.org_id, point.location_id)
 
-    # The same phone checking in again at this point while still waiting updates that check-in.
-    existing = (await db.execute(select(Checkin).join(Lead, Lead.id == Checkin.lead_id).where(
-        Checkin.point_id == point.id, Checkin.queue_day == day, Checkin.state == "waiting",
-        Lead.phone == data.phone.strip()))).scalars().first()
+    # Updating a check-in needs its status token (only its owner has it); a phone number alone
+    # never reaches someone else's place, token or signature: that's a new check-in.
+    existing = None
+    if data.status_token:
+        existing = (await db.execute(select(Checkin).join(Lead, Lead.id == Checkin.lead_id).where(
+            Checkin.status_token == data.status_token, Checkin.point_id == point.id, Checkin.queue_day == day,
+            Checkin.state == "waiting", Lead.phone == data.phone.strip()))).scalars().first()
+    if not existing:
+        await _check_caps(db, point, day)
 
     terms_hash = hashlib.sha256(form["terms"].encode()).hexdigest()
     jt_name = next((t["name"] for t in form["job_types"] if t["id"] == job_type_id), None)
@@ -283,7 +326,10 @@ async def submit_checkin(token: str, data: CheckinIn, request: Request, db: Asyn
     c.signature_png, c.signer_name, c.signer_ip, c.terms_hash = data.signature, name, ip[:64], terms_hash
     c.key_tag = (data.key_tag or "").strip() or None
     if data.photos:
-        blobs = [await media.store(db, point.org_id, p, name="checkin.jpg") for p in data.photos]
+        try:
+            blobs = [await media.store(db, point.org_id, p, name="checkin.jpg") for p in data.photos]
+        except ValueError:
+            raise HTTPException(422, "Photos must be images under 5 MB") from None
         c.photo_ids = [b.id for b in blobs]
 
     if not existing:
@@ -310,7 +356,7 @@ async def submit_checkin(token: str, data: CheckinIn, request: Request, db: Asyn
             else f"{name} checked in, #{c.queue_no}"
         await svc.alert_staff(db, point.org_id, point.location_id, title, f"{asset} · {issue[:80]}")
         place = loc.name if loc else "the shop"
-        body = (f"Thanks, {name.split(' ')[0]}. We've got your keys and details at {place}. "
+        body = (f"Hi, we've got your keys and details at {place}. "   # never the typed name: anyone can type one
                 f"We'll text you once we've looked at it. {svc.status_url(c)}") if mode == "key_drop" else (
                 f"You're checked in at {place}. You're #{c.queue_no}. Track your place: {svc.status_url(c)}")
         texted = await svc.text_customer(db, c, lead.phone, body, "checkin_created")
