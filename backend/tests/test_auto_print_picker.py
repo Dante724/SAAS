@@ -165,3 +165,34 @@ async def test_only_settings_managers_change_it_and_shops_are_separate(client, t
     assert r.status_code == 404
     s = await _sale(client, tenant)
     assert (await client.post(f"/api/documents/auto-print-sale/{s['id']}", headers=oh)).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_auto_print_respects_price_and_invoice_permissions(client, tenant):
+    """A technician who can't see prices or invoices doesn't get them by closing a job."""
+    wo = (await client.post("/api/documents/templates", json={
+        "name": "Job sheet", "doc_type": "work_order", "body_html": "<p>{Order Number}</p>{All Items Table}"},
+        headers=tenant)).json()["id"]
+    inv = (await client.post("/api/documents/templates", json={
+        "name": "Bill", "doc_type": "invoice", "body_html": "<p>{Order Number}</p>{All Items Table}"},
+        headers=tenant)).json()["id"]
+    for tid in (wo, inv):
+        r = await client.put(f"/api/documents/templates/{tid}/auto-print", json={"events": ["close"]}, headers=tenant)
+        assert r.status_code == 200, r.text
+    job = await _job(client, tenant)
+    await client.post(f"/api/orders/{job['id']}/lines", json={"line_type": "labour", "kind": "custom",
+                                                             "description": "Screen fit", "qty": 1, "unit_price": 987}, headers=tenant)
+    role = (await client.post("/api/settings/rbac/roles", json={
+        "name": "Tech", "permissions": {"can_view_item_prices": False, "can_view_invoices": False}}, headers=tenant)).json()["id"]
+    email = f"tech-{uuid.uuid4().hex[:8]}@t.dev"
+    await client.post("/api/staff/employees", json={"name": "Tech", "email": email, "password": "pw-test-12345",
+                                                    "role_id": role}, headers=tenant)
+    tok = (await client.post("/api/auth/token", data={"username": email, "password": "pw-test-12345"})).json()
+    tech = {"Authorization": f"Bearer {tok['access_token']}"}
+    r = await client.post(f"/api/documents/auto-print/{job['id']}?event=close", headers=tech)
+    assert r.status_code == 200, r.text
+    docs = r.json()["docs"]
+    assert [d["name"] for d in docs] == ["Job sheet"]                    # no invoice
+    assert "987" not in docs[0]["html"]                                    # no prices
+    owner = (await client.post(f"/api/documents/auto-print/{job['id']}?event=close", headers=tenant)).json()["docs"]
+    assert sorted(d["name"] for d in owner) == ["Bill", "Job sheet"] and "987" in owner[0]["html"]

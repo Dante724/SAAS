@@ -1776,6 +1776,14 @@ async def auto_print(
     if event not in ("create", "close"):
         raise HTTPException(422, "event must be create or close")
     tpls = await _auto_templates(db, current.org_id, event)
+    # Print only what this person may see: an invoice needs "View invoices" (as when printing by
+    # hand), and line prices are blanked for staff without "View prices".
+    allowed = []
+    for t in tpls:
+        perm = _SAMPLE_PERMS.get(t.doc_type or "")
+        if not perm or await has_perm(db, current, perm):
+            allowed.append(t)
+    tpls = allowed
     if not tpls:
         return {"docs": []}
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
@@ -1795,7 +1803,7 @@ async def auto_print(
             Device.id.in_(asset_ids), Device.org_id == current.org_id))).scalars().all()}
         assets = [by_id[i] for i in asset_ids if i in by_id]
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
-    doc, rows = await _resolve(db, current.org_id, order, current)
+    doc, rows = await _resolve(db, current.org_id, order, current, hide_prices=await _hides_prices(db, current))
     out = []
     from backend.routers.feed import log_system_event
     for tpl in tpls:
