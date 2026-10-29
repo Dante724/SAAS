@@ -1,11 +1,14 @@
 import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
+import { PlanBanner, CheckoutOffer } from "../memberships/WOPlan";
 import RecommendationsPanel from "./RecommendationsPanel";
 import { DeferredWork, MarginNote, ReadyWhy, ServiceDue, TogetherChips } from "../../components/sense/Sense";
 import PartsPOPanel from "./PartsPOPanel";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import Section, { sectionCard } from "../../components/Section";
+import { fmtServerTime } from "../../lib/serverTime";
 import ConversationPanel from "./ConversationPanel";
 import PhotoAnnotator from "./PhotoAnnotator";
 import TagChips from "../../components/TagChips";
@@ -13,6 +16,7 @@ import { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import FloatingMenu from "../../components/FloatingMenu";
 import PrintMenu from "./PrintMenu";
+import { autoPrintIfClosed } from "../../lib/autoPrint";
 import { Order, deviceName, money } from "./types";
 import { Avatar, deviceIcon, dueText, friendlyDate } from "./look";
 import { api, openAuthedDoc } from "../../api/client";
@@ -31,6 +35,8 @@ import JobCardFields from "../../components/JobCardFields";
 import ReaderCharge from "../../components/ReaderCharge";
 import AccountPicker, { type PayAccount, type PaymentOption, accountsFor, pickDefaultAccount } from "../../components/AccountPicker";
 import CardPaymentsList from "../../components/CardPaymentsList";
+import LineQtyEditor from "./LineQtyEditor";
+import AutoPrintPicker from "../../components/AutoPrintPicker";
 import KitGroupHeader from "./KitGroupHeader";
 import { groupKitLines } from "../../lib/kitGroups";
 import { jobTypeLabel, type WOTypeRef } from "./jobType";
@@ -55,6 +61,12 @@ type Timing = {
 };
 type Tab = "general" | "services" | "checklists" | "invoices" | "activity";
 
+// House button and input looks, shared across the drawer.
+const btnPrimary = "h-9 px-3.5 rounded-xl text-xs font-semibold bg-primary text-white hover:brightness-110 transition-all disabled:opacity-50 inline-flex items-center gap-1.5";
+const btnSecondary = "h-9 px-3.5 rounded-xl text-xs font-semibold bg-white text-ink-primary border border-slate-200 hover:bg-slate-50 transition-colors disabled:opacity-50 inline-flex items-center gap-1.5";
+const btnGhost = "h-9 px-3.5 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100 transition-colors";
+const houseInput = "glass-input rounded-xl px-3 py-2 text-sm";
+const menuRow = "w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-50";
 const or = (real: any, sample: string) => (real != null && real !== "" ? String(real) : sample);
 const fmtDT = (iso?: string | null) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
 const fmtDur = (min?: number | null) => {
@@ -86,6 +98,21 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   const canBuy = can("can_manage_inventory");
   const [partsOpen, setPartsOpen] = useState(false);   // ADR-144po: the ⋯ → Parts & purchase orders panel
   const [menuOpen, setMenuOpen] = useState(false);
+  // The ⋯ menu closes on any click outside it (the tab bar sits above the click-catcher) and on Escape.
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menuOpen) return;
+    // Clicks inside a sub-menu opened from it (Auto-print's picker renders in a portal) don't count as outside.
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Element;
+      if (!menuRef.current?.contains(t) && !t.closest?.('[role="menu"]')) setMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMenuOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [menuOpen]);
+  const [watchEditing, setWatchEditing] = useState(false);   // the watch-out editor in the alert area
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
 
   const reload = () => api.get<Detail>(`/orders/${order.id}`).then(setD).catch(() => {});
@@ -105,12 +132,29 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   const [woTypes, setWoTypes] = useState<WOTypeRef[] | null>(null);
   useEffect(() => { api.get<any>("/forms/types").then((r) => setWoTypes(r.items || [])).catch(() => setWoTypes([])); }, []);
 
-  async function changeStatus(key: string) {
-    let reason: string | null = null;
-    { const ds = droppedStatus(statuses as any[], key); if (ds) { reason = await askCancelReason(ds.name); if (reason === null) return; } }
+  // B11: a status that needs something first (a comment, or payment) asks for it right here,
+  // under the header, instead of failing with a message the drawer gave no way to fix.
+  const [gate, setGate] = useState<null | { key: string; name: string; reason?: string; kind: "comment" | "unpaid"; message?: string; canOverride?: boolean }>(null);
+  const [gateText, setGateText] = useState("");
+  async function changeStatus(key: string, extra: { reason?: string; comment?: string; allow_unpaid?: boolean } = {}) {
+    let reason: string | null = extra.reason ?? null;
+    if (reason === null) { const ds = droppedStatus(statuses as any[], key); if (ds) { reason = await askCancelReason(ds.name); if (reason === null) return; } }
+    const target = statuses.find((s) => s.key === key);
+    const name = target?.name || key;
+    if (target?.require_comment && !extra.comment && !((d as any).comments || []).length) {
+      setGateText(""); setGate({ key, name, reason: reason || undefined, kind: "comment" }); return;
+    }
     const prev = d.status; setD({ ...d, status: key });
-    try { await api.patch(`/orders/${order.id}/status`, { status: key, reason: reason || undefined }); flash("Status updated"); onChanged?.(); reload(); }
-    catch (e: any) { setD({ ...d, status: prev }); flash(`Failed: ${e.message}`); }
+    try {
+      const r = await api.patch<any>(`/orders/${order.id}/status`, { status: key, reason: reason || undefined, comment: extra.comment, allow_unpaid: extra.allow_unpaid || undefined });
+      setGate(null); flash("Status updated"); void autoPrintIfClosed(order.id, r); onChanged?.(); reload(); loadLabor();
+    } catch (e: any) {
+      setD({ ...d, status: prev });
+      let detail: any = null; try { detail = JSON.parse(e?.body || "null")?.detail; } catch { /* not JSON */ }
+      if (e?.status === 409 && detail?.code === "comment_required") { setGateText(""); setGate({ key, name, reason: reason || undefined, kind: "comment" }); return; }
+      if (e?.status === 409 && detail?.code === "unpaid") { setGate({ key, name, reason: reason || undefined, kind: "unpaid", message: detail.message, canOverride: !!detail.can_override }); return; }
+      flash(`Failed: ${e.message}`);
+    }
   }
   const nav = useNavigate();
   async function continueLinked() {
@@ -236,6 +280,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   const devTitle = deviceName(d.device) !== "—" ? deviceName(d.device) : (dev.asset_label || "Device");
   const isClosed = !!statuses.find((st) => st.key === d.status && ["closed", "dropped"].includes(st.status_group || ""));
   const due = dueText(d.due_at, !isClosed);
+  const showTiming = !!timing && !timing.is_terminal && (timing.stalled || timing.typical_min != null || !!timing.predicted_ready_at);
+  const hasWatch = watchEditing || !!(d.device?.watch_out || d.client?.watch_out);
 
   // 144dd — tab badges reflect real state (no always-on dots). Amber Checklists dot only when a
   // required checklist item is still undone; red Activity count only when a customer message is unread.
@@ -267,6 +313,11 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                 <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />{(d.priority ?? 0) >= 2 ? "Urgent" : "High priority"}
               </span>
             )}
+            {!!(d as any).estimate_approved_at && (
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200 flex items-center gap-1">
+                <M n="check" c="text-xs" />Customer approved
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-1.5 ml-auto">
             {/* 144au — job timer as a header pill: always reachable on every tab (Jobber pattern) */}
@@ -288,72 +339,136 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                 <M n="local_shipping" c="text-sm" />Waiting on parts
               </button>
             )}
-            <div className="relative">
+            <div ref={menuRef} className="relative">
               <button aria-label="More actions" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)}
                 className="p-1.5 rounded-lg text-ink-secondary hover:text-ink-primary hover:bg-slate-100 border border-slate-200/80 transition-colors" title="More actions"><M n="more_horiz" c="text-base" /></button>
               {menuOpen && (<>
                 <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(false)} />
-                <div role="menu" className="absolute right-0 top-full mt-1 z-40 w-64 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5">
-                  <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); setPartsOpen(true); }}
-                    className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-50">
+                <div role="menu" className="absolute right-0 top-full mt-1 z-40 w-72 max-h-[70vh] overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5">
+                  <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); setPartsOpen(true); }} className={menuRow}>
                     <M n="local_shipping" c="text-base text-ink-tertiary" />
                     <span className="flex-1 min-w-0">
                       <span className="block text-sm text-ink-primary">Parts &amp; purchase orders</span>
-                      <span className="block text-[11px] text-ink-tertiary">{incomingPo.length ? `${incomingPo.length} on order` : "Order or hold parts for this job"}</span>
+                      <span className="block text-xs text-ink-tertiary">{incomingPo.length ? `${incomingPo.length} on order` : "Order or hold parts for this job"}</span>
                     </span>
                   </button>
-                  <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); navigator.clipboard?.writeText(`${window.location.origin}/orders?open=${order.id}`).then(() => flash("Link copied")).catch(() => {}); }}
-                    className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-50">
-                    <M n="link" c="text-base text-ink-tertiary" /><span className="text-sm text-ink-primary">Copy link to this job</span>
-                  </button>
                   {!(order as any).is_estimate && can("can_create_tickets") && (
-                    <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); continueLinked(); }}
-                      className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-50">
+                    <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); continueLinked(); }} className={menuRow}>
                       <M n="redo" c="text-base text-ink-tertiary" />
                       <span className="flex-1 min-w-0">
                         <span className="block text-sm text-ink-primary">Continue as a linked job</span>
-                        <span className="block text-[11px] text-ink-tertiary">A new job for the same customer and device</span>
+                        <span className="block text-xs text-ink-tertiary">A new job for the same customer and device</span>
                       </span>
                     </button>
                   )}
+                  {(d.device?.id || d.client?.id) && (
+                    <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); setWatchEditing(true); }} className={menuRow}>
+                      <M n="warning" c="text-base text-ink-tertiary" />
+                      <span className="text-sm text-ink-primary">{d.device?.watch_out || d.client?.watch_out ? "Edit watch-outs" : "Add watch-out"}</span>
+                    </button>
+                  )}
+                  <div className="my-1 border-t border-slate-100" />
+                  <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); navigator.clipboard?.writeText(`${window.location.origin}/orders?open=${order.id}`).then(() => flash("Staff link copied")).catch(() => {}); }} className={menuRow}>
+                    <M n="link" c="text-base text-ink-tertiary" />
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-sm text-ink-primary">Copy staff link</span>
+                      <span className="block text-xs text-ink-tertiary">Opens this job for your team</span>
+                    </span>
+                  </button>
+                  <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); copyTrackingLink(); }} className={menuRow}>
+                    <M n="link" c="text-base text-ink-tertiary" />
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-sm text-ink-primary">Copy customer tracking link</span>
+                      <span className="block text-xs text-ink-tertiary">The status page the customer sees</span>
+                    </span>
+                  </button>
+                  {(d as any).public_token && (
+                    <a role="menuitem" href={`/track/${(d as any).public_token}`} target="_blank" rel="noopener noreferrer" onClick={() => setMenuOpen(false)} className={menuRow}>
+                      <M n="open_in_new" c="text-base text-ink-tertiary" /><span className="text-sm text-ink-primary">Open tracking page</span>
+                    </a>
+                  )}
+                  <div className="my-1 border-t border-slate-100" />
+                  <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); del(); }} className={`${menuRow} text-rose-600 hover:!bg-rose-50`}>
+                    <M n="delete" c="text-base" /><span className="text-sm font-medium">Delete</span>
+                  </button>
                 </div>
               </>)}
             </div>
             <button aria-label="Close" onClick={tryClose} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100 transition-colors" title="Close"><M n="close" c="text-lg" /></button>
           </div>
+          <div className="w-full">
+            <TagChips entityType="order" entityId={order.id} />
+          </div>
         </header>
         {partsOpen && <PartsPOPanel orderId={order.id} lines={(d.lines || []) as any[]} canBuy={canBuy} isEstimate={!!(order as any).is_estimate}
           onClose={() => setPartsOpen(false)} onChanged={() => { loadIncomingPo(); reload(); }} />}
 
-        <div className="px-6 py-2 border-b border-slate-200/70 bg-white/95 flex-shrink-0">
-          <TagChips entityType="order" entityId={order.id} />
-        </div>
+        {/* Alerts: one area above the tabs, holding only the alerts this job has right now. */}
+        {(gate || showTiming || comeback?.is_comeback || hasWatch) && (
+          <div className="px-4 sm:px-6 py-3 border-b border-slate-200/80 bg-white flex-shrink-0 space-y-2">
+            {gate && (
+              <div role="region" aria-label={gate.kind === "comment" ? "Comment needed" : "Still to pay"}
+                className={`rounded-xl border px-3.5 py-3 ${gate.kind === "unpaid" ? "bg-amber-50 border-amber-200" : "bg-slate-50 border-slate-200"}`}>
+                {gate.kind === "comment" ? (
+                  <form onSubmit={(e) => { e.preventDefault(); if (gateText.trim()) changeStatus(gate.key, { reason: gate.reason, comment: gateText.trim() }); }} className="space-y-2">
+                    <p className="text-xs font-semibold text-ink-primary">Moving to {gate.name} needs a comment on the job.</p>
+                    <textarea autoFocus value={gateText} onChange={(e) => setGateText(e.target.value)} rows={2} aria-label="Comment"
+                      placeholder="What was done, or what the customer agreed to" className="glass-input w-full rounded-xl px-3 py-2 text-sm resize-none" />
+                    <div className="flex items-center gap-2">
+                      <button type="submit" disabled={!gateText.trim()} className={btnPrimary}>Add comment and move to {gate.name}</button>
+                      <button type="button" onClick={() => setGate(null)} className={btnGhost}>Cancel</button>
+                    </div>
+                  </form>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-amber-900">{gate.message}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {can("can_view_invoices_tab") && <button type="button" onClick={() => { setGate(null); setTab("invoices"); }} className={btnPrimary}>Take payment</button>}
+                      {gate.canOverride && <button type="button" onClick={() => changeStatus(gate.key, { reason: gate.reason, allow_unpaid: true })}
+                        className="h-9 px-3.5 rounded-xl text-xs font-semibold border border-amber-300 bg-white text-amber-900 hover:bg-amber-100">Move to {gate.name} unpaid</button>}
+                      <button type="button" onClick={() => setGate(null)} className={btnGhost}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
-        {/* Cycle-time band — predicted ready + stall detection (Feature 2) */}
-        {timing && !timing.is_terminal && (timing.stalled || timing.typical_min != null || timing.predicted_ready_at) && (
-          <div className={`px-6 py-2 border-b flex-shrink-0 flex items-center gap-4 text-[11px] ${timing.stalled ? "bg-rose-50 border-rose-200" : "bg-slate-50/80 border-slate-200/70"}`}>
-            {timing.stalled ? (
-              <span className="flex items-center gap-1.5 font-bold text-rose-800">
-                <M n="schedule" c="text-sm" />Running long
-                <span className="font-semibold text-rose-700">· {fmtDur(timing.elapsed_min)} in this status{timing.typical_min != null ? ` vs ~${fmtDur(timing.typical_min)} typical` : ""}</span>
-              </span>
-            ) : timing.typical_min != null ? (
-              <span className="flex items-center gap-1.5 text-ink-secondary">
-                <M n="insights" c="text-sm text-primary" />
-                <span className="font-semibold text-ink-primary">{fmtDur(timing.elapsed_min)}</span> in this status
-                <span className="text-ink-tertiary">· typically ~{fmtDur(timing.typical_min)}</span>
-              </span>
-            ) : (
-              <span className="flex items-center gap-1.5 text-ink-tertiary"><M n="insights" c="text-sm" />{fmtDur(timing.elapsed_min)} in this status</span>
+            {/* Cycle time — predicted ready + stall detection (Feature 2) */}
+            {showTiming && timing && (
+              <div className={`rounded-xl border px-3.5 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs ${timing.stalled ? "bg-rose-50 border-rose-200" : "bg-slate-50 border-slate-200/80"}`}>
+                {timing.stalled ? (
+                  <span className="flex items-center gap-1.5 font-semibold text-rose-800">
+                    <M n="timer" c="text-sm" />Running long
+                    <span className="font-medium text-rose-700">· {fmtDur(timing.elapsed_min)} in this status{timing.typical_min != null ? ` vs ~${fmtDur(timing.typical_min)} typical` : ""}</span>
+                  </span>
+                ) : timing.typical_min != null ? (
+                  <span className="flex items-center gap-1.5 text-ink-secondary">
+                    <M n="insights" c="text-sm text-ink-tertiary" />
+                    <span className="font-semibold text-ink-primary">{fmtDur(timing.elapsed_min)}</span> in this status
+                    <span className="text-ink-tertiary">· typically ~{fmtDur(timing.typical_min)}</span>
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1.5 text-ink-tertiary"><M n="insights" c="text-sm" />{fmtDur(timing.elapsed_min)} in this status</span>
+                )}
+                {timing.predicted_ready_at && (
+                  <span className="ml-auto flex items-center gap-1.5 text-ink-secondary">
+                    <M n="event_available" c="text-sm text-emerald-600" />
+                    Est. ready <span className="font-semibold text-ink-primary">{fmtDT(timing.predicted_ready_at)}</span>
+                    {timing.confidence === "low" && <span className="text-ink-tertiary" title={`Based on ${timing.sample_n} past job(s)`}>· rough</span>}
+                    <ReadyWhy sampleN={timing.sample_n} typicalMin={timing.typical_min} fmt={fmtDur} />
+                  </span>
+                )}
+              </div>
             )}
-            {timing.predicted_ready_at && (
-              <span className="ml-auto flex items-center gap-1.5 text-ink-secondary">
-                <M n="event_available" c="text-sm text-emerald-600" />
-                Est. ready <span className="font-semibold text-ink-primary">{fmtDT(timing.predicted_ready_at)}</span>
-                {timing.confidence === "low" && <span className="text-ink-tertiary" title={`Based on ${timing.sample_n} past job(s)`}>· rough</span>}
-                <ReadyWhy sampleN={timing.sample_n} typicalMin={timing.typical_min} fmt={fmtDur} />
-              </span>
+
+            {comeback?.is_comeback && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2 flex items-start gap-2 text-xs text-amber-900">
+                <M n="replay" c="text-sm mt-px text-amber-700" />
+                <span><b className="font-semibold">Possible comeback.</b> This device was here {comeback.days_since != null ? `${comeback.days_since} day${comeback.days_since === 1 ? "" : "s"} ago` : "recently"} (WO {comeback.prior_order_number}){comeback.count && comeback.count > 1 ? ` · ${comeback.count} visits in 45 days` : ""}. Check the earlier fix before promising.</span>
+              </div>
             )}
+            <WatchOutBanner device={d.device} client={d.client} editing={watchEditing} setEditing={setWatchEditing}
+              onChanged={reload} onFlash={flash} onPending={(f) => setPending("watchout", f)} />
           </div>
         )}
 
@@ -369,20 +484,12 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
           ))}
         </nav>
 
-        {comeback?.is_comeback && (
-          <div className="px-6 py-2 border-b border-amber-200 bg-amber-50 flex-shrink-0 flex items-start gap-2 text-[11px] text-amber-800">
-            <M n="replay" c="text-sm mt-px" />
-            <span><b>Possible comeback.</b> This device was here {comeback.days_since != null ? `${comeback.days_since} day${comeback.days_since === 1 ? "" : "s"} ago` : "recently"} (WO {comeback.prior_order_number}){comeback.count && comeback.count > 1 ? ` · ${comeback.count} visits in 45 days` : ""}. Check the earlier fix before promising.</span>
-          </div>
-        )}
-        <WatchOutBanner device={d.device} client={d.client} onChanged={reload} onFlash={flash} onPending={(f) => setPending("watchout", f)} />
-
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-6 bg-slate-50/70 space-y-6">
           {tab === "general" && (
             <div className="space-y-5">
               {(urgent || d.scheduled_for || d.due_at) && (
-                <div className="bg-white border border-slate-200/90 rounded-2xl p-3.5 flex items-center justify-between shadow-clay-sm">
+                <div className={`${sectionCard} p-3.5 flex items-center justify-between`}>
                   <div className="flex items-center gap-3">
                     <div className={`w-9 h-9 rounded-xl grid place-items-center ${urgent ? "bg-rose-50 text-rose-600" : "bg-primary/10 text-primary"}`}><M n="schedule" c="text-base" /></div>
                     <div>
@@ -434,11 +541,11 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                   </div>)}
                 </div>
                 ) : (
-                <div className="bg-slate-50/60 rounded-xl border border-dashed border-slate-200 p-4 flex items-center justify-between">
+                <div className="bg-slate-50/60 rounded-2xl border border-dashed border-slate-200 p-4 flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
                     <div className="w-10 h-10 rounded-xl bg-slate-100 text-ink-tertiary flex items-center justify-center border border-slate-200"><M n="smartphone" c="text-xl" /></div>
                     <div>
-                      <h4 className="text-sm font-bold text-ink-secondary">No device on this order</h4>
+                      <h4 className="text-sm font-semibold text-ink-secondary">No device on this order</h4>
                       <p className="text-xs text-ink-tertiary">Estimates and non-device jobs don't need one.</p>
                     </div>
                   </div>
@@ -447,11 +554,15 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               </div>
 
               {/* Order parameters */}
-              <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-clay-sm space-y-4">
-                <h4 className="text-sm font-semibold text-ink-primary">Job details</h4>
+              <Section title="Job details">
+                <div className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <Ro label="Job type"><Sel value={jobTypeLabel({ is_estimate: d.is_estimate, type_id: (d as any).type_id }, woTypes)} /></Ro>
-                  <Ro label="Priority"><Sel value={(d.priority ?? 0) >= 2 ? "Urgent, same day" : urgent ? "High" : "Normal"} opts={["Normal", "High", "Urgent, same day"]} red={urgent} /></Ro>
+                  <Ro label="Job type"><ReadOnly>{jobTypeLabel({ is_estimate: d.is_estimate, type_id: (d as any).type_id }, woTypes)}</ReadOnly></Ro>
+                  <Ro label="Priority">
+                    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold ${urgent ? "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200" : "bg-slate-100 text-ink-secondary"}`}>
+                      {urgent && <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />}{(d.priority ?? 0) >= 2 ? "Urgent, same day" : urgent ? "High" : "Normal"}
+                    </span>
+                  </Ro>
                   <Ro label="Manager"><SelEmp label="Manager" value={d.manager?.id || ""} emps={emps.filter((e) => e.in_managers !== false || e.id === d.manager?.id)} onChange={(id) => reassign("manager_id", id)} /></Ro>
                   <Ro label="Technician"><SelEmp label="Technician" value={d.assigned_to?.id || ""} emps={emps.filter((e) => e.in_assignees !== false || e.id === d.assigned_to?.id)} onChange={(id) => reassign("assigned_to_id", id)} /></Ro>
                   <Ro label="Time on this job">
@@ -468,7 +579,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                           </div>
                         ))}
                       </div>
-                    ) : <span className="text-[11px] text-ink-tertiary">Start the job timer from the header, or clock into a specific line under Services &amp; products.</span>}
+                    ) : <span className="text-xs text-ink-tertiary">Start the job timer from the header, or clock into a specific line under Services &amp; products.</span>}
                   </Ro>
                   <Ro label="Booked for">
                     <div className="relative">
@@ -476,21 +587,20 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                     </div>
                   </Ro>
                   <Ro label="Due">
-                    <div className={`w-full py-2 px-3 text-xs rounded-xl border flex items-center gap-2 ${due?.[1] ? "text-rose-700 bg-rose-50/60 border-rose-200" : "text-ink-primary bg-slate-50 border-slate-200"}`}>
-                      <M n="timer" c={`text-sm ${due?.[1] ? "text-rose-600" : "text-ink-tertiary"}`} />
-                      <span className="font-semibold">{d.due_at ? fmtDT(d.due_at) : "No due date"}</span>
-                      {due && <span className={`ml-auto text-[11px] ${due[1] ? "font-semibold" : "text-ink-tertiary"}`}>{due[0]}</span>}
-                    </div>
+                    <ReadOnly>
+                      <span className={due?.[1] ? "text-rose-700 font-medium" : d.due_at ? "" : "text-ink-tertiary"}>{d.due_at ? fmtDT(d.due_at) : "No due date"}</span>
+                      {due && <span className={`ml-2 px-2 py-0.5 rounded-full text-[11px] font-semibold ${due[1] ? "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200" : "bg-slate-100 text-ink-secondary"}`}>{due[0]}</span>}
+                    </ReadOnly>
                   </Ro>
                 </div>
-                <div className="space-y-1">
-                  <label className="block text-xs font-medium text-ink-secondary">What the customer reported</label>
-                  <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200 text-sm text-ink-primary leading-relaxed">{or(d.complaint, "No complaint recorded yet.")}</div>
-                </div>
+                <Ro label="What the customer reported">
+                  <p className={`text-sm leading-relaxed whitespace-pre-wrap ${d.complaint ? "text-ink-primary" : "text-ink-tertiary"}`}>{or(d.complaint, "No complaint recorded yet.")}</p>
+                </Ro>
                 <JobCardFields orderId={order.id} typeId={(d as any).type_id} value={(d as any).custom_data} onFlash={flash}
                   onSaved={(cd) => setD({ ...d, custom_data: cd } as Detail)} />
                 <NotesEditor initTech={d.tech_notes || ""} initConcl={d.conclusion || ""} diagnosis={d.diagnosis || ""} onSave={saveNotes} onPending={(f) => setPending("notes", f)} />
-              </div>
+                </div>
+              </Section>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><ChecklistRings orderId={order.id} onOpen={() => setTab("checklists")} /></div>
 
@@ -506,13 +616,9 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               <IntakePhotos orderId={order.id} photos={d.intake_photos} onChanged={reload} onFlash={flash} />
 
               {/* Barcode */}
-              <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 flex items-center justify-between shadow-clay-sm">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 rounded-lg bg-slate-100 text-ink-primary"><M n="qr_code_2" c="text-2xl" /></div>
-                  <div><span className="font-mono text-xs font-bold text-ink-primary">{woNum}</span><p className="text-[11px] text-ink-tertiary">Bench ticket code. Scan it with a barcode gun to open this job.</p></div>
-                </div>
-                <button onClick={printWO} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50 flex items-center gap-1.5 transition-colors"><M n="print" c="text-xs" />Print sticker</button>
-              </div>
+              <Section title="Bench ticket" icon="qr_code_2" meta={<span className="font-mono">{woNum}</span>}
+                description="Scan it with a barcode gun to open this job."
+                actions={<button onClick={printWO} className={btnSecondary}><M n="print" c="text-sm" />Print sticker</button>} />
             </div>
           )}
 
@@ -524,7 +630,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             </div>
           )}
           {tab === "checklists" && <ChecklistsTab orderId={order.id} typeId={(d as any).type_id} />}
-          {tab === "invoices" && <InvoicesTab orderId={order.id} total={d.total} writtenOff={(d as any).written_off || 0} deposit={(d as any).deposit_amount} currencyCode={(d as any).currency_code} fxRate={(d as any).fx_rate} currencySymbol={(d as any).currency_symbol} onCurrencyChange={(code, rate, symbol) => setD({ ...d, currency_code: code, fx_rate: rate, currency_symbol: symbol } as any)} onFlash={flash} />}
+          {tab === "invoices" && <InvoicesTab onChanged={reload} orderId={order.id} total={d.total} writtenOff={(d as any).written_off || 0} deposit={(d as any).deposit_amount} currencyCode={(d as any).currency_code} fxRate={(d as any).fx_rate} currencySymbol={(d as any).currency_symbol} onCurrencyChange={(code, rate, symbol) => setD({ ...d, currency_code: code, fx_rate: rate, currency_symbol: symbol } as any)} onFlash={flash} />}
           {tab === "activity" && (<>
             <ConversationPanel orderId={order.id} />
             <NotesPanel orderId={order.id} onFlash={flash} />
@@ -532,21 +638,14 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
           </>)}
         </div>
 
-        {/* Footer */}
+        {/* Footer: print on the left; close and save on the right (the drawer convention) */}
         <footer className="px-6 py-3.5 border-t border-slate-200/90 bg-white/95 backdrop-blur-md flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-            <label className="flex items-center gap-2 text-xs font-semibold text-ink-secondary"><input checked={!!(d as any).estimate_approved_at} readOnly disabled className="rounded text-primary h-4 w-4" type="checkbox" /><span>Customer approved</span></label>
-            <span className="flex items-center gap-2">
-              <button onClick={copyTrackingLink} className="text-xs text-primary font-bold hover:underline flex items-center gap-1"><M n="link" c="text-xs" />Copy tracking link</button>
-              {(d as any).public_token && <a href={`/track/${(d as any).public_token}`} target="_blank" rel="noopener noreferrer" className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-0.5 hover:underline">Open<M n="open_in_new" c="text-xs" /></a>}
-            </span>
-            <PrintMenu key={order.id} orderId={order.id} status={d.status} canInvoices={can("can_view_invoices")} onSticker={printWO} onError={flash} />
-            {hasKit && can("can_print_itemised_copy") && <button onClick={printItemised} className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-1 border border-slate-200 rounded-lg px-2 py-1 bg-white"><M n="receipt_long" c="text-xs" />Print itemised copy</button>}
-            <button onClick={del} className="text-xs text-rose-600 hover:text-rose-700 font-semibold flex items-center gap-1 hover:bg-rose-50 rounded-lg px-2 py-1 transition-colors"><M n="delete" c="text-xs" />Delete</button>
-          </div>
+          <PrintMenu key={order.id} orderId={order.id} status={d.status} canInvoices={can("can_view_invoices")} onSticker={printWO}
+            onItemised={hasKit && can("can_print_itemised_copy") ? printItemised : undefined} itemisedType={(order as any).is_estimate ? "estimate" : "work_order"}
+            autoPrint={(order as any).is_estimate ? undefined : { canChange: can("can_manage_settings") }} onError={flash} />
           <div className="flex items-center gap-2">
-            <button onClick={tryClose} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 transition-colors">Close</button>
-            <button onClick={saveAndClose} disabled={saving} className="px-5 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all disabled:opacity-60"><M n="check" c="text-sm" />{saving ? "Saving…" : "Save and close"}</button>
+            <button onClick={tryClose} className={btnSecondary}>Close</button>
+            <button onClick={saveAndClose} disabled={saving} className={`${btnPrimary} shadow-clay-sm`}><M n="check" c="text-sm" />{saving ? "Saving…" : "Save and close"}</button>
           </div>
         </footer>
 
@@ -626,20 +725,12 @@ function JobItems({ orderId, onFlash, onChanged }: { orderId: string; onFlash: (
   }
   const links = [...(st.split_from ? [{ ...st.split_from, rel: "Split from" }] : []), ...(st.split_off || []).map((l) => ({ ...l, rel: "Split off" }))];
   return (
-    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-100">
-        <span className="w-8 h-8 rounded-xl bg-primary/10 text-primary grid place-items-center"><M n="inventory" c="text-base" /></span>
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-ink-primary">Items on this job <span className="text-ink-tertiary font-normal">· {st.items.length}</span></div>
-          <div className="text-[11px] text-ink-tertiary">{done} of {st.items.length} have a result{ro ? " · read-only, several items per job is off" : ""}</div>
-        </div>
-        {!ro && !adding && !pick && (
-          <div className="ml-auto flex items-center gap-1.5">
-            {canBill && <button onClick={startPick} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-primary hover:bg-slate-50 flex items-center gap-1"><M n="shopping_bag" c="text-sm" />Collect &amp; invoice</button>}
-            <button onClick={openAdd} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-primary hover:bg-slate-50 flex items-center gap-1"><M n="add" c="text-sm" />Add item</button>
-          </div>
-        )}
-      </div>
+    <Section flush title="Items on this job" icon="inventory" meta={st.items.length}
+      description={`${done} of ${st.items.length} have a result${ro ? " · read-only, several items per job is off" : ""}`}
+      actions={!ro && !adding && !pick ? (<>
+        {canBill && <button onClick={startPick} className={btnSecondary}><M n="shopping_bag" c="text-sm" />Collect &amp; invoice</button>}
+        <button onClick={openAdd} className={btnSecondary}><M n="add" c="text-sm" />Add item</button>
+      </>) : undefined}>
       {links.length > 0 && (
         <div className="px-4 py-2 border-b border-slate-100 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-tertiary">
           <M n="link" c="text-sm" />
@@ -712,21 +803,21 @@ function JobItems({ orderId, onFlash, onChanged }: { orderId: string; onFlash: (
       </div>
       {pick && (
         <div className="px-4 py-3 border-t border-slate-100 bg-slate-50/70 flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <button onClick={collect} disabled={!picked.length || busy} className={btnPrimary}>
+              {busy ? "Working…" : picked.length ? `Collect ${picked.length} & invoice ${money(pickTotal)}` : "Tick what they're taking"}
+            </button>
+            <button onClick={() => setPick(null)} className={btnGhost}>Cancel</button>
+          </div>
           {(st.job_unbilled || 0) > 0 && (
-            <label className="flex items-center gap-1.5 text-[11px] text-ink-secondary cursor-pointer">
+            <label className="flex items-center gap-1.5 text-xs text-ink-secondary cursor-pointer">
               <input type="checkbox" checked={withJob} onChange={(e) => setJobLines(e.target.checked)} className="accent-primary" />
               Add whole-job charges ({money(st.job_unbilled)}){lastOut ? "" : " now"}
             </label>
           )}
-          <div className="ml-auto flex items-center gap-2">
-            <button onClick={() => setPick(null)} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
-            <button onClick={collect} disabled={!picked.length || busy} className="px-3.5 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-40">
-              {busy ? "Working…" : picked.length ? `Collect ${picked.length} & invoice ${money(pickTotal)}` : "Tick what they're taking"}
-            </button>
-          </div>
         </div>
       )}
-    </div>
+    </Section>
   );
 }
 
@@ -757,15 +848,14 @@ function ItemComplaint({ value, readOnly, onSave }: { value: string; readOnly: b
 }
 
 /* ---- field helpers ---- */
+// One label style for every field in the drawer's cards.
+const fieldLabel = "block text-xs font-medium text-ink-secondary mb-1.5";
 function Ro({ label, children }: { label: string; children: React.ReactNode }) {
-  return <div><label className="block text-xs font-medium text-ink-secondary mb-1.5">{label}</label>{children}</div>;
+  return <div><div className={fieldLabel}>{label}</div>{children}</div>;
 }
-// Read-only display of a work-order attribute. (These were <select>s with no onChange — they
-// never persisted — so they're rendered as static fields to avoid implying they're editable.)
-function Sel({ value, red }: { value: string; opts?: string[]; red?: boolean }) {
-  return (
-    <div className={`w-full py-2 px-3 text-xs rounded-xl border flex items-center gap-2 ${red ? "font-semibold text-rose-700 bg-rose-50/60 border-rose-200" : "font-medium text-ink-primary bg-slate-50 border-slate-200"}`}>{red && <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />}{value}</div>
-  );
+// A value the drawer shows but doesn't edit here: plain text, not an input box.
+function ReadOnly({ children }: { children: React.ReactNode }) {
+  return <div className="text-sm text-ink-primary flex items-center min-h-[20px]">{children}</div>;
 }
 function SelEmp({ value, emps, onChange, label }: { value: string; emps: Emp[]; onChange: (id: string) => void; label?: string }) {
   return (
@@ -790,15 +880,15 @@ function NotesEditor({ initTech, initConcl, diagnosis, onSave, onPending }: { in
   useEffect(() => () => onPending?.(null), []);   // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-      <div className="space-y-1">
-        <label className="text-[11px] font-bold text-ink-tertiary flex items-center gap-1"><M n="sticky_note_2" c="text-xs text-amber-500" />Manager notes (only your team sees these)</label>
-        <div className="glass-input w-full p-2.5 text-xs text-ink-secondary rounded-xl min-h-[52px]">{diagnosis || "—"}</div>
+      <div>
+        <div className={fieldLabel}>Manager notes <span className="font-normal text-ink-tertiary">(only your team sees these)</span></div>
+        <p className={`text-sm leading-relaxed whitespace-pre-wrap ${diagnosis ? "text-ink-primary" : "text-ink-tertiary"}`}>{diagnosis || "No manager notes."}</p>
       </div>
-      <div className="space-y-1">
-        <label className="text-[11px] font-bold text-ink-tertiary flex items-center gap-1"><M n="engineering" c="text-xs text-primary" />Technician bench notes</label>
-        <textarea value={tech} onChange={(e) => setTech(e.target.value)} rows={2} aria-label="Technician working notes" className="glass-input w-full p-2.5 text-xs text-ink-secondary rounded-xl resize-none" placeholder="Working notes…" />
-        <textarea value={concl} onChange={(e) => setConcl(e.target.value)} rows={2} aria-label="Conclusion the customer sees" className="glass-input w-full p-2.5 text-xs text-ink-secondary rounded-xl resize-none" placeholder="Conclusion the customer sees…" />
-        <div className="flex justify-end"><button onClick={() => onSave(tech, concl)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50">Save notes</button></div>
+      <div className="space-y-2">
+        <div className={`${fieldLabel} !mb-0`}>Technician bench notes</div>
+        <textarea value={tech} onChange={(e) => setTech(e.target.value)} rows={2} aria-label="Technician working notes" className={`${houseInput} w-full resize-none`} placeholder="Working notes…" />
+        <textarea value={concl} onChange={(e) => setConcl(e.target.value)} rows={2} aria-label="Conclusion the customer sees" className={`${houseInput} w-full resize-none`} placeholder="Conclusion the customer sees…" />
+        <div className="flex"><button onClick={() => onSave(tech, concl)} className={btnSecondary}>Save notes</button></div>
       </div>
     </div>
   );
@@ -827,9 +917,9 @@ function ChecklistRings({ orderId, onOpen }: { orderId: string; onOpen: () => vo
     // The list endpoint sends a summary (items_done / items_total); older shapes carried done/total or the items.
     setP(cls.map((c: any) => ({ done: c.items_done ?? c.done ?? c.items?.filter((i: any) => i.done).length ?? 0, total: c.items_total ?? c.total ?? c.items?.length ?? 0, name: c.title || c.name || "Checklist" })));
   }).catch(() => setP([])); }, [orderId]);
-  if (p === null) return <div className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-sm text-xs text-ink-tertiary">Loading checklists…</div>;
+  if (p === null) return <div className={`${sectionCard} p-4 text-xs text-ink-tertiary`}>Loading checklists…</div>;
   if (p.length === 0) return (
-    <div className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-sm flex items-center justify-between">
+    <div className={`${sectionCard} p-4 flex items-center justify-between`}>
       <span className="text-xs text-ink-tertiary">No checklists on this order.</span>
       <button onClick={onOpen} className="text-xs font-semibold text-primary hover:underline">Add one</button>
     </div>
@@ -838,10 +928,10 @@ function ChecklistRings({ orderId, onOpen }: { orderId: string; onOpen: () => vo
     const pct = c.total ? Math.round((c.done / c.total) * 100) : 0;
     const done = pct === 100;
     return (
-      <div key={i} className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-sm flex items-center justify-between">
+      <div key={i} className={`${sectionCard} p-4 flex items-center justify-between`}>
         <div className="flex items-center gap-3">
           <ProgressRing pct={pct} />
-          <div><h5 className="text-xs font-semibold text-ink-primary">{c.name}</h5><p className={`text-xs tabular-nums ${done ? "text-emerald-700 font-medium" : "text-ink-tertiary"}`}>{done ? `All ${c.total} checks done` : `${c.done} of ${c.total} checks done`}</p></div>
+          <div><h4 className="text-sm font-semibold text-ink-primary">{c.name}</h4><p className={`text-xs tabular-nums ${done ? "text-emerald-700 font-medium" : "text-ink-tertiary"}`}>{done ? `All ${c.total} checks done` : `${c.done} of ${c.total} checks done`}</p></div>
         </div>
         <button onClick={onOpen} className="text-xs font-semibold text-primary hover:underline">View</button>
       </div>
@@ -850,13 +940,15 @@ function ChecklistRings({ orderId, onOpen }: { orderId: string; onOpen: () => vo
 }
 
 /* ---- Watch-out banner — prominent handling warnings for the asset + the customer ---- */
-function WatchOutBanner({ device, client, onChanged, onFlash, onPending }: {
+// Shown in the drawer's alert area only when there is a warning, or while editing one
+// ("Add watch-out" lives in the header's ⋯ menu).
+function WatchOutBanner({ device, client, editing, setEditing, onChanged, onFlash, onPending }: {
   device?: { id?: string; watch_out?: string | null } | null;
   client?: { id?: string; name?: string; watch_out?: string | null } | null;
+  editing: boolean; setEditing: (v: boolean) => void;
   onChanged: () => void; onFlash: (m: string) => void;
   onPending?: (save: (() => Promise<boolean>) | null) => void;
 }) {
-  const [editing, setEditing] = useState(false);
   const [dev, setDev] = useState(device?.watch_out || "");
   const [cli, setCli] = useState(client?.watch_out || "");
   const [busy, setBusy] = useState(false);
@@ -872,30 +964,24 @@ function WatchOutBanner({ device, client, onChanged, onFlash, onPending }: {
   }
   const dirty = editing && ((cli || "") !== (client?.watch_out || "") || (dev || "") !== (device?.watch_out || ""));
   useEffect(() => { onPending?.(dirty ? save : null); }, [dirty, cli, dev]);   // eslint-disable-line react-hooks/exhaustive-deps
-  if (!hasAny && !editing) {
-    return (
-      <div className="px-6 py-1.5 bg-slate-50/70 border-b border-slate-200/70 flex-shrink-0">
-        <button onClick={() => setEditing(true)} className="text-[11px] font-semibold text-ink-tertiary hover:text-amber-700 flex items-center gap-1"><M n="warning" c="text-xs" />Add a watch-out warning</button>
-      </div>
-    );
-  }
+  if (!hasAny && !editing) return null;
   return (
-    <div className="px-6 py-2.5 bg-amber-50 border-b border-amber-200 flex-shrink-0">
+    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5">
       {editing ? (
         <div className="space-y-2">
-          <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-800"><M n="warning" c="text-sm" />Watch-outs</div>
-          {device?.id && <input value={dev} onChange={(e) => setDev(e.target.value)} placeholder="Asset warning (e.g. battery swollen — handle with care)" className="w-full glass-input rounded-lg px-2.5 py-1.5 text-xs" />}
-          {client?.id && <input value={cli} onChange={(e) => setCli(e.target.value)} placeholder={`Customer warning${client.name ? ` for ${client.name}` : ""}`} className="w-full glass-input rounded-lg px-2.5 py-1.5 text-xs" />}
-          <div className="flex gap-2"><button onClick={save} disabled={busy} className="px-3 py-1 rounded-lg bg-amber-600 text-white text-xs font-bold disabled:opacity-50">Save</button><button onClick={() => { setEditing(false); setDev(device?.watch_out || ""); setCli(client?.watch_out || ""); }} className="px-2 py-1 text-xs font-semibold text-ink-tertiary">Cancel</button></div>
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-900"><M n="warning" c="text-sm" />Watch-outs</div>
+          {device?.id && <input value={dev} onChange={(e) => setDev(e.target.value)} aria-label="Asset warning" placeholder="Asset warning (e.g. battery swollen, handle with care)" className={`${houseInput} w-full`} />}
+          {client?.id && <input value={cli} onChange={(e) => setCli(e.target.value)} aria-label="Customer warning" placeholder={`Customer warning${client.name ? ` for ${client.name}` : ""}`} className={`${houseInput} w-full`} />}
+          <div className="flex gap-2"><button onClick={save} disabled={busy} className={btnPrimary}>Save</button><button onClick={() => { setEditing(false); setDev(device?.watch_out || ""); setCli(client?.watch_out || ""); }} className={btnGhost}>Cancel</button></div>
         </div>
       ) : (
         <div className="flex items-start gap-2">
           <M n="warning" c="text-base text-amber-600 mt-0.5" />
           <div className="flex-1 space-y-0.5 text-xs">
-            {device?.watch_out && <div className="text-amber-900"><span className="font-bold">Asset:</span> {device.watch_out}</div>}
-            {client?.watch_out && <div className="text-amber-900"><span className="font-bold">Customer:</span> {client.watch_out}</div>}
+            {device?.watch_out && <div className="text-amber-900"><span className="font-semibold">Asset:</span> {device.watch_out}</div>}
+            {client?.watch_out && <div className="text-amber-900"><span className="font-semibold">Customer:</span> {client.watch_out}</div>}
           </div>
-          <button onClick={() => setEditing(true)} className="text-[11px] font-semibold text-amber-700 hover:text-amber-900">Edit</button>
+          <button onClick={() => setEditing(true)} className="text-xs font-semibold text-amber-800 hover:text-amber-950">Edit</button>
         </div>
       )}
     </div>
@@ -942,36 +1028,35 @@ function IntakePhotos({ orderId, photos, onChanged, onFlash }: {
     catch (e: any) { onFlash(e.message || "Could not remove"); } finally { setBusy(false); }
   }
   return (
-    <div className="bg-white rounded-xl border border-slate-200/90 p-3.5 space-y-2.5">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2"><M n="photo_camera" c="text-base text-primary" /><h5 className="text-xs font-bold text-ink-primary">Intake photos</h5><span className="text-[11px] text-ink-tertiary">condition at check-in</span></div>
-        <label className={`px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-ink-secondary text-xs font-semibold flex items-center gap-1 cursor-pointer ${busy ? "opacity-50 pointer-events-none" : ""}`}>
+    <Section title="Intake photos" icon="photo_camera" description="How the device looked at check-in."
+      actions={
+        <label className={`${btnSecondary} cursor-pointer ${busy ? "opacity-50 pointer-events-none" : ""}`}>
           <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => { add(e.target.files); e.currentTarget.value = ""; }} />
-          <M n="add" c="text-xs" />{busy ? "…" : "Add"}
+          <M n="add" c="text-sm" />{busy ? "Uploading…" : "Add photos"}
         </label>
-      </div>
+      }>
       {list.length === 0 ? (
-        <p className="text-[11px] text-ink-tertiary">No photos yet. Snap how the device arrived to protect against disputes.</p>
+        <p className="text-xs text-ink-tertiary">No photos yet. Snap how the device arrived to protect against disputes.</p>
       ) : (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-3 pt-2 pr-2">
           {list.map((p) => {
             const hasMark = !!p.marked_url;
             const viewUrl = hasMark && !showOrig[p.id] ? p.marked_url! : p.url;
             return (
             <span key={p.id} className="relative group">
               <AuthedImage src={viewUrl} alt="intake" onClick={() => setAnnotate(p)} className="w-16 h-16 rounded-lg object-cover border border-slate-200 bg-slate-100 cursor-pointer" />
-              {hasMark && <span className="absolute top-0.5 left-0.5 text-[8px] font-bold bg-primary text-white px-1 rounded">{showOrig[p.id] ? "orig" : "marked"}</span>}
+              {hasMark && <span className="absolute top-0.5 left-0.5 text-[11px] leading-4 font-semibold bg-white/95 text-ink-primary px-1 rounded shadow-sm">{showOrig[p.id] ? "Original" : "Marked"}</span>}
               {/* mark up always edits the ORIGINAL, so re-marking stays non-destructive */}
               <button onClick={() => setAnnotate(p)} className="absolute bottom-0.5 left-0.5 w-5 h-5 rounded-md bg-ink-primary/85 text-white flex items-center justify-center opacity-0 group-hover:opacity-100" title="Mark up"><M n="edit" c="text-[12px]" /></button>
               {hasMark && <button onClick={() => setShowOrig((s) => ({ ...s, [p.id]: !s[p.id] }))} className="absolute bottom-0.5 right-0.5 w-5 h-5 rounded-md bg-ink-primary/85 text-white flex items-center justify-center opacity-0 group-hover:opacity-100" title={showOrig[p.id] ? "Show marked" : "Show original"}><M n="swap_horiz" c="text-[12px]" /></button>}
-              <button onClick={() => remove(p.id)} className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-ink-primary text-white text-[11px] leading-none opacity-0 group-hover:opacity-100" title="Remove">×</button>
+              <button onClick={() => remove(p.id)} aria-label="Remove photo" title="Remove" className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-white text-ink-secondary border border-slate-200 shadow-sm grid place-items-center hover:text-rose-600 hover:border-rose-200"><M n="close" c="text-sm" /></button>
             </span>
             );
           })}
         </div>
       )}
       {annotate && <PhotoAnnotator src={annotate.url} onSave={(d) => saveMarkup(annotate.id, d)} onClose={() => setAnnotate(null)} />}
-    </div>
+    </Section>
   );
 }
 
@@ -1039,27 +1124,53 @@ function CustomLineForm({ orderId, forItem, onFlash, onClose, onAdded }: { order
 }
 
 /* ---- Services tab ---- */
-function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labor, onClockIn, isEstimate, emps, locked }: { orderId: string; deviceId?: string; lines?: Line[]; total?: number; onFlash: (m: string) => void; onChanged?: () => void; labor?: any; onClockIn?: (lineId: string) => void; isEstimate?: boolean; emps?: { id: string; name: string }[]; locked?: boolean }) {
+// A line's kind in plain words: parts are products, labour is a service, a bundle is a kit.
+const LINE_KIND: Record<string, string> = { part: "Product", product: "Product", labour: "Service", labor: "Service", service: "Service", custom: "Custom", bundle: "Kit", membership: "Plan" };
+// A line inside its kit is stored as "Screen replacement labour (Screen Replacement Kit)". Under the
+// kit's header the suffix only repeats the header, so the row shows it without. Display only —
+// the description itself (API, prints, aria-labels, the "By technician" view) keeps the full name.
+export function displayName(description: string, kitName?: string | null): string {
+  if (!kitName) return description;
+  const suffix = ` (${kitName})`;
+  return description.endsWith(suffix) && description.length > suffix.length ? description.slice(0, -suffix.length) : description;
+}
+const lineKindLabel = (l: Line) => LINE_KIND[(l.kind || l.line_type || "").toLowerCase()] || humanize(l.kind || l.line_type) || "Item";
+export function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labor, onClockIn, isEstimate, emps, locked }: { orderId: string; deviceId?: string; lines?: Line[]; total?: number; onFlash: (m: string) => void; onChanged?: () => void; labor?: any; onClockIn?: (lineId: string) => void; isEstimate?: boolean; emps?: { id: string; name: string }[]; locked?: boolean }) {
   const { can } = useMe();
   const seePrices = can("can_view_item_prices");   // off: the API leaves line prices out
   const [recsVersion, setRecsVersion] = useState(0);   // bumped when a deferred item becomes a draft
-  const _secHM = (s: number) => { const h = Math.floor((s || 0) / 3600), m = Math.floor(((s || 0) % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m`; };
-  const _byEmp = labor?.by_employee || [];
-  const _timeTotal = _byEmp.reduce((n: number, b: any) => n + (b.total_seconds || 0), 0);
   const _runningLine = (lineId: string) => (labor?.entries || []).some((e: any) => e.running && e.order_line_id === lineId);
   // 144av: per-line actual clocked hours (from /labor by_line), employee-name lookup, and the
   // grouping toggle — flat (Orderry default) vs technician swimlanes (council: a lens, not home).
   const empName = (id?: string | null) => (emps || []).find((e) => e.id === id)?.name || "Unassigned";
-  const empInitials = (id?: string | null) => { const n = empName(id); return n === "Unassigned" ? "?" : n.split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase(); };
+  const empAvatarName = (id?: string | null) => (id ? (emps || []).find((e) => e.id === id)?.name : undefined);
   const _lineActualH = (lineId: string) => { const bl = (labor?.by_line || []).find((b: any) => b.order_line_id === lineId); return (bl?.total_seconds || 0) / 3600; };
   const [groupBy, setGroupBy] = useState(false);               // false = flat list (default)
   const [assignOpen, setAssignOpen] = useState<string | null>(null);  // line id whose picker is open
+  const [qtyOpen, setQtyOpen] = useState<string | null>(null);   // the line whose quantity/discount editor is open
   const [splitRatio, setSplitRatio] = useState(0.5);                   // 144ax G8 — primary's share
   const [splitOpen, setSplitOpen] = useState(false);                   // split choices folded until asked for
   const [techQuery, setTechQuery] = useState("");                      // filter, shown for bigger teams
   async function patchLine(lineId: string, body: any) {
     try { await api.patch(`/orders/${orderId}/lines/${lineId}`, body); onChanged?.(); }
     catch (e: any) { onFlash(e.message || "Could not update line"); }
+  }
+  // Removing a line or a whole kit goes through the server, which returns stock for parts, re-spreads
+  // a fixed kit price over what's left, and refuses lines already on an invoice. Same right as adding.
+  const canRemove = (l: Line) => !locked && (l as any).kind !== "membership"
+    && (kindOf(l).includes("serv") || kindOf(l).includes("lab") ? can("can_add_services") : can("can_add_products"));
+  async function removeLine(l: Line) {
+    if (!(await confirmDialog(`Remove "${l.description || "this line"}" from the job?${kindOf(l).includes("prod") || kindOf(l).includes("part") ? " Parts taken from stock go back." : ""}`,
+      { title: "Remove line?", confirmLabel: "Remove", danger: true }))) return;
+    try { await api.del(`/orders/${orderId}/lines/${l.id}`); onFlash("Line removed"); onChanged?.(); }
+    catch (e: any) { onFlash(e.message || "Could not remove the line"); }
+  }
+  async function removeKit(name: string, kitLines: Line[]) {
+    if (!(await confirmDialog(`Remove ${name} and its ${kitLines.length} ${kitLines.length === 1 ? "item" : "items"} from the job? Parts taken from stock go back.`,
+      { title: "Remove kit?", confirmLabel: "Remove kit", danger: true }))) return;
+    try { for (const l of kitLines) await api.del(`/orders/${orderId}/lines/${l.id}`); onFlash(`${name} removed`); }
+    catch (e: any) { onFlash(e.message || "Could not remove the kit"); }
+    finally { onChanged?.(); }
   }
   // Several items per job: which item a line is for ("" = whole job). Shown only when the shop has it on.
   const [jobItems, setJobItems] = useState<JobItem[]>([]);
@@ -1068,52 +1179,58 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
   useEffect(() => { api.get<any>(`/orders/${orderId}/items`).then((r) => { setItemsOn(!!r.enabled); setJobItems(r.items || []); }).catch(() => {}); }, [orderId, lines]);
   const tagging = itemsOn && jobItems.length > 1;
   const [filter, setFilter] = useState("All");
-  const [pick, setPick] = useState<CatalogItem | null>(null);
-  const [qty, setQty] = useState(1);
-  const [disc, setDisc] = useState(0);
   const [adding, setAdding] = useState(false);
-  const [intoKit, setIntoKit] = useState<{ id: string; name: string } | null>(null);   // add the pick inside this kit
   const [custom, setCustom] = useState(false);     // 3: a line that isn't in the catalog (yet)
-  const [stock, setStock] = useState<{ total_available: number; items: { location: string; available: number }[] } | null>(null);
-  // When a product is picked, show where it's in stock — the point-of-need answer
-  // to "we're out here, is it at another branch?" (products only; services carry no stock).
-  useEffect(() => {
-    setStock(null);
-    if (pick && pick.kind === "product" && pick.ref_id)
-      api.get<any>(`/inventory/parts/${pick.ref_id}/stock`).then(setStock).catch(() => {});
-  }, [pick]);
-  async function addLine() {
-    if (!pick) return;
+  const [intoKit, setIntoKit] = useState<{ id: string; name: string } | null>(null);   // add the pick inside this kit
+  // Picking from search adds the line straight away with quantity 1; quantity and discount are
+  // changed on the line itself (LineQtyEditor). Stock shows in the search results before picking.
+  async function addLine(pick: CatalogItem) {
+    if (adding) return;
     setAdding(true);
     try {
       const r = await api.post<any>(`/orders/${orderId}/lines`, {
         description: pick.name, kind: pick.kind,
         line_type: pick.kind === "service" ? "labour" : "part",
-        ref_id: pick.ref_id, qty, unit_price: pick.price || 0,
-        discount: disc, discount_type: "pct",
+        ref_id: pick.ref_id, qty: 1, unit_price: pick.price || 0,
         ...(tagging && forItem ? { order_item_id: forItem } : {}),
         ...(intoKit && pick.kind !== "bundle" ? { bundle_group_id: intoKit.id } : {}),
       });
-      onFlash(r?.margin_warning ? `Added — ${r.margin_warning}` : intoKit ? `Added to ${intoKit.name}` : "Line added");
-      setPick(null); setQty(1); setDisc(0); setIntoKit(null);
+      const out = pick.kind === "product" && pick.available === 0 ? " · out of stock, order or transfer it" : "";
+      onFlash(r?.margin_warning ? `Added — ${r.margin_warning}` : `${intoKit ? `Added to ${intoKit.name}` : `${pick.name} added`}${out}`);
+      setIntoKit(null);
       onChanged?.();
     } catch (e: any) { onFlash(e.message || "Could not add line"); }
     finally { setAdding(false); }
   }
 
   const kindOf = (l: Line) => (l.kind || l.line_type || "item").toLowerCase();
-  const shown = (lines || []).filter((l) => filter === "All" || (filter === "Services" && kindOf(l).includes("serv")) || (filter === "Products" && (kindOf(l).includes("part") || kindOf(l).includes("prod"))) || (filter === "Job Kits" && kindOf(l).includes("bundle")));
+  // Which filter tab a line belongs to. Lines carry kind (service/product/custom) and line_type
+  // (labour/part): a custom labour line is a service. Kit items are ordinary lines tagged with a kit.
+  const lineGroup = (l: Line): "Services" | "Products" => {
+    const k = kindOf(l); const t = String((l as any).line_type || "").toLowerCase();
+    return k.includes("prod") || k.includes("part") || (!k.includes("serv") && t === "part") ? "Products" : "Services";
+  };
+  const inKit = (l: Line) => !!(l as any).bundle_group_id || kindOf(l).includes("bundle");
+  const matches = (l: Line, f: string) => f === "All" || (f === "Job Kits" ? inKit(l) : lineGroup(l) === f);
+  const countFor = (f: string) => f === "Job Kits"   // kits, not the items inside them
+    ? new Set((lines || []).filter(inKit).map((l) => (l as any).bundle_group_id || l.id)).size
+    : (lines || []).filter((l) => matches(l, f)).length;
+  const shown = (lines || []).filter((l) => matches(l, filter));
   // 144av #4 — flat by default; "By technician" groups into swimlanes (council: a lens, opt-in).
   const groups: Record<string, Line[]> = {};
   if (groupBy) shown.forEach((l) => { const k = l.technician_id || "Unassigned"; (groups[k] ||= []).push(l); });
   else groups[""] = shown;
   const dot = ["bg-primary", "bg-purple-500", "bg-emerald-500", "bg-amber-500"];
-  const tagCls = (k: string) => k.includes("serv") ? "bg-blue-50 text-primary" : k.includes("lab") ? "bg-purple-50 text-purple-700" : "bg-emerald-50 text-emerald-700";
-  const avCls = ["bg-primary", "bg-emerald-500", "bg-amber-500"];
-  const avHue = (id?: string | null) => { if (!id) return "bg-slate-300"; let h = 0; for (const c of id) h = (h + c.charCodeAt(0)) % avCls.length; return avCls[h]; };
+  const [bookedEdit, setBookedEdit] = useState<string | null>(null);   // line whose booked-hours box is open
+  // One column grid for every row (and the kit header) so all amounts line up:
+  // icon | name + meta | actions | amount | remove slot (always reserved).
+  const rowGrid = "grid grid-cols-[28px_minmax(0,1fr)_auto_88px_40px] items-center gap-x-3";
+  const hrs = (h: number) => `${+h.toFixed(2)} h`;
 
-  // 144av #1+#2+#3 — one service/labour line row with assignee, booked-vs-actual, and split.
-  const renderLine = (l: Line) => {
+  // 144av #1+#2+#3 — one line row; service/labour lines add assignee and booked-vs-actual.
+  // `kit` is set when the row sits under its kit header: the name drops the "(Kit name)" suffix
+  // there, and in a fixed-price kit the row amounts go quiet so the kit total reads as the price.
+  const renderLine = (l: Line, kit?: { name: string; fixed: boolean }) => {
     const k = kindOf(l);
     const isServ = k.includes("serv") || k.includes("lab");
     const co = l.co_technicians || [];
@@ -1121,45 +1238,78 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
     const booked = Number(l.booked_hours || 0);
     const eff = booked > 0 && actualH > 0 ? Math.round((booked / actualH) * 100) : null;
     const openPick = assignOpen === l.id;
+    const full = l.description || "Item";
+    const qtyN = Number(l.qty ?? 1);
+    const onPlan = !!(l as any).membership_id;
+    const discTxt = l.discount && !onPlan ? (l.discount_type === "pct" ? `−${l.discount}%` : `−${money(Number(l.discount))}`) : "";
+    const amountTxt = [seePrices ? `${qtyN} × ${money(l.unit_price)}` : `Qty ${qtyN}`, seePrices ? discTxt : ""].filter(Boolean).join(" · ");
+    const editable = !locked && (l as any).kind !== "membership" && !onPlan;
+    const icon = isServ ? "build" : k.includes("bundle") ? "package_2" : "inventory_2";
     return (
-      <div key={l.id} className="p-3.5 hover:bg-slate-50/50 transition-colors">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-3 min-w-0">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-none ${tagCls(k)}`}><M n={k.includes("serv") ? "build" : k.includes("lab") ? "search_check" : "inventory_2"} c="text-base" /></div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2"><h5 className="text-xs font-bold text-ink-primary truncate">{l.description || "Item"}</h5><span className={`text-[11px] px-1.5 py-0.5 rounded font-bold ${tagCls(k)}`}>{l.kind || l.line_type || "item"}</span></div>
-              <p className="text-[11px] text-ink-tertiary tabular-nums">Qty: {l.qty ?? 1}{seePrices && <> · Unit: {money(l.unit_price)}{l.discount ? ` · Disc ${l.discount}${l.discount_type === "pct" ? "%" : ""}` : ""}</>}</p>
-              {tagging && (
-                <select value={l.order_item_id || ""} onChange={(e) => patchLine(l.id, { order_item_id: e.target.value })} aria-label={`Which item ${l.description || "this line"} is for`}
-                  className="mt-1 max-w-[220px] text-[11px] font-medium text-ink-secondary bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5">
-                  <option value="">For: whole job</option>{jobItems.map((it) => <option key={it.id} value={it.id}>For: {itemName(it)}</option>)}
-                </select>
-              )}
-            </div>
-          </div>
-          <div className="flex items-center gap-2 flex-none">
-            {!isEstimate && onClockIn && isServ && (
-              _runningLine(l.id)
-                ? <span className="flex items-center gap-1 text-[11px] font-semibold text-emerald-700"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />running</span>
-                : <button type="button" onClick={() => onClockIn(l.id)} title={`Clock into ${l.description || "this line"}`}
-                    className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-emerald-700 border border-emerald-200 hover:bg-emerald-50"><M n="play_arrow" c="text-[13px]" />clock in</button>
-            )}
-            {seePrices && <div className="text-right"><p className="tabular-nums font-bold text-xs text-ink-primary">{money(l.total)}</p></div>}
-          </div>
+      <div key={l.id} className={`group/row ${rowGrid} px-4 py-3 min-h-[56px] gap-y-1.5 hover:bg-slate-50/50 transition-colors`}>
+        <div className="w-7 h-7 rounded-lg grid place-items-center bg-slate-100 text-ink-secondary"><M n={icon} c="text-[15px]" /></div>
+        <div className="min-w-0">
+          <h5 className="text-[13px] font-medium text-ink-primary truncate" title={full}>{displayName(full, kit?.name)}</h5>
+          <p className="text-xs text-ink-secondary tabular-nums">{lineKindLabel(l)}{" · "}
+            {editable ? <span onClick={() => setQtyOpen(l.id)} className="cursor-pointer hover:text-ink-primary">{amountTxt}</span> : amountTxt}
+            {onPlan && (l as any).kind !== "membership" && <span className="ml-1.5 inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-primary/10 px-1.5 py-px text-[11px] font-semibold text-primary"><M n="workspace_premium" c="text-[11px]" />{Number(l.discount) >= 100 ? "Covered by plan" : `Plan ${l.discount}% off`}</span>}</p>
+          {tagging && (
+            <select value={l.order_item_id || ""} onChange={(e) => patchLine(l.id, { order_item_id: e.target.value })} aria-label={`Which item ${l.description || "this line"} is for`}
+              className={`mt-1.5 max-w-[240px] ${houseInput}`}>
+              <option value="">For: whole job</option>{jobItems.map((it) => <option key={it.id} value={it.id}>For: {itemName(it)}</option>)}
+            </select>
+          )}
+        </div>
+        <div className="flex items-center">
+          {!isEstimate && onClockIn && isServ && (
+            _runningLine(l.id)
+              ? <span className="flex items-center gap-1.5 text-xs font-medium text-emerald-700"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />Running</span>
+              : <button type="button" onClick={() => onClockIn(l.id)} title={`Clock into ${l.description || "this line"}`}
+                  className="h-8 px-2.5 rounded-lg border border-slate-200 text-xs font-medium text-ink-secondary hover:bg-slate-50 flex items-center gap-1 whitespace-nowrap"><M n="play_arrow" c="text-[13px]" />Clock in</button>
+          )}
+        </div>
+        <div className="text-right">
+          {/* The price is the big, obvious target for "change quantity or discount" (the grey 1 × €12 works too). */}
+          {editable ? (
+            <button type="button" data-qty-anchor={l.id} onClick={() => setQtyOpen(qtyOpen === l.id ? null : l.id)} aria-haspopup="dialog" aria-expanded={qtyOpen === l.id}
+              aria-label={`Change quantity${can("can_set_discount") && !kit?.fixed ? " or discount" : ""} for ${full}`} title="Change quantity or discount"
+              className={`group -my-1 -mr-2 inline-flex min-h-10 min-w-[72px] items-center justify-end gap-1.5 rounded-lg border px-2 py-1 transition-colors group-hover/row:border-slate-200 group-hover/row:bg-white hover:shadow-sm ${qtyOpen === l.id ? "border-primary/40 bg-white shadow-sm" : "border-transparent"}`}>
+              <M n="edit" c="text-[13px] text-ink-tertiary opacity-0 transition-opacity group-hover/row:opacity-100" />
+              <span>
+                {seePrices && onPlan && Number(l.discount) > 0 && <span className="block tabular-nums text-xs text-ink-tertiary line-through">{money(qtyN * (l.unit_price ?? 0))}</span>}
+                <span className={`block tabular-nums text-[13px] font-medium ${kit?.fixed ? "text-ink-tertiary" : "text-ink-primary"}`}>{seePrices ? money(l.total) : `Qty ${qtyN}`}</span>
+              </span>
+            </button>
+          ) : seePrices && <>
+            {/* A plan-covered line shows what the member would have paid, struck through. */}
+            {onPlan && Number(l.discount) > 0 && <p className="tabular-nums text-xs text-ink-tertiary line-through">{money(qtyN * (l.unit_price ?? 0))}</p>}
+            <p className={`tabular-nums text-[13px] font-medium ${kit?.fixed ? "text-ink-tertiary" : "text-ink-primary"}`}>{money(l.total)}</p>
+          </>}
+          {qtyOpen === l.id && (
+            <LineQtyEditor lineId={l.id} label={full} qty={qtyN} discount={Number(l.discount || 0)}
+              canDiscount={can("can_set_discount") && !kit?.fixed && (l.discount_type || "pct") === "pct"}
+              onSave={(body) => patchLine(l.id, body)} onClose={() => setQtyOpen(null)} />
+          )}
+        </div>
+        <div className="w-10 h-10">
+          {canRemove(l) && (
+            <button type="button" onClick={() => removeLine(l)} aria-label={`Remove ${l.description || "line"}`} title="Remove from job"
+              className="w-10 h-10 grid place-items-center rounded-lg text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-base" /></button>
+          )}
         </div>
         {/* 144av — assignee + booked/actual on service & labour lines only */}
         {isServ && (
-          <div className="mt-2 ml-11 flex flex-wrap items-center gap-2 text-[11px]">
+          <div className="col-start-2 col-span-4 -mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-secondary">
             {/* #1 assignee chip + #3 any co-techs */}
             <div>
               <button type="button" data-assign-for={l.id} aria-haspopup="menu" aria-expanded={openPick} onClick={() => { setAssignOpen(openPick ? null : l.id); setSplitOpen(false); setTechQuery(""); }}
-                className="flex items-center gap-1.5 pl-1 pr-2 py-1 rounded-full border border-slate-200 bg-white hover:border-primary/40">
+                className="-ml-1 flex items-center gap-1.5 h-8 pl-1 pr-1.5 rounded-lg hover:bg-slate-100">
                 {co.length > 1 ? (
-                  <span className="flex -space-x-1.5">{co.map((c) => <span key={c.employee_id} className={`w-5 h-5 rounded-full grid place-items-center text-[8px] font-bold text-white ring-1 ring-white ${avHue(c.employee_id)}`}>{empInitials(c.employee_id)}</span>)}</span>
+                  <span className="flex -space-x-1.5">{co.map((c) => <span key={c.employee_id} className="rounded-full ring-1 ring-white"><Avatar name={empAvatarName(c.employee_id)} size={18} /></span>)}</span>
                 ) : (
-                  <span className={`w-5 h-5 rounded-full grid place-items-center text-[8px] font-bold text-white ${l.technician_id ? avHue(l.technician_id) : "bg-slate-300"}`}>{empInitials(l.technician_id)}</span>
+                  <Avatar name={empAvatarName(l.technician_id)} size={18} />
                 )}
-                <span className="font-semibold text-ink-secondary">{co.length > 1 ? `${co.length} techs · split` : empName(l.technician_id)}</span>
+                <span className="font-medium text-ink-secondary">{co.length > 1 ? `${co.length} techs · split` : empName(l.technician_id)}</span>
                 <M n="expand_more" c="text-[13px] text-ink-tertiary" />
               </button>
               {openPick && (
@@ -1188,7 +1338,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                         {list.map((e) => (
                           <button type="button" key={e.id} onClick={() => pickTech(e.id)}
                             className={`${row} ${l.technician_id === e.id && co.length < 2 ? "font-semibold text-ink-primary bg-blue-50/60" : "text-ink-primary"}`}>
-                            <span className={`w-6 h-6 rounded-full grid place-items-center text-[10px] font-bold text-white flex-none ${avHue(e.id)}`}>{empInitials(e.id)}</span>
+                            <Avatar name={e.name} size={24} />
                             <span className="truncate">{e.name}</span>{l.technician_id === e.id && co.length < 2 && check}
                           </button>
                         ))}
@@ -1219,7 +1369,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                                 {(emps || []).filter((e) => e.id !== l.technician_id).map((e) => (
                                   <button type="button" key={"sp" + e.id} onClick={() => { patchLine(l.id, { co_technicians: [{ employee_id: l.technician_id, share: splitRatio }, { employee_id: e.id, share: Math.round((1 - splitRatio) * 100) / 100 }] }); setAssignOpen(null); }}
                                     className={`${row} text-ink-primary`}>
-                                    <span className={`w-6 h-6 rounded-full grid place-items-center text-[10px] font-bold text-white flex-none ${avHue(e.id)}`}>{empInitials(e.id)}</span>
+                                    <Avatar name={e.name} size={24} />
                                     <span className="truncate">+ {e.name}</span><span className="ml-auto text-[12px] tabular-nums text-ink-tertiary">{Math.round((1 - splitRatio) * 100)}%</span>
                                   </button>
                                 ))}
@@ -1233,13 +1383,26 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                 </FloatingMenu>
               )}
             </div>
-            {/* #2 booked vs actual */}
-            <label className="flex items-center gap-1 text-ink-tertiary">Booked
-              <input type="number" min={0} step={0.25} defaultValue={booked || ""} placeholder="0"
-                onBlur={(e) => { const v = Number(e.target.value || 0); if (v !== booked) patchLine(l.id, { booked_hours: v }); }}
-                className="glass-input w-14 px-1.5 py-0.5 rounded text-[11px] tabular-nums text-center" />h</label>
-            <span className="text-ink-tertiary">Actual <b className="tabular-nums text-ink-secondary">{actualH ? `${actualH.toFixed(2)}h` : "—"}</b></span>
-            {eff !== null && <span className={`tabular-nums font-bold px-1.5 py-0.5 rounded ${eff >= 100 ? "text-emerald-700 bg-emerald-50" : "text-amber-700 bg-amber-50"}`}>{eff}%</span>}
+            {/* #2 booked vs actual — booked reads as text until clicked; the box opens on demand. */}
+            {bookedEdit === l.id ? (
+              <label className="flex items-center gap-1.5 text-xs text-ink-secondary">Booked
+                <span className="glass-input h-8 w-20 rounded-xl flex items-center pr-2.5 focus-within:ring-2 focus-within:ring-primary/30">
+                  <input type="number" min={0} step={0.25} defaultValue={booked || ""} placeholder="0" aria-label={`Booked hours for ${l.description || "this line"}`} autoFocus
+                    onBlur={(e) => { const v = Number(e.target.value || 0); setBookedEdit(null); if (v !== booked) patchLine(l.id, { booked_hours: v }); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                    className="w-full min-w-0 bg-transparent pl-2.5 text-xs font-medium tabular-nums text-ink-primary outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" />
+                  <span className="text-xs text-ink-tertiary shrink-0">h</span>
+                </span>
+              </label>
+            ) : booked > 0 ? (
+              <button type="button" onClick={() => setBookedEdit(l.id)} aria-label={`Booked ${hrs(booked)} for ${l.description || "this line"}, change`}
+                className="h-8 px-1.5 -mx-1.5 rounded-lg tabular-nums hover:bg-slate-100 hover:text-ink-primary">Booked {hrs(booked)}</button>
+            ) : (
+              <button type="button" onClick={() => setBookedEdit(l.id)} aria-label={`Set booked hours for ${l.description || "this line"}`}
+                className="h-8 px-1.5 -mx-1.5 rounded-lg text-ink-secondary hover:bg-slate-100 hover:text-ink-primary">+ Booked hours</button>
+            )}
+            {actualH > 0 && <span className="tabular-nums">Actual {hrs(actualH)}</span>}
+            {eff !== null && <span className={`tabular-nums text-[11px] font-semibold px-1.5 py-0.5 rounded-md ${eff >= 100 ? "text-emerald-700 bg-emerald-50" : "text-amber-700 bg-amber-50"}`}>{eff}%</span>}
           </div>
         )}
       </div>
@@ -1248,59 +1411,38 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm">
+      {!isEstimate && <PlanBanner orderId={orderId} refreshKey={lines?.length} onChanged={onChanged} />}
+      <div className={`${sectionCard} flex flex-wrap items-center gap-3 p-3`}>
         <div className="flex items-center space-x-1.5">
           {["All", "Services", "Products", "Job Kits"].map((f) => (
-            <button key={f} onClick={() => setFilter(f)} className={`px-3 py-1 rounded-lg text-xs ${filter === f ? "bg-blue-50 text-primary font-bold" : "text-ink-secondary hover:text-ink-primary font-semibold"}`}>{f}</button>
+            <button key={f} onClick={() => setFilter(f)} className={`px-3 py-1 rounded-lg text-xs ${filter === f ? "bg-blue-50 text-primary font-bold" : "text-ink-secondary hover:text-ink-primary font-semibold"}`}>{f === "Job Kits" ? "Job kits" : f}{(lines || []).length > 0 && <span className={`ml-1 tabular-nums ${filter === f ? "text-primary/70" : "text-ink-tertiary"}`}>{countFor(f)}</span>}</button>
           ))}
         </div>
         {/* #4 swimlane toggle */}
         <button type="button" onClick={() => setGroupBy((v) => !v)} title="Group line items by technician"
-          className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold border ${groupBy ? "bg-blue-50 text-primary border-primary/30" : "text-ink-secondary border-slate-200 hover:text-ink-primary"}`}>
+          className={`ml-auto flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border ${groupBy ? "bg-blue-50 text-primary border-primary/30" : "text-ink-secondary border-slate-200 hover:text-ink-primary"}`}>
           <M n="groups" c="text-[14px]" />By technician</button>
       </div>
 
-      {/* 144au — time on job rollup; clock into a specific line below (ShopMonkey model) */}
-      {!isEstimate && onClockIn && _byEmp.length > 0 && (
-        <div className="flex items-center justify-between bg-emerald-50/60 border border-emerald-200/70 rounded-xl px-3.5 py-2 text-xs">
-          <span className="flex items-center gap-1.5 text-emerald-800 font-semibold"><M n="schedule" c="text-sm" />Time on job</span>
-          <span className="tabular-nums font-bold text-emerald-800">{_secHM(_timeTotal)}{_byEmp.some((b: any) => b.running) ? " · running" : ""}</span>
-        </div>
-      )}
-
+      {/* Time on the job shows in the header timer and General › Time on this job; clock into a line below. */}
       {/* Add a line — margin guardrail (block/warn) applies on save */}
-      <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm space-y-2.5">
-        <div className="text-[11px] font-bold text-ink-tertiary flex items-center gap-2">{intoKit ? <>Add to kit: {intoKit.name}<button type="button" onClick={() => setIntoKit(null)} className="font-semibold text-primary hover:underline">Add as an extra instead</button></> : "Add service or product"}</div>
-        {pick ? (
-          <div className="flex flex-wrap items-end gap-2">
-            <div className="flex-1 min-w-[160px]"><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Item</label>
-              <div className="glass-input px-3 py-2 rounded-lg text-xs font-semibold flex items-center justify-between"><span className="truncate">{pick.name}</span><button aria-label="Close" onClick={() => setPick(null)} className="text-ink-tertiary hover:text-rose-600 ml-2"><M n="close" c="text-sm" /></button></div></div>
-            <div className="w-16"><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Qty</label><input type="number" min={1} value={qty} onChange={(e) => setQty(Math.max(1, Number(e.target.value)))} className="glass-input w-full px-2 py-2 rounded-lg text-xs" /></div>
-            <div className="w-20"><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Disc %</label><input type="number" min={0} max={100} value={disc} onChange={(e) => setDisc(Number(e.target.value))} className="glass-input w-full px-2 py-2 rounded-lg text-xs" /></div>
-            {tagging && (
-              <div className="min-w-[150px]"><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">For</label>
-                <select value={forItem} onChange={(e) => setForItem(e.target.value)} aria-label="Which item this is for" className="glass-input w-full px-2 py-2 rounded-lg text-xs font-semibold text-ink-primary">
-                  <option value="">Whole job</option>{jobItems.map((it) => <option key={it.id} value={it.id}>{itemName(it)}</option>)}
-                </select></div>
-            )}
-            <button onClick={addLine} disabled={adding} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50">{adding ? "Adding…" : "Add"}</button>
-            {stock && (
-              <div className="w-full text-[11px] pt-0.5">
-                {stock.total_available > 0 ? (
-                  <span className="text-ink-secondary">In stock: <b className="text-emerald-600">{stock.total_available}</b> · {stock.items.filter((i) => i.available > 0).map((i) => `${i.location} ${i.available}`).join(" · ") || "—"}</span>
-                ) : (
-                  <span className="text-rose-600 font-semibold">Out of stock at every warehouse — you may need to order or transfer it.</span>
-                )}
-              </div>
-            )}
-          </div>
-        ) : locked ? (
+      <div className={`${sectionCard} p-4 space-y-3`}>
+        <h4 className="text-sm font-semibold text-ink-primary flex items-center gap-2">{intoKit ? <>Add to kit: {intoKit.name}<button type="button" onClick={() => setIntoKit(null)} className="text-xs font-semibold text-primary hover:underline">Add as a separate item</button></> : "Add service or product"}</h4>
+        {locked ? (
           <p className="text-xs text-ink-tertiary">This job is closed. Your role can't change a closed job.</p>
         ) : custom ? (
           <CustomLineForm orderId={orderId} forItem={tagging ? forItem : ""} onFlash={onFlash} onClose={() => setCustom(false)} onAdded={() => { setCustom(false); onChanged?.(); }} />
         ) : (
           <div className="flex items-center gap-2">
-            <div className="flex-1 min-w-0"><CatalogPicker deviceId={deviceId} onPick={(i) => { setPick(i); setDisc(0); setQty(1); }} placeholder="Search catalog — service, product, or job kit…" /></div>
+            <div className="flex-1 min-w-0"><CatalogPicker key={filter} deviceId={deviceId} onPick={addLine}
+              type={filter === "Services" ? "service" : filter === "Products" ? "product" : filter === "Job Kits" ? "bundle" : "all"}
+              placeholder={filter === "Services" ? "Search services…" : filter === "Products" ? "Search products…" : filter === "Job Kits" ? "Search job kits…" : "Search services, products and job kits…"} /></div>
+            {tagging && !intoKit && (
+              <select value={forItem} onChange={(e) => setForItem(e.target.value)} aria-label="Which item new lines are for"
+                className="glass-input max-w-[180px] px-2 py-2 rounded-lg text-xs font-semibold text-ink-primary">
+                <option value="">For: whole job</option>{jobItems.map((it) => <option key={it.id} value={it.id}>For: {itemName(it)}</option>)}
+              </select>
+            )}
             {(can("can_add_custom_product") || can("can_add_custom_service")) && (
               <button type="button" onClick={() => setCustom(true)} className="px-3 py-2 rounded-lg border border-dashed border-primary/40 text-primary text-xs font-bold hover:bg-blue-50 flex items-center gap-1 whitespace-nowrap"><M n="add" c="text-sm" />Custom item</button>
             )}
@@ -1309,9 +1451,10 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
       </div>
 
       {!locked && <TogetherChips orderId={orderId} linesKey={(lines || []).map((l) => l.description).join("|")} onFlash={onFlash} onChanged={onChanged} />}
-      {shown.length === 0 && <p className="text-xs text-ink-tertiary">No line items yet — add a service or product.</p>}
+      {shown.length === 0 && <p className="text-xs text-ink-tertiary">{(lines || []).length === 0 ? "No line items yet. Add a service or product above."
+        : filter === "Job Kits" ? "No job kits on this job." : `No ${filter.toLowerCase()} on this job.`}</p>}
       {Object.entries(groups).map(([tech, ls], gi) => (
-        <div key={tech || "all"} className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
+        <div key={tech || "all"} className={`${sectionCard} overflow-hidden`}>
           {groupBy && (
             <div className="bg-slate-50/90 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
               <div className="flex items-center gap-2"><span className={`w-2 h-2 rounded-full ${dot[gi % dot.length]}`} /><span className="text-xs font-bold text-ink-primary">{tech === "Unassigned" || !tech ? "Unassigned" : empName(tech)}</span><span className="text-[11px] text-ink-tertiary">({ls.length} line items)</span></div>
@@ -1321,11 +1464,12 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
           <div className="divide-y divide-slate-100">
             {groupBy ? ls.map((l) => renderLine(l)) : groupKitLines(ls).map((seg, si) => (
               seg.type === "line" ? renderLine(seg.line)
-                : seg.type === "extras" ? <div key={`extras-${si}`} className="px-4 pt-3 pb-1 text-[11px] font-bold text-ink-tertiary">Extras</div>
+                : seg.type === "extras" ? <h4 key={`extras-${si}`} className="px-4 pt-4 pb-1.5 text-xs font-medium text-ink-secondary">Other items</h4>
                 : <KitGroupHeader key={seg.groupId} orderId={orderId} groupId={seg.groupId} name={seg.name} qty={seg.qty} mode={seg.mode}
                     locked={seg.locked} total={seg.total} count={seg.lines.length} seePrices={seePrices} closed={locked}
-                    onChanged={onChanged} onFlash={onFlash} onAddInto={(id) => setIntoKit({ id, name: seg.name })}>
-                    {seg.lines.map((l) => renderLine(l))}
+                    onChanged={onChanged} onFlash={onFlash} onAddInto={(id) => setIntoKit({ id, name: seg.name })}
+                    onRemove={seg.lines.every(canRemove) ? () => removeKit(seg.name, seg.lines) : undefined}>
+                    {seg.lines.map((l) => renderLine(l, { name: seg.name, fixed: seg.locked != null }))}
                   </KitGroupHeader>
             ))}
           </div>
@@ -1406,25 +1550,30 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
   return (
     <div className="space-y-5">
       {/* Apply a template */}
-      <div className="flex items-end gap-2 bg-slate-50/80 border border-slate-200 rounded-xl p-3">
-        <div className="flex-1">
-          <label className="block text-[11px] font-semibold text-ink-secondary mb-1">Apply a checklist</label>
-          <select value={pick} onChange={(e) => setPick(e.target.value)} className="glass-input w-full px-3 py-2 rounded-lg text-xs">
-            <option value="">{templates.length ? "Choose a template…" : "No templates — create one in Settings ▸ Checklists"}</option>
-            {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-        </div>
-        <button onClick={apply} disabled={!pick || busy} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">Apply</button>
-      </div>
+      <Section title="Apply a checklist" icon="fact_check">
+        {templates.length ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <select value={pick} onChange={(e) => setPick(e.target.value)} aria-label="Checklist template" className={`${houseInput} flex-1 min-w-[200px]`}>
+              <option value="">Choose a template…</option>
+              {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+            <button onClick={apply} disabled={!pick || busy} className={btnPrimary}>Apply</button>
+          </div>
+        ) : (
+          <p className="text-xs text-ink-tertiary">
+            No checklist templates yet. <Link to="/settings?section=checklists" className="font-semibold text-primary hover:underline">Create one in Settings › Checklists</Link>
+          </p>
+        )}
+      </Section>
 
       {cls === null && <p className="text-xs text-ink-tertiary">Loading checklists…</p>}
       {cls?.length === 0 && <p className="text-xs text-ink-tertiary">No checklists applied to this order yet.</p>}
       {cls?.map((c: any) => {
         const items = c.items || []; const done = items.filter((i: any) => i.done).length; const pct = items.length ? Math.round((done / items.length) * 100) : 0;
         return (
-          <div key={c.id} className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-4 space-y-3.5">
+          <div key={c.id} className={`${sectionCard} p-4 space-y-3.5`}>
             <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-              <div className="flex items-center gap-2.5 min-w-0"><ProgressRing pct={pct} size={28} label={false} /><div className="min-w-0"><h5 className="text-sm font-semibold text-ink-primary truncate">{c.title || c.name || "Checklist"}</h5><p className="text-xs text-ink-tertiary tabular-nums">{done} of {items.length} done</p></div></div>
+              <div className="flex items-center gap-2.5 min-w-0"><ProgressRing pct={pct} size={28} label={false} /><div className="min-w-0"><h4 className="text-sm font-semibold text-ink-primary truncate">{c.title || c.name || "Checklist"}</h4><p className="text-xs text-ink-tertiary tabular-nums">{done} of {items.length} done</p></div></div>
               <div className="flex items-center gap-2"><span className={`text-xs font-semibold tabular-nums ${pct === 100 ? "text-emerald-700" : "text-ink-tertiary"}`}>{pct}%</span><button aria-label="Remove" onClick={() => removeCl(c.id)} title="Remove" className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-sm" /></button></div>
             </div>
             <div className="space-y-2 text-xs font-medium text-ink-primary">
@@ -1445,13 +1594,16 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
                         ))}</div>
                       )}
                     </div>
-                    {["text", "textarea", "number", "date"].includes(i.field_kind) && (
-                      <input type={i.field_kind === "number" ? "number" : i.field_kind === "date" ? "date" : "text"} defaultValue={v ?? ""} onBlur={(e) => e.target.value !== (v ?? "") && fill(c.id, i.id, e.target.value)}
-                        className="glass-input w-full px-2 py-1 rounded mt-2 text-xs" placeholder="Enter value…" />
+                    {i.field_kind === "date" && (
+                      <DateField className="mt-2 w-48" value={String(v ?? "")} onChange={(d) => d !== (v ?? "") && fill(c.id, i.id, d)} label={i.label || "Date"} />
+                    )}
+                    {["text", "textarea", "number"].includes(i.field_kind) && (
+                      <input type={i.field_kind === "number" ? "number" : "text"} defaultValue={v ?? ""} onBlur={(e) => e.target.value !== (v ?? "") && fill(c.id, i.id, e.target.value)}
+                        aria-label={i.label} className={`${houseInput} w-full mt-2`} placeholder="Enter value…" />
                     )}
                     {/* Templates save "dropdown" (pick one) and "multiselect" (pick several); older ones "select". */}
                     {(i.field_kind === "select" || i.field_kind === "dropdown") && (
-                      <select aria-label={i.label} value={v ?? ""} onChange={(e) => fill(c.id, i.id, e.target.value)} className="w-full mt-2 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs text-ink-primary focus:outline-none focus:ring-2 focus:ring-primary/30">
+                      <select aria-label={i.label} value={v ?? ""} onChange={(e) => fill(c.id, i.id, e.target.value)} className={`${houseInput} w-full mt-2`}>
                         <option value="">Choose…</option>{(i.options || []).map((o: string) => <option key={o} value={o}>{o}</option>)}
                       </select>
                     )}
@@ -1471,11 +1623,11 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
                       </div>
                     )}
                     {/* Attachments — photos / files / videos (like Orderry) */}
-                    <div className="flex flex-wrap items-center gap-2 mt-2">
+                    <div className="flex flex-wrap items-center gap-3 mt-2 pt-1">
                       {(i.file_ids || []).map((fid: string) => (
                         <span key={fid} className="relative group">
                           <AuthedImage src={`/api/media/${fid}`} alt="attachment" onClick={() => openAuthedDoc(`/api/media/${fid}`)} className="w-12 h-12 rounded-lg object-cover border border-slate-200 bg-slate-100 cursor-pointer" />
-                          <button onClick={() => detach(c.id, i, fid)} className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-ink-primary text-white text-[11px] leading-none opacity-0 group-hover:opacity-100" title="Remove">×</button>
+                          <button onClick={() => detach(c.id, i, fid)} aria-label="Remove attachment" title="Remove" className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-white text-ink-secondary border border-slate-200 shadow-sm grid place-items-center hover:text-rose-600 hover:border-rose-200"><M n="close" c="text-sm" /></button>
                         </span>
                       ))}
                       <label className="flex items-center gap-1 text-[11px] font-semibold text-primary cursor-pointer px-2 py-1 rounded-lg border border-dashed border-slate-300 hover:bg-slate-50">
@@ -1495,11 +1647,24 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
 }
 
 /* ---- Invoices tab ---- */
+// Plain words for the payment-link state and for each payment's kind and method.
+const LINK_STATUS: Record<string, string> = {
+  created: "ready", open: "waiting for payment", pending: "waiting for payment", requires_payment_method: "waiting for payment",
+  processing: "processing", paid: "paid", succeeded: "paid", expired: "expired", revoked: "revoked", canceled: "cancelled", cancelled: "cancelled",
+};
+const linkStatusLabel = (st?: string) => (st ? LINK_STATUS[st] || humanize(st).toLowerCase() : "ready");
+const PAY_KIND: Record<string, string> = { payment: "Payment", pay: "Payment", prepayment: "Prepayment", prepay: "Prepayment", deposit: "Deposit", refund: "Refund" };
+const PAY_METHOD: Record<string, string> = { cash: "cash", cashless: "cashless / UPI", upi: "UPI", card: "card", bank: "bank transfer", bank_transfer: "bank transfer", transfer: "bank transfer", gift_card: "gift card", giftcard: "gift card", loyalty: "loyalty points", coupon: "coupon", online: "online", link: "payment link" };
+const payLabel = (kind?: string, method?: string) => {
+  const k = (kind && (PAY_KIND[kind] || humanize(kind))) || "Payment";
+  const m = method ? PAY_METHOD[method] || humanize(method).toLowerCase() : "";
+  return m ? `${k} · ${m}` : k;
+};
 type PayCtx = { order_total: number; already_paid: number; prepaid: number; remaining: number; location_id?: string | null; accounts_by_method: Record<string, PayAccount[]> };
 // Every account from the payment context in one list, each tagged with the method it sits under.
 const ctxAccounts = (c: PayCtx | null): PayAccount[] =>
   c ? Object.entries(c.accounts_by_method || {}).flatMap(([k, list]) => (list || []).map((a) => ({ ...a, payment_option: a.payment_option || k }))) : [];
-export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash }: { orderId: string; total?: number; writtenOff?: number; deposit?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: (m: string) => void }) {
+export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash, onChanged }: { orderId: string; total?: number; writtenOff?: number; deposit?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: (m: string) => void; onChanged?: () => void }) {
   const { base, opts: curOpts, multi: multiCurrency } = useCurrencies();
   const { can } = useMe();
   const changeCurrency = async (code: string) => {
@@ -1588,78 +1753,100 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
 
   return (
     <div className="space-y-5">
-      <div className="bg-[#14213f] text-white rounded-2xl p-5 shadow-clay-card relative overflow-hidden">
-        <div className="relative z-10 flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <span className="text-[11px] font-bold text-blue-200/80">Still to pay</span>
-            <div className="flex items-baseline gap-3 mt-1"><h2 className="text-3xl font-bold tabular-nums tracking-tight text-white">{money(due)}</h2><span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${settled ? "bg-emerald-400/20 text-emerald-300 border-emerald-400/30" : "bg-amber-400/20 text-amber-300 border-amber-400/30"}`}>{settled ? (writtenOff > 0 ? "Written off" : "Settled") : "Balance due"}</span></div>
-            <p className="text-xs text-blue-200/70 mt-1">Grand Total {money(t)} · {money(paid)} Collected{writtenOff > 0 ? ` · ${money(writtenOff)} written off` : ""}</p>
-            {isForeign && (
-              <p className="text-xs text-blue-100 mt-1 font-mono">≈ {currencySymbol}{conv(due).toFixed(2)} {currencyCode} <span className="text-blue-200/60">(1 {currencyCode} = {fxRate && (1 / fxRate).toFixed(4)} {base?.code})</span></p>
-            )}
-            {multiCurrency && (
-              <div className="mt-2 flex items-center gap-1.5">
-                <span className="text-[11px] font-bold text-blue-200/70">Currency</span>
-                <select value={currencyCode || base?.code || ""} onChange={(e) => changeCurrency(e.target.value)} className="bg-white/10 border border-white/20 rounded-lg px-2 py-0.5 text-[11px] font-bold text-white [&>option]:text-ink-primary">
-                  {curOpts.map(([c, l]) => <option key={c} value={c}>{l}</option>)}
-                </select>
+      {/* Balance hero (design council, option C): the figure stays ink and large; the state shows in a
+          thin top edge, a pill with words, and a bar of how much is collected — never in the digits. */}
+      {(() => {
+        const state = !settled ? "due" : writtenOff > 0 ? "written_off" : "settled";
+        const tone = {
+          due: { edge: "bg-amber-400", pill: "bg-amber-50 text-amber-800 ring-amber-200", dot: "bg-amber-500", label: "Balance due" },
+          settled: { edge: "bg-emerald-500", pill: "bg-emerald-50 text-emerald-700 ring-emerald-200", dot: "bg-emerald-500", label: "Settled" },
+          written_off: { edge: "bg-slate-300", pill: "bg-slate-100 text-ink-secondary ring-slate-200", dot: "bg-slate-400", label: "Written off" },
+        }[state];
+        const shown = money(due);
+        const m = /^([^\d-]+)(.*)$/.exec(shown);   // "€9,000" -> "€" + "9,000"; leave suffix-style currencies whole
+        const pct = (n: number) => (t > 0 ? Math.min(100, Math.max(0, (n / t) * 100)) : 0);
+        return (
+          <section aria-label="Balance" className={`${sectionCard} relative overflow-hidden p-6`}>
+            <div aria-hidden="true" className={`absolute inset-x-0 top-0 h-0.5 ${tone.edge}`} />
+            <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-ink-tertiary">Still to pay</span>
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-2">
+              <h2 className={`flex items-start tabular-nums ${state === "due" ? "text-ink-primary" : "text-ink-tertiary"}`} aria-label={`Still to pay ${shown}`}>
+                {m ? <><span className="mt-1.5 mr-0.5 text-xl font-medium text-ink-tertiary">{m[1].trim()}</span><span className="text-[44px] leading-none font-medium tracking-[-0.035em]">{m[2]}</span></>
+                  : <span className="text-[44px] leading-none font-medium tracking-[-0.035em]">{shown}</span>}
+              </h2>
+              <span className={`inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full text-xs font-semibold ring-1 ring-inset ${tone.pill}`}>
+                <span aria-hidden="true" className={`size-1.5 rounded-full ${tone.dot}`} />{tone.label}
+              </span>
+            </div>
+            {t > 0 && (
+              <div className="mt-4 h-1.5 rounded-full bg-slate-100 overflow-hidden flex" role="img"
+                aria-label={`${money(paid)} of ${money(t)} collected${writtenOff > 0 ? `, ${money(writtenOff)} written off` : ""}`}>
+                <div className="h-full bg-emerald-500" style={{ width: `${pct(paid)}%` }} />
+                {writtenOff > 0 && <div className="h-full bg-slate-300" style={{ width: `${pct(writtenOff)}%` }} />}
               </div>
             )}
+            <p className="mt-2 text-xs text-ink-tertiary tabular-nums">
+              <span className="font-medium text-ink-secondary">{money(paid)}</span> of <span className="font-medium text-ink-secondary">{money(t)}</span> collected
+              {writtenOff > 0 && <> · <span className="font-medium text-ink-secondary">{money(writtenOff)}</span> written off</>}
+            </p>
+        {isForeign && (
+          <p className="text-xs text-ink-secondary mt-1 tabular-nums">≈ {currencySymbol}{conv(due).toFixed(2)} {currencyCode} <span className="text-ink-tertiary">(1 {currencyCode} = {fxRate && (1 / fxRate).toFixed(4)} {base?.code})</span></p>
+        )}
+        {multiCurrency && (
+          <div className="mt-3 flex items-center gap-2">
+            <label htmlFor={`wo-currency-${orderId}`} className="text-xs font-medium text-ink-secondary">Currency</label>
+            <select id={`wo-currency-${orderId}`} value={currencyCode || base?.code || ""} onChange={(e) => changeCurrency(e.target.value)} className={houseInput}>
+              {curOpts.map(([c, l]) => <option key={c} value={c}>{l}</option>)}
+            </select>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {!settled && <button onClick={() => openPay("prepay")} className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold border border-white/20 transition-all flex items-center gap-1.5"><M n="savings" c="text-xs" />Take Prepayment</button>}
-            {!settled && <button onClick={() => openPay("pay")} className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold shadow-sm transition-all flex items-center gap-1.5"><M n="credit_card" c="text-xs" />Take Payment</button>}
+        )}
+        {(!settled || link) && (
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            {!settled && <button onClick={() => openPay("pay")} className={btnPrimary}><M n="credit_card" c="text-sm" />Take payment</button>}
+            {!settled && <button onClick={() => openPay("prepay")} className={btnSecondary}><M n="savings" c="text-sm" />Take prepayment</button>}
             {!link ? !settled && can("can_create_payment_links") && (
-              <button onClick={() => createLink(false)} className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold border border-white/20 transition-all flex items-center gap-1.5"><M n="link" c="text-xs" />Payment link</button>
+              <button onClick={() => createLink(false)} className={btnSecondary}><M n="link" c="text-sm" />Payment link</button>
             ) : (
-              <div className="flex items-center gap-1.5 px-2 py-1 rounded-xl bg-white/10 border border-white/20 text-[11px] font-bold">
-                <span className="px-1.5 py-0.5 rounded-full bg-amber-400/20 text-amber-200 border border-amber-400/30">{link.status || "link"}</span>
-                <button aria-label="Copy" onClick={copyLink} title="Copy" className="hover:text-white"><M n="content_copy" c="text-xs" /></button>
-                <button aria-label="Rotate" onClick={() => createLink(true)} title="Rotate" className="hover:text-white"><M n="autorenew" c="text-xs" /></button>
-                <button aria-label="Revoke" onClick={revokeLink} title="Revoke" className="hover:text-rose-300"><M n="link_off" c="text-xs" /></button>
+              <div className="flex flex-wrap items-center gap-1 pl-2.5 pr-1 h-9 rounded-xl border border-slate-200 bg-slate-50 text-xs">
+                <span className="font-semibold text-ink-secondary mr-1">Payment link · {linkStatusLabel(link.status)}</span>
+                <button onClick={copyLink} title="Copy the payment link" className="h-7 px-2 rounded-lg font-semibold text-ink-primary hover:bg-white">Copy</button>
+                <button onClick={() => createLink(true)} title="Make a new link (the old one stops working)" className="h-7 px-2 rounded-lg font-semibold text-ink-primary hover:bg-white">New link</button>
+                <button onClick={revokeLink} title="Stop this link working" className="h-7 px-2 rounded-lg font-semibold text-rose-600 hover:bg-white">Revoke</button>
               </div>
             )}
           </div>
-        </div>
-      </div>
+        )}
+          </section>
+        );
+      })()}
 
-      {!settled && <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-3.5 space-y-2.5">
-        <div className="flex items-center justify-between">
-          <h5 className="text-xs font-bold text-ink-primary">Requested deposit</h5>
-          {dep > 0 && <span className="text-[11px] font-bold text-emerald-600">{money(conv(dep))} requested</span>}
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5">
+      {!settled && <Section title="Requested deposit" meta={dep > 0 ? <span className="font-semibold text-emerald-700">{money(conv(dep))} requested</span> : null}
+        description={`The customer pays this through the payment link or portal.${total ? ` Total ${money(conv(total))}.` : ""}`}>
+        <div className="flex flex-wrap items-center gap-2">
+          <input value={depInput} onChange={(e) => setDepInput(e.target.value)} inputMode="decimal" placeholder="Amount" aria-label="Deposit amount"
+            className={`${houseInput} w-28 tabular-nums`} />
+          <button type="button" disabled={depBusy || !depInput || isNaN(Number(depInput))} onClick={() => requestDeposit({ amount: Number(depInput) })} className={btnPrimary}>Set</button>
           {[25, 50, 100].map((pct) => (
-            <button key={pct} type="button" disabled={depBusy} onClick={() => requestDeposit({ percent: pct })}
-              className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-ink-secondary text-xs font-semibold disabled:opacity-50">{pct}%</button>
+            <button key={pct} type="button" disabled={depBusy} onClick={() => requestDeposit({ percent: pct })} className={btnSecondary}>{pct}%</button>
           ))}
-          <div className="flex items-center gap-1 ml-1">
-            <input value={depInput} onChange={(e) => setDepInput(e.target.value)} inputMode="decimal" placeholder="Amount"
-              className="w-24 text-xs px-2 py-1 rounded-lg border border-slate-200 bg-white tabular-nums" />
-            <button type="button" disabled={depBusy || !depInput || isNaN(Number(depInput))} onClick={() => requestDeposit({ amount: Number(depInput) })}
-              className="px-2.5 py-1 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50">Set</button>
-          </div>
-          {dep > 0 && <button type="button" disabled={depBusy} onClick={() => requestDeposit({ amount: 0 })} className="text-[11px] font-semibold text-rose-600 hover:underline ml-auto disabled:opacity-50">Clear</button>}
+          {dep > 0 && <button type="button" disabled={depBusy} onClick={() => requestDeposit({ amount: 0 })} className="h-9 px-3 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50">Clear</button>}
         </div>
-        <p className="text-[11px] text-ink-tertiary">The customer pays this through the payment link or portal. {total ? `Total ${money(conv(total))}.` : ""}</p>
-      </div>}
+      </Section>}
 
       {due > 0 && (
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-3.5 space-y-2.5">
-          <h5 className="text-xs font-bold text-ink-primary">Rewards &amp; credits</h5>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
-            <div className="flex gap-1.5"><input value={rwPts} onChange={(e) => setRwPts(e.target.value)} type="number" placeholder="Points" className="glass-input flex-1 px-2.5 py-1.5 rounded-lg font-mono text-ink-primary" /><button disabled={rwBusy} onClick={() => redeem("loyalty")} className="px-2.5 py-1.5 rounded-lg bg-blue-50 text-primary border border-blue-100 font-bold hover:bg-blue-100 disabled:opacity-60">Redeem</button></div>
-            <div className="flex gap-1.5"><input value={rwCoupon} onChange={(e) => setRwCoupon(e.target.value)} placeholder="Coupon code" className="glass-input flex-1 px-2.5 py-1.5 rounded-lg font-mono text-ink-primary" /><button disabled={rwBusy} onClick={() => redeem("coupon")} className="px-2.5 py-1.5 rounded-lg bg-blue-50 text-primary border border-blue-100 font-bold hover:bg-blue-100 disabled:opacity-60">Apply</button></div>
-            <div className="flex gap-1.5"><input value={rwGift} onChange={(e) => setRwGift(e.target.value)} placeholder="Gift card" className="glass-input flex-1 px-2.5 py-1.5 rounded-lg tabular-nums text-ink-primary" /><button disabled={rwBusy} onClick={() => redeem("gift")} className="px-2.5 py-1.5 rounded-lg bg-blue-50 text-primary border border-blue-100 font-bold hover:bg-blue-100 disabled:opacity-60">Redeem</button></div>
+        <Section title="Rewards & credits">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            <div className="flex gap-1.5"><input value={rwPts} onChange={(e) => setRwPts(e.target.value)} type="number" placeholder="Points" aria-label="Loyalty points" className={`${houseInput} flex-1 min-w-0 tabular-nums`} /><button disabled={rwBusy} onClick={() => redeem("loyalty")} className={btnSecondary}>Redeem</button></div>
+            <div className="flex gap-1.5"><input value={rwCoupon} onChange={(e) => setRwCoupon(e.target.value)} placeholder="Coupon code" aria-label="Coupon code" className={`${houseInput} flex-1 min-w-0 font-mono`} /><button disabled={rwBusy} onClick={() => redeem("coupon")} className={btnSecondary}>Apply</button></div>
+            <div className="flex gap-1.5"><input value={rwGift} onChange={(e) => setRwGift(e.target.value)} placeholder="Gift card" aria-label="Gift card" className={`${houseInput} flex-1 min-w-0 tabular-nums`} /><button disabled={rwBusy} onClick={() => redeem("gift")} className={btnSecondary}>Redeem</button></div>
           </div>
-        </div>
+        </Section>
       )}
 
       {data && data.invoices.length > 0 && (
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
-          <div className="p-3.5 border-b border-slate-100 flex items-center justify-between"><h5 className="text-xs font-bold text-ink-primary">Invoices</h5><span className="text-[11px] text-ink-tertiary">{data.invoices.length} billing records</span></div>
+        <Section flush title="Invoices" meta={data.invoices.length}>
           <table className="w-full text-xs text-left">
-            <thead className="bg-slate-50 text-[11px] text-ink-tertiary font-bold"><tr><th className="py-2.5 px-4">Invoice #</th><th className="py-2.5 px-4">Status</th><th className="py-2.5 px-4 text-right">Amount</th></tr></thead>
+            <thead className="bg-slate-50 text-xs text-ink-tertiary font-medium"><tr><th className="py-2.5 px-4 font-medium">Invoice</th><th className="py-2.5 px-4 font-medium">Status</th><th className="py-2.5 px-4 font-medium text-right">Amount</th></tr></thead>
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
               {data.invoices.map((i) => (
                 <tr key={i.id} className="hover:bg-slate-50/50"><td className="py-2.5 px-4 font-mono font-bold text-primary">{i.invoice_number}</td>
@@ -1668,31 +1855,25 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
               ))}
             </tbody>
           </table>
-        </div>
+        </Section>
       )}
 
       {data && data.payments.length > 0 && (
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
-          <div className="p-3.5 border-b border-slate-100 flex items-center justify-between"><h5 className="text-xs font-bold text-ink-primary">Payments</h5><span className="text-[11px] text-emerald-600 tabular-nums font-bold">{money(paid)} Collected</span></div>
+        <Section flush title="Payments" meta={`${money(paid)} collected`}>
           <div className="p-3 space-y-2">
             {data.payments.map((p) => (
               <div key={p.id} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs">
-                <div className="flex items-center gap-2.5"><M n={p.kind === "refund" ? "undo" : p.method === "cash" ? "payments" : "contactless"} c={`text-sm ${p.kind === "refund" ? "text-rose-600" : "text-emerald-600"}`} /><div><p className="font-bold text-ink-primary capitalize">{p.kind} · {p.method}</p></div></div>
+                <div className="flex items-center gap-2.5"><M n={p.kind === "refund" ? "undo" : p.method === "cash" ? "payments" : "contactless"} c={`text-sm ${p.kind === "refund" ? "text-rose-600" : "text-emerald-600"}`} /><div><p className="font-semibold text-ink-primary">{payLabel(p.kind, p.method)}</p></div></div>
                 <span className={`tabular-nums font-bold ${p.kind === "refund" ? "text-rose-600" : "text-ink-primary"}`}>{p.kind === "refund" ? "−" : ""}{money(p.amount)}</span>
               </div>
             ))}
           </div>
-        </div>
+        </Section>
       )}
 
       <CardPaymentsList orderId={orderId} reloadKey={data?.payments.length} onChanged={load} />
 
-      {data && data.invoices.length === 0 && data.payments.length === 0 && <p className="text-xs text-ink-tertiary">No invoices or payments yet. Use Take Payment or Take Prepayment.</p>}
-
-      <div className="bg-slate-50/90 p-4 rounded-xl border border-slate-200 flex items-center justify-between text-xs">
-        <div><span className="text-ink-tertiary">Collected</span><p className="text-base font-bold tabular-nums text-emerald-600">{money(paid)}</p></div>
-        <div className="text-right"><span className="text-ink-tertiary">Net Balance Due</span><p className={`text-base font-bold tabular-nums ${due > 0 ? "text-rose-600" : "text-emerald-600"}`}>{money(due)}</p></div>
-      </div>
+      {data && data.invoices.length === 0 && data.payments.length === 0 && <p className="text-xs text-ink-tertiary">No invoices or payments yet. Use Take payment or Take prepayment.</p>}
 
       {/* Portaled to <body>: inside the drawer the header (z-20) painted over the scrim as a white strip. */}
       {modal && ctx && createPortal(
@@ -1700,6 +1881,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
           <div className="absolute inset-0 bg-ink-primary/40" onClick={() => setModal(null)} />
           <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-md p-5 space-y-4">
             <div className="flex items-center justify-between"><h4 className="text-sm font-bold text-ink-primary">{modal === "prepay" ? "Take prepayment" : "Take payment"}</h4><button aria-label="Close" onClick={() => setModal(null)} className="text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-lg" /></button></div>
+            {modal === "pay" && <CheckoutOffer orderId={orderId} onJoined={() => { onChanged?.(); openPay("pay"); onFlash("Plan added to this job"); }} />}
             <div className="text-xs text-ink-secondary">Remaining balance: <b className="tabular-nums">{money(ctx.remaining)}</b></div>
             <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Amount <span className="text-ink-tertiary font-normal normal-case">({base?.code || "base"})</span></label><input value={amount} onChange={(e) => setAmount(e.target.value)} type="number" className="glass-input w-full py-2 px-3 text-sm font-bold font-mono rounded-xl" />
               {isForeign && amount && !isNaN(parseFloat(amount)) && (
@@ -1717,6 +1899,13 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
             {modal === "pay" && method === "card" && can("can_take_card_payments") && (
               <button onClick={() => setOnReader(true)} disabled={!(parseFloat(amount) > 0)} className="w-full py-2 rounded-xl border border-primary/30 bg-white text-primary text-xs font-bold hover:bg-blue-50 disabled:opacity-50 flex items-center justify-center gap-2"><M n="contactless" c="text-base" />Charge on reader</button>
             )}
+            {/* Like Orderry: what prints by itself is chosen where it happens. Shop-wide, kept until changed. */}
+            {modal === "pay" && (
+              <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2">
+                <span className="text-xs text-ink-secondary">Print by itself when a job closes</span>
+                <AutoPrintPicker event="close" />
+              </div>
+            )}
             <div className="flex justify-end gap-2 pt-1"><button onClick={() => setModal(null)} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button><button onClick={submit} disabled={payBusy || !account} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{payBusy ? "Recording…" : `Record ${modal === "prepay" ? "prepayment" : "payment"}`}</button></div>
           </div>
         </div>
@@ -1729,81 +1918,49 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
 }
 
 /* ---- Activity tab ---- */
-function ActivityTab({ orderId, clientPhone, onFlash }: { orderId: string; clientName?: string; clientPhone?: string; onFlash: (m: string) => void }) {
-  const [msg, setMsg] = useState("");
-  const [sent, setSent] = useState<string[]>([]);
-  const [f, setF] = useState("All");
+const CHANNEL: Record<string, string> = { sms: "SMS", email: "Email", whatsapp: "WhatsApp", push: "Push", telegram: "Telegram", viber: "Viber", voice: "Call" };
+const channelLabel = (c: string) => CHANNEL[c.toLowerCase()] || humanize(c);
+function ActivityTab({ orderId, onFlash }: { orderId: string; clientName?: string; clientPhone?: string; onFlash: (m: string) => void }) {
   const [aiSum, setAiSum] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
   async function aiSummary() {
     setAiBusy(true);
     try { const r = await api.post<any>(`/ai/orders/${orderId}/summary`, {}); setAiSum(r.summary || r.text || "No summary."); }
-    catch (e: any) { onFlash(e.message || "AI summary failed"); } finally { setAiBusy(false); }
+    catch (e: any) { onFlash(e.message || "Couldn't summarize this job"); } finally { setAiBusy(false); }
   }
-  const send = async () => {
-    const body = msg.trim(); if (!body) return;
-    try { await api.post(`/orders/${orderId}/customer-reply`, { body }); setSent((s) => [...s, body]); setMsg(""); onFlash("Message sent to client"); }
-    catch (e: any) { onFlash(`Failed: ${e.message}`); }
-  };
   // 144jc — real notification delivery log for this order
   const [logs, setLogs] = useState<any[]>([]);
   useEffect(() => { api.get<any>(`/notifications/log?order_id=${orderId}`).then((r) => setLogs(r.items || [])).catch(() => setLogs([])); }, [orderId]);
   const statusStyle = (s: string) => s === "sent" ? "bg-emerald-500" : s === "failed" ? "bg-rose-500" : s === "scheduled" ? "bg-amber-500" : "bg-slate-400";
-  const fmtWhen = (iso?: string) => { if (!iso) return ""; try { return new Date(iso).toLocaleString(); } catch { return iso; } };
+  const fmtWhen = (iso?: string) => fmtServerTime(iso) || iso || "";
   return (
     <div className="space-y-5">
-      <div className="bg-indigo-50 rounded-2xl border border-indigo-100 p-3.5 shadow-sm">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-bold text-indigo-900 flex items-center gap-1.5"><M n="auto_awesome" c="text-sm" />AI summary</span>
-          <button onClick={aiSummary} disabled={aiBusy} className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[11px] font-bold shadow-clay-sm disabled:opacity-50">{aiBusy ? "Summarizing…" : aiSum ? "Regenerate" : "Summarize"}</button>
-        </div>
-        {aiSum && <p className="text-xs text-ink-secondary mt-2 leading-relaxed">{aiSum}</p>}
-      </div>
-      <div className="flex flex-wrap items-center gap-1.5 text-xs">
-        {["All", "Status changes", "Payments", "Messages", "Notes", "Files"].map((c) => (
-          <button key={c} onClick={() => setF(c)} className={`px-2.5 py-1 rounded-full text-[11px] ${f === c ? "bg-primary text-white font-semibold" : "bg-white border border-slate-200 text-ink-secondary hover:bg-slate-50"}`}>{c}</button>
-        ))}
-      </div>
-      <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm space-y-4">
-        <h5 className="text-xs font-bold text-ink-primary">Notifications &amp; delivery</h5>
+      <Section title="Job summary" icon="summarize" description={aiSum ? undefined : "A short read-out of where this job stands, from its history."}
+        actions={<button onClick={aiSummary} disabled={aiBusy} className={btnSecondary}>{aiBusy ? "Summarizing…" : aiSum ? "Regenerate" : "Summarize"}</button>}>
+        {aiSum ? <p className="text-sm text-ink-secondary leading-relaxed">{aiSum}</p> : null}
+      </Section>
+      <Section title="Notifications & delivery" icon="notifications">
         {logs.length === 0 ? (
-          <div className="text-[11px] text-ink-tertiary">No notifications sent for this order yet.</div>
+          <div className="text-xs text-ink-tertiary">No notifications sent for this order yet.</div>
         ) : (
           <div className="relative pl-6 space-y-4 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-[2px] before:bg-slate-200 text-xs">
             {logs.map((l) => (
               <div key={l.id} className="relative">
                 <span className={`absolute -left-6 top-1 w-2.5 h-2.5 rounded-full ring-4 ring-white ${statusStyle(l.status)}`} />
                 <div>
-                  <p className="font-bold text-ink-primary flex items-center gap-2">
-                    {(l.subject || String(l.trigger_event || "Notification").replace(/_/g, " "))}
-                    <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-ink-secondary">{String(l.channel || "").toUpperCase()}</span>
+                  <p className="font-semibold text-ink-primary flex flex-wrap items-center gap-2">
+                    {(l.subject || humanize(l.trigger_event) || "Notification")}
+                    {l.channel && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-ink-secondary">{channelLabel(l.channel)}</span>}
                     <span className={`text-[11px] font-semibold ${l.status === "failed" ? "text-rose-600" : l.status === "sent" ? "text-emerald-600" : "text-amber-600"}`}>{humanize(l.status)}</span>
                   </p>
-                  {l.body && <p className="text-[11px] text-ink-tertiary line-clamp-2">{l.body}</p>}
-                  <span className="text-[11px] text-slate-400 tabular-nums">{l.recipient ? `${l.recipient} · ` : ""}{fmtWhen(l.created_at)}{l.error ? ` · ${l.error}` : ""}</span>
+                  {l.body && <p className="text-xs text-ink-secondary line-clamp-2">{l.body}</p>}
+                  <span className="text-[11px] text-ink-tertiary tabular-nums">{l.recipient ? `${l.recipient} · ` : ""}{fmtWhen(l.created_at)}{l.error ? ` · ${l.error}` : ""}</span>
                 </div>
               </div>
             ))}
           </div>
         )}
-      </div>
-      <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm space-y-3">
-        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-          <div className="flex items-center gap-2"><M n="chat" c="text-primary text-base" /><h5 className="text-xs font-bold text-ink-primary">Customer text and WhatsApp thread</h5></div>
-          <span className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> {clientPhone || "Not connected"}</span>
-        </div>
-        {sent.length > 0 && (
-          <div className="space-y-3 p-2 bg-slate-50/70 rounded-xl max-h-48 overflow-y-auto">
-            {sent.map((m, i) => (
-              <div key={i} className="flex flex-col items-end max-w-[80%] ml-auto"><div className="bg-primary text-white p-2.5 rounded-2xl rounded-tr-none shadow-2xs text-xs">{m}</div><span className="text-[11px] text-slate-400 mr-1 mt-0.5 tabular-nums">You · now</span></div>
-            ))}
-          </div>
-        )}
-        <div className="flex items-center gap-2 pt-1">
-          <input value={msg} onChange={(e) => setMsg(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} className="glass-input flex-1 py-2 px-3 text-xs rounded-xl" placeholder="Send an SMS update or WhatsApp note..." />
-          <button onClick={send} className="px-3.5 py-2 rounded-xl bg-primary text-white text-xs font-bold hover:brightness-110 flex items-center gap-1"><span>Send</span><M n="send" c="text-xs" /></button>
-        </div>
-      </div>
+      </Section>
     </div>
   );
 }

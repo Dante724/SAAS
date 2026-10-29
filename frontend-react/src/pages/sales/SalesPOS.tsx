@@ -6,7 +6,9 @@ import VoidableList from "../../components/VoidableList";
 import { useClientSearch } from "../../hooks/useClientSearch";
 import NewClientDrawer from "../../components/NewClientDrawer";
 import { currencySymbol, money } from "../orders/types";
-import { escapeHtml } from "../../lib/safeHtml";
+import { escapeHtml, printHtmlInFrame } from "../../lib/safeHtml";
+import { autoPrintForSale } from "../../lib/autoPrint";
+import AutoPrintPicker from "../../components/AutoPrintPicker";
 import ScanButton from "../../components/ScanButton";
 import ReaderCharge from "../../components/ReaderCharge";
 import CardPaymentsList from "../../components/CardPaymentsList";
@@ -208,6 +210,7 @@ export default function SalesPOS() {
     setRecentKey((k) => k + 1);
     setPending(null);
     if (p.fromCart) clearSale();
+    void autoPrintForSale(p.id);   // whatever is switched on to print when a sale is made
     setReceiptFor({ id: p.id, change: change && change > 0 ? change : null });
   }
 
@@ -451,6 +454,7 @@ export default function SalesPOS() {
             {quoteErr && <p role="alert" className="text-[11px] text-rose-700">{quoteErr}</p>}
             <button onClick={() => charge()} disabled={busy || !quote || blocked || short} className="w-full h-12 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center justify-center gap-2 tabular-nums">{busy ? "Processing…" : cart.length === 0 ? "Charge" : quote ? `Charge ${cash(quote.due)}` : quoteErr ? "Can't price this sale" : "Pricing…"}</button>
             {can("can_take_card_payments") && <button onClick={() => charge(true)} disabled={busy || !quote || blocked || quote.due <= 0} className="w-full h-11 rounded-xl border border-slate-200 bg-white text-ink-primary text-sm font-semibold hover:bg-slate-50 disabled:opacity-50 flex items-center justify-center gap-2"><M n="contactless" c="text-base text-ink-tertiary" />Charge on reader</button>}
+            <div className="flex justify-center"><AutoPrintPicker event="sale" /></div>
             </>)}
           </div>
         </aside>
@@ -519,16 +523,21 @@ function ReceiptSheet({ saleId, change, onClose, onFlash }: { saleId: string; ch
     window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k);
   }, [onClose]);
 
-  function print() {
+  // The shop's receipt template (Settings › Documents you print), printed through a hidden frame —
+  // no pop-up, and one click when the browser's print dialog is turned off. Without a receipt
+  // template it falls back to the built-in layout below.
+  async function print() {
     if (!rc) return;
-    const w = window.open("", "_blank", "width=380,height=600"); if (!w) { onFlash("Allow pop-ups to print the receipt"); return; }
+    try {
+      const r = await api.get<{ html: string | null }>(`/documents/render-sale/${saleId}`);
+      if (r?.html) { printHtmlInFrame(r.html); return; }
+    } catch { /* fall back to the built-in receipt */ }
     const rows = rc.lines.map((l) => `<tr><td>${l.qty !== 1 ? `${l.qty} × ` : ""}${escapeHtml(l.description)}</td><td class="r">${escapeHtml(money(l.total))}</td></tr>`).join("");
     const css = "body{font-family:Inter,system-ui,sans-serif;margin:0;padding:18px;color:#14213f;font-size:13px}h1{font-size:15px;margin:0}p{margin:2px 0 12px;color:#5b6b8c}table{width:100%;border-collapse:collapse}td{padding:4px 0}.r{text-align:right}.t td{border-top:1px dashed #c9d3ea;padding-top:8px;font-weight:700;font-size:15px}";
-    w.document.write(`<html><head><title>${escapeHtml(rc.sale_number)}</title><style>${css}</style></head><body><h1>${escapeHtml(rc.shop_name)}</h1>`
+    printHtmlInFrame(`<html><head><title>${escapeHtml(rc.sale_number)}</title><style>${css}</style></head><body><h1>${escapeHtml(rc.shop_name)}</h1>`
       + `<p>Receipt ${escapeHtml(rc.sale_number)}${rc.created_at ? " · " + escapeHtml(new Date(rc.created_at + (rc.created_at.endsWith("Z") ? "" : "Z")).toLocaleString()) : ""}</p>`
       + `<table>${rows}${rc.discount ? `<tr><td>Discount</td><td class="r">−${escapeHtml(money(rc.discount))}</td></tr>` : ""}${rc.tax ? `<tr><td>Tax</td><td class="r">${escapeHtml(money(rc.tax))}</td></tr>` : ""}<tr class="t"><td>Total</td><td class="r">${escapeHtml(money(rc.total))}</td></tr>${rc.gift_card ? `<tr><td>Gift card</td><td class="r">−${escapeHtml(money(rc.gift_card))}</td></tr>` : ""}</table>`
       + `<p style="margin-top:12px">${rc.paid ? "Paid" : "Not paid yet"} · Thank you!</p></body></html>`);
-    w.document.close(); w.focus(); w.print();
   }
   async function sendEmail() {
     setSending(true);

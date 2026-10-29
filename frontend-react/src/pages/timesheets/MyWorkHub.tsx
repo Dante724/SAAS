@@ -4,6 +4,7 @@ import Shell, { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { promptDialog } from "../../lib/dialog";
 import BayChecklist from "./BayChecklist";
+import { autoPrintIfClosed } from "../../lib/autoPrint";
 
 // 144az — the technician's own shop-floor view: live job timer, today/week clocked hours,
 // my assigned open service lines (booked vs actual + one-tap clock-in), and my recent time
@@ -53,7 +54,7 @@ export default function MyWorkHub() {
   }
   async function advance(o: BayOrder) {
     if (!o.next_status) return;
-    try { await api.patch(`/orders/${o.order_id}/status`, { status: o.next_status }); setFlash(`${o.order_number} → ${o.next_label}`); load(); }
+    try { const r = await api.patch<any>(`/orders/${o.order_id}/status`, { status: o.next_status }); void autoPrintIfClosed(o.order_id, r); setFlash(`${o.order_number} → ${o.next_label}`); load(); }
     catch (e: any) { setFlash(e.message || "Could not advance"); }  // surfaces 409 gate messages (checklist/comment/payment)
   }
   async function dispute(e: Entry) {

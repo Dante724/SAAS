@@ -11,6 +11,7 @@ import WODrawer from "./WODrawer";
 import { JobLabelsButton } from "./JobLabels";
 import CreateOrderDrawer from "./CreateOrderDrawer";
 import Pager from "../../components/Pager";
+import { autoPrintIfClosed } from "../../lib/autoPrint";
 import { Gate } from "../../context/Me";
 
 type Kpis = { new?: number; urgent?: number; overdue?: number; receivables?: number };
@@ -157,7 +158,7 @@ export default function WorkOrdersHub() {
     let reason: string | null = null;
     { const ds = droppedStatus(statuses, key); if (ds) { reason = await askCancelReason(ds.name); if (reason === null) return; } }
     setOrders((cur) => (cur || []).map((x) => x.id === id ? { ...x, status: key } : x)); // optimistic
-    try { await api.patch(`/orders/${id}/status`, { status: key, reason: reason || undefined }); } catch { refetch(); }
+    try { const r = await api.patch<any>(`/orders/${id}/status`, { status: key, reason: reason || undefined }); void autoPrintIfClosed(id, r); } catch { refetch(); }
   }
 
   // Filters go to the server: the table fetches one page plus facet counts; the board fetches
