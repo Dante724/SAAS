@@ -12,7 +12,7 @@
    for the /tech app only: requests from the main app's pages go straight to the network, so
    its data (clients, prices, costs) never lands in a cache that outlives sign-out.
 */
-const VERSION = 'ros-tech-v7';   // v7: escaped tech app (XSS fix) — devices must drop v6's cached JS
+const VERSION = 'ros-tech-v8';   // v8: scan opens jobs via /api/scan/resolve (v7: escaped tech app, XSS fix)
 const SHELL_CACHE = `shell-${VERSION}`;
 const STATIC_CACHE = `static-${VERSION}`;
 const API_CACHE = `api-${VERSION}`;

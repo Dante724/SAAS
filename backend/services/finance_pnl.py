@@ -5,8 +5,11 @@ owner: net sales − cost of parts − operating expenses = profit, in the shop'
 currency, org-scoped, for any period.
 
 Method (documented so the number is trustworthy):
-- **Net revenue** = Σ(subtotal − discount) of issued invoices (status ≠ draft/void)
-  by issue date — ex-tax, because collected tax isn't revenue.
+- **Net revenue** = Σ(total − tax) of issued invoices (status ≠ draft/void)
+  by issue date — ex-tax, because collected tax isn't revenue. The total is the one number
+  every invoice path stores the same way; ``discount`` and ``tax`` are amounts (B3: invoices
+  made in the editor once stored them as percents, and summing those as money gave a 96%
+  margin).
 - **Tax collected** = Σ(tax) — shown for context, not part of profit.
 - **COGS (parts)** = Σ(qty × cost_price) over product invoice lines linked to their
   order line (which carries cost); free-form product lines with no linked cost
@@ -44,7 +47,7 @@ async def compute_pnl(db: AsyncSession, org_id: str, date_from: Optional[str],
 
     # revenue (ex-tax), tax, gross sales
     rev_row = (await db.execute(select(
-        func.coalesce(func.sum(Invoice.subtotal - Invoice.discount), 0.0),
+        func.coalesce(func.sum(Invoice.total - Invoice.tax), 0.0),
         func.coalesce(func.sum(Invoice.tax), 0.0),
         func.coalesce(func.sum(Invoice.total), 0.0),
         func.count(),

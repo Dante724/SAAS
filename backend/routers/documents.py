@@ -25,7 +25,7 @@ from backend.models import (
     Employee, Organisation, Invoice, LegalEntity, Location, Part,
     CustomField, WorkOrderType, Device,
 )
-from backend.services.auth import assert_perm, get_current_employee, require_perm, record_scope
+from backend.services.auth import assert_perm, get_current_employee, has_perm, require_perm, record_scope
 from backend.services.codes import (
     barcode_svg, code128_svg, label_barcode, qr_svg, unprintable_message, validate_barcode_options,
 )
@@ -133,7 +133,13 @@ VARIABLE_GROUPS = [
     ("Invoice", ["{Invoice Number}", "{Invoice Date}", "{Invoice Due Date}", "{Invoice Status}",
                  "{Invoice Comment}", "{Invoice Subtotal}", "{Invoice Tax}", "{Invoice Total}",
                  "{Invoice Paid}", "{Invoice Balance Due}", "{Invoice Table}", "{Invoice Payment URL}",
-                 "{Invoice Credited}"]),
+                 "{Invoice Credited}",
+                 # the job the invoice bills (the first one, when it bills several)
+                 "{Order Number}", "{Order Malfunction}", "{Order Complaint}", "{Order Technician Notes}",
+                 "{Order Conclusion}", "{Order Created Date}", "{Order Done Date}", "{Order Assignee Name}",
+                 "{Order Custom Fields}",
+                 # per row: the job that row belongs to (invoices billing several jobs)
+                 "{Row Order Number}", "{Row Order Fault}", "{Row Order Technician Notes}"]),
     # opb — credit-note documents (resolved by _resolve_credit_note)
     ("Credit note", ["{Credit Note Number}", "{Credit Note Date}", "{Credit Note Status}",
                      "{Credit Note Reason}", "{Credit Note Invoice}", "{Credit Note Subtotal}",
@@ -194,8 +200,8 @@ LABEL_DOC_TYPES = {"label", "price_tag", "product_label", "vehicle_label"}
 
 # Row-level markers: a <tbody> containing any of these is treated as a repeating
 # product row. {Technician *} are resolved both at row and document level.
-_ROW_MARKER_RE = re.compile(r"\{Product [^}]+\}|\{Row Number\}")
-_ROW_VAR_RE = re.compile(r"\{Product [^}]+\}|\{Row Number\}|\{Technician (?:Name|Phone|Job Title)\}")
+_ROW_MARKER_RE = re.compile(r"\{Product [^}]+\}|\{Row Number\}|\{Row Order [^}]+\}")
+_ROW_VAR_RE = re.compile(r"\{Product [^}]+\}|\{Row Number\}|\{Row Order [^}]+\}|\{Technician (?:Name|Phone|Job Title)\}")
 _TBODY_RE = re.compile(r"(<tbody[^>]*>)(.*?)(</tbody>)", re.S | re.I)
 
 # 144id — Smart-doc conditionals: {#if Var}…{#else}…{/if} and {#unless Var}…{/if}.
@@ -379,6 +385,14 @@ class TemplateIn(BaseModel):
     barcode_field: Optional[str] = None      # opa: label {Barcode} source — barcode|sku|code|mpn
     barcode_types: dict[str, str] = {}       # opa: symbology per field — code128|ean13|upca|qr
 
+    @field_validator("auto_print_on")
+    @classmethod
+    def _known_auto_print(cls, v: Optional[str]) -> Optional[str]:
+        v = (v or "").strip() or None
+        if v not in (None, "none", "create", "close"):
+            raise ValueError("auto_print_on must be one of: none, create, close")
+        return None if v == "none" else v
+
     @field_validator("page_size")
     @classmethod
     def _known_page_size(cls, v: Optional[str]) -> str:
@@ -542,6 +556,31 @@ def _line_numbers(line: OrderLine) -> dict:
             "base": base, "base_no_disc": gross_no_disc, "tax": tax, "amount": amount}
 
 
+_NO_PRICE = "—"
+_LINE_PRICE_WORDS = ("Price", "Amount", "Discount")
+
+
+def _hide_line_prices(row: dict) -> dict:
+    """Blank every money value in a line's row map (prices, amounts, tax, discounts)."""
+    return {k: (_NO_PRICE if any(w in k for w in _LINE_PRICE_WORDS) else v) for k, v in row.items()}
+
+
+async def _hides_prices(db, current) -> bool:
+    return not await has_perm(db, current, "can_view_item_prices")
+
+
+async def _guard_order(db, current, order) -> None:
+    """Record scope for routes that take the job in the body or via an invoice."""
+    from backend.services import scoping
+    if order is not None and not await scoping.can_view_order(db, current, order):
+        raise HTTPException(403, "You can only act on work orders within your access")
+
+
+async def _guard_invoices(db, current) -> None:
+    if not await has_perm(db, current, "can_view_invoices"):
+        raise HTTPException(403, "You don't have permission to view invoices")
+
+
 def _row_vars(i: int, line: OrderLine, part, tech) -> dict:
     n = _line_numbers(line)
     return {
@@ -624,11 +663,13 @@ async def _status_name(db, org_id, order: Order) -> str:
     return name or (order.status or "").replace("_", " ").capitalize()
 
 
-async def _resolve(db, org_id, order: Order, current=None, *, itemised: bool = False):
+async def _resolve(db, org_id, order: Order, current=None, *, itemised: bool = False, hide_prices: bool = False):
     """Return (doc_map, rows) — document-level variables and per-line row maps.
 
     Lines come from kit_print.customer_lines: a kit set to print as one line is one row here
-    (itemised=True prints every line, for the customer's itemised copy)."""
+    (itemised=True prints every line, for the customer's itemised copy).
+    hide_prices blanks LINE prices (staff without "View prices"), as the order API does;
+    document totals stay, matching what the order screen shows them."""
     org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
     client = order.client
     dev = order.device
@@ -692,11 +733,13 @@ async def _resolve(db, org_id, order: Order, current=None, *, itemised: bool = F
             if names:
                 lt = _types.SimpleNamespace(name=" + ".join(names),
                                             phone=getattr(lt, "phone", ""), position=getattr(lt, "position", ""))
-        rows.append(_row_vars(i, l, p, lt))
+        rows.append(_hide_line_prices(_row_vars(i, l, p, lt)) if hide_prices else _row_vars(i, l, p, lt))
         n = _line_numbers(l)
         subtotal += n["base"]; tax_total += n["tax"]; total += n["amount"]
         total_qty += n["qty"]; total_disc += n["disc"]; base_no_disc_total += n["base_no_disc"]
         entry = [i, l.description or "", f"{n['qty']:g}", _money(n["unit_ex"]), _money(n["tax"]), _money(n["amount"])]
+        if hide_prices:
+            entry[3:] = [_NO_PRICE] * 3
         (prod_rows if _is_part(l) else serv_rows).append(entry)
 
     hdr = ["#", "Description", "Qty", "Unit Price", "Tax", "Amount"]
@@ -710,11 +753,12 @@ async def _resolve(db, org_id, order: Order, current=None, *, itemised: bool = F
             if g["row"] == "group":
                 _grouped.append({"group": g["item"]})
             elif g["row"] == "subtotal":
-                _grouped.append({"subtotal": g["item"], "amount": _money(g["total"])})
+                _grouped.append({"subtotal": g["item"], "amount": _NO_PRICE if hide_prices else _money(g["total"])})
             else:
                 l, n = g["_l"], _line_numbers(g["_l"])
-                _grouped.append([_rowno[id(l)], l.description or "", f"{n['qty']:g}", _money(n["unit_ex"]),
-                                 _money(n["tax"]), _money(n["amount"])])
+                _grouped.append([_rowno[id(l)], l.description or "", f"{n['qty']:g}"]
+                                + ([_NO_PRICE] * 3 if hide_prices else
+                                   [_money(n["unit_ex"]), _money(n["tax"]), _money(n["amount"])]))
         all_items_table = _table_block(hdr, _grouped)
 
     # Tax split by rate, from the real lines (a folded kit never merges rates).
@@ -1034,6 +1078,9 @@ async def _resolve(db, org_id, order: Order, current=None, *, itemised: bool = F
         val = (getattr(src, "custom_data", None) or {}).get(f.field_key) if src else None
         doc.setdefault(_cf_varname(f), _fmt_cf(val))
     doc["{Custom Fields}"] = await _custom_fields_block(db, org_id, order=order, device=dev, client=client)
+    if hide_prices:
+        doc["{Price}"] = _NO_PRICE          # the first line's unit price
+        doc["{Asset Cost}"] = _NO_PRICE     # what the device cost, never shown to price-blind staff
 
     return doc, rows
 
@@ -1118,9 +1165,11 @@ async def render_document(
         from backend.services.audit import record as _audit
         await _audit(db, org_id=current.org_id, actor_id=current.id, action="order.itemised_copy",
                      entity_type="order", entity_id=order.id, diff={"template": tpl.name})
-    doc, rows = await _resolve(db, current.org_id, order, current, itemised=itemised)
+    doc, rows = await _resolve(db, current.org_id, order, current, itemised=itemised, hide_prices=await _hides_prices(db, current))
     body = await _expand_components(db, current.org_id, tpl.body_html)
-    html = _render(body, doc, rows)
+    # Exact physical size (receipt, label, A4…) so it prints true-to-size from the job's Print menu.
+    html = _print_doc(body, doc, rows, font=tpl.font_family or "Inter", page_size=tpl.page_size or "a4",
+                      w=tpl.page_w_mm, h=tpl.page_h_mm, margin=tpl.margin_mm)
     db.add(GeneratedDocument(org_id=current.org_id, order_id=order.id, template_id=tpl.id,
                              name=tpl.name, rendered_html=html))
     from backend.routers.feed import log_system_event
@@ -1161,11 +1210,12 @@ async def preview_template(
     yet, so the preview never errors on a fresh account."""
     await _assert_sample_perm(db, current, data.doc_type)   # samples are real invoices / credit notes
     if (data.doc_type or "") == "invoice":
+        await _guard_invoices(db, current)
         inv = (await db.execute(select(Invoice).where(Invoice.org_id == current.org_id)
             .order_by(Invoice.created_at.desc()))).scalars().first()
         body = await _expand_components(db, current.org_id, data.body_html)
         if inv:
-            doc, rows = await _resolve_invoice(db, current.org_id, inv)
+            doc, rows = await _resolve_invoice(db, current.org_id, inv, hide_prices=await _hides_prices(db, current))
             return {"html": _render(body, doc, rows), "sample": inv.invoice_number}
         return {"html": _render(body, {}, []), "sample": None}
     if (data.doc_type or "") == "credit_note":
@@ -1200,10 +1250,12 @@ async def preview_template(
     order = (await db.execute(q.options(
         selectinload(Order.lines), selectinload(Order.client),
         selectinload(Order.device), selectinload(Order.assigned_to)))).scalars().first()
+    if data.order_id:
+        await _guard_order(db, current, order)
     body = await _expand_components(db, current.org_id, data.body_html)
     if not order:
         return {"html": _render(body, {}, []), "sample": None}
-    doc, rows = await _resolve(db, current.org_id, order, current)
+    doc, rows = await _resolve(db, current.org_id, order, current, hide_prices=await _hides_prices(db, current))
     return {"html": _render(body, doc, rows), "sample": order.order_number}
 
 
@@ -1254,11 +1306,17 @@ def _page_dims(page_size: str, w, h):
     return PAGE_PRESETS["a4"]
 
 
+_SAFE_FONT = re.compile(r"[A-Za-z0-9 ,'\"_-]{1,64}")
+
+
 def _print_doc(body_html, doc, rows, *, font="Inter", page_size="a4", w=None, h=None, margin=None) -> str:
     """A standalone, print-ready HTML document that prints at the EXACT physical size on
     any printer — the @page rule sets the real page dimensions, so a 40x30mm label or an
     80mm receipt comes out true-to-size instead of being scaled onto A4 (Orderry's gap)."""
     rendered = _render(body_html, doc, rows)
+    # The font name is shop-entered text placed inside <style>: allow plain names only, so it
+    # can't close the style block and inject markup into a printed document.
+    font = font if isinstance(font, str) and _SAFE_FONT.fullmatch(font) else "Inter"
     pw, ph = _page_dims(page_size, w, h)
     size_css = (f"{pw:g}mm {ph:g}mm" if ph else f"{pw:g}mm auto")
     m = margin if margin is not None else (0 if page_size in ("label", "receipt80", "receipt58") else 10)
@@ -1294,9 +1352,10 @@ async def print_view(
     if data.itemised:
         await assert_perm(db, current, "can_print_itemised_copy")
     if (data.doc_type or "") == "invoice":
+        await _guard_invoices(db, current)
         inv = (await db.execute(select(Invoice).where(Invoice.org_id == current.org_id)
             .order_by(Invoice.created_at.desc()))).scalars().first()
-        doc, rows = (await _resolve_invoice(db, current.org_id, inv, itemised=data.itemised)) if inv else ({}, [])
+        doc, rows = (await _resolve_invoice(db, current.org_id, inv, itemised=data.itemised, hide_prices=await _hides_prices(db, current))) if inv else ({}, [])
     elif (data.doc_type or "") == "credit_note":
         cn = await _sample_credit_note(db, current.org_id)
         doc, rows = (await _resolve_credit_note(db, current.org_id, cn)) if cn else ({}, [])
@@ -1306,14 +1365,17 @@ async def print_view(
         order = (await db.execute(q.options(
             selectinload(Order.lines), selectinload(Order.client),
             selectinload(Order.device), selectinload(Order.assigned_to)))).scalars().first()
-        doc, rows = (await _resolve(db, current.org_id, order, current, itemised=data.itemised)) if order else ({}, [])
+        if data.order_id:
+            await _guard_order(db, current, order)
+        doc, rows = (await _resolve(db, current.org_id, order, current, itemised=data.itemised,
+                                    hide_prices=await _hides_prices(db, current))) if order else ({}, [])
     body = await _expand_components(db, current.org_id, data.body_html)
     html = _print_doc(body, doc, rows, font=data.font_family or "Inter",
                       page_size=data.page_size, w=data.page_w_mm, h=data.page_h_mm, margin=data.margin_mm)
     return {"html": html}
 
 
-async def _resolve_invoice(db, org_id, inv: Invoice, *, itemised: bool = False):
+async def _resolve_invoice(db, org_id, inv: Invoice, *, itemised: bool = False, hide_prices: bool = False):
     """Variable map + repeating rows for an INVOICE document — lets an invoice be
     designed in the customizable template editor (doc_type='invoice'), the same way
     work orders are. Line rows come from the invoice's display_mode (detailed /
@@ -1334,8 +1396,10 @@ async def _resolve_invoice(db, org_id, inv: Invoice, *, itemised: bool = False):
     def g(o, a):
         return (getattr(o, a, None) if o else "") or "—"
 
+    from backend.services.invoicing import invoice_orders
     from backend.services.multi_asset import group_rows
     dl = await _inv_display(db, inv, itemised=itemised)
+    inv_orders = {o.id: o for o in await invoice_orders(db, inv) if o.org_id == org_id}
     hdr = ["#", "Description", "Qty", "Unit Price", "Amount"]
     rows, table_rows = [], []
     i = 0
@@ -1344,14 +1408,18 @@ async def _resolve_invoice(db, org_id, inv: Invoice, *, itemised: bool = False):
             table_rows.append({"group": l["item"]})
             continue
         if l["row"] == "subtotal":
-            table_rows.append({"subtotal": l["item"], "amount": m(l["total"])})
+            table_rows.append({"subtotal": l["item"], "amount": _NO_PRICE if hide_prices else m(l["total"])})
             continue
         i += 1
+        ro = inv_orders.get(l.get("order_id"))
+        unit, amt = (_NO_PRICE, _NO_PRICE) if hide_prices else (m(l["unit_price"]), m(l["total"]))
         rows.append({"{Row Number}": i, "{Product Name}": l["description"] or "—",
                      "{Product Qty}": f"{float(l.get('qty') or 0):g}",
-                     "{Product Price}": m(l["unit_price"]), "{Product Amount}": m(l["total"])})
-        table_rows.append([i, l["description"] or "", f"{float(l.get('qty') or 0):g}",
-                           m(l["unit_price"]), m(l["total"])])
+                     "{Product Price}": unit, "{Product Amount}": amt,
+                     "{Row Order Number}": (ro.order_number if ro else "") or "",
+                     "{Row Order Fault}": (ro.complaint if ro else "") or "",
+                     "{Row Order Technician Notes}": (getattr(ro, "tech_notes", None) if ro else "") or ""})
+        table_rows.append([i, l["description"] or "", f"{float(l.get('qty') or 0):g}", unit, amt])
     paid = inv.amount_paid or 0
     from backend.services.invoicing import balance_due as _inv_balance
     bal = _inv_balance(inv)          # net of payments and issued credit notes
@@ -1402,10 +1470,27 @@ async def _resolve_invoice(db, org_id, inv: Invoice, *, itemised: bool = False):
             continue
         val = (getattr(client, "custom_data", None) or {}).get(f.field_key) if client else None
         doc.setdefault(_cf_varname(f), _fmt_cf(val))
-    _inv_order = (await db.execute(select(Order).where(Order.id == inv.order_id, Order.org_id == org_id)
-                                   .options(selectinload(Order.device)))).scalar_one_or_none() if getattr(inv, "order_id", None) else None
+    _first = inv.order_id or next(iter(inv_orders), None)
+    _inv_order = (await db.execute(select(Order).where(Order.id == _first, Order.org_id == org_id)
+                                   .options(selectinload(Order.device), selectinload(Order.assigned_to)))
+                  ).scalar_one_or_none() if _first else None
     doc["{Custom Fields}"] = await _custom_fields_block(db, org_id, order=_inv_order,
                                                       device=_inv_order.device if _inv_order else None, client=client)
+    # Job fields: the job this invoice bills (the first, when it bills several).
+    jo = _inv_order
+    doc.update({
+        "{Order Number}": g(jo, "order_number"), "{Order Malfunction}": g(jo, "complaint"),
+        "{Order Complaint}": g(jo, "complaint"), "{Order Technician Notes}": g(jo, "tech_notes"),
+        "{Order Conclusion}": g(jo, "conclusion"),
+        "{Order Created Date}": _fmt_date(jo.created_at) if jo and jo.created_at else "—",
+        "{Order Done Date}": _fmt_date(jo.closed_at) if jo and jo.closed_at else "—",
+        "{Order Assignee Name}": (jo.assigned_to.name if jo and jo.assigned_to else "—"),
+        "{Order Custom Fields}": doc["{Custom Fields}"],
+    })
+    for f in await _custom_field_defs(db, org_id):    # {Order <label>} for every job custom field
+        if f.entity_type == "order":
+            doc.setdefault(_cf_varname(f), _fmt_cf((getattr(jo, "custom_data", None) or {}).get(f.field_key)
+                                                   if jo else None))
     return doc, rows
 
 
@@ -1417,6 +1502,7 @@ async def render_invoice_document(
     current: Employee = Depends(get_current_employee),
 ):
     """Render an invoice through a customizable document template (doc_type='invoice')."""
+    await _guard_invoices(db, current)   # it carries job notes and custom fields too
     tpl = (await db.execute(select(DocumentTemplate).where(
         DocumentTemplate.id == template_id, DocumentTemplate.org_id == current.org_id))).scalar_one_or_none()
     inv = (await db.execute(select(Invoice).where(
@@ -1425,14 +1511,19 @@ async def render_invoice_document(
         raise HTTPException(404, "Template not found")
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    if inv.order_id:   # it shows the job's notes and fields: a role limited to its own jobs sees only those
+        await _guard_order(db, current, (await db.execute(select(Order).where(
+            Order.id == inv.order_id, Order.org_id == current.org_id))).scalar_one_or_none())
     if itemised:
         await assert_perm(db, current, "can_print_itemised_copy")
         from backend.services.audit import record as _audit
         await _audit(db, org_id=current.org_id, actor_id=current.id, action="invoice.itemised_copy",
                      entity_type="invoice", entity_id=inv.id, diff={"template": tpl.name})
         await db.commit()
-    doc, rows = await _resolve_invoice(db, current.org_id, inv, itemised=itemised)
-    html = _render(tpl.body_html, doc, rows)
+    doc, rows = await _resolve_invoice(db, current.org_id, inv, itemised=itemised, hide_prices=await _hides_prices(db, current))
+    body = await _expand_components(db, current.org_id, tpl.body_html)
+    html = _print_doc(body, doc, rows, font=tpl.font_family or "Inter", page_size=tpl.page_size or "a4",
+                      w=tpl.page_w_mm, h=tpl.page_h_mm, margin=tpl.margin_mm)
     return {"html": html, "name": tpl.name}
 
 
@@ -1613,6 +1704,66 @@ class ClientLabelIn(BaseModel):
     copies: int = 1
 
 
+# Label templates that print against the job's asset(s) when auto-printed.
+ASSET_LABEL_TYPES = ("label",)
+
+
+@router.post("/auto-print/{order_id}")
+async def auto_print(
+    order_id: str,
+    event: str = "create",
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Templates set to print automatically on `event` (create | close), rendered for this job.
+    The desktop new-job form and Tekly Go call it right after creating a job and open the print
+    dialog for each document returned. An asset label prints one label per item on the job, at
+    the template's exact size; with no item on the job it prints one against the job."""
+    if event not in ("create", "close"):
+        raise HTTPException(422, "event must be create or close")
+    tpls = (await db.execute(select(DocumentTemplate).where(
+        DocumentTemplate.org_id == current.org_id, DocumentTemplate.auto_print_on == event,
+        DocumentTemplate.active == True).order_by(DocumentTemplate.name))).scalars().all()  # noqa: E712
+    if not tpls:
+        return {"docs": []}
+    order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
+        .options(selectinload(Order.lines), selectinload(Order.client),
+                 selectinload(Order.device), selectinload(Order.assigned_to)))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    from backend.models import OrderItem
+    asset_ids = [order.device_id] if order.device_id else []
+    for (aid,) in (await db.execute(select(OrderItem.asset_id).where(
+            OrderItem.order_id == order.id, OrderItem.asset_id.isnot(None)))).all():
+        if aid not in asset_ids:
+            asset_ids.append(aid)
+    assets = []
+    if asset_ids:
+        by_id = {a.id: a for a in (await db.execute(select(Device).where(
+            Device.id.in_(asset_ids), Device.org_id == current.org_id))).scalars().all()}
+        assets = [by_id[i] for i in asset_ids if i in by_id]
+    org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
+    doc, rows = await _resolve(db, current.org_id, order, current)
+    out = []
+    from backend.routers.feed import log_system_event
+    for tpl in tpls:
+        body = await _expand_components(db, current.org_id, tpl.body_html)
+        if tpl.doc_type in ASSET_LABEL_TYPES:
+            tiles = []
+            for a in assets or [None]:
+                varmap = {**doc, **(await _resolve_asset(db, org, a) if a is not None else {})}
+                tiles.append(f"<div class='lbl'>{_render(body, varmap, rows)}</div>")
+            html = _labels_html(tpl, tiles)
+        else:
+            html = _render(body, doc, rows)
+        db.add(GeneratedDocument(org_id=current.org_id, order_id=order.id, template_id=tpl.id,
+                                 name=tpl.name, rendered_html=html))
+        await log_system_event(db, current.org_id, "order", order.id, f"Printed automatically: {tpl.name}")
+        out.append({"template_id": tpl.id, "name": tpl.name, "doc_type": tpl.doc_type, "html": html})
+    await db.commit()
+    return {"docs": out}
+
+
 @router.post("/render-client-labels")
 async def render_client_labels(
     data: ClientLabelIn,
@@ -1668,8 +1819,12 @@ async def render_invoice_batch(
         raise HTTPException(404, "No matching invoices")
     body_tpl = await _expand_components(db, current.org_id, tpl.body_html)
     tiles = []
+    hide = await _hides_prices(db, current)
     for inv in invoices:
-        doc, rows = await _resolve_invoice(db, current.org_id, inv)
+        if inv.order_id:
+            await _guard_order(db, current, (await db.execute(select(Order).where(
+                Order.id == inv.order_id, Order.org_id == current.org_id))).scalar_one_or_none())
+        doc, rows = await _resolve_invoice(db, current.org_id, inv, hide_prices=hide)
         tiles.append(f"<div class='lbl'>{_render(body_tpl, doc, rows)}</div>")
     return {"html": _labels_html(tpl, tiles), "name": tpl.name, "count": len(tiles)}
 

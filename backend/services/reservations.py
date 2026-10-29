@@ -15,7 +15,7 @@ from datetime import datetime
 
 from sqlalchemy import select
 
-from backend.models import StockLevel, StockReservation
+from backend.models import StockReservation
 from backend.services.money import q4
 
 
@@ -38,9 +38,8 @@ async def plan_consumption(db, *, part_id, location_id, order_id, qty):
       reserved_block units physically present but reserved to OTHER orders (→ needs override)
       free_take      units freely consumable now (free stock + this order's own reservation)
     """
-    sl = (await db.execute(select(StockLevel).where(
-        StockLevel.part_id == part_id, StockLevel.location_id == location_id))).scalar_one_or_none()
-    avail = (sl.qty_available or 0) if sl else 0
+    from backend.services import stock_rows
+    avail, _held = await stock_rows.totals(db, part_id, location_id)
     holds = await _active_holds(db, part_id, location_id)
     # Reserved for the free-stock calc is the sum of *active* holds — expired holds self-heal and
     # never block, even before the release sweep touches StockLevel.qty_reserved.
@@ -64,16 +63,16 @@ async def draw(db, *, org_id, part_id, location_id, order_id, own_qty=0.0, other
     `qty_available` (the caller owns that). Returns {drew_own, drew_others, overrides}.
     """
     from backend.models import StockMovement
-    sl = (await db.execute(select(StockLevel).where(
-        StockLevel.part_id == part_id, StockLevel.location_id == location_id))).scalar_one_or_none()
+    from backend.services import stock_rows
     holds = await _active_holds(db, part_id, location_id)
     holds.sort(key=lambda r: r.created_at or datetime.min)
+    released = 0.0
 
     def _take(hold, want):
+        nonlocal released
         take = min(hold.qty or 0, want)
         hold.qty = (hold.qty or 0) - take
-        if sl:
-            sl.qty_reserved = max((sl.qty_reserved or 0) - take, 0)
+        released += take
         if (hold.qty or 0) <= 1e-9:
             hold.released = True
         return take
@@ -98,6 +97,8 @@ async def draw(db, *, org_id, part_id, location_id, order_id, own_qty=0.0, other
             overrides.append({"order_id": from_order, "qty": q4(t), "hold_id": h.id})
             rem -= t
 
+    if released > 0:      # ii144a: reserved lives on the location's rows (one per bin)
+        await stock_rows.reserve(db, part_id, location_id, -released)
     if overrides:
         # Audit trail: a zero-qty movement records the override (who + which job it was taken for).
         db.add(StockMovement(part_id=part_id, location_id=location_id, qty=0,

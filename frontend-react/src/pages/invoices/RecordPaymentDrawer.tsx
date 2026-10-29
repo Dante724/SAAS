@@ -2,14 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
+import AccountPicker, { type PayAccount, type PaymentOption, accountsFor } from "../../components/AccountPicker";
 import { Drawer, ErrorNote, btnGhost, btnPrimary, cash, inputCls, labelCls, round2, todayIso, type InvoiceDetail } from "./billing";
 
 /* Record payment against an invoice → POST /finance/invoices/{id}/pay.
    Partial amounts are fine. When the amount is more than the balance the user picks what happens
    to the difference: keep it as client balance (store credit) or refund it now. */
 
-type Account = { id: string; name: string; payment_option?: string };
-const METHODS = [
+const METHODS: { key: string; label: string; option: PaymentOption | "" }[] = [
   { key: "cash", label: "Cash", option: "cash" },
   { key: "card", label: "Card", option: "card" },
   { key: "transfer", label: "Bank transfer", option: "cashless" },
@@ -21,7 +21,7 @@ export default function RecordPaymentDrawer({ invoice, onClose, onPaid }: { invo
   const due = round2(invoice.balance_due || 0);
   const [amount, setAmount] = useState(due ? String(due) : "");
   const [method, setMethod] = useState("cash");
-  const [accounts, setAccounts] = useState<Account[] | null>(null);
+  const [accounts, setAccounts] = useState<PayAccount[] | null>(null);
   const [accountId, setAccountId] = useState("");
   const [paidAt, setPaidAt] = useState(todayIso());
   const [reference, setReference] = useState("");
@@ -32,15 +32,12 @@ export default function RecordPaymentDrawer({ invoice, onClose, onPaid }: { invo
   const canRefund = can("can_create_returns");
 
   useEffect(() => {
-    api.get<{ items: Account[] }>("/cash/accounts").then((r) => setAccounts(r.items || [])).catch(() => setAccounts([]));
+    api.get<{ items: PayAccount[] }>("/cash/accounts").then((r) => setAccounts(r.items || [])).catch(() => setAccounts([]));
   }, []);
-  // Default the account to the first one that takes this method (cash → a till, card → a card account).
-  const option = METHODS.find((m) => m.key === method)?.option || "";
-  useEffect(() => {
-    if (!accounts || method === "balance") return;
-    const match = accounts.find((a) => a.payment_option === option) || accounts[0];
-    setAccountId((cur) => (accounts.some((a) => a.id === cur && a.payment_option === option) ? cur : match?.id || ""));
-  }, [accounts, method, option]);
+  // The account follows the method (cash → a till, card → a card account); AccountPicker preselects
+  // the one at the invoice's location, else a company-wide one, and offers to set one up if none.
+  const option = (METHODS.find((m) => m.key === method)?.option || "cash") as PaymentOption;
+  const hasAccount = !!accounts && accountsFor(accounts, option).length > 0;
 
   const amt = round2(Number(amount) || 0);
   const excess = round2(Math.max(0, amt - due));
@@ -54,7 +51,7 @@ export default function RecordPaymentDrawer({ invoice, onClose, onPaid }: { invo
     amt <= 0 ? "Enter an amount above zero."
     : over && method === "balance" ? "A payment from client balance can't be more than the balance due."
     : over && !overpay ? "Choose what to do with the difference."
-    : method !== "balance" && accounts && accounts.length > 0 && !accountId ? "Pick the account the money goes into."
+    : method !== "balance" && hasAccount && !accountId ? "Pick the account the money goes into."
     : paidAt > todayIso() ? "The payment date can't be in the future."
     : null;
 
@@ -64,7 +61,7 @@ export default function RecordPaymentDrawer({ invoice, onClose, onPaid }: { invo
     try {
       await api.post(`/finance/invoices/${invoice.id}/pay`, {
         amount: amt, method,
-        account_id: method === "balance" ? null : accountId || null,
+        account_id: method === "balance" || !hasAccount ? null : accountId || null,
         reference: reference.trim() || null,
         paid_at: paidAt && paidAt !== todayIso() ? paidAt : null,
         overpay: over ? overpay : null,
@@ -103,10 +100,8 @@ export default function RecordPaymentDrawer({ invoice, onClose, onPaid }: { invo
         <div>
           <label htmlFor="pay-account" className={labelCls}>Account</label>
           {accounts === null ? <div className="text-xs text-ink-tertiary">Loading accounts…</div>
-            : accounts.length === 0 ? <div className="text-xs text-ink-tertiary">No accounts yet. The payment is recorded without moving a cashbox.</div>
-            : <select id="pay-account" value={accountId} onChange={(e) => setAccountId(e.target.value)} className={inputCls}>
-                {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-              </select>}
+            : <AccountPicker id="pay-account" accounts={accounts} paymentOption={option} locationId={invoice.location_id}
+                value={accountId} onChange={setAccountId} onCreated={(a) => setAccounts((l) => [...(l || []), a])} selectClassName={inputCls} />}
         </div>
       )}
       <div className="grid grid-cols-2 gap-3">

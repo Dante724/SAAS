@@ -91,7 +91,9 @@ def assert_org_active(org, today=None) -> None:
         return
     today = today or _date.today()
     if org.sub_status == "suspended":
-        raise HTTPException(status_code=403, detail="This account is suspended. Please contact support.")
+        # The admin panel can leave the shop a message ("Payment overdue, call us on ...").
+        msg = (getattr(org, "suspend_message", None) or "").strip()
+        raise HTTPException(status_code=403, detail=msg or "This account is suspended. Please contact support.")
     if getattr(org, "sub_end", None) and org.sub_end < today:
         raise HTTPException(status_code=403, detail="Your subscription has ended. Please contact support to renew.")
 
@@ -110,6 +112,10 @@ async def get_current_employee(
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         employee_id: str = payload.get("sub")
         if employee_id is None:
+            raise credentials_exception
+        # Special-purpose tokens (e.g. the device-limit "pick a device to sign out" token) are
+        # never a session.
+        if payload.get("typ"):
             raise credentials_exception
     except JWTError:
         raise credentials_exception
@@ -137,8 +143,17 @@ async def get_current_employee(
     # expires, so the session id is checked against the revocation list.
     sid = payload.get("sid")
     if sid:
-        from backend.models import RevokedSession
-        if (await db.execute(select(RevokedSession.sid).where(RevokedSession.sid == sid))).first():
+        from backend.models import AuthSession, RevokedSession
+        dev = (await db.execute(select(AuthSession.revoked_at, AuthSession.last_seen_at)
+                                .where(AuthSession.sid == sid))).first()
+        if dev is not None:
+            # Signed out from "Signed-in devices" (by them, an admin, or to make room at the limit).
+            if dev[0] is not None:
+                raise credentials_exception
+            from backend.services.sessions import touch
+            await touch(db, sid, dev[1])
+        elif (await db.execute(select(RevokedSession.sid).where(RevokedSession.sid == sid))).first():
+            # Tokens from before devices were tracked: still honour a sign-out.
             raise credentials_exception
     # Build 144do (security): enforce org lifecycle + employee access window on
     # EVERY request, not just at login. Previously a suspended/expired org's
@@ -161,6 +176,9 @@ async def get_current_employee(
         if not request.url.path.startswith(MFA_ENROLLMENT_PATHS):
             raise HTTPException(status_code=403, detail="Set up two-factor authentication to continue.",
                                 headers={"X-MFA-Enrollment-Required": "1"})
+    # Who is acting on this request's session: backend/db/actors.py stamps it on discounts,
+    # refunds and drawer closes, whichever route makes them.
+    db.info["actor_id"] = employee.id
     return employee
 
 

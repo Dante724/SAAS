@@ -340,9 +340,14 @@ async def import_price_list(
                     errors.append({"row": i + 1, "error": f"{money} isn't a number"})
                     rec.pop(money)
 
-        col = Part.sku if data.match_on == "sku" else Part.barcode
-        part = (await db.execute(select(Part).where(
-            Part.org_id == current.org_id, col == str(key)))).scalars().first()
+        if data.match_on == "sku":
+            part = (await db.execute(select(Part).where(
+                Part.org_id == current.org_id, Part.sku == str(key)))).scalars().first()
+        else:       # ii144b: any form of the barcode (UPC-A / EAN-13 / extra barcodes)
+            from backend.services import product_codes
+            part = (await db.execute(select(Part).where(Part.org_id == current.org_id, or_(
+                Part.barcode == str(key), Part.id.in_(product_codes.barcode_part_ids(current.org_id, str(key)))))
+            )).scalars().first()
 
         if not part:
             if not data.create_missing:

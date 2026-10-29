@@ -3,6 +3,9 @@ import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { useMe } from "../../context/Me";
 import { api } from "../../api/client";
+import { BARCODE_TYPES, barcodeTypeLabel, sortBarcodes } from "../../lib/barcodes";
+import type { BarcodeType } from "../../lib/barcodes";
+import ScanButton from "../../components/ScanButton";
 import { Product, currencySymbol, money } from "./types";
 import CustomFields from "../../components/CustomFields";
 import CategoryPicker from "../../components/CategoryPicker";
@@ -29,14 +32,17 @@ type LocLite = { id: string; name: string };
 const fmtDate = (s?: string) => (s ? new Date(s).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "—");
 
 // Inlines the authed barcode/QR SVG (/catalog/code.svg needs the bearer, so <img src> can't be used).
-function CodeSvg({ data, type }: { data: string; type: "code128" | "qr" }) {
+type CodeType = BarcodeType;
+const svgType = (t?: string | null): CodeType => (BARCODE_TYPES.some((x) => x.key === t) ? t as CodeType : "code128");
+
+function CodeSvg({ data, type }: { data: string; type: CodeType }) {
   const [svg, setSvg] = useState("");
   useEffect(() => {
     let tok = ""; try { tok = localStorage.getItem("ros_tok") || ""; } catch { /* ignore */ }
     fetch(`/api/catalog/code.svg?type=${type}&data=${encodeURIComponent(data)}`, { headers: tok ? { Authorization: `Bearer ${tok}` } : {} })
       .then((r) => (r.ok ? r.text() : "")).then(setSvg).catch(() => setSvg(""));
   }, [data, type]);
-  return <div className={`${type === "qr" ? "w-16 h-16" : "h-12 w-40"} bg-white flex items-center justify-center [&>svg]:max-w-full [&>svg]:max-h-full`} dangerouslySetInnerHTML={{ __html: svg || "" }} />;
+  return <div className={`${type === "qr" || type === "datamatrix" ? "w-16 h-16" : "h-12 w-40"} bg-white flex items-center justify-center [&>svg]:max-w-full [&>svg]:max-h-full`} dangerouslySetInnerHTML={{ __html: svg || "" }} />;
 }
 
 // How a kit prints on the customer's invoice and job printout. Plain words; the itemising-law
@@ -79,14 +85,46 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
   const editing = !!id;
   const [codeBusy, setCodeBusy] = useState(false);
   const [showCode, setShowCode] = useState(false);
-  // Assign + persist a Code128 or QR value to this product, then preview it. Needs a saved
-  // product (the endpoint writes to the row). Uses the same generator the label engine uses.
-  async function genCode(type: "code128" | "qr") {
+  // ii144a — a product can answer to several barcodes (a supplier's EAN, a repack's UPC).
+  const [codes, setCodes] = useState<{ id: string; barcode: string; barcode_type?: string | null; is_main: boolean }[] | null>(null);
+  const [newCode, setNewCode] = useState("");
+  const [newType, setNewType] = useState<string>("");
+  useEffect(() => {
+    if (kind === "product" && id && codes === null)
+      api.get<{ items: { id: string; barcode: string; is_main: boolean }[] }>(`/catalog/products/${id}/barcodes`)
+        .then((r) => setCodes(sortBarcodes(r.items || []))).catch(() => setCodes([]));
+  }, [kind, id, codes]);
+  async function addCode(scanned?: string) {
+    const v = (scanned ?? newCode).trim();
+    if (!v || !id) return;
+    setCodeBusy(true);
+    try {
+      const r = await api.post<{ barcode: string; is_main: boolean }>(`/catalog/products/${id}/barcodes`,
+        { barcode: v, barcode_type: newType || null });
+      if (r.is_main) set("barcode", r.barcode);
+      setNewCode(""); setCodes(null); flash("Barcode added");
+    } catch (e: any) { flash(e.message || "Couldn't add the barcode"); }
+    finally { setCodeBusy(false); }
+  }
+  async function removeCode(c: { id: string; barcode: string; is_main: boolean }) {
+    if (!id) return;
+    setCodeBusy(true);
+    try {
+      await api.del(`/catalog/products/${id}/barcodes/${c.id}`);
+      if (c.is_main) set("barcode", null);
+      setCodes(null); flash("Barcode removed");
+    } catch (e: any) { flash(e.message || "Couldn't remove the barcode"); }
+    finally { setCodeBusy(false); }
+  }
+  // Assign + persist a barcode or QR value to this product, then preview it. Needs a saved
+  // product (the endpoint writes to the row). ii144a: a barcode is a shop-made EAN-13 (20–29),
+  // valid at any till and never a manufacturer's number.
+  async function genCode(type: "ean13" | "qr") {
     if (!id) { flash("Save the product first, then generate a code"); return; }
     setCodeBusy(true);
     try {
       const r = await api.post<{ barcode: string; barcode_type: string }>(`/catalog/products/${id}/barcode/generate?type=${type}`, {});
-      set("barcode", r.barcode); set("barcode_type", r.barcode_type); setShowCode(true);
+      set("barcode", r.barcode); set("barcode_type", r.barcode_type); setShowCode(true); setCodes(null);
       flash(type === "qr" ? "QR generated" : "Barcode generated");
     } catch (e: any) { flash(e.message || "Could not generate code"); }
     finally { setCodeBusy(false); }
@@ -231,15 +269,47 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                 <button type="button" onClick={() => setShowCode((v) => !v)} disabled={!p.barcode}
                   className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-ink-secondary text-xs font-semibold flex items-center gap-1.5 disabled:opacity-50">
                   <M n="barcode" c="text-xs" />{showCode ? "Hide code" : "Show code"}</button>
-                <button type="button" onClick={() => genCode("code128")} disabled={codeBusy || !editing} title={editing ? "" : "Save first"}
+                <button type="button" onClick={() => genCode("ean13")} disabled={codeBusy || !editing || !!p.barcode} title={!editing ? "Save first" : p.barcode ? "This product already has a barcode" : ""}
                   className="px-2.5 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 text-ink-secondary text-xs font-medium disabled:opacity-50">Generate barcode</button>
                 <button type="button" onClick={() => genCode("qr")} disabled={codeBusy || !editing} title={editing ? "" : "Save first"}
                   className="px-2.5 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 text-ink-secondary text-xs font-medium disabled:opacity-50">Generate QR</button>
               </div>
               {showCode && p.barcode && (
                 <div className="flex items-center gap-3 p-2.5 rounded-lg bg-white border border-slate-200">
-                  <CodeSvg data={p.barcode} type={p.barcode_type === "qr" ? "qr" : "code128"} />
+                  <CodeSvg data={p.barcode} type={svgType(p.barcode_type)} />
                   <span className="font-mono text-xs text-ink-secondary break-all">{p.barcode}</span>
+                </div>
+              )}
+              {editing && (
+                <div className="pt-1">
+                  <div className={lbl}>Barcodes <span className="font-normal text-ink-tertiary">(scanning any of them finds this product)</span></div>
+                  {codes === null ? <div className="text-[11px] text-ink-tertiary">Loading…</div> : (
+                    <ul className="space-y-1">
+                      {codes.map((c) => (
+                        <li key={c.id} className="flex items-center gap-2 text-xs">
+                          <span className="font-mono text-ink-primary break-all">{c.barcode}</span>
+                          {c.barcode_type && <span className="text-[11px] text-ink-tertiary">{barcodeTypeLabel(c.barcode_type)}</span>}
+                          {c.is_main && <span className="px-1.5 py-0.5 rounded bg-slate-100 text-[11px] text-ink-secondary">Main</span>}
+                          <button type="button" onClick={() => removeCode(c)} disabled={codeBusy} aria-label={`Remove barcode ${c.barcode}`}
+                            className="ml-auto w-6 h-6 rounded-md grid place-items-center text-ink-tertiary hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"><M n="close" c="text-sm" /></button>
+                        </li>
+                      ))}
+                      {codes.length === 0 && <li className="text-[11px] text-ink-tertiary">No barcode yet.</li>}
+                    </ul>
+                  )}
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <input value={newCode} onChange={(e) => setNewCode(e.target.value)} maxLength={100} aria-label="Add a barcode"
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCode(); } }}
+                      placeholder="Scan or type another barcode" className={`${field} font-mono`} />
+                    <select value={newType} onChange={(e) => setNewType(e.target.value)} aria-label="Barcode type"
+                      className={`${field} w-auto appearance-none`}>
+                      <option value="">Any type</option>
+                      {BARCODE_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+                    </select>
+                    <ScanButton title="Scan a barcode" onScan={(c) => addCode(c)} />
+                    <button type="button" onClick={() => addCode()} disabled={codeBusy || !newCode.trim()}
+                      className="px-2.5 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-ink-secondary text-xs font-medium disabled:opacity-50 whitespace-nowrap">Add</button>
+                  </div>
                 </div>
               )}
             </div>

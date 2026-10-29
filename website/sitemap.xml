@@ -1,10 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://tekly.app/</loc><lastmod>2026-10-20</lastmod><priority>1.0</priority></url>
-  <url><loc>https://tekly.app/phone-repair-software/</loc><lastmod>2026-10-20</lastmod><priority>0.8</priority></url>
-  <url><loc>https://tekly.app/auto-repair-shop-software/</loc><lastmod>2026-10-20</lastmod><priority>0.8</priority></url>
-  <url><loc>https://tekly.app/small-engine-repair-software/</loc><lastmod>2026-10-20</lastmod><priority>0.8</priority></url>
-  <url><loc>https://tekly.app/marine-repair-software/</loc><lastmod>2026-10-20</lastmod><priority>0.8</priority></url>
-  <url><loc>https://tekly.app/privacy/</loc><lastmod>2026-10-20</lastmod><priority>0.3</priority></url>
-  <url><loc>https://tekly.app/terms/</loc><lastmod>2026-10-20</lastmod><priority>0.3</priority></url>
+  <url><loc>https://tekly.app/</loc><lastmod>2026-10-28</lastmod></url>
+  <url><loc>https://tekly.app/product/</loc><lastmod>2026-10-28</lastmod></url>
+  <url><loc>https://tekly.app/pricing/</loc><lastmod>2026-10-28</lastmod></url>
+  <url><loc>https://tekly.app/about/</loc><lastmod>2026-10-26</lastmod></url>
+  <url><loc>https://tekly.app/changelog/</loc><lastmod>2026-10-26</lastmod></url>
+  <url><loc>https://tekly.app/phone-repair-software/</loc><lastmod>2026-10-28</lastmod></url>
+  <url><loc>https://tekly.app/auto-repair-shop-software/</loc><lastmod>2026-10-28</lastmod></url>
+  <url><loc>https://tekly.app/small-engine-repair-software/</loc><lastmod>2026-10-28</lastmod></url>
+  <url><loc>https://tekly.app/marine-repair-software/</loc><lastmod>2026-10-28</lastmod></url>
+  <url><loc>https://tekly.app/multi-location-repair-shop-software/</loc><lastmod>2026-10-26</lastmod></url>
+  <url><loc>https://tekly.app/compare/</loc><lastmod>2026-10-26</lastmod></url>
+  <url><loc>https://tekly.app/compare/tekly-vs-repairdesk/</loc><lastmod>2026-10-28</lastmod></url>
+  <url><loc>https://tekly.app/compare/tekly-vs-repairshopr/</loc><lastmod>2026-10-28</lastmod></url>
+  <url><loc>https://tekly.app/compare/tekly-vs-shopmonkey/</loc><lastmod>2026-10-28</lastmod></url>
+  <url><loc>https://tekly.app/compare/tekly-vs-tekmetric/</loc><lastmod>2026-10-28</lastmod></url>
+  <url><loc>https://tekly.app/compare/tekly-vs-orderry/</loc><lastmod>2026-10-28</lastmod></url>
+  <url><loc>https://tekly.app/guides/choose-repair-shop-software/</loc><lastmod>2026-10-28</lastmod></url>
+  <url><loc>https://tekly.app/privacy/</loc><lastmod>2026-10-26</lastmod></url>
+  <url><loc>https://tekly.app/terms/</loc><lastmod>2026-10-26</lastmod></url>
 </urlset>

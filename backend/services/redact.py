@@ -12,7 +12,7 @@ COST_PERM = "can_view_purchase_price"
 COST_KEYS = frozenset({
     "cost_price", "avg_cost", "unit_cost", "purchase_price", "last_cost", "landed_cost",
     "supplier_price", "purchase_cost", "cost_total", "total_cost",
-    "margin", "margin_pct", "profit", "cogs",
+    "margin", "margin_pct", "usual_pct", "profit", "cogs",
 })
 # Cheap pre-check on the raw JSON before parsing it.
 _NEEDLES = tuple(f'"{k}"'.encode() for k in COST_KEYS)

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from backend.db.database import get_db
 from backend.models import (
-    ClientReturn, ClientReturnLine, Refund, Order, StockLevel, StockMovement,
+    ClientReturn, ClientReturnLine, Refund, Order, StockMovement,
     Account, Employee, Payment,
 )
 from backend.services.auth import assert_perm, get_current_employee, require_perm
@@ -49,14 +49,8 @@ async def create_return(
         db.add(ClientReturnLine(return_id=ret.id, part_id=li.part_id,
                                 qty=li.qty, restock=li.restock))
         if li.restock and li.qty > 0:
-            sl = (await db.execute(select(StockLevel).where(
-                StockLevel.part_id == li.part_id,
-                StockLevel.location_id == current.location_id))).scalars().first()
-            if sl:
-                await _atomic_add(db, sl, "qty_available", li.qty, round_to=None)   # atomic
-            else:
-                db.add(StockLevel(part_id=li.part_id, location_id=current.location_id,
-                                  qty_available=li.qty, qty_reserved=0))
+            from backend.services import stock_rows
+            await stock_rows.add(db, li.part_id, current.location_id, li.qty)
             db.add(StockMovement(part_id=li.part_id, location_id=current.location_id,
                                  movement_type="return", qty=li.qty,
                                  ref_type="client_return", ref_id=ret.id))
@@ -142,6 +136,8 @@ async def create_refund(
                 await post_contact_ledger(db, current.org_id, order.client_id, "refund", abs(data.amount),
                                           note=f"Refund for {order.order_number}", ref_type="refund",
                                           ref_id=refund.id, created_by_id=current.id)
+            from backend.services.order_money import resync_write_off   # dropped job: no debt comes back
+            await resync_write_off(db, order, current.id)
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "refund", refund.id,
                            f"Refund {data.amount:g} from {acct.name}")

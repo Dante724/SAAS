@@ -1,16 +1,19 @@
 import { humanize } from "../../lib/humanize";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api, openAuthedDoc } from "../../api/client";
 import DateField from "../../components/DateField";
 import { Product, money } from "./types";
 import { confirmDialog } from "../../lib/dialog";
+import SerialEntry from "../../components/SerialEntry";
+import PasteImport, { ImportedLine } from "./PasteImport";
+import { useMe } from "../../context/Me";
 
 /** PO detail + the missing Receive action. Receiving posts to the ONE real path
  * (`/inventory/po/{id}/receive`) that lands stock, moving-average cost, FIFO layers,
  * landed cost, supplier balance and honours reservations. Before this the whole
  * pipeline was unreachable and POs stayed open forever. */
-type Line = { id: string; part_id: string; part?: string; qty_ordered: number; qty_received: number; unit_cost: number };
+type Line = { id: string; part_id: string; part?: string; qty_ordered: number; qty_received: number; unit_cost: number; serialized?: boolean };
 type Charge = { label: string; amount: number };
 type Match = {
   status: "pending" | "unbilled" | "matched" | "variance";
@@ -35,6 +38,9 @@ const d = (s?: string | null) => (s ? new Date(s).toLocaleDateString() : "—");
 export default function PODrawer({ poId, onClose, onChanged }: { poId: string; onClose: () => void; onChanged: () => void }) {
   const [po, setPo] = useState<PODetail | null>(null);
   const [recv, setRecv] = useState<Record<string, number>>({});
+  // 16b: serial-tracked lines are received by scanning each unit's serial / IMEI
+  const [serials, setSerials] = useState<Record<string, string[]>>({});
+  const [serState, setSerState] = useState<Record<string, { blocked: number; checking: boolean }>>({});
   const [inv, setInv] = useState("");
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -53,7 +59,8 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
       setPo(p);
       setInv(p.supplier_invoice_total != null ? String(p.supplier_invoice_total) : "");
       // default each line's receive qty to the outstanding remainder
-      setRecv(Object.fromEntries(p.lines.map((l) => [l.id, Math.max((l.qty_ordered || 0) - (l.qty_received || 0), 0)])));
+      setRecv(Object.fromEntries(p.lines.map((l) => [l.id, l.serialized ? 0 : Math.max((l.qty_ordered || 0) - (l.qty_received || 0), 0)])));
+      setSerials({}); setSerState({});
     }).catch(() => setToast("Could not load PO"));
     api.get<any>(`/inventory/po/${poId}/receipts`).then((r) => setReceipts(r.items || [])).catch(() => {});
   }
@@ -75,6 +82,13 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
   }
   const edSet = (patch: any) => setEd((e: any) => ({ ...e, ...patch }));
   const edLine = (i: number, patch: any) => setEd((e: any) => ({ ...e, lines: e.lines.map((l: any, j: number) => j === i ? { ...l, ...patch } : l) }));
+  const { can } = useMe();
+  const [pasting, setPasting] = useState(false);   // 13b: paste the supplier's sheet into this PO
+  function edImport(lines: ImportedLine[]) {
+    setPool((xs) => [...xs, ...lines.filter((l) => l.created && !xs.some((x) => x.id === l.part_id)).map((l) => ({ id: l.part_id, name: l.name, cost_price: l.cost } as any))]);
+    setEd((e: any) => ({ ...e, lines: [...e.lines.filter((l: any) => l.part_id), ...lines.map((l) => ({ part_id: l.part_id, qty_ordered: l.qty, unit_cost: l.cost }))] }));
+    setPasting(false);
+  }
   const edAddLine = () => setEd((e: any) => ({ ...e, lines: [...e.lines, { part_id: "", qty_ordered: 1, unit_cost: 0 }] }));
   const edDelLine = (i: number) => setEd((e: any) => ({ ...e, lines: e.lines.filter((_: any, j: number) => j !== i) }));
   const edCharge = (i: number, patch: any) => setEd((e: any) => ({ ...e, charges: e.charges.map((c: any, j: number) => j === i ? { ...c, ...patch } : c) }));
@@ -118,6 +132,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
     const p: any = pool.find((x: any) => [x.sku, x.barcode, x.code].some((v: any) => (v || "").toLowerCase() === c));
     const line = p && po.lines.find((l) => l.part_id === p.id);
     if (!line) { flash(`No PO line matches "${code}"`); setScan(""); return; }
+    if (line.serialized) { flash(`${prodName(line.part_id)} is tracked by serial — scan each unit's serial in the box under it`); setScan(""); return; }
     const remain = Math.max((line.qty_ordered || 0) - (line.qty_received || 0), 0);
     const cur = recv[line.id] ?? 0;
     if (cur >= remain) { flash(`${prodName(line.part_id)} already at max (${remain})`); setScan(""); return; }
@@ -126,7 +141,8 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
   }
 
   const outstanding = (po?.lines || []).reduce((n, l) => n + Math.max((l.qty_ordered || 0) - (l.qty_received || 0), 0), 0);
-  const toReceive = Object.values(recv).reduce((n, q) => n + (q > 0 ? q : 0), 0);
+  const qtyFor = (l: Line) => l.serialized ? (serials[l.id] || []).length : (recv[l.id] || 0);
+  const toReceive = (po?.lines || []).reduce((n, l) => n + qtyFor(l), 0);
   const received = (po?.status === "received");
   const st = (po?.status || "").toLowerCase();
   // Receiving is only open once the PO is placed (Ordered) and while stock is still
@@ -136,9 +152,17 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
   const [shipFreight, setShipFreight] = useState("");
   async function receive(all = false) {
     if (!po) return;
-    const source = all
-      ? po.lines.map((l) => ({ po_line_id: l.id, qty: Math.max((l.qty_ordered || 0) - (l.qty_received || 0), 0) })).filter((l) => l.qty > 0)
-      : po.lines.filter((l) => (recv[l.id] || 0) > 0).map((l) => ({ po_line_id: l.id, qty: recv[l.id] }));
+    const remainOf = (l: Line) => Math.max((l.qty_ordered || 0) - (l.qty_received || 0), 0);
+    if (all) {
+      const short = po.lines.find((l) => l.serialized && remainOf(l) > 0 && (serials[l.id] || []).length < remainOf(l));
+      if (short) { flash(`Scan a serial for each unit of ${short.part || prodName(short.part_id)} first (${(serials[short.id] || []).length} of ${remainOf(short)})`); return; }
+    }
+    if (po.lines.some((l) => l.serialized && (serState[l.id]?.blocked || serState[l.id]?.checking))) { flash("Fix the serials marked in red first"); return; }
+    const source = po.lines
+      .map((l) => l.serialized
+        ? { po_line_id: l.id, qty: (serials[l.id] || []).length, serials: serials[l.id] || [] }
+        : { po_line_id: l.id, qty: all ? remainOf(l) : (recv[l.id] || 0) })
+      .filter((l) => l.qty > 0);
     if (source.length === 0) { flash("Nothing to receive — set a quantity"); return; }
     setBusy(true);
     try {
@@ -346,7 +370,11 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                   </tbody>
                 </table>
               </div>
-              <button onClick={edAddLine} className="text-xs font-bold text-primary hover:underline flex items-center gap-1"><M n="add" c="text-sm" />Add line</button>
+              <div className="flex items-center gap-4">
+                <button onClick={edAddLine} className="text-xs font-bold text-primary hover:underline flex items-center gap-1"><M n="add" c="text-sm" />Add line</button>
+                <button onClick={() => setPasting((v) => !v)} className="text-xs font-bold text-primary hover:underline flex items-center gap-1"><M n="content_paste" c="text-sm" />Paste from Excel</button>
+              </div>
+              {pasting && <PasteImport onAdd={edImport} onClose={() => setPasting(false)} canCreate={can("can_create_products")} />}
 
               {/* charges / landed cost */}
               <div className="rounded-2xl border border-slate-200/80 p-3 space-y-2">
@@ -417,20 +445,31 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                 <tbody className="divide-y divide-slate-100">
                   {po.lines.map((l) => {
                     const remain = Math.max((l.qty_ordered || 0) - (l.qty_received || 0), 0);
-                    return (
-                      <tr key={l.id}>
-                        <td className="py-2.5 px-3 font-semibold text-ink-primary">{l.part || l.part_id}</td>
+                    const scanRow = canReceive && l.serialized && remain > 0;
+                    return (<Fragment key={l.id}>
+                      <tr className={scanRow ? "border-b-0" : undefined}>
+                        <td className="py-2.5 px-3 font-semibold text-ink-primary">{l.part || l.part_id}{l.serialized && <span className="ml-1.5 text-[11px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-ink-secondary">Serial-tracked</span>}</td>
                         <td className="py-2.5 px-3 text-right tabular-nums">{l.qty_ordered}</td>
                         <td className="py-2.5 px-3 text-right tabular-nums">{l.qty_received || 0}{remain > 0 && (l.qty_received || 0) > 0 ? <span className="text-[11px] text-amber-600"> · {remain} left</span> : null}</td>
                         <td className="py-2.5 px-3 text-right tabular-nums">{money(l.unit_cost)}</td>
                         {canReceive && <td className="py-2.5 px-3 text-right">
-                          <input type="number" min={0} max={remain} value={recv[l.id] ?? 0}
-                            onChange={(e) => setRecv({ ...recv, [l.id]: Math.max(0, Math.min(remain, Number(e.target.value) || 0)) })}
-                            disabled={remain === 0}
-                            className="glass-input rounded-lg px-2 py-1 w-20 text-right tabular-nums disabled:opacity-40" />
+                          {l.serialized
+                            ? <span className="tabular-nums font-semibold text-ink-primary" title="One per scanned serial">{(serials[l.id] || []).length}</span>
+                            : <input type="number" min={0} max={remain} value={recv[l.id] ?? 0}
+                                onChange={(e) => setRecv({ ...recv, [l.id]: Math.max(0, Math.min(remain, Number(e.target.value) || 0)) })}
+                                disabled={remain === 0} aria-label={`Receive now: ${l.part || "line"}`}
+                                className="glass-input rounded-lg px-2 py-1 w-20 text-right tabular-nums disabled:opacity-40" />}
                         </td>}
                       </tr>
-                    );
+                      {scanRow && (
+                        <tr><td colSpan={5} className="px-3 pb-3 pt-0">
+                          <SerialEntry value={serials[l.id] || []} target={remain} partId={l.part_id}
+                            others={Object.entries(serials).flatMap(([id, v]) => id !== l.id ? v : [])}
+                            onChange={(v) => setSerials((m) => ({ ...m, [l.id]: v }))}
+                            onState={(st2) => setSerState((m) => ({ ...m, [l.id]: { blocked: st2.blocked, checking: st2.checking } }))} />
+                        </td></tr>
+                      )}
+                    </Fragment>);
                   })}
                 </tbody>
               </table>

@@ -321,7 +321,8 @@ async def start_charge(db: AsyncSession, *, org_id: str, actor_id: str, terminal
             raise TerminalError(409, "This sale was deleted.")
         if s.paid:
             raise TerminalError(409, "This sale is already paid.")
-        amount = float(s.total or 0)   # a sale is always charged in full
+        from backend.routers.sales import sale_amount_due
+        amount = await sale_amount_due(db, s)   # in full, less what a gift card already paid (B5)
         if amount <= 0:
             raise TerminalError(400, "Nothing to charge on this sale.")
         what = f"Sale {s.sale_number}"
@@ -640,6 +641,14 @@ async def refund(db: AsyncSession, ch: TerminalCharge, *, amount: Optional[float
         raise TerminalError(400, "Refund amount must be positive")
     if amount > left + 0.005:
         raise TerminalError(422, f"Only {left:.2f} is left to refund on this charge.")
+    if ch.order_id:
+        # One cap for every refund path (B3): money already handed back in cash (Refunds, an
+        # overpayment refund) counts too, or the same 100 went back once in cash and again here.
+        from backend.services.order_money import net_paid
+        kept = await net_paid(db, ch.order_id)
+        if amount > kept + 0.005:
+            raise TerminalError(422, f"Only {max(kept, 0):.2f} paid for this job hasn't been refunded yet."
+                                if kept > 0 else "Everything paid for this job has already been refunded.")
     # Claim the refund before calling the provider so two clicks can't both refund.
     claimed = await db.execute(sa_update(TerminalCharge)
         .where(TerminalCharge.id == ch.id, TerminalCharge.refunded_amount == ch.refunded_amount)
@@ -701,6 +710,8 @@ async def _post_refund(db: AsyncSession, ch: TerminalCharge, amount: float, ref:
             await post_contact_ledger(db, ch.org_id, o.client_id, "refund", abs(amount),
                                       note=f"Card refund for {o.order_number}", ref_type="payment",
                                       ref_id=rp.id, created_by_id=actor_id)
+        from backend.services.order_money import resync_write_off   # dropped job: no debt comes back
+        await resync_write_off(db, o, actor_id)
         await log_system_event(db, ch.org_id, "order", o.id, f"Card reader refund {amount:.2f}")
     else:
         s = (await db.execute(select(Sale).where(Sale.id == ch.sale_id))).scalar_one()

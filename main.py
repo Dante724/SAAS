@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 import backend.core.scheduled  # noqa: F401 — registers periodic jobs
@@ -56,11 +56,13 @@ from backend.routers import (
     lookups,
     media,
     mfa,
+    mobile_messages,
     notifications,
     order_items,
     orders,
     payments,
     payroll,
+    pilot,
     platform,
     prefs,
     pricing,
@@ -76,6 +78,7 @@ from backend.routers import (
     sales,
     scan,
     schedules,
+    sense,
     settings_finance,
     sso,
     staff,
@@ -104,10 +107,10 @@ log = logging.getLogger("tekly")
 ROUTERS = [
     auth, orders, clients, inventory, finance, staff, reports, feed, forms,
     notifications, public, catalog, assets, cash, statuses, feedback, documents,
-    bins, payroll, leads, pricing, sales, returns, transfers, bundles, appointments,
+    bins, payroll, leads, pricing, sales, sense, returns, transfers, bundles, appointments,
     chats, resources, timeclock, webhooks, payments, apikeys, v1,
     integrations_qbo, ai, catalog_products, tech, push, checklists, lookups, engage, settings_finance, rbac, directories, analytics, media, compliance, platform, mfa, sso, comms, integrations_xero, integrations_email, integrations_credentials, industry, schedules, conversions, warehouses, tasks, stock_docs, suppliers, printing, inbox, comms_ai, automations, insights, recommendations, order_items, prefs, admin, currencies, tags, telephony, custom_reports, regions, scan,
-    terminals, auto_print, v2,
+    terminals, auto_print, v2, mobile_messages, pilot,
 ]
 
 
@@ -121,9 +124,12 @@ async def lifespan(app: FastAPI):
     # Build 144ce: ensure a bootstrap platform admin exists for the /admin portal.
     try:
         from backend.db.database import AsyncSessionLocal
+        from backend.services.admin_access import ensure_builtin_roles
         from backend.services.platform_auth import ensure_seed_admin
         async with AsyncSessionLocal() as _s:
             await ensure_seed_admin(_s)
+            await ensure_builtin_roles(_s)   # Owner, Sales and account management, Sales, ...
+            await _s.commit()
     except Exception:  # noqa: BLE001 — never block startup on this
         log.exception("platform admin seed skipped")
     if settings.SEED_DEMO:
@@ -156,8 +162,17 @@ app = FastAPI(
 from backend.core.cost_redaction import CostRedactionMiddleware  # noqa: E402
 
 app.add_middleware(CostRedactionMiddleware)
+# Which app (Tekly Go or the web) made the request; write sites read it via column defaults.
+from backend.core.client_source import ClientSourceMiddleware  # noqa: E402
+
+app.add_middleware(ClientSourceMiddleware)
 app.add_middleware(RequestContextMiddleware)
-from backend.core.observability import MetricsMiddleware, RateLimitMiddleware, SecurityHeadersMiddleware
+from backend.core.observability import (  # noqa: E402
+    MetricsMiddleware,
+    RateLimitMiddleware,
+    SecurityHeadersMiddleware,
+    is_public_api_path,
+)
 
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(MetricsMiddleware)
@@ -166,8 +181,23 @@ from backend.core.body_limit import BodySizeLimitMiddleware
 
 # Inside CORS so a 413 still carries CORS headers and the browser can show the message.
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.MAX_REQUEST_BYTES)
+class _CorsExceptPublicApi(CORSMiddleware):
+    """CORS for the app's own browser screens only. /api/v1 is called server to server with a
+    secret key, so browsers on other sites get no CORS grant for it (A11): a key pasted into a
+    web page can't be used from there, and preflights get no allow headers."""
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            if is_public_api_path(scope.get("path", "")):
+                return await self.app(scope, receive, send)
+        return await super().__call__(scope, receive, send)
+
+
+from backend.core.observability import PublicApiTransportMiddleware  # noqa: E402
+
+# Deployed: /api/v1 and /api/v2 over plain HTTP are refused with 403 (A11).
+app.add_middleware(PublicApiTransportMiddleware)
 app.add_middleware(
-    CORSMiddleware,
+    _CorsExceptPublicApi,
     allow_origins=settings.cors_origin_list,
     # Credentials cannot be combined with a wildcard origin (CORS spec); only
     # enable them for an explicit allowlist.
@@ -176,6 +206,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from sqlalchemy.exc import IntegrityError  # noqa: E402
+
+from backend.core.db_errors import integrity_error_handler  # noqa: E402
+
+app.add_exception_handler(IntegrityError, integrity_error_handler)   # ii144a: unique clash → plain 409
+
 for r in ROUTERS:
     app.include_router(r.router)
 app.include_router(sales.st_router)
@@ -183,6 +219,9 @@ app.include_router(industry.scan_router)
 from backend.routers import credit_notes  # noqa: E402 — opb: credit notes
 
 app.include_router(credit_notes.router)
+from backend.routers import devices  # noqa: E402 — signed-in devices and the per-login device limit
+
+app.include_router(devices.router)
 
 
 @app.get("/health", include_in_schema=False)
@@ -289,15 +328,54 @@ async def serve_track(token: str):
 
 @app.get("/admin", include_in_schema=False)
 async def serve_admin():
-    # Build 144cf: the separate platform-operator portal (own login, outside any tenant).
-    from backend.core.observability import ADMIN_CSP
-    return FileResponse(os.path.join(frontend_dir, "admin.html"), headers={"Content-Security-Policy": ADMIN_CSP})
+    # Tekly's own back office (separate login, outside any shop): a React page built from
+    # frontend-react/admin.html. It has no inline script, so it gets the app's strict CSP.
+    page = os.path.join(react_dir, "admin.html")
+    if os.path.isfile(page):
+        return FileResponse(page, headers={"Cache-Control": "no-cache"})
+    return HTMLResponse(_NOT_BUILT, status_code=503)
 
 
 @app.get("/book/{slug}", include_in_schema=False)
 async def serve_book(slug: str):
     # Appointment 2.0 — React page (main.tsx detects "/book/" and renders <PublicAppointment/>).
     return _serve_react()
+
+
+# ── Tekly Go (phone app, a second page of the React build) ──
+# Served at /go/. Its service worker lives at /go/sw.js and controls only /go/, so it never
+# touches the web app or the /tech worker's root scope.
+_go_dir = os.path.join(react_dir, "go")
+_go_index = os.path.join(_go_dir, "index.html")
+
+
+@app.get("/go", include_in_schema=False)
+async def serve_go_root():
+    return RedirectResponse("/go/", status_code=307)
+
+
+@app.get("/go/sw.js", include_in_schema=False)
+async def serve_go_sw():
+    if not os.path.isfile(os.path.join(_go_dir, "sw.js")):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    return FileResponse(os.path.join(_go_dir, "sw.js"), media_type="text/javascript",
+                        headers={"Service-Worker-Allowed": "/go/", "Cache-Control": "no-cache"})
+
+
+@app.get("/go/manifest.webmanifest", include_in_schema=False)
+async def serve_go_manifest():
+    if not os.path.isfile(os.path.join(_go_dir, "manifest.webmanifest")):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    return FileResponse(os.path.join(_go_dir, "manifest.webmanifest"), media_type="application/manifest+json",
+                        headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/go/{path:path}", include_in_schema=False)
+async def serve_go(path: str = ""):
+    # Every Go route (/go/today, /go/job/<id>, /go/scan …) is the same shell; the router picks the screen.
+    if os.path.isfile(_go_index):
+        return FileResponse(_go_index, headers={"Cache-Control": "no-cache"})
+    return HTMLResponse(_NOT_BUILT, status_code=503)
 
 
 # ── Technician PWA ──

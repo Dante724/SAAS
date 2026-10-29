@@ -9,15 +9,15 @@ which is what makes tasks payable (build 70's `term_condition` machinery).
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from sqlalchemy import or_, select
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.services.dates import parse_dt
 from backend.models import Client, Employee, Order, Task
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, has_perm
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -72,11 +72,11 @@ async def list_tasks(
         q = q.where(Task.order_id == order_id)
     if client_id:
         q = q.where(Task.client_id == client_id)
-    if mine:
-        q = q.where(or_(Task.assigned_to_id == current.id, Task.created_by_id == current.id))
     if overdue:
         q = q.where(Task.completed_at.is_(None), Task.due_at < datetime.utcnow())
     rows = (await db.execute(q)).scalars().all()
+    if mine:   # assigned to me (primary or one of several), or created by me
+        rows = [t for t in rows if _involves(t, current.id)]
 
     far = datetime.max
     rows.sort(key=lambda t: (t.completed_at is not None, t.due_at or far))
@@ -101,6 +101,7 @@ class TaskIn(BaseModel):
 @router.post("", status_code=201)
 async def create_task(
     data: TaskIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
@@ -108,6 +109,63 @@ async def create_task(
     primary = data.assigned_to_id or (ids[0] if ids else None)
     if primary and primary not in ids:
         ids = [primary] + ids
+    await _check_assign(db, current, ids)
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "tasks.create")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _create_task(data, ids, primary, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+class PartRequestIn(BaseModel):
+    order_id: str
+    description: str = Field(min_length=1, max_length=200)
+    qty: float = Field(default=1, gt=0, le=999)
+    note: Optional[str] = Field(default=None, max_length=1000)
+
+
+@router.post("/part-request", status_code=201)
+async def request_part(
+    data: PartRequestIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Tekly Go: a technician says a job needs a part ordered. Becomes an urgent task on the job
+    for the job's manager (or for the whole shop when the job has none), so the person who orders
+    stock sees it. Anyone working on the job may ask, which is why this doesn't need
+    can_assign_staff the way handing someone a normal task does."""
+    from backend.routers.orders import _guard_order_access
+    order = (await db.execute(select(Order).where(
+        Order.id == data.order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "tasks.part_request")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        qty = f"{data.qty:g}"
+        who = order.manager_id if order.manager_id and order.manager_id != current.id else None
+        task = TaskIn(
+            title=f"Order part: {data.description.strip()}{'' if qty == '1' else f' ×{qty}'} for {order.order_number}",
+            description=(data.note or "").strip() or None, priority=1, order_id=order.id, client_id=order.client_id)
+        result = await _create_task(task, [who] if who else [], who, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _create_task(data: TaskIn, ids: list, primary, db: AsyncSession, current: Employee):
     t = Task(
         org_id=current.org_id, title=data.title, description=data.description,
         assigned_to_id=primary, assignee_ids=ids, created_by_id=current.id,
@@ -163,6 +221,10 @@ async def update_task(
     current: Employee = Depends(get_current_employee),
 ):
     t = await _load(db, current, task_id)
+    await _check_may_change(db, current, t)
+    new_people = list(data.assignee_ids or []) + ([data.assigned_to_id] if data.assigned_to_id else [])
+    if new_people:
+        await _check_assign(db, current, [p for p in new_people if p not in (t.assignee_ids or []) and p != t.assigned_to_id])
     prev_assignee, prev_status = t.assigned_to_id, t.status
 
     for f in ("title", "description", "priority", "assigned_to_id", "client_id", "order_id"):
@@ -217,6 +279,7 @@ async def delete_task(
     current: Employee = Depends(get_current_employee),
 ):
     t = await _load(db, current, task_id)
+    await _check_may_change(db, current, t)
     await db.delete(t)
     await db.commit()
     return {"ok": True}
@@ -260,6 +323,22 @@ async def add_comment(
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+def _involves(t: Task, emp_id: str) -> bool:
+    return emp_id in (t.assigned_to_id, t.created_by_id) or emp_id in (t.assignee_ids or [])
+
+
+async def _check_assign(db: AsyncSession, current: Employee, people: list) -> None:
+    """Giving work to someone else needs can_assign_staff; anyone may take a task themselves."""
+    if any(p and p != current.id for p in people) and not await has_perm(db, current, "can_assign_staff"):
+        raise HTTPException(403, "Your role can't assign tasks to other people. Assign it to yourself.")
+
+
+async def _check_may_change(db: AsyncSession, current: Employee, t: Task) -> None:
+    """Edit, complete or delete: the creator, an assignee, or someone who assigns work."""
+    if not _involves(t, current.id) and not await has_perm(db, current, "can_assign_staff"):
+        raise HTTPException(403, "Only the person who made this task, its assignees or a manager can change it.")
+
+
 async def _load(db: AsyncSession, current: Employee, task_id: str) -> Task:
     t = (await db.execute(select(Task).where(
         Task.id == task_id, Task.org_id == current.org_id))).scalar_one_or_none()

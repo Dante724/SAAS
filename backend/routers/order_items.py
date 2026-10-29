@@ -8,6 +8,9 @@ DELETE /api/orders/{id}/items/{item_id}   remove (not item #1); its lines go bac
 POST   /api/orders/{id}/items/collect     "Collect & invoice these items": bill only their lines,
                                           mark them collected, leave the job open
 POST   /api/orders/{id}/items/{item_id}/split   move the item + its lines to a new, linked job
+POST   /api/orders/{id}/continue          "Continue as a linked job": a new job for the same customer
+                                          and device that carries on from this one (any job, any shop type)
+GET    /api/orders/{id}/linked            jobs linked to this one (continued from / in, split from / off)
 
 Every query matches org_id AND order_id. Writes need the shop setting on (services/multi_asset)
 and the "Create tickets" role permission.
@@ -314,3 +317,71 @@ async def split_item(order_id: str, item_id: str, db: AsyncSession = Depends(get
     await db.commit()
     return {"ok": True, "id": new.id, "order_number": new.order_number, "line_count": len(line_ids),
             "items": await _list(db, order), **(await _links(db, order))}
+
+
+class ContinueIn(BaseModel):
+    complaint: Optional[str] = Field(None, max_length=5000)
+
+
+@router.post("/{order_id}/continue", status_code=201)
+async def continue_as_linked_job(order_id: str, data: ContinueIn, db: AsyncSession = Depends(get_db),
+                                 current: Employee = Depends(require_perm("can_create_tickets"))):
+    """Start a new job that carries on from this one — open or closed, e.g. the customer came back
+    or the work needs a second visit. Same customer, device, location, type, people and job fields;
+    a fresh status, no lines. Linked both ways."""
+    from backend.models import OrderStatus
+    from backend.routers.feed import log_system_event
+    from backend.routers.orders import unique_public_token
+    from backend.services.audit import record as _audit
+    from backend.services.numbering import next_number
+    order = await _order(db, current, order_id)
+    if order.is_estimate:
+        raise HTTPException(409, "Estimates can't be continued — create a job from the estimate instead")
+    status = (await db.execute(select(OrderStatus.key).where(
+        OrderStatus.org_id == current.org_id, OrderStatus.is_default == True,  # noqa: E712
+        OrderStatus.active == True, OrderStatus.record_type == "work_order"))).scalars().first() or "new"  # noqa: E712
+    complaint = (data.complaint or "").strip() or order.complaint
+    new = Order(order_number=await next_number(db, current.org_id, "order"), org_id=current.org_id,
+                public_token=await unique_public_token(db), client_id=order.client_id, device_id=order.device_id,
+                location_id=order.location_id, priority=order.priority, complaint=complaint,
+                assigned_to_id=order.assigned_to_id, manager_id=order.manager_id, type_id=order.type_id,
+                template_key=order.template_key, status=status, is_estimate=False,
+                currency_code=order.currency_code, fx_rate=order.fx_rate,
+                custom_data=dict(order.custom_data or {}), continued_from_order_id=order.id)
+    db.add(new)
+    await db.flush()
+    db.add(OrderStatusLog(order_id=new.id, from_status=None, to_status=status, changed_by_id=current.id))
+    await _audit(db, org_id=current.org_id, actor_id=current.id, action="order.continue",
+                 entity_type="order", entity_id=new.id, diff={"from": order.order_number, "to": new.order_number})
+    await log_system_event(db, current.org_id, "order", order.id, f"Continued in job {new.order_number}")
+    await log_system_event(db, current.org_id, "order", new.id, f"Continued from job {order.order_number}")
+    await db.commit()
+    return {"ok": True, "id": new.id, "order_number": new.order_number}
+
+
+@router.get("/{order_id}/linked")
+async def linked_jobs(order_id: str, db: AsyncSession = Depends(get_db),
+                      current: Employee = Depends(get_current_employee)):
+    """Every job linked to this one, this shop only."""
+    order = await _order(db, current, order_id)
+
+    from backend.services import scoping
+
+    async def visible(rows):   # only jobs this person may open (own-jobs / location-limited roles)
+        return [{"id": o.id, "order_number": o.order_number, "status": o.status}
+                for o in rows if await scoping.can_view_order(db, current, o)]
+
+    async def one(oid):
+        if not oid:
+            return None
+        got = await visible((await db.execute(select(Order).where(
+            Order.id == oid, Order.org_id == current.org_id))).scalars().all())
+        return got[0] if got else None
+
+    async def many(col):
+        return await visible((await db.execute(select(Order).where(
+            Order.org_id == current.org_id, col == order.id).order_by(Order.created_at))).scalars().all())
+    return {"continued_from": await one(order.continued_from_order_id),
+            "continued_in": await many(Order.continued_from_order_id),
+            "split_from": await one(order.split_from_order_id),
+            "split_off": await many(Order.split_from_order_id)}

@@ -48,6 +48,10 @@ CATALOG = {
         ("can_change_kit_print", "Change how a kit prints on a job"),
         ("can_change_kit_price", "Change a fixed kit price on a job"),
         ("can_print_itemised_copy", "Print an itemised copy for the customer"),
+        ("can_close_tickets", "Finish (close) jobs"),
+        ("can_take_payments", "Take payments on jobs (cash, card, pay link)"),
+        ("can_use_sense_suggestions", "See Tekly Sense suggestions on jobs"),
+        ("can_approve_agent_sends", "Approve automatic customer messages (Tekly Sense)"),
     ],
     "Inventory": [
         ("can_manage_inventory", "Manage inventory (stock, POs, receiving)"),
@@ -169,10 +173,12 @@ _NOT_FOR_STAFF = {
     "can_refund_card_payments": False, "can_manage_terminals": False,
     "can_view_purchase_price": False, "can_see_profit": False, "can_set_cost_price": False,
     "can_see_asset_cost": False,
+    "can_take_payments": False, "can_create_payment_links": False,
 }
 TEMPLATES = {
-    "Full access": {},                       # nothing denied
-    "Manager": {"can_delete_transactions": False, "can_manage_roles": False},
+    "Full access": {"can_use_sense_suggestions": True, "can_approve_agent_sends": True},   # nothing denied
+    "Manager": {"can_delete_transactions": False, "can_manage_roles": False,
+                "can_use_sense_suggestions": True},
     "Partner": {"can_manage_settings": False, "can_manage_roles": False,
                 "can_manage_employees": False, "can_make_calls": False, **_NOT_FOR_STAFF},
     "Specialist": {"can_manage_settings": False, "can_manage_roles": False,
@@ -181,7 +187,7 @@ TEMPLATES = {
 
 
 # Codes that were always opt-in (only an explicit True grants them), even for legacy roles.
-OPT_IN = {"can_override_reservation", "can_change_kit_price"}
+OPT_IN = {"can_override_reservation", "can_change_kit_price", "can_use_sense_suggestions", "can_approve_agent_sends"}
 
 
 def role_allows(role, perm_key: str) -> bool:
@@ -243,3 +249,28 @@ def in_location_scope(role, location_id) -> bool:
         return location_id in json.loads(role.location_ids or "[]")
     except Exception:
         return False
+
+
+def grant_go_codes(perms: dict, explicit: bool) -> tuple[dict, bool]:
+    """Migration gc144g1: closing and payments became permissions, and estimate / pay-link codes
+    started being enforced. Returns (new permissions, changed?) so nobody's access changes:
+    - explicit roles: can_close_tickets on (closing needed nothing before); can_take_payments and
+      can_create_payment_links copy can_view_finance (both were gated by it); can_create_estimates,
+      if missing, copies can_create_tickets.
+    - legacy (deny-wins) roles: the two money codes are written as False when the role already
+      denies can_view_finance, so they don't suddenly default to allowed.
+    The shop creator's admin role ({"all": "write"}) is left alone: it has everything."""
+    perms = dict(perms or {})
+    if perms.get("all") == "write":
+        return perms, False
+    before = dict(perms)
+    if explicit:
+        finance = perms.get("can_view_finance") is True
+        perms.setdefault("can_close_tickets", True)
+        perms.setdefault("can_create_estimates", perms.get("can_create_tickets") is True)
+        perms["can_take_payments"] = finance
+        perms["can_create_payment_links"] = finance
+    elif perms.get("can_view_finance") is False:
+        perms["can_take_payments"] = False
+        perms["can_create_payment_links"] = False
+    return perms, perms != before

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -158,9 +158,25 @@ async def list_clients(
 @router.post("", status_code=201)
 async def create_client(
     data: ClientIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_clients")),
 ):
+    # A retried create with the same Idempotency-Key returns the first customer.
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "clients.create")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _create_client(data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _create_client(data: ClientIn, db: AsyncSession, current: Employee):
     from backend.models import Organisation
     org = (await db.execute(select(Organisation).where(
         Organisation.id == current.org_id))).scalar_one()
@@ -902,11 +918,12 @@ async def client_calls(
     rows = (await db.execute(select(Call).where(
         Call.org_id == current.org_id, Call.client_id == client_id)
         .order_by(Call.id.desc()).limit(100))).scalars().all()
+    from backend.routers.comms import safe_recording_url as _safe_rec
     return {"items": [{
         "id": c.id, "direction": c.direction, "provider": c.provider,
         "from_number": c.from_number, "to_number": c.to_number,
         "duration_s": getattr(c, "duration_s", None),
-        "recording_url": getattr(c, "recording_url", None),
+        "recording_url": _safe_rec(getattr(c, "recording_url", None)),   # B9
         "created_at": c.created_at.isoformat() if getattr(c, "created_at", None) else None,
     } for c in rows]}
 

@@ -35,6 +35,7 @@ from backend.models import (
     WriteOffLine,
 )
 from backend.services import warehouses as wh
+from backend.services import stock_rows
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.money import q2, q4
 
@@ -66,29 +67,35 @@ class DocLine(BaseModel):
     comment_public: bool = False
 
 
-async def _stock_row(db: AsyncSession, part_id: str, warehouse) -> Optional[StockLevel]:
-    # Prefer a warehouse-keyed row; fall back to the location-level row that postings, sales
+async def _stock_rows(db: AsyncSession, part_id: str, warehouse) -> list[StockLevel]:
+    # Prefer warehouse-keyed rows; fall back to the location-level rows that postings, sales
     # and PO receipts actually write (they key StockLevel by location_id, warehouse_id NULL).
     # 144bg: without this, write-offs/transfers read an empty warehouse-only row set and 409.
-    row = (await db.execute(select(StockLevel).where(
+    # ii144a: a product can sit in several rows (one per bin) — return them all.
+    rows = (await db.execute(select(StockLevel).where(
         StockLevel.part_id == part_id,
-        StockLevel.warehouse_id == warehouse.id))).scalar_one_or_none()
-    if row is None:
-        row = (await db.execute(select(StockLevel).where(
-            StockLevel.part_id == part_id,
-            StockLevel.location_id == warehouse.location_id))).scalar_one_or_none()
-    return row
+        StockLevel.warehouse_id == warehouse.id))).scalars().all()
+    if not rows:
+        rows = await stock_rows.rows(db, part_id, warehouse.location_id)
+    return list(rows)
 
 
 async def _take_stock(db: AsyncSession, part_id: str, warehouse, qty: float, *,
-                      doc: str) -> None:
-    sl = await _stock_row(db, part_id, warehouse)
-    have = (sl.qty_available if sl else 0) or 0
-    if have < qty:
+                      doc: str, bin_id: Optional[str] = None) -> None:
+    if bin_id:
+        await stock_rows.check_bin(db, warehouse.org_id, warehouse.location_id, bin_id)
+    rows = await _stock_rows(db, part_id, warehouse)
+    if bin_id and not any(r.bin_id == bin_id for r in rows):
+        # bin rows are never warehouse-tagged: a named bin is always part of what can be drawn
+        brow = await stock_rows.row_for(db, part_id, warehouse.location_id, bin_id)
+        if brow is not None:
+            rows.append(brow)
+    try:      # guarded per-row decrements, the named bin first
+        await stock_rows.draw(db, part_id, warehouse.location_id, qty, bin_id=bin_id, only=rows)
+    except stock_rows.NotEnoughStock as e:
         name = (await db.execute(select(Part.name).where(Part.id == part_id))).scalar_one_or_none()
         raise HTTPException(
-            409, f"Only {have:g} of “{name}” in this warehouse — can't {doc} {qty:g}.")
-    await _atomic_add(db, sl, "qty_available", -(qty), round_to=None)   # atomic
+            409, f"Only {e.have:g} of “{name}” in this warehouse — can't {doc} {qty:g}.")
     await _deplete_batches_fefo(db, part_id, warehouse, qty)
 
 
@@ -125,13 +132,21 @@ async def _deplete_batches_fefo(db: AsyncSession, part_id: str, warehouse, qty: 
 
 
 async def _give_stock(db: AsyncSession, part_id: str, warehouse, qty: float,
-                      location_id: Optional[str]) -> None:
-    sl = await _stock_row(db, part_id, warehouse)
-    if sl:
-        await _atomic_add(db, sl, "qty_available", qty, round_to=None)   # atomic
+                      location_id: Optional[str], bin_id: Optional[str] = None) -> None:
+    """Into the bin's row when a bin is named; else the warehouse's own unbinned row if it has one,
+    else the location's main row (where postings/sales keep stock)."""
+    loc = location_id or warehouse.location_id
+    if bin_id:
+        await stock_rows.check_bin(db, warehouse.org_id, loc, bin_id)
+        await stock_rows.add(db, part_id, loc, qty, bin_id=bin_id)
+        return
+    own = (await db.execute(select(StockLevel.id).where(
+        StockLevel.part_id == part_id, StockLevel.warehouse_id == warehouse.id,
+        StockLevel.bin_id.is_(None)).limit(1))).scalar_one_or_none()
+    if own or not await stock_rows.rows(db, part_id, loc):
+        await stock_rows.add(db, part_id, loc, qty, warehouse_id=warehouse.id)
     else:
-        db.add(StockLevel(part_id=part_id, location_id=location_id,
-                          warehouse_id=warehouse.id, qty_available=qty, qty_reserved=0))
+        await stock_rows.add(db, part_id, loc, qty)
 
 
 async def _cost(db: AsyncSession, part_id: str, given: Optional[float]) -> Decimal:
@@ -225,7 +240,7 @@ async def create_return(
     total = Decimal("0")
     for ln in data.lines:
         cost = await _cost(db, ln.part_id, ln.unit_cost)
-        await _take_stock(db, ln.part_id, w, ln.qty, doc="return")
+        await _take_stock(db, ln.part_id, w, ln.qty, doc="return", bin_id=getattr(ln, "bin_id", None))
         if ln.serialized_item_id:
             unit = (await db.execute(select(SerializedItem).where(
                 SerializedItem.id == ln.serialized_item_id))).scalar_one_or_none()
@@ -287,7 +302,7 @@ async def delete_return(
     lines = (await db.execute(select(PurchaseReturnLine).where(
         PurchaseReturnLine.return_id == doc.id))).scalars().all()
     for ln in lines:
-        await _give_stock(db, ln.part_id, w, ln.qty, w.location_id if w else None)
+        await _give_stock(db, ln.part_id, w, ln.qty, w.location_id if w else None, bin_id=getattr(ln, "bin_id", None))
         if ln.serialized_item_id:
             unit = (await db.execute(select(SerializedItem).where(
                 SerializedItem.id == ln.serialized_item_id))).scalar_one_or_none()
@@ -392,7 +407,7 @@ async def create_write_off(
     total = Decimal("0")
     for ln in data.lines:
         cost = await _cost(db, ln.part_id, ln.unit_cost)
-        await _take_stock(db, ln.part_id, w, ln.qty, doc="write off")
+        await _take_stock(db, ln.part_id, w, ln.qty, doc="write off", bin_id=getattr(ln, "bin_id", None))
         if ln.serialized_item_id:
             unit = (await db.execute(select(SerializedItem).where(
                 SerializedItem.id == ln.serialized_item_id))).scalar_one_or_none()
@@ -453,9 +468,9 @@ async def edit_write_off_line(
             raise HTTPException(400, "Quantity must be positive — delete the document instead")
         delta = data.qty - ln.qty
         if delta > 0:
-            await _take_stock(db, ln.part_id, w, delta, doc="write off")
+            await _take_stock(db, ln.part_id, w, delta, doc="write off", bin_id=getattr(ln, "bin_id", None))
         else:
-            await _give_stock(db, ln.part_id, w, -delta, w.location_id if w else None)
+            await _give_stock(db, ln.part_id, w, -delta, w.location_id if w else None, bin_id=getattr(ln, "bin_id", None))
         db.add(StockMovement(
             part_id=ln.part_id, location_id=w.location_id if w else None,
             warehouse_id=doc.warehouse_id, movement_type="writeoff_adjust",
@@ -493,7 +508,7 @@ async def delete_write_off(
     lines = (await db.execute(select(WriteOffLine).where(
         WriteOffLine.write_off_id == doc.id))).scalars().all()
     for ln in lines:
-        await _give_stock(db, ln.part_id, w, ln.qty, w.location_id if w else None)
+        await _give_stock(db, ln.part_id, w, ln.qty, w.location_id if w else None, bin_id=getattr(ln, "bin_id", None))
         if ln.serialized_item_id:
             unit = (await db.execute(select(SerializedItem).where(
                 SerializedItem.id == ln.serialized_item_id))).scalar_one_or_none()
@@ -601,14 +616,14 @@ async def _apply_posting_line(db: AsyncSession, current: Employee, w, ln, *,
                         item_type="product", item_id=part.id, price=new_price))
             else:
                 part.sell_price = new_price
-        await _give_stock(db, ln.part_id, w, ln.qty, w.location_id)
+        await _give_stock(db, ln.part_id, w, ln.qty, w.location_id, bin_id=getattr(ln, "bin_id", None))
         # FIFO cost layer, as every other receipt path creates (exact COGS on consumption).
         from backend.models import StockItemBatch
         db.add(StockItemBatch(org_id=current.org_id, part_id=part.id, location_id=w.location_id,
                               unit_cost=cost, qty_received=Decimal(str(ln.qty)),
                               qty_remaining=Decimal(str(ln.qty))))
     else:
-        await _take_stock(db, ln.part_id, w, ln.qty, doc="un-post")
+        await _take_stock(db, ln.part_id, w, ln.qty, doc="un-post", bin_id=getattr(ln, "bin_id", None))
         cost = Decimal(str(ln.unit_cost or 0))
 
     db.add(StockMovement(
@@ -727,8 +742,7 @@ async def delete_posting(
     # reversing it would drive stock negative and desync FEFO. Block and point to
     # the correcting document instead of silently erasing history.
     for ln in lines:
-        sl = await _stock_row(db, ln.part_id, w)
-        have = (sl.qty_available if sl else 0) or 0
+        have = sum((r.qty_available or 0) for r in await _stock_rows(db, ln.part_id, w))
         if have < ln.qty:
             name = (await db.execute(select(Part.name).where(Part.id == ln.part_id))).scalar_one_or_none()
             raise HTTPException(

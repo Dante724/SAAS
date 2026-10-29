@@ -3,7 +3,7 @@ name: Security checks
 # speed-up / Postgres-sharding work can evolve that file independently).
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, 'release/**' ]
   # CI minutes cost money on a private repo, so pull requests are checked only when they are
   # ready: draft PRs skip every job; marking a PR "Ready for review" runs it once, and each
   # later push cancels the run it replaces. "Run workflow" on the Actions tab starts one by hand.
