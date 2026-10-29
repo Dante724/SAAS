@@ -175,7 +175,7 @@ class StatusChange(BaseModel):
 
 class CommentIn(BaseModel):
     body: str
-    visible_to_client: bool = False
+    visible_to_client: Optional[bool] = None   # left out: the shop's default comment visibility
 
 # ── Helpers ──────────────────────────────────
 
@@ -299,6 +299,7 @@ def _serialize_order_scalars(o: Order) -> dict:
         "total": o.total,
         "prepayment_total": getattr(o, "prepayment_total", 0.0) or 0.0,
         "deposit_amount": getattr(o, "deposit_amount", 0.0) or 0.0,
+        "written_off": float(getattr(o, "written_off", 0.0) or 0.0),
         "currency_code": o.currency_code,      # Build 122: display currency + snapshot rate
         "fx_rate": o.fx_rate,
         "warranty_until": o.warranty_until.isoformat() if o.warranty_until else None,
@@ -1060,8 +1061,9 @@ async def create_order(
     try:
         from backend.services import automation as _auto
         await _auto.run(db, current.org_id, "order_created", order=order)
+        await db.commit()   # its tasks/tags/assignments and queued webhooks were never committed
     except Exception:
-        pass
+        await db.rollback()
 
     result = await db.execute(
         select(Order)
@@ -1249,6 +1251,11 @@ async def get_order(
         _Inv.order_id == order.id,
         _Inv.status.notin_(["draft", "cancelled", "canceled"])))).scalar() or 0
     data["payment_due"] = q2(float(_due)) > 0
+    if data["payment_due"] and float(order.written_off or 0) > 0:
+        # A dropped job's unpaid balance is written off: the job isn't owed, even while an issued
+        # invoice keeps its balance until the shop credits it.
+        from backend.services.order_money import balance_due as _bd
+        data["payment_due"] = await _bd(db, order) > 0
     # 144bj: prior-visit count for this device (repeat-repair signal on the WO card).
     if order.device_id and data.get("device"):
         vc = (await db.execute(select(func.count()).select_from(Order).where(
@@ -1376,6 +1383,9 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         .order_by(OrderStatus.sort_order)
     )).scalars().first()
     is_closing = target.is_terminal if target else (data.status in ("done", "closed", "delivered"))
+    # A dropped job (not collected, cancelled, abandoned) ends without the work being finished,
+    # so the "finish the work" close gates below don't apply to it.
+    is_dropping = bool(target and (target.status_group or "") == "dropped")
 
     # Phase B.7: enforce status transfer rules (allowed from->to for this role)
     from backend.routers.statuses import is_transition_allowed
@@ -1411,7 +1421,7 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     # Completion gate: when closing, enforce required checklist items + (optional)
     # customer signature. Only bites when the work has required checklist items or
     # the order's type opts in, so other closes are unaffected.
-    if is_closing:
+    if is_closing and not is_dropping:
         from backend.models import OrderChecklistItem, WorkOrderType
         req_items = (await db.execute(select(OrderChecklistItem).where(
             OrderChecklistItem.order_id == order.id,
@@ -1434,7 +1444,7 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
                 raise HTTPException(409, f"Fill in before closing: {', '.join(_missing)}.")
 
     # Orderry rule: cannot close an order with products not yet written off from stock
-    if is_closing:
+    if is_closing and not is_dropping:
         pending = sum((l.pending_stock or 0) for l in order.lines)
         if pending > 0:
             raise HTTPException(
@@ -1458,7 +1468,7 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         order.closed_at = datetime.utcnow()
         # Build 144dr — auto-draft an invoice on close (org opt-in). Never blocks
         # the status change if it fails.
-        if not order.is_estimate:
+        if not order.is_estimate and not is_dropping:
             try:
                 from backend.services.invoicing import auto_draft_on_close
                 await auto_draft_on_close(db, order)
@@ -1467,7 +1477,7 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         # Phase E groundwork: activate warranty on close from the longest line warranty
         try:
             wdays = max([(getattr(l, "warranty_days", 0) or 0) for l in order.lines] or [0])
-            if wdays:
+            if wdays and not is_dropping:
                 from datetime import timedelta as _td
                 # Item 4: warranty start honors org policy (closure date vs order creation date)
                 _org = (await db.execute(select(Organisation).where(
@@ -1557,6 +1567,12 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
                 db, current.org_id, order.client_id, "charge", _delta,
                 note=_note, ref_type="order", ref_id=order.id, created_by_id=current.id)
 
+    # Dropped jobs: write off whatever is still unpaid so the job stops showing as owed;
+    # leaving the dropped group puts the balance back.
+    if not order.is_estimate and (is_dropping or float(order.written_off or 0)):
+        from backend.services.order_money import sync_write_off
+        await sync_write_off(db, order, dropped=is_dropping, actor_id=current.id)
+
     # Mandate 1: payroll commissions. Accrue when the order enters a terminal
     # (closed) state; claw back when it leaves one (reopen) or is an estimate.
     # Runs before the commit below so the status, the client ledger and the commissions save
@@ -1608,10 +1624,11 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         await emit_event(db, current.org_id, "order.status_changed", {
             "id": order.id, "order_number": order.order_number,
             "from": prev, "to": data.status})
-        if is_closing:   # WS-C: registered and documented, but never fired before
+        if is_closing and not prev_terminal and not order.is_estimate:
             await emit_event(db, current.org_id, "order.closed", {
                 "id": order.id, "order_number": order.order_number, "status": data.status,
-                "is_estimate": bool(order.is_estimate)})
+                "total": order.total,
+                "closed_at": order.closed_at.replace(microsecond=0).isoformat() + "Z" if order.closed_at else None})
         await db.commit()
     except Exception:
         pass
@@ -1887,6 +1904,9 @@ async def add_comment(
     if not _co:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, _co)
+    if data.visible_to_client is None:
+        from backend.routers.feed import default_visibility
+        data.visible_to_client = await default_visibility(db, current.org_id, "comment") == "client"
     comment = OrderComment(order_id=order_id, author_id=current.id,
                            body=data.body, visible_to_client=data.visible_to_client)
     db.add(comment)

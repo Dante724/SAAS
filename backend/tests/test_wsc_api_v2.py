@@ -114,10 +114,14 @@ async def test_inquiry_key_cannot_convert_or_learn_customers(client, tenant):
 async def test_inquiry_lifecycle_and_idempotency(client, tenant):
     k = await key(client, tenant)
     h = {**k, "Idempotency-Key": "web-form-42"}
-    a = await client.post("/api/v2/inquiries", json={"name": "From the site", "device_model": "Pixel 8",
-                                                      "inquiry": "Screen"}, headers=h)
-    b = await client.post("/api/v2/inquiries", json={"name": "From the site"}, headers=h)
-    assert a.status_code == 201 and b.status_code == 200 and a.json()["data"]["id"] == b.json()["data"]["id"]
+    body = {"name": "From the site", "device_model": "Pixel 8", "inquiry": "Screen"}
+    a = await client.post("/api/v2/inquiries", json=body, headers=h)
+    b = await client.post("/api/v2/inquiries", json=body, headers=h)
+    # Merged onto v1's Idempotency-Key rules: a retry replays the stored response, and the same
+    # key with a different body is refused (it used to quietly return the first inquiry).
+    assert a.status_code == 201 and b.status_code == 201 and a.json()["data"]["id"] == b.json()["data"]["id"]
+    assert b.headers.get("idempotent-replayed") == "true"
+    assert (await client.post("/api/v2/inquiries", json={"name": "From the site"}, headers=h)).status_code == 422
     lid = a.json()["data"]["id"]
     assert a.json()["data"]["source"] == "api"
     r = await client.patch(f"/api/v2/inquiries/{lid}", json={"status": "in_progress"}, headers=k)
@@ -147,7 +151,7 @@ async def test_api_never_crosses_shops(client, tenant):
 # ── catalogue ────────────────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_products_writable(client, tenant, db):
-    k = await key(client, tenant)
+    k = await key(client, tenant, "read,write,costs:read")   # it sets cost_price, which needs costs:read
     await hook(db, await org(client, tenant))
     r = await client.post("/api/v2/products", json={"name": "Screen iPhone 14", "sku": "SCR-14", "mpn": "A2649-LCD",
                                                      "sell_price": 129, "cost_price": 60}, headers=k)
@@ -188,7 +192,7 @@ async def test_services_and_bundles(client, tenant, db):
     ko = await key(client, other)
     r = await client.post("/api/v2/bundles", json={"name": "Steal", "components": [
         {"ref_type": "service", "ref_id": s["id"]}]}, headers=ko)
-    assert r.status_code == 400
+    assert r.status_code == 404          # merged: another shop's id is a 404, as in v1 (was 400)
     s2 = (await client.patch(f"/api/v2/services/{s['id']}", json={"price": 30}, headers=k)).json()["data"]
     assert s2["price"] == 30
     assert (await client.patch(f"/api/v2/services/{s['id']}", json={"price": 1}, headers=ko)).status_code == 404
@@ -222,8 +226,11 @@ async def test_contacts_v2_carry_structured_address(client, tenant):
 # ── webhooks ─────────────────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_manage_webhooks_with_the_api(client, tenant, monkeypatch):
-    from backend.core import ssrf
-    monkeypatch.setattr(ssrf, "assert_safe_url", lambda url: None)
+    import socket
+    real = socket.getaddrinfo
+    monkeypatch.setattr(socket, "getaddrinfo", lambda host, port, *a, **kw: (
+        [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+        if host == "hooks.example.com" else real(host, port, *a, **kw)))
     k = await key(client, tenant, "webhooks:write")
     from backend.models import AuditLog
     r = await client.post("/api/v2/webhooks", json={"url": "https://hooks.example.com/x",
@@ -258,10 +265,11 @@ async def test_every_registered_event_fires_somewhere_and_is_documented():
         assert direct or f'"{family}.' in code, ev
     for ev in ("order.closed", "estimate.accepted", "inquiry.created", "tag.created", "bundle.created"):
         assert code.count(f'"{ev}"') >= 2, f"{ev} is registered but never emitted"
-    doc = (REPO / "docs" / "public-api-v1.md").read_text()
-    documented = set(re.findall(r"`([a-z_]+\.[a-z_]+)`", doc.split("## Webhooks", 1)[1]))
+    # Merged: the webhook reference moved to docs/developers/06-events.md (public-api-v1.md is a
+    # pointer). Every catalogue event is documented there; old names appear only as aliases.
+    doc = (REPO / "docs" / "developers" / "06-events.md").read_text()
+    documented = set(re.findall(r"`([a-z_]+\.[a-z_]+)`", doc))
     assert set(EVENTS) <= documented
-    assert "booking.created" not in doc.split("## Webhooks", 1)[1].split("Older name")[0]
 
 
 @pytest.mark.asyncio

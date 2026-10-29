@@ -100,6 +100,7 @@ async def list_assets(
     owner_type: Optional[str] = None,
     asset_type: Optional[str] = None,
     search: Optional[str] = None,
+    state: Optional[str] = None,        # active | written_off | all (default: all, for pickers)
     skip: int = _paging.skip_query(),
     limit: int = _paging.limit_query(200),
     db: AsyncSession = Depends(get_db),
@@ -117,6 +118,12 @@ async def list_assets(
         q = q.where(Device.owner_type == owner_type)
     if asset_type:
         q = q.where(Device.asset_type == asset_type)
+    if state == "active":
+        q = q.where(func.coalesce(Device.asset_status, "in_use") != "written_off")
+    elif state == "written_off":
+        q = q.where(Device.asset_status == "written_off")
+    elif state not in (None, "", "all"):
+        raise HTTPException(422, "state must be active, written_off or all")
     if search:
         q = q.where(or_(
             Device.serial.ilike(f"%{search}%"),

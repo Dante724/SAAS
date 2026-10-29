@@ -1,6 +1,7 @@
 """B3 rate limiting + B4 observability — dependency-free middleware.
 
-- Sliding-window in-memory rate limiter (per client IP + path bucket). Good for a
+- Sliding-window in-memory rate limiter (per user, API key or client IP). Every counted /api
+  response carries X-RateLimit-Limit / X-RateLimit-Remaining; a 429 also carries Retry-After. Good for a
   single-process deploy; swap the store for Redis in multi-process.
 - Request metrics (count, latency histogram buckets, status classes) exposed in
   Prometheus text format at /metrics — no prometheus_client dependency.
@@ -121,27 +122,36 @@ def _rate_key(request) -> str:
     return "ip:" + ratelimit.client_ip(request)
 
 
-# Verified API keys: sha256 → (prefix or None, expires_at). A made-up "rok_…" token must not
-# buy a fresh budget, so only a key that exists and is active gets its own bucket; anything else
-# counts against the caller's IP. Results are cached briefly so a busy integration costs one
-# lookup per minute, and the cache is capped so random tokens can't grow it without bound.
+# Verified API keys: sha256 → (ApiKey.id or None, expires_at). A made-up "rok_…" token must not
+# buy a fresh budget, so only a key that exists, is active and has not expired gets its own bucket;
+# anything else counts against the caller's IP. The bucket is the key's id (A15: it used to be the
+# prefix, which a rotation changes and which is not guaranteed unique). Results are cached briefly
+# so a busy integration costs one lookup per minute, and the cache is capped so random tokens
+# can't grow it without bound.
 _KEY_CACHE: dict[str, tuple[str | None, float]] = {}
 _KEY_CACHE_TTL_S = 60.0
 _KEY_CACHE_MAX = 5000
 
 
+def forget_key(token_hash: str | None) -> None:
+    """Drop a cached verification (called on revoke and rotate)."""
+    if token_hash:
+        _KEY_CACHE.pop(token_hash, None)
+
+
 async def _key_bucket(request, token: str) -> str:
     import time
+    from datetime import datetime
 
     from backend.services import ratelimit
-    from backend.services.apikeys import hash_key
+    from backend.services.apikeys import hash_key, key_lookup_clause
     h = hash_key(token)
     now = time.monotonic()
     hit = _KEY_CACHE.get(h)
     if hit and hit[1] > now:
-        prefix = hit[0]
+        key_id = hit[0]
     else:
-        prefix = None
+        key_id = None
         try:
             from sqlalchemy import select
 
@@ -151,16 +161,16 @@ async def _key_bucket(request, token: str) -> str:
             agen = dep()
             db = await agen.__anext__()
             try:
-                prefix = (await db.execute(select(ApiKey.prefix).where(
-                    ApiKey.key_hash == h, ApiKey.active == True))).scalar()  # noqa: E712
+                key_id = (await db.execute(select(ApiKey.id).where(
+                    key_lookup_clause(h, datetime.utcnow())))).scalars().first()
             finally:
                 await agen.aclose()
         except Exception:
-            prefix = None
+            key_id = None
         if len(_KEY_CACHE) >= _KEY_CACHE_MAX:
             _KEY_CACHE.clear()
-        _KEY_CACHE[h] = (prefix, now + _KEY_CACHE_TTL_S)
-    return ("k:" + prefix) if prefix else ("ip:" + ratelimit.client_ip(request))
+        _KEY_CACHE[h] = (key_id, now + _KEY_CACHE_TTL_S)
+    return ("k:" + key_id) if key_id else ("ip:" + ratelimit.client_ip(request))
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -187,8 +197,67 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             key = await _key_bucket(request, key[2:])
         limit = settings.RATE_LIMIT_IP_PER_MIN if key.startswith("ip:") else settings.RATE_LIMIT_USER_PER_MIN
         try:
-            await ratelimit.aenforce("global", key, limit, self.window)
+            remaining = await ratelimit.aenforce("global", key, limit, self.window)
         except HTTPException as e:
-            return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"},
-                                headers=e.headers or {})
-        return await call_next(request)
+            # A15: say what the limit is and when to come back.
+            headers = {**(e.headers or {}), "X-RateLimit-Limit": str(limit), "X-RateLimit-Remaining": "0"}
+            headers.setdefault("Retry-After", str(self.window))
+            return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"}, headers=headers)
+        response = await call_next(request)
+        # WS-C: an API key also has its own per-minute limit (checked with the key). Report
+        # whichever limit is closer to running out, so the headers describe the binding one.
+        key_rate = getattr(request.state, "api_key_rate", None)
+        if key_rate is not None and remaining is not None and (key_rate[1], key_rate[0]) < (remaining, limit):
+            limit, remaining = key_rate
+            response.headers["X-RateLimit-Limit"] = str(limit)
+            response.headers["X-RateLimit-Remaining"] = str(remaining)
+        response.headers.setdefault("X-RateLimit-Limit", str(limit))
+        if remaining is not None:
+            response.headers.setdefault("X-RateLimit-Remaining", str(remaining))
+        return response
+
+
+# ── public API transport (A11) ───────────────────────────────────────────────
+PUBLIC_API_PREFIXES = ("/api/v1", "/api/v2")
+
+
+def is_public_api_path(path: str) -> bool:
+    """/api/v1 and /api/v2: key-authenticated, server to server (no CORS, HTTPS only)."""
+    return any(path == p or path.startswith(p + "/") for p in PUBLIC_API_PREFIXES)
+
+
+def request_scheme(scope) -> str:
+    """The scheme the caller used. With TRUSTED_PROXY_HOPS set, X-Forwarded-Proto is read the
+    same way as X-Forwarded-For (the entry our outermost trusted proxy wrote); otherwise the ASGI
+    scheme, which uvicorn --proxy-headers already sets from a trusted proxy."""
+    from backend.config import settings
+    scheme = (scope.get("scheme") or "http").lower()
+    hops = int(getattr(settings, "TRUSTED_PROXY_HOPS", 0) or 0)
+    if hops <= 0:
+        return scheme
+    raw = ""
+    for k, v in scope.get("headers") or []:
+        if k.lower() == b"x-forwarded-proto":
+            raw = v.decode("latin-1")
+            break
+    chain = [p.strip().lower() for p in raw.split(",") if p.strip()]
+    if not chain:
+        return scheme
+    return chain[-hops] if len(chain) >= hops else chain[-1]
+
+
+class PublicApiTransportMiddleware:
+    """Deployed: /api/v1 and /api/v2 are refused over plain HTTP (403) instead of quietly working, so an
+    integration that sends its key in clear text finds out at once. Dev and test are untouched."""
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            if is_public_api_path(scope.get("path", "")):
+                from backend.config import settings
+                if settings.is_deployed and request_scheme(scope) != "https":
+                    resp = JSONResponse(status_code=403, content={
+                        "detail": "The Tekly API is only available over HTTPS."})
+                    return await resp(scope, receive, send)
+        return await self.app(scope, receive, send)

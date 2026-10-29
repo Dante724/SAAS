@@ -98,9 +98,10 @@ async def _feed(db, org_id: str, lead_id: str, message: str) -> None:
 
 
 async def _emit(db, org_id: str, event: str, lead: Lead) -> None:
-    from backend.services.webhooks import emit_event
-    await emit_event(db, org_id, event, {"id": lead.id, "status": lead.status, "source": lead.source,
-                                         "client_id": lead.client_id})
+    """inquiry.updated / inquiry.converted. (inquiry.created comes from the ORM hook in
+    services/webhooks.py, so every way an inquiry is made sends it exactly once.)"""
+    from backend.services.webhooks import emit_event, lead_data
+    await emit_event(db, org_id, event, lead_data(lead))
 
 
 def _clean(v, n: int) -> Optional[str]:
@@ -161,7 +162,6 @@ async def create_lead(db: AsyncSession, org_id: str, data: dict, *, actor: Optio
         return prior, False
     who = actor.name if actor else ("the API" if via == "api" else "Tekly")
     await _feed(db, org_id, lead.id, f"Inquiry logged by {who}" + (f" ({ltype.name})" if ltype else ""))
-    await _emit(db, org_id, "inquiry.created", lead)
     await db.commit()
     await db.refresh(lead)
     return lead, True
@@ -387,8 +387,7 @@ async def on_missed_call(db: AsyncSession, org_id: str, call) -> Optional[dict]:
         db.add(lead)
         await db.flush()
         await _feed(db, org_id, lead.id, "Inquiry opened from a missed call")
-        await _emit(db, org_id, "inquiry.created", lead)
-
+    
     # The older task-only automation's settings still shape the call-back task when it's on.
     legacy = (await db.execute(select(AutomationSetting).where(
         AutomationSetting.org_id == org_id, AutomationSetting.key == "task_on_missed_call"))).scalar_one_or_none()

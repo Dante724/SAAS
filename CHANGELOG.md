@@ -1,8 +1,36 @@
 # Changelog
 
+## Merge: API hardening + WS-C (claude/ws-c-inquiries onto api/harden-and-docs, 25 Oct 2026)
+
+- **One migration chain:** `… opd1 → ojj1 → apih1 → whh1 → wsc1`. `wsc1` now widens
+  `organisations.public_employee_name` (added by `ojj1`) to 16 characters instead of adding it again.
+- **Scopes are the union:** broad `read` / `write` (`*` stored as `read,write`), `costs:read`, and the
+  WS-C `<resource>:read|write`. Write implies read, broad and per resource. `webhooks` is explicit-only.
+  New keys default to read only; expiry, rotation, the 25-key cap and the costs:read permission check
+  apply to every key. Settings → Integrations → API keys gains **Only some things** and
+  **Requests a minute** in the existing create drawer.
+- **Rate limits:** the per-key `rate_limit_per_min` (default 120, max 6000) runs with the key check on
+  v1 and v2; the shop-wide middleware still applies. `X-RateLimit-*` report whichever limit is closer
+  to running out.
+- **API v2 has every v1 protection:** bounded paging, length limits and unknown fields refused,
+  other-shop ids → 404 (bundle components too), constraint errors → 422, cost fields only with
+  `costs:read`, `Idempotency-Key` on every POST (v1 semantics), writes audited with `via_api_key`,
+  no CORS and HTTPS only, and a public `/api/v2/openapi.json`. v2 webhook management goes through the
+  same create/delete code as the settings screen (10-endpoint cap, catalogue events, SSRF/https rule,
+  `whsec_` secret shown once, soft delete).
+- **Webhook events:** `EVENT_CATALOGUE` is the one list, with the WS-C inquiry, tag, bundle and product
+  events added. `lead.created` became an alias of `inquiry.created`, which now comes from the ORM hook
+  for every source (sent once). Duplicate `estimate.accepted` emission removed.
+- **Overlapping Orderry fixes deduplicated:** one public-name helper (full / first / first_initial /
+  custom), one comment/file visibility default, and the documents auto-print endpoint drives the
+  new-job print (the WS-C `/api/auto-print/order-created/{id}` endpoint stays available).
+- Docs: `docs/developers/10-api-v2.md`, plus scopes, rate limits and events updated across
+  `docs/developers/`.
+
 ## WS-C — Inquiries everywhere (Orderry June–July sprint, gaps #8–#12, #17, #18, #20)
 
-Council note: `docs/council-ws-c-inquiries.md`. Migration `wsc1` (after `opd1`, additive only).
+Council note: `docs/council-ws-c-inquiries.md`. Migration `wsc1` (after `whh1` since the merge onto
+api/harden-and-docs; additive only).
 
 - **Missed call → inquiry (Twilio now, Aircall and the generic call webhook too).** A missed inbound
   call opens an inquiry linked to the contact (matched by phone), creates one "Call back" task and
@@ -21,16 +49,20 @@ Council note: `docs/council-ws-c-inquiries.md`. Migration `wsc1` (after `opd1`, 
     converting is 422; changing the status of a converted inquiry is 409.
 - **API v2** (`/api/v2`): inquiries, inquiry types, tags, services, bundles, writable products,
   contacts with address parts, webhook subscriptions. Keys can be narrowed to `<resource>:read|write`
-  and have a per-key requests-a-minute limit (default 120; 429 + Retry-After).
+  and have a per-key requests-a-minute limit (default 120; 429 + Retry-After). Reference:
+  `docs/developers/10-api-v2.md`.
   - **Integrators:** webhooks are never implied by `read,write` or `*`; a key needs `webhooks:read` /
     `webhooks:write`. v1 reads now need the `read`, `write` or `*` scope (keys with other free-text
     scopes get 403).
 - **Webhooks match the docs.** `order.closed` and `estimate.accepted` now fire; the docs say
   `appointment.created` (an endpoint subscribed to the old `booking.created` still receives it); new
-  events for inquiries, tags, bundles and products. Unknown event names are refused when subscribing.
+  events for inquiries, tags, bundles and products (`lead.created` is now an alias of
+  `inquiry.created`). Unknown event names are refused when subscribing.
 - **Settings switched on.** Default visibility for new comments and files (used when a client doesn't
-  send one); how staff names show on public pages (full / first / first + initial; "Name on documents"
-  always wins); label templates can print automatically when a job is created.
+  send one; Settings → General → Comments and files); how staff names show on public pages
+  (Settings → Public pages: full / first / first + initial / custom, where custom uses each person's
+  "Name on documents"); templates can print automatically when a job is created (the web app calls
+  `POST /api/documents/auto-print/{order_id}?event=create`).
 - **Structured addresses** on contacts (street, city, region, postcode, country), postcode checked for
   countries with a fixed format; the single address line is rebuilt from them, and a typed line still
   works (it clears the parts).
