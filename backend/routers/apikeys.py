@@ -2,7 +2,9 @@
 the keys it mints authenticate the public /api/v1 surface."""
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from typing import Optional
+
+from pydantic import BaseModel, Field
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,14 +12,14 @@ from backend.db.database import get_db
 from backend.models import ApiKey, Employee
 from backend.services import audit
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.apikeys import generate_key
+from backend.services.apikeys import MAX_RATE_PER_MIN, generate_key, parse_scopes
 
 router = APIRouter(prefix="/api/api-keys", tags=["api-keys"])
 
 
 def _ser(k: ApiKey) -> dict:
     return {"id": k.id, "name": k.name, "prefix": k.prefix, "scopes": k.scopes,
-            "active": k.active, "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
+            "rate_limit_per_min": k.rate_limit_per_min, "active": k.active, "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
             "created_at": k.created_at.isoformat() if k.created_at else None}
 
 
@@ -32,8 +34,9 @@ async def list_keys(
 
 
 class KeyIn(BaseModel):
-    name: str = "API key"
-    scopes: str = "read,write"
+    name: str = Field("API key", max_length=120)
+    scopes: str = Field("read,write", max_length=300)   # csv: read, write, * or <resource>:read|write
+    rate_limit_per_min: Optional[int] = Field(None, ge=1, le=MAX_RATE_PER_MIN)
 
 
 @router.post("", status_code=201)
@@ -42,9 +45,10 @@ async def create_key(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
+    scopes = ",".join(parse_scopes(data.scopes or "read,write"))
     full, prefix, key_hash = generate_key()
     k = ApiKey(org_id=current.org_id, name=data.name, prefix=prefix, key_hash=key_hash,
-               scopes=data.scopes or "read,write", created_by_id=current.id)
+               scopes=scopes, rate_limit_per_min=data.rate_limit_per_min, created_by_id=current.id)
     db.add(k)
     await db.flush()
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="apikey.create",

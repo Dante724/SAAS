@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime as _dt
 from backend.db.database import get_db
+from backend.services.public_names import display_name as _public_name
 from backend.models import (
     Order, Client, Device, Organisation, Location,
     OrderStatusLog, EventFeedItem, DocumentSignature,
@@ -146,6 +147,9 @@ async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
 
     # 144ig — always record a tamper-evident signed-approval certificate (estimate OR work order)
     await _record_signature(db, order, decision, signature, who, request)
+    if decision == "accept" and order.is_estimate:   # WS-C: was registered but never fired
+        from backend.services.webhooks import emit_event
+        await emit_event(db, order.org_id, "estimate.accepted", {"id": order.id, "number": order.order_number})
 
     from backend.models import OrderStatus, OrderStatusLog
     converted_id = None
@@ -1100,7 +1104,8 @@ async def appointment_config(slug: str, response: Response, db: AsyncSession = D
                       "employee_ids": getattr(s, "allowed_employee_ids", None) or [],
                       "category": (_svc_cats.get(s.category_id) if s.category_id else None) or s.category}
                      for s in services],
-        "staff": [{"id": e.id, "name": e.name} for e in staff],
+        "staff": [{"id": e.id, "name": _public_name(e, getattr(org, "public_employee_name", None))}
+                  for e in staff],
         "locations": [{"id": l.id, "name": l.name,
                        "address": l.address, "phone": l.phone,
                        "working_hours": l.working_hours or {}} for l in locs],
