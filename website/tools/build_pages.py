@@ -282,7 +282,7 @@ def page(p):
 
 <section class="sec sec-tight">
   <div class="wrap"><div class="sub-price rv">
-    <div><p class="eyebrow">Pricing</p><h2 class="h-sub">Plans from $29 a month.</h2><p class="lede">Solo is $29 for up to 2 people. Shop is $69 for 4 people shared across locations ($49 per extra location, $4 per extra person) and adds inventory, scanning, the time clock and reports. Pro is $129 for the first location ($79 each extra) with 8 people, plus purchase orders, payroll, AI estimate drafting and accounting sync. Every trial includes all Pro features for 14 days, no card.</p></div>
+    <div><p class="eyebrow">Pricing</p><h2 class="h-sub">Plans from $29 a month.</h2><p class="lede">Solo is $29 for up to 2 people. Shop is $69 for 4 people shared across locations ($49 per extra location, $6 per extra person) and adds inventory, scanning, the time clock and reports. Pro is $129 for the first location ($79 each extra) with 8 people, plus purchase orders, payroll, AI estimate drafting and accounting sync. Every trial includes all Pro features for 14 days, no card.</p></div>
     <div class="sub-price-ctas"><a class="btn btn-brand btn-lg" data-app="signup" data-cta="pricing_trial" href="/#start">Start free trial</a><a class="link" href="/pricing/">Compare plans</a></div>
   </div></div>
 </section>
@@ -572,7 +572,7 @@ MULTI = {
     "lead": "Two counters across town, a depot and a storefront, or a phone shop next to a boatyard: Tekly runs every location and every trade in one account, with one login.",
     "faq": [
         ("How is multi-location pricing worked out?", "You pay for the first location on your plan, then a flat price for each extra one: Shop is $69 a month plus $49 per extra location, Pro is $129 a month plus $79 per extra location. Solo covers one location."),
-        ("Can my team work at more than one location?", "Yes. Team members are shared across all your locations: 4 on Shop and 8 on Pro, and each extra person is $4 a month."),
+        ("Can my team work at more than one location?", "Yes. Team members are shared across all your locations: 4 on Shop and 8 on Pro, and each extra person is $6 a month."),
         ("Can I move stock between locations?", "Every location on Shop and Pro keeps its own stock, bins and serial numbers. Transfers between locations are on Pro."),
         ("Can each location run a different trade?", "Yes. Use the Electronics, Vehicles, Tools & small engine and Marine templates side by side in one account."),
         ("Can I see each location's numbers separately?", "Yes. Profit per job, per technician and per location is always current, and roles limit who sees what."),

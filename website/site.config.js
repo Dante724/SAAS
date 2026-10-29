@@ -65,7 +65,7 @@ window.TEKLY_SITE = {
       tagline: "A full shop with a team, stock and regular customers.",
       monthly: 69,
       extraLocation: 49,
-      extraSeat: 4,
+      extraSeat: 6,
       unit: "for the first location, per month",
       seats: "4 team members shared across your locations · unlimited jobs",
       cta: "Start free trial",
@@ -87,7 +87,7 @@ window.TEKLY_SITE = {
       monthly: 129,
       extraLocation: 79,
       unit: "for the first location, per month",
-      extraSeat: 4,
+      extraSeat: 6,
       seats: "8 team members shared across your locations · unlimited jobs",
       cta: "Start free trial",
       features: [

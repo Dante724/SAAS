@@ -11,7 +11,7 @@ Rules for these pages (they are about other companies, so accuracy is the whole 
 CHECKED = "23 October 2026"
 
 TEKLY_PRICES = ("Solo $29/mo (up to 2 people, 150 jobs a month) · Shop $69/mo for 4 people shared across "
-                "locations, $49 per extra location · Pro $129/mo for 8 people, $4 per extra person on both, "
+                "locations, $49 per extra location · Pro $129/mo for 8 people, $6 per extra person on both, "
                 "$79 per extra location. Month to month; yearly gets 2 months free.")
 
 COMPETITORS = [
@@ -23,7 +23,7 @@ COMPETITORS = [
         "about": "RepairDesk describes itself as cloud-based point-of-sale software for small and medium-sized repair shops, and lists cell phone, computer, small engine, power tool, jewellery, watch, bicycle, drone, camera, heavy-duty and mail-in repair.",
         "rows": [
             ("Published starting price", "$29/mo (Solo, up to 2 people), billed monthly", "From $79/mo billed annually or $99/mo billed quarterly (Essential, 5 users, per store)", "https://www.repairdesk.co/pricing/"),
-            ("A plan for 8 people", "$85/mo (Shop: 4 people included + 4 extra at $4) or $129/mo (Pro, 8 people)", "From $119/mo billed annually or $149/mo billed quarterly (Growth, 8 users)", "https://www.repairdesk.co/pricing/"),
+            ("A plan for 8 people", "$93/mo (Shop: 4 people included + 4 extra at $6) or $129/mo (Pro, 8 people)", "From $119/mo billed annually or $149/mo billed quarterly (Growth, 8 users)", "https://www.repairdesk.co/pricing/"),
             ("Free trial", "14 days, every Pro feature, no card", "Free trial offered; length not stated on the pricing page", "https://www.repairdesk.co/pricing/"),
             ("Customer estimate approval", "Line by line on the customer's phone, with a signature; extra work waits for their tick", "Customers can approve, decline or request changes to an estimate from email", "https://help.repairdesk.co/portal/en/kb/articles/how-can-i-create-and-manage-an-estimate"),
             ("Payroll", "Payroll and commissions from closed jobs (Pro)", "Employee management that can process payroll", "https://www.repairdesk.co/"),
@@ -49,7 +49,7 @@ COMPETITORS = [
         "about": "RepairShopr lists computer, cell phone, electronics, IT/MSP, general repair, watch, scuba, musical instrument, small engine and lawn care shops among the businesses it serves.",
         "rows": [
             ("Published starting price", "$29/mo (Solo, up to 2 people, 150 jobs a month)", "$69.99/mo monthly or $59.99/mo annual (Starter: 1 user, 1 location, 75 tickets and invoices a month)", "https://www.repairshopr.com/pricing"),
-            ("Bigger team, one location", "$85/mo (Shop: 4 people + 4 extra at $4) or $129/mo (Pro: 8 people), unlimited jobs", "$139.99/mo monthly or $129.99/mo annual (Repair Shop: 10 users)", "https://www.repairshopr.com/pricing"),
+            ("Bigger team, one location", "$93/mo (Shop: 4 people + 4 extra at $6) or $129/mo (Pro: 8 people), unlimited jobs", "$139.99/mo monthly or $129.99/mo annual (Repair Shop: 10 users)", "https://www.repairshopr.com/pricing"),
             ("Two or more locations", "Shop $69 + $49 per extra location; Pro $129 + $79 per extra location", "$149.99/mo monthly or $139.99/mo annual (Big Chain: 10 users, 2+ locations)", "https://www.repairshopr.com/pricing"),
             ("Free trial", "14 days, every Pro feature, no card", "30-day free trial", "https://www.repairshopr.com/?p=8587"),
             ("Estimates", "AI-drafted estimates on Pro; line-by-line approval and signature on the customer's phone", "Estimates on all plans", "https://www.repairshopr.com/pricing"),
@@ -102,7 +102,7 @@ COMPETITORS = [
         "rows": [
             ("Published starting price", "$29/mo (Solo); $69/mo (Shop, 4 people); $129/mo (Pro, 8 people)", "$199/mo monthly or $179/mo annual (Start), per shop", "https://www.tekmetric.com/pricing"),
             ("Higher plans", "Pro $129/mo, 8 people and unlimited jobs", "Grow $349/mo and Scale $439/mo monthly; Enterprise custom", "https://www.tekmetric.com/pricing"),
-            ("How users are charged", "People included per plan; $4 per extra person on Shop and Pro", "Not charged by user or by repair order", "https://www.tekmetric.com/pricing"),
+            ("How users are charged", "People included per plan; $6 per extra person on Shop and Pro", "Not charged by user or by repair order", "https://www.tekmetric.com/pricing"),
             ("Extra locations", "$49 each on Shop, $79 each on Pro", "Each location needs its own subscription; Multi-Shop Management is +$70/mo per shop", "https://www.tekmetric.com/pricing"),
             ("Free trial", "14 days, every Pro feature, no card", "Free demos and self-guided tours, not free trials", "https://www.tekmetric.com/pricing"),
             ("Customer approvals", "Line by line on the customer's phone, with a signature", "Digital approval with e-signature, by text or email", "https://www.tekmetric.com/pricing"),
@@ -128,7 +128,7 @@ COMPETITORS = [
         "about": "Orderry describes itself as an all-in-one platform for small businesses, covering electronics and phone repair, auto and truck, small engines and power tools, marine, bicycle, jewellery, HVAC and contractors, field services and retail.",
         "rows": [
             ("Published starting price", "$29/mo (Solo, 2 people, 150 jobs a month)", "$39/mo (Hobby: 2 employees, 1 location, 100 work orders or sales per 30 days)", "https://orderry.com/pricing/"),
-            ("Growing team", "$69/mo (Shop: 4 people included, $4 per extra person)", "From $69/mo (Startup: 3 employees included, $6 per extra employee, up to 15)", "https://orderry.com/pricing/"),
+            ("Growing team", "$69/mo (Shop: 4 people included, $6 per extra person)", "From $69/mo (Startup: 3 employees included, $6 per extra employee, up to 15)", "https://orderry.com/pricing/"),
             ("Extra locations", "$49 each on Shop, $79 each on Pro", "$49 each on Startup, $79 on Business, $179 on Enterprise", "https://orderry.com/pricing/"),
             ("Free trial", "14 days, every Pro feature, no card", "7 days, no card", "https://orderry.com/pricing/"),
             ("Customer estimate approval", "Line by line on the customer's phone, with a signature", "Estimates approved online with e-signature and converted to jobs", "https://orderry.com/pricing/"),
