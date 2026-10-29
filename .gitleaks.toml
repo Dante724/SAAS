@@ -9,4 +9,14 @@ description = "Test fixtures and CI-only placeholder keys (never real credential
 # generic-api-key rule flags every `"password": "…"` in a request body.
 paths = ['''^backend/tests/''']
 # The e2e job boots the app with a fixed, CI-only SECRET_KEY (prefix ci-e2e-).
-regexes = ['''ci-e2e[A-Za-z0-9_-]*''']
+regexes = [
+  '''ci-e2e[A-Za-z0-9_-]*''',
+  # Developer docs: the documented webhook test vector secret and placeholder key / example
+  # Idempotency-Key values. They are published examples, never real credentials.
+  '''whsec_test_5WbX3nC1p9QeK2tLmZ8rYvA4''',
+  '''rok_5f2c9a1e_\.\.\.''',
+  '''4f9a3c1e-2b7d-4e8f-9a61-0c5d2e7b8f13''',
+  '''0c6a2f4e-8d1b-4b7a-9e35-71f0c2d8a944''',
+  '''7d3e9b1a-4c2f-4a8e-b6d0-2e9f5c1a7b38''',
+  '''2c9f4e7a-1d3b-4a6e-8f05-9b2c7d1e4a80''',
+]

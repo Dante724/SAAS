@@ -106,6 +106,9 @@ class Organisation(Base):
     default_due_days: Mapped[int] = mapped_column(Integer, default=0)
     default_comment_visibility: Mapped[str] = mapped_column(String(10), default="private")
     default_file_visibility: Mapped[str] = mapped_column(String(10), default="private")
+    # WS-C: how staff names show on public pages (booking, portal). An employee's own
+    # "Name on documents" always wins. full | first | first_initial
+    public_employee_name: Mapped[str] = mapped_column(String(16), default="full", server_default="full")
     warranty_count_from: Mapped[str] = mapped_column(String(10), default="closure")  # closure|created
     asset_one_open_ticket: Mapped[bool] = mapped_column(Boolean, default=False)
     # Several items per job (tools / equipment / device shops only — see services/multi_asset.py).
@@ -356,6 +359,13 @@ class Client(Base):
     phone: Mapped[Optional[str]] = mapped_column(String(50))
     email: Mapped[Optional[str]] = mapped_column(String(200))
     address: Mapped[Optional[str]] = mapped_column(Text)
+    # WS-C: structured address. When any part is set, `address` is rebuilt from them so old
+    # documents, exports and the v1 API keep reading one line.
+    addr_street: Mapped[Optional[str]] = mapped_column(String(200))
+    addr_city: Mapped[Optional[str]] = mapped_column(String(120))
+    addr_region: Mapped[Optional[str]] = mapped_column(String(120))
+    addr_postcode: Mapped[Optional[str]] = mapped_column(String(20))
+    addr_country: Mapped[Optional[str]] = mapped_column(String(2))   # ISO 3166-1 alpha-2
     source: Mapped[Optional[str]] = mapped_column(String(100))
     # 144ja — contact birthday (ISO YYYY-MM-DD, string keeps sqlite/postgres identical).
     # Drives the Contacts-module birthday notification (Orderry parity).
@@ -2084,6 +2094,10 @@ class Lead(Base):
     Each lead carries a response-time SLA; "won" converts into a work order,
     creating the client on the fly if the contact isn't in CRM yet."""
     __tablename__ = "leads"
+    __table_args__ = (
+        Index("uq_leads_org_idempotency", "org_id", "idempotency_key", unique=True),
+        Index("ix_leads_org_created", "org_id", "created_at"),
+    )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"))
@@ -2097,6 +2111,29 @@ class Lead(Base):
     manager_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     sla_due_at: Mapped[Optional[datetime]] = mapped_column(DateTime)  # respond-by deadline
     converted_order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # WS-C: richer inquiries — type, the device, custom fields, missed-call merging, and an
+    # idempotency key so Tekly Go can create offline and retry without duplicates.
+    lead_type_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("lead_types.id"))
+    device_brand: Mapped[Optional[str]] = mapped_column(String(100))
+    device_model: Mapped[Optional[str]] = mapped_column(String(100))
+    serial: Mapped[Optional[str]] = mapped_column(String(100))        # serial number or IMEI
+    custom_data: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
+    call_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # missed calls merged in
+    last_call_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(64))
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class LeadType(Base):
+    """WS-C — an inquiry type (Repair, Sale, Consultation…) with its own respond-by time."""
+    __tablename__ = "lead_types"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    sla_minutes: Mapped[int] = mapped_column(Integer, default=60)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
@@ -2363,6 +2400,7 @@ class ApiKey(Base):
     prefix: Mapped[str] = mapped_column(String(16), index=True)      # rok_xxxxxxxx (shown in UI)
     key_hash: Mapped[str] = mapped_column(String(64), index=True)    # sha256 of the full key
     scopes: Mapped[str] = mapped_column(String(300), default="read,write")  # csv
+    rate_limit_per_min: Mapped[Optional[int]] = mapped_column(Integer)   # WS-C: null = the default limit
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
@@ -3029,7 +3067,7 @@ all_models = [
     Invoice, InvoiceLine, Payment, CashShift, Expense, Account, CashFlowItem, Transaction,
     Task, NotificationTemplate, CustomField, AuditLog, EventFeedItem,
     WorkOrderType, StatusTransition, AssetMovement, StockReservation, StorageBin,
-    CommissionRule, EmployeeBalanceLedger, PayrollRun, StockItemBatch, SerializedItem, NotificationLog, Lead, PriceType, Sale, SaleLine, Stocktake, StocktakeLine, ClientReturn, ClientReturnLine, Refund, StockTransfer, StockTransferLine, Bundle, BundleComponent, Appointment, ChatThread, ChatMessage,
+    CommissionRule, EmployeeBalanceLedger, PayrollRun, StockItemBatch, SerializedItem, NotificationLog, Lead, LeadType, PriceType, Sale, SaleLine, Stocktake, StocktakeLine, ClientReturn, ClientReturnLine, Refund, StockTransfer, StockTransferLine, Bundle, BundleComponent, Appointment, ChatThread, ChatMessage,
     Feedback, FeedbackSettings, DocumentTemplate, GeneratedDocument, Resource,
     TimeEntry, TimeEntryAudit, WebhookEndpoint, WebhookDelivery,
     ApiKey, PaymentIntent, QboConnection, IntegrationMapping, IntegrationSyncLog,

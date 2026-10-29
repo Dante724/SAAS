@@ -6,18 +6,19 @@ Twilio account (encrypted via org_creds, never returned), click-to-call goes
 through Twilio's REST Calls API, and Twilio's signed webhooks land on
 /api/comms/twilio/voice and /api/comms/twilio/status. D2's contacts-from-calls
 automation is configured here too. Aircall/Zadarma are accepted as config
-values for older setups but have no adapter yet."""
+values for older setups. WS-C adds an Aircall adapter behind the AIRCALL_ENABLED server switch
+(services/aircall.py): a per-shop webhook token, and the signed webhook below."""
 from datetime import datetime, timedelta
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import AutomationSetting, Call, Client, Employee, Organisation, Tag, TelephonyConfig
-from backend.services import call_contacts, org_creds, ratelimit, twilio_voice
+from backend.services import aircall, call_contacts, org_creds, ratelimit, twilio_voice
 from backend.services.auth import get_current_employee, has_perm, require_perm
 
 router = APIRouter(prefix="/api/telephony", tags=["telephony"])
@@ -60,7 +61,16 @@ async def _ser_cfg(db: AsyncSession, org_id: str, c: Optional[TelephonyConfig]) 
             "caller_id_number": c.caller_id_number if c else None,
             "forward_to": cfg.get("forward_to"),
             "destinations": await allowed_prefixes(db, org_id, c),
-            "twilio": await twilio_status(db, org_id)}
+            "twilio": await twilio_status(db, org_id),
+            "aircall": await aircall_status(db, org_id)}
+
+
+async def aircall_status(db: AsyncSession, org_id: str) -> dict:
+    """What the settings card shows about Aircall. Never the token itself."""
+    from backend.config import settings
+    saved = bool((await org_creds.own(db, org_id, aircall.PROVIDER)).get("webhook_token"))
+    return {"available": aircall.enabled(), "connected": saved,
+            "webhook_url": f"{settings.public_base}/api/telephony/aircall/webhook?org_id={org_id}"}
 
 
 @router.get("/config")
@@ -87,6 +97,11 @@ async def set_config(data: ConfigIn, db: AsyncSession = Depends(get_db),
         raise HTTPException(422, "Unknown provider")
     number = (data.caller_id_number or "").strip() or None
     forward = (data.forward_to or (data.config or {}).get("forward_to") or "").strip() or None
+    # Older setups keep "aircall" as a label fed through the generic call webhook; only once the
+    # server's Aircall adapter is switched on does turning it on need the shop's webhook token.
+    if data.provider == "aircall" and data.enabled and aircall.enabled():
+        if not (await aircall_status(db, current.org_id))["connected"]:
+            raise HTTPException(409, "Save your Aircall webhook token before turning Aircall calls on")
     if data.provider == "twilio" and data.enabled:
         tw = await twilio_status(db, current.org_id)
         if not tw["connected"]:
@@ -174,6 +189,100 @@ async def disconnect_twilio(db: AsyncSession = Depends(get_db),
         c.enabled = False
         await db.commit()
     return await _ser_cfg(db, current.org_id, c)
+
+
+# ── WS-C: Aircall ────────────────────────────────────────────────────────────
+class AircallIn(BaseModel):
+    webhook_token: str = Field(..., min_length=16, max_length=200)
+
+
+@router.put("/aircall")
+async def connect_aircall(data: AircallIn, db: AsyncSession = Depends(get_db),
+                          current: Employee = Depends(require_perm("can_manage_settings"))):
+    if not aircall.enabled():
+        raise HTTPException(409, "Aircall isn't switched on for this server yet")
+    await org_creds.set_creds(db, current.org_id, aircall.PROVIDER, {"webhook_token": data.webhook_token.strip()})
+    return await aircall_status(db, current.org_id)
+
+
+@router.delete("/aircall")
+async def disconnect_aircall(db: AsyncSession = Depends(get_db),
+                             current: Employee = Depends(require_perm("can_manage_settings"))):
+    await org_creds.delete_creds(db, current.org_id, aircall.PROVIDER)
+    c = await _cfg(db, current.org_id)
+    if c and c.provider == "aircall":
+        c.enabled = False
+        await db.commit()
+    return await aircall_status(db, current.org_id)
+
+
+@router.post("/aircall/webhook")
+async def aircall_webhook(request: Request, org_id: str = Query(..., max_length=64),
+                          db: AsyncSession = Depends(get_db)):
+    """Aircall → Tekly call events. The tenant is the org in the URL, proven by the token
+    Aircall puts in the payload matching the one this shop saved. Idempotent per Aircall
+    call id; unhandled events are acknowledged (Aircall disables failing webhooks)."""
+    from sqlalchemy.exc import IntegrityError
+
+    from backend.models import Call
+    from backend.routers.comms import on_missed, record_inbound_call
+    if not aircall.enabled():
+        raise HTTPException(404, "Not found")
+    await ratelimit.aenforce("aircall-hook-ip", ratelimit.client_ip(request), 1200, 60)
+    saved = (await org_creds.own(db, org_id, aircall.PROVIDER)).get("webhook_token")
+    try:
+        payload = await request.json()
+    except ValueError:
+        raise HTTPException(400, "Expected JSON")
+    if not aircall.token_ok(saved, (payload or {}).get("token") if isinstance(payload, dict) else None):
+        # Only failed attempts count against the shop, so junk can't crowd out Aircall's real events.
+        await ratelimit.aenforce("aircall-hook-bad", org_id, 30, 60)
+        raise HTTPException(403, "Invalid Aircall token")
+    cfg = await _cfg(db, org_id)
+    if not (cfg and cfg.enabled and cfg.provider == "aircall"):
+        return {"ok": True, "ignored": "aircall is not the active provider"}
+    ev = aircall.parse(payload)
+    if not ev:
+        return {"ok": True, "ignored": "event"}
+    if cfg.caller_id_number and ev["line"] and not call_contacts.same_number(ev["line"], cfg.caller_id_number):
+        raise HTTPException(403, "This number isn't registered to this shop")
+
+    call = (await db.execute(select(Call).where(Call.org_id == org_id, Call.provider_sid == ev["sid"]))).scalar_one_or_none()
+    ours = cfg.caller_id_number or ev["line"]
+    if call is None:
+        if ev["event"] == "call.answered":
+            status = "in_progress"
+        elif ev["event"] in ("call.ended", "call.voicemail_left"):
+            status = ("missed" if ev["missed"] else "completed") if ev["direction"] == "inbound" else (
+                "completed" if ev["answered"] else "failed")
+        else:
+            status = "ringing"
+        frm, to = (ev["other"], ours) if ev["direction"] == "inbound" else (ours, ev["other"])
+        try:
+            res = await record_inbound_call(db, org_id, provider="aircall", from_number=frm, to_number=to,
+                                            status=status, provider_sid=ev["sid"], direction=ev["direction"],
+                                            duration_s=ev["duration_s"])
+        except IntegrityError:      # a concurrent retry of the same call won the insert
+            await db.rollback()
+            return {"ok": True, "duplicate": True}
+        return {"ok": True, "call_id": res["id"], "lead_id": res.get("lead_id")}
+
+    before = call.status
+    if before in ("completed", "missed", "failed"):
+        return {"ok": True, "call_id": call.id}          # a finished call keeps its outcome
+    if ev["event"] == "call.answered":
+        call.status = "in_progress"
+    elif ev["event"] in ("call.ended", "call.voicemail_left"):
+        if call.direction == "inbound":
+            call.status = "missed" if ev["missed"] else "completed"
+        else:
+            call.status = "completed" if ev["answered"] else "failed"
+        call.duration_s = ev["duration_s"] or call.duration_s
+    await db.commit()
+    lead_id = None
+    if call.direction == "inbound" and call.status == "missed" and before != "missed":
+        lead_id = (await on_missed(db, org_id, call)).get("lead_id")
+    return {"ok": True, "call_id": call.id, "lead_id": lead_id}
 
 
 # ── Click-to-call ────────────────────────────────────────────────────────────
@@ -308,6 +417,7 @@ async def set_contact_automation(data: ContactAutomationIn, db: AsyncSession = D
 class SimInboundIn(BaseModel):
     from_number: str = Field(..., max_length=40)
     extension: Optional[str] = Field(None, max_length=20)
+    missed: bool = False        # WS-C: nobody answers, so the missed-call inquiry flow runs
 
 
 @router.post("/simulate/inbound", status_code=201)
@@ -323,7 +433,7 @@ async def simulate_inbound(data: SimInboundIn, db: AsyncSession = Depends(get_db
     from backend.routers.comms import record_inbound_call
     res = await record_inbound_call(
         db, current.org_id, provider="simulated", from_number=data.from_number.strip(),
-        to_number=(cfg.caller_id_number if cfg else None), status="ringing",
+        to_number=(cfg.caller_id_number if cfg else None), status="missed" if data.missed else "ringing",
         extension=(data.extension or "").strip() or None)
     return res
 

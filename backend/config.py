@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     # D1: a shop's live Twilio voice credentials are refused unless this is true AND
     # ENVIRONMENT=production. Test credentials (magic numbers, nothing dials) always work.
     ALLOW_LIVE_TELEPHONY: bool = False
+    # WS-C: the Aircall adapter stays off (webhook 404s, settings refuse) until the owner has an
+    # Aircall account and turns this on.
+    AIRCALL_ENABLED: bool = False
 
     # -- Meta messaging (Messenger / Instagram / WhatsApp Cloud) — absent -> simulated --
     # One webhook verify token for all Meta channels; per-channel access tokens.

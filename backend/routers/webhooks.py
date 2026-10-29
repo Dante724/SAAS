@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Employee, WebhookEndpoint, WebhookDelivery
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.webhooks import EVENTS
+from backend.services.webhooks import EVENTS, valid_events
 
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
 
@@ -45,6 +45,13 @@ async def _require_public_url(url: str) -> None:
         raise HTTPException(400, "URL must be a public http:// or https:// address")
 
 
+def _events(raw) -> str:
+    try:
+        return valid_events(raw or "*")
+    except ValueError as e:
+        raise HTTPException(422, f"Unknown event: {e}")
+
+
 @router.post("", status_code=201)
 async def create_endpoint(
     data: EndpointIn,
@@ -52,7 +59,7 @@ async def create_endpoint(
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     await _require_public_url(data.url)
-    e = WebhookEndpoint(org_id=current.org_id, url=data.url.strip(), events=data.events or "*",
+    e = WebhookEndpoint(org_id=current.org_id, url=data.url.strip(), events=_events(data.events),
                         active=data.active)
     db.add(e)
     await db.commit()
@@ -77,6 +84,8 @@ async def update_endpoint(
     if not e:
         raise HTTPException(404, "Endpoint not found")
     changes = data.model_dump(exclude_unset=True)
+    if "events" in changes:
+        changes["events"] = _events(changes["events"])
     if "url" in changes:
         await _require_public_url(changes["url"])
         changes["url"] = changes["url"].strip()
