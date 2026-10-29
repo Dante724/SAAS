@@ -9,7 +9,6 @@ from sqlalchemy import select
 from backend.models import (
     AuditLog,
     Client,
-    ClientLedgerEntry,
     Employee,
     Location,
     Order,
@@ -458,12 +457,12 @@ async def test_dropped_job_write_off_via_api(client, db):
     assert r.status_code == 200, r.text           # dropping skips the "finish the work" gates
     d = r.json()["data"]
     assert d["written_off"] == pytest.approx(70) and d["cancel_reason"] == "Customer declined"
-    # The client is charged only what wasn't written off (workstream B), so the drop leaves no debt.
-    rows = (await db.execute(select(ClientLedgerEntry).where(
-        ClientLedgerEntry.client_id == cid, ClientLedgerEntry.ref_id == oid,
-        ClientLedgerEntry.entry_type == "charge"))).scalars().all()
-    assert sum(float(x.amount) for x in rows) == pytest.approx(30)
-    wo = (await db.execute(select(AuditLog).where(AuditLog.action == "order.write_off",
+    # Workstream B's design: the write-off lowers the job's ledger charge (no separate
+    # "write_off" line), so the customer owes nothing.
+    c = (await db.execute(select(Client).where(Client.id == cid))).scalar_one()
+    await db.refresh(c)
+    assert float(c.balance) == pytest.approx(0)
+    wo =(await db.execute(select(AuditLog).where(AuditLog.action == "order.write_off",
                                                   AuditLog.entity_id == oid))).scalar_one()
     assert wo.actor_id is None
 

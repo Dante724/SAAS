@@ -17,13 +17,13 @@ branch_labels = None
 depends_on = None
 
 
-def _has_written_off() -> bool:
-    # Preview: workstream B's wsb1 adds the same column; whichever runs second skips it.
-    return "written_off" in {c["name"] for c in sa.inspect(op.get_bind()).get_columns("orders")}
+def _has_column(table: str, column: str) -> bool:
+    return column in {c["name"] for c in sa.inspect(op.get_bind()).get_columns(table)}
 
 
 def upgrade() -> None:
-    if not _has_written_off():
+    # wsb1 (a sibling off opd1) adds the same column; whichever runs first adds it.
+    if not _has_column("orders", "written_off"):
         with op.batch_alter_table("orders") as b:
             b.add_column(sa.Column("written_off", sa.Numeric(12, 2, asdecimal=False), nullable=False,
                                    server_default="0"))
@@ -35,5 +35,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     with op.batch_alter_table("organisations") as b:
         b.drop_column("public_employee_name")
-    with op.batch_alter_table("orders") as b:
-        b.drop_column("written_off")
+    if _has_column("orders", "written_off"):
+        with op.batch_alter_table("orders") as b:
+            b.drop_column("written_off")

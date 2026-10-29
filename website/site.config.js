@@ -95,7 +95,7 @@ window.TEKLY_SITE = {
         "Payroll and commissions",
         "Stock transfers between locations",
         "AI estimate drafting and parts recognition",
-        "QuickBooks and Xero sync",
+        "QuickBooks Online export",
         "Single sign-on and API keys",
       ],
     },

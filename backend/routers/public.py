@@ -973,6 +973,7 @@ from backend.services.booking_slots import (  # noqa: E402
     slot_is_free as _slot_is_free,  # noqa: F401
     slots_for_day as _slots_for_day,
 )
+from backend.services.dates import location_tz as _location_tz  # noqa: E402
 
 
 # ── Back-compat (144dx): old /api/public/booking/* → /api/public/appointment/* ──
@@ -1114,7 +1115,7 @@ async def appointment_days(slug: str, response: Response, start: Optional[str] =
     # appointments, so it is never cached/shared. Indexed reads keep it cheap.
     response.headers["Cache-Control"] = "no-store"
     location = await _resolve_location(db, org, location_id)
-    now = _local_now(location.timezone if location else "UTC")
+    now = _local_now(_location_tz(location, org))
     try:
         first = datetime.fromisoformat(start).date() if start else now.date()
     except ValueError:
@@ -1167,7 +1168,7 @@ async def create_public_appointment(slug: str, data: PublicAppointmentIn, reques
 
     # the location taking the appointment + its working hours for that weekday
     loc = await _resolve_location(db, org, data.location_id)
-    now = _local_now(loc.timezone if loc else "UTC")
+    now = _local_now(_location_tz(loc, org))
     # lead time + appointment window (server re-validates; never trust the client)
     if start < now + timedelta(minutes=org.appointment_lead_min or 0):
         raise HTTPException(409, "That time is too soon to book — please pick a later slot")
@@ -1335,10 +1336,25 @@ async def public_pay_info(intent_id: str, db: AsyncSession = Depends(get_db)):
     i = (await db.execute(select(PaymentIntent).where(PaymentIntent.id == intent_id))).scalar_one_or_none()
     if not i:
         raise HTTPException(404, "Payment not found")
-    order_no = None
+    order_no, o = None, None
     if i.order_id:
         o = (await db.execute(select(Order).where(Order.id == i.order_id))).scalar_one_or_none()
         order_no = o.order_number if o else None
+    # The customer must see who is asking for money: the shop's own name, logo and address,
+    # never ours. A pay page branded "Tekly" reads as phishing to someone who's never heard of us.
+    org = (await db.execute(select(Organisation).where(Organisation.id == i.org_id))).scalar_one_or_none()
+    loc = None
+    if o is not None and o.location_id:
+        loc = (await db.execute(select(Location).where(Location.id == o.location_id))).scalar_one_or_none()
+    _show_logo = getattr(org, "page_show_logo", True) or getattr(org, "oe_show_logo", True)
+    shop = {
+        "shop_name": org.name if org else "Repair shop",
+        "logo_data": (org.logo_data if (org and _show_logo) else None),
+        "shop_address": (loc.address if (loc and loc.address) else getattr(org, "company_address", None)),
+        "shop_phone": (loc.phone if (loc and loc.phone) else getattr(org, "company_phone", None)),
+    }
+    # A cancelled request, or one for nothing, must never show a live Pay button.
+    payable = i.status in ("created", "pending", "failed") and (i.amount or 0) > 0
     # Build 144dv — when the intent bills an invoice, show its line items exactly as
     # the invoice's Order-display mode resolves them, so the client sees the same
     # breakdown (per-line, per-ticket, or a single line) as the printed document.
@@ -1353,7 +1369,8 @@ async def public_pay_info(intent_id: str, db: AsyncSession = Depends(get_db)):
     return {"intent_id": i.id, "amount": i.amount, "currency": i.currency,
             "status": i.status, "order_number": order_no,
             "invoice_number": invoice_number, "display_mode": display_mode, "lines": lines,
-            "provider": i.provider, "checkout_url": i.checkout_url}
+            "provider": i.provider, "checkout_url": i.checkout_url,
+            "payable": payable, **shop}
 
 
 # ══ Build 109: public status lookup + embeddable widget ══════════════════════

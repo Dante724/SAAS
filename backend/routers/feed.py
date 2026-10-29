@@ -13,6 +13,7 @@ from backend.core import paging as _paging
 from backend.db.database import get_db
 from backend.models import Client, Employee, EventFeedItem, Order
 from backend.services import audit
+from backend.services.dates import utc_iso
 from backend.services.auth import get_current_employee
 
 router = APIRouter(prefix="/api/feed", tags=["event-feed"])
@@ -46,7 +47,7 @@ def _serialize(it: EventFeedItem) -> dict:
         "visibility": it.visibility,
         "author_name": it.author_name,
         "author_id": it.author_id,
-        "created_at": it.created_at.isoformat(),
+        "created_at": utc_iso(it.created_at),   # B6: "Z" so browsers read UTC
     }
 
 

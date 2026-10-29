@@ -8,6 +8,7 @@ import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import { readAsDataUrl } from "../../lib/files";
 import AuthedImage from "../../components/AuthedImage";
+import { fmtServerTime } from "../../lib/serverTime";
 
 type Vis = "private" | "client";
 export type FeedItem = {
@@ -17,7 +18,7 @@ export type FeedItem = {
 };
 
 const SHOWN = new Set(["comment", "photo", "file"]);
-const when = (iso: string) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+const when = (iso: string) => fmtServerTime(iso);   // UTC instant, shown on the viewer's clock
 const isImage = (it: FeedItem) => it.item_type === "photo" || (it.media_mime || "").startsWith("image/");
 
 export function VisibilityToggle({ value, onChange, disabled, compact }: { value: Vis; onChange: (v: Vis) => void; disabled?: boolean; compact?: boolean }) {

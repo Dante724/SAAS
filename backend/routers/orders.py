@@ -125,6 +125,14 @@ class LineIn(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _fixed_within_line(self):
+        # B3: an amount off can't be more than the line itself.
+        if (self.discount_type or "pct") == "fixed" and \
+                (self.discount or 0) > q2((self.qty or 0) * (self.unit_price or 0)) + 0.005:
+            raise ValueError("A discount can't be more than the line's price")
+        return self
+
+    @model_validator(mode="after")
     def _fill_line_type(self):
         if not self.line_type:
             self.line_type = _LINE_TYPE_FROM_KIND.get((self.kind or "").lower())
@@ -222,7 +230,8 @@ def _calc_line(line: "LineIn") -> float:
     if dtype == "fixed":
         after_discount = max(base - line.discount, 0)
     else:
-        after_discount = base * (1 - line.discount / 100)
+        # B3: clamped, so no path (old rows, imports) can turn a discount into a negative job.
+        after_discount = base * (1 - min(max(line.discount or 0, 0), 100) / 100)
     mode = getattr(line, "tax_mode", "imposed")
     if mode == "included":
         # price already contains tax; customer total does not change
@@ -264,6 +273,15 @@ def _line_tax_amount(line: "LineIn") -> float:
         # extract: tax = net - net/(1+rate)
         return q2(after_discount - after_discount / (1 + rate)) if rate else 0.0
     return q2(after_discount * rate)
+
+def order_tax(lines) -> float:
+    """Launch B4: the tax inside an order's total (imposed tax added on top plus VAT contained in
+    VAT-inclusive prices), stored on Order.tax so invoices, the PDF and reports can show it."""
+    from backend.services.tax import line_tax
+    return q2(sum(line_tax(qty=l.qty, unit_price=l.unit_price, discount=l.discount,
+                           discount_type=getattr(l, "discount_type", None), tax_rate=l.tax_rate,
+                           tax_mode=getattr(l, "tax_mode", None)) for l in lines))
+
 
 def _order_totals(lines: list[OrderLine]):
     labour = sum(l.total for l in lines if l.line_type == "labour")
@@ -707,7 +725,7 @@ async def bulk_action(
             inv = Invoice(
                 invoice_number=await next_number(db, current.org_id, "invoice"),
                 org_id=current.org_id, order_id=o.id, client_id=o.client_id,
-                status="draft", subtotal=o.total or 0, total=o.total or 0,
+                status="draft", subtotal=o.total or 0, tax=o.tax or 0, total=o.total or 0,
                 issued_at=datetime.utcnow(),
             )
             db.add(inv)
@@ -733,7 +751,8 @@ async def bulk_action(
             inv = Invoice(
                 invoice_number=await next_number(db, current.org_id, "invoice"),
                 org_id=current.org_id, order_id=grp[0].id, client_id=client_id,
-                status="draft", subtotal=total, total=total, issued_at=datetime.utcnow())
+                status="draft", subtotal=total, tax=q2(sum((o.tax or 0) for o in grp)), total=total,
+                issued_at=datetime.utcnow())
             db.add(inv)
             for o in grp:
                 await log_system_event(db, current.org_id, "order", o.id,
@@ -783,9 +802,11 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
             select(Location).where(Location.org_id == current.org_id, Location.active == True)  # noqa: E712
             .order_by(Location.created_at))).scalars().first()
         if not loc:
-            loc = Location(org_id=current.org_id, name="Main", timezone="UTC")
+            loc = Location(org_id=current.org_id, name="Main")
             db.add(loc)
             await db.flush()
+            from backend.services.shop_setup import setup_location
+            await setup_location(db, loc, first=True)
         data.location_id = loc.id
 
     # Item 2: role location-scope enforcement (no-op for unscoped roles/owners).
@@ -819,6 +840,7 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
         if _hide_cost or _fixed_cost:
             li.cost_price = await _catalog_cost(db, current.org_id, li.kind, li.ref_id)
         await _apply_client_discount(db, current.org_id, data.client_id, li)
+        await _auto_apply_tax(db, current.org_id, li)   # launch B4: lines on a new job were never taxed
         await _guard_discount_approval(db, current.org_id, _perms_create, li.discount, li.discount_type, is_owner=not current.role_id,
                                           base=(li.qty or 0) * (li.unit_price or 0))
         # 144ha — margin-floor guardrail on create (block a below-floor line)
@@ -962,6 +984,7 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
         labour_total=labour_total,
         parts_total=parts_total,
         total=labour_total + parts_total,
+        tax=order_tax(lines),
         currency_code=_cinfo["code"],
         fx_rate=_cinfo["rate"],
         lines=lines,
@@ -1603,8 +1626,12 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         if not existing_inv:
             _inv = Invoice(invoice_number=await next_number(db, current.org_id, "invoice"), org_id=current.org_id,
                            order_id=order.id, client_id=order.client_id, status="draft",
-                           subtotal=order.total or 0, total=order.total or 0, issued_at=datetime.utcnow())
+                           subtotal=order.total or 0, tax=order.tax or 0, total=order.total or 0,
+                           issued_at=datetime.utcnow())
             db.add(_inv)
+            await db.flush()
+            from backend.services.order_money import apply_deposits
+            await apply_deposits(db, _inv, order)   # a fully prepaid job's invoice is paid, not "Remind"
             await log_system_event(db, current.org_id, "order", order.id, "Invoice auto-created on status change")
             # Build 144z: mirror the new invoice (and its customer) to QuickBooks if connected.
             try:
@@ -3488,6 +3515,7 @@ async def _recalc_order(db, order):
     if _org and getattr(_org, "rounding_enabled", False):
         total = q2(round(total / 0.05) * 0.05)
     order.total = total
+    order.tax = order_tax(lines)
 
 
 def _all_codes():
@@ -3741,11 +3769,13 @@ async def add_line(
             li = LineIn(line_type=ltype, kind=kind, ref_id=eff_ref_id,
                         description=f"{name} ({bundle.name})",
                         qty=c.qty * data.qty, unit_price=q2(price))
+            await _auto_apply_tax(db, current.org_id, li)
             t = _calc_line(li)
             # The part's catalog cost, like any picked line, so profit reports see the kit's cost.
             nl = OrderLine(order_id=order_id, line_type=li.line_type, kind=li.kind, ref_id=li.ref_id,
                            description=li.description, qty=li.qty, unit_price=li.unit_price,
                            cost_price=await _catalog_cost(db, current.org_id, kind, eff_ref_id),
+                           tax_id=li.tax_id, tax_rate=li.tax_rate, tax_mode=li.tax_mode,
                            technician_id=data.technician_id, order_item_id=data.order_item_id, total=t,
                            bundle_group_id=group_id, bundle_name=bundle.name,
                            bundle_print_mode=kit_print.norm_mode(bundle.print_mode),
@@ -4248,6 +4278,11 @@ async def update_line(
     if _mg["blocked"]:
         raise HTTPException(409, f"Margin {_mg['margin_pct']}% is below the {_mg['floor']}% floor. "
                                  f"Lower the discount or raise the price.")
+    if (line.discount_type or "pct") == "fixed" and \
+            (line.discount or 0) > q2((line.qty or 0) * (line.unit_price or 0)) + 0.005:
+        raise HTTPException(422, "A discount can't be more than the line's price")
+    if (line.discount_type or "pct") == "pct" and (line.discount or 0) > 100:
+        raise HTTPException(422, "A percentage discount can't exceed 100%")
     tmp = LineIn(line_type=line.line_type, description=line.description or "", qty=line.qty,
                  unit_price=line.unit_price, cost_price=line.cost_price or 0,
                  discount=line.discount or 0, discount_type=line.discount_type or "pct",

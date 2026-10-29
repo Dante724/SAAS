@@ -96,7 +96,9 @@ async def _schema():
         # On Postgres, drop_all + create_all of ~150 tables (twice per test, with the teardown drop)
         # is what made the serial suite take over an hour. Build the schema once per process, then
         # empty every table before each test — equivalent here: no test alters the schema, and no
-        # table has a sequence, trigger or create-time seed data that a rebuild would have reset.
+        # table has a sequence or create-time seed data that a rebuild would have reset.
+        # admin_action_log's append-only trigger refuses DELETE, so the cleanup runs with user
+        # triggers off (SET LOCAL: this transaction only; tests still run with it on).
         # DELETE children-first in one round trip (~10ms) rather than TRUNCATE, which costs ~0.2s
         # for this many tables even when they are empty. The FK graph is acyclic apart from
         # self-references, which a single DELETE per table handles.
@@ -108,6 +110,7 @@ async def _schema():
                 _pg_schema_built = True
             else:
                 deletes = "".join(f'DELETE FROM "{t.name}";' for t in reversed(Base.metadata.sorted_tables))
+                await conn.exec_driver_sql("SET LOCAL session_replication_role = replica")
                 await conn.exec_driver_sql(f"DO $$BEGIN {deletes} END$$")
         yield
         return

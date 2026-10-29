@@ -15,12 +15,15 @@ python3 -m http.server 4321 --directory website
 | Where demo requests go | `site.config.js` → `demoEndpoint` (POST JSON), else `assistant.booking.slug` (a lead in Tekly → Inquiries), else `demoEmail` (mailto) — see `TeklyLead` in `marketing.js` |
 | Comparison pages and the buying guide | `tools/compare_pages.py` (competitor facts with source URLs and the date checked), then rerun `build_pages.py` |
 | AI-readable summary | `llms.txt` — keep it in step with prices and features |
-| Copy and sections | `index.html` |
+| Home, product, pricing, about and changelog | `src/` then `python3 tools/build_site.py` — see "Main pages" below |
 
 ## Design system
-The homepage (`index.html`) is one self-contained file: inline CSS and one ES module, Geist and
-the Tekly midnight-sapphire palette on a light page of rounded card sections (see "Homepage" below).
-The four landing pages, privacy and terms still use `styles.css` (Sora/Inter) and `page.js`.
+Home, product, pricing, about and changelog share `assets/site.css` and `assets/site.js`: Geist and
+the Tekly midnight-sapphire palette on a light page of rounded card sections (see "Main pages"
+below). The industry, comparison, guide and legal pages are built by `tools/build_pages.py` inside the
+same shell (header, title card, footer, menu, demo form). Their bodies keep their own markup, styled by
+`assets/sub.css`, which `build_pages.py` generates from `styles.css` scoped to `.legacy` content cards —
+edit `styles.css`, not `sub.css`.
 
 ## Visuals
 No photography. Every visual is a product screen built in HTML/CSS with sample data (labelled as
@@ -30,7 +33,9 @@ four real templates — Electronics (IMEI or serial, with a Phone/Computer toggl
 (cars, trucks, RVs, bikes), Tools & small engine, and Marine — with line icons and example intake.
 
 Trust content is factual: a "works with" strip lists integrations that exist in the codebase
-(Stripe, Square, QuickBooks, Xero, SMS via Twilio, WhatsApp, Gmail, Outlook) and a promises row
+(Stripe, Square, QuickBooks Online, SMS via Twilio, WhatsApp, Gmail, Outlook). Xero and
+Shopify/WooCommerce are hidden in the app until their sync is real, so the site doesn't mention them;
+QuickBooks is described as a one-way send of invoices and payments, which is what it does and a promises row
 (no contracts, export anytime, free migration, AI never sends on its own).
 
 ## SEO & marketing
@@ -83,38 +88,41 @@ Events pushed to `dataLayer`: `assistant_open`, `assistant_message` (matched int
 `assistant_booking_start`, `assistant_recommend`, `generate_lead`. To edit answers, change the
 `KB` and `TRADES` lists at the top of `assistant.js` — keep them to facts that are true.
 
-## Homepage
+## Main pages (`tools/build_site.py`)
 
-`index.html` is one
-self-contained file (inline CSS and an ES module; the only library is Lenis 1.1.18, self-hosted at
-`assets/vendor/`) with the same copy, plans (`site.config.js`), links, demo destination, FAQ,
-JSON-LD, attribution and assistant.  `/v2/` (its preview URL) forwards to `/`.
+Home, `/product/`, `/pricing/`, `/about/` and `/changelog/` are built from `src/` by
+`python3 website/tools/build_site.py`. Edit the sources, then rebuild:
 
-- **Layout:** rounded "card" sections on a light page; a full-height photo hero with a navy scrim,
-  a navy stats band and a navy CTA footer. Geist and Tekly sapphire.
-- **Speed:** the loader shows once per visit for at most 1.2s; the hero photo is a 65KB 1600w
-  WebP (960/1600/2400 srcset, plus a portrait crop for phones); reveals run on the compositor
-  (Web Animations), scroll work is one rAF per frame with geometry measured on resize; the
-  assistant loads when the browser is idle.
-- **Motion:** a small rAF spring helper drives hovers (off at ≤768px), the templates carousel, the
-  menu and the demo modal. `prefers-reduced-motion` skips Lenis and shows everything at once.
-- **SEO:** one H1 with the keyword visible; job stages and the four template cards (with their
-  landing-page links) are in the HTML, not injected by JS. Pricing cards are still rendered from
-  `site.config.js` (prices are also in the FAQ and JSON-LD).
-- **Every trade, every location:** the four template cards (with live photo tiles that cycle
-  2–3 photos, and a "Today's bench" board that rolls through sample jobs for each kind of work —
-  e.g. car, truck, RV and bike for Vehicles; the chips and intake form follow the job on top and a
-  chip jumps to its job; jobs live in each `<li data-fields>` in the HTML) sit side by side on desktop right after the intro, followed by a
-  "One account for every repair business you run" band (trades, locations, stock transfers,
-  per-location numbers). Below 1025px they become a swipeable carousel.
-- **New sections:** What's new shows three highlights and links to `/changelog/`, which lists all
-  of this autumn's updates (card readers and calling are marked "Rolling out" until live keys are
-  set); and About us. Pricing sits straight after the Approvals / Inventory / Money section.
-- **Share image:** `assets/og.jpg` (used by every page) is a light 1200×630 card: "Repair shop
-  software for every trade", four trade photos, from $29/mo. To remake it, render a 1200×630 HTML
-  card with headless Chrome (`--screenshot --window-size=1200,630`).
-- **Placeholders to fill before launch:** the founder note in About us; the customer-quotes
-  section is `hidden` until real quotes exist (`PLACEHOLDER` comments in the HTML).
+| Change | File |
+|---|---|
+| A section's copy or layout | `src/sections/<name>.html` (home: hero, intro, home-tour, industries, home-switch, home-pricing, home-faq; product: flow, feats, go, stats, ai, sense, switch, everything; pricing: pricing, faq; about: about, quotes) |
+| Header, phone menu, demo form | `src/partials/` (`hdr.html`, `modal.html`) |
+| Footer and the closing call to action | `src/sections/cta.html` |
+| Which sections each page shows, titles, descriptions, structured data | `PAGES` in `tools/build_site.py` |
+| Changelog cards | `src/sections/changelog-soon.cards.html` (coming soon) and `changelog-oct.cards.html` (shipped) |
+| Styles and behaviour for all five pages | `assets/site.css`, `assets/site.js` |
+
+Plans and prices still come from `site.config.js` (the pricing page renders them; the home
+pricing strip has them written in, so update both). The FAQ's structured data lives in
+`src/jsonld.json` and must match the visible FAQ in `src/sections/faq.html`.
+
+- **Look and motion ("Daylight", chosen with the design council, Oct 2026):** a white page with
+  full-width sections in a 1200px column, Geist and midnight sapphire, navy only for the closing call to
+  action and footer. One sticky header on every page (Product, Industries, Pricing, Resources dropdowns;
+  a menu sheet on phones). Nothing changes on its own: content fades in once as it scrolls into view;
+  trade cards and job steps change only when clicked. Native scrolling; `prefers-reduced-motion` turns
+  the fade off. Stylesheet and script links carry a content hash (`?v=`) so updates aren't cached.
+- **Home order:** hero (with links to the four industry pages) → works-with strip → product tour →
+  every trade → switching → pricing line → top questions (FAQPage data matches them) → call to action.
+- **Coming soon:** the changelog's "Coming soon" cards describe features
+  from open PRs #12–#28; move them to a shipped month as they merge.
+- **No invented proof:** there is no founder note and no customer-quotes section. Add quotes only
+  from real customers who agreed to be quoted (name, shop, city).
+- **Honest claims:** Tekly AI drafts estimate lines; the shop checks and sets the prices. Don't say
+  "priced from your catalog" or "two-way sync" until the product does it.
+- **Legal placeholders:** `tools/legal/` has `[[CAPITALISED]]` tokens the founder must fill in.
+  `build_pages.py` lists them and **fails** while any remain, so use it as the host's build command.
+  `--allow-placeholders` makes a draft build for previewing only.
 - **Photos:** `assets/photos/` from Unsplash (Unsplash License) and Wikimedia Commons (public
-  domain, CC BY 2.0, CC BY-SA 3.0/4.0). Credits are listed under "Photo credits" in the footer;
-  keep them when you swap photos.
+  domain, CC BY 2.0, CC BY-SA 3.0/4.0); credits under "Photo credits" in the footer.
+- `/v2/` (an old preview URL) forwards to `/`.

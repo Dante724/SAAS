@@ -17,11 +17,17 @@ branch_labels = None
 depends_on = None
 
 
+def _has_column(table: str, column: str) -> bool:
+    return column in {c["name"] for c in sa.inspect(op.get_bind()).get_columns(table)}
+
+
 def upgrade() -> None:
-    has = "written_off" in {c["name"] for c in sa.inspect(op.get_bind()).get_columns("orders")}
+    # ojj1 (a sibling off opd1) adds the same column; whichever runs first adds it.
+    if not _has_column("orders", "written_off"):
+        with op.batch_alter_table("orders") as b:
+            b.add_column(sa.Column("written_off", sa.Numeric(12, 2, asdecimal=False), nullable=False,
+                                   server_default="0"))
     with op.batch_alter_table("orders") as b:
-        if not has:   # preview: ojj1 adds the same column; whichever runs second skips it
-            b.add_column(sa.Column("written_off", sa.Numeric(12, 2, asdecimal=False), nullable=False, server_default="0"))
         b.add_column(sa.Column("continued_from_order_id", sa.String(), nullable=True))
         b.create_foreign_key("fk_orders_continued_from_order_id_orders", "orders",
                              ["continued_from_order_id"], ["id"], ondelete="SET NULL")
@@ -33,4 +39,4 @@ def downgrade() -> None:
         b.drop_index("ix_orders_continued_from_order_id")
         b.drop_constraint("fk_orders_continued_from_order_id_orders", type_="foreignkey")
         b.drop_column("continued_from_order_id")
-        b.drop_column("written_off")
+        # written_off belongs to ojj1 too; ojj1's downgrade drops it.

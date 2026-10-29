@@ -9,6 +9,7 @@ import { money } from "../orders/types";
 import { confirmDialog } from "../../lib/dialog";
 import { isoDate, isoDateTimeLocal } from "../../lib/localDate";
 import { EmployeeHours } from "../company/CompanyHub";
+import { serverDate } from "../../lib/serverTime";
 
 // Timesheets — React port of legacy timesheets.js. Per-employee grid + approve,
 // manual entry add/void/reopen, and a live "who's on the clock" roster.
@@ -94,7 +95,7 @@ export default function TimesheetsHub() {
                 {sheet?.entries?.length === 0 && <tr><td colSpan={5} className="py-6 text-center text-ink-tertiary">No entries in this range.</td></tr>}
                 {sheet?.entries?.map((e) => (
                   <tr key={e.id}>
-                    <td className="py-2.5 px-4 text-ink-secondary">{e.started_at ? new Date(e.started_at).toLocaleString() : "—"}</td>
+                    <td className="py-2.5 px-4 text-ink-secondary">{serverDate(e.started_at)?.toLocaleString() || "—"}</td>
                     <td className="py-2.5 px-4 font-semibold text-ink-primary">{e.order_number || e.category || "—"}{e.billable ? "" : <span className="ml-1 text-[11px] text-ink-tertiary">non-bill</span>}</td>
                     <td className="py-2.5 px-4 text-right tabular-nums">{hm(e.duration_min)}</td>
                     <td className="py-2.5 px-4"><span className={`text-[11px]  font-bold px-1.5 py-0.5 rounded ${e.state === "approved" ? "bg-emerald-100 text-emerald-700" : e.state === "running" ? "bg-blue-100 text-primary" : "bg-slate-100 text-ink-secondary"}`}>{e.state || "logged"}</span></td>

@@ -28,7 +28,8 @@ async def test_pos_gift_card_decrements_balance(client, tenant):
     r = await client.post("/api/sales", json={
         "lines": [_svc_line(50)], "gift_card_code": code}, headers=tenant)
     assert r.status_code == 201, r.text
-    assert r.json()["total"] == pytest.approx(20.0)       # 50 - 30 card
+    assert r.json()["total"] == pytest.approx(50.0)       # B5: the card is a tender, not a discount
+    assert r.json()["due"] == pytest.approx(20.0)         # 50 - 30 card
     assert r.json()["redeemed"]["gift_card"] == pytest.approx(30.0)
     # card drained to 0
     assert (await client.get(f"/api/giftcards/{code}", headers=tenant)).json()["balance"] == pytest.approx(0.0)

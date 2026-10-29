@@ -1,7 +1,7 @@
 name: CI
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, 'release/**' ]
   # CI minutes cost money on a private repo, so pull requests are checked only when they are
   # ready: draft PRs skip every job; marking a PR "Ready for review" runs it once, and each
   # later push cancels the run it replaces. "Run workflow" on the Actions tab starts one by hand.
@@ -9,9 +9,11 @@ on:
     types: [ opened, reopened, synchronize, ready_for_review ]
   workflow_dispatch:
 
+# A new push to a PR/branch cancels that ref's still-running CI. Runs on main/master each get a
+# unique group (the run id), so they are never cancelled or queued behind one another.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   SHARDS: 4   # number of backend test shards; keep in sync with the `test` job's matrix
