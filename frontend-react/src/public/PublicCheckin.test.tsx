@@ -31,7 +31,7 @@ beforeEach(() => {
   HTMLCanvasElement.prototype.getContext = vi.fn(() => ({ beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, clearRect() {} })) as any;
   HTMLCanvasElement.prototype.toDataURL = vi.fn(() => "data:image/png;base64,AAA");
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); localStorage.clear(); });
 
 function serve(p = page()) {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
@@ -61,22 +61,39 @@ describe("PublicCheckin", () => {
     serve();
     render(<PublicCheckin token="tok" />);
     expect(await screen.findByText("Harbor Marine and Auto")).toBeInTheDocument();
-    expect(screen.getByLabelText("VIN")).toBeInTheDocument();
-    expect(screen.getByLabelText("Mileage")).toBeInTheDocument();
+    expect(screen.getByLabelText("VIN (optional)")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Mileage/)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /Add more details/ }));
+    expect(screen.getByLabelText(/Mileage/)).toBeInTheDocument();
     expect(screen.queryByLabelText(/Noise when braking/)).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Brakes" }));
     expect(screen.getByLabelText(/Noise when braking/)).toBeInTheDocument();
   });
 
-  it("decodes the VIN and fills make and model", async () => {
+  it("decodes the VIN into one vehicle line instead of empty boxes, and sends what it found", async () => {
+    serve();
+    const assign = vi.fn();
+    vi.stubGlobal("location", { ...window.location, assign, reload: vi.fn() });
+    render(<PublicCheckin token="tok" />);
+    expect(await screen.findByLabelText("Make (optional)")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("VIN (optional)"), "1HGCM82633A004352");
+    await userEvent.tab();
+    expect(await screen.findByText("2019 Honda Accord")).toBeInTheDocument();
+    expect(screen.getByText(/VIN ···4352/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Make/)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /Change/ }));
+    expect(screen.getByLabelText("Make (optional)")).toHaveValue("Honda");
+  });
+
+  it("remembers a returning customer on their own phone", async () => {
+    localStorage.setItem("tekly.checkin.me", JSON.stringify({ name: "Sam Patel", phone: "5550142290", email: "" }));
     serve();
     render(<PublicCheckin token="tok" />);
-    const vin = await screen.findByLabelText("VIN");
-    await userEvent.type(vin, "1HGCM82633A004352");
-    await userEvent.tab();
-    await waitFor(() => expect(screen.getByLabelText("Make")).toHaveValue("Honda"));
-    expect(screen.getByLabelText("Model")).toHaveValue("Accord");
-    expect(screen.getByText(/2019 Honda Accord, found from VIN/)).toBeInTheDocument();
+    expect(await screen.findByText("Welcome back, Sam")).toBeInTheDocument();
+    expect(screen.getByLabelText("Your name")).toHaveValue("Sam Patel");
+    await userEvent.click(screen.getByRole("button", { name: "Not you?" }));
+    expect(screen.getByLabelText("Your name")).toHaveValue("");
+    expect(localStorage.getItem("tekly.checkin.me")).toBeNull();
   });
 
   it("won't send until required answers and the signature are there, then posts the check-in", async () => {
@@ -92,11 +109,10 @@ describe("PublicCheckin", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Noise when braking is required");
     await userEvent.selectOptions(screen.getByLabelText(/Noise when braking/), "Squeal");
     await userEvent.click(screen.getByRole("button", { name: "Check in" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(/Sign and tick/);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Sign to agree/);
     const pad = screen.getByLabelText("Sign here");
     pad.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: 5, clientY: 5 }));
     window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-    await userEvent.click(screen.getByLabelText(/I agree/));
     await userEvent.click(screen.getByRole("button", { name: "Check in" }));
     await waitFor(() => expect(posts.some((p) => p.url === "/api/public/checkin/tok")).toBe(true));
     const sent = posts.find((p) => p.url === "/api/public/checkin/tok")!.body;
@@ -110,6 +126,7 @@ describe("PublicCheckin", () => {
     render(<PublicCheckin token="tok" />);
     expect(await screen.findByRole("heading", { name: "Dropping off keys" })).toBeInTheDocument();
     expect(screen.getByLabelText("Key tag number")).toBeInTheDocument();
+    expect(screen.queryByText(/About 15 min wait/)).toBeNull();
     expect(screen.getByRole("button", { name: "Leave my keys" })).toBeInTheDocument();
   });
 

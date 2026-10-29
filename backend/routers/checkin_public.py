@@ -160,9 +160,16 @@ async def identify(token: str, data: IdentifyIn, request: Request, db: AsyncSess
         dec = lookups.decode_hin(norm)
     elif kind == "imei":
         dec = await lookups.decode_imei(norm)
-    out.update({"make": dec.get("make") or dec.get("manufacturer"), "model": dec.get("model"),
+    out.update({"make": _name_case(dec.get("make") or dec.get("manufacturer")), "model": dec.get("model"),
                 "year": dec.get("model_year")})
     return out
+
+
+def _name_case(v):
+    """Decoders shout ("HONDA"); show "Honda". Short marques (BMW, GMC, KIA) stay as they are."""
+    if isinstance(v, str) and len(v) > 3 and v.isupper():
+        return "-".join(p.capitalize() for p in v.title().split("-"))
+    return v
 
 
 class CheckinIn(BaseModel):
@@ -240,7 +247,7 @@ async def submit_checkin(token: str, data: CheckinIn, request: Request, db: Asyn
         from backend.services import lookups
         dec = (await lookups.decode_vin(ident_value) if ident_kind == "vin" else
                lookups.decode_hin(ident_value) if ident_kind == "hin" else await lookups.decode_imei(ident_value))
-        decoded = {k: dec.get(k) for k in ("make", "model", "model_year", "manufacturer") if dec.get(k)}
+        decoded = {k: _name_case(dec.get(k)) for k in ("make", "model", "model_year", "manufacturer") if dec.get(k)}
     reading_kind = form["reading"]["key"] if form["reading"] and data.reading is not None else None
     day = await svc.queue_day(db, point.org_id, point.location_id)
 
