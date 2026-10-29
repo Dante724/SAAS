@@ -15,7 +15,7 @@
   const cur = C.currency || "$";
   const plans = C.plans || [];
   const solo = plans.find(p => p.id === "solo") || { monthly: 29, name: "Solo" };
-  const shop = plans.find(p => p.id === "shop") || { monthly: 69, extraLocation: 49, extraSeat: 4, name: "Shop" };
+  const shop = plans.find(p => p.id === "shop") || { monthly: 69, extraLocation: 49, extraSeat: 6, name: "Shop" };
   const pro = plans.find(p => p.id === "pro") || { monthly: 129, extraLocation: 79, name: "Pro" };
   const ymo = C.yearlyMonths ?? 10;
   const trial = C.trialDays ?? 14;
@@ -47,8 +47,8 @@
     { id: "book", w: ["demo", "book", "booking", "meeting", "call", "schedule", "appointment", "walkthrough", "show", "talk", "sales", "person", "human", "someone"], a: () => ({ text: "Happy to set that up. A demo is 30 minutes: we set up your trade live, run one job from intake to paid, and answer questions about moving your data and pricing.", chips: ["Pick a time"], action: "book" }) },
     { id: "price", w: ["price", "prices", "pricing", "cost", "costs", "much", "expensive", "cheap", "plan", "plans", "pay", "fee", "monthly", "subscription", "per"], a: () => ({ text: `There are three plans:
 • ${solo.name} — ${cur}${solo.monthly}/month: 2 team members, 150 new jobs a month.
-• ${shop.name} — ${cur}${shop.monthly}/month for the first location and ${cur}${shop.extraLocation} for each extra: 8 team members shared across locations (${cur}${shop.extraSeat} a month per extra person), unlimited jobs, plus inventory, scanning, time clock and reports.
-• ${pro.name} — ${cur}${pro.monthly}/month for the first location and ${cur}${pro.extraLocation} for each extra, no limits, plus purchase orders, payroll, AI estimates and accounting sync.
+• ${shop.name} — ${cur}${shop.monthly}/month for the first location and ${cur}${shop.extraLocation} for each extra: 4 team members shared across locations (${cur}${shop.extraSeat} a month per extra person), unlimited jobs, plus inventory, scanning, time clock and reports.
+• ${pro.name} — ${cur}${pro.monthly}/month for the first location and ${cur}${pro.extraLocation} for each extra: 8 team members (${cur}${pro.extraSeat ?? 6} a month per extra person), unlimited jobs, plus purchase orders, payroll, AI estimates and accounting sync.
 Yearly billing gets ${12 - ymo} months free. Every trial includes all Pro features for ${trial} days.`, chips: ["Which plan fits me?", "Book a demo"] }) },
     { id: "recommend", w: ["which", "recommend", "fit", "right", "best", "choose", "suit", "should"], a: () => ({ action: "recommend" }) },
     { id: "trial", w: ["trial", "free", "try", "test", "card", "credit"], a: () => ({ text: `Yes — every plan starts with a ${trial}-day free trial of all Pro features, no credit card needed. You can explore with sample jobs and clear them in one click.`, chips: ["Start free trial", "Book a demo"] }) },
@@ -60,13 +60,13 @@ Yearly billing gets ${12 - ymo} months free. Every trial includes all Pro featur
     { id: "pos", w: ["pos", "checkout", "sell", "sales", "retail", "payment", "payments", "stripe", "square", "invoice", "invoices", "receipt", "cash"], a: () => ({ text: "Tekly has a quick POS with cash drawers, invoices and payment links. Card payments go through Stripe or Square, and customers can pay online from their tracking page.", chips: ["Accounting sync", "Book a demo"] }) },
     { id: "accounting", w: ["quickbooks", "xero", "accounting", "accountant", "books", "bookkeeping", "ledger", "tax"], a: () => ({ text: "QuickBooks and Xero sync comes with Pro. Revenue, margin and payroll post to one ledger, so profit per job, technician and location is always current.", chips: ["Pricing", "Book a demo"] }) },
     { id: "messages", w: ["sms", "text", "texts", "whatsapp", "email", "gmail", "outlook", "notify", "notifications", "message", "messages", "inbox", "remind", "reminders"], a: () => ({ text: "Customer updates go out by SMS, WhatsApp or email (Gmail or Outlook), and replies land in one shared inbox. Customers also get a tracking link with live status, photos and the ready time.", chips: ["Approvals", "Book a demo"] }) },
-    { id: "switch", w: ["switch", "switching", "migrate", "migration", "import", "move", "moving", "transfer", "repairdesk", "shopmonkey", "orderry", "jobber", "spreadsheet", "excel", "current"], a: () => ({ text: "Switching is free on every plan. Send us an export from your current system or spreadsheets and we bring your customers, devices and stock across. Most single-location shops can be set up in a day.", chips: ["Book a demo", "Start free trial"] }) },
+    { id: "switch", w: ["switch", "switching", "migrate", "migration", "import", "move", "moving", "transfer", "repairdesk", "shopmonkey", "orderry", "jobber", "spreadsheet", "excel", "current"], a: () => ({ text: "Switching is free on every plan. Send us an export from your current system or spreadsheets and we bring your customers, devices and stock across. You can take your first job the day you sign up.", chips: ["Book a demo", "Start free trial"] }) },
     { id: "data", w: ["data", "export", "security", "secure", "safe", "privacy", "encrypt", "encryption", "gdpr", "leave", "cancel", "contract", "lock"], a: () => ({ text: "Your data is yours: export customers, jobs, stock and finances to CSV or Excel any time, even after you cancel. Passcodes and keys are encrypted, there's two-factor sign-in, role permissions and an audit log. Plans are month to month with no contract.", chips: ["Pricing", "Book a demo"] }) },
     { id: "mobile", w: ["mobile", "phone app", "app", "technician", "tech", "offline", "android", "iphone", "home", "install", "field"], a: () => ({ text: "Technicians get the Tekly Technician app: install it to the home screen from the browser, no app store. It shows today's jobs, runs the labour timer and checklists, scans parts with the camera, has a time clock, and keeps working offline.", chips: ["Book a demo", "Pricing"], link: { href: "/#mobile", label: "See the app" } }) },
     { id: "sense", w: ["sense", "learn", "learns", "suggest", "suggestion", "suggestions", "brief", "morning", "watchdog", "scorecard", "pattern", "upsell", "margin", "due"], a: () => ({ text: "Tekly Sense learns from your own closed jobs — no AI service, nothing shared between shops. It suggests lines from similar jobs, work usually added together, and services that are due, flags a job priced under your usual margin, and sends a Morning Brief. The owner also gets the Watchdog for unusual discounts, refunds and short drawers, plus a team scorecard.", chips: ["Pricing", "Book a demo"], link: { href: "/#sense", label: "See Tekly Sense" } }) },
     { id: "hardware", w: ["hardware", "printer", "scanner", "ipad", "tablet", "device", "install", "download", "app", "offline", "browser", "windows"], a: () => ({ text: "No special hardware — Tekly runs in any modern browser on a computer, tablet or phone, and works with standard barcode scanners, label printers and receipt printers.", chips: ["Book a demo"] }) },
     { id: "locations", w: ["locations", "location", "multi", "multiple", "branches", "stores", "franchise", "shops"], a: () => ({ text: `Solo covers one location. Shop adds locations at $49 a month each; Pro at $79 each, and adds stock transfers between them.`, chips: ["Which plan fits me?", "Book a demo"] }) },
-    { id: "setup", w: ["setup", "onboarding", "start", "started", "long", "quick", "training", "learn"], a: () => ({ text: "Most single-location shops are set up in a day, and onboarding is free on every plan. Pick your trade and the intake fields and services are pre-filled.", chips: ["Start free trial", "Book a demo"] }) },
+    { id: "setup", w: ["setup", "onboarding", "start", "started", "long", "quick", "training", "learn"], a: () => ({ text: "You can take your first job the day you sign up, and onboarding is free on every plan. Pick your trade and the intake fields and services are pre-filled.", chips: ["Start free trial", "Book a demo"] }) },
     { id: "hello", w: ["hi", "hello", "hey", "hiya", "morning", "afternoon", "evening", "yo"], a: () => ({ text: "Hi! I can answer questions about Tekly, help you pick a plan, or book a 30-minute demo. What do you repair?", chips: ["Book a demo", "Which plan fits me?", "Pricing"] }) },
     { id: "thanks", w: ["thanks", "thank", "cheers", "great", "perfect", "awesome", "ok", "okay", "cool"], a: () => ({ text: "You're welcome! Anything else I can help with?", chips: ["Book a demo", "Pricing"] }) },
   ];
@@ -180,16 +180,16 @@ Yearly billing gets ${12 - ymo} months free. Every trial includes all Pro featur
       me(c); mem.locations = c; save();
       flow.data.multi = c !== "One";
       await say("How many people will use Tekly, including you?");
-      chips(["1–2", "3–8", "More than 8"], async d => {
+      chips(["1–2", "3–4", "5 or more"], async d => {
         me(d);
-        flow.data.big = d === "More than 8";
+        flow.data.big = d === "5 or more";
         await say("Do you need purchase orders, payroll and commissions, or QuickBooks/Xero sync?");
         chips(["Yes", "No"], async e => {
           me(e);
           if (e === "Yes") return recommend("pro", "Those come with Pro.");
-          if (flow.data.big) return recommend("shop", `It includes 8 people shared across your locations, and each extra person is ${cur}${shop.extraSeat} a month. Pro has no limit if you also need payroll or purchase orders.`);
+          if (flow.data.big) return recommend("shop", `It includes 4 people shared across your locations, and each extra person is ${cur}${shop.extraSeat} a month. Pro includes 8 if you also need payroll or purchase orders.`);
           if (flow.data.multi) return recommend("shop", `Each extra location is ${cur}${shop.extraLocation} a month on Shop. If you need to move stock between locations, that comes with Pro.`);
-          if (d === "3–8") return recommend("shop", "It covers up to 8 people with unlimited jobs, inventory, scanning, the time clock and reports.");
+          if (d === "3–4") return recommend("shop", "It covers up to 4 people with unlimited jobs, inventory, scanning, the time clock and reports.");
           await say("Do you keep parts in stock or need barcode labels?");
           chips(["Yes", "Not really"], f => { me(f); f === "Yes" ? recommend("shop", "Inventory, barcodes and scanning start on Shop.") : recommend("solo", "It covers 2 people and 150 new jobs a month, and you can move up any time."); });
         });
@@ -280,16 +280,17 @@ Yearly billing gets ${12 - ymo} months free. Every trial includes all Pro featur
       if (LIVE) {
         const r = await api(`/appointment/${encodeURIComponent(B.slug)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: d.name, email: d.email, date: d.date, time: d.time, note }) });
         await say(`You're booked for ${r.when || d.when}. It's in our calendar, and we'll email ${d.email} with the details. Looking forward to it!`);
-      } else if (C.demoEndpoint) {
-        const r = await fetch(C.demoEndpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: d.name, email: d.email, shop: d.shop, industry: tradeName, preferred: d.when, source: "assistant", ...attr }) });
-        if (!r.ok) throw new Error(r.status);
-        await say(`Thanks, ${d.name.split(" ")[0]} — request sent. We'll email ${d.email} to confirm a time on ${d.when}.`);
       } else {
-        const body = `Name: ${d.name}\nEmail: ${d.email}\nShop: ${d.shop}\nTrade: ${tradeName}\nPreferred: ${d.when}`;
-        await say("I'll open an email with your request filled in — just press send.");
-        setTimeout(() => { location.href = `mailto:${C.demoEmail}?subject=${encodeURIComponent("Tekly demo request — " + d.shop)}&body=${encodeURIComponent(body)}`; }, 600);
+        const lead = { name: d.name, email: d.email, shop: d.shop, industry: tradeName, preferred: d.when, locations: mem.locations };
+        if (!C.demoEndpoint && !B.slug) {
+          await say("I'll open an email with your request filled in — just press send.");
+          await new Promise(r => setTimeout(r, 600));
+        }
+        const how = await window.TeklyLead.send(lead, "assistant");
+        if (how === "sent") await say(`Thanks, ${d.name.split(" ")[0]} — request sent. We'll email ${d.email} to confirm a time on ${d.when}.`);
+        else if (C.demoEndpoint || B.slug) await say("That didn't go through, so your email app opened with the request filled in — press send and we'll reply to find a time.");
       }
-      push("generate_lead", { form: "assistant", live: LIVE, industry: tradeName, ...attr });
+      if (LIVE) push("generate_lead", { form: "assistant", live: true, delivery: "booked", industry: tradeName, ...attr });
       flow = null; chips(["Start free trial", "Pricing"]);
     } catch (e) {
       if (e.status === 409) { await say("Someone just took that time — let's pick another."); return liveDays(); }
