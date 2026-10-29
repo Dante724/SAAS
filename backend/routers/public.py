@@ -309,10 +309,17 @@ async def _track_payload(db: AsyncSession, order: "Order") -> dict:
     _inames = await _ma.item_names(db, order.org_id, [l.order_item_id for l in _lines])
     if _inames:
         _lines = _ma.sort_by_item(_lines, _inames, key=lambda l: l.order_item_id)
+    # A kit set to print as one line is one row here too (kit_print is the only way customer
+    # pages get lines); its amount is the sum of its real lines.
+    from backend.services import kit_print as _kp
+    def _amt(l):
+        return q2(sum(_line_amt(m) for m in l.members)) if getattr(l, "is_kit", False) else _line_amt(l)
     lines_pub = [{"label": l.description or (l.kind or l.line_type or "Item").title(),
                   "qty": l.qty or 1, "kind": l.kind or l.line_type,
-                  "amount": _line_amt(l),
-                  **({"item": (_inames.get(l.order_item_id) or (None,))[0]} if _inames else {})} for l in _lines]
+                  "amount": _amt(l),
+                  **({"includes": list(l.includes)} if getattr(l, "includes", None) else {}),
+                  **({"item": (_inames.get(l.order_item_id) or (None,))[0]} if _inames else {})}
+                 for l in _kp.customer_lines(_lines)]
 
     # 144ix — customer review capture: expose active feedback settings + whether this
     # order already has a submitted rating. Actual submit is token-gated below.

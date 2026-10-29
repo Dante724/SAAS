@@ -30,9 +30,12 @@ import { escapeHtml, printHtmlInFrame } from "../../lib/safeHtml";
 import JobCardFields from "../../components/JobCardFields";
 import ReaderCharge from "../../components/ReaderCharge";
 import CardPaymentsList from "../../components/CardPaymentsList";
+import KitGroupHeader from "./KitGroupHeader";
+import { groupKitLines } from "../../lib/kitGroups";
 
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
-type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean; order_item_id?: string | null };
+type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean; order_item_id?: string | null;
+  bundle_group_id?: string | null; bundle_name?: string | null; bundle_print_mode?: string | null; bundle_price_locked?: number | null; bundle_qty?: number | null };
 type Detail = Order & {
   complaint?: string; tech_notes?: string; diagnosis?: string; conclusion?: string;
   warranty_until?: string | null; due_at?: string | null;
@@ -206,6 +209,20 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
       <div class="k">Total</div><div class="v">${escapeHtml(money(d.total))}</div></div>`;
     // Hidden sandboxed frame instead of a pop-up window, so pop-up blockers can't stop it.
     printHtmlInFrame(`<html><head><title>${escapeHtml(woNum)}</title><style>${css}</style></head><body>${stickers}</body></html>`);
+  }
+
+  // A kit can print as one line for the customer; a customer can always ask for every item.
+  const hasKit = (d.lines || []).some((l) => l.bundle_group_id);
+  async function printItemised() {
+    try {
+      const t = await api.get<any>("/documents/templates");
+      const want = (order as any).is_estimate ? "estimate" : "work_order";
+      const tpls = (t?.items || []).filter((x: any) => x.doc_type === want);
+      const tpl = tpls.find((x: any) => x.is_default) || tpls[0];
+      if (!tpl) { flash("Add a work order template first (Settings → Documents)"); return; }
+      const r = await api.get<any>(`/documents/render/${order.id}/${tpl.id}?itemised=true`);
+      if (r?.html) printHtmlInFrame(r.html);
+    } catch (e: any) { flash(e.message || "Could not print the itemised copy"); }
   }
 
   const woNum = d.order_number || order.order_number || order.id;
@@ -513,13 +530,14 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
         {/* Footer */}
         <footer className="px-6 py-3.5 border-t border-slate-200/90 bg-white/95 backdrop-blur-md flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
             <label className="flex items-center gap-2 text-xs font-semibold text-ink-secondary"><input checked={!!(d as any).estimate_approved_at} readOnly disabled className="rounded text-primary h-4 w-4" type="checkbox" /><span>Customer approved</span></label>
             <span className="flex items-center gap-2">
               <button onClick={copyTrackingLink} className="text-xs text-primary font-bold hover:underline flex items-center gap-1"><M n="link" c="text-xs" />Copy tracking link</button>
               {(d as any).public_token && <a href={`/track/${(d as any).public_token}`} target="_blank" rel="noopener noreferrer" className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-0.5 hover:underline">Open<M n="open_in_new" c="text-xs" /></a>}
             </span>
             <PrintMenu key={order.id} orderId={order.id} status={d.status} canInvoices={can("can_view_invoices")} onSticker={printWO} onError={flash} />
+            {hasKit && can("can_print_itemised_copy") && <button onClick={printItemised} className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-1 border border-slate-200 rounded-lg px-2 py-1 bg-white"><M n="receipt_long" c="text-xs" />Print itemised copy</button>}
             <button onClick={del} className="text-xs text-rose-600 hover:text-rose-700 font-semibold flex items-center gap-1 hover:bg-rose-50 rounded-lg px-2 py-1 transition-colors"><M n="delete" c="text-xs" />Delete</button>
           </div>
           <div className="flex items-center gap-2">
@@ -1051,6 +1069,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
   const [disc, setDisc] = useState(0);
   const [adding, setAdding] = useState(false);
   const [custom, setCustom] = useState(false);     // 3: a line that isn't in the catalog (yet)
+  const [intoKit, setIntoKit] = useState<{ id: string; name: string } | null>(null);   // add the pick inside this kit
   const [stock, setStock] = useState<{ total_available: number; items: { location: string; available: number }[] } | null>(null);
   // When a product is picked, show where it's in stock — the point-of-need answer
   // to "we're out here, is it at another branch?" (products only; services carry no stock).
@@ -1069,9 +1088,10 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
         ref_id: pick.ref_id, qty, unit_price: pick.price || 0,
         discount: disc, discount_type: "pct",
         ...(tagging && forItem ? { order_item_id: forItem } : {}),
+        ...(intoKit && pick.kind !== "bundle" ? { bundle_group_id: intoKit.id } : {}),
       });
-      onFlash(r?.margin_warning ? `Added — ${r.margin_warning}` : "Line added");
-      setPick(null); setQty(1); setDisc(0);
+      onFlash(r?.margin_warning ? `Added — ${r.margin_warning}` : intoKit ? `Added to ${intoKit.name}` : "Line added");
+      setPick(null); setQty(1); setDisc(0); setIntoKit(null);
       onChanged?.();
     } catch (e: any) { onFlash(e.message || "Could not add line"); }
     finally { setAdding(false); }
@@ -1246,7 +1266,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
 
       {/* Add a line — margin guardrail (block/warn) applies on save */}
       <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm space-y-2.5">
-        <div className="text-[11px] font-bold text-ink-tertiary">Add service or product</div>
+        <div className="text-[11px] font-bold text-ink-tertiary flex items-center gap-2">{intoKit ? <>Add to kit: {intoKit.name}<button type="button" onClick={() => setIntoKit(null)} className="font-semibold text-primary hover:underline">Add as an extra instead</button></> : "Add service or product"}</div>
         {pick ? (
           <div className="flex flex-wrap items-end gap-2">
             <div className="flex-1 min-w-[160px]"><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Item</label>
@@ -1295,7 +1315,15 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
             </div>
           )}
           <div className="divide-y divide-slate-100">
-            {ls.map((l) => renderLine(l))}
+            {groupBy ? ls.map((l) => renderLine(l)) : groupKitLines(ls).map((seg, si) => (
+              seg.type === "line" ? renderLine(seg.line)
+                : seg.type === "extras" ? <div key={`extras-${si}`} className="px-4 pt-3 pb-1 text-[11px] font-bold text-ink-tertiary">Extras</div>
+                : <KitGroupHeader key={seg.groupId} orderId={orderId} groupId={seg.groupId} name={seg.name} qty={seg.qty} mode={seg.mode}
+                    locked={seg.locked} total={seg.total} count={seg.lines.length} seePrices={seePrices} closed={locked}
+                    onChanged={onChanged} onFlash={onFlash} onAddInto={(id) => setIntoKit({ id, name: seg.name })}>
+                    {seg.lines.map((l) => renderLine(l))}
+                  </KitGroupHeader>
+            ))}
           </div>
         </div>
       ))}

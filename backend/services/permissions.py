@@ -49,6 +49,9 @@ CATALOG = {
         ("can_take_payments", "Take payments on jobs (cash, card, pay link)"),
         ("can_use_sense_suggestions", "See Tekly Sense suggestions on jobs"),
         ("can_approve_agent_sends", "Approve automatic customer messages (Tekly Sense)"),
+        ("can_change_kit_print", "Change how a kit prints on a job"),
+        ("can_change_kit_price", "Change a fixed kit price on a job"),
+        ("can_print_itemised_copy", "Print an itemised copy for the customer"),
     ],
     "Inventory": [
         ("can_manage_inventory", "Manage inventory (stock, POs, receiving)"),
@@ -184,7 +187,8 @@ TEMPLATES = {
 
 
 # Codes that were always opt-in (only an explicit True grants them), even for legacy roles.
-OPT_IN = {"can_override_reservation", "can_use_sense_suggestions", "can_approve_agent_sends"}
+OPT_IN = {"can_override_reservation", "can_use_sense_suggestions", "can_approve_agent_sends",
+          "can_change_kit_price"}
 
 
 def role_allows(role, perm_key: str) -> bool:
