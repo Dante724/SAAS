@@ -6,7 +6,7 @@ import CallButton from "../../components/CallButton";
 import { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import { api, openAuthedDoc } from "../../api/client";
-import { alertDialog, promptDialog } from "../../lib/dialog";
+import { alertDialog, confirmDialog, promptDialog } from "../../lib/dialog";
 import { useMe } from "../../context/Me";
 import { money } from "./types";
 import AddressFields, { ADDRESS_KEYS, addressPayload, type Address } from "../../components/AddressFields";
@@ -36,6 +36,7 @@ function F({ l, v }: { l: string; v: string }) {
 
 export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: { woNum?: string; clientId: string; onClose: () => void; onOpenAsset?: () => void }) {
   const term = useTerminology();
+  const { can } = useMe();
   const [tab, setTab] = useState(0);
   const [assetOpen, setAssetOpen] = useState<string | null>(null);
   const [newWO, setNewWO] = useState(false);
@@ -101,6 +102,15 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
       setToast("Saved"); setTimeout(() => onClose(), 700);
     }
     catch (e: any) { setToast(e.message || "Save failed"); setBusy(false); }
+  }
+
+  // Contacts with history (jobs, invoices, payments, devices) can't be deleted; the server says so
+  // and points to Merge instead, which we show as is.
+  async function removeClient() {
+    if (!(await confirmDialog("This removes the contact for good. Contacts with jobs, invoices or payments can't be deleted; merge them into another contact instead.",
+      { title: "Delete this contact?", confirmLabel: "Delete", danger: true }))) return;
+    try { await api.del(`/clients/${clientId}`); onClose(); }
+    catch (e: any) { await alertDialog(e?.message || "Couldn't delete this contact.", "Can't delete"); }
   }
 
   return (
@@ -218,7 +228,7 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
           )}
         </div>
         <footer className="px-6 py-3.5 border-t border-slate-200/90 bg-white/95 flex items-center gap-2">
-          <button className="text-xs font-semibold text-rose-600">Delete Client</button>
+          {can("can_delete_clients") && <button onClick={removeClient} disabled={busy} className="px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50">Delete client</button>}
           <div className="ml-auto flex gap-2"><button onClick={onClose} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : "Save Client"}</button></div>
         </footer>
         {toast && <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-drawer">{toast}</div>}
