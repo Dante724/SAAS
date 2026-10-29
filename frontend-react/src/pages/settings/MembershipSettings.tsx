@@ -81,10 +81,10 @@ export default function MembershipSettings() {
         <div className="min-w-0 flex-1">
           <h2 className="text-base font-semibold text-ink-primary">Memberships</h2>
           <p className="mt-0.5 text-sm text-ink-tertiary">How plans are offered, what happens when a payment is missed, and how plan money shows in your books.</p>
+          <a href="/catalog?tab=plans" className="mt-3 h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 inline-flex items-center gap-1.5 whitespace-nowrap">
+            Manage plans<M n="arrow_forward" c="text-sm" />
+          </a>
         </div>
-        <a href="/catalog?tab=plans" className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex items-center gap-1.5 whitespace-nowrap">
-          Manage plans<M n="arrow_forward" c="text-sm" />
-        </a>
       </div>
 
       <div className="rounded-2xl border border-slate-200/90 bg-white shadow-clay-sm divide-y divide-slate-100">
