@@ -14,6 +14,22 @@ const MOST_USED = ["{Company Name}", "{Company Logo}", "{Company Phone}", "{Clie
   "{Order Created Date}", "{Asset Brand}", "{Asset Model}", "{Asset Serial Number}", "{Order Complaint}", "{Items Table}",
   "{All Items Table}", "{Order Total}", "{Order Balance Due}", "{Barcode}"];
 const DOC_TYPES = ["estimate", "invoice", "credit_note", "receipt", "work_order", "label", "other"];
+// When a document of this type can print by itself (the server checks the same rule).
+const AUTO_EVENTS: [string, string][] = [["create", "A job is created"], ["close", "A job is closed"], ["sale", "A sale is made"]];
+export function autoPrintChoices(docType: string): [string, string][] {
+  if (docType === "credit_note" || docType === "component") return [];
+  if (docType === "receipt" || docType === "other") return AUTO_EVENTS;
+  return AUTO_EVENTS.filter(([ev]) => ev !== "sale");
+}
+function keepAllowed(current: string | null | undefined, docType: string): string {
+  const ok = autoPrintChoices(docType).map(([e]) => e);
+  return (current || "").split(",").filter((e) => ok.includes(e)).join(",");
+}
+export function toggleEvent(current: string | null | undefined, ev: string): string {
+  const on = new Set((current || "").split(",").filter(Boolean));
+  if (on.has(ev)) on.delete(ev); else on.add(ev);
+  return AUTO_EVENTS.map(([e]) => e).filter((e) => on.has(e)).join(",");
+}
 // small identifying icon per variable group (Material Symbols names)
 const GROUP_ICON: Record<string, string> = {
   "Most used": "auto_awesome", Company: "storefront", "Legal entity": "gavel", Interactive: "bolt", Client: "person",
@@ -327,7 +343,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
           {settings && (
             <div className="absolute right-0 top-11 z-20 w-64 bg-white border border-slate-200 rounded-xl shadow-drawer p-3 space-y-3">
               <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Type</label>
-                <select value={meta.doc_type} onChange={(e) => setMeta({ ...meta, doc_type: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5 capitalize">{DOC_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}</select></div>
+                <select value={meta.doc_type} onChange={(e) => setMeta({ ...meta, doc_type: e.target.value, auto_print_on: keepAllowed(meta.auto_print_on, e.target.value) })} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5 capitalize">{DOC_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}</select></div>
               <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Paper / label size</label>
                 <select value={meta.page_size} onChange={(e) => setMeta({ ...meta, page_size: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5">
                   <option value="a4">A4 (210×297mm)</option>
@@ -349,13 +365,20 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
               <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Default font</label>
                 <select value={meta.font_family} onChange={(e) => setMeta({ ...meta, font_family: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5">{FONTS.map((f) => <option key={f} value={f}>{f}</option>)}</select></div>
               <label className="flex items-center gap-2 text-sm text-ink-secondary"><input type="checkbox" checked={meta.is_default} onChange={(e) => setMeta({ ...meta, is_default: e.target.checked })} /> Default for this type</label>
-              <div><label htmlFor="tpl-auto-print" className="block text-[11px] font-semibold text-ink-tertiary mb-1">Print automatically</label>
-                <select id="tpl-auto-print" value={meta.auto_print_on || ""} onChange={(e) => setMeta({ ...meta, auto_print_on: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5">
-                  <option value="">Never</option>
-                  <option value="create">When a job is created</option>
-                  {meta.auto_print_on === "close" && <option value="close">When a job is closed</option>}
-                </select>
-                {meta.auto_print_on === "create" && <span className="block text-[11px] text-ink-tertiary mt-1">{meta.doc_type === "label" ? "One label per item on the job opens in the print dialog." : "Opens in the print dialog for each new job."}</span>}</div>
+              {autoPrintChoices(meta.doc_type).length > 0 && (
+                <fieldset><legend className="block text-[11px] font-semibold text-ink-tertiary mb-1">Print automatically when</legend>
+                  {autoPrintChoices(meta.doc_type).map(([ev, label]) => {
+                    const on = (meta.auto_print_on || "").split(",").includes(ev);
+                    return (
+                      <label key={ev} className="flex items-center gap-2 text-sm text-ink-secondary">
+                        <input type="checkbox" checked={on} onChange={() => setMeta({ ...meta, auto_print_on: toggleEvent(meta.auto_print_on, ev) })} /> {label}</label>
+                    );
+                  })}
+                  <span className="block text-[11px] text-ink-tertiary mt-1">{meta.doc_type === "label"
+                    ? "One label per item on the job. Only labels that use {Asset …} variables can print by themselves."
+                    : "Nothing ticked: it only prints when someone presses Print."}</span>
+                </fieldset>
+              )}
               {LABEL_DOC_TYPES.includes(meta.doc_type) && <LabelBarcodePicker value={meta} onChange={(v) => setMeta({ ...meta, ...v })} />}
             </div>
           )}

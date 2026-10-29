@@ -13,6 +13,8 @@ import { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import FloatingMenu from "../../components/FloatingMenu";
 import PrintMenu from "./PrintMenu";
+import AutoPrintPicker from "../../components/AutoPrintPicker";
+import { autoPrintIfClosed } from "../../lib/autoPrint";
 import { Order, deviceName, money } from "./types";
 import { Avatar, deviceIcon, dueText, friendlyDate } from "./look";
 import { api, openAuthedDoc } from "../../api/client";
@@ -119,8 +121,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
     }
     const prev = d.status; setD({ ...d, status: key });
     try {
-      await api.patch(`/orders/${order.id}/status`, { status: key, reason: reason || undefined, comment: extra.comment, allow_unpaid: extra.allow_unpaid || undefined });
-      setGate(null); flash("Status updated"); onChanged?.(); reload(); loadLabor();
+      const r = await api.patch<any>(`/orders/${order.id}/status`, { status: key, reason: reason || undefined, comment: extra.comment, allow_unpaid: extra.allow_unpaid || undefined });
+      setGate(null); flash("Status updated"); void autoPrintIfClosed(order.id, r); onChanged?.(); reload(); loadLabor();
     } catch (e: any) {
       setD({ ...d, status: prev });
       let detail: any = null; try { detail = JSON.parse(e?.body || "null")?.detail; } catch { /* not JSON */ }
@@ -585,6 +587,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             </span>
             <PrintMenu key={order.id} orderId={order.id} status={d.status} canInvoices={can("can_view_invoices")} onSticker={printWO} onError={flash} />
             {hasKit && can("can_print_itemised_copy") && <button onClick={printItemised} className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-1 border border-slate-200 rounded-lg px-2 py-1 bg-white"><M n="receipt_long" c="text-xs" />Print itemised copy</button>}
+            {!(order as any).is_estimate && <AutoPrintPicker event="close" />}
             <button onClick={del} className="text-xs text-rose-600 hover:text-rose-700 font-semibold flex items-center gap-1 hover:bg-rose-50 rounded-lg px-2 py-1 transition-colors"><M n="delete" c="text-xs" />Delete</button>
           </div>
           <div className="flex items-center gap-2">
