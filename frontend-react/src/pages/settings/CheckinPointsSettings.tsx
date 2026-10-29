@@ -199,12 +199,12 @@ export default function CheckinPointsSettings() {
 
   return (
     <section className="max-w-4xl space-y-4 pb-10">
-      <div className="flex flex-wrap items-start gap-3">
-        <div className="min-w-0 flex-1 basis-64">
+      <div className="flex flex-col items-start gap-3">
+        <div className="min-w-0">
           <h2 className="text-base font-semibold text-ink-primary">Self check-in</h2>
           <p className="mt-0.5 text-sm text-ink-tertiary">Customers scan a QR at the door, key box or counter and check themselves in. Check-ins appear in Inquiries › Walk-ins.</p>
         </div>
-        {canEdit && <button onClick={() => setAdd({ location_id: locs[0]?.id || "", name: "", mode: "walk_in" })} className="ml-auto h-9 px-3.5 rounded-xl bg-ink-primary text-white text-xs font-semibold flex-shrink-0 flex items-center gap-1.5"><M n="add" c="text-sm" />Add check-in point</button>}
+        {canEdit && <button onClick={() => setAdd({ location_id: locs[0]?.id || "", name: "", mode: "walk_in" })} className="h-9 px-3.5 rounded-xl bg-ink-primary text-white text-xs font-semibold flex-shrink-0 flex items-center gap-1.5"><M n="add" c="text-sm" />Add check-in point</button>}
       </div>
       {msg && <p role="status" className="text-xs text-ink-secondary">{msg}</p>}
       {add && (
