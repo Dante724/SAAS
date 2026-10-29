@@ -24,8 +24,8 @@ Shops that fix more than one kind of thing can use several templates in one acco
 
 ## Pricing (USD, month to month, published)
 - Solo: $29/month. Up to 2 people at one location, 150 new jobs a month. Work orders, estimates, invoices, POS, customer portal and booking, Tekly Go, messaging.
-- Shop: $69/month for the first location, $49 for each extra location. 8 team members shared across locations, $4/month per extra person, unlimited jobs. Adds inventory, barcodes and scanning, time clock, reports and automatic notifications.
-- Pro: $129/month for the first location, $79 for each extra location. Unlimited people and jobs. Adds purchase orders, payroll and commissions, stock transfers, AI estimate drafting, QuickBooks and Xero sync, single sign-on and API keys.
+- Shop: $69/month for the first location, $49 for each extra location. 4 team members shared across locations, $4/month per extra person, unlimited jobs. Adds inventory, barcodes and scanning, time clock, reports and automatic notifications.
+- Pro: $129/month for the first location, $79 for each extra location. 8 team members shared across locations, $4/month per extra person, unlimited jobs. Adds purchase orders, payroll and commissions, stock transfers, AI estimate drafting, QuickBooks and Xero sync, single sign-on and API keys.
 - Yearly billing: 2 months free. Free trial: 14 days with every Pro feature, no credit card. No setup fee, no contract; free data migration and onboarding on every plan.
 
 ## Data and security

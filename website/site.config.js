@@ -67,7 +67,7 @@ window.TEKLY_SITE = {
       extraLocation: 49,
       extraSeat: 4,
       unit: "for the first location, per month",
-      seats: "8 team members shared across your locations · unlimited jobs",
+      seats: "4 team members shared across your locations · unlimited jobs",
       cta: "Start free trial",
       featured: true,
       badge: "Best for most shops",
@@ -87,7 +87,8 @@ window.TEKLY_SITE = {
       monthly: 129,
       extraLocation: 79,
       unit: "for the first location, per month",
-      seats: "Unlimited team members and jobs",
+      extraSeat: 4,
+      seats: "8 team members shared across your locations · unlimited jobs",
       cta: "Start free trial",
       features: [
         "Everything in Shop",
