@@ -28,12 +28,12 @@ const cardToOrder = (c: BoardCard): Order => ({
 });
 const WO_PAGE_SIZE = 50;
 
-// Toggleable table columns (checkbox + action columns are always shown)
+// Toggleable table columns (the checkbox column is always shown)
 const COLS: { key: string; label: string }[] = [
   { key: "order_id", label: "Order ID" }, { key: "client", label: "Client" },
   { key: "device", label: "Device / Asset" }, { key: "status", label: "Status" },
   { key: "assignee", label: "Assignee" }, { key: "scheduled", label: "Scheduled" },
-  { key: "estimate", label: "Estimate" },
+  { key: "estimate", label: "Total" },
 ];
 const COLS_KEY = "ros_wo_cols";
 
@@ -49,21 +49,21 @@ const PILL: Record<string, [string, string]> = {
   delivered: ["bg-slate-100 text-slate-700 border-slate-200", "bg-slate-500"],
 };
 // The status's own name and colour from Settings › Statuses; the key is only a fallback.
-function pill(status?: string, st?: Status) {
-  const key = (status || "").toLowerCase().replace(/\s+/g, "_");
-  const label = st?.name || (status || "—").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+// Used by the table, the board and the scheduler alike, so a status looks the same everywhere.
+function statusTone(status?: string, st?: Status): { cls: string; style?: React.CSSProperties; dotCls: string; dotStyle?: React.CSSProperties } {
   if (st?.color) {
-    return (
-      <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold inline-flex items-center gap-1.5 text-ink-primary whitespace-nowrap"
-        style={{ background: tint(st.color), boxShadow: `inset 0 0 0 1px ${tint(st.color, 25)}` }}>
-        <span className="w-1.5 h-1.5 rounded-full" style={{ background: st.color }} />{label}
-      </span>
-    );
+    return { cls: "text-ink-primary", style: { background: tint(st.color), boxShadow: `inset 0 0 0 1px ${tint(st.color, 25)}` }, dotCls: "", dotStyle: { background: st.color } };
   }
+  const key = (status || "").toLowerCase().replace(/\s+/g, "_");
   const [cls, dot] = PILL[key] || ["bg-slate-100 text-slate-700 border-slate-200", "bg-slate-500"];
+  return { cls: `border ${cls}`, dotCls: dot };
+}
+function pill(status?: string, st?: Status, small = false) {
+  const label = st?.name || (status || "—").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  const t = statusTone(status, st);
   return (
-    <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border inline-flex items-center gap-1.5 ${cls}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />{label}
+    <span className={`${small ? "px-1.5 py-0.5 gap-1" : "px-2.5 py-1 gap-1.5"} rounded-full text-[11px] font-semibold inline-flex items-center whitespace-nowrap max-w-full truncate ${t.cls}`} style={t.style}>
+      <span className={`${small ? "w-1 h-1" : "w-1.5 h-1.5"} rounded-full flex-shrink-0 ${t.dotCls}`} style={t.dotStyle} />{label}
     </span>
   );
 }
@@ -151,7 +151,7 @@ export default function WorkOrdersHub() {
     e.stopPropagation();
     try { await api.del(`/orders/filters/saved/${id}`); loadViews(); } catch { /* ignore */ }
   }
-  const colSpan = 2 + [...cols].length;
+  const colSpan = 1 + [...cols].length;
   async function moveTo(id: string, key: string) {
     const o = (orders || []).find((x) => x.id === id); if (!o || norm(o.status) === key) return;
     let reason: string | null = null;
@@ -245,6 +245,19 @@ export default function WorkOrdersHub() {
   const statusCounts = view === "board" ? boardCounts : (facets?.status_counts || {});
   const countFor = (key: string) => Object.entries(statusCounts).reduce((n, [k, v]) => n + (norm(k) === key ? v : 0), 0);
   const countAll = Object.values(statusCounts).reduce((n, v) => n + v, 0);
+  const filtersOn = !!(filter || activeFacets || q.trim());
+  const clearFilters = () => { setFilter(null); setFAssignee(""); setFPriority(""); setFScheduled(""); setQ(""); };
+  const emptyState = filtersOn ? (
+    <div className="text-center text-xs text-ink-tertiary space-y-3">
+      <p>No work orders match these filters.</p>
+      <button onClick={clearFilters} className="h-9 px-3.5 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Clear filters</button>
+    </div>
+  ) : (
+    <div className="text-center text-xs text-ink-tertiary space-y-3">
+      <p>No work orders yet.</p>
+      <Gate perm="can_create_tickets"><button onClick={() => setCreate("order")} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 inline-flex items-center gap-1.5"><M n="add" c="text-sm" />New order</button></Gate>
+    </div>
+  );
   // Numbered pagination — table view only (board = kanban columns, scheduler = calendar).
   const woPages = Math.max(1, Math.ceil(total / WO_PAGE_SIZE));
   const pageRows = rows;
@@ -291,64 +304,59 @@ export default function WorkOrdersHub() {
 
         {/* Toolbar */}
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 space-y-3.5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <Gate perm="can_create_tickets"><button onClick={() => setCreate("order")} className="px-4 py-2.5 rounded-xl bg-primary text-white text-sm font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="add" c="text-sm font-bold" />Order</button></Gate>
-              <Gate perm="can_create_estimates"><button onClick={() => setCreate("estimate")} className="px-3.5 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-ink-secondary hover:text-ink-primary text-sm font-semibold border border-slate-200 transition-all flex items-center gap-1.5 whitespace-nowrap"><M n="request_quote" c="text-sm" />+ Estimate</button></Gate>
-              <div className="hidden sm:block h-5 w-[1px] bg-slate-200 mx-1" />
-              <div className="relative">
-                <button onClick={() => { setFltOpen((o) => !o); setColsOpen(false); setViewsOpen(false); }} className={`px-3 py-2 rounded-xl text-xs font-medium flex items-center gap-1 border ${activeFacets ? "bg-primary/10 text-primary border-primary/30" : "text-ink-secondary hover:bg-slate-100 border-slate-200"}`}><M n="filter_list" c="text-xs" />Filter{activeFacets ? <span className="ml-0.5 px-1.5 rounded-full bg-primary text-white text-[11px] font-bold">{activeFacets}</span> : null}</button>
-                {fltOpen && (
-                  <div className="absolute left-0 top-9 z-30 w-64 bg-white border border-slate-200 rounded-xl shadow-drawer p-3 space-y-3" onMouseLeave={() => setFltOpen(false)}>
-                    <div className="flex items-center justify-between"><span className="text-[11px] font-bold text-ink-tertiary ">Filter work orders</span>{activeFacets ? <button onClick={() => { setFAssignee(""); setFPriority(""); setFScheduled(""); }} className="text-[11px] font-semibold text-primary">Clear</button> : null}</div>
-                    <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Assignee</span>
-                      <select value={fAssignee} onChange={(e) => setFAssignee(e.target.value)} className="w-full text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-medium"><option value="">Any</option><option value="__none">Unassigned</option>{assignees.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
-                    <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Priority</span>
-                      <select value={fPriority} onChange={(e) => setFPriority(e.target.value)} className="w-full text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-medium"><option value="">Any</option><option value="0">Normal</option><option value="1">High</option><option value="2">Urgent</option><option value="urgent">High or urgent</option></select></label>
-                    <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Scheduling</span>
-                      <select value={fScheduled} onChange={(e) => setFScheduled(e.target.value as "" | "yes" | "no")} className="w-full text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white font-medium"><option value="">Any</option><option value="yes">Scheduled</option><option value="no">Unscheduled</option></select></label>
-                  </div>
-                )}
-              </div>
-              <button onClick={openArchived} className="px-3 py-2 rounded-xl text-xs font-medium text-ink-secondary hover:bg-slate-100 flex items-center gap-1 border border-slate-200"><M n="inventory" c="text-xs" />Archived</button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Gate perm="can_create_tickets"><button onClick={() => setCreate("order")} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="add" c="text-sm" />New order</button></Gate>
+            <Gate perm="can_create_estimates"><button onClick={() => setCreate("estimate")} className="h-9 px-3 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100 border border-slate-200 bg-white flex items-center gap-1.5 whitespace-nowrap"><M n="request_quote" c="text-sm" />New estimate</button></Gate>
+            <div className="relative w-full sm:w-64"><M n="search" c="absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" /><input value={q} onChange={(e) => setQ(e.target.value)} className="glass-input w-full rounded-xl pl-9 pr-3 py-2 text-sm" aria-label="Filter rows" placeholder="Search work orders…" /></div>
+            <div className="relative">
+              <button onClick={() => { setFltOpen((o) => !o); setColsOpen(false); setViewsOpen(false); }} className={`h-9 px-3 rounded-xl text-xs font-semibold flex items-center gap-1.5 border ${activeFacets ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary hover:bg-slate-100 border-slate-200"}`}><M n="filter_list" c="text-sm" />Filter{activeFacets ? <span className="ml-0.5 px-1.5 rounded-full bg-primary text-white text-[11px] font-bold">{activeFacets}</span> : null}</button>
+              {fltOpen && (
+                <div className="absolute left-0 top-10 z-30 w-64 bg-white border border-slate-200 rounded-xl shadow-drawer p-3 space-y-3" onMouseLeave={() => setFltOpen(false)}>
+                  <div className="flex items-center justify-between"><span className="text-[11px] font-bold text-ink-tertiary ">Filter work orders</span>{activeFacets ? <button onClick={() => { setFAssignee(""); setFPriority(""); setFScheduled(""); }} className="text-[11px] font-semibold text-primary">Clear</button> : null}</div>
+                  <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Assignee</span>
+                    <select value={fAssignee} onChange={(e) => setFAssignee(e.target.value)} className="glass-input w-full rounded-xl px-3 py-2 text-sm"><option value="">Any</option><option value="__none">Unassigned</option>{assignees.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
+                  <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Priority</span>
+                    <select value={fPriority} onChange={(e) => setFPriority(e.target.value)} className="glass-input w-full rounded-xl px-3 py-2 text-sm"><option value="">Any</option><option value="0">Normal</option><option value="1">High</option><option value="2">Urgent</option><option value="urgent">High or urgent</option></select></label>
+                  <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Scheduling</span>
+                    <select value={fScheduled} onChange={(e) => setFScheduled(e.target.value as "" | "yes" | "no")} className="glass-input w-full rounded-xl px-3 py-2 text-sm"><option value="">Any</option><option value="yes">Scheduled</option><option value="no">Unscheduled</option></select></label>
+                </div>
+              )}
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200/70 text-xs">
-                <button onClick={() => setView("table")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1 ${view === "table" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="table_rows" c="text-xs" />Table</button>
-                <button onClick={() => setView("board")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1 ${view === "board" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="view_kanban" c="text-xs" />Board</button>
-                <button onClick={() => setView("scheduler")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1 ${view === "scheduler" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="calendar_month" c="text-xs" />Scheduler</button>
-              </div>
-              <div className="relative"><M n="filter_alt" c="absolute left-2.5 top-1.5 text-ink-tertiary text-xs" /><input value={q} onChange={(e) => setQ(e.target.value)} className="text-xs pl-7 pr-3 py-1 rounded-lg border border-slate-200 bg-slate-50 font-medium focus:bg-white focus:outline-none" aria-label="Filter rows" placeholder="Filter rows..." /></div>
-              <div className="relative">
-                <button onClick={() => { setColsOpen((o) => !o); setViewsOpen(false); }} className="px-3 py-2 rounded-xl text-xs font-medium text-ink-secondary hover:bg-slate-100 border border-slate-200 flex items-center gap-1"><M n="view_column" c="text-xs" />Columns</button>
-                {colsOpen && (
-                  <div className="absolute right-0 top-9 z-30 w-52 bg-white border border-slate-200 rounded-xl shadow-drawer p-2" onMouseLeave={() => setColsOpen(false)}>
-                    <div className="px-2 py-1 text-[11px] font-bold text-ink-tertiary ">Visible columns</div>
-                    {COLS.map((c) => (
-                      <label key={c.key} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer text-xs font-medium text-ink-primary">
-                        <input type="checkbox" checked={showCol(c.key)} onChange={() => toggleCol(c.key)} className="accent-primary" />{c.label}
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="relative">
-                <button onClick={() => { setViewsOpen((o) => !o); setColsOpen(false); }} className="px-3 py-2 rounded-xl text-xs font-medium text-ink-secondary hover:bg-slate-100 border border-slate-200 flex items-center gap-1"><M n="bookmark" c="text-xs" />Saved views</button>
-                {viewsOpen && (
-                  <div className="absolute right-0 top-9 z-30 w-60 bg-white border border-slate-200 rounded-xl shadow-drawer p-2" onMouseLeave={() => setViewsOpen(false)}>
-                    <button onClick={saveView} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-blue-50/60 text-primary text-xs font-semibold"><M n="add" c="text-sm" />Save current view</button>
-                    <div className="border-t border-slate-100 my-1" />
-                    {views.length === 0 && <div className="px-2 py-2 text-[11px] text-ink-tertiary">No saved views yet.</div>}
-                    {views.map((v) => (
-                      <div key={v.id} onClick={() => applyView(v)} className="group flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer text-xs font-medium text-ink-primary">
-                        <M n="bookmark_added" c="text-sm text-ink-tertiary" /><span className="flex-1 truncate">{v.name}</span>
-                        {v.mine && <button aria-label="Delete" onClick={(e) => deleteView(v.id, e)} className="opacity-0 group-hover:opacity-100 text-ink-tertiary hover:text-rose-600"><M n="delete" c="text-xs" /></button>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+            <div className="h-9 flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200/70 text-xs">
+              <button onClick={() => setView("table")} className={`h-full px-2.5 rounded-lg font-semibold flex items-center gap-1 ${view === "table" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="table_rows" c="text-xs" />Table</button>
+              <button onClick={() => setView("board")} className={`h-full px-2.5 rounded-lg font-semibold flex items-center gap-1 ${view === "board" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="view_kanban" c="text-xs" />Board</button>
+              <button onClick={() => setView("scheduler")} className={`h-full px-2.5 rounded-lg font-semibold flex items-center gap-1 ${view === "scheduler" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="calendar_month" c="text-xs" />Scheduler</button>
             </div>
+            <div className="relative">
+              <button onClick={() => { setColsOpen((o) => !o); setViewsOpen(false); }} className="h-9 px-3 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100 border border-slate-200 bg-white flex items-center gap-1.5"><M n="view_column" c="text-sm" />Columns</button>
+              {colsOpen && (
+                <div className="absolute left-0 top-10 z-30 w-52 bg-white border border-slate-200 rounded-xl shadow-drawer p-2" onMouseLeave={() => setColsOpen(false)}>
+                  <div className="px-2 py-1 text-[11px] font-bold text-ink-tertiary ">Visible columns</div>
+                  {COLS.map((c) => (
+                    <label key={c.key} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer text-xs font-medium text-ink-primary">
+                      <input type="checkbox" checked={showCol(c.key)} onChange={() => toggleCol(c.key)} className="accent-primary" />{c.label}
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="relative">
+              <button onClick={() => { setViewsOpen((o) => !o); setColsOpen(false); }} className="h-9 px-3 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100 border border-slate-200 bg-white flex items-center gap-1.5"><M n="bookmark" c="text-sm" />Saved views</button>
+              {viewsOpen && (
+                <div className="absolute left-0 top-10 z-30 w-60 bg-white border border-slate-200 rounded-xl shadow-drawer p-2" onMouseLeave={() => setViewsOpen(false)}>
+                  <button onClick={saveView} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-blue-50/60 text-primary text-xs font-semibold"><M n="add" c="text-sm" />Save current view</button>
+                  <div className="border-t border-slate-100 my-1" />
+                  {views.length === 0 && <div className="px-2 py-2 text-[11px] text-ink-tertiary">No saved views yet.</div>}
+                  {views.map((v) => (
+                    <div key={v.id} onClick={() => applyView(v)} className="group flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer text-xs font-medium text-ink-primary">
+                      <M n="bookmark_added" c="text-sm text-ink-tertiary" /><span className="flex-1 truncate">{v.name}</span>
+                      {v.mine && <button aria-label="Delete" onClick={(e) => deleteView(v.id, e)} className="opacity-0 group-hover:opacity-100 text-ink-tertiary hover:text-rose-600"><M n="delete" c="text-xs" /></button>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <button onClick={openArchived} className="h-9 px-3 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100 border border-slate-200 bg-white flex items-center gap-1.5"><M n="inventory" c="text-sm" />Archived</button>
           </div>
           <div className="flex flex-wrap items-center gap-2 pt-3.5 text-xs border-t border-slate-100">
             <button onClick={() => setFilter(null)} className={!filter ? "px-3.5 py-1.5 rounded-full font-semibold bg-primary text-white text-xs shadow-clay-sm" : "px-3.5 py-1.5 rounded-full font-medium bg-slate-50 text-ink-secondary ring-1 ring-inset ring-slate-200 hover:bg-white hover:text-ink-primary hover:ring-slate-300 text-xs transition-colors"}>All ({countAll})</button>
@@ -381,7 +389,7 @@ export default function WorkOrdersHub() {
           <ul className="sm:hidden divide-y divide-slate-100" aria-label="Work orders">
             {err && <li className="p-4 text-xs text-status-overdue-ink">Error: {err}</li>}
             {!orders && !err && <li className="p-4 text-xs text-ink-tertiary">Loading orders…</li>}
-            {orders && rows.length === 0 && <li className="p-4 text-xs text-ink-tertiary">No work orders match.</li>}
+            {orders && rows.length === 0 && <li className="p-6">{emptyState}</li>}
             {pageRows.map((o) => (
               <li key={o.id}>
                 <button onClick={() => setOpen(o)} className={`w-full text-left px-4 py-3 flex flex-col gap-1 hover:bg-slate-50/80 ${sel.has(o.id) ? "bg-primary/5" : ""}`}>
@@ -409,14 +417,13 @@ export default function WorkOrdersHub() {
                 {showCol("status") && <th className="py-3 px-4">Status</th>}
                 {showCol("assignee") && <th className="py-3 px-4">Assignee</th>}
                 {showCol("scheduled") && <th className="py-3 px-4">Scheduled</th>}
-                {showCol("estimate") && <th className="py-3 px-4 text-right">Estimate</th>}
-                <th className="py-3 px-4 w-12 text-center">Action</th>
+                {showCol("estimate") && <th className="py-3 px-4 text-right">Total</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
               {err && <tr><td colSpan={colSpan} className="py-6 px-4 text-status-overdue-ink">Error: {err}</td></tr>}
               {!orders && !err && <tr><td colSpan={colSpan} className="py-6 px-4 text-ink-tertiary">Loading orders…</td></tr>}
-              {orders && rows.length === 0 && <tr><td colSpan={colSpan} className="py-6 px-4 text-ink-tertiary">No work orders match.</td></tr>}
+              {orders && rows.length === 0 && <tr><td colSpan={colSpan} className="py-10 px-4">{emptyState}</td></tr>}
               {pageRows.map((o) => (
                 <tr key={o.id} onClick={() => setOpen(o)} className={`hover:bg-slate-50/80 cursor-pointer transition-colors group ${sel.has(o.id) ? "bg-primary/5" : ""}`}>
                   <td className="py-3.5 px-4" onClick={(e) => e.stopPropagation()}><input className="rounded text-primary border-slate-300" type="checkbox" aria-label={`Select ${o.order_number || o.id}`} checked={sel.has(o.id)} onChange={() => toggle(o.id)} /></td>
@@ -429,7 +436,6 @@ export default function WorkOrdersHub() {
                   {showCol("assignee") && <td className="py-3.5 px-4">{o.assigned_to?.name || "—"}</td>}
                   {showCol("scheduled") && <td className="py-3.5 px-4">{o.scheduled_for ? fmtDay(o.scheduled_for) : "—"}</td>}
                   {showCol("estimate") && <td className="py-3.5 px-4 text-right tabular-nums font-bold text-ink-primary">{money(o.total)}</td>}
-                  <td className="py-3.5 px-4 text-center"><button aria-label="Next" className="p-1.5 rounded-lg text-ink-tertiary group-hover:text-primary group-hover:bg-primary/10 transition-colors"><M n="chevron_right" c="text-sm" /></button></td>
                 </tr>
               ))}
             </tbody>
@@ -445,14 +451,13 @@ export default function WorkOrdersHub() {
               const key = s.key || norm(s.name);
               const cards = rows.filter((o) => norm(o.status) === key);
               const n = countFor(key);   // true count; the board only carries the newest open cards
-              const [cls, dot] = PILL[key] || ["bg-slate-100 text-slate-700", "bg-slate-500"];
               return (
                 <div key={s.id}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={() => { if (drag) { moveTo(drag, key); setDrag(null); } }}
                   className="w-64 flex-shrink-0 bg-slate-50/70 rounded-2xl border border-slate-200/70 flex flex-col max-h-[calc(100vh-320px)]">
                   <div className="px-3 py-2.5 flex items-center justify-between border-b border-slate-200/70">
-                    <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 ${cls}`}><span className={`w-1.5 h-1.5 rounded-full ${dot}`} />{s.name}</span>
+                    {pill(key, s, true)}
                     <span className="text-[11px] font-bold text-ink-tertiary">{n}</span>
                   </div>
                   <div className="p-2 space-y-2 overflow-y-auto">
@@ -490,7 +495,6 @@ export default function WorkOrdersHub() {
           const openCard = (o: any) => setOpen(all.find((x) => x.id === o.id) || o);
           // compact order card
           const Card = (o: any, showTime = true) => {
-            const key = norm(o.status); const [cls, dot] = PILL[key] || ["bg-slate-100 text-slate-700", "bg-slate-500"];
             return (
               <button key={o.id} onClick={() => openCard(o)} className="w-full text-left bg-white rounded-lg border border-slate-200/80 shadow-clay-sm p-2 hover:border-primary/40 transition-colors">
                 <div className="flex items-center justify-between gap-1">
@@ -499,7 +503,7 @@ export default function WorkOrdersHub() {
                 </div>
                 <div className="text-[11px] font-bold text-ink-primary truncate">{o.client_name || "Walk-in"}</div>
                 <div className="mt-1 flex items-center justify-between gap-1">
-                  <span className={`px-1.5 py-0.5 rounded-full text-[11px] font-semibold inline-flex items-center gap-1 ${cls}`}><span className={`w-1 h-1 rounded-full ${dot}`} />{stOf(o)?.name || (o.status || "").replace(/_/g, " ")}</span>
+                  {pill(o.status, stOf(o), true)}
                   {o.assigned_to_name && <span className="text-[11px] text-ink-tertiary truncate">{o.assigned_to_name}</span>}
                 </div>
               </button>
@@ -573,8 +577,8 @@ export default function WorkOrdersHub() {
                           <div className={`text-[11px] font-bold mb-1 ${isToday ? "text-primary" : inMonth ? "text-ink-secondary" : "text-ink-tertiary"}`}>{d.getDate()}</div>
                           <div className="space-y-0.5">
                             {items.slice(0, 3).map((o) => {
-                              const key = norm(o.status); const [cls] = PILL[key] || ["bg-slate-100 text-slate-700"];
-                              return <button key={o.id} onClick={() => openCard(o)} className={`w-full text-left truncate rounded px-1 py-0.5 text-[11px] font-semibold ${cls}`}>{hhmm(o.scheduled_for)} {o.order_number || o.client_name || ""}</button>;
+                              const t = statusTone(o.status, stOf(o));
+                              return <button key={o.id} onClick={() => openCard(o)} style={t.style} className={`w-full text-left truncate rounded px-1 py-0.5 text-[11px] font-semibold ${t.cls}`}>{hhmm(o.scheduled_for)} {o.order_number || o.client_name || ""}</button>;
                             })}
                             {items.length > 3 && <div className="text-[11px] text-ink-tertiary px-1">+{items.length - 3} more</div>}
                           </div>

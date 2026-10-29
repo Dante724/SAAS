@@ -5,7 +5,7 @@ import Shell, { M } from "../../components/Shell";
 import ScanStockPanel from "../../components/ScanStockPanel";
 import { api, openAuthedDoc } from "../../api/client";
 import { isoDate } from "../../lib/localDate";
-import { Product, Supplier, PO, Service, Bundle, Asset, currencySymbol, money } from "./types";
+import { Product, Supplier, PO, Service, Bundle, Asset, money } from "./types";
 import { analyzePaste, gridToRows, mergeRemap, loadRememberedMap, saveRememberedMap, FIELD_LABELS, FIELD_ORDER } from "./pasteMap";
 import type { PasteField, PostRow } from "./pasteMap";
 import InventoryDrawer, { DrawerKind } from "./InventoryDrawer";
@@ -21,7 +21,9 @@ import { useServerPage } from "../../hooks/useServerPage";
 import { useMe } from "../../context/Me";
 import { alertDialog, confirmDialog, promptDialog } from "../../lib/dialog";
 import { printHtmlInFrame } from "../../lib/safeHtml";
-import { inputCls } from "../invoices/billing";
+import { MoreMenu, inputCls } from "../invoices/billing";
+import { humanize } from "../../lib/humanize";
+import { fmtDay, fmtServerTime } from "../../lib/serverTime";
 import { productGlyph } from "../sales/SalesPOS";
 import { RowMenu } from "../company/CompanyHub";
 
@@ -39,6 +41,14 @@ const TABS: { id: Tab; label: string; count?: string }[] = [
 // A set filter reads as active in the primary tint; an unset one stays neutral.
 const filterSel = (on: boolean) => `h-8 px-3 text-xs font-semibold rounded-lg border cursor-pointer ${on ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`;
 
+// A raw API value ("partially_received", "IN") as sentence-case words ("Partially received").
+const sentence = (s?: string | null) => { const h = humanize(s).toLowerCase(); return h ? h[0].toUpperCase() + h.slice(1) : ""; };
+// A date for a history row: a bare shop date as-is, a timestamp in the viewer's clock.
+const dayOf = (v?: string | null) => (!v ? "" : v.length <= 10 ? fmtDay(v) : fmtServerTime(v, { month: "short", day: "numeric", year: "numeric" }));
+// Bulk-bar buttons: compact ghost buttons; Archive reads as danger without shouting.
+const bulkBtn = "h-8 px-3 rounded-xl border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1 disabled:opacity-50";
+const bulkDanger = "h-8 px-3 rounded-xl border border-rose-200 bg-white text-rose-700 hover:bg-rose-50 flex items-center gap-1 disabled:opacity-50";
+
 // Margin as a percentage: ink when healthy, red only when the part sells below cost.
 export function marginOf(p: Pick<Product, "margin_pct" | "sell_price" | "cost_price">): number | null {
   if (p.margin_pct != null) return p.margin_pct;
@@ -47,8 +57,8 @@ export function marginOf(p: Pick<Product, "margin_pct" | "sell_price" | "cost_pr
 
 // Exception-only stock status: healthy rows show a plain number (returns null),
 // only out/low get a coloured pill — so the eye lands on what needs action.
-const primaryBtn = "h-9 px-4 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container flex items-center gap-1.5";
-const ghostBtn = "h-9 px-3.5 rounded-lg bg-white border border-slate-200 text-ink-secondary text-xs font-semibold hover:bg-slate-50 flex items-center gap-1.5";
+const primaryBtn = "h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container flex items-center gap-1.5";
+const ghostBtn = "h-9 px-3.5 rounded-xl bg-white border border-slate-200 text-ink-secondary text-xs font-semibold hover:bg-slate-50 flex items-center gap-1.5";
 
 // Empty history tab: why it's worth having, and (when the header has no button) the first step.
 const AUDIT_EMPTY: Record<string, { why: string; action?: string }> = {
@@ -216,13 +226,13 @@ export default function InventoryHub() {
   }, [tab]);
 
   const AUDIT: Record<string, { icon: string; title: string; sub: string }> = {
-    postings: { icon: "receipt_long", title: "Stock postings", sub: "Audit trail of manual adjustments, received shipments and reconciliations." },
-    reservations: { icon: "bookmark_added", title: "Part reservations", sub: "Items reserved for active work orders and confirmed appointments." },
-    conversions: { icon: "sync_alt", title: "Conversions", sub: "Assets converted into stock parts and vice-versa." },
+    postings: { icon: "receipt_long", title: "Stock postings", sub: "Every delivery received, count and stock correction, newest first." },
+    reservations: { icon: "bookmark_added", title: "Part reservations", sub: "Parts set aside for open jobs and booked appointments." },
+    conversions: { icon: "sync_alt", title: "Conversions", sub: "Devices turned into stock parts, and parts turned back into devices." },
     transfers: { icon: "swap_horiz", title: "Transfers", sub: "Stock moved between warehouses and branches." },
-    "stock-takes": { icon: "fact_check", title: "Stock takes", sub: "Physical count sessions and variance reconciliation." },
+    "stock-takes": { icon: "fact_check", title: "Stock takes", sub: "Shelf counts, and the differences they corrected." },
     "write-offs": { icon: "delete_sweep", title: "Write-offs", sub: "Damaged, lost or expired stock removed from inventory." },
-    returns: { icon: "assignment_return", title: "Returns", sub: "Customer and supplier returns processed here." },
+    returns: { icon: "assignment_return", title: "Returns", sub: "Items customers brought back, and parts sent back to suppliers." },
   };
   // The first step for a history tab whose header has no button of its own.
   const AUDIT_START: Record<string, (() => void) | undefined> = { postings: () => setPostingOpen(true) };
@@ -232,16 +242,19 @@ export default function InventoryHub() {
     "stock-takes": "/stocktake", "write-offs": "/stock-docs/write-offs", returns: "/returns",
   };
   const av = (o: any, keys: string[], fb = "—") => { for (const k of keys) { const v = o?.[k]; if (v !== undefined && v !== null && v !== "") return typeof v === "number" ? String(v) : String(v); } return fb; };
-  const dt = (o: any, keys: string[]) => { for (const k of keys) { if (o?.[k]) return new Date(o[k]).toLocaleDateString(); } return "—"; };
+  const dt = (o: any, keys: string[]) => { for (const k of keys) { if (o?.[k]) return dayOf(String(o[k])) || "—"; } return "—"; };
+  const lab = (o: any, keys: string[]) => { const v = av(o, keys); return v === "—" ? v : sentence(v); };
   const AUDIT_COLS: Record<string, [string, (o: any) => string][]> = {
-    postings: [["Date", (r) => dt(r, ["created_at", "date", "posted_at"])], ["Part", (r) => av(r, ["part_name", "part", "product_name"])], ["Type", (r) => av(r, ["movement_type", "type", "kind"])], ["Qty", (r) => av(r, ["qty", "quantity", "delta"])], ["Note", (r) => av(r, ["note", "reason", "comment"])]],
-    reservations: [["Part", (r) => av(r, ["part_name", "part", "product_name"])], ["Qty", (r) => av(r, ["qty", "quantity"])], ["Order", (r) => av(r, ["order_number", "order_id"])], ["Status", (r) => av(r, ["status", "state"])]],
-    conversions: [["Date", (r) => dt(r, ["created_at", "date"])], ["From", (r) => av(r, ["from_name", "source_name", "source", "from"])], ["To", (r) => av(r, ["to_name", "target_name", "target", "to"])], ["Direction", (r) => av(r, ["direction", "type", "kind"])]],
-    transfers: [["Date", (r) => dt(r, ["created_at", "date"])], ["From", (r) => av(r, ["from_location_name", "from_location", "source"])], ["To", (r) => av(r, ["to_location_name", "to_location", "dest"])], ["Items", (r) => av(r, ["item_count", "lines_count"], String((r?.lines || r?.items || []).length || 0))], ["Status", (r) => av(r, ["status", "state"])]],
-    "stock-takes": [["Date", (r) => dt(r, ["created_at", "date", "started_at"])], ["Location", (r) => av(r, ["location_name", "warehouse_name", "warehouse"])], ["Status", (r) => av(r, ["status", "state"])], ["Counted", (r) => `${r?.counted ?? 0} / ${r?.lines ?? 0}`]],
+    postings: [["Date", (r) => dt(r, ["created_at", "date", "posted_at"])], ["Part", (r) => av(r, ["part_name", "part", "product_name"])], ["Type", (r) => lab(r, ["movement_type", "type", "kind"])], ["Qty", (r) => av(r, ["qty", "quantity", "delta"])], ["Note", (r) => av(r, ["note", "reason", "comment"])]],
+    reservations: [["Part", (r) => av(r, ["part_name", "part", "product_name"])], ["Qty", (r) => av(r, ["qty", "quantity"])], ["Order", (r) => av(r, ["order_number", "order_id"])], ["Status", (r) => lab(r, ["status", "state"])]],
+    conversions: [["Date", (r) => dt(r, ["created_at", "date"])], ["From", (r) => av(r, ["from_name", "source_name", "source", "from"])], ["To", (r) => av(r, ["to_name", "target_name", "target", "to"])], ["Direction", (r) => lab(r, ["direction", "type", "kind"])]],
+    transfers: [["Date", (r) => dt(r, ["created_at", "date"])], ["From", (r) => av(r, ["from_location_name", "from_location", "source"])], ["To", (r) => av(r, ["to_location_name", "to_location", "dest"])], ["Items", (r) => av(r, ["item_count", "lines_count"], String((r?.lines || r?.items || []).length || 0))], ["Status", (r) => lab(r, ["status", "state"])]],
+    "stock-takes": [["Date", (r) => dt(r, ["created_at", "date", "started_at"])], ["Location", (r) => av(r, ["location_name", "warehouse_name", "warehouse"])], ["Status", (r) => lab(r, ["status", "state"])], ["Counted", (r) => `${r?.counted ?? 0} / ${r?.lines ?? 0}`]],
     "write-offs": [["Date", (r) => dt(r, ["created_at", "date"])], ["Part", (r) => av(r, ["part_name", "part", "product_name"])], ["Qty", (r) => av(r, ["qty", "quantity"])], ["Reason", (r) => av(r, ["reason", "note"])]],
-    returns: [["Date", (r) => dt(r, ["created_at", "date"])], ["Order", (r) => av(r, ["order_number", "order_id"])], ["Client", (r) => av(r, ["client_name", "client"])], ["Amount", (r) => money(r?.amount ?? r?.refund_total ?? r?.total)], ["Status", (r) => av(r, ["status", "state"])]],
+    returns: [["Date", (r) => dt(r, ["created_at", "date"])], ["Order", (r) => av(r, ["order_number", "order_id"])], ["Client", (r) => av(r, ["client_name", "client"])], ["Amount", (r) => money(r?.amount ?? r?.refund_total ?? r?.total)], ["Status", (r) => lab(r, ["status", "state"])]],
   };
+
+  const AUDIT_NUM = new Set(["Qty", "Amount", "Items", "Counted"]);   // right-aligned numeric columns
 
   const supName = Object.fromEntries(suppliers.map((s) => [s.id, s.name]));
   const catName = Object.fromEntries(cats.map((c) => [c.id, c.name]));
@@ -423,14 +436,16 @@ export default function InventoryHub() {
           </div>
           {psel.size > 0 && (
             <div className="bg-primary/5 rounded-xl border border-primary/30 px-4 py-2.5 mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold">
-              <span className="text-primary">{psel.size} selected</span>
+              <span className="text-primary mr-1">{psel.size} selected</span>
+              <button onClick={() => openLabelDlg("product")} disabled={pBusy} className={bulkBtn}><M n="print" c="text-sm" />Print labels</button>
+              <button onClick={() => setBulkAdj(true)} disabled={pBusy} className={bulkBtn}><M n="tune" c="text-sm" />Adjust qty</button>
+              <button onClick={pMarkup} disabled={pBusy} className={bulkBtn}><M n="percent" c="text-sm" />Adjust price</button>
+              <MoreMenu align="start" label="More bulk actions" items={[
+                { label: "Export CSV", icon: "download", onClick: pExport, disabled: pBusy },
+                { label: "Write off", icon: "delete_sweep", onClick: () => setAction({ kind: "write-off" }), disabled: pBusy },
+              ]} />
+              {can("can_delete_products") && <button onClick={pDelete} disabled={pBusy} className={bulkDanger}><M n="archive" c="text-sm" />Archive</button>}
               <div className="flex-1" />
-              <button onClick={() => openLabelDlg("product")} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="print" c="text-sm" />Print labels</button>
-              <button onClick={pExport} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="download" c="text-sm" />Export CSV</button>
-              <button onClick={pMarkup} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="percent" c="text-sm" />Adjust price</button>
-              <button onClick={() => setBulkAdj(true)} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="tune" c="text-sm" />Adjust qty</button>
-              <button onClick={() => setAction({ kind: "write-off" })} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="delete_sweep" c="text-sm" />Write off</button>
-              {can("can_delete_products") && <button onClick={pDelete} disabled={pBusy} className="px-3 py-1.5 rounded-lg bg-rose-600 text-white hover:bg-rose-700 flex items-center gap-1"><M n="archive" c="text-sm" />Archive</button>}
               <button aria-label="Close" onClick={pClear} className="px-2 py-1.5 rounded-lg hover:bg-slate-200/60 text-ink-tertiary"><M n="close" c="text-sm" /></button>
             </div>
           )}
@@ -440,7 +455,7 @@ export default function InventoryHub() {
               <thead><tr className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary">
                 <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" aria-label="Select all" checked={pAllSel} onChange={pToggleAll} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
                 <th className="py-3.5 px-3">Product</th><th className="py-3.5 px-3">Category</th><th className="py-3.5 px-3">Unit</th>
-                <th className="py-3.5 px-3 text-right">Cost ({currencySymbol()})</th><th className="py-3.5 px-3 text-right">Sell price ({currencySymbol()})</th><th className="py-3.5 px-3 text-right">Margin</th><th className="py-3.5 px-3 text-center">In stock</th>{cfg.enable_reservations && <th className="py-3.5 px-3 text-center">Reserved</th>}<th className="py-3.5 pr-5 pl-2 w-12"><span className="sr-only">Actions</span></th>
+                <th className="py-3.5 px-3 text-right">Cost</th><th className="py-3.5 px-3 text-right">Sell price</th><th className="py-3.5 px-3 text-right">Margin</th><th className="py-3.5 px-3 text-right">In stock</th>{cfg.enable_reservations && <th className="py-3.5 px-3 text-right">Reserved</th>}<th className="py-3.5 pr-5 pl-2 w-12"><span className="sr-only">Actions</span></th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-xs">
                 {/* 144bu — table-body skeleton (chrome stays real; geometry matches rows → no layout shift) */}
@@ -453,8 +468,8 @@ export default function InventoryHub() {
                     <td className="py-3.5 px-3"><span className="sk block h-3 w-14 ml-auto" /></td>
                     <td className="py-3.5 px-3"><span className="sk block h-3 w-14 ml-auto" /></td>
                     <td className="py-3.5 px-3"><span className="sk block h-3 w-10 ml-auto" /></td>
-                    <td className="py-3.5 px-3"><span className="sk block h-5 w-16 rounded-full mx-auto" /></td>
-                    {cfg.enable_reservations && <td className="py-3.5 px-3"><span className="sk block h-3 w-8 mx-auto" /></td>}
+                    <td className="py-3.5 px-3"><span className="sk block h-5 w-16 rounded-full ml-auto" /></td>
+                    {cfg.enable_reservations && <td className="py-3.5 px-3"><span className="sk block h-3 w-8 ml-auto" /></td>}
                     <td className="py-3.5 pr-5 pl-2" />
                   </tr>
                 ))}
@@ -501,8 +516,8 @@ export default function InventoryHub() {
                       <td className="py-3.5 px-3 tabular-nums text-ink-secondary text-right">{money(p.avg_cost || p.cost_price)}</td>
                       <td className="py-3.5 px-3 tabular-nums font-semibold text-ink-primary text-right">{money(p.sell_price)}</td>
                       <td data-testid="margin" className={`py-3.5 px-3 tabular-nums text-right ${m == null ? "text-ink-tertiary" : m < 0 ? "text-rose-600 font-semibold" : "text-ink-secondary"}`}>{m != null ? `${m < 0 ? "−" : ""}${Math.abs(m)}%` : "—"}</td>
-                      <td className="py-3.5 px-3 text-center">{pill ? <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${pill.cls}`}><span className={`w-1.5 h-1.5 rounded-full ${pill.dot}`} />{pill.label}</span> : <span className="font-semibold tabular-nums text-ink-primary">{p.qty_available ?? 0}</span>}</td>
-                      {cfg.enable_reservations && <td className="py-3.5 px-3 text-center font-semibold tabular-nums text-ink-secondary">{p.qty_reserved ? <span className="text-amber-700">{p.qty_reserved}</span> : <span className="text-ink-tertiary">—</span>}</td>}
+                      <td className="py-3.5 px-3 text-right tabular-nums">{pill ? <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${pill.cls}`}><span className={`w-1.5 h-1.5 rounded-full ${pill.dot}`} />{pill.label}</span> : <span className="font-semibold tabular-nums text-ink-primary">{p.qty_available ?? 0}</span>}</td>
+                      {cfg.enable_reservations && <td className="py-3.5 px-3 text-right font-semibold tabular-nums text-ink-secondary">{p.qty_reserved ? <span className="text-amber-700">{p.qty_reserved}</span> : <span className="text-ink-tertiary">—</span>}</td>}
                       <td className="py-3.5 pr-5 pl-2 text-right" onClick={(e) => e.stopPropagation()}><RowMenu label={`More actions for ${p.name}`} items={[
                         { label: "Open", icon: "edit", onClick: () => setDrawer({ kind: "product", id: p.id }) },
                         { label: "Adjust quantity", icon: "tune", onClick: () => { setPsel(new Set([p.id])); setBulkAdj(true); } },
@@ -528,9 +543,9 @@ export default function InventoryHub() {
           </div>
           {asel.size > 0 && (
             <div className="bg-primary/5 rounded-xl border border-primary/30 px-4 py-2.5 mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold">
-              <span className="text-primary">{asel.size} selected</span>
+              <span className="text-primary mr-1">{asel.size} selected</span>
+              <button onClick={() => openLabelDlg("asset")} className={bulkBtn}><M n="print" c="text-sm" />Print labels</button>
               <div className="flex-1" />
-              <button onClick={() => openLabelDlg("asset")} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="print" c="text-sm" />Print labels</button>
               <button aria-label="Close" onClick={() => setAsel(new Set())} className="px-2 py-1.5 rounded-lg hover:bg-slate-200/60 text-ink-tertiary"><M n="close" c="text-sm" /></button>
             </div>
           )}
@@ -568,7 +583,7 @@ export default function InventoryHub() {
             <table className="w-full text-left border-collapse">
               <thead className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary"><tr>
                 <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" aria-label="Select all" className="w-4 h-4 rounded border-slate-300 text-primary" /></th>
-                <th className="py-3.5 px-3">PO number</th><th className="py-3.5 px-3">Supplier</th><th className="py-3.5 px-3">Expected</th><th className="py-3.5 px-3 text-right">Total ({currencySymbol()})</th><th className="py-3.5 px-3 text-center">Status</th><th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
+                <th className="py-3.5 px-3">PO number</th><th className="py-3.5 px-3">Supplier</th><th className="py-3.5 px-3">Expected</th><th className="py-3.5 px-3 text-right">Total</th><th className="py-3.5 px-3 text-center">Status</th><th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-xs">
                 {!pos && <SkeletonRows cols={7} />}
@@ -581,9 +596,9 @@ export default function InventoryHub() {
                       <td className="py-3.5 pl-5 pr-2"><input type="checkbox" aria-label="Select row" className="w-4 h-4 rounded border-slate-300 text-primary" /></td>
                       <td className="py-3.5 px-3 font-mono font-bold text-primary">{po.po_number || po.id}</td>
                       <td className="py-3.5 px-3 font-semibold text-ink-primary">{supName[po.supplier_id || ""] || "—"}</td>
-                      <td className="py-3.5 px-3 text-ink-secondary">{po.expected_at ? new Date(po.expected_at).toLocaleDateString() : "—"}</td>
+                      <td className="py-3.5 px-3 text-ink-secondary">{po.expected_at ? fmtDay(po.expected_at) : "—"}</td>
                       <td className="py-3.5 px-3 text-right tabular-nums font-bold text-ink-primary">{money(po.total)}</td>
-                      <td className="py-3.5 px-3 text-center"><span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-semibold border capitalize ${cls}`}>{st}</span></td>
+                      <td className="py-3.5 px-3 text-center"><span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-semibold border ${cls}`}>{sentence(st)}</span></td>
                       <td className="py-3.5 pr-5 pl-2 text-right"><button aria-label="Print / PDF" onClick={() => openAuthedDoc(`/print/purchase-order/${po.id}`).catch(() => alertDialog("Could not open PO PDF"))} title="Print / PDF" className="p-1.5 rounded-lg text-ink-tertiary hover:text-primary hover:bg-slate-100 align-middle"><M n="print" c="text-sm" /></button><button onClick={() => setPoOpen(po.id)} className="text-primary font-semibold text-xs hover:underline ml-1">View details</button></td>
                     </tr>
                   );
@@ -597,7 +612,7 @@ export default function InventoryHub() {
         {/* AUDIT tabs — live data tables */}
         {AUDIT[tab] && (
           <>
-            <div className="mb-4 flex items-start justify-between gap-3">
+            <div className="mb-4 flex flex-col items-start gap-3">
               <div><h3 className="text-sm font-semibold text-ink-primary">{AUDIT[tab].title}</h3><p className="text-xs text-ink-tertiary">{AUDIT[tab].sub}</p></div>
               {tab === "transfers" && <button onClick={() => setAction({ kind: "transfer" })} className={`${primaryBtn} whitespace-nowrap`}><M n="add" c="text-sm" />New transfer</button>}
               {tab === "write-offs" && <button onClick={() => setAction({ kind: "write-off" })} className={`${primaryBtn} whitespace-nowrap`}><M n="add" c="text-sm" />New write-off</button>}
@@ -608,14 +623,14 @@ export default function InventoryHub() {
             <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
               <table className="w-full text-left border-collapse text-xs">
                 <thead className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary"><tr>
-                  {(AUDIT_COLS[tab] || []).map(([h]) => <th key={h} className="py-3 px-4">{h}</th>)}
+                  {(AUDIT_COLS[tab] || []).map(([h]) => <th key={h} className={`py-3 px-4 ${AUDIT_NUM.has(h) ? "text-right" : ""}`}>{h}</th>)}
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 text-ink-secondary">
                   {auditRows[tab] == null && <SkeletonRows cols={8} />}
                   {auditRows[tab]?.length === 0 && <tr><td colSpan={8} className="py-12 px-4"><AuditEmpty tab={tab} title={AUDIT[tab].title} sub={AUDIT[tab].sub} onStart={AUDIT_START[tab]} /></td></tr>}
                   {pageAudit.map((row: any, i: number) => (
                     <tr key={row?.id || i} onClick={tab === "stock-takes" && row?.id ? () => setStk({ id: row.id }) : undefined} className={`hover:bg-blue-50/30 ${tab === "stock-takes" ? "cursor-pointer" : ""}`}>
-                      {(AUDIT_COLS[tab] || []).map(([h, fn], j) => <td key={h} className={`py-2.5 px-4 ${j === 0 ? "font-bold text-ink-primary" : ""}`}>{fn(row)}</td>)}
+                      {(AUDIT_COLS[tab] || []).map(([h, fn], j) => <td key={h} className={`py-2.5 px-4 ${j === 0 ? "font-bold text-ink-primary" : ""} ${AUDIT_NUM.has(h) ? "text-right tabular-nums" : ""}`}>{fn(row)}</td>)}
                     </tr>
                   ))}
                 </tbody>
@@ -642,8 +657,8 @@ export default function InventoryHub() {
             <input type="number" min={1} max={500} value={labelCopies} onChange={(e) => setLabelCopies(Math.max(1, +e.target.value || 1))} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2 mb-4" />
             {labelErr && <div role="alert" className="mb-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{labelErr}</div>}
             <div className="flex justify-end gap-2">
-              <button onClick={() => setLabelDlg(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
-              <button onClick={printLabels} disabled={!labelTplId} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60 flex items-center gap-1"><M n="print" c="text-[15px]" /> Print {labelSelCount * labelCopies} label{labelSelCount * labelCopies === 1 ? "" : "s"}</button>
+              <button onClick={() => setLabelDlg(false)} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
+              <button onClick={printLabels} disabled={!labelTplId} className="h-9 px-3.5 rounded-xl bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60 flex items-center gap-1"><M n="print" c="text-[15px]" /> Print {labelSelCount * labelCopies} label{labelSelCount * labelCopies === 1 ? "" : "s"}</button>
             </div>
           </div>
         </div>
@@ -801,9 +816,9 @@ function StocktakeDrawer({ id, products, onClose, onDone }:
           )}
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">{posted ? "Close" : "Cancel"}</button>
-          {!stId && <button onClick={start} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Starting…" : "Start count"}</button>}
-          {stId && !posted && <button onClick={post} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Posting…" : "Post variance"}</button>}
+          <button onClick={onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">{posted ? "Close" : "Cancel"}</button>
+          {!stId && <button onClick={start} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Starting…" : "Start count"}</button>}
+          {stId && !posted && <button onClick={post} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Posting…" : "Post variance"}</button>}
         </div>
       </div>
     </div>
@@ -897,8 +912,8 @@ function ActionModal({ kind, products, preselected, onClose, onDone }:
             <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2" /></div>
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : title.replace("New ", "Create ")}</button>
+          <button onClick={onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
+          <button onClick={save} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : title.replace("New ", "Create ")}</button>
         </div>
       </div>
     </div>
@@ -960,7 +975,7 @@ function ConversionModal({ onClose, onDone }: { onClose: () => void; onDone: () 
           {stockUnit && <div><label className={lbl}>Location</label><select value={locId} onChange={(e) => setLocId(e.target.value)} className={fld}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>}
           <div><label className={lbl}>Note</label><textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className={fld} /></div>
         </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2"><button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Converting…" : "Convert"}</button></div>
+        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2"><button onClick={onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button><button onClick={save} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Converting…" : "Convert"}</button></div>
       </div>
     </div>
   );
@@ -1045,8 +1060,8 @@ function ReorderModal({ onClose, onCreated }: { onClose: () => void; onCreated?:
         <div className="px-5 py-4 border-t border-slate-200 flex items-center justify-between gap-3">
           <span className="text-[11px] text-ink-tertiary">{msg || (mode === "forecast" && noSupplier ? `${noSupplier} selected have no default supplier — they'll be skipped.` : "")}</span>
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Close</button>
-            {mode === "forecast" && <button onClick={createPOs} disabled={busy || chosen.length === 0} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50">{busy ? "Creating…" : `Create draft POs (${chosen.filter((i) => i.supplier_id).length})`}</button>}
+            <button onClick={onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary text-xs font-semibold">Close</button>
+            {mode === "forecast" && <button onClick={createPOs} disabled={busy || chosen.length === 0} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50">{busy ? "Creating…" : `Create draft POs (${chosen.filter((i) => i.supplier_id).length})`}</button>}
           </div>
         </div>
       </div>
@@ -1219,10 +1234,10 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
           </>)}
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex justify-between gap-2">
-          <button onClick={review ? () => setReview(null) : onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">{review ? "Back" : "Cancel"}</button>
+          <button onClick={review ? () => setReview(null) : onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary text-xs font-semibold">{review ? "Back" : "Cancel"}</button>
           {!review
-            ? <button onClick={doPreview} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Matching…" : "Review & match →"}</button>
-            : <button onClick={doCommit} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Posting…" : "Post stock"}</button>}
+            ? <button onClick={doPreview} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Matching…" : "Review & match →"}</button>
+            : <button onClick={doCommit} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Posting…" : "Post stock"}</button>}
         </div>
       </div>
     </div>
@@ -1276,7 +1291,7 @@ function BulkAdjustModal({ items, onClose, onDone }: { items: Product[]; onClose
           </div>
           <div><label className={lbl2}>Reason / note</label><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Recount, correction…" className={`${fld} w-full`} /></div>
         </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2"><button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Adjusting…" : "Apply adjustments"}</button></div>
+        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2"><button onClick={onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary text-xs font-semibold">Cancel</button><button onClick={save} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Adjusting…" : "Apply adjustments"}</button></div>
       </div>
     </div>
   );
@@ -1350,7 +1365,7 @@ function PartsToOrderModal({ onClose, onCreated }: { onClose: () => void; onCrea
             </div>
           ))}
         </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end"><button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Close</button></div>
+        <div className="px-5 py-4 border-t border-slate-200 flex justify-end"><button onClick={onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary text-xs font-semibold">Close</button></div>
       </div>
     </div>
   );

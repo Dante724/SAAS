@@ -46,12 +46,10 @@ export default function DirectoriesManager() {
 
   return (
     <div className="max-w-5xl pb-10">
-      <div className="flex items-start gap-3 mb-5">
-        <div>
-          <h2 className="text-base font-semibold text-ink-primary">Lists</h2>
-          <p className="text-xs text-ink-tertiary">The choices your team picks from: where customers came from, why a job was cancelled, and any list a form field uses.</p>
-        </div>
-        <button onClick={newList} className="ml-auto inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-primary hover:bg-slate-50 flex-shrink-0"><M n="add" c="text-sm" />New list</button>
+      <div className="mb-5">
+        <h2 className="text-base font-semibold text-ink-primary">Directories</h2>
+        <p className="text-xs text-ink-tertiary">The lists your team picks from: where customers came from, why a job was cancelled, and any list a form field uses.</p>
+        <button onClick={newList} className="mt-3 inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n="add" c="text-sm" />New list</button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-[240px_minmax(0,1fr)] gap-4 items-start">
         <nav aria-label="Lists" className="space-y-1.5">
@@ -204,8 +202,8 @@ function ListEditor({ dir, onChanged, onDelete }: { dir: Dir; onChanged: () => v
       <div className="p-5 space-y-3">
         <div className="flex gap-2">
           <input value={nv} onChange={(e) => setNv(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} placeholder="Add an option and press Enter" aria-label="New option"
-            className="flex-1 bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/10" />
-          <button onClick={add} disabled={!nv.trim()} className="px-4 py-2.5 rounded-xl bg-ink-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">Add</button>
+            className="glass-input flex-1 rounded-xl px-3 py-2 text-sm" />
+          <button onClick={add} disabled={!nv.trim()} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90 disabled:opacity-40">Add</button>
         </div>
         <div className="flex flex-wrap items-center gap-3 text-[11px] font-semibold">
           <button onClick={() => setPaste(paste === null ? "" : null)} className="text-primary hover:underline">Paste a list</button>
@@ -221,14 +219,14 @@ function ListEditor({ dir, onChanged, onDelete }: { dir: Dir; onChanged: () => v
         </div>
         {more && (
           <div className="flex flex-wrap gap-2">
-            <select value={np} onChange={(e) => setNp(e.target.value)} aria-label="Put it under" className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs"><option value="">Top level</option>{active.map((i) => <option key={i.id} value={i.id}>Under {i.value}</option>)}</select>
-            <select value={nl} onChange={(e) => setNl(e.target.value)} aria-label="Location" className="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs"><option value="">All locations</option>{locs.map((l) => <option key={l.id} value={l.id}>{l.name} only</option>)}</select>
+            <select value={np} onChange={(e) => setNp(e.target.value)} aria-label="Put it under" className="glass-input rounded-xl px-3 py-2 text-sm"><option value="">Top level</option>{active.map((i) => <option key={i.id} value={i.id}>Under {i.value}</option>)}</select>
+            <select value={nl} onChange={(e) => setNl(e.target.value)} aria-label="Location" className="glass-input rounded-xl px-3 py-2 text-sm"><option value="">All locations</option>{locs.map((l) => <option key={l.id} value={l.id}>{l.name} only</option>)}</select>
           </div>
         )}
         {paste !== null && (
           <div className="space-y-1.5">
-            <textarea autoFocus value={paste} onChange={(e) => setPaste(e.target.value)} placeholder={"One option per line\nNextdoor\nRadio ad"} className="w-full h-28 bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-primary" />
-            <button onClick={addPasted} disabled={!paste.trim()} className="px-3.5 py-2 rounded-xl bg-ink-primary text-white text-xs font-semibold disabled:opacity-40">Add {paste.split(/\r?\n/).filter((l) => l.trim()).length || ""} options</button>
+            <textarea autoFocus value={paste} onChange={(e) => setPaste(e.target.value)} placeholder={"One option per line\nNextdoor\nRadio ad"} className="glass-input w-full h-28 rounded-xl px-3 py-2 text-sm" />
+            <button onClick={addPasted} disabled={!paste.trim()} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90 disabled:opacity-40">Add {paste.split(/\r?\n/).filter((l) => l.trim()).length || ""} options</button>
           </div>
         )}
         {active.length > 8 && (

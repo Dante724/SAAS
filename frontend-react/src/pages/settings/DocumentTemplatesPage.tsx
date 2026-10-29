@@ -72,8 +72,9 @@ export default function DocumentTemplatesPage({ templates, onOpen, onChanged, on
     catch (e: any) { onFlash(e?.message || "Couldn't delete"); }
   }
 
-  const Card = ({ t }: { t: any }) => (
-    <div className="group relative rounded-2xl border border-slate-200/90 bg-white shadow-clay-card overflow-hidden hover:border-slate-300 hover:shadow-clay-drawer transition-shadow">
+  // A plain function (not a component), so the previews aren't remounted (and re-fetched) on every render.
+  const card = (t: any) => (
+    <div key={t.id} className="group relative rounded-2xl border border-slate-200/90 bg-white shadow-clay-card overflow-hidden hover:border-slate-300 hover:shadow-clay-drawer transition-shadow">
       <button onClick={() => onOpen(t)} className="block w-full text-left" aria-label={`Edit ${t.name}`}>
         <Thumb t={t} />
         <div className="px-3.5 py-3 border-t border-slate-100">
@@ -99,12 +100,10 @@ export default function DocumentTemplatesPage({ templates, onOpen, onChanged, on
 
   return (
     <div className="max-w-5xl space-y-6 pb-10">
-      <div className="flex items-start gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-ink-primary">Documents you print</h2>
-          <p className="text-xs text-ink-tertiary">Receipts, estimates, invoices and labels. Each preview is filled with your latest job so you see exactly what customers get.</p>
-        </div>
-        <button onClick={() => onOpen(null)} className="ml-auto inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-ink-primary text-white text-xs font-semibold hover:opacity-90 flex-shrink-0"><M n="add" c="text-sm" />New template</button>
+      <div>
+        <h2 className="text-base font-semibold text-ink-primary">Documents you print</h2>
+        <p className="text-xs text-ink-tertiary">Receipts, estimates, invoices and labels. Each preview is filled with your latest job so you see exactly what customers get.</p>
+        <button onClick={() => onOpen(null)} className="mt-3 inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n="add" c="text-sm" />New template</button>
       </div>
 
       {templates == null && <div className="text-xs text-ink-tertiary">Loading…</div>}
@@ -119,7 +118,7 @@ export default function DocumentTemplatesPage({ templates, onOpen, onChanged, on
               <span className="text-[11px] text-ink-tertiary">{k.hint}</span>
             </div>
             <div className={`grid gap-3 ${k.key === "label" ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}>
-              {mine.map((t) => <Card key={t.id} t={t} />)}
+              {mine.map((t) => card(t))}
               <button onClick={() => onOpen({ doc_type: k.key, name: mine.length ? "" : k.label })}
                 className={`rounded-2xl border border-dashed border-slate-300 grid place-items-center text-xs font-semibold text-ink-secondary hover:bg-white hover:border-slate-400 transition-colors ${k.key === "label" ? "min-h-[170px]" : "min-h-[262px]"}`}>
                 <span className="flex flex-col items-center gap-1.5 px-4 text-center">

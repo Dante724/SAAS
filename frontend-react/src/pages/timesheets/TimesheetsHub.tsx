@@ -9,6 +9,7 @@ import { money } from "../orders/types";
 import { confirmDialog } from "../../lib/dialog";
 import { isoDate, isoDateTimeLocal } from "../../lib/localDate";
 import { EmployeeHours } from "../company/CompanyHub";
+import { fmtServerTime } from "../../lib/serverTime";
 
 // Timesheets — React port of legacy timesheets.js. Per-employee grid + approve,
 // manual entry add/void/reopen, and a live "who's on the clock" roster.
@@ -18,6 +19,7 @@ type Sheet = { total_hours?: number; straight_hours?: number; overtime_hours?: n
 
 function weekAgo() { const d = new Date(); d.setDate(d.getDate() - 6); return isoDate(d); }
 const today = () => isoDate();
+const STATE_LABEL: Record<string, string> = { logged: "Logged", running: "Running", approved: "Approved" };
 const hm = (min?: number) => { const m = Math.round(min || 0); return `${Math.floor(m / 60)}h ${m % 60}m`; };
 
 export default function TimesheetsHub() {
@@ -66,12 +68,12 @@ export default function TimesheetsHub() {
       <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
         {/* controls */}
         <div className="flex flex-wrap items-end gap-3">
+          <button onClick={approve} className="h-[38px] px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110">Approve range</button>
+          <button onClick={() => setAdd(true)} className="h-[38px] px-3.5 rounded-xl bg-white border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50 flex items-center gap-1.5"><M n="add" c="text-sm" />Add entry</button>
           <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Employee</label>
             <select value={empId} onChange={(e) => setEmpId(e.target.value)} className="glass-input rounded-lg px-3 py-2 text-sm font-semibold text-ink-primary">{emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select></div>
           <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">From</label><DateField mode="date" value={from} onChange={setFrom} className="w-40" /></div>
           <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">To</label><DateField mode="date" value={to} onChange={setTo} className="w-40" /></div>
-          <button onClick={() => setAdd(true)} className="h-[38px] px-3.5 rounded-xl bg-white border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50 flex items-center gap-1.5"><M n="add" c="text-sm" />Add entry</button>
-          <button onClick={approve} className="h-[38px] px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 ml-auto">Approve range</button>
         </div>
 
         {/* summary */}
@@ -94,10 +96,10 @@ export default function TimesheetsHub() {
                 {sheet?.entries?.length === 0 && <tr><td colSpan={5} className="py-6 text-center text-ink-tertiary">No entries in this range.</td></tr>}
                 {sheet?.entries?.map((e) => (
                   <tr key={e.id}>
-                    <td className="py-2.5 px-4 text-ink-secondary">{e.started_at ? new Date(e.started_at).toLocaleString() : "—"}</td>
-                    <td className="py-2.5 px-4 font-semibold text-ink-primary">{e.order_number || e.category || "—"}{e.billable ? "" : <span className="ml-1 text-[11px] text-ink-tertiary">non-bill</span>}</td>
+                    <td className="py-2.5 px-4 text-ink-secondary">{fmtServerTime(e.started_at) || "—"}</td>
+                    <td className="py-2.5 px-4 font-semibold text-ink-primary">{e.order_number || e.category || "—"}{e.billable ? "" : <span className="ml-1 text-[11px] text-ink-tertiary">Not billable</span>}</td>
                     <td className="py-2.5 px-4 text-right tabular-nums">{hm(e.duration_min)}</td>
-                    <td className="py-2.5 px-4"><span className={`text-[11px]  font-bold px-1.5 py-0.5 rounded ${e.state === "approved" ? "bg-emerald-100 text-emerald-700" : e.state === "running" ? "bg-blue-100 text-primary" : "bg-slate-100 text-ink-secondary"}`}>{e.state || "logged"}</span></td>
+                    <td className="py-2.5 px-4"><span className={`text-[11px]  font-bold px-1.5 py-0.5 rounded ${e.state === "approved" ? "bg-emerald-100 text-emerald-700" : e.state === "running" ? "bg-blue-100 text-primary" : "bg-slate-100 text-ink-secondary"}`}>{STATE_LABEL[e.state || "logged"] || e.state}</span></td>
                     <td className="py-2.5 px-4 text-right whitespace-nowrap">{e.state === "approved" ? <button onClick={() => reopen(e.id)} className="text-primary font-semibold">Reopen</button> : <button onClick={() => voidEntry(e.id)} className="text-rose-600 font-semibold">Void</button>}</td>
                   </tr>
                 ))}
