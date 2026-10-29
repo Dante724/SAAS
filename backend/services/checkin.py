@@ -238,6 +238,8 @@ def clean_answers(form: dict, job_type_id: Optional[str], answers: Optional[dict
                 v = float(v)
             except (TypeError, ValueError):
                 raise HTTPException(422, f"{f['label']} must be a number")
+            if v.is_integer():
+                v = int(v)  # a year or a count reads "2003", not "2003.0"
         if f["type"] == "select" and v not in (None, "") and f.get("options") and str(v) not in [str(o) for o in f["options"]]:
             raise HTTPException(422, f"Pick one of the choices for {f['label']}")
         if v in (None, ""):
