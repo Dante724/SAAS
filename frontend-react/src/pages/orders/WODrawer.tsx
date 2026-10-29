@@ -105,12 +105,29 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   const [woTypes, setWoTypes] = useState<WOTypeRef[] | null>(null);
   useEffect(() => { api.get<any>("/forms/types").then((r) => setWoTypes(r.items || [])).catch(() => setWoTypes([])); }, []);
 
-  async function changeStatus(key: string) {
-    let reason: string | null = null;
-    { const ds = droppedStatus(statuses as any[], key); if (ds) { reason = await askCancelReason(ds.name); if (reason === null) return; } }
+  // B11: a status that needs something first (a comment, or payment) asks for it right here,
+  // under the header, instead of failing with a message the drawer gave no way to fix.
+  const [gate, setGate] = useState<null | { key: string; name: string; reason?: string; kind: "comment" | "unpaid"; message?: string; canOverride?: boolean }>(null);
+  const [gateText, setGateText] = useState("");
+  async function changeStatus(key: string, extra: { reason?: string; comment?: string; allow_unpaid?: boolean } = {}) {
+    let reason: string | null = extra.reason ?? null;
+    if (reason === null) { const ds = droppedStatus(statuses as any[], key); if (ds) { reason = await askCancelReason(ds.name); if (reason === null) return; } }
+    const target = statuses.find((s) => s.key === key);
+    const name = target?.name || key;
+    if (target?.require_comment && !extra.comment && !((d as any).comments || []).length) {
+      setGateText(""); setGate({ key, name, reason: reason || undefined, kind: "comment" }); return;
+    }
     const prev = d.status; setD({ ...d, status: key });
-    try { await api.patch(`/orders/${order.id}/status`, { status: key, reason: reason || undefined }); flash("Status updated"); onChanged?.(); reload(); }
-    catch (e: any) { setD({ ...d, status: prev }); flash(`Failed: ${e.message}`); }
+    try {
+      await api.patch(`/orders/${order.id}/status`, { status: key, reason: reason || undefined, comment: extra.comment, allow_unpaid: extra.allow_unpaid || undefined });
+      setGate(null); flash("Status updated"); onChanged?.(); reload(); loadLabor();
+    } catch (e: any) {
+      setD({ ...d, status: prev });
+      let detail: any = null; try { detail = JSON.parse(e?.body || "null")?.detail; } catch { /* not JSON */ }
+      if (e?.status === 409 && detail?.code === "comment_required") { setGateText(""); setGate({ key, name, reason: reason || undefined, kind: "comment" }); return; }
+      if (e?.status === 409 && detail?.code === "unpaid") { setGate({ key, name, reason: reason || undefined, kind: "unpaid", message: detail.message, canOverride: !!detail.can_override }); return; }
+      flash(`Failed: ${e.message}`);
+    }
   }
   const nav = useNavigate();
   async function continueLinked() {
@@ -322,6 +339,32 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             <button aria-label="Close" onClick={tryClose} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100 transition-colors" title="Close"><M n="close" c="text-lg" /></button>
           </div>
         </header>
+        {gate && (
+          <div role="region" aria-label={gate.kind === "comment" ? "Comment needed" : "Still to pay"}
+            className={`px-4 sm:px-6 py-3 border-b flex-shrink-0 ${gate.kind === "unpaid" ? "bg-amber-50 border-amber-200" : "bg-slate-50 border-slate-200"}`}>
+            {gate.kind === "comment" ? (
+              <form onSubmit={(e) => { e.preventDefault(); if (gateText.trim()) changeStatus(gate.key, { reason: gate.reason, comment: gateText.trim() }); }} className="space-y-2">
+                <p className="text-xs font-semibold text-ink-primary">Moving to {gate.name} needs a comment on the job.</p>
+                <textarea autoFocus value={gateText} onChange={(e) => setGateText(e.target.value)} rows={2} aria-label="Comment"
+                  placeholder="What was done, or what the customer agreed to" className="glass-input w-full p-2.5 text-xs rounded-xl resize-none" />
+                <div className="flex items-center gap-2">
+                  <button type="submit" disabled={!gateText.trim()} className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-primary text-white disabled:opacity-50">Add comment and move to {gate.name}</button>
+                  <button type="button" onClick={() => setGate(null)} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
+                </div>
+              </form>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-amber-900">{gate.message}</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  {can("can_view_invoices_tab") && <button type="button" onClick={() => { setGate(null); setTab("invoices"); }} className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-primary text-white">Take payment</button>}
+                  {gate.canOverride && <button type="button" onClick={() => changeStatus(gate.key, { reason: gate.reason, allow_unpaid: true })}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-amber-300 text-amber-900 hover:bg-amber-100">Move to {gate.name} unpaid</button>}
+                  <button type="button" onClick={() => setGate(null)} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {partsOpen && <PartsPOPanel orderId={order.id} lines={(d.lines || []) as any[]} canBuy={canBuy} isEstimate={!!(order as any).is_estimate}
           onClose={() => setPartsOpen(false)} onChanged={() => { loadIncomingPo(); reload(); }} />}
 

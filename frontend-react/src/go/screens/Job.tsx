@@ -20,6 +20,7 @@ import NotesCard from "../components/NotesCard";
 import ChecklistCard from "../components/ChecklistCard";
 import PartRequestSheet from "../components/PartRequestSheet";
 import { useJobTimer } from "../lib/useJobTimer";
+import { checkFinish } from "../lib/finish";
 import { finishTarget, money } from "../lib/pay";
 import { refusal } from "../lib/statusChange";
 import { goQueue } from "../lib/offlineQueue";
@@ -27,6 +28,7 @@ import { changeStatus } from "../lib/statusChange";
 import { haptic } from "../lib/scanner";
 import { announceChange, useQueueStatus, useStatuses, useToast, useWide, type StatusMeta } from "../lib/useGo";
 import { hm, utc } from "../lib/time";
+import { nextStep } from "../../lib/nextStatus";
 import { rowDetail, rowWhen } from "../lib/rows";
 
 type Order = {
@@ -111,8 +113,7 @@ export default function Job() {
     const ordered = [...list].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
     const ok = allowed ? new Set(allowed) : null;
     const pick = ordered.filter((s) => !ok || ok.has(s.key));
-    const curIdx = ordered.findIndex((s) => s.key === order?.status);
-    const next = ordered.slice(curIdx + 1).find((s) => !["closed", "dropped"].includes(s.status_group || "") && (!ok || ok.has(s.key)));
+    const next = nextStep(ordered, order?.status, allowed);
     // a "waiting for parts" status this job may move to (prefer one that says "part")
     const waiting = pick.filter((s) => s.status_group === "pending" && s.key !== order?.status);
     const waitingParts = waiting.find((s) => /part/i.test(s.name)) || null;
@@ -191,18 +192,24 @@ export default function Job() {
     } catch (e: any) { toast({ title: "Couldn't change the item", body: e?.message, tone: "error" }); }
   }
 
-  // Finish: pay first (when there's a balance and this person may take payment), then close.
+  // Finish: check the close first, then either close, or take the payment and close in one step.
   const target = useMemo(() => finishTarget(list, allowed), [list, allowed]);
+  const [finishPay, setFinishPay] = useState(false);
+  function finished() {
+    if (!order || !target) return;
+    haptic();
+    toast({ title: `${order.order_number} finished`, body: target.name });
+    announceChange("jobs");
+    timer.reload();   // the server stops any timer still running on the job
+    load();
+  }
   async function closeJob() {
     if (!order || !target) return;
     if (!navigator.onLine) { toast({ title: "You're offline", body: "Finishing a job needs a connection.", tone: "warn" }); return; }
     setFinishing(true);
     try {
       await api.patch(`/orders/${encodeURIComponent(order.id)}/status`, { status: target.key });
-      haptic();
-      toast({ title: `${order.order_number} finished`, body: target.name });
-      announceChange("jobs");
-      load();
+      finished();
     } catch (e: any) {
       let data: any = null; try { data = JSON.parse(e?.body || "null"); } catch { /* not JSON */ }
       const r = refusal(e?.status ?? 0, data, target.name);
@@ -214,10 +221,21 @@ export default function Job() {
     setOpen(null);
     if (!(await confirmMoney(thenFinish ? "Finish and take payment" : "Take a payment"))) return;
     finishAfterPay.current = thenFinish;
+    setFinishPay(thenFinish);
     setOpen("pay");
   }
-  function finish() {
-    if (mayPay && (balance ?? 0) > 0.009) { openPay(true); return; }
+  async function finish() {
+    if (!order || !target) return;
+    if (!navigator.onLine) { toast({ title: "You're offline", body: "Finishing a job needs a connection.", tone: "warn" }); return; }
+    const paying = mayPay && (balance ?? 0) > 0.009;
+    // Ask before any money moves: a job that can't close must not take the customer's cash.
+    setFinishing(true);
+    let ok: Awaited<ReturnType<typeof checkFinish>>;
+    try { ok = await checkFinish(api.post, order.id, target.key, target.name, paying); }
+    catch (e: any) { toast({ title: "Couldn't finish the job", body: e?.message, tone: "error" }); return; }
+    finally { setFinishing(false); }
+    if (!ok.ok) { toast({ title: ok.title, body: ok.message, tone: "error" }); return; }
+    if (paying) { openPay(true); return; }
     closeJob();
   }
 
@@ -403,6 +421,7 @@ export default function Job() {
         waitingStatus={choices.waitingParts} onWaiting={() => choices.waitingParts && pickStatus(choices.waitingParts)} />
       <SignatureSheet open={open === "sign"} onClose={() => setOpen(null)} orderId={order.id} customer={order.client?.name} onSaved={load} />
       <PaySheet open={open === "pay"} onClose={() => setOpen(null)} orderId={order.id} orderNumber={order.order_number} customer={order.client?.name}
+        finishTo={finishPay && !isClosed ? target : null} onFinished={() => { finishAfterPay.current = false; setBalance(0); finished(); }}
         onPaid={(left) => { setBalance(left); if (left <= 0.009 && finishAfterPay.current && !isClosed) { finishAfterPay.current = false; closeJob(); } else load(); }} />
       <MessageSheet open={open === "msg"} onClose={() => setOpen(null)} orderId={order.id}
         onRead={() => setOrder((o) => (o ? { ...o, client_msg_unread: 0 } : o))} />
