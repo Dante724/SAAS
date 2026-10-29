@@ -4,6 +4,7 @@ import DateField from "../../components/DateField";
 import ScanButton from "../../components/ScanButton";
 import { api } from "../../api/client";
 import { autoPrintForJob } from "../../lib/autoPrint";
+import AutoPrintPicker from "../../components/AutoPrintPicker";
 import { useClientSearch } from "../../hooks/useClientSearch";
 import { readAsDataUrl } from "../../lib/files";
 import { alertDialog } from "../../lib/dialog";
@@ -499,6 +500,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
             <div className="w-full flex items-center justify-between">
               <button type="button" onClick={() => setStep(1)} className="px-4 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 transition-colors flex items-center gap-1"><M n="arrow_back" c="text-xs" /><span>Back</span></button>
               <div className="flex items-center space-x-2">
+                {!estimate && <AutoPrintPicker event="create" />}
                 <button type="button" disabled={busy} onClick={() => submit(true)} className="hidden sm:inline-flex px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 transition-colors">Save &amp; create another</button>
                 <button type="button" disabled={busy} onClick={() => submit(false)} className="px-5 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 transition-all">{busy ? "Creating…" : `Create ${estimate ? "estimate" : "work order"}`}</button>
               </div>
