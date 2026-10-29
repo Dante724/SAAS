@@ -3,6 +3,7 @@
 // looked jobs up. The headline is the share of status changes made on a phone against the 50%
 // decision rule. See docs/pilot/tekly-go-shop-pilot.md.
 import { useEffect, useState } from "react";
+import DateField from "../../components/DateField";
 import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog } from "../../lib/dialog";
 
@@ -52,16 +53,15 @@ export default function GoPilotReport() {
   }
 
   const h = rep?.headline;
-  const field = "text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white";
   const th = "py-2 px-3 text-left text-[11px] font-semibold text-ink-tertiary whitespace-nowrap";
   const td = "py-2 px-3 text-xs tabular-nums whitespace-nowrap";
   return (
     <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
       <div className="flex flex-wrap items-end gap-3">
         <label className="space-y-1"><span className="block text-[11px] font-semibold text-ink-secondary">From</span>
-          <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} className={field} /></label>
+          <DateField value={from} onChange={setFrom} className="w-40" label="From" /></label>
         <label className="space-y-1"><span className="block text-[11px] font-semibold text-ink-secondary">To</span>
-          <input type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} className={field} /></label>
+          <DateField value={to} min={from} onChange={setTo} className="w-40" label="To" /></label>
         <button type="button" onClick={csv} className="px-3 py-2 rounded-xl text-xs font-semibold border border-slate-200 hover:bg-slate-50">Download CSV</button>
         <p className="text-[11px] text-ink-tertiary">Dates are UTC. Jobs: those that got a pilot QR label.</p>
       </div>

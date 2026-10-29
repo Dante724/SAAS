@@ -225,8 +225,8 @@ function ScheduleDrawer({ employees, defaultEmp, onClose, onDone }: { employees:
           </div>
           {isShift && (
             <div className="grid grid-cols-2 gap-3">
-              <div><label className={lbl}>Start</label><input type="time" value={f.start} onChange={(e) => set("start", e.target.value)} className={fld} /></div>
-              <div><label className={lbl}>End</label><input type="time" value={f.end} onChange={(e) => set("end", e.target.value)} className={fld} /></div>
+              <div><label className={lbl}>Start</label><DateField mode="time" value={f.start} onChange={(v) => set("start", v)} label="Start" /></div>
+              <div><label className={lbl}>End</label><DateField mode="time" value={f.end} onChange={(v) => set("end", v)} label="End" /></div>
             </div>
           )}
           <div><label className={lbl}>Note</label><input value={f.note} onChange={(e) => set("note", e.target.value)} placeholder="Optional" className={fld} /></div>

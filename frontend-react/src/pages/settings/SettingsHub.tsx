@@ -1816,7 +1816,9 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
                   </div>
                 )
               ) : (
-                <input type={f.type} value={v[f.k]} onChange={set(f.k)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary" />
+                f.type === "date"
+                  ? <DateField value={v[f.k] || ""} onChange={(x) => setV({ ...v, [f.k]: x })} label={f.label} />
+                  : <input type={f.type} value={v[f.k]} onChange={set(f.k)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary" />
               )}
             </div>
           ))}

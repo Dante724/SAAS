@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import DateField from "../../components/DateField";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
@@ -203,7 +204,7 @@ function LocationDetail({ loc, companyTz, resources, onSaved, onResChanged, onCa
           <label className="flex-shrink-0">
             <span className="sr-only">Time zone</span>
             <span className={`inline-flex items-center gap-1 rounded-lg pl-2 text-[11px] ${companyTz && f.timezone !== companyTz ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-ink-secondary"}`}>
-              <M n="schedule" c="text-[12px]" />
+              <M n="public" c="text-[12px]" />
               <select value={f.timezone} onChange={(e) => set("timezone", e.target.value)} aria-label="Time zone" className="bg-transparent py-1 pr-1 outline-none text-[11px] max-w-[150px]">
                 <optgroup label="United States and Canada">{COMMON_TZ.map((z) => <option key={z} value={z}>{tzLabel(z)}</option>)}</optgroup>
                 <optgroup label="All time zones">{zones.map((z) => <option key={z} value={z}>{z.replace(/_/g, " ")}</option>)}</optgroup>
@@ -253,9 +254,9 @@ function LocationDetail({ loc, companyTz, resources, onSaved, onResChanged, onCa
                       className={`w-9 h-5 rounded-full relative transition-colors ${open ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${open ? "left-[18px]" : "left-0.5"}`} /></button>
                     <span className="text-xs text-ink-secondary w-12">{open ? "Open" : "Closed"}</span>
                     {open && (<>
-                      <input type="time" value={d.open || "09:00"} onChange={(e) => patchDay(k, { open: e.target.value })} aria-label={`${l} opens`} className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-sm outline-none focus:border-primary" />
+                      <DateField mode="time" className="w-36" value={d.open || "09:00"} onChange={(v) => patchDay(k, { open: v })} label={`${l} opens`} />
                       <span className="text-xs text-ink-tertiary">to</span>
-                      <input type="time" value={d.close || "18:00"} onChange={(e) => patchDay(k, { close: e.target.value })} aria-label={`${l} closes`} className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-sm outline-none focus:border-primary" />
+                      <DateField mode="time" className="w-36" value={d.close || "18:00"} onChange={(v) => patchDay(k, { close: v })} label={`${l} closes`} />
                     </>)}
                     <button type="button" onClick={() => setWh((s) => Object.fromEntries(DAYS.map(([kk], i) => [kk, i < 5 ? { ...d } : (s[kk] || DEFAULT_DAY)])))}
                       className="ml-auto text-[11px] font-semibold text-ink-tertiary hover:text-ink-secondary">Same for Mon–Fri</button>
