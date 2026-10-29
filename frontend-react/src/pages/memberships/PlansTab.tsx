@@ -54,19 +54,20 @@ export default function PlansTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="min-w-0 flex-1 basis-64">
+      <div className="flex flex-col items-start gap-3">
+        <div className="min-w-0">
           <div className="text-base font-semibold text-ink-primary">Membership plans</div>
           <div className="text-xs text-ink-tertiary">Sell included services and member discounts monthly or yearly. Plans go on a customer's boat, vehicle or device.</div>
         </div>
         {canEdit && <div className="flex gap-2">
+          <button onClick={() => setEdit(blankPlan())} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm flex items-center gap-1.5 whitespace-nowrap"><M n="add" c="text-sm" />New plan</button>
           <div ref={starterRef} className="relative">
             <button onClick={() => setStarter((x) => !x)} aria-haspopup="menu" aria-expanded={starter}
               className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 whitespace-nowrap flex items-center gap-1">
               From a template<M n={starter ? "expand_less" : "expand_more"} c="text-base text-ink-tertiary" />
             </button>
             {starter && (
-              <div role="menu" className="absolute right-0 top-full mt-1.5 z-40 w-80 bg-raised rounded-2xl border border-slate-200/80 shadow-clay-card p-1.5">
+              <div role="menu" className="absolute left-0 top-full mt-1.5 z-40 w-80 bg-raised rounded-2xl border border-slate-200/80 shadow-clay-card p-1.5">
                 <div className="px-3 pt-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Start from your trade</div>
                 {STARTER_TEMPLATES.map((t) => (
                   <button key={t.k} role="menuitem" onClick={() => fromStarter(t.k)}
@@ -81,7 +82,6 @@ export default function PlansTab() {
               </div>
             )}
           </div>
-          <button onClick={() => setEdit(blankPlan())} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm flex items-center gap-1.5 whitespace-nowrap"><M n="add" c="text-sm" />New plan</button>
         </div>}
       </div>
       {plans === null && <p className="text-xs text-ink-tertiary">Loading…</p>}
