@@ -18,10 +18,11 @@ import TagFilterChip from "./TagFilterChip";
 import { useMe } from "../../context/Me";
 import { Avatar } from "../orders/look";
 import { MoreMenu, btnGhost, btnPrimary } from "../invoices/billing";
+import MembershipsView from "../memberships/MembershipsView";
 import { hueText, tint } from "../../lib/tint";
 
 type Client = { id: string; name?: string; phone?: string; email?: string; loyalty_tier?: string; balance?: number; devices?: any[]; order_count?: number };
-type Tab = "clients" | "suppliers";
+type Tab = "clients" | "memberships" | "suppliers";
 
 /* Tier is an exception worth seeing (VIP, gold, silver), so it only shows when a client has
    one; "standard" or no tier reads as a quiet dash. */
@@ -36,7 +37,7 @@ export function TierPill({ tier }: { tier?: string | null }) {
 export default function ClientsHub() {
   const term = useTerminology();
   const { can } = useMe();
-  const [tab, setTab] = useState<Tab>("clients");
+  const [tab, setTab] = useState<Tab>(() => (new URLSearchParams(window.location.search).get("tab") === "memberships" ? "memberships" : "clients"));
   const [suppliers, setSuppliers] = useState<Supplier[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState("");
@@ -148,7 +149,7 @@ export default function ClientsHub() {
     <Shell title="Contacts">
       <div className="flex-1 overflow-y-auto">
         <div className="px-6 pt-4 flex items-center gap-1 border-b border-slate-200/70">
-          {(["clients", "suppliers"] as Tab[]).map((t) => (
+          {(["clients", "memberships", "suppliers"] as Tab[]).map((t) => (
             <button key={t} onClick={() => { setTab(t); clearSel(); }}
               className={`px-3 py-2 text-sm font-semibold rounded-t-lg -mb-px border-b-2 capitalize ${tab === t ? "text-primary border-primary" : "text-ink-tertiary border-transparent hover:text-ink-primary"}`}>
               {t}
@@ -164,12 +165,15 @@ export default function ClientsHub() {
                   <label className={`${btnGhost} bg-white cursor-pointer`}><M n="upload" c="text-sm" />Import CSV
                     <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) importCsv(f); e.target.value = ""; }} /></label>
                 </div>
-              : <button onClick={() => setNewSupplier(true)} className={btnPrimary}><M n="add" c="text-sm" />New supplier</button>}
+              : tab === "suppliers" ? <button onClick={() => setNewSupplier(true)} className={btnPrimary}><M n="add" c="text-sm" />New supplier</button>
+              : <a href="/catalog?tab=plans" className={`${btnGhost} bg-white`}><M n="workspace_premium" c="text-sm" />Manage plans</a>}
             <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
               {tab === "clients" && <TagFilterChip value={tagId} onChange={(id) => { setTagId(id); clearSel(); }} />}
               <div className="relative w-full sm:w-72"><M n="search" c="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" /><input value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search contacts" className="w-full h-9 bg-white border border-slate-200 rounded-lg pl-8 pr-3 text-xs text-ink-primary placeholder:text-ink-placeholder outline-none focus:border-primary focus:ring-2 focus:ring-primary/10" placeholder="Search name, phone or email…" /></div>
             </div>
           </div>
+
+          {tab === "memberships" && <MembershipsView q={dq} />}
 
           {tab === "clients" && merged && (
             <div className="bg-emerald-50 rounded-2xl border border-emerald-200 shadow-clay-sm px-4 py-2.5 flex items-center gap-2 text-xs font-semibold">

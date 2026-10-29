@@ -30,13 +30,21 @@ import {
   CircleDollarSign, Percent, ShieldAlert, Globe, Gift, RotateCcw, SearchCheck, VideoOff,
   ShieldCheck, Target, EyeOff, Car, Sailboat, Bike, Laptop, Cog, Upload,
   ShoppingBag, Split, Nfc, Phone, PhoneIncoming, PhoneOutgoing, PhoneMissed, Network, HelpCircle,
-  LogOut, Menu as MenuIcon, PackageOpen, Info,
+  LogOut, Menu as MenuIcon, PackageOpen, Info, UserCheck, KeyRound, MapPin, Crown,
+  CircleDot, CloudOff, Footprints, Hand, Infinity as InfinityIcon, LayoutGrid, LogIn, MessageSquareText, MessagesSquare, MoveRight, Redo2, SquareCheck, Star, ThumbsUp, TriangleAlert, UserX,
 } from "lucide-react";
 import { fmtServerTime } from "../lib/serverTime";
 
 // Map the old Material-Symbols ligature names to bundled Lucide icons (no web font,
 // works under the app's Content-Security-Policy, and needs no server restart).
 const ICONS: Record<string, any> = {
+  // Names used in the app that had no mapping (they drew as an empty circle).
+  forum: MessagesSquare, grid_view: LayoutGrid, summarize: FileText, reviews: Star,
+  check_box: SquareCheck, check_box_outline_blank: Square, sms: MessageSquareText, thumb_up: ThumbsUp,
+  directions_walk: Footprints, insert_chart: BarChart3, login: LogIn, all_inclusive: InfinityIcon, bedtime: Moon,
+  list_alt: ClipboardList, back_hand: Hand, cloud_off: CloudOff, sync_problem: TriangleAlert,
+  trending_flat: MoveRight, person_off: UserX, redo: Redo2, replay: RotateCcw, print_disabled: Printer,
+  currency_exchange: ArrowLeftRight, fiber_manual_record: CircleDot, radio_button_unchecked: Circle,
   package_2: PackageOpen, info: Info,
   build: Wrench, handyman: Wrench, engineering: HardHat, hammer: Hammer,
   task_alt: CheckCircle2, mail: Mail, chat: MessageSquare, chat_bubble: MessageCircle,
@@ -68,12 +76,12 @@ const ICONS: Record<string, any> = {
   lock_open: LockOpen, merge: Merge, paid: CircleDollarSign, percent: Percent, privacy_tip: ShieldAlert,
   public: Globe, redeem: Gift, refresh: RefreshCw, report: Flag, restore: RotateCcw, rule: ListChecks,
   search_check: SearchCheck, sell: Tag, stop: Square, table_view: Table, tag: Tag, target: Target,
-  verified: BadgeCheck, verified_user: ShieldCheck, videocam_off: VideoOff, web: Globe,
+  verified: BadgeCheck, workspace_premium: Crown, verified_user: ShieldCheck, videocam_off: VideoOff, web: Globe,
   qr_code_2: QrCode, sticky_note_2: StickyNote, receipt: Receipt,
   open_in_new: ExternalLink, link: LinkIcon,
   search: Search, table_rows: Rows3, view_kanban: KanbanSquare,
   notifications: Bell, pause: Pause, play_arrow: Play, more_vert: MoreVertical, more_horiz: MoreHorizontal,
-  print: Printer, save: Save, send: Send, campaign: Send, smartphone: Smartphone,
+  print: Printer, location_on: MapPin, how_to_reg: UserCheck, key: KeyRound, save: Save, send: Send, campaign: Send, smartphone: Smartphone,
   photo_camera: Camera, add_a_photo: Camera, image: ImageIcon,
   barcode: Barcode, qr_code_scanner: QrCode, scan: ScanLine, contactless: Nfc,
   call: Phone, phone: Phone, call_received: PhoneIncoming, phone_missed: PhoneMissed, hub: Network, help: HelpCircle, call_made: PhoneOutgoing,
@@ -181,6 +189,19 @@ export default function Shell({ title, children }: { title: string; children: Re
     api.get<{ items: any[] }>("/tech/notifications?only_unread=true")
       .then((r) => { if (liveRef.current) setUnread((r.items || []).length); }).catch(() => {});
   }, 60000);
+  // Self check-in: people waiting at this location, shown on the Inquiries item.
+  const [walkins, setWalkins] = useState(0);
+  const loadWalkins = () => {
+    if (!can(NAV_PERM["/inquiries"])) return;
+    api.get<{ waiting: number }>("/checkins/count")
+      .then((r) => { if (liveRef.current) setWalkins(Number(r?.waiting) || 0); }).catch(() => {});
+  };
+  useVisibleInterval(loadWalkins, 30000);
+  // The Walk-ins view says when the queue changed (call, no-show, convert) so the badge doesn't lag.
+  useEffect(() => {
+    window.addEventListener("tekly:checkins", loadWalkins);
+    return () => window.removeEventListener("tekly:checkins", loadWalkins);
+  });
 
   // Below 900px the sidebar becomes a slide-in drawer opened from the top bar's menu button.
   const [navOpen, setNavOpen] = useState(false);
@@ -222,6 +243,9 @@ export default function Shell({ title, children }: { title: string; children: Re
                   <>
                     <M n={it.i} c={`text-[17px] ${isActive ? "text-primary" : "text-ink-tertiary"}`} />
                     {!collapsed && <span>{t(it.l)}</span>}
+                    {it.to === "/inquiries" && walkins > 0 && (
+                      <span aria-label={`${walkins} waiting`} title={`${walkins} waiting`} className={`${collapsed ? "absolute ml-5 -mt-4" : "ml-auto"} min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-white text-[11px] font-bold leading-[18px] text-center`}>{walkins}</span>
+                    )}
                   </>
                 )}
               </NavLink>
