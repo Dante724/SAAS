@@ -12,9 +12,10 @@ import { Avatar } from "../orders/look";
 // side panel with what's left, the payments and the few changes a plan needs.
 
 type View = "all" | "renewing" | "unpaid" | "paused" | "former";
-// Renewing and Unpaid are the summary numbers above; the chips keep the rest.
+// One filter row; the numbers above are a summary only, so there's one place to filter.
 const VIEWS: { k: View; label: string }[] = [
-  { k: "all", label: "All members" }, { k: "paused", label: "Paused" }, { k: "former", label: "Former" },
+  { k: "all", label: "All" }, { k: "renewing", label: "Renewing soon" }, { k: "unpaid", label: "Unpaid" },
+  { k: "paused", label: "Paused" }, { k: "former", label: "Former" },
 ];
 
 export default function MembershipsView({ q = "" }: { q?: string }) {
@@ -30,28 +31,29 @@ export default function MembershipsView({ q = "" }: { q?: string }) {
 
   const c = data?.counts || {};
   const t = data?.totals;
-  const go = (v: View) => () => setView(v);
   return (
     <div className="space-y-4">
       {data && (
         <PageSummary stats={[
-          { label: "Active members", value: c.all ?? 0, hint: c.paused ? `${c.paused} paused` : "on a plan today", onClick: go("all"), active: view === "all" },
-          ...(t ? [{ label: "Monthly recurring", value: money(Math.round(t.mrr)), hint: "yearly plans count a twelfth" }] : []),
-          { label: "Renewing in 30 days", value: t ? money(Math.round(t.renewing_value)) : (c.renewing ?? 0), zero: !c.renewing, hint: c.renewing ? `${c.renewing} member${c.renewing === 1 ? "" : "s"}` : "none this month", onClick: go("renewing"), active: view === "renewing" },
-          { label: "Unpaid", value: t ? money(t.owed) : (c.unpaid ?? 0), hint: `${c.unpaid ?? 0} member${c.unpaid === 1 ? "" : "s"}`, tone: "bad" as const, zero: !(c.unpaid), onClick: go("unpaid"), active: view === "unpaid" },
+          { label: "Active members", value: c.all ?? 0, hint: c.paused ? `${c.paused} paused` : "on a plan today" },
+          ...(t ? [{ label: "Monthly recurring", value: money(Math.round(t.mrr)), hint: "monthly and yearly plans" }] : []),
+          { label: "Renewing in 30 days", value: t ? money(Math.round(t.renewing_value)) : (c.renewing ?? 0), zero: !c.renewing, hint: c.renewing ? `${c.renewing} member${c.renewing === 1 ? "" : "s"}` : "none this month" },
+          { label: "Unpaid", value: t ? money(t.owed) : (c.unpaid ?? 0), hint: `${c.unpaid ?? 0} member${c.unpaid === 1 ? "" : "s"}`, tone: "bad" as const, zero: !(c.unpaid) },
         ]} />
       )}
-      <div className="flex flex-wrap gap-2">
-        {VIEWS.map((v) => {
-          const c = data?.counts?.[v.k];
-          return (
-            <button key={v.k} onClick={() => setView(v.k)} aria-pressed={view === v.k}
-              className={`h-9 px-3.5 rounded-full text-xs font-semibold border transition flex items-center gap-1.5 ${view === v.k ? "bg-ink-primary text-white border-ink-primary" : "bg-white text-ink-secondary border-slate-200 hover:border-slate-300"}`}>
-              {v.label}{c ? <span className={`tabular-nums ${view === v.k ? "text-white/70" : v.k === "unpaid" || v.k === "paused" ? "text-amber-700" : "text-ink-tertiary"}`}>{c}</span> : null}
-            </button>
-          );
-        })}
-        <a href="/catalog?tab=plans" className="ml-auto h-9 px-3 rounded-full text-xs font-semibold text-primary flex items-center gap-1"><M n="workspace_premium" c="text-sm" />Plans</a>
+      <div className="flex flex-wrap items-center gap-3">
+        <div role="group" aria-label="Show" className="inline-flex flex-wrap gap-0.5 rounded-xl bg-slate-100/80 p-1">
+          {VIEWS.map((v) => {
+            const n = data?.counts?.[v.k];
+            const on = view === v.k;
+            return (
+              <button key={v.k} onClick={() => setView(v.k)} aria-pressed={on}
+                className={`h-8 px-3 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 ${on ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>
+                {v.label}{n ? <span className={`tabular-nums ${(v.k === "unpaid" || v.k === "paused") ? "text-amber-700" : "text-ink-tertiary"}`}>{n}</span> : null}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
@@ -60,7 +62,8 @@ export default function MembershipsView({ q = "" }: { q?: string }) {
           <div className="p-10 text-center">
             <div className="mx-auto h-11 w-11 rounded-2xl grid place-items-center bg-primary/10 text-primary"><M n="workspace_premium" c="text-xl" /></div>
             <div className="mt-3 text-sm font-semibold text-ink-primary">{view === "all" ? "No members yet" : "Nothing here"}</div>
-            <div className="mt-1 text-xs text-ink-tertiary">{view === "all" ? "Add a plan from a client, an asset, or at checkout." : "All caught up."}</div>
+            <div className="mt-1 text-xs text-ink-tertiary">{view === "all" ? "Sell a plan from a customer's page, one of their assets, or at checkout." : "All caught up."}</div>
+            {view === "all" && <a href="/catalog?tab=plans" className="mt-4 inline-flex h-9 px-3.5 rounded-xl bg-ink-primary text-white text-xs font-semibold items-center">Set up plans</a>}
           </div>
         )}
         {data?.items.map((m) => (

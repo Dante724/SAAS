@@ -166,7 +166,7 @@ export default function ClientsHub() {
                     <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) importCsv(f); e.target.value = ""; }} /></label>
                 </div>
               : tab === "suppliers" ? <button onClick={() => setNewSupplier(true)} className={btnPrimary}><M n="add" c="text-sm" />New supplier</button>
-              : <div className="text-sm font-semibold text-ink-primary flex items-center gap-2"><M n="workspace_premium" c="text-base text-primary" />Memberships</div>}
+              : <a href="/catalog?tab=plans" className={`${btnGhost} bg-white`}><M n="workspace_premium" c="text-sm" />Manage plans</a>}
             <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
               {tab === "clients" && <TagFilterChip value={tagId} onChange={(id) => { setTagId(id); clearSel(); }} />}
               <div className="relative w-full sm:w-72"><M n="search" c="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" /><input value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search contacts" className="w-full h-9 bg-white border border-slate-200 rounded-lg pl-8 pr-3 text-xs text-ink-primary placeholder:text-ink-placeholder outline-none focus:border-primary focus:ring-2 focus:ring-primary/10" placeholder="Search name, phone or email…" /></div>
