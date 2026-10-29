@@ -65,7 +65,8 @@ the kit's name and price, but parts a tech adds on top must still show. Orderry'
 - Consumables tracked outside kits without being billed.
 - QBO: roll a kit up to one description.
 - An optional, never-automatic tool to tag old "(Kit)" lines.
-- `/api/v2/bundles` should expose `print_mode` once API v2 lands (it is not on this branch).
+- `/api/v2/bundles` now returns `print_mode` (it shares the staff serializer). A change made with
+  an API key is audited without a person (`actor_id` is empty).
 - A Tekly Go badge on kit lines once Go is on this branch (the order API already returns the tags).
 - The margin floor isn't re-checked after a re-share. A kit priced below cost can put a line under
   the floor, and with the guard set to "block", that would refuse later edits to it.
