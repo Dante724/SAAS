@@ -3833,10 +3833,10 @@ async def add_line(
         await _maybe_deduct(db, order, line, data.qty, perms, current)
     # Memberships: a line the asset's plan includes goes to $0 (or gets the plan discount)
     # straight away, for staff allowed to apply plan benefits (docs/SPEC_memberships.md §7.4).
-    if order.device_id and not order.is_estimate and not (data.discount or 0) \
+    if not order.is_estimate and not (data.discount or 0) \
             and await has_perm(db, current, "can_apply_membership_benefits"):
         from backend.services import memberships as _mb
-        _hit = await _mb.coverage_for_line(db, await _mb.live_on_device(db, current.org_id, order.device_id), line)
+        _hit = await _mb.coverage_for_line(db, await _mb.memberships_for_line(db, order, line), line)
         if _hit:
             _mb._cover(line, *_hit)
             line.total = _calc_line(line)
@@ -4043,6 +4043,9 @@ async def update_line(
     line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id))).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
+    if line.kind == "membership":
+        # The plan's own price: removing it would make the plan free. Cancel the membership instead.
+        raise HTTPException(409, "This is a membership plan. Cancel it from the customer's membership instead.")
     payload = data.model_dump(exclude_unset=True)
     if current.role_id and not (await _order_perms(db, current)).get("can_view_purchase_price"):
         payload.pop("cost_price", None)
@@ -4135,6 +4138,9 @@ async def delete_line(
     line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id))).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
+    if line.kind == "membership":
+        # The plan's own price: removing it would make the plan free. Cancel the membership instead.
+        raise HTTPException(409, "This is a membership plan. Cancel it from the customer's membership instead.")
     # return previously-deducted stock for product lines (incl. serials + cost layers)
     if line.kind == "product" and line.ref_id and not order.is_estimate:
         deducted = (line.qty or 0) - (line.pending_stock or 0)

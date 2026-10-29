@@ -105,6 +105,10 @@ async def _plan(db: AsyncSession, org_id: str, pid: str) -> MembershipPlan:
     return p
 
 
+async def _money(db: AsyncSession, current: Employee) -> bool:
+    return await has_perm(db, current, "can_view_client_info")
+
+
 async def _membership(db: AsyncSession, org_id: str, mid: str) -> Membership:
     m = (await db.execute(select(Membership).where(
         Membership.id == mid, Membership.org_id == org_id))).scalar_one_or_none()
@@ -251,9 +255,7 @@ async def _save_plan(db: AsyncSession, org_id: str, p: MembershipPlan, data: Pla
         MembershipUsage.plan_item_id.in_([o.id for o in old])))).scalars().all()) if old else set()
     for o in old:
         if o.id in used:
-            o.sort_order = -1       # keep history; hidden from the plan (sort_order < 0)
-            o.qty = 0
-            o.kind = "perk" if o.kind != "perk" else o.kind
+            o.sort_order = -1       # kept for its usage history; hidden from the plan (sort_order < 0)
         else:
             await db.delete(o)
     await db.flush()
@@ -396,9 +398,9 @@ async def for_order(order_id: str, db: AsyncSession = Depends(get_db),
     coverable = 0
     if plans and order.device_id:
         from backend.models import OrderLine
-        ms = await svc.live_on_device(db, current.org_id, order.device_id)
         for line in (await db.execute(select(OrderLine).where(OrderLine.order_id == order.id))).scalars().all():
-            if await svc.coverage_for_line(db, ms, line):
+            ms = await svc.memberships_for_line(db, order, line)
+            if ms and await svc.coverage_for_line(db, ms, line):
                 coverable += 1
     offer = None
     if not plans and await has_perm(db, current, "can_sell_memberships"):
@@ -417,6 +419,8 @@ async def apply_on_order(order_id: str, db: AsyncSession = Depends(get_db),
         Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    from backend.routers.orders import _guard_editable
+    await _guard_editable(db, order, current)
     n = await svc.apply_to_order(db, order)
     if n:
         await _retotal(db, order)
@@ -451,6 +455,16 @@ async def snooze_offer(order_id: str, db: AsyncSession = Depends(get_db),
 @router.post("", status_code=201)
 async def sell_membership(data: SellIn, db: AsyncSession = Depends(get_db),
                           current: Employee = Depends(require_perm("can_sell_memberships"))):
+    if data.order_id:
+        # Adding the plan to a job changes its bill: the job must still be editable.
+        order = (await db.execute(select(Order).where(
+            Order.id == data.order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+        if not order:
+            raise HTTPException(404, "Work order not found")
+        if order.is_estimate:
+            raise HTTPException(409, "Add the plan when the estimate becomes a job")
+        from backend.routers.orders import _guard_editable
+        await _guard_editable(db, order, current)
     m = await svc.sell(db, org_id=current.org_id, actor=current, plan_id=data.plan_id,
                        client_id=data.client_id, device_id=data.device_id, billing=data.billing,
                        order_id=data.order_id, manager_id=data.manager_id)
@@ -463,7 +477,7 @@ async def sell_membership(data: SellIn, db: AsyncSession = Depends(get_db),
     await db.commit()
     period = (await db.execute(select(MembershipPeriod).where(
         MembershipPeriod.membership_id == m.id))).scalars().first()
-    return {**await _membership_out(db, m, detail=True), "invoice_id": period.invoice_id if period else None}
+    return {**await _membership_out(db, m, detail=True, show_money=await _money(db, current)), "invoice_id": period.invoice_id if period else None}
 
 
 @router.get("/{mid}")
@@ -498,11 +512,12 @@ async def cancel_membership(mid: str, data: CancelIn, db: AsyncSession = Depends
             MembershipPeriod.membership_id == m.id, MembershipPeriod.paid_at.isnot(None),
             MembershipPeriod.period_start == m.period_start))).scalar_one() or 0)
         refund = svc.refund_estimate(m, paid, given, date.today())
-        # Unpaid future/current periods are dropped with the plan: void their invoices.
+        # Unpaid periods are dropped with the plan, but only if the plan hasn't given any work
+        # yet: otherwise the open invoice stays, so "sell, use, cancel" can't make work free.
         from backend.models import Invoice
         for p in (await db.execute(select(MembershipPeriod).where(
                 MembershipPeriod.membership_id == m.id, MembershipPeriod.paid_at.is_(None)))).scalars().all():
-            if p.invoice_id:
+            if p.invoice_id and given <= 0:
                 inv = (await db.execute(select(Invoice).where(Invoice.id == p.invoice_id))).scalar_one_or_none()
                 if inv and (inv.amount_paid or 0) == 0:
                     inv.status = "cancelled"
@@ -515,7 +530,7 @@ async def cancel_membership(mid: str, data: CancelIn, db: AsyncSession = Depends
     await log_system_event(db, current.org_id, "client", m.client_id,
                            f"{plan.name} cancelled " + ("now" if data.when == "now" else "at period end"))
     await db.commit()
-    return {**await _membership_out(db, m, detail=True), "refund_suggested": refund}
+    return {**await _membership_out(db, m, detail=True, show_money=await _money(db, current)), "refund_suggested": refund}
 
 
 @router.post("/{mid}/resume")
@@ -530,7 +545,7 @@ async def resume_membership(mid: str, db: AsyncSession = Depends(get_db),
     if m.status == "paused" and not await svc._unpaid_started(db, m, date.today()):
         m.status = "active"
     await db.commit()
-    return await _membership_out(db, m, detail=True)
+    return await _membership_out(db, m, detail=True, show_money=await _money(db, current))
 
 
 @router.post("/{mid}/pause")
@@ -541,7 +556,7 @@ async def pause_membership(mid: str, db: AsyncSession = Depends(get_db),
         raise HTTPException(409, "Only an active membership can be paused")
     m.status = "paused"
     await db.commit()
-    return await _membership_out(db, m, detail=True)
+    return await _membership_out(db, m, detail=True, show_money=await _money(db, current))
 
 
 @router.post("/{mid}/billing")
@@ -567,7 +582,7 @@ async def switch_billing(mid: str, data: BillingIn, db: AsyncSession = Depends(g
         await db.delete(p)
     m.billing, m.price = data.billing, price
     await db.commit()
-    return await _membership_out(db, m, detail=True)
+    return await _membership_out(db, m, detail=True, show_money=await _money(db, current))
 
 
 @router.post("/{mid}/transfer")
@@ -605,7 +620,7 @@ async def transfer_membership(mid: str, data: TransferIn, db: AsyncSession = Dep
     if new_client != old_client:
         await svc.sync_tags(db, current.org_id, new_client)
     await db.commit()
-    return await _membership_out(db, m, detail=True)
+    return await _membership_out(db, m, detail=True, show_money=await _money(db, current))
 
 
 @router.post("/{mid}/pay-link")

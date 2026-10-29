@@ -340,18 +340,27 @@ async def sell(db: AsyncSession, *, org_id: str, actor: Employee, plan_id: str, 
 
 # ── coverage on work orders ──────────────────────────────────────────────────────────────────────
 
-async def used_in_term(db: AsyncSession, m: Membership, item_id: str) -> float:
-    return float((await db.execute(select(func.coalesce(func.sum(MembershipUsage.qty), 0)).where(
-        MembershipUsage.membership_id == m.id, MembershipUsage.plan_item_id == item_id,
-        MembershipUsage.term_start == m.term_start))).scalar_one() or 0)
+async def _used(db: AsyncSession, m: Membership, item: MembershipPlanItem, term_start: date) -> float:
+    """Uses of this item's service in one plan year. Counted by service, not by item row, so
+    editing the plan (which may replace item rows) never hands a member their counts back."""
+    return float((await db.execute(select(func.coalesce(func.sum(MembershipUsage.qty), 0))
+        .join(MembershipPlanItem, MembershipPlanItem.id == MembershipUsage.plan_item_id).where(
+        MembershipUsage.membership_id == m.id, MembershipPlanItem.kind == "service",
+        MembershipPlanItem.service_id == item.service_id,
+        MembershipUsage.term_start == term_start))).scalar_one() or 0)
+
+
+async def used_in_term(db: AsyncSession, m: Membership, item: MembershipPlanItem) -> float:
+    return await _used(db, m, item, m.term_start)
 
 
 async def _pending_lines(db: AsyncSession, m: Membership, service_id: str,
                          exclude_line: Optional[str] = None) -> float:
     """Covered lines on orders that haven't closed yet (no usage row): they hold a count too."""
-    q = select(func.coalesce(func.sum(OrderLine.qty), 0)).where(
+    # Only jobs still open: a closed job has usage rows, an estimate or dropped job never uses the plan.
+    q = select(func.coalesce(func.sum(OrderLine.qty), 0)).join(Order, Order.id == OrderLine.order_id).where(
         OrderLine.membership_id == m.id, OrderLine.ref_id == service_id, OrderLine.kind == "service",
-        OrderLine.discount >= 100,
+        OrderLine.discount >= 100, Order.closed_at.is_(None), Order.is_estimate == False,  # noqa: E712
         ~select(MembershipUsage.id).where(MembershipUsage.order_line_id == OrderLine.id).exists())
     if exclude_line:
         q = q.where(OrderLine.id != exclude_line)
@@ -364,16 +373,14 @@ async def allowance(db: AsyncSession, m: Membership, item: MembershipPlanItem) -
     if item.rollover:
         prev_start = add_months(m.term_start, -12)
         if m.created_at and m.created_at.date() <= prev_start:
-            used_prev = float((await db.execute(select(func.coalesce(func.sum(MembershipUsage.qty), 0)).where(
-                MembershipUsage.membership_id == m.id, MembershipUsage.plan_item_id == item.id,
-                MembershipUsage.term_start == prev_start))).scalar_one() or 0)
+            used_prev = await _used(db, m, item, prev_start)
             total += max(0.0, float(item.qty or 0) - used_prev)
     return total
 
 
 async def remaining(db: AsyncSession, m: Membership, item: MembershipPlanItem,
                     exclude_line: Optional[str] = None) -> float:
-    return max(0.0, await allowance(db, m, item) - await used_in_term(db, m, item.id)
+    return max(0.0, await allowance(db, m, item) - await used_in_term(db, m, item)
                - await _pending_lines(db, m, item.service_id or "", exclude_line))
 
 
@@ -419,17 +426,34 @@ def uncover(line: OrderLine) -> None:
     line.membership_id = None
 
 
+async def line_asset(db: AsyncSession, order: Order, line: OrderLine) -> Optional[str]:
+    """The asset a line is for: its job item's asset on a multi-asset job, else the job's asset."""
+    if getattr(line, "order_item_id", None):
+        from backend.models import OrderItem
+        return (await db.execute(select(OrderItem.asset_id).where(
+            OrderItem.id == line.order_item_id, OrderItem.order_id == order.id))).scalar_one_or_none()
+    return order.device_id
+
+
+async def memberships_for_line(db: AsyncSession, order: Order, line: OrderLine) -> list[Membership]:
+    """Plans that may cover this line: on the line's own asset, held by the job's own client."""
+    if order.is_estimate:
+        return []
+    asset = await line_asset(db, order, line)
+    if not asset or not order.client_id:
+        return []
+    return [m for m in await live_on_device(db, order.org_id, asset) if m.client_id == order.client_id]
+
+
 async def apply_to_order(db: AsyncSession, order: Order) -> int:
     """Cover every eligible line on an order. Returns how many lines changed."""
-    if not order.device_id:
-        return 0
-    ms = await live_on_device(db, order.org_id, order.device_id)
-    if not ms:
+    if order.is_estimate or order.closed_at:
         return 0
     lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == order.id))).scalars().all()
     n = 0
     for line in lines:
-        hit = await coverage_for_line(db, ms, line)
+        ms = await memberships_for_line(db, order, line)
+        hit = await coverage_for_line(db, ms, line) if ms else None
         if hit:
             _cover(line, *hit)
             await db.flush()
@@ -451,8 +475,9 @@ async def check_order_lines(db: AsyncSession, order: Order) -> list[OrderLine]:
         m = (await db.execute(select(Membership).where(
             Membership.id == line.membership_id, Membership.org_id == order.org_id))).scalar_one_or_none()
         ok = False
-        if m and m.status == "active" and order.device_id and order.device_id in (
-                await asset_ids(db, m)):
+        asset = await line_asset(db, order, line)
+        if m and m.status == "active" and asset and asset in (await asset_ids(db, m)) \
+                and m.client_id == order.client_id and not order.is_estimate:
             for it in await plan_items(db, m.plan_id):
                 if it.kind == "service" and line.kind == "service" and line.ref_id == it.service_id \
                         and (line.discount or 0) >= 100:
@@ -495,11 +520,17 @@ async def record_usage(db: AsyncSession, order: Order) -> int:
             if it.kind == "discount" and _discount_fits(it, line):
                 item = it
         gross = q2((line.qty or 0) * (line.unit_price or 0))
-        db.add(MembershipUsage(org_id=order.org_id, membership_id=m.id,
-                               plan_item_id=item.id if item else None, device_id=order.device_id,
+        # The plan year the job was opened in (a job reopened after renewal still counts in its year).
+        term = m.term_start
+        opened = order.created_at.date() if order.created_at else term
+        joined = m.created_at.date() if m.created_at else term
+        while opened < term and term > joined:
+            term = add_months(term, -12)
+        db.add(MembershipUsage(org_id=order.org_id, membership_id=m.id, term_start=term,
+                               plan_item_id=item.id if item else None, device_id=await line_asset(db, order, line),
                                order_id=order.id, order_line_id=line.id,
                                qty=(line.qty or 1) if item and item.kind == "service" else 0,
-                               value=q2(gross * (line.discount or 0) / 100), term_start=m.term_start))
+                               value=q2(gross * (line.discount or 0) / 100)))
         n += 1
     if n:
         await db.flush()
@@ -643,8 +674,13 @@ async def period_paid(db: AsyncSession, p: MembershipPeriod) -> bool:
         o = (await db.execute(select(Order).where(Order.id == p.order_id))).scalar_one_or_none()
         if not o:
             return False
+        still_billed = (await db.execute(select(OrderLine.id).where(
+            OrderLine.order_id == o.id, OrderLine.kind == "membership",
+            OrderLine.membership_id == p.membership_id))).scalars().first()
+        if not still_billed:
+            return False                      # the plan line isn't on the job: it wasn't paid for
         from backend.services.order_money import balance_due, net_paid
-        return (await net_paid(db, o.id)) > 0 and (await balance_due(db, o)) <= 0
+        return (await net_paid(db, o.id)) >= float(p.amount or 0) and (await balance_due(db, o)) <= 0
     return False
 
 
@@ -779,112 +815,129 @@ async def _next_period(db: AsyncSession, m: Membership, plan: MembershipPlan, to
 async def sweep(db: AsyncSession, org: Organisation, today: Optional[date] = None) -> dict:
     """Daily membership work for one shop; safe to run every hour (idempotent per day)."""
     today = today or date.today()
-    stats = {"invoiced": 0, "paused": 0, "lapsed": 0, "ended": 0, "messages": 0}
-    await sync_payments(db, org.id)
-    shop = await _shop(db, org.id)
-    ms = (await db.execute(select(Membership).where(
-        Membership.org_id == org.id, Membership.status.in_(LIVE)))).scalars().all()
-    for m in ms:
-        plan = (await db.execute(select(MembershipPlan).where(MembershipPlan.id == m.plan_id))).scalar_one()
-        client = (await db.execute(select(Client).where(Client.id == m.client_id))).scalar_one()
-        first = (client.name or "there").split()[0]
-
-        if m.status == "scheduled" and m.term_start <= today:
-            m.status = "active"
-
-        # Upcoming period: monthly at the period end; renewals `renewal_notice_days` ahead.
-        has_next = (await db.execute(select(MembershipPeriod.id).where(
-            MembershipPeriod.membership_id == m.id,
-            MembershipPeriod.period_start >= m.period_end))).scalars().first()
-        renewal = m.period_end >= m.term_end
-        lead = timedelta(days=org.membership_renewal_notice_days or 0) if renewal else timedelta(0)
-        if m.renews and not has_next and today >= m.period_end - lead:
-            p = await _next_period(db, m, plan, today)
-            stats["invoiced"] += 1
-            link = await pay_link(db, p)
-            what = f"Your {plan.name} renews on {p.period_start:%d %b}" if renewal \
-                else f"Your {plan.name} payment for {p.period_start:%B} is ready"
-            body = f"Hi {first}, {what}: {p.amount:.2f}. " + (f"Pay here: {link}" if link
-                                                               else f"Pay at {shop} or reply to this message.")
-            stats["messages"] += await tell_client(db, org.id, client, f"membership.due:{p.id}", what, body)
-
-        # Roll into the next period once the current one is over.
-        if today >= m.period_end:
-            if not m.renews:
-                await end(db, m, m.ended_reason or "cancelled", today)
-                stats["ended"] += 1
+    stats = {"invoiced": 0, "paused": 0, "lapsed": 0, "ended": 0, "messages": 0, "failed": 0}
+    org_id = org.id
+    grace, lapse = org.membership_grace_days or 0, org.membership_lapse_days or 0
+    notice = org.membership_renewal_notice_days or 0
+    await sync_payments(db, org_id)
+    shop = await _shop(db, org_id)
+    await db.commit()
+    ids = (await db.execute(select(Membership.id).where(
+        Membership.org_id == org_id, Membership.status.in_(LIVE)))).scalars().all()
+    # One member at a time, each saved on its own: a bad row can't stall the shop's other members,
+    # and a text already sent is never rolled back into being sent again next hour.
+    for mid in ids:
+        try:
+            m = (await db.execute(select(Membership).where(Membership.id == mid))).scalar_one_or_none()
+            if not m or m.status not in LIVE:
                 continue
-            nxt = (await db.execute(select(MembershipPeriod).where(
-                MembershipPeriod.membership_id == m.id, MembershipPeriod.period_start >= m.period_end)
-                .order_by(MembershipPeriod.period_start))).scalars().first()
-            if nxt:
-                if nxt.period_start >= m.term_end or m.period_end >= m.term_end:
-                    t_start, t_end = (season_around(plan, nxt.period_start) if plan.term == "season"
-                                      else (nxt.period_start, add_months(nxt.period_start, 12)))
-                    m.term_start, m.term_end = t_start, t_end
-                    m.price = plan_offers(plan, m.billing) or m.price
-                m.period_start, m.period_end = nxt.period_start, nxt.period_end
+            plan = (await db.execute(select(MembershipPlan).where(MembershipPlan.id == m.plan_id))).scalar_one_or_none()
+            client = (await db.execute(select(Client).where(Client.id == m.client_id))).scalar_one_or_none()
+            if not plan or not client:
+                continue
+            first = (client.name or "there").split()[0]
 
-        # Missed payments (§7.7).
-        for p in await _unpaid_started(db, m, today):
-            late = (today - p.due_on).days
-            if late >= 3 and p.nudges < 1:
+            if m.status == "scheduled" and m.term_start <= today:
+                m.status = "active"
+
+            # Upcoming period: monthly at the period end; renewals `renewal_notice_days` ahead.
+            has_next = (await db.execute(select(MembershipPeriod.id).where(
+                MembershipPeriod.membership_id == m.id,
+                MembershipPeriod.period_start >= m.period_end))).scalars().first()
+            renewal = m.period_end >= m.term_end
+            lead = timedelta(days=notice) if renewal else timedelta(0)
+            if m.renews and not has_next and today >= m.period_end - lead:
+                p = await _next_period(db, m, plan, today)
+                stats["invoiced"] += 1
                 link = await pay_link(db, p)
-                stats["messages"] += await tell_client(
-                    db, org.id, client, f"membership.reminder:{p.id}", f"{plan.name} payment reminder",
-                    f"Hi {first}, your {plan.name} payment of {p.amount:.2f} is still open. "
-                    + (f"Pay here: {link}" if link else f"Pay at {shop}."))
-                p.nudges = 1
-            if late >= (org.membership_grace_days or 0) and m.status == "active":
-                m.status = "paused"
-                stats["paused"] += 1
-                await alert_manager(db, m, f"{client.name}: {plan.name} unpaid",
-                                    f"{p.amount:.2f} has been open {late} days. Benefits are paused.")
-            if late >= (org.membership_lapse_days or 0) and m.status in ("active", "paused"):
-                await end(db, m, "unpaid", today)
-                stats["lapsed"] += 1
-                await alert_manager(db, m, f"{client.name}: {plan.name} lapsed", "Unpaid for too long.")
-                stats["messages"] += await tell_client(
-                    db, org.id, client, f"membership.lapsed:{m.id}:{m.term_start}", f"{plan.name} has ended",
-                    f"Hi {first}, your {plan.name} has ended because a payment wasn't made. "
-                    f"Ask {shop} any time to re-join.")
-                break
+                what = f"Your {plan.name} renews on {p.period_start:%d %b}" if renewal \
+                    else f"Your {plan.name} payment for {p.period_start:%B} is ready"
+                body = f"Hi {first}, {what}: {p.amount:.2f}. " + (f"Pay here: {link}" if link
+                                                                   else f"Pay at {shop} or reply to this message.")
+                stats["messages"] += await tell_client(db, org_id, client, f"membership.due:{p.id}", what, body)
 
-        if m.status not in ("active", "scheduled"):
-            continue
-        # Included items: booking windows and "use it before" reminders (§7.6).
-        for it in await plan_items(db, m.plan_id):
-            if it.kind != "service":
+            # Roll into the next period once the current one is over.
+            if today >= m.period_end:
+                if not m.renews:
+                    await end(db, m, m.ended_reason or "cancelled", today)
+                    stats["ended"] += 1
+                    continue
+                nxt = (await db.execute(select(MembershipPeriod).where(
+                    MembershipPeriod.membership_id == m.id, MembershipPeriod.period_start >= m.period_end)
+                    .order_by(MembershipPeriod.period_start))).scalars().first()
+                if nxt:
+                    if nxt.period_start >= m.term_end or m.period_end >= m.term_end:
+                        t_start, t_end = (season_around(plan, nxt.period_start) if plan.term == "season"
+                                          else (nxt.period_start, add_months(nxt.period_start, 12)))
+                        m.term_start, m.term_end = t_start, t_end
+                        m.price = plan_offers(plan, m.billing) or m.price
+                    m.period_start, m.period_end = nxt.period_start, nxt.period_end
+
+            # Missed payments (§7.7).
+            for p in await _unpaid_started(db, m, today):
+                late = (today - p.due_on).days
+                if late >= 3 and p.nudges < 1:
+                    link = await pay_link(db, p)
+                    stats["messages"] += await tell_client(
+                        db, org_id, client, f"membership.reminder:{p.id}", f"{plan.name} payment reminder",
+                        f"Hi {first}, your {plan.name} payment of {p.amount:.2f} is still open. "
+                        + (f"Pay here: {link}" if link else f"Pay at {shop}."))
+                    p.nudges = 1
+                if late >= grace and m.status == "active":
+                    m.status = "paused"
+                    stats["paused"] += 1
+                    await alert_manager(db, m, f"{client.name}: {plan.name} unpaid",
+                                        f"{p.amount:.2f} has been open {late} days. Benefits are paused.")
+                if late >= lapse and m.status in ("active", "paused"):
+                    await end(db, m, "unpaid", today)
+                    stats["lapsed"] += 1
+                    await alert_manager(db, m, f"{client.name}: {plan.name} lapsed", "Unpaid for too long.")
+                    stats["messages"] += await tell_client(
+                        db, org_id, client, f"membership.lapsed:{m.id}:{m.term_start}", f"{plan.name} has ended",
+                        f"Hi {first}, your {plan.name} has ended because a payment wasn't made. "
+                        f"Ask {shop} any time to re-join.")
+                    break
+
+            if m.status not in ("active", "scheduled"):
                 continue
-            left = await remaining(db, m, it)
-            if left <= 0:
-                continue
-            win = window_around(it, m.term_start)
-            name = it.label or "service"
-            if win and win[0] - timedelta(days=14) <= today < win[1]:
-                stats["messages"] += await tell_client(
-                    db, org.id, client, f"membership.window:{it.id}:{m.id}:{m.term_start}",
-                    f"Book your {name}",
-                    f"Hi {first}, your {name} is included in {plan.name}. "
-                    f"It's done between {win[0]:%d %b} and {(win[1] - timedelta(days=1)):%d %b}. "
-                    f"Contact {shop} to book your slot.")
-                if today >= win[1] - timedelta(days=14):
-                    key = log_key(f"membership.window-staff:{it.id}:{m.id}:{m.term_start}")
-                    if not (await db.execute(select(NotificationLog.id).where(
-                            NotificationLog.org_id == org.id, NotificationLog.trigger_event == key))).scalar_one_or_none():
-                        db.add(NotificationLog(org_id=org.id, scope="employee", channel="push", trigger_event=key,
-                                               client_id=client.id, recipient=m.manager_id or "",
-                                               subject="window", body="", status="sent",
-                                               send_at=datetime.utcnow()))
-                        await alert_manager(db, m, f"{client.name}: {name} not booked",
-                                            f"Included in {plan.name}; the window closes "
-                                            f"{(win[1] - timedelta(days=1)):%d %b}.")
-            elif not win and m.renews and m.term_end - timedelta(days=30) <= today < m.term_end:
-                stats["messages"] += await tell_client(
-                    db, org.id, client, f"membership.expiring:{it.id}:{m.id}:{m.term_start}",
-                    f"{name} still included",
-                    f"Hi {first}, you still have {int(left)} {name} left in {plan.name}. "
-                    f"Use it before {(m.term_end - timedelta(days=1)):%d %b}.")
+            # Included items: booking windows and "use it before" reminders (§7.6).
+            for it in await plan_items(db, m.plan_id):
+                if it.kind != "service":
+                    continue
+                left = await remaining(db, m, it)
+                if left <= 0:
+                    continue
+                win = window_around(it, m.term_start)
+                name = it.label or "service"
+                if win and win[0] - timedelta(days=14) <= today < win[1]:
+                    stats["messages"] += await tell_client(
+                        db, org_id, client, f"membership.window:{it.id}:{m.id}:{m.term_start}",
+                        f"Book your {name}",
+                        f"Hi {first}, your {name} is included in {plan.name}. "
+                        f"It's done between {win[0]:%d %b} and {(win[1] - timedelta(days=1)):%d %b}. "
+                        f"Contact {shop} to book your slot.")
+                    if today >= win[1] - timedelta(days=14):
+                        key = log_key(f"membership.window-staff:{it.id}:{m.id}:{m.term_start}")
+                        if not (await db.execute(select(NotificationLog.id).where(
+                                NotificationLog.org_id == org_id, NotificationLog.trigger_event == key))).scalar_one_or_none():
+                            db.add(NotificationLog(org_id=org_id, scope="employee", channel="push", trigger_event=key,
+                                                   client_id=client.id, recipient=m.manager_id or "",
+                                                   subject="window", body="", status="sent",
+                                                   send_at=datetime.utcnow()))
+                            await alert_manager(db, m, f"{client.name}: {name} not booked",
+                                                f"Included in {plan.name}; the window closes "
+                                                f"{(win[1] - timedelta(days=1)):%d %b}.")
+                elif not win and m.renews and m.term_end - timedelta(days=30) <= today < m.term_end:
+                    stats["messages"] += await tell_client(
+                        db, org_id, client, f"membership.expiring:{it.id}:{m.id}:{m.term_start}",
+                        f"{name} still included",
+                        f"Hi {first}, you still have {int(left)} {name} left in {plan.name}. "
+                        f"Use it before {(m.term_end - timedelta(days=1)):%d %b}.")
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            await db.rollback()
+            stats["failed"] += 1
+            log.exception("membership sweep failed for %s", mid)
     await db.flush()
     return stats
 

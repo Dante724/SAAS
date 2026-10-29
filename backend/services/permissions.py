@@ -283,11 +283,14 @@ def grant_go_codes(perms: dict, explicit: bool) -> tuple[dict, bool]:
 
 def grant_membership_codes(perms: dict, explicit: bool) -> tuple[dict, bool]:
     """Migration mb145a1: the four membership codes, without anyone gaining or losing access
-    they'd expect. Explicit (default-deny) roles get selling and applying benefits if they can
-    create work orders, and setting up / changing memberships if they can manage settings.
-    Legacy (deny-wins) roles already allow new codes; they're left alone, as is the admin role."""
+    they'd expect. Selling and applying benefits follow "create work orders"; setting up and
+    changing memberships follow "manage settings".
+    - explicit (default-deny) roles: each code copies the code it follows.
+    - legacy (deny-wins) roles: a code is written False when the role already denies the code it
+      follows, so a restricted role doesn't suddenly get plan management by default.
+    The shop creator's admin role ({"all": "write"}) is left alone: it has everything."""
     perms = dict(perms or {})
-    if not explicit or perms.get("all") == "write":
+    if perms.get("all") == "write":
         return perms, False
     changed = False
     follow = {
@@ -297,7 +300,12 @@ def grant_membership_codes(perms: dict, explicit: bool) -> tuple[dict, bool]:
         "can_manage_membership_plans": "can_manage_settings",
     }
     for code, like in follow.items():
-        if code not in perms:
+        if code in perms:
+            continue
+        if explicit:
             perms[code] = perms.get(like) is True
+            changed = True
+        elif perms.get(like) is False:
+            perms[code] = False
             changed = True
     return perms, changed

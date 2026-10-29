@@ -408,7 +408,10 @@ def test_existing_roles_keep_the_access_they_would_expect():
     same, changed = grant_membership_codes({"all": "write"}, True)
     assert not changed
     _, changed = grant_membership_codes({"can_create_tickets": True}, False)
-    assert not changed
+    assert not changed                                   # legacy role that denies nothing: unchanged
+    legacy, changed = grant_membership_codes({"can_manage_settings": False}, False)
+    assert changed and legacy["can_manage_membership_plans"] is False and legacy["can_change_memberships"] is False
+    assert "can_sell_memberships" not in legacy
 
 
 @pytest.mark.asyncio
@@ -432,3 +435,45 @@ async def test_list_totals_plan_worth_attention_and_welcome_text(client, db):
     T = await _teammate(client, H, "can_view_client_info")
     r = (await client.get("/api/memberships", headers=T)).json()
     assert r["totals"] is None and "owed" not in r["items"][0]
+
+
+@pytest.mark.asyncio
+async def test_security_review_regressions(client):
+    """Fixes from the security review: counts survive plan edits, the plan line can't be removed,
+    coverage needs the member's own client, cancelling after use keeps the bill, money stays hidden."""
+    H, _ = await _register(client)
+    oil = await _service(client, H, "Oil change", 80)
+    plan = await _plan(client, H, oil, items=[{"kind": "service", "service_id": oil, "qty": 1}])
+    cid, boat = await _client_and_boat(client, H)
+    m = await _sell(client, H, plan["id"], cid, boat)
+    oid = await _order(client, H, cid, boat)
+    await _add(client, H, oid, kind="service", ref_id=oil, description="Oil change", unit_price=80)
+    await _close(client, H, oid)
+    # Editing (re-saving) the plan doesn't hand the member their oil change back.
+    body = {k: v for k, v in plan.items() if k not in ("id", "members", "value_yearly")}
+    body["name"] = "Boat Care+"
+    body["items"] = [{"kind": "service", "service_id": oil, "qty": 1}]
+    assert (await client.put(f"/api/memberships/plans/{plan['id']}", json=body, headers=H)).status_code == 200
+    card = (await client.get(f"/api/memberships/for?device_id={boat}", headers=H)).json()
+    assert card["live"][0]["items"][0]["left"] == 0
+    # Someone else's job with this boat on it isn't covered by Sam's plan.
+    other = (await client.post("/api/clients", json={"name": "Mallory"}, headers=H)).json()["id"]
+    o2 = await _order(client, H, other, boat)
+    line = await _add(client, H, o2, kind="service", ref_id=oil, description="Oil change", unit_price=80)
+    assert line["discount"] == 0 and not line["membership_id"]
+    # The plan's own line on a job can't be deleted or edited.
+    cid2, boat2 = await _client_and_boat(client, H, name="Ann", phone="5550122222")
+    o3 = await _order(client, H, cid2, boat2)
+    await _sell(client, H, plan["id"], cid2, boat2, order_id=o3)
+    fee = next(x for x in (await client.get(f"/api/orders/{o3}", headers=H)).json()["lines"] if x["kind"] == "membership")
+    assert (await client.delete(f"/api/orders/{o3}/lines/{fee['id']}", headers=H)).status_code == 409
+    assert (await client.patch(f"/api/orders/{o3}/lines/{fee['id']}", json={"unit_price": 0}, headers=H)).status_code == 409
+    # Used the plan, then cancelled today: the unpaid plan invoice stays open.
+    r = await client.post(f"/api/memberships/{m['id']}/cancel", json={"when": "now"}, headers=H)
+    assert r.status_code == 200
+    inv = (await client.get(f"/api/finance/invoices/{m['invoice_id']}", headers=H)).json()
+    assert inv["status"] != "cancelled"
+    # Staff without client money access don't get prices back from changes.
+    T = await _teammate(client, H, "can_view_client_info")
+    r = (await client.get(f"/api/memberships/{m['id']}", headers=T)).json()
+    assert "price" not in r and "periods" not in r
