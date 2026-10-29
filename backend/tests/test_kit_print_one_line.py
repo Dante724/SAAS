@@ -148,11 +148,12 @@ async def test_package_line_plus_charger_everywhere(client, tenant, db):
     oid, cid, _gid = await _job_with_kit_and_charger(client, tenant, s)
     assert (await k.order(client, tenant, oid))["total"] == 174.99
     inv = await k.invoice_lines(client, tenant, await k.invoice(client, tenant, oid, cid))
-    assert [(ln["description"], ln["total"]) for ln in inv] == [("Screen Replacement", 149.99), ("USB-C charger", 25)]
+    # Line order isn't fixed (order lines have no sort column; Postgres returns them in any order).
+    assert sorted((ln["description"], ln["total"]) for ln in inv) == [("Screen Replacement", 149.99), ("USB-C charger", 25)]
     html = await k.job_print(client, tenant, oid)
     assert "Screen Replacement" in html and "USB-C charger" in html and "174.99" in html
     t = await k.track(client, db, oid)
-    assert [(x["label"], x["amount"]) for x in t["lines"]] == [("Screen Replacement", 149.99), ("USB-C charger", 25)]
+    assert sorted((x["label"], x["amount"]) for x in t["lines"]) == [("Screen Replacement", 149.99), ("USB-C charger", 25)]
     # stock dropped for the kit's parts and the extra; the staff view is still item by item
     assert await k.stock(client, tenant, s.screen) == 9 and await k.stock(client, tenant, s.charger) == 9
     ls = await k.lines(client, tenant, oid)
