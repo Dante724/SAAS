@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { M } from "./Shell";
 
 /**
- * Glass-clay date / time / datetime field. Drop-in replacement for the native
+ * Date / time / datetime field. Drop-in replacement for the native
  * <input type="date|time|datetime-local"> we used app-wide — same string value
  * semantics, but our own popover so the OS calendar chrome never appears.
  *
@@ -10,14 +12,20 @@ import { useEffect, useRef, useState } from "react";
  *   time     -> "HH:MM"        (24h)
  *   datetime -> "YYYY-MM-DDTHH:MM"
  *
- * ponytail: absolute-positioned popover (relative wrapper). Upgrade to a portal
- * only if a scroll-clipped drawer actually cuts it off.
+ * The popover is portalled to <body> and fixed-positioned against the field, so a drawer's
+ * scroll area can't clip it. It lines up with the field's right edge (under the calendar icon)
+ * and opens upward when there's no room below. Clicking the month or year jumps by month/year,
+ * so a birthday decades back is three clicks, not hundreds.
  */
 
 type Mode = "date" | "time" | "datetime";
+type View = "days" | "months" | "years";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTHS_LONG = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DOW = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
+const POP_W = 288;
+const GAP = 6;
 
 function splitVal(v: string): { date: string; time: string } {
   if (!v) return { date: "", time: "" };
@@ -32,11 +40,11 @@ function joinVal(mode: Mode, date: string, time: string): string {
 function pad(n: number) { return String(n).padStart(2, "0"); }
 function ymd(d: Date) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
 
+// The app's date format ("Oct 29, 2026"). A bare date is read as local midnight, not UTC.
 function fmtDate(iso: string): string {
   if (!iso) return "";
-  const [y, m, d] = iso.split("-").map(Number);
-  if (!y || !m || !d) return "";
-  return `${d} ${MONTHS[m - 1]} ${y}`;
+  const d = new Date(iso.length <= 10 ? iso + "T00:00" : iso);
+  return isNaN(d.getTime()) ? "" : d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
 }
 function fmtTime(hm: string): string {
   if (!hm) return "";
@@ -46,6 +54,9 @@ function fmtTime(hm: string): string {
   return `${h12}:${pad(m || 0)} ${ap}`;
 }
 
+const navBtn = "w-8 h-8 grid place-items-center rounded-lg text-ink-secondary hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
+const cellBase = "rounded-lg text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
+
 export default function DateField({
   mode = "date",
   value,
@@ -54,6 +65,7 @@ export default function DateField({
   placeholder,
   min,
   disabled = false,
+  label: ariaName,
 }: {
   mode?: Mode;
   value: string;
@@ -62,26 +74,55 @@ export default function DateField({
   placeholder?: string;
   min?: string; // "YYYY-MM-DD" lower bound for date selection
   disabled?: boolean;
+  label?: string; // accessible name when the field has no visible <label>
 }) {
   const [open, setOpen] = useState(false);
+  const [view, setView] = useState<View>("days");
   const wrap = useRef<HTMLDivElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const { date, time } = splitVal(value);
 
   // month the calendar is showing
   const initial = date ? new Date(date + "T00:00") : new Date();
-  const [view, setView] = useState({ y: initial.getFullYear(), m: initial.getMonth() });
+  const [cur, setCur] = useState({ y: initial.getFullYear(), m: initial.getMonth() });
+
+  // Place the popover under the field, right edges aligned; above it if there's no room below.
+  const place = () => {
+    const b = btn.current?.getBoundingClientRect();
+    if (!b) return;
+    const h = pop.current?.offsetHeight ?? 340;
+    const below = window.innerHeight - b.bottom;
+    let top = below < h + GAP && b.top > below ? b.top - h - GAP : b.bottom + GAP;
+    top = Math.min(Math.max(8, top), Math.max(8, window.innerHeight - h - 8));   // short windows: stay on screen
+    const left = Math.min(Math.max(8, b.right - POP_W), window.innerWidth - POP_W - 8);
+    setPos({ top, left });
+  };
+  useLayoutEffect(() => { if (open) place(); }, [open, view]);
 
   useEffect(() => {
     if (!open) return;
-    const onDoc = (e: MouseEvent) => { if (wrap.current && !wrap.current.contains(e.target as Node)) setOpen(false); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (wrap.current?.contains(t) || pop.current?.contains(t)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setOpen(false); btn.current?.focus(); } };
     document.addEventListener("mousedown", onDoc);
     document.addEventListener("keydown", onKey);
-    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);   // any scroll container, not just the window
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
   }, [open]);
 
   useEffect(() => { // re-sync view when value changes externally
-    if (date) { const d = new Date(date + "T00:00"); setView({ y: d.getFullYear(), m: d.getMonth() }); }
+    if (date) { const d = new Date(date + "T00:00"); setCur({ y: d.getFullYear(), m: d.getMonth() }); }
   }, [date]);
 
   const label =
@@ -90,69 +131,86 @@ export default function DateField({
         : (date ? `${fmtDate(date)}${time ? `, ${fmtTime(time)}` : ""}` : (placeholder || "Select date & time"));
   const empty = mode === "time" ? !time : !date;
 
+  const toggle = () => { setView("days"); setOpen((o) => !o); };
   const pickDate = (iso: string) => {
     onChange(joinVal(mode, iso, time || (mode === "datetime" ? "09:00" : "")));
     if (mode === "date") setOpen(false);
   };
   const pickTime = (hm: string) => onChange(joinVal(mode, date || ymd(new Date()), hm));
+  const shift = (n: number) => setCur((v) => {
+    if (view === "years") return { ...v, y: v.y + 12 * n };
+    if (view === "months") return { ...v, y: v.y + n };
+    const m = v.m + n;
+    return m < 0 ? { y: v.y - 1, m: 11 } : m > 11 ? { y: v.y + 1, m: 0 } : { y: v.y, m };
+  });
 
   // calendar grid for the viewed month (Monday-first)
-  const first = new Date(view.y, view.m, 1);
+  const first = new Date(cur.y, cur.m, 1);
   const startPad = (first.getDay() + 6) % 7; // Mon=0
-  const daysIn = new Date(view.y, view.m + 1, 0).getDate();
+  const daysIn = new Date(cur.y, cur.m + 1, 0).getDate();
   const cells: (number | null)[] = [];
   for (let i = 0; i < startPad; i++) cells.push(null);
   for (let d = 1; d <= daysIn; d++) cells.push(d);
   const todayIso = ymd(new Date());
+  const selY = date ? Number(date.slice(0, 4)) : null;
+  const selM = date ? Number(date.slice(5, 7)) - 1 : null;
+  const yearStart = cur.y - (((cur.y % 12) + 12) % 12);   // 12-year page containing cur.y
 
   const showTime = mode === "time" || mode === "datetime";
   const showCal = mode === "date" || mode === "datetime";
   const [th, tm] = (time || "").split(":");
 
-  return (
-    <div ref={wrap} className={`relative ${className}`}>
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => setOpen((o) => !o)}
-        className={`glass-input rounded-lg px-3 py-2 text-sm w-full flex items-center justify-between gap-2 text-left disabled:opacity-50 disabled:cursor-not-allowed ${empty ? "text-ink-tertiary" : "text-ink-primary font-semibold"}`}
-      >
-        <span className="truncate">{label}</span>
-        <span className="material-symbols-outlined text-base text-primary shrink-0">{mode === "time" ? "schedule" : "calendar_month"}</span>
-      </button>
+  const popover = open && createPortal(
+    <div
+      ref={pop}
+      role="dialog"
+      aria-label={showCal ? "Choose a date" : "Choose a time"}
+      style={{ position: "fixed", top: pos?.top ?? -9999, left: pos?.left ?? -9999, width: POP_W, zIndex: 1000 }}
+      className="bg-raised rounded-2xl shadow-clay-card border border-slate-200/80 p-3"
+    >
+      {showCal && (
+        <>
+          <div className="flex items-center justify-between mb-2">
+            <button type="button" aria-label="Previous" onClick={() => shift(-1)} className={navBtn}>
+              <M n="chevron_left" c="text-lg" />
+            </button>
+            <div className="flex items-center gap-0.5">
+              {view === "days" && (
+                <button type="button" onClick={() => setView("months")} className="px-2 h-8 rounded-lg text-sm font-semibold text-ink-primary hover:bg-slate-100">
+                  {MONTHS_LONG[cur.m]}
+                </button>
+              )}
+              <button type="button" onClick={() => setView(view === "years" ? "days" : "years")} className="px-2 h-8 rounded-lg text-sm font-semibold text-ink-primary hover:bg-slate-100">
+                {view === "years" ? `${yearStart} – ${yearStart + 11}` : cur.y}
+              </button>
+            </div>
+            <button type="button" aria-label="Next" onClick={() => shift(1)} className={navBtn}>
+              <M n="chevron_right" c="text-lg" />
+            </button>
+          </div>
 
-      {open && (
-        <div className="absolute z-50 mt-1 left-0 bg-raised rounded-xl shadow-clay-card border border-slate-200/80 p-2 w-[212px]">
-          {showCal && (
+          {view === "days" && (
             <>
-              <div className="flex items-center justify-between mb-1">
-                <button type="button" onClick={() => setView((v) => { const m = v.m - 1; return m < 0 ? { y: v.y - 1, m: 11 } : { y: v.y, m }; })} className="w-6 h-6 grid place-items-center rounded-md hover:bg-slate-100 text-ink-secondary">
-                  <span className="material-symbols-outlined text-sm">chevron_left</span>
-                </button>
-                <span className="text-xs font-bold text-ink-primary">{MONTHS[view.m]} {view.y}</span>
-                <button type="button" onClick={() => setView((v) => { const m = v.m + 1; return m > 11 ? { y: v.y + 1, m: 0 } : { y: v.y, m }; })} className="w-6 h-6 grid place-items-center rounded-md hover:bg-slate-100 text-ink-secondary">
-                  <span className="material-symbols-outlined text-sm">chevron_right</span>
-                </button>
+              <div className="grid grid-cols-7 mb-1">
+                {DOW.map((d) => <div key={d} className="h-8 grid place-items-center text-xs font-medium text-ink-tertiary">{d}</div>)}
               </div>
-              <div className="grid grid-cols-7 gap-px mb-0.5">
-                {DOW.map((d) => <div key={d} className="text-[11px] font-bold text-ink-tertiary text-center">{d}</div>)}
-              </div>
-              <div className="grid grid-cols-7 gap-px">
+              <div className="grid grid-cols-7 gap-0.5">
                 {cells.map((d, i) => {
                   if (d === null) return <div key={i} />;
-                  const iso = `${view.y}-${pad(view.m + 1)}-${pad(d)}`;
+                  const iso = `${cur.y}-${pad(cur.m + 1)}-${pad(d)}`;
                   const sel = iso === date;
                   const isToday = iso === todayIso;
-                  const disabled = min ? iso < min : false;
+                  const off = min ? iso < min : false;
                   return (
                     <button
                       key={i}
                       type="button"
-                      disabled={disabled}
+                      disabled={off}
+                      aria-pressed={sel}
                       onClick={() => pickDate(iso)}
-                      className={`h-6 w-6 rounded-md text-[11px] flex items-center justify-center transition-colors
-                        ${sel ? "bg-primary text-white font-bold" : disabled ? "text-ink-placeholder cursor-not-allowed" : "text-ink-primary hover:bg-blue-50"}
-                        ${isToday && !sel ? "ring-1 ring-primary/40" : ""}`}
+                      className={`${cellBase} h-9 w-full grid place-items-center
+                        ${sel ? "bg-primary text-white font-semibold" : off ? "text-ink-placeholder cursor-not-allowed" : "text-ink-primary hover:bg-slate-100"}
+                        ${isToday && !sel ? "font-semibold text-primary" : ""}`}
                     >{d}</button>
                   );
                 })}
@@ -160,28 +218,66 @@ export default function DateField({
             </>
           )}
 
-          {showTime && (
-            <div className={`flex items-center gap-1.5 ${showCal ? "mt-2 pt-2 border-t border-slate-100" : ""}`}>
-              <span className="material-symbols-outlined text-sm text-ink-tertiary">schedule</span>
-              <select value={th ?? "09"} onChange={(e) => pickTime(`${e.target.value}:${tm ?? "00"}`)} className="glass-input rounded-md px-1.5 py-1 text-xs font-semibold text-ink-primary">
-                {Array.from({ length: 24 }, (_, h) => <option key={h} value={pad(h)}>{pad(h)}</option>)}
-              </select>
-              <span className="text-ink-tertiary font-bold text-xs">:</span>
-              <select value={tm ?? "00"} onChange={(e) => pickTime(`${th ?? "09"}:${e.target.value}`)} className="glass-input rounded-md px-1.5 py-1 text-xs font-semibold text-ink-primary">
-                {Array.from({ length: 12 }, (_, i) => pad(i * 5)).map((m) => <option key={m} value={m}>{m}</option>)}
-              </select>
-              <span className="text-[11px] text-ink-tertiary ml-auto">{fmtTime(`${th ?? "09"}:${tm ?? "00"}`)}</span>
+          {view === "months" && (
+            <div className="grid grid-cols-3 gap-1">
+              {MONTHS.map((m, i) => (
+                <button key={m} type="button" onClick={() => { setCur((v) => ({ ...v, m: i })); setView("days"); }}
+                  className={`${cellBase} h-11 ${selY === cur.y && selM === i ? "bg-primary text-white font-semibold" : "text-ink-primary hover:bg-slate-100"}`}>{m}</button>
+              ))}
             </div>
           )}
 
-          {(mode === "date" || mode === "datetime") && (
-            <div className="flex justify-between mt-2 pt-1.5 border-t border-slate-100">
-              <button type="button" onClick={() => pickDate(todayIso)} className="text-[11px] font-semibold text-primary hover:underline">Today</button>
-              {!empty && <button type="button" onClick={() => { onChange(""); setOpen(false); }} className="text-[11px] font-semibold text-ink-tertiary hover:text-rose-600">Clear</button>}
+          {view === "years" && (
+            <div className="grid grid-cols-3 gap-1">
+              {Array.from({ length: 12 }, (_, i) => yearStart + i).map((y) => (
+                <button key={y} type="button" onClick={() => { setCur((v) => ({ ...v, y })); setView("months"); }}
+                  className={`${cellBase} h-11 ${selY === y ? "bg-primary text-white font-semibold" : "text-ink-primary hover:bg-slate-100"}`}>{y}</button>
+              ))}
             </div>
           )}
+        </>
+      )}
+
+      {showTime && (
+        <div className={`flex items-center gap-2 ${showCal ? "mt-3 pt-3 border-t border-slate-100" : ""}`}>
+          <M n="schedule" c="text-base text-ink-tertiary" />
+          <select aria-label="Hour" value={th ?? "09"} onChange={(e) => pickTime(`${e.target.value}:${tm ?? "00"}`)} className="glass-input rounded-lg px-2 py-1.5 text-sm text-ink-primary">
+            {Array.from({ length: 24 }, (_, h) => <option key={h} value={pad(h)}>{pad(h)}</option>)}
+          </select>
+          <span className="text-ink-tertiary">:</span>
+          <select aria-label="Minute" value={tm ?? "00"} onChange={(e) => pickTime(`${th ?? "09"}:${e.target.value}`)} className="glass-input rounded-lg px-2 py-1.5 text-sm text-ink-primary">
+            {Array.from({ length: 12 }, (_, i) => pad(i * 5)).map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+          <span className="text-xs text-ink-tertiary ml-auto">{fmtTime(`${th ?? "09"}:${tm ?? "00"}`)}</span>
         </div>
       )}
+
+      {showCal && (
+        <div className="flex justify-between mt-3 pt-2 border-t border-slate-100">
+          <button type="button" onClick={() => pickDate(todayIso)} className="text-sm font-medium text-primary px-1 rounded hover:underline">Today</button>
+          {!empty && <button type="button" onClick={() => { onChange(""); setOpen(false); }} className="text-sm font-medium text-ink-tertiary px-1 rounded hover:text-rose-600">Clear</button>}
+        </div>
+      )}
+    </div>,
+    document.body,
+  );
+
+  return (
+    <div ref={wrap} className={`relative ${className}`}>
+      <button
+        ref={btn}
+        type="button"
+        disabled={disabled}
+        aria-haspopup="dialog"
+        aria-label={ariaName ? `${ariaName}: ${label}` : undefined}
+        aria-expanded={open}
+        onClick={toggle}
+        className={`glass-input rounded-xl px-3 py-2 text-sm w-full flex items-center justify-between gap-2 text-left disabled:opacity-50 disabled:cursor-not-allowed ${empty ? "text-ink-tertiary" : "text-ink-primary"}`}
+      >
+        <span className="truncate">{label}</span>
+        <M n={mode === "time" ? "schedule" : "calendar_today"} c="text-lg text-ink-tertiary shrink-0" />
+      </button>
+      {popover}
     </div>
   );
 }
