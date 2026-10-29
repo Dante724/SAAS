@@ -32,3 +32,16 @@ describe("product tiles", () => {
     expect(stockChip(0, false)).toEqual({ label: "Out of stock", warn: true });
   });
 });
+
+describe("stock list when the load fails (launch review B9)", () => {
+  it("says the stock couldn't load and offers a retry, never 'No stock yet'", async () => {
+    const { render, screen, fireEvent } = await import("@testing-library/react");
+    const { StockLoadError } = await import("./InventoryHub");
+    const retry = vi.fn();
+    render(<StockLoadError onRetry={retry} />);
+    expect(screen.getByRole("alert").textContent).toContain("Couldn't load your stock");
+    expect(screen.queryByText("No stock yet")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+    expect(retry).toHaveBeenCalledOnce();
+  });
+});

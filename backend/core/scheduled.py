@@ -48,8 +48,11 @@ async def sweep_notifications() -> None:
         org_ids = (await db.execute(
             select(Organisation.id).where(Organisation.active == True)  # noqa: E712
         )).scalars().all()
-        queued = sent = 0
-        for oid in org_ids:
+    queued = sent = 0
+    for oid in org_ids:
+        # A session per org: a DB error leaves its session unusable until rolled back, and with
+        # one shared session every org after the failing one failed too (512 orgs, 510 failed).
+        async with AsyncSessionLocal() as db:
             try:
                 queued += await nr.queue_reminders(db, org_id=oid)
                 queued += await nr.queue_appointment_reminders(db, org_id=oid)
@@ -57,8 +60,8 @@ async def sweep_notifications() -> None:
                 sent += res.get("sent", 0)
             except Exception:  # noqa: BLE001 — one bad org never stalls the sweep
                 log.exception("notification-sweep failed for org %s", oid)
-        if queued or sent:
-            log.info("notification-sweep: queued %d, sent %d", queued, sent)
+    if queued or sent:
+        log.info("notification-sweep: queued %d, sent %d", queued, sent)
 
 
 @job_runner.every(3600, "contact-lifecycle-sweep")
@@ -76,14 +79,15 @@ async def sweep_contact_lifecycle() -> None:
         org_ids = (await db.execute(
             select(Organisation.id).where(Organisation.active == True)  # noqa: E712
         )).scalars().all()
-        sent = 0
-        for oid in org_ids:
+    sent = 0
+    for oid in org_ids:
+        async with AsyncSessionLocal() as db:   # per org, as in notification-sweep
             try:
                 sent += await nr.notify_contact_birthdays(db, org_id=oid)
             except Exception:  # noqa: BLE001
                 log.exception("contact-lifecycle-sweep failed for org %s", oid)
-        if sent:
-            log.info("contact-lifecycle-sweep: sent %d birthday message(s)", sent)
+    if sent:
+        log.info("contact-lifecycle-sweep: sent %d birthday message(s)", sent)
 
 
 @job_runner.every(60, "webhook-retry-sweep")

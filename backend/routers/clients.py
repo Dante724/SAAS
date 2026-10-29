@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from backend.db.database import get_db
 from backend.models import Client, Device, Employee
-from backend.services.auth import get_current_employee, require_perm, record_scope
+from backend.services.auth import assert_perm, get_current_employee, require_perm, record_scope
 from backend.core import paging as _paging
 from backend.services.money import q2
 from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
@@ -168,6 +168,7 @@ async def create_client(
     if claim.replay is not None:
         return claim.replay
     try:
+        await _guard_standing_discount(db, current, None, data.model_dump())
         result = await _create_client(data, db, current)
     except BaseException:
         await claim.release(db)
@@ -289,6 +290,20 @@ async def issue_portal_link(
     return {"portal_token": client.portal_token, "portal_url": f"/portal/{client.portal_token}"}
 
 
+_DISCOUNT_FIELDS = ("disc_services_mode", "disc_services_value", "disc_services_price_type_id",
+                    "disc_materials_mode", "disc_materials_value", "disc_materials_price_type_id")
+
+
+async def _guard_standing_discount(db, current: Employee, client: Optional[Client], sent: dict) -> None:
+    """A client's standing discount applies to every future job, so changing it takes the
+    discount right (a zero-permission Viewer set 60% here). Re-sending the saved values, as
+    a full-form save does, needs nothing. client=None: a new client, compared with no discount."""
+    def now(k):
+        return getattr(client, k) if client is not None else ClientIn.model_fields[k].default
+    if any(k in sent and sent[k] != now(k) for k in _DISCOUNT_FIELDS):
+        await assert_perm(db, current, "can_set_discount")
+
+
 @router.put("/{client_id}")
 async def update_client(
     client_id: str, data: ClientIn,
@@ -299,6 +314,7 @@ async def update_client(
     client = result.scalar_one_or_none()
     if not client:
         raise HTTPException(404, "Client not found")
+    await _guard_standing_discount(db, current, client, data.model_dump())
     if "address" in data.model_fields_set and not any(k in data.model_fields_set for k in _addr.PARTS):
         _addr.typed_line(client, data.address)
     for k, v in data.model_dump().items():
@@ -366,6 +382,7 @@ async def patch_client(
     if not client:
         raise HTTPException(404, "Client not found")
     fields = data.model_dump(exclude_unset=True)
+    await _guard_standing_discount(db, current, client, fields)
     cd = fields.pop("custom_data", None)
     addr = {k: fields.pop(k) for k in _addr.PARTS if k in fields}
     if "address" in fields and not addr:
