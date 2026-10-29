@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { M } from "../../components/Shell";
+import Switch from "../../components/Switch";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
 import { Avatar } from "../orders/look";
@@ -62,15 +63,15 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
 
   return (
     <div className="max-w-3xl space-y-4">
-      <div className="flex flex-wrap items-start gap-3">
-        <div className="min-w-[200px] flex-1">
-          <h2 className="text-base font-semibold text-ink-primary">Your team</h2>
-          <p className="text-xs text-ink-tertiary">Who works here, what they can do, and how commission is paid.</p>
-        </div>
-        <div className="ml-auto flex items-center gap-2 flex-shrink-0">
-          {tab === "people" && <button onClick={onNewPerson} className="px-3.5 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Add without invite</button>}
-          {tab !== "signin" && <button onClick={primary.on} className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-ink-primary text-white text-xs font-semibold hover:opacity-90"><M n={primary.icon} c="text-sm" />{primary.label}</button>}
-        </div>
+      <div>
+        <h2 className="text-base font-semibold text-ink-primary">Your team</h2>
+        <p className="text-xs text-ink-tertiary">Who works here, what they can do, and how commission is paid.</p>
+        {tab !== "signin" && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button onClick={primary.on} className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n={primary.icon} c="text-sm" />{primary.label}</button>
+            {tab === "people" && <button onClick={onNewPerson} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50">Add without invite</button>}
+          </div>
+        )}
       </div>
 
       <div className="inline-flex rounded-xl bg-slate-100 p-1">
@@ -278,10 +279,6 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
     catch (e: any) { setErr(e?.message || "Couldn't delete the role"); setBusy(false); }
   }
 
-  const Sw = ({ on, onClick, label }: { on: boolean; onClick: () => void; label: string }) => (
-    <button type="button" role="switch" aria-checked={on} aria-label={label} onClick={onClick}
-      className={`w-9 h-5 rounded-full flex-shrink-0 relative transition-colors ${on ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${on ? "left-[18px]" : "left-0.5"}`} /></button>
-  );
   const Choice = ({ value, set, options }: { value: string; set: (v: string) => void; options: [string, string][] }) => (
     <div className="inline-flex flex-wrap max-w-full gap-0.5 rounded-xl bg-slate-100 p-1">
       {options.map(([v, l]) => (
@@ -366,14 +363,14 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
                       <span className="text-sm text-ink-primary capitalize truncate">{group.replace(/_/g, " ")}</span>
                       {live.length > 0 && <span className={`text-[11px] px-1.5 py-0.5 rounded-md ${onCount === 0 ? "bg-slate-100 text-ink-tertiary" : allOn ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{allOn ? "All" : onCount === 0 ? "None" : `${onCount} of ${live.length}`}</span>}
                     </button>
-                    {live.length > 0 && <Sw on={allOn} onClick={() => grantAll(live, !allOn)} label={`${allOn ? "Turn off" : "Turn on"} all ${group.replace(/_/g, " ")}`} />}
+                    {live.length > 0 && <Switch size="sm" on={allOn} onChange={() => grantAll(live, !allOn)} label={`${allOn ? "Turn off" : "Turn on"} all ${group.replace(/_/g, " ")}`} />}
                   </div>
                   {isOpen && (
                     <div className="border-t border-slate-100 bg-slate-50/50">
                       {codes.map((c) => (
                         <div key={c.code} className="flex items-center gap-3 pl-11 pr-4 py-2.5 border-t border-slate-100 first:border-0">
                           <span className="text-xs flex-1 text-ink-primary">{c.label}</span>
-                          <Sw on={allowed(c.code)} onClick={() => toggle(c.code)} label={c.label} />
+                          <Switch size="sm" on={allowed(c.code)} onChange={() => toggle(c.code)} label={c.label} />
                         </div>
                       ))}
                     </div>

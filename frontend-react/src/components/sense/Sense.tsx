@@ -2,11 +2,13 @@ import { useEffect, useState } from "react";
 import { M } from "../Shell";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
-import { money } from "../../pages/orders/types";
+import { money, currencySymbol } from "../../pages/orders/types";
+import Switch from "../Switch";
+import { SettingRow, NumField } from "../SettingRow";
 
 /* Tekly Sense — quiet suggestions learned from the shop's own history (no AI service).
    Everything here suggests and explains; nothing changes a job on its own. Styling is
-   deliberately plain (slate chip, one sapphire ✦) so it reads as part of the app, not a robot. */
+   deliberately plain (slate chip, one small sapphire icon) so it reads as part of the app, not a robot. */
 
 export type SenseFeature = "job_suggestions" | "deferred" | "ready_time_why" | "margin_check"
   | "morning_brief" | "added_together" | "service_due" | "watchdog";
@@ -38,7 +40,7 @@ export function useSenseOn(feature: SenseFeature): boolean | null {
 }
 
 export function Spark({ c = "" }: { c?: string }) {
-  return <span aria-hidden className={`text-primary ${c}`}>✦</span>;
+  return <M n="lightbulb" c={`text-primary text-xs ${c}`} />;
 }
 
 /** A one-tap suggestion with a "Why?" explanation. */
@@ -64,7 +66,7 @@ export function SuggestedChip({ label, price, why, onAdd, onDismiss }: {
 
 type DraftItem = { description: string; kind?: string; line_type?: string; ref_id?: string | null; unit_price?: number; why: { used: number; similar: number } };
 
-/** "✦ Suggested" lines for a new job, from similar closed jobs in this shop. */
+/** "Suggested" lines for a new job, from similar closed jobs in this shop. */
 export function JobSuggestions({ complaint, deviceId, onAdd }: {
   complaint: string; deviceId?: string | null; onAdd: (i: { description: string; kind: string; price: number; ref_id?: string | null }) => void;
 }) {
@@ -193,21 +195,38 @@ type Person = { id: string; name: string; active?: boolean };
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 const hourLabel = (h: number) => new Date(2000, 0, 1, h).toLocaleTimeString([], { hour: "numeric" });
 
+/** A number field with its unit inside that saves when you leave it (not on every keystroke). */
+function SavedNum({ id, value, onSave, unit, disabled, max, ok = (v) => v > 0, width }: {
+  id: string; value: number | undefined; onSave: (v: number) => void; unit: string;
+  disabled?: boolean; max?: number; ok?: (v: number) => boolean; width?: string;
+}) {
+  const [v, setV] = useState<number>(value ?? 0);
+  useEffect(() => { setV(value ?? 0); }, [value]);
+  return (
+    <div onBlur={() => { if (ok(v) && v !== value) onSave(v); }}>
+      <NumField id={id} value={v} onChange={setV} unit={unit} disabled={disabled} max={max} width={width} />
+    </div>
+  );
+}
+
+const subPanel = "ml-1 mb-2 rounded-xl bg-slate-50 border border-slate-100 px-4 py-4";
+
 /** The owner's Watchdog thresholds. */
 function WatchdogControls({ s, busy, save }: { s: SenseSettings; busy: boolean; save: (p: { watchdog: Partial<WatchdogCfg> }) => void }) {
   const w = s.watchdog;
-  const num = (v: string) => (v === "" ? undefined : Number(v));
   return (
-    <div className="ml-1 mb-2 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl bg-slate-50 border border-slate-100 px-3.5 py-3 text-xs text-ink-secondary">
-      <label className="flex items-center gap-1.5">Big discount means
-        <input aria-label="Big discount percent" type="number" min={1} max={100} defaultValue={w.discount_pct} disabled={busy}
-          onBlur={(e) => { const v = num(e.target.value); if (v && v !== w.discount_pct) save({ watchdog: { discount_pct: v } }); }}
-          className="w-16 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs" />% or more</label>
-      <label className="flex items-center gap-1.5">Flag a drawer short by more than
-        <input aria-label="Cash tolerance" type="number" min={0} defaultValue={w.cash_tolerance} disabled={busy}
-          onBlur={(e) => { const v = num(e.target.value); if (v != null && v !== w.cash_tolerance) save({ watchdog: { cash_tolerance: v } }); }}
-          className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs" /></label>
-      <span className="w-full text-[11px] text-ink-tertiary">Only you see Watchdog. A flag needs at least 3 events and twice what others usually do, and it shows the records behind it.</span>
+    <div className={subPanel}>
+      <div className="divide-y divide-slate-200/70">
+        <SettingRow label="Big discount" help="Discounts at or above this count as big" htmlFor="sense-wd-discount">
+          <SavedNum id="sense-wd-discount" value={w.discount_pct} unit="%" max={100} disabled={busy}
+            onSave={(v) => save({ watchdog: { discount_pct: v } })} />
+        </SettingRow>
+        <SettingRow label="Cash drawer short by more than" help="A drawer count this far under expected gets flagged" htmlFor="sense-wd-cash">
+          <SavedNum id="sense-wd-cash" value={w.cash_tolerance} unit={currencySymbol()} ok={(v) => v >= 0} disabled={busy}
+            onSave={(v) => save({ watchdog: { cash_tolerance: v } })} />
+        </SettingRow>
+      </div>
+      <p className="mt-3 text-xs text-ink-tertiary">Only you see Watchdog. A flag needs at least 3 events and twice what others usually do, and it shows the records behind it.</p>
     </div>
   );
 }
@@ -223,38 +242,45 @@ function AgentControls({ s, busy, save }: { s: SenseSettings; busy: boolean; sav
   const a = s.agents;
   return (
     <div className={s.enabled ? "" : "opacity-50"}>
-      <div className="pt-2 text-[11px] font-semibold text-ink-tertiary">Customers</div>
+      <div className="pt-2 text-xs font-semibold text-ink-tertiary">Customers</div>
       {AGENT_ROWS.map((r) => {
         const c = a[r.k];
+        const waitVal = r.wait === "months" ? c.months : c.wait_days;
         return (
           <div key={r.k} className="py-2.5 border-t border-slate-100 first:border-0">
             <div className="flex items-center gap-3">
-              <span className="min-w-0"><span className="block text-sm text-ink-primary">{r.label}</span><span className="block text-[11px] text-ink-tertiary">{r.hint}</span></span>
-              <Toggle on={c.on} label={r.label} busy={busy} disabled={!s.enabled} onClick={() => save({ agents: { [r.k]: { on: !c.on } } })} />
+              <span className="min-w-0 flex-1"><span className="block text-sm font-medium text-ink-primary">{r.label}</span><span className="block text-xs text-ink-tertiary">{r.hint}</span></span>
+              <Switch on={c.on} label={r.label} disabled={!s.enabled} onChange={() => save({ agents: { [r.k]: { on: !c.on } } })} />
             </div>
             {c.on && (
-              <div className="mt-2 ml-1 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl bg-slate-50 border border-slate-100 px-3.5 py-2.5 text-xs text-ink-secondary">
-                <label className="flex items-center gap-1.5"><input type="checkbox" checked={!c.auto_send} disabled={busy}
-                  onChange={() => save({ agents: { [r.k]: { auto_send: !c.auto_send } } })} /> Ask me before sending</label>
-                <label className="flex items-center gap-1.5">{r.wait === "months" ? "After" : "Wait"}
-                  <input aria-label={`${r.label} wait`} type="number" min={1} defaultValue={r.wait === "months" ? c.months : c.wait_days} disabled={busy}
-                    onBlur={(e) => { const v = Number(e.target.value); if (v > 0 && v !== (r.wait === "months" ? c.months : c.wait_days)) save({ agents: { [r.k]: { [r.wait]: v } } }); }}
-                    className="w-14 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs" />{r.wait === "months" ? "months away" : r.k === "collections" ? "days after it's due" : "days"}</label>
-                <label className="flex items-center gap-1.5">By
-                  <select aria-label={`${r.label} channel`} value={c.channel} disabled={busy} onChange={(e) => save({ agents: { [r.k]: { channel: e.target.value } } })}
-                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs">
-                    {r.k !== "win_back" && <option value="sms">Text</option>}<option value="email">Email</option></select></label>
-                {r.k === "win_back" && <span className="w-full text-[11px] text-ink-tertiary">Email only, to customers who gave marketing consent. Your shop address from Settings goes at the bottom, as the law requires.</span>}
+              <div className={`mt-2 ${subPanel}`}>
+                <div className="divide-y divide-slate-200/70">
+                  <SettingRow label="Ask me before sending" help="Drafts wait for your OK before they go out">
+                    <Switch size="sm" on={!c.auto_send} label="Ask me before sending"
+                      onChange={() => save({ agents: { [r.k]: { auto_send: !c.auto_send } } })} />
+                  </SettingRow>
+                  <SettingRow label={r.wait === "months" ? "Customers away for" : r.k === "collections" ? "Days after it's due" : "Wait before nudging"}
+                    help={r.wait === "months" ? "How long since their last visit" : r.k === "collections" ? "When the first reminder goes out" : "Days after the quote was sent"} htmlFor={`sense-agent-${r.k}-wait`}>
+                    <SavedNum id={`sense-agent-${r.k}-wait`} value={waitVal} unit={r.wait === "months" ? "months" : "days"} disabled={busy}
+                      onSave={(v) => save({ agents: { [r.k]: { [r.wait]: v } } })} />
+                  </SettingRow>
+                  <SettingRow label="Send by" htmlFor={`sense-agent-${r.k}-channel`}>
+                    <select id={`sense-agent-${r.k}-channel`} aria-label={`${r.label} channel`} value={c.channel} disabled={busy} onChange={(e) => save({ agents: { [r.k]: { channel: e.target.value } } })}
+                      className="glass-input rounded-xl px-3 py-2 text-sm">
+                      {r.k !== "win_back" && <option value="sms">Text</option>}<option value="email">Email</option></select>
+                  </SettingRow>
+                </div>
+                {r.k === "win_back" && <p className="mt-3 text-xs text-ink-tertiary">Email only, to customers who gave marketing consent. Your shop address from Settings goes at the bottom, as the law requires.</p>}
               </div>
             )}
           </div>
         );
       })}
-      <div className="flex items-center gap-2 py-2 text-xs text-ink-secondary">At most
-        <input aria-label="Daily message cap" type="number" min={1} max={500} defaultValue={a.daily_cap} disabled={busy}
-          onBlur={(e) => { const v = Number(e.target.value); if (v > 0 && v !== a.daily_cap) save({ agents: { daily_cap: v } }); }}
-          className="w-16 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs" /> messages a day.
-        <span className="text-[11px] text-ink-tertiary">Each customer gets at most one every 3 days. Consent, opening hours and these switches are checked again right before sending, and every email has an unsubscribe link.</span>
+      <div className="py-2.5 border-t border-slate-100">
+        <SettingRow label="Most messages a day" help="Each customer gets at most one every 3 days. Consent, opening hours and these switches are checked again right before sending, and every email has an unsubscribe link." htmlFor="sense-daily-cap">
+          <SavedNum id="sense-daily-cap" value={a.daily_cap} unit="a day" max={500} width="w-32" disabled={busy}
+            onSave={(v) => save({ agents: { daily_cap: v } })} />
+        </SettingRow>
       </div>
     </div>
   );
@@ -269,40 +295,34 @@ function BriefControls({ s, busy, save }: { s: SenseSettings; busy: boolean; sav
   const others = people.filter((p) => p.id !== me?.id);
   const toggle = (id: string) => save({ brief: { recipients: b.recipients.includes(id) ? b.recipients.filter((x) => x !== id) : [...b.recipients, id] } });
   return (
-    <div className="ml-1 mb-2 space-y-2.5 rounded-xl bg-slate-50 border border-slate-100 px-3.5 py-3 text-xs text-ink-secondary">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <label className="flex items-center gap-1.5">Send at
-          <select aria-label="Brief send time" value={b.hour} disabled={busy} onChange={(e) => save({ brief: { hour: Number(e.target.value) } })}
-            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs">{HOURS.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}</select>
-        </label>
-        <label className="flex items-center gap-1.5"><input type="checkbox" checked={b.email} disabled={busy} onChange={() => save({ brief: { email: !b.email } })} /> Email</label>
-        <label className="flex items-center gap-1.5"><input type="checkbox" checked={b.push} disabled={busy} onChange={() => save({ brief: { push: !b.push } })} /> Push to the phone app</label>
+    <div className={subPanel}>
+      <div className="divide-y divide-slate-200/70">
+        <SettingRow label="Send at" htmlFor="sense-brief-hour">
+          <select id="sense-brief-hour" aria-label="Brief send time" value={b.hour} disabled={busy} onChange={(e) => save({ brief: { hour: Number(e.target.value) } })}
+            className="glass-input rounded-xl px-3 py-2 text-sm">{HOURS.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}</select>
+        </SettingRow>
+        <SettingRow label="Email" help="Send the brief by email too">
+          <Switch size="sm" on={b.email} label="Email" onChange={() => save({ brief: { email: !b.email } })} />
+        </SettingRow>
+        <SettingRow label="Push to the phone app" help="The push only says the brief is ready">
+          <Switch size="sm" on={b.push} label="Push to the phone app" onChange={() => save({ brief: { push: !b.push } })} />
+        </SettingRow>
+        <div className="py-4 last:pb-0">
+          <div className="text-sm font-medium text-ink-primary">Also send to</div>
+          <p className="mt-0.5 mb-2 text-xs text-ink-tertiary">You always get it.</p>
+          {others.length ? (
+            <div className="flex flex-wrap gap-1.5">
+              {others.map((p) => (
+                <label key={p.id} className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs ${b.recipients.includes(p.id) ? "border-primary/40 bg-white text-ink-primary" : "border-slate-200 bg-white text-ink-secondary"}`}>
+                  <input type="checkbox" checked={b.recipients.includes(p.id)} disabled={busy} onChange={() => toggle(p.id)} className="accent-primary" /> {p.name}
+                </label>
+              ))}
+            </div>
+          ) : <span className="text-xs text-ink-tertiary">No one else on the team yet.</span>}
+        </div>
       </div>
-      <div>
-        <div className="mb-1 text-[11px] text-ink-tertiary">Also send to (you always get it):</div>
-        {others.length ? (
-          <div className="flex flex-wrap gap-1.5">
-            {others.map((p) => (
-              <label key={p.id} className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${b.recipients.includes(p.id) ? "border-primary/40 bg-white text-ink-primary" : "border-slate-200 bg-white"}`}>
-                <input type="checkbox" checked={b.recipients.includes(p.id)} disabled={busy} onChange={() => toggle(p.id)} /> {p.name}
-              </label>
-            ))}
-          </div>
-        ) : <span className="text-[11px] text-ink-tertiary">No one else on the team yet.</span>}
-      </div>
-      <p className="text-[11px] text-ink-tertiary">Counts cover the whole shop; money lines follow each person's own permissions. The push only says the brief is ready.</p>
+      <p className="mt-3 text-xs text-ink-tertiary">Counts cover the whole shop; money lines follow each person's own permissions.</p>
     </div>
-  );
-}
-
-// Declared at module level so a save doesn't remount the switch (keeps keyboard focus on it).
-function Toggle({ on, label, onClick, disabled, busy }: { on: boolean; label: string; onClick: () => void; disabled?: boolean; busy?: boolean }) {
-  return (
-    <button type="button" role="switch" aria-checked={on} aria-label={label} onClick={onClick} disabled={disabled}
-      aria-busy={busy || undefined}
-      className={`ml-auto w-10 h-6 rounded-full flex-shrink-0 relative transition-colors disabled:opacity-50 ${on ? "bg-primary" : "bg-slate-300"}`}>
-      <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${on ? "left-[18px]" : "left-0.5"}`} />
-    </button>
   );
 }
 
@@ -325,12 +345,12 @@ export function SenseSettingsSection() {
   return (
     <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card" aria-label="Tekly Sense">
       <div className="flex items-start gap-3 px-5 pt-4 pb-3">
-        <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0 text-base">✦</span>
-        <div className="min-w-0">
+        <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n="lightbulb" c="text-base" /></span>
+        <div className="min-w-0 flex-1">
           <h3 className="text-sm font-semibold text-ink-primary">Tekly Sense</h3>
-          <p className="text-[11px] text-ink-tertiary">Learns from your own jobs. Suggests, never acts, and every hint shows why. Only you see these settings.</p>
+          <p className="text-xs text-ink-tertiary">Learns from your own jobs. Suggests, never acts, and every hint shows why. Only you see these settings.</p>
         </div>
-        <Toggle on={s.enabled} label="Tekly Sense" busy={busy} onClick={() => save({ enabled: !s.enabled })} />
+        <Switch on={s.enabled} label="Tekly Sense" onChange={() => save({ enabled: !s.enabled })} />
       </div>
       <div className="px-5 pb-5 space-y-3">
         {lr && !lr.ready && (
@@ -342,22 +362,22 @@ export function SenseSettingsSection() {
         <div className={s.enabled ? "" : "opacity-50"}>
           {FEATURE_ROWS.map((g) => (
             <div key={g.group}>
-              <div className="pt-2 text-[11px] font-semibold text-ink-tertiary">{g.group}</div>
+              <div className="pt-2 text-xs font-semibold text-ink-tertiary">{g.group}</div>
               {g.rows.map((r) => (
                 <div key={r.k} className="flex items-center gap-3 py-2.5 border-t border-slate-100 first:border-0">
-                  <span className="min-w-0"><span className="block text-sm text-ink-primary">{r.label}</span><span className="block text-[11px] text-ink-tertiary">{r.hint}</span></span>
-                  <Toggle on={s.features[r.k]} label={r.label} busy={busy} disabled={!s.enabled} onClick={() => save({ features: { [r.k]: !s.features[r.k] } })} />
+                  <span className="min-w-0 flex-1"><span className="block text-sm font-medium text-ink-primary">{r.label}</span><span className="block text-xs text-ink-tertiary">{r.hint}</span></span>
+                  <Switch on={s.features[r.k]} label={r.label} disabled={!s.enabled} onChange={() => save({ features: { [r.k]: !s.features[r.k] } })} />
                 </div>
               )).flatMap((el, i) => g.rows[i].k === "morning_brief" && s.enabled && s.features.morning_brief
-                ? [el, <BriefControls key="brief" s={s} busy={busy} save={save} />]
+                ? [el, <BriefControls key="brief-controls" s={s} busy={busy} save={save} />]
                 : g.rows[i].k === "watchdog" && s.enabled && s.features.watchdog
-                  ? [el, <WatchdogControls key="watchdog" s={s} busy={busy} save={save} />] : [el])}
+                  ? [el, <WatchdogControls key="watchdog-controls" s={s} busy={busy} save={save} />] : [el])}
             </div>
           ))}
         </div>
         {s.agents && <AgentControls s={s} busy={busy} save={save} />}
-        <p className="text-[11px] text-ink-tertiary">Staff see suggestions when their role has "See Tekly Sense suggestions on jobs" (Settings → Team).</p>
-        {err && <p className="text-[11px] font-semibold text-status-overdue-ink">{err}</p>}
+        <p className="text-xs text-ink-tertiary">Staff see suggestions when their role has "See Tekly Sense suggestions on jobs" (Settings → Team).</p>
+        {err && <p className="text-xs font-semibold text-status-overdue-ink">{err}</p>}
       </div>
     </section>
   );

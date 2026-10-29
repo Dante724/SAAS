@@ -70,7 +70,7 @@ describe("Tekly Sense", () => {
   it("lets the owner choose email and who else gets the brief", async () => {
     const u = userEvent.setup();
     render(<SenseSettingsSection />);
-    await u.click(await screen.findByRole("checkbox", { name: "Email" }));
+    await u.click(await screen.findByRole("switch", { name: "Email" }));
     expect(calls.filter((c) => c.method === "PUT").pop()?.body).toEqual({ brief: { email: true } });
     await u.click(await screen.findByRole("checkbox", { name: "Ana" }));
     expect(calls.filter((c) => c.method === "PUT").pop()?.body).toEqual({ brief: { recipients: ["e2"] } });
@@ -103,7 +103,7 @@ describe("Tekly Sense", () => {
     render(<SenseSettingsSection />);
     await u.click(await screen.findByRole("switch", { name: "Collections" }));
     expect(calls.filter((c) => c.method === "PUT").pop()?.body).toEqual({ agents: { collections: { on: true } } });
-    expect((await screen.findByRole("checkbox", { name: "Ask me before sending" }) as HTMLInputElement).checked).toBe(true);
+    expect((await screen.findByRole("switch", { name: "Ask me before sending" })).getAttribute("aria-checked")).toBe("true");
   });
 
   it("shows drafted messages and sends one on the owner's OK", async () => {

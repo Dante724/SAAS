@@ -6,6 +6,7 @@ import { api } from "../../api/client";
 import { humanize } from "../../lib/humanize";
 import { currencySymbol } from "./types";
 import CategoryPicker from "../../components/CategoryPicker";
+import Switch from "../../components/Switch";
 import { inputCls } from "../invoices/billing";
 
 const lbl = "block font-semibold text-ink-secondary mb-1";
@@ -87,16 +88,16 @@ export default function ServiceForm({ p, set }: { p: any; set: (k: string, v: an
         <div><label htmlFor="svc-warranty" className={lbl}>Warranty (days)</label><input id="svc-warranty" type="number" min={0} value={p.warranty_days ?? 0} onChange={(e) => set("warranty_days", e.target.value)} className={`${field} tabular-nums`} /></div>
         <div><label htmlFor="svc-barcode" className={lbl}>Barcode</label><input id="svc-barcode" value={p.barcode || ""} onChange={(e) => set("barcode", e.target.value)} className={`${field} font-mono`} /></div>
       </div>
-      <label className={`flex items-center justify-between cursor-pointer ${box}`}><span className="text-ink-secondary font-medium">This is a labor operation</span><input type="checkbox" checked={!!p.is_labor} onChange={(e) => set("is_labor", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
+      <div className={`flex items-center justify-between gap-3 ${box}`}><span className="text-ink-secondary font-medium">This is a labor operation</span><Switch on={!!p.is_labor} onChange={(v) => set("is_labor", v)} label="This is a labor operation" /></div>
       {/* 144ax G3 — flat-rate labour: bill the standard duration × the fee as an hourly rate */}
-      <label className={`flex items-center justify-between cursor-pointer ${box}`}><span className="text-ink-secondary font-medium">Flat-rate <span className="block text-xs text-ink-tertiary font-normal">Bills booked hours × the price, so the price is the hourly rate.</span></span><input type="checkbox" checked={!!p.flat_rate} onChange={(e) => set("flat_rate", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
+      <div className={`flex items-center justify-between gap-3 ${box}`}><span className="text-ink-secondary font-medium">Flat-rate <span className="block text-xs text-ink-tertiary font-normal">Bills booked hours × the price, so the price is the hourly rate.</span></span><Switch on={!!p.flat_rate} onChange={(v) => set("flat_rate", v)} label="Flat-rate" /></div>
 
       <div className="p-4 rounded-xl bg-white border border-slate-200 space-y-3.5">
         <div className="text-sm font-semibold text-ink-primary">Online booking</div>
-        <label className="flex items-center justify-between gap-3 cursor-pointer">
+        <div className="flex items-center justify-between gap-3">
           <span className="text-ink-secondary font-medium">Show on online booking page<span className="block text-xs text-ink-tertiary font-normal">Clients can pick this service when they book online.</span></span>
-          <input type="checkbox" role="switch" aria-label="Show on online booking page" checked={p.bookable !== false} onChange={(e) => set("bookable", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300 shrink-0" />
-        </label>
+          <Switch on={p.bookable !== false} onChange={(v) => set("bookable", v)} label="Show on online booking page" />
+        </div>
         <div>
           <span className={lbl}>Who can perform it</span>
           <p className="text-xs text-ink-tertiary mb-1.5">None selected means anyone. Online bookings only offer these people.</p>

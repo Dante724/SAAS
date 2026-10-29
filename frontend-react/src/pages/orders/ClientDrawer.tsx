@@ -6,6 +6,8 @@ import TagChips from "../../components/TagChips";
 import CallButton from "../../components/CallButton";
 import { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
+import Switch from "../../components/Switch";
+import { fmtDay } from "../../lib/serverTime";
 import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog, promptDialog } from "../../lib/dialog";
 import { useMe } from "../../context/Me";
@@ -19,7 +21,11 @@ import { useTerminology } from "../../lib/useTerminology";
 import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../../lib/formLayout";
 import { ClientCreditNotes } from "../invoices/CreditNotesList";
 
-const BASE_TABS = ["General info", "Devices & Assets", "Work orders", "Purchases", "Loyalty & Payout", "Communications"];
+const BASE_TABS = ["General info", "Devices & assets", "Work orders", "Purchases", "Loyalty & payout", "Communications"];
+const GHOST = "h-9 px-3.5 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50 disabled:opacity-50 inline-flex items-center gap-1.5";
+const CHANNELS: [string, string][] = [["email", "Email"], ["sms", "SMS"], ["whatsapp", "WhatsApp"], ["facebook", "Facebook"], ["instagram", "Instagram"], ["call", "Call"]];
+const channelLabel = (k?: string) => CHANNELS.find(([c]) => c === k)?.[1] || (k ? humanize(k) : "—");
+const DIRECTION: Record<string, string> = { outbound: "Sent", inbound: "Received" };
 
 type Client = { id?: string; name?: string; phone?: string; email?: string; address?: string; source?: string;
   loyalty_tier?: string; discount_card?: string; currency_code?: string; balance?: number; order_count?: number; custom_data?: Record<string, any>;
@@ -28,15 +34,15 @@ type Client = { id?: string; name?: string; phone?: string; email?: string; addr
   disc_materials_mode?: string; disc_materials_value?: number; disc_materials_price_type_id?: string | null;
   devices?: { id: string; brand?: string; model?: string; serial?: string; imei?: string }[] };
 
+// A read-only value: plain label and text, so it doesn't look like a field you can type in.
 function F({ l, v }: { l: string; v: string }) {
   return (
-    <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">{l}</label>
-      <div className="glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary">{v || "—"}</div></div>
+    <div><div className="text-[11px] font-bold text-ink-tertiary mb-1">{l}</div>
+      <div className="text-sm font-semibold text-ink-primary whitespace-pre-wrap break-words">{v || "—"}</div></div>
   );
 }
 
 export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: { woNum?: string; clientId: string; onClose: () => void; onOpenAsset?: () => void }) {
-  const term = useTerminology();
   const [tab, setTab] = useState(0);
   const [assetOpen, setAssetOpen] = useState<string | null>(null);
   const [newWO, setNewWO] = useState(false);
@@ -126,7 +132,7 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
           <div className="pb-3"><TagChips entityType="contact" entityId={clientId} /></div>
           <div className="flex gap-6 overflow-x-auto text-xs font-semibold">
             {(isSupplier ? [...BASE_TABS, "Supplier"] : BASE_TABS).map((t, i) => {
-              const label = i === 1 && c.devices ? `Devices & Assets (${c.devices.length})` : i === 2 && c.order_count != null ? `Work orders (${c.order_count})` : t;
+              const label = i === 1 && c.devices ? `Devices & assets (${c.devices.length})` : i === 2 && c.order_count != null ? `Work orders (${c.order_count})` : t;
               return <button key={t} onClick={() => setTab(i)} className={`py-3 border-b-2 whitespace-nowrap transition-colors ${tab === i ? "text-primary border-primary font-bold" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{label}</button>;
             })}
           </div>
@@ -146,20 +152,20 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
                   <span className="text-[11px] text-ink-tertiary">{isSupplier ? "Buys & sells — appears in Contacts and Purchasing." : "Turn on to buy from this contact (purchase orders, price list)."}</span>
                 </div>
               </div>
-              <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm flex items-center justify-between">
+              <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm space-y-3">
                 <div><span className="text-[11px] font-bold text-ink-tertiary">Account balance</span>
                   <div className="text-xl font-bold tabular-nums text-ink-primary">{money(balanceView(bal).amount)} <span className={`text-xs font-bold ${balanceView(bal).className}`}>({balanceView(bal).label})</span></div></div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button onClick={() => setNewWO(true)} className={GHOST}><M n="add" c="text-sm" />New work order</button>
                   {creditOpen ? (
-                    <div className="flex items-center gap-1">
-                      <input autoFocus value={creditVal} onChange={(e) => setCreditVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addCredit(); if (e.key === "Escape") { setCreditOpen(false); setCreditVal(""); } }} inputMode="decimal" placeholder="Amount" className="w-24 glass-input rounded-lg px-2 py-1.5 text-xs tabular-nums" />
-                      <button onClick={addCredit} disabled={busy} className="px-2.5 py-1.5 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50">Add</button>
-                      <button onClick={() => { setCreditOpen(false); setCreditVal(""); }} className="px-2 py-1.5 rounded-lg text-xs font-semibold text-ink-tertiary hover:text-ink-primary">Cancel</button>
+                    <div className="flex items-center gap-2">
+                      <input autoFocus aria-label="Credit amount" value={creditVal} onChange={(e) => setCreditVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addCredit(); if (e.key === "Escape") { setCreditOpen(false); setCreditVal(""); } }} inputMode="decimal" placeholder="Amount" className="w-28 glass-input rounded-xl px-3 py-2 text-sm tabular-nums" />
+                      <button onClick={addCredit} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">Add</button>
+                      <button onClick={() => { setCreditOpen(false); setCreditVal(""); }} className="h-9 px-3 rounded-xl text-xs font-semibold text-ink-tertiary hover:text-ink-primary">Cancel</button>
                     </div>
                   ) : (
-                    <button onClick={() => setCreditOpen(true)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50">+ Add Credit</button>
+                    <button onClick={() => setCreditOpen(true)} className={GHOST}>Add credit</button>
                   )}
-                  <button onClick={() => setNewWO(true)} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110">+ New Work Order</button>
                 </div>
               </div>
               {/* Built-in and custom fields in the order set in Settings → Forms → Customize. */}
@@ -167,7 +173,7 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
                 phone: { half: true, el: <F l="Phone number" v={c.phone || ""} /> },
                 email: { half: true, el: <F l="Email address" v={c.email || ""} /> },
                 source: { half: true, el: <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Lead source{reqStar(layout, "source")}</label>
-                  <DirectorySelect dirKey="lead_source" value={source} onChange={setSource} className="glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full" /></div> },
+                  <DirectorySelect dirKey="lead_source" value={source} onChange={setSource} className="glass-input rounded-xl px-3 py-2 text-sm font-semibold text-ink-primary w-full" /></div> },
                 loyalty_tier: { half: true, el: <F l="Loyalty tier" v={c.loyalty_tier || ""} /> },
                 discount_card: { half: true, el: <F l="Discount card / Member ID" v={c.discount_card || ""} /> },
                 address: { el: <AddressFields value={addr} onChange={setAddr} legacy={c.address} idPrefix="cd-addr" /> },
@@ -192,15 +198,6 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
               </div>
               <DiscountMatrix disc={disc} onChange={setDisc} />
               <GdprCard clientId={clientId} onErased={onClose} />
-              <div className="text-[11px] font-bold text-ink-tertiary mt-2">Registered {term.assets.toLowerCase()} on file</div>
-              {(c.devices || []).length === 0 && <div className="text-xs text-ink-tertiary">No {term.assets.toLowerCase()} on file.</div>}
-              {(c.devices || []).map((dv) => (
-                <div key={dv.id} onClick={() => openAsset(dv.id)} className="bg-white rounded-xl border border-slate-200/90 p-3.5 shadow-sm flex items-center gap-3 cursor-pointer hover:border-primary/50 transition-all">
-                  <span className="w-9 h-9 rounded-lg bg-purple-50 text-purple-600 grid place-items-center border border-purple-100"><M n="smartphone" c="text-base" /></span>
-                  <div className="flex-1"><div className="text-xs font-bold text-ink-primary">{[dv.brand, dv.model].filter(Boolean).join(" ") || term.asset}</div><div className="text-[11px] text-ink-tertiary font-mono">SN: {dv.serial || "—"}{dv.imei ? ` · IMEI: ${dv.imei}` : ""}</div></div>
-                  <M n="chevron_right" c="text-ink-tertiary text-base" />
-                </div>
-              ))}
             </>
           ) : tab === 1 ? (
             <DevicesTab devices={c.devices} onOpen={openAsset} />
@@ -219,8 +216,8 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
           )}
         </div>
         <footer className="px-6 py-3.5 border-t border-slate-200/90 bg-white/95 flex items-center gap-2">
-          <button className="text-xs font-semibold text-rose-600">Delete Client</button>
-          <div className="ml-auto flex gap-2"><button onClick={onClose} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : "Save Client"}</button></div>
+          <button className="px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Delete client</button>
+          <div className="ml-auto flex gap-2"><button onClick={onClose} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : "Save client"}</button></div>
         </footer>
         {toast && <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-drawer">{toast}</div>}
       </div>
@@ -230,7 +227,7 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
   );
 }
 
-const d = (iso?: string) => (iso ? new Date(iso).toLocaleDateString([], { day: "2-digit", month: "short", year: "numeric" }) : "—");
+const d = (iso?: string) => fmtDay(iso) || "—";
 const Empty = ({ t }: { t: string }) => <div className="grid place-items-center h-48 text-center text-sm font-semibold text-ink-tertiary">{t}</div>;
 const Loading = () => <div className="text-xs text-ink-tertiary py-4">Loading…</div>;
 
@@ -340,9 +337,9 @@ function LoyaltyTab({ clientId }: { clientId: string }) {
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-2">
         <div className="bg-white rounded-xl border border-slate-200/90 p-3 shadow-sm"><div className="text-[11px] font-bold text-ink-tertiary">Loyalty points</div><div className="text-lg font-bold tabular-nums text-ink-primary">{loy.enabled ? Math.round(loy.points || 0) : "—"}</div><div className="text-[11px] text-ink-tertiary">{loy.enabled ? `${Math.round(loy.lifetime_points || 0)} lifetime · ${loy.tier || "Standard"}` : "Loyalty not configured"}</div></div>
-        <div className="bg-white rounded-xl border border-slate-200/90 p-3 shadow-sm flex flex-col"><div className="text-[11px] font-bold text-ink-tertiary">Account balance</div><div className="text-lg font-bold tabular-nums text-ink-primary">{sym}{balanceView(bal.balance).amount.toLocaleString()} <span className={`text-[11px] font-bold ${balanceView(bal.balance).className}`}>({balanceView(bal.balance).label})</span></div>{creditOpen ? (<div className="mt-auto flex items-center gap-1"><input autoFocus value={creditVal} onChange={(e) => setCreditVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addCredit(); if (e.key === "Escape") { setCreditOpen(false); setCreditVal(""); } }} inputMode="decimal" placeholder="Amount" className="w-20 glass-input rounded-lg px-2 py-1 text-[11px] tabular-nums" /><button onClick={addCredit} disabled={busy} className="px-2 py-1 rounded-lg bg-primary text-white text-[11px] font-bold disabled:opacity-50">Add</button><button onClick={() => { setCreditOpen(false); setCreditVal(""); }} className="text-[11px] font-semibold text-ink-tertiary">✕</button></div>) : (<button onClick={() => setCreditOpen(true)} disabled={busy} className="mt-auto self-start text-[11px] font-bold text-primary">+ Add credit</button>)}</div>
+        <div className="bg-white rounded-xl border border-slate-200/90 p-3 shadow-sm flex flex-col"><div className="text-[11px] font-bold text-ink-tertiary">Account balance</div><div className="text-lg font-bold tabular-nums text-ink-primary">{sym}{balanceView(bal.balance).amount.toLocaleString()} <span className={`text-[11px] font-bold ${balanceView(bal.balance).className}`}>({balanceView(bal.balance).label})</span></div>{creditOpen ? (<div className="mt-2 flex items-center gap-1.5"><input autoFocus value={creditVal} onChange={(e) => setCreditVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addCredit(); if (e.key === "Escape") { setCreditOpen(false); setCreditVal(""); } }} inputMode="decimal" placeholder="Amount" aria-label="Credit amount" className="w-24 glass-input rounded-xl px-3 py-2 text-sm tabular-nums" /><button onClick={addCredit} disabled={busy} className="h-9 px-3 rounded-xl bg-primary text-white text-xs font-semibold disabled:opacity-50">Add</button><button aria-label="Cancel" onClick={() => { setCreditOpen(false); setCreditVal(""); }} className="h-9 w-9 grid place-items-center rounded-xl text-ink-tertiary hover:bg-slate-100"><M n="close" c="text-sm" /></button></div>) : (<button onClick={() => setCreditOpen(true)} disabled={busy} className="mt-2 self-start text-xs font-semibold text-primary hover:underline">Add credit</button>)}</div>
       </div>
-      <div className="flex items-center justify-between"><div className="text-[11px] font-bold text-ink-tertiary">Coupons</div><button onClick={genCoupon} disabled={busy} className="px-2.5 py-1 rounded-lg bg-primary text-white text-[11px] font-bold shadow-clay-sm disabled:opacity-50">+ Generate</button></div>
+      <div className="flex items-center justify-between"><div className="text-[11px] font-bold text-ink-tertiary">Coupons</div><button onClick={genCoupon} disabled={busy} className={GHOST}>Generate</button></div>
       {coupons.length === 0 ? <div className="text-xs text-ink-tertiary">No coupons issued to this client.</div> : coupons.map((c) => (
         <div key={c.id} className="bg-white rounded-xl border border-slate-200/90 p-3 shadow-sm flex items-center gap-2">
           <span className="font-mono font-bold text-primary text-xs">{c.code}</span>
@@ -351,7 +348,7 @@ function LoyaltyTab({ clientId }: { clientId: string }) {
           <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold border ${c.spent ? "bg-slate-100 text-ink-tertiary border-slate-200" : c.active ? "bg-emerald-100 text-emerald-700 border-emerald-200" : "bg-rose-100 text-rose-700 border-rose-200"}`}>{c.spent ? "Used" : c.active ? "Active" : "Inactive"}</span>
         </div>
       ))}
-      <div className="flex items-center justify-between pt-1"><div className="text-[11px] font-bold text-ink-tertiary">Gift cards</div><button onClick={issueCard} disabled={busy} className="px-2.5 py-1 rounded-lg bg-primary text-white text-[11px] font-bold shadow-clay-sm disabled:opacity-50">+ Issue</button></div>
+      <div className="flex items-center justify-between pt-1"><div className="text-[11px] font-bold text-ink-tertiary">Gift cards</div><button onClick={issueCard} disabled={busy} className={GHOST}>Issue</button></div>
       {cards.length === 0 ? <div className="text-xs text-ink-tertiary">No gift cards for this client.</div> : cards.map((g) => (
         <div key={g.id} className="bg-white rounded-xl border border-slate-200/90 p-3 shadow-sm flex items-center gap-2">
           <span className="font-mono font-bold text-primary text-xs">{g.code}</span>
@@ -382,23 +379,23 @@ function CommsTab({ clientId }: { clientId: string }) {
     try { const r = await api.post<any>(`/clients/${clientId}/communication/suggest`, {}); setBody(r.reply || ""); }
     catch { /* ignore */ } finally { setBusy(false); }
   }
-  const sel = "glass-input rounded-lg px-2 py-1.5 text-xs font-semibold text-ink-primary";
+  const sel = "glass-input rounded-xl px-3 py-2 text-sm text-ink-primary";
   return (
     <div className="space-y-3">
       <div className="bg-white rounded-xl border border-slate-200/90 p-3 shadow-sm space-y-2">
         <div className="flex items-center gap-2">
-          <select value={channel} onChange={(e) => setChannel(e.target.value)} className={sel}>{["email", "sms", "whatsapp", "facebook", "instagram", "call"].map((c) => <option key={c} value={c}>{c}</option>)}</select>
-          <select value="" onChange={(e) => { const t = templates.find((x) => x.id === e.target.value); if (t) setBody(t.body); }} className={`${sel} flex-1`}><option value="">Insert template…</option>{templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
-          <button onClick={suggest} disabled={busy} className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-[11px] font-bold text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="auto_awesome" c="text-xs" />Suggest</button>
+          <select aria-label="Channel" value={channel} onChange={(e) => setChannel(e.target.value)} className={sel}>{CHANNELS.map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+          <select aria-label="Insert template" value="" onChange={(e) => { const t = templates.find((x) => x.id === e.target.value); if (t) setBody(t.body); }} className={`${sel} flex-1`}><option value="">Insert template…</option>{templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
+          <button onClick={suggest} disabled={busy} className={GHOST}><M n="auto_awesome" c="text-sm" />Suggest</button>
         </div>
-        <textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="Write a message…" className="glass-input w-full rounded-lg px-3 py-2 text-sm text-ink-primary h-20 resize-none" />
-        <div className="flex justify-end"><button onClick={send} disabled={busy || !body.trim()} className="px-4 py-1.5 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm disabled:opacity-50">{busy ? "…" : "Send"}</button></div>
+        <textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="Write a message…" className="glass-input rounded-xl px-3 py-2 text-sm w-full text-ink-primary h-20 resize-none" />
+        <div className="flex"><button onClick={send} disabled={busy || !body.trim()} className="h-9 px-4 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm disabled:opacity-50">{busy ? "Sending…" : "Send"}</button></div>
       </div>
       {!msgs ? <Loading /> : msgs.length === 0 ? <Empty t="No messages exchanged yet." /> : (
         <div className="space-y-2">
           {msgs.map((m) => (
             <div key={m.id} className={`rounded-xl border p-3 shadow-sm ${m.direction === "outbound" ? "bg-blue-50/60 border-blue-100 ml-6" : "bg-white border-slate-200/90 mr-6"}`}>
-              <div className="flex items-center gap-2 mb-1 text-[11px] font-bold text-ink-tertiary"><span className="px-1.5 py-0.5 rounded bg-slate-100">{m.channel || "—"}</span><span>{m.direction}</span>{m.author ? <span>· {m.author}</span> : null}<div className="flex-1" /><span>{d(m.created_at)}</span></div>
+              <div className="flex items-center gap-2 mb-1 text-[11px] font-bold text-ink-tertiary"><span className="px-1.5 py-0.5 rounded bg-slate-100">{channelLabel(m.channel)}</span><span>{DIRECTION[m.direction] || humanize(m.direction)}</span>{m.author ? <span>· {m.author}</span> : null}<div className="flex-1" /><span>{d(m.created_at)}</span></div>
               <div className="text-xs text-ink-primary whitespace-pre-wrap">{m.body}</div>
             </div>
           ))}
@@ -429,26 +426,33 @@ function GdprCard({ clientId, onErased }: { clientId: string; onErased: () => vo
   async function erase() {
     setBusy(true);
     try { await api.post(`/compliance/gdpr/client/${clientId}/erase`, {}); onErased(); }
-    catch (e: any) { await alertDialog(e.message || "Erase failed"); setBusy(false); }
+    catch (e: any) { await alertDialog(e.message || "Couldn't delete the personal data."); setBusy(false); }
   }
-  const Toggle = ({ ch, label }: { ch: string; label: string }) => (
-    <label className="flex items-center gap-2 text-xs font-semibold text-ink-secondary cursor-pointer">
-      <input type="checkbox" checked={!!consent[ch]} onChange={(e) => setC(ch, e.target.checked)} className="accent-primary" />{label}
-    </label>
+  const consentRow = (ch: string, label: string) => (
+    <div key={ch} className="flex items-center justify-between gap-3 py-1.5">
+      <span className="text-xs font-semibold text-ink-secondary">{label}</span>
+      <Switch size="sm" on={!!consent[ch]} onChange={(v) => setC(ch, v)} label={label} />
+    </div>
   );
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm space-y-3">
       <div className="text-[11px] font-bold text-ink-tertiary flex items-center gap-1.5"><M n="privacy_tip" c="text-sm" />Privacy &amp; GDPR</div>
-      <div className="flex flex-wrap items-center gap-4">
-        <Toggle ch="email" label="Email consent" />
-        <Toggle ch="phone" label="Phone consent" />
-        <Toggle ch="marketing" label="Marketing consent" />
+      <div className="divide-y divide-slate-100">
+        {consentRow("email", "Email consent")}
+        {consentRow("phone", "Phone consent")}
+        {consentRow("marketing", "Marketing consent")}
       </div>
-      <div className="flex items-center gap-2 pt-1">
-        <button onClick={() => openAuthedDoc(`/compliance/gdpr/client/${clientId}/export`).catch(() => alertDialog("Export failed"))} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 text-xs font-bold flex items-center gap-1"><M n="download" c="text-sm" />Export data</button>
+      <div className="flex flex-wrap items-center gap-2 pt-1">
+        <button onClick={() => openAuthedDoc(`/compliance/gdpr/client/${clientId}/export`).catch(() => alertDialog("Export failed"))} className={GHOST}><M n="download" c="text-sm" />Export data</button>
         {!confirmErase
-          ? <button onClick={() => setConfirmErase(true)} className="px-3 py-1.5 rounded-lg border border-rose-200 bg-white text-rose-600 hover:bg-rose-50 text-xs font-bold flex items-center gap-1"><M n="delete_forever" c="text-sm" />Erase (GDPR)</button>
-          : <span className="flex items-center gap-1.5"><span className="text-[11px] font-semibold text-rose-600">Permanently scrub PII?</span><button onClick={erase} disabled={busy} className="px-2.5 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold disabled:opacity-50">{busy ? "…" : "Yes, erase"}</button><button onClick={() => setConfirmErase(false)} className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Cancel</button></span>}
+          ? <button onClick={() => setConfirmErase(true)} className="h-9 px-3.5 rounded-xl bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-semibold inline-flex items-center gap-1.5"><M n="delete_forever" c="text-sm" />Delete personal data…</button>
+          : <div className="w-full rounded-xl border border-rose-200 bg-rose-50/60 p-3 space-y-2">
+              <p className="text-xs text-rose-700">This removes this client's name, contact details and address for good. It can't be undone.</p>
+              <div className="flex items-center gap-2">
+                <button onClick={erase} disabled={busy} className="h-9 px-3.5 rounded-xl bg-rose-600 text-white text-xs font-semibold disabled:opacity-50">{busy ? "Deleting…" : "Delete personal data"}</button>
+                <button onClick={() => setConfirmErase(false)} className={GHOST}>Cancel</button>
+              </div>
+            </div>}
       </div>
     </div>
   );
@@ -484,14 +488,14 @@ function DiscountMatrix({ disc, onChange }: { disc: any; onChange: (d: any) => v
       <div className="space-y-1">
         <div className="grid grid-cols-12 gap-2 items-center">
           <div className="col-span-4 text-xs font-semibold text-ink-secondary">{label}</div>
-          <select value={mode} onChange={(e) => set(`${mk}_mode`, e.target.value)} className="col-span-4 glass-input px-2 py-1.5 rounded-lg text-xs">
+          <select value={mode} onChange={(e) => set(`${mk}_mode`, e.target.value)} className="col-span-4 glass-input rounded-xl px-3 py-2 text-sm">
             <option value="none">No discount</option><option value="percent">Fixed %</option><option value="price_type">By price type</option>
           </select>
           {mode === "percent" && (
-            <div className="col-span-4 flex items-center gap-1"><input type="number" min={0} max={100} value={disc[`${mk}_value`] ?? 0} onChange={(e) => set(`${mk}_value`, Number(e.target.value))} className="glass-input px-2 py-1.5 rounded-lg text-xs w-full" /><span className="text-xs text-ink-tertiary">%</span></div>
+            <div className="col-span-4 flex items-center gap-1"><input type="number" min={0} max={100} value={disc[`${mk}_value`] ?? 0} onChange={(e) => set(`${mk}_value`, Number(e.target.value))} className="glass-input rounded-xl px-3 py-2 text-sm w-full" /><span className="text-xs text-ink-tertiary">%</span></div>
           )}
           {mode === "price_type" && (
-            <select value={disc[`${mk}_price_type_id`] || ""} onChange={(e) => set(`${mk}_price_type_id`, e.target.value)} className="col-span-4 glass-input px-2 py-1.5 rounded-lg text-xs">
+            <select value={disc[`${mk}_price_type_id`] || ""} onChange={(e) => set(`${mk}_price_type_id`, e.target.value)} className="col-span-4 glass-input rounded-xl px-3 py-2 text-sm">
               <option value="">Select price…</option>{types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
           )}
