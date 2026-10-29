@@ -388,8 +388,8 @@ if (plansBox) {
     const shop = (C.plans || []).find(x => x.id === "shop"), pro = (C.plans || []).find(x => x.id === "pro");
     const eg = $("#multiEg"), per = yearly ? "a year" : "a month";
     if (eg && shop && pro) eg.innerHTML =
-      `<div><b>Two locations on Shop: ${cur}${fmt((shop.monthly + shop.extraLocation) * f)} ${per}</b><span>${cur}${fmt(shop.monthly * f)} + ${cur}${fmt(shop.extraLocation * f)}, with 8 team members shared between them. Inventory, scanning, time clock and reports.</span></div>`
-      + `<div><b>Two locations on Pro: ${cur}${fmt((pro.monthly + pro.extraLocation) * f)} ${per}</b><span>${cur}${fmt(pro.monthly * f)} + ${cur}${fmt(pro.extraLocation * f)}, unlimited people. Adds stock transfers between locations, purchase orders and payroll.</span></div>`;
+      `<div><b>Two locations on Shop: ${cur}${fmt((shop.monthly + shop.extraLocation) * f)} ${per}</b><span>${cur}${fmt(shop.monthly * f)} + ${cur}${fmt(shop.extraLocation * f)}, with 4 team members shared between them. Inventory, scanning, time clock and reports.</span></div>`
+      + `<div><b>Two locations on Pro: ${cur}${fmt((pro.monthly + pro.extraLocation) * f)} ${per}</b><span>${cur}${fmt(pro.monthly * f)} + ${cur}${fmt(pro.extraLocation * f)}, with 8 team members shared between them. Adds stock transfers between locations, purchase orders and payroll.</span></div>`;
     const e = C.enterprise;
     if (e && $("#ent")) $("#ent").innerHTML = `<div><b>${e.name}</b><p>${e.text}</p></div><button class="btn btn-outline" type="button" data-open-demo>${e.cta}</button>`;
     bindHovers(plansBox);
