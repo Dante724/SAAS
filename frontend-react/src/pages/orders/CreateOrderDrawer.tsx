@@ -58,6 +58,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
   const [priority, setPriority] = useState(0);
   const [managerId, setManagerId] = useState(""); const [assigneeId, setAssigneeId] = useState("");
   const [scheduled, setScheduled] = useState(""); const [duration, setDuration] = useState(60);
+  const [pickType, setPickType] = useState<"all" | "service" | "product">("all");   // step 2 search filter
   const [complaint, setComplaint] = useState("");
   const [group, setGroup] = useState("Device"); const [brand, setBrand] = useState(""); const [model, setModel] = useState(""); const [serial, setSerial] = useState("");
   // 144ka: optional deeper asset identifiers, revealed by the "+ More details" expander (mirrors the WO/asset drawer).
@@ -155,6 +156,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
         assigned_to_id: assigneeId || null,
         manager_id: managerId || null,
         scheduled_for: scheduled || null,
+        duration_min: duration || 60,
         device_id: deviceId,
         asset_brand: brand || null, asset_model: model || null, asset_serial: serial || null,
         asset_imei: imei || null, asset_vin: vin || null, asset_hin: hin || null,
@@ -417,10 +419,11 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
           {step === 2 && (
             <section className="space-y-5">
               <p className="text-xs text-ink-tertiary leading-relaxed">Add the services and products for this order. You can also create it now and add these later.</p>
-              <div className="flex items-center space-x-1 border-b border-slate-200/80 pb-2">
-                <button type="button" className="px-3.5 py-1 text-xs font-bold rounded-lg bg-blue-50 text-primary">All</button>
-                <button type="button" className="px-3.5 py-1 text-xs font-semibold text-ink-secondary hover:text-ink-primary">Services</button>
-                <button type="button" className="px-3.5 py-1 text-xs font-semibold text-ink-secondary hover:text-ink-primary">Products</button>
+              <div role="group" aria-label="Show in search" className="flex items-center space-x-1 border-b border-slate-200/80 pb-2">
+                {([["all", "All"], ["service", "Services"], ["product", "Products"]] as const).map(([k, l]) => (
+                  <button key={k} type="button" aria-pressed={pickType === k} onClick={() => setPickType(k)}
+                    className={`px-3.5 py-1 text-xs rounded-lg ${pickType === k ? "font-bold bg-blue-50 text-primary" : "font-semibold text-ink-secondary hover:text-ink-primary"}`}>{l}</button>
+                ))}
               </div>
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-[11px] font-bold text-ink-tertiary">Line items</span>
@@ -435,7 +438,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
               </div>
               <JobSuggestions complaint={issueText()} deviceId={deviceId}
                 onAdd={(i) => setLines((ls) => [...ls, { id: Math.random().toString(36).slice(2), description: i.description, kind: i.kind, price: i.price }])} />
-              <CatalogPicker placeholder="Search a service or product to add…" onPick={(i) => setLines((ls) => [...ls, { id: Math.random().toString(36).slice(2), description: i.name, kind: i.kind, price: i.price || 0, ref_id: i.ref_id }])} />
+              <CatalogPicker key={pickType} type={pickType} placeholder={pickType === "service" ? "Search a service to add…" : pickType === "product" ? "Search a product to add…" : "Search a service or product to add…"} onPick={(i) => setLines((ls) => [...ls, { id: Math.random().toString(36).slice(2), description: i.name, kind: i.kind, price: i.price || 0, ref_id: i.ref_id }])} />
 
               <div className="space-y-2.5">
                 <div className="flex items-center justify-between text-[11px] font-bold text-ink-tertiary px-1"><span>Configured items</span><span>Subtotal</span></div>

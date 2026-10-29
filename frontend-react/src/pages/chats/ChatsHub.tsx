@@ -64,7 +64,6 @@ export default function ChatsHub() {
     return () => window.removeEventListener("keydown", onKey);
   }, [more, convMenu]);
   const [toast, setToast] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLInputElement>(null);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2600); };
 
@@ -299,8 +298,7 @@ export default function ChatsHub() {
                 {QUICK.map((q) => <button key={q} title={q} onClick={() => insertQuick(q)} className="flex-shrink-0 px-2.5 py-1 rounded-full border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-ink-secondary hover:text-ink-primary text-xs">{q.length > 34 ? q.slice(0, 34) + "…" : q}</button>)}
               </div>
               <div className="p-3 md:p-4 pt-2 bg-white flex items-center gap-2">
-                <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={(e) => { if (e.target.files?.[0]) flash("Image attach needs a connected channel provider"); e.currentTarget.value = ""; }} />
-                <button aria-label="Attach image" onClick={() => fileRef.current?.click()} title="Attach image" className="w-10 h-10 flex-shrink-0 rounded-xl border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center justify-center"><M n="image" c="text-base" /></button>
+                {/* No channel can send images yet, so there is no attach button (it could only ever fail). */}
                 <input ref={composerRef} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} className={`${fieldCls} flex-1 min-w-0 h-10 px-3 text-sm rounded-xl`} placeholder="Message…" />
                 <button onClick={() => send()} disabled={!text.trim()} className="h-10 px-4 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center gap-1.5"><span>Send</span><M n="send" c="text-sm" /></button>
               </div>
