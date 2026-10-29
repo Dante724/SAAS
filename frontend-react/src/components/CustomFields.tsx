@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { promptDialog } from "../lib/dialog";
+import DateField from "./DateField";
 
 // Renders org-configured custom fields (Settings → Forms) into any form, reading/
 // writing the record's custom_data. Backend resolve_custom_data enforces required +
@@ -119,7 +120,9 @@ export default function CustomFields({ entity, typeId, value, onChange, creating
               : f.field_type === "select" ? <select disabled={locked} value={v} onChange={(e) => set(f.field_key, e.target.value)} className={`${field} appearance-none disabled:opacity-60`}><option value="">—</option>{optsFor(f).map((o) => <option key={o} value={o}>{o}</option>)}</select>
               : f.field_type === "multiselect" ? <div className="flex flex-wrap gap-1.5">{!optsFor(f).length && <span className="text-[11px] text-ink-tertiary">No options yet</span>}{optsFor(f).map((o) => { const arr: string[] = Array.isArray(v) ? v : []; const on = arr.includes(o); return <button type="button" key={o} disabled={locked} onClick={() => set(f.field_key, on ? arr.filter((x) => x !== o) : [...arr, o])} className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${on ? "bg-primary text-white border-primary" : "bg-white text-ink-secondary border-slate-200"} disabled:opacity-60`}>{o}</button>; })}</div>
               : f.field_type === "link" ? <input disabled={locked} type="url" value={v} onChange={(e) => set(f.field_key, e.target.value)} placeholder={f.placeholder || "https://"} className={`${field} disabled:opacity-60`} />
-              : <input disabled={locked} type={f.field_type === "number" ? "number" : f.field_type === "date" ? "date" : f.field_type === "datetime" ? "datetime-local" : "text"} value={v} onChange={(e) => set(f.field_key, e.target.value)} placeholder={f.placeholder || ""} className={`${field} disabled:opacity-60`} />}
+              : f.field_type === "date" || f.field_type === "datetime"
+                ? <DateField mode={f.field_type === "date" ? "date" : "datetime"} disabled={locked} value={v || ""} onChange={(d) => set(f.field_key, d)} label={f.field_label} />
+              : <input disabled={locked} type={f.field_type === "number" ? "number" : "text"} value={v} onChange={(e) => set(f.field_key, e.target.value)} placeholder={f.placeholder || ""} className={`${field} disabled:opacity-60`} />}
             {f.directory_key && !locked && (f.field_type === "select" || f.field_type === "multiselect") &&
               <button type="button" onClick={() => addToDir(f)} className="mt-1 text-[11px] font-semibold text-primary hover:underline">+ Add {f.field_label.toLowerCase()}</button>}
           </div>

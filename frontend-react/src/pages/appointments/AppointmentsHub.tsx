@@ -98,7 +98,7 @@ export default function AppointmentsHub() {
           <button onClick={() => setDrawer(true)} className="h-[38px] px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New appointment</button>
           <div className="ml-auto flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200/70 text-xs">
             <button onClick={() => setView("agenda")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1 ${view === "agenda" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="table_rows" c="text-xs" />Agenda</button>
-            <button onClick={() => setView("scheduler")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1 ${view === "scheduler" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="schedule" c="text-xs" />Scheduler</button>
+            <button onClick={() => setView("scheduler")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1 ${view === "scheduler" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="calendar_month" c="text-xs" />Scheduler</button>
           </div>
         </div>
         {!rows && <p className="text-xs text-ink-tertiary">Loading…</p>}

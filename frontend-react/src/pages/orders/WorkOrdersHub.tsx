@@ -1,4 +1,5 @@
 import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
+import { fmtDay } from "../../lib/serverTime";
 import { tint } from "../../lib/tint";
 import PageSummary, { type SummaryStat } from "../../components/PageSummary";
 import { useEffect, useState } from "react";
@@ -423,10 +424,10 @@ export default function WorkOrdersHub() {
                   {showCol("client") && <td className="py-3.5 px-4"><span className="font-semibold text-[13px] text-ink-primary">{o.client?.name || "Walk-in"}</span><span className="text-[11px] font-normal text-ink-tertiary block">{o.client?.phone || ""}</span></td>}
                   {showCol("device") && <td className="py-3.5 px-4 text-ink-primary font-semibold">{deviceName(o.device)}</td>}
                   {showCol("status") && <td className="py-3.5 px-4"><div className="flex items-center gap-1.5">{pill(o.status, stOf(o))}{flags[o.id]?.stalled && (
-                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-700 border border-rose-200" title={flags[o.id]?.over_by_min ? `~${Math.round(flags[o.id]!.over_by_min!)} min over typical` : "Running long"}><M n="schedule" c="text-[11px]" />Stalled</span>
+                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-700 border border-rose-200" title={flags[o.id]?.over_by_min ? `~${Math.round(flags[o.id]!.over_by_min!)} min over typical` : "Running long"}><M n="timer" c="text-[11px]" />Stalled</span>
                   )}</div></td>}
                   {showCol("assignee") && <td className="py-3.5 px-4">{o.assigned_to?.name || "—"}</td>}
-                  {showCol("scheduled") && <td className="py-3.5 px-4">{o.scheduled_for ? new Date(o.scheduled_for).toLocaleDateString() : "—"}</td>}
+                  {showCol("scheduled") && <td className="py-3.5 px-4">{o.scheduled_for ? fmtDay(o.scheduled_for) : "—"}</td>}
                   {showCol("estimate") && <td className="py-3.5 px-4 text-right tabular-nums font-bold text-ink-primary">{money(o.total)}</td>}
                   <td className="py-3.5 px-4 text-center"><button aria-label="Next" className="p-1.5 rounded-lg text-ink-tertiary group-hover:text-primary group-hover:bg-primary/10 transition-colors"><M n="chevron_right" c="text-sm" /></button></td>
                 </tr>
@@ -461,7 +462,7 @@ export default function WorkOrdersHub() {
                         className={`bg-white rounded-xl border border-slate-200/80 shadow-clay-sm p-3 cursor-grab active:cursor-grabbing hover:border-primary/40 transition-colors ${drag === o.id ? "opacity-50" : ""}`}>
                         <div className="flex items-center justify-between mb-1">
                           <span className="font-mono font-bold text-primary text-xs">{o.order_number || o.id}</span>
-                          <span className="text-[11px] text-ink-tertiary">{o.scheduled_for ? new Date(o.scheduled_for).toLocaleDateString() : ""}</span>
+                          <span className="text-[11px] text-ink-tertiary">{fmtDay(o.scheduled_for)}</span>
                         </div>
                         <div className="text-xs font-bold text-ink-primary truncate">{o.client?.name || "Walk-in"}</div>
                         <div className="text-[11px] text-ink-secondary truncate">{deviceName(o.device)}</div>

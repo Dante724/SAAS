@@ -292,7 +292,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
           <div className={`px-6 py-2 border-b flex-shrink-0 flex items-center gap-4 text-[11px] ${timing.stalled ? "bg-rose-50 border-rose-200" : "bg-slate-50/80 border-slate-200/70"}`}>
             {timing.stalled ? (
               <span className="flex items-center gap-1.5 font-bold text-rose-800">
-                <M n="schedule" c="text-sm" />Running long
+                <M n="timer" c="text-sm" />Running long
                 <span className="font-semibold text-rose-700">· {fmtDur(timing.elapsed_min)} in this status{timing.typical_min != null ? ` vs ~${fmtDur(timing.typical_min)} typical` : ""}</span>
               </span>
             ) : timing.typical_min != null ? (
@@ -434,7 +434,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                   </Ro>
                   <Ro label="Due">
                     <div className={`w-full py-2 px-3 text-xs rounded-xl border flex items-center gap-2 ${due?.[1] ? "text-rose-700 bg-rose-50/60 border-rose-200" : "text-ink-primary bg-slate-50 border-slate-200"}`}>
-                      <M n="timer" c={`text-sm ${due?.[1] ? "text-rose-600" : "text-ink-tertiary"}`} />
+                      <M n="calendar_today" c={`text-sm ${due?.[1] ? "text-rose-600" : "text-ink-tertiary"}`} />
                       <span className="font-semibold">{d.due_at ? fmtDT(d.due_at) : "No due date"}</span>
                       {due && <span className={`ml-auto text-[11px] ${due[1] ? "font-semibold" : "text-ink-tertiary"}`}>{due[0]}</span>}
                     </div>
@@ -1251,8 +1251,11 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
                         ))}</div>
                       )}
                     </div>
-                    {["text", "textarea", "number", "date"].includes(i.field_kind) && (
-                      <input type={i.field_kind === "number" ? "number" : i.field_kind === "date" ? "date" : "text"} defaultValue={v ?? ""} onBlur={(e) => e.target.value !== (v ?? "") && fill(c.id, i.id, e.target.value)}
+                    {i.field_kind === "date" && (
+                      <DateField className="mt-2 w-48" value={String(v ?? "")} onChange={(d) => d !== (v ?? "") && fill(c.id, i.id, d)} label={i.label || "Date"} />
+                    )}
+                    {["text", "textarea", "number"].includes(i.field_kind) && (
+                      <input type={i.field_kind === "number" ? "number" : "text"} defaultValue={v ?? ""} onBlur={(e) => e.target.value !== (v ?? "") && fill(c.id, i.id, e.target.value)}
                         className="glass-input w-full px-2 py-1 rounded mt-2 text-xs" placeholder="Enter value…" />
                     )}
                     {/* Templates save "dropdown" (pick one) and "multiselect" (pick several); older ones "select". */}
