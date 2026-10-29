@@ -71,7 +71,14 @@ async def get_tag(db: AsyncSession, org_id: str, tag_id: str) -> Tag:
     return t
 
 
+def _not_system(t: Tag) -> None:
+    """Membership tags ("Boat Care member") are Tekly's: added and removed with the plan."""
+    if getattr(t, "system", False):
+        raise HTTPException(409, "This tag is managed automatically by memberships")
+
+
 async def update_tag_core(db: AsyncSession, t: Tag, name: Optional[str], color: Optional[str]) -> Tag:
+    _not_system(t)
     if name and name.strip():
         name = name.strip()[:40]
         dup = (await db.execute(select(Tag).where(Tag.org_id == t.org_id, Tag.id != t.id,
@@ -87,6 +94,7 @@ async def update_tag_core(db: AsyncSession, t: Tag, name: Optional[str], color: 
 
 
 async def delete_tag_core(db: AsyncSession, t: Tag) -> None:
+    _not_system(t)
     # Remove every attachment FIRST and flush, then the tag. Taggable has no ORM relationship to
     # Tag, so the unit-of-work can't guarantee it deletes the children before the parent — under
     # enforced FKs (SQLite pragma / Postgres) that races into a FOREIGN KEY violation. An explicit
@@ -128,6 +136,7 @@ async def attach_tag(data: AttachIn, db: AsyncSession = Depends(get_db),
         Tag.id == data.tag_id, Tag.org_id == current.org_id))).scalar_one_or_none()
     if not t:
         raise HTTPException(404, "Tag not found")
+    _not_system(t)
     existing = (await db.execute(select(Taggable).where(
         Taggable.org_id == current.org_id, Taggable.tag_id == data.tag_id,
         Taggable.entity_type == data.entity_type,
@@ -148,6 +157,7 @@ async def detach_tag(data: AttachIn, db: AsyncSession = Depends(get_db),
         Taggable.entity_type == data.entity_type,
         Taggable.entity_id == data.entity_id))).scalar_one_or_none()
     if tg:
+        _not_system(await get_tag(db, current.org_id, tg.tag_id))
         await db.delete(tg)
         await db.commit()
     return {"ok": True}

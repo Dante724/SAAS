@@ -246,7 +246,8 @@ async def org_provider(db: AsyncSession, org_id: str) -> str:
 # ── Intent creation ──────────────────────────────────────────────────────────
 async def create_intent(db: AsyncSession, *, org_id: str, order_id: Optional[str],
                         amount: float, account_id: Optional[str],
-                        currency: Optional[str] = None) -> PaymentIntent:
+                        currency: Optional[str] = None,
+                        invoice_id: Optional[str] = None) -> PaymentIntent:
     # Stored money is always in the org's base currency, so that's what a checkout must charge.
     # Hard-coding "usd" turned an INR 5,000 balance into a $5,000 checkout.
     if not currency:
@@ -254,8 +255,16 @@ async def create_intent(db: AsyncSession, *, org_id: str, order_id: Optional[str
         org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
         currency = ((org.currency_code if org else None) or "usd")
     currency = currency.lower()
-    invoice_id = None
+    # A stand-alone invoice (a membership period) can be paid by link too; mark_succeeded already
+    # posts to intent.invoice_id when there's no order.
     description = "Tekly payment"
+    if invoice_id:
+        inv = (await db.execute(select(Invoice).where(
+            Invoice.id == invoice_id, Invoice.org_id == org_id))).scalar_one_or_none()
+        if not inv:
+            from fastapi import HTTPException
+            raise HTTPException(404, "Invoice not found")
+        description = f"Invoice {inv.invoice_number}"
     if order_id:
         o = (await db.execute(select(Order).where(
             Order.id == order_id, Order.org_id == org_id))).scalar_one_or_none()
