@@ -124,6 +124,7 @@ export default function InventoryHub() {
   const [asel, setAsel] = useState<Set<string>>(new Set());   // asset selection
   const PAGE_SIZE = 50;                 // numbered pagination — 50 rows/page (Stock + Devices)
   const [pPage, setPPage] = useState(1);   // Stock page
+  const [poQ, setPoQ] = useState("");   // purchase orders search
   const [secPage, setSecPage] = useState(1);  // shared page for the other tabs (PO + audit) — one visible at a time
   const aToggle = (id: string) => setAsel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const [labelDlg, setLabelDlg] = useState(false);
@@ -358,8 +359,12 @@ export default function InventoryHub() {
   const pageProducts = shownProducts.slice((Math.min(pPage, pPages) - 1) * PAGE_SIZE, Math.min(pPage, pPages) * PAGE_SIZE);
   const pageAssets = assets || [];
   // PO + audit tables share secPage (only one of these tabs renders at a time).
-  const poPages = Math.max(1, Math.ceil((pos?.length ?? 0) / PAGE_SIZE));
-  const pagePos = (pos || []).slice((Math.min(secPage, poPages) - 1) * PAGE_SIZE, Math.min(secPage, poPages) * PAGE_SIZE);
+  // PO search: number, supplier or status.
+  const poNeedle = poQ.trim().toLowerCase();
+  const shownPos = (pos || []).filter((po) => !poNeedle || [po.po_number, supName[po.supplier_id || ""], po.status]
+    .some((x) => String(x || "").toLowerCase().includes(poNeedle)));
+  const poPages = Math.max(1, Math.ceil(shownPos.length / PAGE_SIZE));
+  const pagePos = shownPos.slice((Math.min(secPage, poPages) - 1) * PAGE_SIZE, Math.min(secPage, poPages) * PAGE_SIZE);
   const auditAll: any[] = auditRows[tab] || [];
   const auditPages = Math.max(1, Math.ceil(auditAll.length / PAGE_SIZE));
   const pageAudit = auditAll.slice((Math.min(secPage, auditPages) - 1) * PAGE_SIZE, Math.min(secPage, auditPages) * PAGE_SIZE);
@@ -613,23 +618,22 @@ export default function InventoryHub() {
 
         {/* PURCHASE ORDERS */}
         {tab === "purchase-orders" && (<>
-          <div className="flex items-center gap-3 mb-5 flex-wrap"><button onClick={() => setNewPo(true)} className={primaryBtn}><M n="add" c="text-sm" />New purchase order</button><button onClick={() => setReorderOpen(true)} className={ghostBtn} title="Suggest POs for products below minimum stock"><M n="sync_alt" c="text-sm text-ink-tertiary" />Reorder suggestions</button><button onClick={() => setCockpitOpen(true)} className={ghostBtn} title="What needs attention: overdue, arriving, recost, invoices, low stock"><M n="target" c="text-sm text-ink-tertiary" />Cockpit</button>{searchBar("Search purchase orders, supplier, PO#…")}</div>
+          <div className="flex items-center gap-3 mb-5 flex-wrap"><button onClick={() => setNewPo(true)} className={primaryBtn}><M n="add" c="text-sm" />New purchase order</button><button onClick={() => setReorderOpen(true)} className={ghostBtn} title="Suggest POs for products below minimum stock"><M n="sync_alt" c="text-sm text-ink-tertiary" />Reorder suggestions</button><button onClick={() => setCockpitOpen(true)} className={ghostBtn} title="What needs attention: overdue, arriving, recost, invoices, low stock"><M n="target" c="text-sm text-ink-tertiary" />Cockpit</button>{searchBar("Search purchase orders, supplier, PO#…", poQ, (v) => { setPoQ(v); setSecPage(1); })}</div>
           <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
             <table className="w-full text-left border-collapse">
               <thead className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary"><tr>
-                <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" aria-label="Select all" className="w-4 h-4 rounded border-slate-300 text-primary" /></th>
-                <th className="py-3.5 px-3">PO number</th><th className="py-3.5 px-3">Supplier</th><th className="py-3.5 px-3">Expected</th><th className="py-3.5 px-3 text-right">Total ({currencySymbol()})</th><th className="py-3.5 px-3 text-center">Status</th><th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
+                <th className="py-3.5 pl-5 px-3">PO number</th><th className="py-3.5 px-3">Supplier</th><th className="py-3.5 px-3">Expected</th><th className="py-3.5 px-3 text-right">Total ({currencySymbol()})</th><th className="py-3.5 px-3 text-center">Status</th><th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-xs">
-                {!pos && <SkeletonRows cols={7} />}
-                {pos?.length === 0 && <tr><td colSpan={7} className="py-6 px-5 text-ink-tertiary">No purchase orders yet.</td></tr>}
+                {!pos && <SkeletonRows cols={6} />}
+                {pos?.length === 0 && <tr><td colSpan={6} className="py-6 px-5 text-ink-tertiary">No purchase orders yet.</td></tr>}
+                {!!pos?.length && shownPos.length === 0 && <tr><td colSpan={6} className="py-6 px-5 text-ink-tertiary">No purchase orders match "{poQ.trim()}".</td></tr>}
                 {pagePos.map((po) => {
                   const st = (po.status || "draft").toLowerCase();
                   const cls = st === "received" ? "bg-emerald-50 text-emerald-700 border-emerald-200/60" : st === "partial" || st === "ordered" ? "bg-amber-50 text-amber-700 border-amber-200/60" : "bg-slate-100 text-slate-600 border-slate-200";
                   return (
                     <tr key={po.id} className="hover:bg-blue-50/30 transition-colors">
-                      <td className="py-3.5 pl-5 pr-2"><input type="checkbox" aria-label="Select row" className="w-4 h-4 rounded border-slate-300 text-primary" /></td>
-                      <td className="py-3.5 px-3 font-mono font-bold text-primary">{po.po_number || po.id}</td>
+                      <td className="py-3.5 pl-5 px-3 font-mono font-bold text-primary">{po.po_number || po.id}</td>
                       <td className="py-3.5 px-3 font-semibold text-ink-primary">{supName[po.supplier_id || ""] || "—"}</td>
                       <td className="py-3.5 px-3 text-ink-secondary">{po.expected_at ? new Date(po.expected_at).toLocaleDateString() : "—"}</td>
                       <td className="py-3.5 px-3 text-right tabular-nums font-bold text-ink-primary">{money(po.total)}</td>
@@ -640,7 +644,7 @@ export default function InventoryHub() {
                 })}
               </tbody>
             </table>
-            {pos && pos.length > 0 && <Pager total={pos.length} page={Math.min(secPage, poPages)} pageSize={PAGE_SIZE} onPage={setSecPage} noun="purchase orders" />}
+            {shownPos.length > 0 && <Pager total={shownPos.length} page={Math.min(secPage, poPages)} pageSize={PAGE_SIZE} onPage={setSecPage} noun="purchase orders" />}
           </div>
         </>)}
 
