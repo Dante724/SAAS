@@ -80,7 +80,7 @@ async def test_traversal_cannot_reach_system_files():
 
 @pytest.mark.asyncio
 async def test_real_frontend_files_still_served():
-    status, body = await _get("/admin.html")
+    status, body = await _get("/offline.html")
     assert status == 200 and b"<html" in body.lower()
 
 

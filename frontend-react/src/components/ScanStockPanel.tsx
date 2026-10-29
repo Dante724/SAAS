@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { M } from "./Shell";
 import { api } from "../api/client";
+import ScanButton from "./ScanButton";
 
 /**
  * Phase 2 — hands-free stock posting. Pick a location + movement type once, then
@@ -27,8 +28,8 @@ export default function ScanStockPanel({ onClose, onPosted }: { onClose: () => v
     ref.current?.focus();
   }, []);
 
-  async function post() {
-    const c = code.trim();
+  async function post(scanned?: string) {
+    const c = (scanned ?? code).trim();
     if (!c || !loc) return;
     try {
       const r = await api.post<any>("/inventory/scan-adjust", { code: c, location_id: loc, qty, movement_type: mode });
@@ -62,6 +63,7 @@ export default function ScanStockPanel({ onClose, onPosted }: { onClose: () => v
               <input type="number" min={1} value={qty} onChange={(e) => setQty(Math.max(1, Number(e.target.value) || 1))} className="glass-input rounded-lg px-2 py-2 text-sm w-full font-mono" /></div>
             <div className="flex-1"><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Scan / type code</label>
               <input ref={ref} value={code} onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") post(); }} placeholder="SKU / barcode" className="glass-input rounded-lg px-3 py-2 text-sm w-full font-mono" /></div>
+            <ScanButton title="Scan with camera" onScan={(c) => { setCode(c); post(c); }} />
           </div>
           <div className="text-[11px] text-ink-tertiary">{verb} {qty} to the selected location per scan. Enter posts each one.</div>
           {log.length > 0 && (

@@ -1,5 +1,6 @@
 import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
 import RecommendationsPanel from "./RecommendationsPanel";
+import { DeferredWork, MarginNote, ReadyWhy, ServiceDue, TogetherChips } from "../../components/sense/Sense";
 import PartsPOPanel from "./PartsPOPanel";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useRef, useState } from "react";
@@ -10,12 +11,15 @@ import PhotoAnnotator from "./PhotoAnnotator";
 import TagChips from "../../components/TagChips";
 import { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
+import FloatingMenu from "../../components/FloatingMenu";
+import PrintMenu from "./PrintMenu";
 import { Order, deviceName, money } from "./types";
 import { Avatar, deviceIcon, dueText, friendlyDate } from "./look";
 import { api, openAuthedDoc } from "../../api/client";
 import { readAsDataUrl } from "../../lib/files";
 import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
 import AuthedImage from "../../components/AuthedImage";
+import NotesPanel from "./NotesPanel";
 import ClientDrawer from "./ClientDrawer";
 import AssetDrawer from "./AssetDrawer";
 import { useMe } from "../../context/Me";
@@ -25,9 +29,11 @@ import StatusControl, { type FullStatus } from "../../components/StatusControl";
 import { escapeHtml, printHtmlInFrame } from "../../lib/safeHtml";
 import JobCardFields from "../../components/JobCardFields";
 import ReaderCharge from "../../components/ReaderCharge";
+import AccountPicker, { type PayAccount, type PaymentOption, accountsFor, pickDefaultAccount } from "../../components/AccountPicker";
 import CardPaymentsList from "../../components/CardPaymentsList";
 import KitGroupHeader from "./KitGroupHeader";
 import { groupKitLines } from "../../lib/kitGroups";
+import { jobTypeLabel, type WOTypeRef } from "./jobType";
 
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
 type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean; order_item_id?: string | null;
@@ -64,6 +70,11 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   const [sub, setSub] = useState<null | "client" | "asset">(null);
   const [d, setD] = useState<Detail>(order as Detail);
   const [statuses, setStatuses] = useState<FullStatus[]>([]);
+  // Edits that only save on an explicit button (notes, watch-outs) register here while
+  // unsaved, so "Save and close" can save them and a plain close can warn first.
+  const pending = useRef(new Map<string, () => Promise<boolean>>());
+  const setPending = (key: string, save: (() => Promise<boolean>) | null) => { if (save) pending.current.set(key, save); else pending.current.delete(key); };
+  const [saving, setSaving] = useState(false);
   const [emps, setEmps] = useState<Emp[]>([]);
   const [timing, setTiming] = useState<Timing | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -91,17 +102,29 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   }, [order.id]);
   useEffect(() => { api.get<Timing>(`/orders/${order.id}/timing`).then(setTiming).catch(() => setTiming(null)); }, [order.id, d.status]);
   useEffect(() => { api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(() => {}); }, []);
+  const [woTypes, setWoTypes] = useState<WOTypeRef[] | null>(null);
+  useEffect(() => { api.get<any>("/forms/types").then((r) => setWoTypes(r.items || [])).catch(() => setWoTypes([])); }, []);
 
   async function changeStatus(key: string) {
     let reason: string | null = null;
     { const ds = droppedStatus(statuses as any[], key); if (ds) { reason = await askCancelReason(ds.name); if (reason === null) return; } }
     const prev = d.status; setD({ ...d, status: key });
-    try { await api.patch(`/orders/${order.id}/status`, { status: key, reason: reason || undefined }); flash("Status updated"); onChanged?.(); }
+    try { await api.patch(`/orders/${order.id}/status`, { status: key, reason: reason || undefined }); flash("Status updated"); onChanged?.(); reload(); }
     catch (e: any) { setD({ ...d, status: prev }); flash(`Failed: ${e.message}`); }
   }
+  const nav = useNavigate();
+  async function continueLinked() {
+    const why = await promptDialog(`Start a new job that carries on from ${d.order_number}? It keeps the customer, device and job details, and the two jobs are linked.`,
+      { title: "Continue as a linked job", placeholder: "What needs doing this time (optional)", defaultValue: "" });
+    if (why === null) return;
+    try {
+      const r = await api.post<{ id: string; order_number: string }>(`/orders/${order.id}/continue`, { complaint: why.trim() || undefined });
+      flash(`Job ${r.order_number} created`); onChanged?.(); nav(`/orders?open=${r.id}`);
+    } catch (e: any) { flash(`Failed: ${e.message}`); }
+  }
   async function saveNotes(tech_notes: string, conclusion: string) {
-    try { await api.patch(`/orders/${order.id}/notes`, { tech_notes, conclusion }); setD({ ...d, tech_notes, conclusion }); flash("Notes saved"); }
-    catch (e: any) { flash(`Failed: ${e.message}`); }
+    try { await api.patch(`/orders/${order.id}/notes`, { tech_notes, conclusion }); setD((p) => ({ ...p, tech_notes, conclusion })); flash("Notes saved"); return true; }
+    catch (e: any) { flash(`Failed: ${e.message}`); return false; }
   }
   // Copies the customer's tracking link; staff open it from the "Open" link beside it (a real
   // new-tab link), so the staff tab never turns into the customer page.
@@ -115,9 +138,19 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
       catch { flash("Couldn't copy. Use Open to see the link."); }
     } catch (e: any) { flash(`Failed: ${e.message}`); }
   }
-  async function markDone() {
-    try { await api.post(`/orders/${order.id}/complete`, {}); onChanged?.(); onClose(); }
-    catch (e: any) { flash(`Cannot close: ${e.message}`); }
+  // Save and close never touches the status (that's the status menu in the header):
+  // it commits fields that save when you leave them, saves pending notes/warnings, then closes.
+  async function saveAndClose() {
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    setSaving(true);
+    try {
+      for (const save of [...pending.current.values()]) if (!(await save())) return;   // stay open on a failed save
+      onChanged?.(); onClose();
+    } finally { setSaving(false); }
+  }
+  async function tryClose() {
+    if (pending.current.size && !(await confirmDialog("You have changes that aren't saved yet. Close without saving them?", { title: "Unsaved changes", confirmLabel: "Close without saving" }))) return;
+    onClose();
   }
   async function del() {
     const reason = await promptDialog("Reason for deleting this work order?"); if (!reason) return;
@@ -160,7 +193,6 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
     for (const b of byEmp.filter((x: any) => x.running)) await stopEntry(b.employee_id);
   }
   async function printWO() {
-    const w = window.open("", "_blank", "width=420,height=640"); if (!w) return;
     const css = `body{font-family:Inter,system-ui,sans-serif;margin:0;color:#14213f}.s{padding:22px;page-break-after:always}.s:last-child{page-break-after:auto}h1{font-size:16px;margin:0 0 4px}.k{font-size:10px;font-weight:800;text-transform:uppercase;color:#9aa7c4;letter-spacing:.05em;margin-top:12px}.v{font-size:14px;font-weight:600}.n{font-size:22px;font-weight:800;font-family:monospace}hr{border:none;border-top:1px dashed #c9d3ea;margin:12px 0}`;
     const head = `<h1>${escapeHtml(me?.org_name || "Tekly")}</h1>`;   // the shop's own name on its stickers
     const client = `<div class="k">Client</div><div class="v">${escapeHtml(c.name || "Walk-in")} ${c.phone ? "· " + escapeHtml(c.phone) : ""}</div>`;
@@ -179,8 +211,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
       <div class="k">Status</div><div class="v">${escapeHtml((d.status || "").replace(/_/g, " "))}</div>
       <div class="k">Complaint</div><div class="v">${escapeHtml(d.complaint || "—")}</div>
       <div class="k">Total</div><div class="v">${escapeHtml(money(d.total))}</div></div>`;
-    w.document.write(`<html><head><title>${escapeHtml(woNum)}</title><style>${css}</style></head><body>${stickers}</body></html>`);
-    w.document.close(); w.focus(); w.print();
+    // Hidden sandboxed frame instead of a pop-up window, so pop-up blockers can't stop it.
+    printHtmlInFrame(`<html><head><title>${escapeHtml(woNum)}</title><style>${css}</style></head><body>${stickers}</body></html>`);
   }
 
   // A kit can print as one line for the customer; a customer can always ask for every item.
@@ -219,7 +251,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 40 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={tryClose} />
       <div className="relative h-full w-full max-w-[840px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 
@@ -274,10 +306,20 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                     className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-50">
                     <M n="link" c="text-base text-ink-tertiary" /><span className="text-sm text-ink-primary">Copy link to this job</span>
                   </button>
+                  {!(order as any).is_estimate && can("can_create_tickets") && (
+                    <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); continueLinked(); }}
+                      className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-50">
+                      <M n="redo" c="text-base text-ink-tertiary" />
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-sm text-ink-primary">Continue as a linked job</span>
+                        <span className="block text-[11px] text-ink-tertiary">A new job for the same customer and device</span>
+                      </span>
+                    </button>
+                  )}
                 </div>
               </>)}
             </div>
-            <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100 transition-colors" title="Close"><M n="close" c="text-lg" /></button>
+            <button aria-label="Close" onClick={tryClose} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100 transition-colors" title="Close"><M n="close" c="text-lg" /></button>
           </div>
         </header>
         {partsOpen && <PartsPOPanel orderId={order.id} lines={(d.lines || []) as any[]} canBuy={canBuy} isEstimate={!!(order as any).is_estimate}
@@ -309,6 +351,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                 <M n="event_available" c="text-sm text-emerald-600" />
                 Est. ready <span className="font-semibold text-ink-primary">{fmtDT(timing.predicted_ready_at)}</span>
                 {timing.confidence === "low" && <span className="text-ink-tertiary" title={`Based on ${timing.sample_n} past job(s)`}>· rough</span>}
+                <ReadyWhy sampleN={timing.sample_n} typicalMin={timing.typical_min} fmt={fmtDur} />
               </span>
             )}
           </div>
@@ -332,7 +375,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             <span><b>Possible comeback.</b> This device was here {comeback.days_since != null ? `${comeback.days_since} day${comeback.days_since === 1 ? "" : "s"} ago` : "recently"} (WO {comeback.prior_order_number}){comeback.count && comeback.count > 1 ? ` · ${comeback.count} visits in 45 days` : ""}. Check the earlier fix before promising.</span>
           </div>
         )}
-        <WatchOutBanner device={d.device} client={d.client} onChanged={reload} onFlash={flash} />
+        <WatchOutBanner device={d.device} client={d.client} onChanged={reload} onFlash={flash} onPending={(f) => setPending("watchout", f)} />
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-6 bg-slate-50/70 space-y-6">
@@ -407,7 +450,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-clay-sm space-y-4">
                 <h4 className="text-sm font-semibold text-ink-primary">Job details</h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <Ro label="Job type"><Sel value={d.is_estimate ? "Estimate" : "Hardware Repair"} opts={["Hardware Repair", "Diagnostics", "Warranty", "Maintenance", "Estimate"]} /></Ro>
+                  <Ro label="Job type"><Sel value={jobTypeLabel({ is_estimate: d.is_estimate, type_id: (d as any).type_id }, woTypes)} /></Ro>
                   <Ro label="Priority"><Sel value={(d.priority ?? 0) >= 2 ? "Urgent, same day" : urgent ? "High" : "Normal"} opts={["Normal", "High", "Urgent, same day"]} red={urgent} /></Ro>
                   <Ro label="Manager"><SelEmp label="Manager" value={d.manager?.id || ""} emps={emps.filter((e) => e.in_managers !== false || e.id === d.manager?.id)} onChange={(id) => reassign("manager_id", id)} /></Ro>
                   <Ro label="Technician"><SelEmp label="Technician" value={d.assigned_to?.id || ""} emps={emps.filter((e) => e.in_assignees !== false || e.id === d.assigned_to?.id)} onChange={(id) => reassign("assigned_to_id", id)} /></Ro>
@@ -446,11 +489,18 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                 </div>
                 <JobCardFields orderId={order.id} typeId={(d as any).type_id} value={(d as any).custom_data} onFlash={flash}
                   onSaved={(cd) => setD({ ...d, custom_data: cd } as Detail)} />
-                <NotesEditor initTech={d.tech_notes || ""} initConcl={d.conclusion || ""} diagnosis={d.diagnosis || ""} onSave={saveNotes} />
+                <NotesEditor initTech={d.tech_notes || ""} initConcl={d.conclusion || ""} diagnosis={d.diagnosis || ""} onSave={saveNotes} onPending={(f) => setPending("notes", f)} />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><ChecklistRings orderId={order.id} onOpen={() => setTab("checklists")} /></div>
 
+              {(d as any).written_off > 0 && (
+                <div role="note" className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-xs text-ink-secondary">
+                  <M n="block" c="text-base text-ink-tertiary" />
+                  <span>Dropped{(d as any).cancel_reason ? `: ${(d as any).cancel_reason}` : ""}. The {money((d as any).written_off)} the customer still owed was written off, so it isn't counted as a debt or as profit.</span>
+                </div>
+              )}
+              <LinkedJobs orderId={order.id} />
               <JobItems orderId={order.id} onFlash={flash} onChanged={reload} />
 
               <IntakePhotos orderId={order.id} photos={d.intake_photos} onChanged={reload} onFlash={flash} />
@@ -474,9 +524,10 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             </div>
           )}
           {tab === "checklists" && <ChecklistsTab orderId={order.id} typeId={(d as any).type_id} />}
-          {tab === "invoices" && <InvoicesTab orderId={order.id} total={d.total} deposit={(d as any).deposit_amount} currencyCode={(d as any).currency_code} fxRate={(d as any).fx_rate} currencySymbol={(d as any).currency_symbol} onCurrencyChange={(code, rate, symbol) => setD({ ...d, currency_code: code, fx_rate: rate, currency_symbol: symbol } as any)} onFlash={flash} />}
+          {tab === "invoices" && <InvoicesTab orderId={order.id} total={d.total} writtenOff={(d as any).written_off || 0} deposit={(d as any).deposit_amount} currencyCode={(d as any).currency_code} fxRate={(d as any).fx_rate} currencySymbol={(d as any).currency_symbol} onCurrencyChange={(code, rate, symbol) => setD({ ...d, currency_code: code, fx_rate: rate, currency_symbol: symbol } as any)} onFlash={flash} />}
           {tab === "activity" && (<>
             <ConversationPanel orderId={order.id} />
+            <NotesPanel orderId={order.id} onFlash={flash} />
             <ActivityTab orderId={order.id} clientName={c.name} clientPhone={c.phone} onFlash={flash} />
           </>)}
         </div>
@@ -489,13 +540,13 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               <button onClick={copyTrackingLink} className="text-xs text-primary font-bold hover:underline flex items-center gap-1"><M n="link" c="text-xs" />Copy tracking link</button>
               {(d as any).public_token && <a href={`/track/${(d as any).public_token}`} target="_blank" rel="noopener noreferrer" className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-0.5 hover:underline">Open<M n="open_in_new" c="text-xs" /></a>}
             </span>
-            <button onClick={printWO} className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-1 border border-slate-200 rounded-lg px-2 py-1 bg-white"><M n="print" c="text-xs" />Print WO</button>
+            <PrintMenu key={order.id} orderId={order.id} status={d.status} canInvoices={can("can_view_invoices")} onSticker={printWO} onError={flash} />
             {hasKit && can("can_print_itemised_copy") && <button onClick={printItemised} className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-1 border border-slate-200 rounded-lg px-2 py-1 bg-white"><M n="receipt_long" c="text-xs" />Print itemised copy</button>}
             <button onClick={del} className="text-xs text-rose-600 hover:text-rose-700 font-semibold flex items-center gap-1 hover:bg-rose-50 rounded-lg px-2 py-1 transition-colors"><M n="delete" c="text-xs" />Delete</button>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={onClose} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 transition-colors">Close</button>
-            {!isClosed && <button onClick={markDone} className="px-5 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="task_alt" c="text-sm" />Mark done and close</button>}
+            <button onClick={tryClose} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 transition-colors">Close</button>
+            <button onClick={saveAndClose} disabled={saving} className="px-5 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all disabled:opacity-60"><M n="check" c="text-sm" />{saving ? "Saving…" : "Save and close"}</button>
           </div>
         </footer>
 
@@ -679,6 +730,24 @@ function JobItems({ orderId, onFlash, onChanged }: { orderId: string; onFlash: (
   );
 }
 
+// "Continue as a linked job": the job this one carries on from, and the jobs that carry it on.
+function LinkedJobs({ orderId }: { orderId: string }) {
+  const nav = useNavigate();
+  const [l, setL] = useState<{ continued_from: JobLink | null; continued_in: JobLink[] } | null>(null);
+  useEffect(() => { api.get<any>(`/orders/${orderId}/linked`).then(setL).catch(() => setL(null)); }, [orderId]);
+  if (!l || (!l.continued_from && !(l.continued_in || []).length)) return null;
+  const links = [...(l.continued_from ? [{ ...l.continued_from, rel: "Continued from" }] : []),
+                 ...(l.continued_in || []).map((x) => ({ ...x, rel: "Continued in" }))];
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-secondary">
+      <M n="link" c="text-sm text-ink-tertiary" />
+      {links.map((x) => (
+        <span key={x.rel + x.id}>{x.rel} <button type="button" onClick={() => nav(`/orders?open=${x.id}`)} className="font-mono font-semibold text-primary hover:underline">{x.order_number}</button></span>
+      ))}
+    </div>
+  );
+}
+
 function ItemComplaint({ value, readOnly, onSave }: { value: string; readOnly: boolean; onSave: (v: string) => void }) {
   const [v, setV] = useState(value);
   useEffect(() => { setV(value); }, [value]);
@@ -712,10 +781,13 @@ function SelEmp({ value, emps, onChange, label }: { value: string; emps: Emp[]; 
 }
 
 /* ---- Notes editor ---- */
-function NotesEditor({ initTech, initConcl, diagnosis, onSave }: { initTech: string; initConcl: string; diagnosis: string; onSave: (t: string, c: string) => void }) {
+function NotesEditor({ initTech, initConcl, diagnosis, onSave, onPending }: { initTech: string; initConcl: string; diagnosis: string; onSave: (t: string, c: string) => Promise<boolean>; onPending?: (save: (() => Promise<boolean>) | null) => void }) {
   const [tech, setTech] = useState(initTech);
   const [concl, setConcl] = useState(initConcl);
   useEffect(() => { setTech(initTech); setConcl(initConcl); }, [initTech, initConcl]);
+  const dirty = tech !== initTech || concl !== initConcl;
+  useEffect(() => { onPending?.(dirty ? () => onSave(tech, concl) : null); }, [dirty, tech, concl]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => onPending?.(null), []);   // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
       <div className="space-y-1">
@@ -778,10 +850,11 @@ function ChecklistRings({ orderId, onOpen }: { orderId: string; onOpen: () => vo
 }
 
 /* ---- Watch-out banner — prominent handling warnings for the asset + the customer ---- */
-function WatchOutBanner({ device, client, onChanged, onFlash }: {
+function WatchOutBanner({ device, client, onChanged, onFlash, onPending }: {
   device?: { id?: string; watch_out?: string | null } | null;
   client?: { id?: string; name?: string; watch_out?: string | null } | null;
   onChanged: () => void; onFlash: (m: string) => void;
+  onPending?: (save: (() => Promise<boolean>) | null) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [dev, setDev] = useState(device?.watch_out || "");
@@ -794,9 +867,11 @@ function WatchOutBanner({ device, client, onChanged, onFlash }: {
     try {
       if (client?.id && (cli || "") !== (client.watch_out || "")) await api.patch(`/clients/${client.id}`, { watch_out: cli || null });
       if (device?.id && (dev || "") !== (device.watch_out || "")) await api.put(`/assets/${device.id}`, { watch_out: dev || null });
-      onFlash("Warnings saved"); setEditing(false); onChanged();
-    } catch (e: any) { onFlash(e.message || "Could not save"); } finally { setBusy(false); }
+      onFlash("Warnings saved"); setEditing(false); onChanged(); return true;
+    } catch (e: any) { onFlash(e.message || "Could not save"); return false; } finally { setBusy(false); }
   }
+  const dirty = editing && ((cli || "") !== (client?.watch_out || "") || (dev || "") !== (device?.watch_out || ""));
+  useEffect(() => { onPending?.(dirty ? save : null); }, [dirty, cli, dev]);   // eslint-disable-line react-hooks/exhaustive-deps
   if (!hasAny && !editing) {
     return (
       <div className="px-6 py-1.5 bg-slate-50/70 border-b border-slate-200/70 flex-shrink-0">
@@ -900,10 +975,74 @@ function IntakePhotos({ orderId, photos, onChanged, onFlash }: {
   );
 }
 
+/* ---- Custom line (3): not in the catalog — optionally saved to it as a product or service ---- */
+function CustomLineForm({ orderId, forItem, onFlash, onClose, onAdded }: { orderId: string; forItem: string; onFlash: (m: string) => void; onClose: () => void; onAdded: () => void }) {
+  const { can } = useMe();
+  const canProduct = can("can_add_custom_product"), canService = can("can_add_custom_service");
+  const [type, setType] = useState<"product" | "service">(canProduct ? "product" : "service");
+  const [name, setName] = useState(""); const [qty, setQty] = useState(1);
+  const [price, setPrice] = useState(""); const [cost, setCost] = useState("");
+  const [save, setSave] = useState(false); const [sku, setSku] = useState(""); const [barcode, setBarcode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const canSave = type === "product" ? can("can_create_products") : can("can_edit_labors");
+  const canCost = can("can_set_cost_price");
+  async function submit() {
+    if (!name.trim()) { onFlash("Give the item a name"); return; }
+    setBusy(true);
+    try {
+      const r = await api.post<any>(`/orders/${orderId}/lines`, {
+        description: name.trim(), kind: "custom", line_type: type === "product" ? "part" : "labour",
+        qty, unit_price: Number(price) || 0, ...(canCost ? { cost_price: Number(cost) || 0 } : {}),
+        ...(forItem ? { order_item_id: forItem } : {}),
+        ...(save && canSave ? { save_to_catalog: true, catalog_kind: type,
+          ...(type === "product" ? { catalog_sku: sku.trim() || null, catalog_barcode: barcode.trim() || null } : {}) } : {}),
+      });
+      onFlash(save && canSave ? `Added and saved to the catalog${r?.margin_warning ? ` — ${r.margin_warning}` : ""}` : (r?.margin_warning ? `Added — ${r.margin_warning}` : "Line added"));
+      onAdded();
+    } catch (e: any) { onFlash(e.message || "Could not add line"); setBusy(false); }
+  }
+  const lbl = "block text-[11px] font-semibold text-ink-tertiary mb-1";
+  const inp = "glass-input w-full px-2 py-2 rounded-lg text-xs";
+  return (
+    <div className="space-y-2.5">
+      <div className="flex items-center justify-between">
+        <div role="radiogroup" aria-label="Item type" className="inline-flex p-0.5 rounded-lg bg-slate-100 border border-slate-200">
+          {canProduct && <button type="button" role="radio" aria-checked={type === "product"} onClick={() => setType("product")} className={`px-2.5 py-1 rounded-md text-xs font-semibold ${type === "product" ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary"}`}>Product</button>}
+          {canService && <button type="button" role="radio" aria-checked={type === "service"} onClick={() => setType("service")} className={`px-2.5 py-1 rounded-md text-xs font-semibold ${type === "service" ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary"}`}>Service</button>}
+        </div>
+        <button type="button" aria-label="Close custom item" onClick={onClose} className="text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-sm" /></button>
+      </div>
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="flex-1 min-w-[180px]"><label className={lbl}>Name</label><input autoFocus aria-label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder={type === "product" ? "e.g. Ribbon cable 30 cm" : "e.g. Water damage clean"} className={inp} /></div>
+        <div className="w-16"><label className={lbl}>Qty</label><input type="number" min={1} aria-label="Qty" value={qty} onChange={(e) => setQty(Math.max(1, Number(e.target.value) || 1))} className={inp} /></div>
+        <div className="w-24"><label className={lbl}>Price</label><input type="number" min={0} aria-label="Price" value={price} onChange={(e) => setPrice(e.target.value)} className={`${inp} text-right`} /></div>
+        {canCost && <div className="w-24"><label className={lbl}>Cost</label><input type="number" min={0} aria-label="Cost" value={cost} onChange={(e) => setCost(e.target.value)} className={`${inp} text-right`} /></div>}
+      </div>
+      {canSave && (
+        <label className="flex items-center gap-2 text-xs text-ink-secondary cursor-pointer">
+          <input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} />
+          Save to catalog so it can be picked next time
+        </label>
+      )}
+      {save && canSave && type === "product" && (
+        <div className="flex flex-wrap gap-2">
+          <div className="w-40"><label className={lbl}>SKU (optional)</label><input aria-label="SKU" value={sku} onChange={(e) => setSku(e.target.value)} className={`${inp} font-mono`} /></div>
+          <div className="w-44"><label className={lbl}>Barcode (optional)</label><input aria-label="Barcode" value={barcode} onChange={(e) => setBarcode(e.target.value)} className={`${inp} font-mono`} /></div>
+        </div>
+      )}
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onClose} className="px-3 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Cancel</button>
+        <button type="button" onClick={submit} disabled={busy || !name.trim()} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50">{busy ? "Adding…" : save && canSave ? "Add and save" : "Add"}</button>
+      </div>
+    </div>
+  );
+}
+
 /* ---- Services tab ---- */
 function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labor, onClockIn, isEstimate, emps, locked }: { orderId: string; deviceId?: string; lines?: Line[]; total?: number; onFlash: (m: string) => void; onChanged?: () => void; labor?: any; onClockIn?: (lineId: string) => void; isEstimate?: boolean; emps?: { id: string; name: string }[]; locked?: boolean }) {
   const { can } = useMe();
   const seePrices = can("can_view_item_prices");   // off: the API leaves line prices out
+  const [recsVersion, setRecsVersion] = useState(0);   // bumped when a deferred item becomes a draft
   const _secHM = (s: number) => { const h = Math.floor((s || 0) / 3600), m = Math.floor(((s || 0) % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m`; };
   const _byEmp = labor?.by_employee || [];
   const _timeTotal = _byEmp.reduce((n: number, b: any) => n + (b.total_seconds || 0), 0);
@@ -916,6 +1055,8 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
   const [groupBy, setGroupBy] = useState(false);               // false = flat list (default)
   const [assignOpen, setAssignOpen] = useState<string | null>(null);  // line id whose picker is open
   const [splitRatio, setSplitRatio] = useState(0.5);                   // 144ax G8 — primary's share
+  const [splitOpen, setSplitOpen] = useState(false);                   // split choices folded until asked for
+  const [techQuery, setTechQuery] = useState("");                      // filter, shown for bigger teams
   async function patchLine(lineId: string, body: any) {
     try { await api.patch(`/orders/${orderId}/lines/${lineId}`, body); onChanged?.(); }
     catch (e: any) { onFlash(e.message || "Could not update line"); }
@@ -932,6 +1073,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
   const [disc, setDisc] = useState(0);
   const [adding, setAdding] = useState(false);
   const [intoKit, setIntoKit] = useState<{ id: string; name: string } | null>(null);   // add the pick inside this kit
+  const [custom, setCustom] = useState(false);     // 3: a line that isn't in the catalog (yet)
   const [stock, setStock] = useState<{ total_available: number; items: { location: string; available: number }[] } | null>(null);
   // When a product is picked, show where it's in stock — the point-of-need answer
   // to "we're out here, is it at another branch?" (products only; services carry no stock).
@@ -1009,8 +1151,8 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
         {isServ && (
           <div className="mt-2 ml-11 flex flex-wrap items-center gap-2 text-[11px]">
             {/* #1 assignee chip + #3 any co-techs */}
-            <div className="relative">
-              <button type="button" onClick={() => setAssignOpen(openPick ? null : l.id)}
+            <div>
+              <button type="button" data-assign-for={l.id} aria-haspopup="menu" aria-expanded={openPick} onClick={() => { setAssignOpen(openPick ? null : l.id); setSplitOpen(false); setTechQuery(""); }}
                 className="flex items-center gap-1.5 pl-1 pr-2 py-1 rounded-full border border-slate-200 bg-white hover:border-primary/40">
                 {co.length > 1 ? (
                   <span className="flex -space-x-1.5">{co.map((c) => <span key={c.employee_id} className={`w-5 h-5 rounded-full grid place-items-center text-[8px] font-bold text-white ring-1 ring-white ${avHue(c.employee_id)}`}>{empInitials(c.employee_id)}</span>)}</span>
@@ -1021,33 +1163,74 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                 <M n="expand_more" c="text-[13px] text-ink-tertiary" />
               </button>
               {openPick && (
-                <div className="absolute z-20 mt-1 w-56 bg-white rounded-xl border border-slate-200 shadow-xl p-1.5 max-h-64 overflow-auto">
-                  <div className="text-[11px] font-bold text-ink-tertiary px-2 py-1">Assign technician</div>
-                  <button onClick={() => { patchLine(l.id, { technician_id: null, co_technicians: [] }); setAssignOpen(null); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-ink-secondary">Unassigned</button>
-                  {(emps || []).map((e) => (
-                    <button key={e.id} onClick={() => { patchLine(l.id, { technician_id: e.id, co_technicians: [] }); setAssignOpen(null); }}
-                      className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 ${l.technician_id === e.id ? "bg-blue-50 text-primary font-semibold" : "text-ink-primary"}`}>
-                      <span className={`w-5 h-5 rounded-full grid place-items-center text-[8px] font-bold text-white ${avHue(e.id)}`}>{empInitials(e.id)}</span>{e.name}</button>
-                  ))}
-                  {/* #3/#8 split with a second tech at a chosen ratio */}
-                  {l.technician_id && (
-                    <>
-                      <div className="flex items-center justify-between px-2 py-1 border-t border-slate-100 mt-1">
-                        <span className="text-[11px] font-bold text-ink-tertiary">Split with</span>
-                        <span className="flex gap-1">{[0.5, 0.6, 0.7].map((r) => (
-                          <button key={r} onClick={() => setSplitRatio(r)}
-                            className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${splitRatio === r ? "bg-blue-50 text-primary" : "text-ink-tertiary hover:text-ink-primary"}`}>{Math.round(r * 100)}/{Math.round((1 - r) * 100)}</button>
-                        ))}</span>
+                <FloatingMenu anchorSel={`[data-assign-for="${l.id}"]`} onClose={() => setAssignOpen(null)} width={264}>
+                  {(() => {
+                    const pickTech = (id: string | null) => { patchLine(l.id, { technician_id: id, co_technicians: [] }); setAssignOpen(null); };
+                    const q = techQuery.trim().toLowerCase();
+                    const list = (emps || []).filter((e) => !q || e.name.toLowerCase().includes(q));
+                    const row = "w-full flex items-center gap-2.5 px-2.5 h-9 rounded-lg text-left text-[13px] hover:bg-slate-50 focus-visible:bg-slate-100 outline-none";
+                    const check = <M n="check" c="ml-auto text-[16px] text-primary" />;
+                    const first = (id?: string | null) => empName(id).split(" ")[0];
+                    return (
+                      <div className="text-[13px]">
+                        <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Technician for this line</div>
+                        {(emps || []).length > 6 && (
+                          <input autoFocus value={techQuery} onChange={(e) => setTechQuery(e.target.value)} placeholder="Search technicians"
+                            onKeyDown={(e) => { if (e.key === "Enter" && list[0]) pickTech(list[0].id); }}
+                            className="mb-1 w-full h-8 px-2.5 rounded-lg border border-slate-200 bg-slate-50 text-[13px] outline-none focus:border-primary/50 focus:bg-white" />
+                        )}
+                        {!q && (
+                          <button type="button" onClick={() => pickTech(null)} className={`${row} text-ink-secondary`}>
+                            <span className="w-6 h-6 rounded-full border border-dashed border-slate-300 grid place-items-center flex-none"><M n="person_off" c="text-[14px] text-ink-tertiary" /></span>
+                            Unassigned{!l.technician_id && check}
+                          </button>
+                        )}
+                        {list.map((e) => (
+                          <button type="button" key={e.id} onClick={() => pickTech(e.id)}
+                            className={`${row} ${l.technician_id === e.id && co.length < 2 ? "font-semibold text-ink-primary bg-blue-50/60" : "text-ink-primary"}`}>
+                            <span className={`w-6 h-6 rounded-full grid place-items-center text-[10px] font-bold text-white flex-none ${avHue(e.id)}`}>{empInitials(e.id)}</span>
+                            <span className="truncate">{e.name}</span>{l.technician_id === e.id && co.length < 2 && check}
+                          </button>
+                        ))}
+                        {q && list.length === 0 && <p className="px-2.5 py-2 text-ink-tertiary">No technician called “{techQuery}”.</p>}
+                        {/* #3/#8 split with a second tech at a chosen ratio — folded away until asked for */}
+                        {l.technician_id && !q && (emps || []).length > 1 && (
+                          <div className="mt-1 pt-1 border-t border-slate-100">
+                            {co.length > 1 && (
+                              <div className="flex items-center gap-2 px-2.5 h-9 text-ink-secondary">
+                                <M n="group" c="text-[16px] text-emerald-600" />
+                                <span className="truncate">{co.map((c) => `${first(c.employee_id)} ${Math.round((c.share || 0) * 100)}%`).join(" + ")}</span>
+                                <button type="button" onClick={() => { patchLine(l.id, { co_technicians: [] }); setAssignOpen(null); }} className="ml-auto text-[12px] font-semibold text-rose-600 hover:underline">Clear</button>
+                              </div>
+                            )}
+                            <button type="button" onClick={() => setSplitOpen((v) => !v)} aria-expanded={splitOpen} className={`${row} text-ink-secondary`}>
+                              <M n="group_add" c="text-[18px] text-ink-tertiary" />{co.length > 1 ? "Change the split" : "Split the work"}
+                              <M n={splitOpen ? "expand_less" : "expand_more"} c="ml-auto text-[16px] text-ink-tertiary" />
+                            </button>
+                            {splitOpen && (
+                              <div className="pb-1">
+                                <div className="flex items-center gap-1 px-2.5 py-1.5">
+                                  <span className="text-[12px] text-ink-tertiary mr-1">{first(l.technician_id)} gets</span>
+                                  {[0.5, 0.6, 0.7].map((r) => (
+                                    <button type="button" key={r} onClick={() => setSplitRatio(r)}
+                                      className={`text-[12px] font-semibold px-2 h-7 rounded-md ${splitRatio === r ? "bg-primary text-white" : "bg-slate-100 text-ink-secondary hover:bg-slate-200"}`}>{Math.round(r * 100)}%</button>
+                                  ))}
+                                </div>
+                                {(emps || []).filter((e) => e.id !== l.technician_id).map((e) => (
+                                  <button type="button" key={"sp" + e.id} onClick={() => { patchLine(l.id, { co_technicians: [{ employee_id: l.technician_id, share: splitRatio }, { employee_id: e.id, share: Math.round((1 - splitRatio) * 100) / 100 }] }); setAssignOpen(null); }}
+                                    className={`${row} text-ink-primary`}>
+                                    <span className={`w-6 h-6 rounded-full grid place-items-center text-[10px] font-bold text-white flex-none ${avHue(e.id)}`}>{empInitials(e.id)}</span>
+                                    <span className="truncate">+ {e.name}</span><span className="ml-auto text-[12px] tabular-nums text-ink-tertiary">{Math.round((1 - splitRatio) * 100)}%</span>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
-                      {(emps || []).filter((e) => e.id !== l.technician_id).map((e) => (
-                        <button key={"sp" + e.id} onClick={() => { patchLine(l.id, { co_technicians: [{ employee_id: l.technician_id, share: splitRatio }, { employee_id: e.id, share: Math.round((1 - splitRatio) * 100) / 100 }] }); setAssignOpen(null); }}
-                          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-emerald-50 text-ink-primary">
-                          <M n="group_add" c="text-[13px] text-emerald-600" />{empName(l.technician_id).split(" ")[0]} {Math.round(splitRatio * 100)}% + {e.name.split(" ")[0]} {Math.round((1 - splitRatio) * 100)}%</button>
-                      ))}
-                      {co.length > 1 && <button onClick={() => { patchLine(l.id, { co_technicians: [] }); setAssignOpen(null); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 text-rose-600">Clear split</button>}
-                    </>
-                  )}
-                </div>
+                    );
+                  })()}
+                </FloatingMenu>
               )}
             </div>
             {/* #2 booked vs actual */}
@@ -1113,11 +1296,19 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
           </div>
         ) : locked ? (
           <p className="text-xs text-ink-tertiary">This job is closed. Your role can't change a closed job.</p>
+        ) : custom ? (
+          <CustomLineForm orderId={orderId} forItem={tagging ? forItem : ""} onFlash={onFlash} onClose={() => setCustom(false)} onAdded={() => { setCustom(false); onChanged?.(); }} />
         ) : (
-          <CatalogPicker deviceId={deviceId} onPick={(i) => { setPick(i); setDisc(0); setQty(1); }} placeholder="Search catalog — service, product, or job kit…" />
+          <div className="flex items-center gap-2">
+            <div className="flex-1 min-w-0"><CatalogPicker deviceId={deviceId} onPick={(i) => { setPick(i); setDisc(0); setQty(1); }} placeholder="Search catalog — service, product, or job kit…" /></div>
+            {(can("can_add_custom_product") || can("can_add_custom_service")) && (
+              <button type="button" onClick={() => setCustom(true)} className="px-3 py-2 rounded-lg border border-dashed border-primary/40 text-primary text-xs font-bold hover:bg-blue-50 flex items-center gap-1 whitespace-nowrap"><M n="add" c="text-sm" />Custom item</button>
+            )}
+          </div>
         )}
       </div>
 
+      {!locked && <TogetherChips orderId={orderId} linesKey={(lines || []).map((l) => l.description).join("|")} onFlash={onFlash} onChanged={onChanged} />}
       {shown.length === 0 && <p className="text-xs text-ink-tertiary">No line items yet — add a service or product.</p>}
       {Object.entries(groups).map(([tech, ls], gi) => (
         <div key={tech || "all"} className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
@@ -1141,8 +1332,11 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
         </div>
       ))}
 
-      <RecommendationsPanel orderId={orderId} items={tagging ? jobItems.map((it) => ({ id: it.id, name: itemName(it) })) : []} onFlash={onFlash} onChanged={onChanged} />
+      <DeferredWork orderId={orderId} onFlash={onFlash} onChanged={() => { setRecsVersion((v) => v + 1); onChanged?.(); }} />
+      <ServiceDue orderId={orderId} onFlash={onFlash} onChanged={() => { setRecsVersion((v) => v + 1); onChanged?.(); }} />
+      <RecommendationsPanel key={recsVersion} orderId={orderId} items={tagging ? jobItems.map((it) => ({ id: it.id, name: itemName(it) })) : []} onFlash={onFlash} onChanged={onChanged} />
 
+      <MarginNote orderId={orderId} refreshKey={total} />
       <div className="bg-slate-50/90 rounded-2xl p-4 border border-slate-200 space-y-2">
         {/* Totals are for the whole job, whatever filter is on. No lines yet but a price on the job
             (agreed at check-in) reads as the quoted price, not a $0 subtotal next to a real total. */}
@@ -1301,8 +1495,11 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
 }
 
 /* ---- Invoices tab ---- */
-type PayCtx = { order_total: number; already_paid: number; prepaid: number; remaining: number; accounts_by_method: Record<string, { id: string; name: string }[]> };
-export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash }: { orderId: string; total?: number; deposit?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: (m: string) => void }) {
+type PayCtx = { order_total: number; already_paid: number; prepaid: number; remaining: number; location_id?: string | null; accounts_by_method: Record<string, PayAccount[]> };
+// Every account from the payment context in one list, each tagged with the method it sits under.
+const ctxAccounts = (c: PayCtx | null): PayAccount[] =>
+  c ? Object.entries(c.accounts_by_method || {}).flatMap(([k, list]) => (list || []).map((a) => ({ ...a, payment_option: a.payment_option || k }))) : [];
+export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash }: { orderId: string; total?: number; writtenOff?: number; deposit?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: (m: string) => void }) {
   const { base, opts: curOpts, multi: multiCurrency } = useCurrencies();
   const { can } = useMe();
   const changeCurrency = async (code: string) => {
@@ -1362,8 +1559,7 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
 
   const openPay = async (kind: "pay" | "prepay") => {
     try { const c = await api.get<PayCtx>(`/cash/orders/${orderId}/payment-context`); setCtx(c);
-      const firstAcc = (c.accounts_by_method[method] || c.accounts_by_method.cash || [])[0];
-      setAccount(firstAcc?.id || ""); setAmount(String(kind === "pay" ? c.remaining : "")); setModal(kind);
+      setAccount(pickDefaultAccount(accountsFor(ctxAccounts(c), method as PaymentOption), c.location_id)); setAmount(String(kind === "pay" ? c.remaining : "")); setModal(kind);
     } catch (e: any) { onFlash(`Cannot open payment: ${e.message}`); }
   };
   // Busy guard: the ref blocks a second click landing before React re-renders the disabled button,
@@ -1383,9 +1579,12 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
 
   // Net of refunds, like the server's balance (services/order_money), so a refunded job isn't "Settled".
   const paid = (data?.payments || []).reduce((s, p) => s + (p.kind === "refund" ? -Math.abs(p.amount || 0) : (p.amount || 0)), 0);
-  const t = total ?? 0; const due = Math.max(t - paid, 0);
+  // A dropped job's unpaid part was written off (orders.written_off), so it isn't owed any more.
+  const t = total ?? 0; const due = Math.max(t - paid - (writtenOff || 0), 0);
   const settled = t > 0 && due <= 0;   // fully paid: no payment or deposit actions to offer
-  const accts = ctx ? (ctx.accounts_by_method[method] || ctx.accounts_by_method.cash || []) : [];
+  const allAccts = ctxAccounts(ctx);
+  // A cashbox made from the dialog's inline "Set up a cashbox" form joins its method's list.
+  const addAccount = (a: PayAccount) => setCtx((c) => c && ({ ...c, accounts_by_method: { ...c.accounts_by_method, [a.payment_option || method]: [...(c.accounts_by_method[a.payment_option || method] || []), a] } }));
 
   return (
     <div className="space-y-5">
@@ -1393,8 +1592,8 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
         <div className="relative z-10 flex flex-wrap items-center justify-between gap-4">
           <div>
             <span className="text-[11px] font-bold text-blue-200/80">Still to pay</span>
-            <div className="flex items-baseline gap-3 mt-1"><h2 className="text-3xl font-bold tabular-nums tracking-tight text-white">{money(due)}</h2><span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${settled ? "bg-emerald-400/20 text-emerald-300 border-emerald-400/30" : "bg-amber-400/20 text-amber-300 border-amber-400/30"}`}>{settled ? "Settled" : "Balance due"}</span></div>
-            <p className="text-xs text-blue-200/70 mt-1">Grand Total {money(t)} · {money(paid)} Collected</p>
+            <div className="flex items-baseline gap-3 mt-1"><h2 className="text-3xl font-bold tabular-nums tracking-tight text-white">{money(due)}</h2><span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${settled ? "bg-emerald-400/20 text-emerald-300 border-emerald-400/30" : "bg-amber-400/20 text-amber-300 border-amber-400/30"}`}>{settled ? (writtenOff > 0 ? "Written off" : "Settled") : "Balance due"}</span></div>
+            <p className="text-xs text-blue-200/70 mt-1">Grand Total {money(t)} · {money(paid)} Collected{writtenOff > 0 ? ` · ${money(writtenOff)} written off` : ""}</p>
             {isForeign && (
               <p className="text-xs text-blue-100 mt-1 font-mono">≈ {currencySymbol}{conv(due).toFixed(2)} {currencyCode} <span className="text-blue-200/60">(1 {currencyCode} = {fxRate && (1 / fxRate).toFixed(4)} {base?.code})</span></p>
             )}
@@ -1506,16 +1705,19 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
               {isForeign && amount && !isNaN(parseFloat(amount)) && (
                 <p className="mt-1 text-[11px] text-ink-tertiary tabular-nums">≈ {currencySymbol}{conv(parseFloat(amount)).toFixed(2)} {currencyCode} <span className="text-ink-placeholder">at the document rate</span></p>
               )}</div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-3 items-start">
               <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Method</label>
-                <select value={method} onChange={(e) => { setMethod(e.target.value); const a = (ctx.accounts_by_method[e.target.value] || [])[0]; setAccount(a?.id || ""); }} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl"><option value="cash">Cash</option><option value="cashless">Cashless / UPI</option><option value="card">Card</option></select></div>
-              <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Account</label>
-                <select value={account} onChange={(e) => setAccount(e.target.value)} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl">{accts.length === 0 && <option value="">No account</option>}{accts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
+                <select value={method} onChange={(e) => { setMethod(e.target.value); setAccount(pickDefaultAccount(accountsFor(allAccts, e.target.value as PaymentOption), ctx.location_id)); }} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl"><option value="cash">Cash</option><option value="cashless">Cashless / UPI</option><option value="card">Card</option></select></div>
+              {accountsFor(allAccts, method as PaymentOption).length > 0 && <div><label htmlFor="wo-pay-account" className="block text-[11px] font-bold text-ink-tertiary mb-1">Account</label>
+                <AccountPicker id="wo-pay-account" accounts={allAccts} paymentOption={method as PaymentOption} locationId={ctx.location_id} value={account} onChange={setAccount} onCreated={addAccount} /></div>}
             </div>
+            {accountsFor(allAccts, method as PaymentOption).length === 0 && (
+              <AccountPicker accounts={allAccts} paymentOption={method as PaymentOption} locationId={ctx.location_id} value={account} onChange={setAccount} onCreated={addAccount} />
+            )}
             {modal === "pay" && method === "card" && can("can_take_card_payments") && (
               <button onClick={() => setOnReader(true)} disabled={!(parseFloat(amount) > 0)} className="w-full py-2 rounded-xl border border-primary/30 bg-white text-primary text-xs font-bold hover:bg-blue-50 disabled:opacity-50 flex items-center justify-center gap-2"><M n="contactless" c="text-base" />Charge on reader</button>
             )}
-            <div className="flex justify-end gap-2 pt-1"><button onClick={() => setModal(null)} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button><button onClick={submit} disabled={payBusy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{payBusy ? "Recording…" : `Record ${modal === "prepay" ? "prepayment" : "payment"}`}</button></div>
+            <div className="flex justify-end gap-2 pt-1"><button onClick={() => setModal(null)} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button><button onClick={submit} disabled={payBusy || !account} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{payBusy ? "Recording…" : `Record ${modal === "prepay" ? "prepayment" : "payment"}`}</button></div>
           </div>
         </div>
       , document.body)}
@@ -1605,3 +1807,4 @@ function ActivityTab({ orderId, clientPhone, onFlash }: { orderId: string; clien
     </div>
   );
 }
+

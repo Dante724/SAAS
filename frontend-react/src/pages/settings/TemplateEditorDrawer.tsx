@@ -67,12 +67,12 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
     name: initial?.name || "", doc_type: initial?.doc_type || "estimate",
     page_size: initial?.page_size || "a4", font_family: initial?.font_family || "Inter",
     is_default: !!initial?.is_default,
+    auto_print_on: (initial?.auto_print_on || "") as string,
     page_w_mm: initial?.page_w_mm ?? null as number | null,
     page_h_mm: initial?.page_h_mm ?? null as number | null,
     margin_mm: initial?.margin_mm ?? null as number | null,
     barcode_field: (initial?.barcode_field ?? null) as string | null,
     barcode_types: (initial?.barcode_types || {}) as Record<string, string>,
-    auto_print_on: (initial?.auto_print_on ?? null) as string | null,   // WS-C #20: "create" = print when a job is created
   });
   const [templates, setTemplates] = useState<any[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(initial?.id || null);
@@ -207,13 +207,13 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
   useEffect(() => { loadList(); /* eslint-disable-next-line */ }, []);
   function openTpl(t: any) {
     setActionsOpen(false); setCode(null); setMode("edit");
-    setMeta({ name: t.name || "", doc_type: t.doc_type || "estimate", page_size: t.page_size || "a4", font_family: t.font_family || "Inter", is_default: !!t.is_default, page_w_mm: t.page_w_mm ?? null, page_h_mm: t.page_h_mm ?? null, margin_mm: t.margin_mm ?? null, barcode_field: t.barcode_field ?? null, barcode_types: t.barcode_types || {}, auto_print_on: t.auto_print_on ?? null });
+    setMeta({ name: t.name || "", doc_type: t.doc_type || "estimate", page_size: t.page_size || "a4", font_family: t.font_family || "Inter", is_default: !!t.is_default, auto_print_on: t.auto_print_on || "", page_w_mm: t.page_w_mm ?? null, page_h_mm: t.page_h_mm ?? null, margin_mm: t.margin_mm ?? null, barcode_field: t.barcode_field ?? null, barcode_types: t.barcode_types || {} });
     setCurrentId(t.id || null);
     requestAnimationFrame(() => { if (edRef.current) { edRef.current.innerHTML = hydrate(t.body_html || ""); refreshBlocks(); } });
   }
   function newDoc() {
     setActionsOpen(false); setCode(null); setMode("edit");
-    setMeta({ name: "", doc_type: "estimate", page_size: "a4", font_family: "Inter", is_default: false, page_w_mm: null, page_h_mm: null, margin_mm: null, barcode_field: null, barcode_types: {}, auto_print_on: null });
+    setMeta({ name: "", doc_type: "estimate", page_size: "a4", font_family: "Inter", is_default: false, auto_print_on: "", page_w_mm: null, page_h_mm: null, margin_mm: null, barcode_field: null, barcode_types: {} });
     setCurrentId(null);
     requestAnimationFrame(() => { if (edRef.current) { edRef.current.innerHTML = ""; refreshBlocks(); } });
   }
@@ -234,9 +234,9 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
   async function duplicate() {
     if (!edRef.current) return; setActionsOpen(false); setErr(null);
     try {
-      const r = await api.post<any>("/documents/templates", { ...meta, name: (meta.name || "Template") + " (copy)", is_default: false, body_html: bodyNow() });
+      const r = await api.post<any>("/documents/templates", { ...meta, name: (meta.name || "Template") + " (copy)", is_default: false, auto_print_on: "", body_html: bodyNow() });   // a copy never double-prints
       say("Duplicated"); await loadList(); reload?.();
-      if (r?.id) { setCurrentId(r.id); setMeta((m) => ({ ...m, name: (m.name || "Template") + " (copy)", is_default: false })); }
+      if (r?.id) { setCurrentId(r.id); setMeta((m) => ({ ...m, name: (m.name || "Template") + " (copy)", is_default: false, auto_print_on: "" })); }
     } catch (e: any) { setErr(e?.message || "Could not duplicate"); }
   }
   async function setDefault() {
@@ -349,11 +349,14 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
               <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Default font</label>
                 <select value={meta.font_family} onChange={(e) => setMeta({ ...meta, font_family: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5">{FONTS.map((f) => <option key={f} value={f}>{f}</option>)}</select></div>
               <label className="flex items-center gap-2 text-sm text-ink-secondary"><input type="checkbox" checked={meta.is_default} onChange={(e) => setMeta({ ...meta, is_default: e.target.checked })} /> Default for this type</label>
+              <div><label htmlFor="tpl-auto-print" className="block text-[11px] font-semibold text-ink-tertiary mb-1">Print automatically</label>
+                <select id="tpl-auto-print" value={meta.auto_print_on || ""} onChange={(e) => setMeta({ ...meta, auto_print_on: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5">
+                  <option value="">Never</option>
+                  <option value="create">When a job is created</option>
+                  {meta.auto_print_on === "close" && <option value="close">When a job is closed</option>}
+                </select>
+                {meta.auto_print_on === "create" && <span className="block text-[11px] text-ink-tertiary mt-1">{meta.doc_type === "label" ? "One label per item on the job opens in the print dialog." : "Opens in the print dialog for each new job."}</span>}</div>
               {LABEL_DOC_TYPES.includes(meta.doc_type) && <LabelBarcodePicker value={meta} onChange={(v) => setMeta({ ...meta, ...v })} />}
-              {LABEL_DOC_TYPES.includes(meta.doc_type) && (
-                <label className="flex items-start gap-2 text-sm text-ink-secondary"><input type="checkbox" className="mt-1" checked={meta.auto_print_on === "create"} onChange={(e) => setMeta({ ...meta, auto_print_on: e.target.checked ? "create" : null })} />
-                  <span>Print when a job is created<span className="block text-[11px] text-ink-tertiary">For device labels: prints one for the job's device right after the job is saved.</span></span></label>
-              )}
             </div>
           )}
         </div>

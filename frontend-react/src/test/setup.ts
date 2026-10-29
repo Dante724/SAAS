@@ -6,18 +6,20 @@ import { cleanup } from "@testing-library/react";
 
 afterEach(() => cleanup());
 
-// Node 25+ ships its own global `localStorage`, which is empty and method-less unless Node runs
-// with --localstorage-file, and it shadows jsdom's. Give tests a working Storage either way
-// (CI pins Node 22, where jsdom's is already in place).
+// Node 25+ ships its own global `localStorage`, which shadows jsdom's and is unusable without
+// --localstorage-file (methods are missing), so tests that touch storage broke on newer Node.
+// CI runs Node 22 and never sees this; give newer Node an in-memory Storage with the same API.
 if (typeof globalThis.localStorage?.clear !== "function") {
-  const data = new Map<string, string>();
-  const store: Storage = {
-    get length() { return data.size; },
-    clear: () => data.clear(),
-    getItem: (k) => (data.has(k) ? data.get(k)! : null),
-    key: (i) => [...data.keys()][i] ?? null,
-    removeItem: (k) => { data.delete(k); },
-    setItem: (k, v) => { data.set(k, String(v)); },
-  };
-  Object.defineProperty(globalThis, "localStorage", { value: store, configurable: true, writable: true });
+  class MemoryStorage implements Storage {
+    private m = new Map<string, string>();
+    get length() { return this.m.size; }
+    clear() { this.m.clear(); }
+    getItem(k: string) { return this.m.has(k) ? this.m.get(k)! : null; }
+    key(i: number) { return [...this.m.keys()][i] ?? null; }
+    removeItem(k: string) { this.m.delete(k); }
+    setItem(k: string, v: string) { this.m.set(k, String(v)); }
+  }
+  for (const name of ["localStorage", "sessionStorage"] as const) {
+    Object.defineProperty(globalThis, name, { value: new MemoryStorage(), configurable: true, writable: true });
+  }
 }

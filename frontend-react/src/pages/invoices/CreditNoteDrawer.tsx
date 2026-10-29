@@ -30,10 +30,13 @@ export function lineAmounts(l: Line) {
 // A new note raised from an invoice starts as a full credit of what the invoice can still take:
 // its lines at the invoice's discount and tax, or one line for the remainder once part is credited.
 export function linesFromInvoice(inv: InvoiceDetail): Line[] {
-  const disc = Number(inv.discount) || 0;
-  // Effective tax rate from the invoice's own numbers: Invoice.tax is a percent on invoices made
-  // in the editor but the order's tax AMOUNT on auto-drafted ones, so never read it as a rate.
-  const base = round2((Number(inv.subtotal) || 0) * (1 - disc / 100));
+  // Invoice.discount is a money AMOUNT off the subtotal (not a percent), so each line is scaled by
+  // the same share the discount left: (subtotal − discount) / subtotal.
+  const sub = Number(inv.subtotal) || 0;
+  const disc = Math.min(Math.max(Number(inv.discount) || 0, 0), sub);
+  const base = round2(sub - disc);
+  const factor = sub > 0 ? base / sub : 1;
+  // Effective tax rate from the invoice's own numbers — Invoice.tax is an amount, never a rate.
   const tax = base > 0 ? Math.max(0, Math.round(((Number(inv.total) || 0) / base - 1) * 100000) / 1000) : 0;
   const room = round2((inv.total || 0) - (inv.credited || 0));
   if ((inv.credited || 0) > 0 || !inv.lines?.length) {
@@ -41,7 +44,7 @@ export function linesFromInvoice(inv: InvoiceDetail): Line[] {
     return [{ description: `Credit for invoice ${inv.invoice_number || ""}`.trim(), qty: 1, unit_price: net, tax_rate: tax }];
   }
   return inv.lines.map((l) => ({ description: l.description || "Item", qty: l.qty ?? 1,
-    unit_price: round2((Number(l.unit_price) || 0) * (1 - disc / 100)), tax_rate: tax }));
+    unit_price: round2((Number(l.unit_price) || 0) * factor), tax_rate: tax }));
 }
 
 export default function CreditNoteDrawer({ id, invoice, clientId, onClose, onChanged }: {

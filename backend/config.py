@@ -171,10 +171,15 @@ class Settings(BaseSettings):
 
     # -- Public base URL for shareable links (payment pages, portals). Empty -> relative. --
     PUBLIC_BASE_URL: str = ""
+    # -- Tekly Sense: platform-wide stop for every shop's automatic customer messages. --
+    SENSE_AGENTS_DISABLED: bool = False
 
     # -- Build 144ce: bootstrap platform-admin account for the /admin portal. --
     PLATFORM_ADMIN_EMAIL: str = ""
     PLATFORM_ADMIN_PASSWORD: str = ""
+    # Signs /admin session tokens. Unset: derived from SECRET_KEY with a separate label, so a
+    # shop token can never verify as an admin token (and vice versa). Set its own value in production.
+    PLATFORM_SECRET_KEY: str = ""
 
     # -- Derived helpers --
     @property

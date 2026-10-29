@@ -30,7 +30,7 @@ const PRESETS: [string, string, string][] = [
 // One avatar look app-wide: the tinted initials from the work order screens (re-exported for SettingsHub).
 export { Avatar };
 
-type Tab = "people" | "roles" | "pay";
+type Tab = "people" | "roles" | "pay" | "signin";
 
 export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEditPerson, onNewPerson, onInvite, onEditRole, onNewRole, onEditRule, onNewRule, onChanged, onFlash }: {
   team: any[] | null | undefined; roles: any[] | null; invites: any[] | null; rules: any[] | null | undefined; catalog: Record<string, any[]> | null;
@@ -56,7 +56,7 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
     try { await api.del(`/staff/invites/${i.id}`); onFlash("Invite cancelled"); onChanged(); } catch (e: any) { onFlash(e?.message || "Couldn't cancel"); }
   }
 
-  const tabs: [Tab, string, number | undefined][] = [["people", "People", people.length], ["roles", "Roles", roles?.length], ["pay", "Commissions", rules?.length]];
+  const tabs: [Tab, string, number | undefined][] = [["people", "People", people.length], ["roles", "Roles", roles?.length], ["pay", "Commissions", rules?.length], ["signin", "Sign-in", undefined]];
   const primary = tab === "people" ? { label: "Invite someone", icon: "person_add", on: onInvite }
     : tab === "roles" ? { label: "New role", icon: "add", on: onNewRole } : { label: "New rule", icon: "add", on: onNewRule };
 
@@ -69,7 +69,7 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
         </div>
         <div className="ml-auto flex items-center gap-2 flex-shrink-0">
           {tab === "people" && <button onClick={onNewPerson} className="px-3.5 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Add without invite</button>}
-          <button onClick={primary.on} className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-ink-primary text-white text-xs font-semibold hover:opacity-90"><M n={primary.icon} c="text-sm" />{primary.label}</button>
+          {tab !== "signin" && <button onClick={primary.on} className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-ink-primary text-white text-xs font-semibold hover:opacity-90"><M n={primary.icon} c="text-sm" />{primary.label}</button>}
         </div>
       </div>
 
@@ -167,6 +167,8 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
           </button>
         </div>
       )}
+
+      {tab === "signin" && <DeviceLimitCard onFlash={onFlash} />}
 
       {tab === "pay" && (
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-2">
@@ -468,6 +470,45 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
           <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-ink-primary text-white font-semibold text-xs hover:opacity-90 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Create role" : "Save"}</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+
+// How many devices one login may use at once. At the limit, signing in somewhere new asks the
+// person to pick one of their devices to sign out; nobody is signed out without being asked.
+const LIMITS: [string, string][] = [["", "No limit"], ["2", "2 devices"], ["3", "3 devices"], ["5", "5 devices"], ["10", "10 devices"]];
+
+export function DeviceLimitCard({ onFlash }: { onFlash: (m: string) => void }) {
+  const [value, setValue] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api.get<any>("/staff/company").then((c) => setValue(c?.max_sessions_per_login ? String(c.max_sessions_per_login) : "")).catch(() => setValue(""));
+  }, []);
+  async function save(v: string) {
+    const before = value;
+    setValue(v); setBusy(true);
+    try {
+      await api.put("/staff/company", { max_sessions_per_login: v ? Number(v) : null });
+      onFlash(v ? `Each person can be signed in on ${v} devices at once` : "No device limit");
+    } catch (e: any) { setValue(before); onFlash(e?.message || "Couldn't save"); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-5">
+      <div className="flex flex-wrap items-start gap-4">
+        <div className="min-w-[220px] flex-1">
+          <label htmlFor="device-limit" className="block text-sm font-semibold text-ink-primary">Devices per person</label>
+          <p className="mt-1 text-xs text-ink-tertiary">How many devices one login can use at the same time. When someone hits the limit,
+            they pick a device to sign out before they can sign in somewhere new. The phone app counts as a device.</p>
+        </div>
+        <select id="device-limit" value={value ?? ""} disabled={value === null || busy} onChange={(e) => save(e.target.value)}
+          className="glass-input rounded-xl px-3 py-2 text-sm font-semibold text-ink-primary">
+          {LIMITS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+      </div>
+      <p className="mt-3 text-xs text-ink-tertiary">People already over a new limit stay signed in until they sign out.
+        Each person can see and sign out their devices under Security &amp; sign-in.</p>
     </div>
   );
 }

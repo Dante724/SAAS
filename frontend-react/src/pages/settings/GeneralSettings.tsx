@@ -3,6 +3,8 @@ import { M } from "../../components/Shell";
 import CurrencyManager from "../../components/CurrencyManager";
 import { getLang, setLang, LANGS } from "../../i18n";
 import { api } from "../../api/client";
+import { useMe } from "../../context/Me";
+import { SenseSettingsSection } from "../../components/sense/Sense";
 
 /* Settings › General — the shop's profile. Edits land in local state and save together from a
    bar that only appears when something changed; a live preview shows how customers see the
@@ -19,7 +21,7 @@ type Opts = {
 const SAVED_KEYS = ["name", "company_email", "company_phone", "company_address", "company_details", "company_note", "logo_data",
   "website", "country", "timezone", "currency", "currency_code", "document_language", "industry_template",
   "prohibit_dup_phone", "prohibit_dup_email", "require_mfa", "clock_wo_enabled", "clock_attendance_enabled",
-  "clock_labour_billing", "rounding_enabled"];
+  "clock_labour_billing", "rounding_enabled", "default_comment_visibility", "default_file_visibility"];
 const snap = (co: any) => JSON.stringify(SAVED_KEYS.map((k) => co?.[k] ?? null));
 
 const INDUSTRY_ICON: Record<string, string> = {
@@ -44,6 +46,25 @@ function Section({ icon, title, hint, children }: { icon: string; title: string;
 }
 
 const inp = "w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-ink-tertiary";
+/** The shop's Tekly account ID: read-only, with a copy button. Tekly support asks for it. */
+function AccountId({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try { await navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* clipboard blocked: the ID is still selectable */ }
+  }
+  return (
+    <div className="mt-5 pt-4 border-t border-slate-100 flex flex-wrap items-center gap-3">
+      <div className="min-w-0">
+        <div className="text-[11px] font-semibold text-ink-tertiary">Tekly account ID</div>
+        <div className="font-mono text-sm text-ink-primary select-all">{value}</div>
+      </div>
+      <button type="button" onClick={copy} className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">
+        <M n={copied ? "check" : "content_copy"} c="text-sm" />{copied ? "Copied" : "Copy"}</button>
+      <div className="w-full text-[11px] text-ink-tertiary">Give this to Tekly support so they can find your shop.</div>
+    </div>
+  );
+}
+
 function Field({ label, hint, children, wide }: { label: string; hint?: string; children: ReactNode; wide?: boolean }) {
   return (
     <label className={`block ${wide ? "sm:col-span-2" : ""}`}>
@@ -59,6 +80,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
 }) {
   // `saved` lives in the hub so leaving the section and coming back still shows unsaved edits.
   if (saved.current == null) saved.current = co;
+  const { me } = useMe();
   const [saving, setSaving] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -106,6 +128,24 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
     </label>
   );
 
+  // Private / Shown to customer, for the defaults on new comments and files.
+  const Visibility = ({ k, label, hint }: { k: string; label: string; hint: string }) => {
+    const v = co?.[k] === "public" ? "public" : "private";
+    return (
+      <div className="flex flex-wrap items-center gap-3 py-3 border-t border-slate-100 first:border-0">
+        <span className="min-w-0"><span className="block text-sm text-ink-primary">{label}</span><span className="block text-[11px] text-ink-tertiary">{hint}</span></span>
+        <div role="radiogroup" aria-label={label} className="ml-auto inline-flex rounded-lg bg-slate-100 p-0.5 flex-shrink-0">
+          {([["private", "Private", "lock"], ["public", "Shown to customer", "visibility"]] as const).map(([val, text, icon]) => (
+            <button key={val} type="button" role="radio" aria-checked={v === val} onClick={() => set(k, val)}
+              className={`px-2.5 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1 transition-colors ${v === val ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>
+              <M n={icon} c="text-[14px]" />{text}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   const country = opts.countries.find((c) => c[0] === co.country);
   const contact = [co.company_phone, co.company_email, co.website].filter(Boolean);
   const first = (co.name || "Your shop").trim();
@@ -142,6 +182,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
               <Field label="Website"><input value={co.website || ""} onChange={(e) => set("website", e.target.value)} placeholder="yourshop.com" className={inp} /></Field>
               <Field label="Address"><input value={co.company_address || ""} onChange={(e) => set("company_address", e.target.value)} placeholder="123 Main St, Austin, TX" className={inp} /></Field>
             </div>
+            {co.account_id && <AccountId value={co.account_id} />}
           </Section>
 
           <Section icon="language" title="Region, money and language" hint="Picking a country fills in the time zone and currency. You can still change them.">
@@ -182,23 +223,6 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
             </div>
           </Section>
 
-          <Section icon="visibility" title="What customers see" hint="Defaults for new notes and files on jobs and inquiries. Staff can still change each one.">
-            <div className="grid sm:grid-cols-2 gap-4">
-              <Field label="New comments are">
-                <select aria-label="New comments are" value={co.default_comment_visibility || "private"} onChange={(e) => set("default_comment_visibility", e.target.value)} className={inp}>
-                  <option value="private">Staff only</option><option value="public">Shared with the customer</option>
-                </select></Field>
-              <Field label="New files and photos are">
-                <select aria-label="New files and photos are" value={co.default_file_visibility || "private"} onChange={(e) => set("default_file_visibility", e.target.value)} className={inp}>
-                  <option value="private">Staff only</option><option value="public">Shared with the customer</option>
-                </select></Field>
-              <Field wide label="Staff names on public pages" hint="Online booking and the customer pages. A name set under the employee's “Name on documents” is always used.">
-                <select aria-label="Staff names on public pages" value={co.public_employee_name || "full"} onChange={(e) => set("public_employee_name", e.target.value)} className={inp}>
-                  <option value="full">Full name (Jane Doe)</option><option value="first_initial">First name and initial (Jane D.)</option><option value="first">First name only (Jane)</option>
-                </select></Field>
-            </div>
-          </Section>
-
           <CurrencyManager />
 
           <Section icon="handyman" title="What you repair" hint="Sets the words used across the app (vehicles, vessels, devices…), the ID to ask for, and starter brands and models. Jobs you already have keep their wording.">
@@ -231,6 +255,12 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
               <Switch k="require_mfa" label="Two-step sign-in for everyone" hint="Staff can't turn it off for themselves" />
             </Section>
           </div>
+
+          {(me?.is_shop_owner || me?.is_owner) && <SenseSettingsSection />}
+          <Section icon="chat" title="Comments and files on jobs" hint="What new comments and files start as. Anyone posting can still switch a single one.">
+            <Visibility k="default_comment_visibility" label="New comments" hint="Shown to customer means it appears on their tracking page" />
+            <Visibility k="default_file_visibility" label="New files and photos" hint="Intake photos and checklist files stay private" />
+          </Section>
 
           <div className="flex items-center gap-3 rounded-2xl border border-slate-200/90 bg-white px-5 py-4">
             <span className="w-9 h-9 rounded-xl bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n="refresh" c="text-lg" /></span>

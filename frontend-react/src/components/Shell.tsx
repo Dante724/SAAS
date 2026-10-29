@@ -1,4 +1,5 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
+import DeviceList from "./DeviceList";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
 import { toAppPath } from "../lib/deepLink";
 import { TeklyMark } from "./brand/TeklyLogo";
@@ -31,6 +32,7 @@ import {
   ShoppingBag, Split, Nfc, Phone, PhoneIncoming, PhoneOutgoing, PhoneMissed, Network, HelpCircle,
   LogOut, Menu as MenuIcon, PackageOpen, Info,
 } from "lucide-react";
+import { fmtServerTime } from "../lib/serverTime";
 
 // Map the old Material-Symbols ligature names to bundled Lucide icons (no web font,
 // works under the app's Content-Security-Policy, and needs no server restart).
@@ -313,7 +315,7 @@ export default function Shell({ title, children }: { title: string; children: Re
                         <span className="text-[11px] font-bold bg-slate-100 text-ink-tertiary rounded px-1 ">{lang}</span>
                       </button>
                       <button onClick={() => { setAvatarOpen(false); setSecOpen(true); }} className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-ink-secondary hover:bg-slate-100 hover:text-ink-primary">
-                        <span className="flex items-center gap-2.5"><M n="lock" c="text-base" />{t("Security & two-factor")}</span>
+                        <span className="flex items-center gap-2.5"><M n="lock" c="text-base" />{t("Security & sign-in")}</span>
                         {me?.mfa_required && !me?.mfa_enabled && <span className="w-2 h-2 rounded-full bg-amber-400" />}
                       </button>
                       <div className="my-1 border-t border-slate-100" />
@@ -394,14 +396,15 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={forced ? undefined : onClose} />
-      <div className="relative w-full max-w-md bg-white rounded-2xl shadow-clay-drawer border border-slate-200/90 overflow-hidden">
+      <div className="relative w-full max-w-lg max-h-[90vh] flex flex-col bg-white rounded-2xl shadow-clay-drawer border border-slate-200/90 overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
-          <h3 className="text-sm font-bold text-ink-primary flex items-center gap-2"><M n="lock" c="text-base" />Security · Two-factor authentication</h3>
+          <h3 className="text-sm font-bold text-ink-primary flex items-center gap-2"><M n="lock" c="text-base" />Security</h3>
           {forced
             ? <button onClick={signOut} className="text-[11px] font-semibold text-ink-tertiary hover:text-ink-primary">Sign out</button>
             : <button aria-label="Close" onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>}
         </div>
-        <div className="p-5 space-y-4 text-sm">
+        <div className="p-5 space-y-4 text-sm overflow-y-auto">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary">Two-factor authentication</p>
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
 
           {enabled && step !== "done" && (
@@ -451,6 +454,13 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
               )}
               <button onClick={onClose} className="w-full px-4 py-2 rounded-lg bg-ink-primary text-white text-xs font-bold">Done</button>
             </>
+          )}
+          {!forced && (
+            <div className="border-t border-slate-100 pt-4">
+              <p className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary">Signed-in devices</p>
+              <p className="mt-0.5 mb-1 text-xs text-ink-tertiary">Don't recognise one? Sign it out and change your password.</p>
+              <DeviceList base="/auth/sessions" />
+            </div>
           )}
         </div>
       </div>
@@ -581,7 +591,7 @@ function NotificationsPanel({ onClose, onChanged }: { onClose: () => void; onCha
             <div key={n.id} className={`group relative w-full hover:bg-blue-50/50 ${n.read ? "" : "bg-blue-50/30"}`}>
               <button onClick={() => open(n)} className="w-full text-left px-4 py-3 pr-9 flex gap-3">
                 <span className={`mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0 ${n.read ? "bg-transparent" : "bg-primary"}`} />
-                <div className="min-w-0"><div className="text-xs font-bold text-ink-primary">{n.title || n.kind || "Update"}</div>{n.body && <div className="text-[11px] text-ink-secondary mt-0.5 line-clamp-2">{n.body}</div>}<div className="text-[11px] text-ink-tertiary mt-1">{n.created_at ? new Date(n.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}</div></div>
+                <div className="min-w-0"><div className="text-xs font-bold text-ink-primary">{n.title || n.kind || "Update"}</div>{n.body && <div className="text-[11px] text-ink-secondary mt-0.5 line-clamp-2">{n.body}</div>}<div className="text-[11px] text-ink-tertiary mt-1">{fmtServerTime(n.created_at)}</div></div>
               </button>
               <button onClick={(e) => dismiss(n, e)} title={t("Dismiss")} aria-label={t("Dismiss")}
                 className="absolute top-2 right-2 w-6 h-6 rounded-md flex items-center justify-center text-ink-placeholder hover:text-rose-600 hover:bg-rose-50 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity">

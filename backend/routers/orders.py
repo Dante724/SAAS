@@ -1,9 +1,10 @@
 import secrets
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, field_validator, model_validator
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -21,7 +22,6 @@ from backend.models import (
     OrderStatus,
     OrderStatusLog,
     Organisation,
-    StockLevel,
     StockMovement,
 )
 from backend.services import industry as _ind
@@ -92,6 +92,8 @@ class LineIn(BaseModel):
     save_to_catalog: bool = False          # build 126: persist a custom line as a catalog item
     catalog_kind: Optional[str] = None     # service|product (when save_to_catalog)
     bundle_group_id: Optional[str] = None  # add this line INSIDE a kit already on the job
+    catalog_sku: Optional[str] = Field(None, max_length=100)      # 3: product saved to the catalog
+    catalog_barcode: Optional[str] = Field(None, max_length=100)
 
     # Security phase 3: negative quantities/prices/discounts and >100% discounts used to
     # create phantom stock and zero/negative totals that slipped past every guard.
@@ -123,6 +125,14 @@ class LineIn(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _fixed_within_line(self):
+        # B3: an amount off can't be more than the line itself.
+        if (self.discount_type or "pct") == "fixed" and \
+                (self.discount or 0) > q2((self.qty or 0) * (self.unit_price or 0)) + 0.005:
+            raise ValueError("A discount can't be more than the line's price")
+        return self
+
+    @model_validator(mode="after")
     def _fill_line_type(self):
         if not self.line_type:
             self.line_type = _LINE_TYPE_FROM_KIND.get((self.kind or "").lower())
@@ -140,6 +150,7 @@ class OrderIn(BaseModel):
     manager_id: Optional[str] = None   # 144cp: WO manager/owner (Orderry parity)
     scheduled_for: Optional[str] = None
     scheduled_to: Optional[str] = None
+    due_at: Optional[str] = None   # gc144g3 — promised-by date/time set at intake (drives "overdue")
     duration_min: int = 60
     resource_id: Optional[str] = None
     type_id: Optional[str] = None
@@ -172,11 +183,11 @@ class RescheduleIn(BaseModel):
 class StatusChange(BaseModel):
     status: str
     note: Optional[str] = None
-    reason: Optional[str] = None   # cancellation reason when moving into a dropped status
+    reason: Optional[str] = Field(None, max_length=300)   # cancellation reason when moving into a dropped status
 
 class CommentIn(BaseModel):
     body: str
-    visible_to_client: bool = False
+    visible_to_client: Optional[bool] = None   # left out: the shop's default comment visibility
 
 # ── Helpers ──────────────────────────────────
 
@@ -219,7 +230,8 @@ def _calc_line(line: "LineIn") -> float:
     if dtype == "fixed":
         after_discount = max(base - line.discount, 0)
     else:
-        after_discount = base * (1 - line.discount / 100)
+        # B3: clamped, so no path (old rows, imports) can turn a discount into a negative job.
+        after_discount = base * (1 - min(max(line.discount or 0, 0), 100) / 100)
     mode = getattr(line, "tax_mode", "imposed")
     if mode == "included":
         # price already contains tax; customer total does not change
@@ -262,6 +274,15 @@ def _line_tax_amount(line: "LineIn") -> float:
         return q2(after_discount - after_discount / (1 + rate)) if rate else 0.0
     return q2(after_discount * rate)
 
+def order_tax(lines) -> float:
+    """Launch B4: the tax inside an order's total (imposed tax added on top plus VAT contained in
+    VAT-inclusive prices), stored on Order.tax so invoices, the PDF and reports can show it."""
+    from backend.services.tax import line_tax
+    return q2(sum(line_tax(qty=l.qty, unit_price=l.unit_price, discount=l.discount,
+                           discount_type=getattr(l, "discount_type", None), tax_rate=l.tax_rate,
+                           tax_mode=getattr(l, "tax_mode", None)) for l in lines))
+
+
 def _order_totals(lines: list[OrderLine]):
     labour = sum(l.total for l in lines if l.line_type == "labour")
     parts = sum(l.total for l in lines if l.line_type == "part")
@@ -272,9 +293,10 @@ def _intake_photos_payload(o: Order) -> list:
     """144dg — intake photos with their marked-up copy (if any). The original id/url is always the
     check-in shot; marked_id/url is the annotated derivative. Original is never replaced."""
     mk = getattr(o, "intake_markups", None) or {}
+    labels = getattr(o, "intake_photo_labels", None) or {}
     out = []
     for b in (getattr(o, "intake_photos", None) or []):
-        row = {"id": b, "url": f"/api/media/{b}"}
+        row = {"id": b, "url": f"/api/media/{b}", "label": labels.get(b)}
         m = mk.get(b)
         if m:
             row["marked_id"] = m
@@ -290,6 +312,8 @@ def _serialize_order_scalars(o: Order) -> dict:
         "order_number": o.order_number,
         "status": o.status,
         "cancel_reason": getattr(o, "cancel_reason", None),
+        "written_off": float(getattr(o, "written_off", 0) or 0),
+        "continued_from_order_id": getattr(o, "continued_from_order_id", None),
         "priority": o.priority,
         "complaint": o.complaint,
         "diagnosis": o.diagnosis,
@@ -322,6 +346,7 @@ def _serialize_order_scalars(o: Order) -> dict:
         "client_msg_unread": getattr(o, "client_msg_unread", 0) or 0,
         "rec_unread": getattr(o, "rec_unread", 0) or 0,
         "public_token": o.public_token,
+        "signed": bool(getattr(o, "signature", None)),   # customer signature captured (Go shows it)
         "created_at": o.created_at.isoformat(),
         "closed_at": o.closed_at.isoformat() if o.closed_at else None,
         "client": {"id": o.client.id, "name": o.client.name, "phone": o.client.phone,
@@ -541,6 +566,13 @@ async def list_orders(
     out = {"total": total, "items": items, "skip": skip, "limit": limit}
     if facets:
         out.update(await _order_facets(db, current, role, status, flt))
+    if (search or q) and not skip:
+        # Go pilot: how the counter looks jobs up — the kind of search, never its text
+        from backend.services import pilot
+        await pilot.record_lookup(db, current, via="search", by=pilot.classify_query(search or q),
+                                  surface="orders_list" if search else "search_box",
+                                  order_id=items[0]["id"] if total == 1 else None,
+                                  matched=total > 0, collapse=True)
     return out
 
 
@@ -693,7 +725,7 @@ async def bulk_action(
             inv = Invoice(
                 invoice_number=await next_number(db, current.org_id, "invoice"),
                 org_id=current.org_id, order_id=o.id, client_id=o.client_id,
-                status="draft", subtotal=o.total or 0, total=o.total or 0,
+                status="draft", subtotal=o.total or 0, tax=o.tax or 0, total=o.total or 0,
                 issued_at=datetime.utcnow(),
             )
             db.add(inv)
@@ -719,7 +751,8 @@ async def bulk_action(
             inv = Invoice(
                 invoice_number=await next_number(db, current.org_id, "invoice"),
                 org_id=current.org_id, order_id=grp[0].id, client_id=client_id,
-                status="draft", subtotal=total, total=total, issued_at=datetime.utcnow())
+                status="draft", subtotal=total, tax=q2(sum((o.tax or 0) for o in grp)), total=total,
+                issued_at=datetime.utcnow())
             db.add(inv)
             for o in grp:
                 await log_system_event(db, current.org_id, "order", o.id,
@@ -735,13 +768,31 @@ async def bulk_action(
 @router.post("", status_code=201)
 async def create_order(
     data: OrderIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_tickets")),
 ):
+    # Estimates have their own permission (it used to be listed but never checked).
     if data.is_estimate:
         await assert_perm(db, current, "can_create_estimates")
     await _assert_listed(db, current.org_id, data.manager_id, "display_in_managers", "Managers")
     await _assert_listed(db, current.org_id, data.assigned_to_id, "display_in_assignees", "Assignee")
+    # A retried create (double tap, phone timeout) with the same Idempotency-Key returns the
+    # first job instead of raising a second one.
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "orders.create")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _create_order(data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
     # Build 144df: location is optional from the client — default to the org's
     # first active location, creating a "Main" one if the org has none yet, so a
     # fresh shop can raise its first work order without a setup dead-end.
@@ -751,9 +802,11 @@ async def create_order(
             select(Location).where(Location.org_id == current.org_id, Location.active == True)  # noqa: E712
             .order_by(Location.created_at))).scalars().first()
         if not loc:
-            loc = Location(org_id=current.org_id, name="Main", timezone="UTC")
+            loc = Location(org_id=current.org_id, name="Main")
             db.add(loc)
             await db.flush()
+            from backend.services.shop_setup import setup_location
+            await setup_location(db, loc, first=True)
         data.location_id = loc.id
 
     # Item 2: role location-scope enforcement (no-op for unscoped roles/owners).
@@ -787,6 +840,7 @@ async def create_order(
         if _hide_cost or _fixed_cost:
             li.cost_price = await _catalog_cost(db, current.org_id, li.kind, li.ref_id)
         await _apply_client_discount(db, current.org_id, data.client_id, li)
+        await _auto_apply_tax(db, current.org_id, li)   # launch B4: lines on a new job were never taxed
         await _guard_discount_approval(db, current.org_id, _perms_create, li.discount, li.discount_type, is_owner=not current.role_id,
                                           base=(li.qty or 0) * (li.unit_price or 0))
         # 144ha — margin-floor guardrail on create (block a below-floor line)
@@ -918,6 +972,7 @@ async def create_order(
                        if data.scheduled_for else None),
         scheduled_to=(await parse_wall_dt(db, current.org_id, data.location_id, data.scheduled_to, "scheduled_to")
                       if data.scheduled_to else None),
+        due_at=parse_dt(data.due_at, "due_at") if data.due_at else None,
         duration_min=data.duration_min or 60,
         resource_id=data.resource_id or None,
         type_id=data.type_id,
@@ -929,6 +984,7 @@ async def create_order(
         labour_total=labour_total,
         parts_total=parts_total,
         total=labour_total + parts_total,
+        tax=order_tax(lines),
         currency_code=_cinfo["code"],
         fx_rate=_cinfo["rate"],
         lines=lines,
@@ -941,6 +997,8 @@ async def create_order(
                  diff={"order_number": order.order_number, "location_id": data.location_id})   # assigns order.id before we reference it
     log = OrderStatusLog(order_id=order.id, from_status=None, to_status=initial_status, changed_by_id=current.id)
     db.add(log)
+    from backend.services import pilot as _pilot
+    _pilot.record_photos(db, current, order.id, len(_intake or []), "create")
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order.id, "Work order created")
 
@@ -959,10 +1017,9 @@ async def create_order(
     # and record the shortfall as pending_stock (Orderry's "add without deduction")
     from backend.services import reservations as _rsv
     _allow_override = _can_override_reservation(perms, current)
+    from backend.services import stock_rows
     for part_id, qty, line_obj in stock_writeoffs:
-        sl = (await db.execute(
-            select(StockLevel).where(StockLevel.part_id == part_id, StockLevel.location_id == data.location_id).with_for_update()
-        )).scalar_one_or_none()
+        sl = await stock_rows.rows(db, part_id, data.location_id, lock=True)
         # 144at — reservation-aware: a new WO can take only FREE stock (+ override for others' holds).
         g = await _rsv.guard_and_draw(
             db, org_id=current.org_id, part_id=part_id, location_id=data.location_id,
@@ -979,8 +1036,8 @@ async def create_order(
                 "Not enough free stock and you don't have permission to add products "
                 "without deduction. Reduce the quantity or receive more stock."
             )
-        if sl:
-            await _atomic_add(db, sl, "qty_available", -(deducted), round_to=None)   # atomic
+        if sl and deducted > 0:     # ii144a: drawn across the location's bins
+            await stock_rows.draw(db, part_id, data.location_id, deducted, allow_short=True)
         line_obj.pending_stock = shortfall
         if deducted > 0:
             db.add(StockMovement(
@@ -1064,8 +1121,9 @@ async def create_order(
     try:
         from backend.services import automation as _auto
         await _auto.run(db, current.org_id, "order_created", order=order)
+        await db.commit()   # its tasks/tags/assignments and queued webhooks were never committed
     except Exception:
-        pass
+        await db.rollback()
 
     result = await db.execute(
         select(Order)
@@ -1167,6 +1225,11 @@ async def board(
                 "assigned_to_id": o.assigned_to_id,
                 "assigned_to_name": o.assigned_to.name if o.assigned_to else None,
                 "scheduled_for": o.scheduled_for.isoformat() if o.scheduled_for else None,
+                # Tekly Go's Today rows: "Device · Problem", the promised time and how long it's been in
+                "complaint": o.complaint or "",
+                "due_at": o.due_at.isoformat() if o.due_at else None,
+                "created_at": o.created_at.isoformat() if o.created_at else None,
+                "age_days": (now - o.created_at).days if o.created_at else None,
                 # flag: scheduled but still in New group → needs attention (Orderry)
                 "needs_attention": bool(o.scheduled_for and g == "new"),
                 "overdue": bool(o.due_at and o.due_at < now),
@@ -1253,6 +1316,11 @@ async def get_order(
         _Inv.order_id == order.id,
         _Inv.status.notin_(["draft", "cancelled", "canceled"])))).scalar() or 0
     data["payment_due"] = q2(float(_due)) > 0
+    if data["payment_due"] and float(order.written_off or 0) > 0:
+        # A dropped job's unpaid balance is written off: the job isn't owed, even while an issued
+        # invoice keeps its balance until the shop credits it.
+        from backend.services.order_money import balance_due as _bd
+        data["payment_due"] = await _bd(db, order) > 0
     # 144bj: prior-visit count for this device (repeat-repair signal on the WO card).
     if order.device_id and data.get("device"):
         vc = (await db.execute(select(func.count()).select_from(Order).where(
@@ -1355,17 +1423,34 @@ async def change_status(
     return await _apply_status_change(db, current, order, data.status, note=data.note, reason=data.reason)
 
 
+@dataclass(frozen=True)
+class ApiActor:
+    """A public API key changing an order (API v2), in place of the signed-in employee.
+
+    It has no employee id and no role: the key's own scope (orders:write) is its permission for
+    the whole shop, so the employee-only checks (record scope, "Edit the closed ticket") don't
+    apply, and status transfer rules apply as for a role with no rules of its own (only the
+    shop's all-roles rules). Every other gate and side effect is the app's, unchanged."""
+    org_id: str
+    api_key_id: str
+    id: Optional[str] = None
+    role_id: Optional[str] = None
+
+
 async def _apply_status_change(db, current, order, new_status, note=None, reason=None):
     """Shared gate + side-effect flow for a single-step status change, used by the
-    single-order PATCH endpoint and the bulk set_status path so both enforce the same
-    transition RBAC, completion + pending-stock-write-off gates, status_entered_at,
+    single-order PATCH endpoint, the bulk set_status path and API v2
+    (POST /api/v2/orders/{id}/status, with an ApiActor as ``current``) so all of them enforce
+    the same transition RBAC, completion + pending-stock-write-off gates, status_entered_at,
     audit, ledger, commissions and (best-effort) notifications. The original endpoint
     body is preserved verbatim; it is simply reached via ``data`` rebuilt from the
     arguments so both callers share one code path."""
     data = StatusChange(status=new_status, note=note, reason=reason)
-    await _guard_order_access(db, current, order)
-    if data.status != order.status and await _is_closed(db, current.org_id, order):
-        await assert_perm(db, current, "can_edit_closed_ticket")   # reopening counts as editing it
+    via_api = isinstance(current, ApiActor)
+    if not via_api:
+        await _guard_order_access(db, current, order)
+        if data.status != order.status and await _is_closed(db, current.org_id, order):
+            await assert_perm(db, current, "can_edit_closed_ticket")   # reopening counts as editing it
 
     # Resolve the target status from the configurable status table, scoped to this
     # record's pipeline. .first() (not scalar_one_or_none) so legacy duplicate keys
@@ -1380,11 +1465,22 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         .order_by(OrderStatus.sort_order)
     )).scalars().first()
     is_closing = target.is_terminal if target else (data.status in ("done", "closed", "delivered"))
+    # Finishing a job is its own permission (closing used to need none). Bulk changes and
+    # /complete come through here too.
+    if is_closing:
+        from backend.services.auth import has_perm
+        if not await has_perm(db, current, "can_close_tickets"):
+            raise HTTPException(403, "Your role can't finish jobs. Move it to a ready status, or ask someone who can.")
+    # Dropped jobs (the customer never collected, refused the repair…): a reason is required,
+    # the finished-work checks below are skipped and what's still owed is written off.
+    is_dropping = bool(target and (target.status_group or "") == "dropped" and not order.is_estimate)
 
     # Phase B.7: enforce status transfer rules (allowed from->to for this role)
     from backend.routers.statuses import is_transition_allowed
     if not await is_transition_allowed(db, current.org_id, current.role_id, order.status, data.status):
         raise HTTPException(403, f"You can't move this order from '{order.status}' to '{data.status}'.")
+    if is_dropping and data.status != order.status and not ((data.reason or "").strip() or order.cancel_reason):
+        raise HTTPException(422, "Choose a reason for dropping this job.")
 
     # 144gr — Smart Fields: a custom field value can block entering a status.
     if target and order.status != data.status:
@@ -1415,7 +1511,7 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     # Completion gate: when closing, enforce required checklist items + (optional)
     # customer signature. Only bites when the work has required checklist items or
     # the order's type opts in, so other closes are unaffected.
-    if is_closing:
+    if is_closing and not is_dropping:
         from backend.models import OrderChecklistItem, WorkOrderType
         req_items = (await db.execute(select(OrderChecklistItem).where(
             OrderChecklistItem.order_id == order.id,
@@ -1438,7 +1534,7 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
                 raise HTTPException(409, f"Fill in before closing: {', '.join(_missing)}.")
 
     # Orderry rule: cannot close an order with products not yet written off from stock
-    if is_closing:
+    if is_closing and not is_dropping:
         pending = sum((l.pending_stock or 0) for l in order.lines)
         if pending > 0:
             raise HTTPException(
@@ -1454,15 +1550,33 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     order.status = data.status
     if target and (target.status_group or "") == "dropped" and (data.reason or "").strip():
         order.cancel_reason = data.reason.strip()[:120]
+    # Write off (or, on reopen / a normal close, undo) what the customer still owes.
+    from backend.services.audit import record as _audit_wo
+    from backend.services.order_money import balance_due as _owed
+    _was_written_off = q2(float(order.written_off or 0))
+    order.written_off = 0.0
+    if is_dropping:
+        order.written_off = await _owed(db, order)
+        # Writing off what a customer owes is a money decision, not just a status change.
+        if order.written_off > _was_written_off and not await has_perm(db, current, "can_view_finance"):
+            raise HTTPException(403, f"This job still has {order.written_off:.2f} owed. Only someone who can use "
+                                     "finance can drop it and write that off — ask a manager.")
+    if q2(float(order.written_off or 0)) != _was_written_off:
+        await _audit_wo(db, org_id=current.org_id, actor_id=current.id, action="order.write_off",
+                        entity_type="order", entity_id=order.id,
+                        diff={"amount": q2(float(order.written_off or 0)), "previous": _was_written_off,
+                              "reason": order.cancel_reason if is_dropping else None})
     order.status_entered_at = datetime.utcnow()
     from backend.services.audit import record as _audit_sc
     await _audit_sc(db, org_id=current.org_id, actor_id=current.id, action="order.status_change",
-                    entity_type="order", entity_id=order.id, diff={"status": [_prev_status, data.status]})   # for status time-limit tracking
+                    entity_type="order", entity_id=order.id,
+                    diff={"status": [_prev_status, data.status],
+                          **({"via_api_key": current.api_key_id} if via_api else {})})   # for status time-limit tracking
     if is_closing:
         order.closed_at = datetime.utcnow()
         # Build 144dr — auto-draft an invoice on close (org opt-in). Never blocks
-        # the status change if it fails.
-        if not order.is_estimate:
+        # the status change if it fails. A dropped job isn't billed.
+        if not order.is_estimate and not is_dropping:
             try:
                 from backend.services.invoicing import auto_draft_on_close
                 await auto_draft_on_close(db, order)
@@ -1471,7 +1585,7 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         # Phase E groundwork: activate warranty on close from the longest line warranty
         try:
             wdays = max([(getattr(l, "warranty_days", 0) or 0) for l in order.lines] or [0])
-            if wdays:
+            if wdays and not is_dropping:
                 from datetime import timedelta as _td
                 # Item 4: warranty start honors org policy (closure date vs order creation date)
                 _org = (await db.execute(select(Organisation).where(
@@ -1512,8 +1626,12 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         if not existing_inv:
             _inv = Invoice(invoice_number=await next_number(db, current.org_id, "invoice"), org_id=current.org_id,
                            order_id=order.id, client_id=order.client_id, status="draft",
-                           subtotal=order.total or 0, total=order.total or 0, issued_at=datetime.utcnow())
+                           subtotal=order.total or 0, tax=order.tax or 0, total=order.total or 0,
+                           issued_at=datetime.utcnow())
             db.add(_inv)
+            await db.flush()
+            from backend.services.order_money import apply_deposits
+            await apply_deposits(db, _inv, order)   # a fully prepaid job's invoice is paid, not "Remind"
             await log_system_event(db, current.org_id, "order", order.id, "Invoice auto-created on status change")
             # Build 144z: mirror the new invoice (and its customer) to QuickBooks if connected.
             try:
@@ -1552,7 +1670,8 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     if not order.is_estimate and order.client_id:
         from backend.services.ledger import order_charge_net, post_contact_ledger
         _net = await order_charge_net(db, order.client_id, order.id)
-        _target = q2(float(order.total or 0)) if is_closing else 0.0
+        # A dropped job is charged only what wasn't written off, so it leaves no debt.
+        _target = q2(float(order.total or 0) - float(order.written_off or 0)) if is_closing else 0.0
         _delta = q2(_target - _net)
         if _delta:
             _note = (f"Order {order.order_number} ready" if is_closing
@@ -1560,6 +1679,8 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
             await post_contact_ledger(
                 db, current.org_id, order.client_id, "charge", _delta,
                 note=_note, ref_type="order", ref_id=order.id, created_by_id=current.id)
+
+    # (Preview: the dropped-job write-off above, from workstream B, is the one in charge.)
 
     # Mandate 1: payroll commissions. Accrue when the order enters a terminal
     # (closed) state; claw back when it leaves one (reopen) or is an estimate.
@@ -1612,10 +1733,11 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         await emit_event(db, current.org_id, "order.status_changed", {
             "id": order.id, "order_number": order.order_number,
             "from": prev, "to": data.status})
-        if is_closing:   # WS-C: registered and documented, but never fired before
+        if is_closing and not prev_terminal and not order.is_estimate:
             await emit_event(db, current.org_id, "order.closed", {
                 "id": order.id, "order_number": order.order_number, "status": data.status,
-                "is_estimate": bool(order.is_estimate)})
+                "total": order.total,
+                "closed_at": order.closed_at.replace(microsecond=0).isoformat() + "Z" if order.closed_at else None})
         await db.commit()
     except Exception:
         pass
@@ -1650,7 +1772,7 @@ async def _convert_estimate(db, current, estimate):
     """Convert an estimate into a work order IN PLACE (Build 144di, Orderry-style):
     the same record flips ``is_estimate`` off, gets a fresh WO number, keeps its
     lines and history, and now deducts stock. Irreversible. Returns the id."""
-    from backend.models import OrderLine, OrderStatus, StockLevel, StockMovement
+    from backend.models import OrderLine, OrderStatus, StockMovement
     old_number = estimate.order_number
     # initial work-order status (org default or "new")
     init = "new"
@@ -1667,11 +1789,12 @@ async def _convert_estimate(db, current, estimate):
     src_lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == estimate.id))).scalars().all()
     for l in src_lines:
         if l.kind == "product" and l.ref_id:
-            sl = (await db.execute(select(StockLevel).where(
-                StockLevel.part_id == l.ref_id, StockLevel.location_id == estimate.location_id).with_for_update())).scalar_one_or_none()
+            from backend.services import stock_rows
+            sl = await stock_rows.rows(db, l.ref_id, estimate.location_id, lock=True)
             if sl:
-                deduct = min(l.qty, max(sl.qty_available, 0))
-                await _atomic_add(db, sl, "qty_available", -(deduct), round_to=None)   # atomic
+                have = sum(r.qty_available or 0 for r in sl)
+                deduct = min(l.qty, max(have, 0))
+                await stock_rows.draw(db, l.ref_id, estimate.location_id, deduct)
                 l.pending_stock = l.qty - deduct
                 # log the ACTUAL deducted quantity, negative — matches every other
                 # consumption movement; was qty=+l.qty which corrupted movement-sum reports.
@@ -1766,6 +1889,11 @@ async def _clean_intake_photos(db, org_id: str, ids) -> list:
 
 class IntakePhotosIn(BaseModel):
     photos: List[str] = []   # the full desired list of media blob ids (replaces the current set)
+    label: Optional[Literal["intake", "before", "after", "damage"]] = None   # gc144g3 — /add only: tag the new photos
+
+
+class PhotoLabelIn(BaseModel):
+    label: Optional[Literal["intake", "before", "after", "damage"]] = None   # None clears it
 
 
 @router.patch("/{order_id}/intake-photos")
@@ -1782,9 +1910,71 @@ async def set_intake_photos(
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
+    before = set(order.intake_photos or [])
     order.intake_photos = await _clean_intake_photos(db, current.org_id, data.photos)
+    from backend.services import pilot
+    pilot.record_photos(db, current, order.id, len([b for b in order.intake_photos if b not in before]), "intake")
     # 144dg — drop markups whose original photo is no longer on the order
     order.intake_markups = {k: v for k, v in (order.intake_markups or {}).items() if k in order.intake_photos}
+    order.intake_photo_labels = {k: v for k, v in (order.intake_photo_labels or {}).items() if k in order.intake_photos}
+    await db.commit()
+    return {"ok": True, "intake_photos": _intake_photos_payload(order)}
+
+
+@router.post("/{order_id}/intake-photos/add")
+async def add_intake_photos(
+    order_id: str,
+    data: IntakePhotosIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Append photos to a work order (the phone app's camera button). Unlike the PATCH, which
+    replaces the whole list, this adds to whatever is there now under a row lock, so two people
+    adding photos at once can't wipe each other's. Adding an id that's already there is a no-op,
+    so a retry is safe. Still capped at 40."""
+    order = (await db.execute(select(Order).where(
+        Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
+    current_ids = list(order.intake_photos or [])
+    if len(current_ids) >= 40 and any(i not in current_ids for i in data.photos):
+        raise HTTPException(409, "This job already has 40 photos, the most it can hold.")
+    order.intake_photos = await _clean_intake_photos(db, current.org_id, current_ids + list(data.photos))
+    from backend.services import pilot
+    pilot.record_photos(db, current, order.id, len([b for b in order.intake_photos if b not in current_ids]), "intake")
+    if data.label:
+        labels = dict(order.intake_photo_labels or {})
+        for b in data.photos:
+            if b in order.intake_photos and b not in current_ids:   # only the photos this call added
+                labels[b] = data.label
+        order.intake_photo_labels = labels
+    await db.commit()
+    return {"ok": True, "intake_photos": _intake_photos_payload(order)}
+
+
+@router.patch("/{order_id}/intake-photos/{blob_id}/label")
+async def set_intake_photo_label(
+    order_id: str,
+    blob_id: str,
+    data: PhotoLabelIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """gc144g3 — mark what a job photo shows (check-in, before, after, damage), or clear it."""
+    order = (await db.execute(select(Order).where(
+        Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
+    if blob_id not in (order.intake_photos or []):
+        raise HTTPException(404, "That photo isn't on this job.")
+    labels = dict(order.intake_photo_labels or {})
+    if data.label:
+        labels[blob_id] = data.label
+    else:
+        labels.pop(blob_id, None)
+    order.intake_photo_labels = labels
     await db.commit()
     return {"ok": True, "intake_photos": _intake_photos_payload(order)}
 
@@ -1891,27 +2081,33 @@ async def add_comment(
     if not _co:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, _co)
+    if data.visible_to_client is None:
+        from backend.routers.feed import default_visibility
+        data.visible_to_client = await default_visibility(db, current.org_id, "comment") == "client"
     comment = OrderComment(order_id=order_id, author_id=current.id,
                            body=data.body, visible_to_client=data.visible_to_client)
     db.add(comment)
     await db.commit()
-    # Fire comment_added notifications (only for client-visible comments).
-    # 144jc: rules engine first (client + staff), legacy template fallback.
     if data.visible_to_client:
-        c_matched = 0
-        try:
-            from backend.services import notification_rules as _nr
-            _cr = await _nr.evaluate(db, org_id=current.org_id, order_id=order_id, event="comment_added")
-            c_matched = (_cr or {}).get("matched", 0)
-            await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order_id,
-                                         event="comment_added", actor_id=current.id)
-        except Exception:  # noqa: BLE001
-            pass
-        if c_matched == 0:
-            from backend.services.notifications import dispatch_order_notifications
-            await dispatch_order_notifications(
-                db, org_id=current.org_id, order_id=order_id, trigger_event="comment_added")
+        await notify_comment_added(db, current.org_id, order_id, actor_id=current.id)
     return {"ok": True}
+
+
+async def notify_comment_added(db: AsyncSession, org_id: str, order_id: str, actor_id: Optional[str]) -> None:
+    """comment_added notifications for a client-visible comment (shared by the app and the API).
+    144jc: rules engine first (client + staff), legacy template fallback."""
+    c_matched = 0
+    try:
+        from backend.services import notification_rules as _nr
+        _cr = await _nr.evaluate(db, org_id=org_id, order_id=order_id, event="comment_added")
+        c_matched = (_cr or {}).get("matched", 0)
+        await _nr.notify_staff_order(db, org_id=org_id, order_id=order_id,
+                                     event="comment_added", actor_id=actor_id)
+    except Exception:  # noqa: BLE001
+        pass
+    if c_matched == 0:
+        from backend.services.notifications import dispatch_order_notifications
+        await dispatch_order_notifications(db, org_id=org_id, order_id=order_id, trigger_event="comment_added")
 
 
 class SignatureIn(BaseModel):
@@ -2118,7 +2314,7 @@ async def payment_link(
     order_id: str,
     regenerate: bool = False,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
+    current: Employee = Depends(require_perm("can_create_payment_links")),
 ):
     """Create a payment intent for the order's outstanding balance and return a
     shareable link + QR code. Uses the live gateway's checkout URL when
@@ -2313,7 +2509,8 @@ async def duplicate_order(
             technician_id=l.technician_id, work_share=l.work_share,
             warranty_days=l.warranty_days, discount=l.discount, discount_type=l.discount_type,
             discount_paid_by=l.discount_paid_by, tax_id=l.tax_id, tax_rate=l.tax_rate,
-            tax_mode=l.tax_mode, total=l.total, pending_stock=0.0)
+            tax_mode=l.tax_mode, total=l.total, pending_stock=0.0,
+            discount_by_id=l.discount_by_id)   # a copied discount stays with whoever gave it
         new_lines.append(nl)
         if l.line_type == "labour":
             labour += l.total
@@ -2424,7 +2621,7 @@ async def create_po_from_order(
     in stock. Product lines with no catalog part are turned into real products
     first (so stock can be tracked), the PO is linked back to this work order, and
     — with auto_send — it's marked ordered and the supplier is notified."""
-    from backend.models import Part, POLine, PurchaseOrder, StockLevel, Supplier
+    from backend.models import Part, POLine, PurchaseOrder, Supplier
 
     order = (await db.execute(
         select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
@@ -2446,9 +2643,8 @@ async def create_po_from_order(
         if l.pending_stock and l.pending_stock > 0:
             short = l.pending_stock
         elif data.only_shortfall and l.ref_id:
-            sl = (await db.execute(select(StockLevel).where(
-                StockLevel.part_id == l.ref_id, StockLevel.location_id == order.location_id))).scalar_one_or_none()
-            avail = (sl.qty_available if sl else 0) or 0
+            from backend.services import stock_rows
+            avail, _held = await stock_rows.totals(db, l.ref_id, order.location_id)
             short = max(l.qty - max(avail, 0), 0)
         else:
             short = l.qty
@@ -2521,7 +2717,7 @@ async def reserve_stock_for_order(
     the quantity each product line still needs that isn't already held for this job, and never
     more than is free at the order's location. Returns what was held and what was short."""
     from datetime import timedelta
-    from backend.models import Part, StockLevel, StockReservation
+    from backend.models import Part, StockReservation
 
     order = (await db.execute(
         select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
@@ -2556,14 +2752,13 @@ async def reserve_stock_for_order(
         want = qty_needed - held.get(part_id, 0)      # still to hold for this job
         if want <= 0:
             continue
-        sl = (await db.execute(select(StockLevel).where(
-            StockLevel.part_id == part_id, StockLevel.location_id == order.location_id))).scalar_one_or_none()
-        free = ((sl.qty_available or 0) - (sl.qty_reserved or 0)) if sl else 0
+        from backend.services import stock_rows
+        free = await stock_rows.free(db, part_id, order.location_id)
         take = min(want, max(free, 0))
         if take <= 0:
             short.append({"part": part_names.get(part_id, part_id), "needed": want, "free": max(free, 0)})
             continue
-        sl.qty_reserved = (sl.qty_reserved or 0) + take
+        await stock_rows.reserve(db, part_id, order.location_id, take)
         db.add(StockReservation(org_id=current.org_id, part_id=part_id, location_id=order.location_id,
                                 order_id=order_id, qty=take,
                                 expires_at=now + timedelta(days=hold_days)))
@@ -3271,14 +3466,13 @@ async def receive_pending_stock(
     if (line.pending_stock or 0) <= 0:
         return {"ok": True, "pending": 0}
 
-    sl = (await db.execute(
-        select(StockLevel).where(StockLevel.part_id == line.ref_id, StockLevel.location_id == order.location_id).with_for_update()
-    )).scalar_one_or_none()
-    available = sl.qty_available if sl else 0
+    from backend.services import stock_rows
+    available = sum(r.qty_available or 0 for r in await stock_rows.rows(
+        db, line.ref_id, order.location_id, lock=True))
     deduct = min(line.pending_stock, max(available, 0))
     if deduct <= 0:
         raise HTTPException(409, "No stock available to write off yet")
-    await _atomic_add(db, sl, "qty_available", -(deduct), round_to=None)   # atomic
+    await stock_rows.draw(db, line.ref_id, order.location_id, deduct, allow_short=True)
     line.pending_stock -= deduct
     db.add(StockMovement(
         part_id=line.ref_id, location_id=order.location_id,
@@ -3321,6 +3515,7 @@ async def _recalc_order(db, order):
     if _org and getattr(_org, "rounding_enabled", False):
         total = q2(round(total / 0.05) * 0.05)
     order.total = total
+    order.tax = order_tax(lines)
 
 
 def _all_codes():
@@ -3494,11 +3689,21 @@ async def add_line(
     # the catalog record and re-point this line at it so it behaves like a picked item.
     if data.save_to_catalog and (data.kind in (None, "custom", "fee") or data.line_type == "fee"):
         ckind = data.catalog_kind or "service"
+        # Adding a line to a job doesn't by itself let someone grow the shop's catalog.
+        await assert_perm(db, current, "can_create_products" if ckind == "product" else "can_edit_labors")
         if ckind == "product":
             from backend.models import Part
+            sku = (data.catalog_sku or "").strip() or None
+            if sku:
+                dup = (await db.execute(select(Part.name, Part.sku).where(
+                    Part.org_id == current.org_id, Part.active == True,  # noqa: E712
+                    func.lower(Part.sku) == sku.lower()).limit(1))).first()
+                if dup:
+                    raise HTTPException(409, f"“{dup[0]}” already uses SKU {dup[1]}. Pick it from the catalog instead.")
             part = Part(org_id=current.org_id, name=data.description,
                         sell_price=data.unit_price or 0, cost_price=data.cost_price or 0,
-                        warranty_days=data.warranty_days or 0)
+                        warranty_days=data.warranty_days or 0, sku=sku,
+                        barcode=(data.catalog_barcode or "").strip() or None)
             db.add(part)
             await db.flush()
             data.kind, data.line_type, data.ref_id = "product", "part", part.id
@@ -3564,11 +3769,13 @@ async def add_line(
             li = LineIn(line_type=ltype, kind=kind, ref_id=eff_ref_id,
                         description=f"{name} ({bundle.name})",
                         qty=c.qty * data.qty, unit_price=q2(price))
+            await _auto_apply_tax(db, current.org_id, li)
             t = _calc_line(li)
             # The part's catalog cost, like any picked line, so profit reports see the kit's cost.
             nl = OrderLine(order_id=order_id, line_type=li.line_type, kind=li.kind, ref_id=li.ref_id,
                            description=li.description, qty=li.qty, unit_price=li.unit_price,
                            cost_price=await _catalog_cost(db, current.org_id, kind, eff_ref_id),
+                           tax_id=li.tax_id, tax_rate=li.tax_rate, tax_mode=li.tax_mode,
                            technician_id=data.technician_id, order_item_id=data.order_item_id, total=t,
                            bundle_group_id=group_id, bundle_name=bundle.name,
                            bundle_print_mode=kit_print.norm_mode(bundle.print_mode),
@@ -3683,13 +3890,8 @@ async def _reverse_fulfillment(db, order, part_id, qty):
         StockMovement.ref_id == order.id, StockMovement.part_id == part_id,
         StockMovement.movement_type == "use").order_by(StockMovement.created_at.desc()).limit(1))).scalar_one_or_none()
     loc_id = dloc or order.location_id
-    sl = (await db.execute(select(StockLevel).where(
-        StockLevel.part_id == part_id, StockLevel.location_id == loc_id))).scalar_one_or_none()
-    if sl:
-        await _atomic_add(db, sl, "qty_available", qty, round_to=None)   # atomic
-    else:
-        db.add(StockLevel(part_id=part_id, location_id=loc_id,
-                          qty_available=qty, qty_reserved=0))
+    from backend.services import stock_rows
+    await stock_rows.add(db, part_id, loc_id, qty)
     db.add(StockMovement(part_id=part_id, location_id=loc_id,
                          movement_type="return", qty=qty, ref_type="order", ref_id=order.id))
     from backend.models import SerializedItem, StockItemBatch
@@ -3764,12 +3966,12 @@ async def _maybe_deduct(db, order, line, qty, perms, current):
                                  f"A manager with override permission must approve using them.")
     deducted = g["take"]
     shortfall = g["pending"]
-    sl = (await db.execute(select(StockLevel).where(
-        StockLevel.part_id == line.ref_id, StockLevel.location_id == order.location_id))).scalar_one_or_none()
+    from backend.services import stock_rows
+    sl = await stock_rows.rows(db, line.ref_id, order.location_id)
     if shortfall > 0 and perms.get("can_add_without_stock") is False:
         raise HTTPException(403, "Not enough free stock and you can't add without deduction.")
     if sl and deducted > 0:
-        await _atomic_add(db, sl, "qty_available", -(deducted), round_to=None)   # atomic
+        await stock_rows.draw(db, line.ref_id, order.location_id, deducted, allow_short=True)
         if True:
             db.add(StockMovement(part_id=line.ref_id, location_id=order.location_id,
                                  movement_type="use", qty=-deducted, ref_type="order", ref_id=order.id))
@@ -4076,6 +4278,11 @@ async def update_line(
     if _mg["blocked"]:
         raise HTTPException(409, f"Margin {_mg['margin_pct']}% is below the {_mg['floor']}% floor. "
                                  f"Lower the discount or raise the price.")
+    if (line.discount_type or "pct") == "fixed" and \
+            (line.discount or 0) > q2((line.qty or 0) * (line.unit_price or 0)) + 0.005:
+        raise HTTPException(422, "A discount can't be more than the line's price")
+    if (line.discount_type or "pct") == "pct" and (line.discount or 0) > 100:
+        raise HTTPException(422, "A percentage discount can't exceed 100%")
     tmp = LineIn(line_type=line.line_type, description=line.description or "", qty=line.qty,
                  unit_price=line.unit_price, cost_price=line.cost_price or 0,
                  discount=line.discount or 0, discount_type=line.discount_type or "pct",

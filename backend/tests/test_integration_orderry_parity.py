@@ -77,7 +77,7 @@ async def test_made_up_api_keys_count_against_the_ip(client, tenant, monkeypatch
     for fake in ("rok_aaaaaaaa_x", "rok_bbbbbbbb_y"):
         await client.get("/api/v1/contacts", headers={"Authorization": f"Bearer {fake}"})
     assert seen and all(k.startswith("ip:") for k in seen), seen
-    key = (await client.post("/api/api-keys", json={"name": "Partner"}, headers=tenant)).json()["key"]
+    made = (await client.post("/api/api-keys", json={"name": "Partner"}, headers=tenant)).json()
     seen.clear()
-    await client.get("/api/v1/contacts", headers={"Authorization": f"Bearer {key}"})
-    assert seen == ["k:" + key[:12]], seen
+    await client.get("/api/v1/contacts", headers={"Authorization": f"Bearer {made['key']}"})
+    assert seen == ["k:" + made["id"]], seen   # apih1 (A15): bucketed on the key id, not its prefix

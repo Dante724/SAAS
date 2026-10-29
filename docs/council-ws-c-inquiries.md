@@ -64,3 +64,27 @@ Out of scope: inventory, reports, invoice templates (A and B own them).
   - Missed call → inquiry is on by default for every shop.
   - A comment or file posted without a visibility uses the shop default.
 - **Tekly Go inquiries screen:** blocked on PR #18, the Go PWA stack, which isn't in `roadmap/orderry-parity`. The backend Go needs is in this PR: the paged `GET /api/leads`, an idempotent `POST /api/leads` and `POST /api/leads/{id}/convert`. The screen is a follow-up stacked on #18.
+
+## Merged onto api/harden-and-docs (25 Oct 2026)
+What changed against the design above when WS-C was merged with the API and webhook hardening:
+- **Migration:** `wsc1` now follows `whh1` (`opd1 → ojj1 → apih1 → whh1 → wsc1`). `ojj1` had already
+  added `organisations.public_employee_name`, so `wsc1` widens it instead of adding it.
+- **Scopes:** the WS-C resource scopes sit alongside `read` / `write` / `costs:read`. New keys are read
+  only by default (WS-C defaulted to `read,write`). Expiry, rotation and the 25-key cap apply to all
+  keys. The API keys UI is the hardened drawer, with an **Only some things** option and **Requests a
+  minute**.
+- **v2 hardening:** paging bounds, `extra=forbid`, length limits, 404 for other-shop ids (a bundle
+  component from another shop is now 404, not 400), IntegrityError → 422, `cost_price` on services only
+  with `costs:read`, v1-style `Idempotency-Key` on every POST (a different body is 422; WS-C returned
+  the first inquiry), audit with `via_api_key`, no CORS, HTTPS only, `/api/v2/openapi.json`.
+- **v2 webhooks** use the hardened endpoint rules: 10-endpoint cap, catalogue events, SSRF/https check,
+  encrypted `whsec_` secret shown once (an idempotent replay omits it), soft delete.
+- **Events:** `inquiry.created` comes from the ORM hook for every source and replaces `lead.created`,
+  which is kept as an alias. `inquiry.updated` / `inquiry.converted` carry the full inquiry payload.
+- **Public names:** one helper with full / first / first_initial / custom. The employee's own public
+  name applies in custom mode only (WS-C let it win in every mode). The setting is in Settings →
+  Public pages; the duplicate control in General was removed, as was the duplicate comment/file
+  visibility section.
+- **Call webhook replays** return 200 (the first event 201), and still raise the inquiry once when a
+  ringing call turns into a missed one.
+

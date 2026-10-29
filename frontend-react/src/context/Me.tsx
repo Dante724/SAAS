@@ -11,11 +11,12 @@ import { getLocale } from "../i18n";
 //   refresh — re-pull after a role/currency change so the UI updates live
 export type Me = {
   id?: string; name?: string; email?: string; role?: string | null; org_name?: string | null;
-  is_owner?: boolean; permissions?: Record<string, boolean>; home_route?: string | null;
+  is_owner?: boolean; is_shop_owner?: boolean; permissions?: Record<string, boolean>; home_route?: string | null;
   currency?: string; currency_code?: string;
   clock_wo_enabled?: boolean; clock_attendance_enabled?: boolean;
   track_job_hours?: boolean; track_attendance?: boolean;
   mfa_enabled?: boolean; mfa_required?: boolean; email_verified?: boolean;
+  pin_set?: boolean;   // Tekly Go payment PIN
   location_id?: string | null;
 };
 
@@ -38,7 +39,7 @@ export function useMe() { return useContext(MeContext); }
 export function canPerm(me: Me | null, code?: string): boolean {
   if (!code) return true;
   if (!me) return true;
-  if (me.is_owner) return true;
+  if (me.is_owner || me.is_shop_owner) return true;   // the server grants the shop owner everything
   return me.permissions?.[code] !== false;
 }
 

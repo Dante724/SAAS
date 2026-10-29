@@ -16,7 +16,7 @@ async def test_activity_log_includes_todays_events_with_date_to_today(client, te
     oid = (await client.post("/api/orders", json={
         "client_id": cid, "location_id": loc, "complaint": "x"}, headers=tenant)).json()["id"]
     st = (await client.get("/api/statuses?is_estimate=false", headers=tenant)).json()["items"][-1]["key"]
-    await client.patch(f"/api/orders/{oid}/status", json={"status": st}, headers=tenant)
+    await client.patch(f"/api/orders/{oid}/status", json={"status": st, "reason": "Test"}, headers=tenant)
 
     today = datetime.utcnow().date().isoformat()
     # Exactly what the UI sends: a date-only From/To spanning "today".

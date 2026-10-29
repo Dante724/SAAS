@@ -169,6 +169,16 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
                 <Pick k="appointment_window_days" label="Book up to" opts={WINDOWS} hint="How far ahead" />
               </div>
               <Sw k="book_show_employee_step" label="Let customers choose a technician" hint="Off: you assign someone later." onFocus="booking" />
+              <label className="flex flex-wrap items-center gap-3 py-3 border-t border-slate-100" onMouseEnter={() => setPage("booking")}>
+                <span className="min-w-0"><span className="block text-sm text-ink-primary">How your team's names appear</span><span className="block text-[11px] text-ink-tertiary">On the booking page and in customer messages. Custom uses each person's “Name on documents” in Team.</span></span>
+                <select value={cfg.public_employee_name || "full"} onChange={(e) => save({ public_employee_name: e.target.value })} aria-label="How your team's names appear"
+                  className="ml-auto bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-primary">
+                  <option value="full">Full name</option>
+                  <option value="first_initial">First name and initial</option>
+                  <option value="first">First name only</option>
+                  <option value="custom">Custom name</option>
+                </select>
+              </label>
               <Sw k="appointment_allow_multiple" label="Allow more than one booking at the same time" onFocus="booking" />
               <Sw k="appointment_consider_orders" label="Keep times free when jobs are scheduled" hint="Scheduled work orders block booking slots too." onFocus="booking" />
             </div>
@@ -193,6 +203,21 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
 
           <Approval prefix="oe" list={est} noun="estimate" />
           <Approval prefix="oe_wo" list={wo} noun="work order" />
+
+          {/* not <Card>: that helper is re-created each render, which would drop focus while typing */}
+          <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card">
+            <div className="flex items-start gap-3 px-5 pt-4 pb-3">
+              <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n="draw" c="text-lg" /></span>
+              <div className="min-w-0"><h3 className="text-sm font-semibold text-ink-primary">Drop-off terms</h3><p className="text-[11px] text-ink-tertiary">What the customer reads and signs on the tablet when they leave an item (Tekly Go). Leave empty to use the standard wording.</p></div>
+            </div>
+            <div className="px-5">
+            <textarea value={cfg.dropoff_terms ?? ""} maxLength={4000} rows={4} aria-label="Drop-off terms"
+              onChange={(e) => setCfg({ ...cfg, dropoff_terms: e.target.value })}
+              onBlur={() => save({ dropoff_terms: (cfg.dropoff_terms || "").trim() })}
+              placeholder="I'm leaving this item for diagnosis and repair. I've backed up my data; the shop isn't responsible for data loss…"
+              className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 mb-4 focus:outline-none focus:ring-1 focus:ring-primary" />
+            </div>
+          </section>
         </div>
 
         {/* Live preview */}
@@ -223,7 +248,7 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
                       ))}
                     </div>
                     {cfg.book_show_employee_step && (
-                      <div className="flex gap-1.5">{["Any", "Priya", "Amit"].map((p, i) => <span key={p} className="px-2.5 py-1 rounded-full border text-[11px]" style={i === 0 ? { borderColor: accent, color: accent } : { borderColor: "#e2e8f0" }}>{p}</span>)}</div>
+                      <div className="flex flex-wrap gap-1.5">{["Any", ...(cfg.public_employee_name === "first" ? ["Priya", "Amit"] : cfg.public_employee_name === "first_initial" ? ["Priya S.", "Amit R."] : cfg.public_employee_name === "custom" ? ["Priya S.", "Amit (lead tech)"] : ["Priya Shah", "Amit Rao"])].map((p, i) => <span key={p} className="px-2.5 py-1 rounded-full border text-[11px]" style={i === 0 ? { borderColor: accent, color: accent } : { borderColor: "#e2e8f0" }}>{p}</span>)}</div>
                     )}
                     <div className="grid grid-cols-4 gap-1.5">
                       {["9:00", "9:30", "10:00", "10:30", "11:00", "1:00", "1:30", "2:00"].map((t, i) => (

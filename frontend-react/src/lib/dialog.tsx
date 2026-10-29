@@ -91,10 +91,11 @@ export function promptDialog(message: string, opts: PromptOpts = {}): Promise<st
   });
 }
 
-type SelectOpts = { title?: string; confirmLabel?: string; allowOther?: boolean; danger?: boolean };
+type SelectOpts = { title?: string; confirmLabel?: string; allowOther?: boolean; danger?: boolean; required?: boolean };
 
 // Pick one of `options` (plus free text when allowOther). Resolves to the chosen string,
-// "" when the user confirms without choosing, or null when they back out.
+// "" when the user confirms without choosing (unless `required`: then it asks again), or null
+// when they back out.
 export function selectDialog(message: string, options: string[], opts: SelectOpts = {}): Promise<string | null> {
   return new Promise((resolve) => {
     mount((close) => {
@@ -104,7 +105,7 @@ export function selectDialog(message: string, options: string[], opts: SelectOpt
       return (
         <div className={overlay}>
           <div className={scrim} onClick={() => done(null)} />
-          <div className={card}>
+          <div className={card} data-sel-dialog>
             {opts.title && <h3 className="text-sm font-bold text-ink-primary">{opts.title}</h3>}
             <p className="text-xs text-ink-secondary whitespace-pre-line">{message}</p>
             <div className="max-h-64 overflow-y-auto space-y-1">
@@ -121,9 +122,18 @@ export function selectDialog(message: string, options: string[], opts: SelectOpt
                 </label>
               )}
             </div>
+            {opts.required && <p data-sel-error role="alert" className="text-xs font-semibold text-rose-600 empty:hidden" />}
             <div className="flex justify-end gap-2">
               <button className={btnGhost} onClick={() => done(null)}>Back</button>
-              <button onClick={() => done(val === "__other__" ? other.trim() : val)}
+              <button onClick={(e) => {
+                const v = val === "__other__" ? other.trim() : val;
+                if (opts.required && !v) {
+                  const err = e.currentTarget.closest("[data-sel-dialog]")?.querySelector("[data-sel-error]");
+                  if (err) err.textContent = "Choose one, or type your own, to continue.";
+                  return;
+                }
+                done(v);
+              }}
                 className={`px-4 py-2 rounded-xl text-xs font-bold text-white shadow-clay-sm hover:brightness-110 ${opts.danger ? "bg-rose-600 hover:bg-rose-700" : "bg-primary"}`}>
                 {opts.confirmLabel || "OK"}</button>
             </div>

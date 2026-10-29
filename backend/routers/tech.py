@@ -53,8 +53,13 @@ async def dashboard(
     current: Employee = Depends(get_current_employee),
 ):
     """Today / upcoming / completed / overdue jobs for the signed-in technician,
-    plus quick stats, clock status and the unread notification count."""
-    now = datetime.utcnow()
+    plus quick stats, clock status and the unread notification count.
+
+    "Today" is the shop's day, not the UTC day: scheduled and due times are stored as shop-local
+    wall-clock time, so a 9am job in a UTC+5:30 shop used to land on the wrong day near midnight."""
+    from backend.services.dates import local_now, shop_timezone
+    tzname = await shop_timezone(db, current)
+    now = local_now(tzname)
     today_start = datetime(now.year, now.month, now.day)
     today_end = today_start + timedelta(days=1)
 
@@ -86,8 +91,8 @@ async def dashboard(
             today.append(o)
         elif sched and sched >= today_end:
             upcoming.append(o)
-        elif not sched:
-            today.append(o)  # unscheduled active work shows under Today
+        else:
+            today.append(o)  # unscheduled, or scheduled on an earlier day and still open: carry it over
 
     running = (await db.execute(
         select(TimeEntry).where(and_(
@@ -122,7 +127,9 @@ async def dashboard(
             "since": running.started_at.isoformat() if running else None,
         },
         "unread_notifications": int(unread),
-        "server_time": now.isoformat(),
+        "server_time": datetime.utcnow().isoformat(),
+        "shop_today": today_start.date().isoformat(),
+        "timezone": tzname,
     }
 
 
