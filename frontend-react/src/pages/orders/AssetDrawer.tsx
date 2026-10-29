@@ -11,6 +11,8 @@ import { identifierFields } from "../../lib/assetIdentifiers";
 import ScanButton from "../../components/ScanButton";
 import { assetStatusTone } from "../inventory/statusTone";
 import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../../lib/formLayout";
+import { MembershipsCard } from "../memberships/shared";
+import { MembershipDrawer } from "../memberships/MembershipsView";
 
 const TABS = ["General", "Work orders", "History"];
 
@@ -34,6 +36,7 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
   const [tab, setTab] = useState(0);
   const [a, setA] = useState<Asset>(creating ? { owner_type: "client" } : {});
   const [moves, setMoves] = useState<Movement[] | null>(null);
+  const [plan, setPlan] = useState<string | null>(null);
   useEffect(() => { if (!assetId) return; setMoves(null); api.get<Asset>(`/assets/${assetId}`).then(setA).catch(() => {}); }, [assetId]);
   useEffect(() => {
     if (assetId && tab === 2 && moves === null)
@@ -103,6 +106,11 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
         <div className="flex-1 overflow-y-auto p-6 bg-canvas space-y-4">
           {tab === 0 ? (
             <>
+              {/* Memberships: the plan on this boat / vehicle / device (docs/SPEC_memberships.md) */}
+              {assetId && a.owner_type === "client" && a.client_id && (
+                <MembershipsCard clientId={a.client_id} deviceId={assetId} onOpen={setPlan} />
+              )}
+              {plan && <MembershipDrawer id={plan} onClose={() => setPlan(null)} />}
               <div className="text-[11px] font-bold text-ink-tertiary">Ownership</div>
               <div className="flex items-center gap-2">
                 <div className="flex bg-slate-100 rounded-lg p-0.5 border border-slate-200/60">
