@@ -7,7 +7,7 @@ vi.mock("../../components/Shell", () => ({ M: ({ n }: { n: string }) => <i data-
 const printed: string[] = [];
 vi.mock("../../lib/safeHtml", () => ({ printHtmlInFrame: (h: string) => printed.push(h), escapeHtml: (s: string) => s }));
 
-import PrintMenu, { pickDefault, STICKER } from "./PrintMenu";
+import PrintMenu, { pickDefault, STICKER, ITEMISED } from "./PrintMenu";
 
 const est = { id: "t-est", name: "Estimate", doc_type: "estimate", print_statuses: ["diagnosed"] };
 const wo = { id: "t-wo", name: "Work order", doc_type: "work_order", is_default: true, print_statuses: [] };
@@ -56,7 +56,7 @@ describe("PrintMenu", () => {
     expect(screen.getByText("Estimate")).toBeTruthy();
     expect(screen.queryByText("Pickup receipt")).toBeNull();
     expect(screen.queryByText("Price tag")).toBeNull();
-    await userEvent.click(screen.getByText("Show all documents"));
+    await userEvent.click(screen.getByText("All documents…"));
     expect(screen.getByText("Pickup receipt")).toBeTruthy();
     expect(screen.queryByText("Price tag")).toBeNull();
   });
@@ -71,8 +71,7 @@ describe("PrintMenu", () => {
 
   it("prints invoice templates against the job's latest invoice", async () => {
     await open();
-    expect(screen.getByText("Invoice INV-7")).toBeTruthy();
-    await userEvent.click(screen.getByText("Invoice A4"));
+    await userEvent.click(screen.getByText("Invoice A4 · INV-7"));
     await waitFor(() => expect(printed.length).toBe(1));
     expect(urls.some((u) => u.includes("/documents/render-invoice/i1/t-inv"))).toBe(true);
   });
@@ -115,5 +114,54 @@ describe("PrintMenu", () => {
     expect(screen.getByText("Bench sticker")).toBeTruthy();
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByText("Bench sticker")).toBeNull());
+  });
+
+  it("prints the itemised copy by flipping 'List every kit item' under the work order, and remembers it", async () => {
+    const itemised = vi.fn();
+    render(<PrintMenu orderId="o2" status="diagnosed" onSticker={() => {}} onItemised={itemised} onError={() => {}} />);
+    await screen.findByRole("button", { name: /Print Estimate/ });
+    await userEvent.click(screen.getByRole("button", { name: "Choose what to print" }));
+    expect(screen.queryByText(/\(itemised\)/)).toBeNull();                 // not a second document any more
+    await userEvent.click(screen.getByRole("switch", { name: "List every kit item" }));
+    expect(itemised).not.toHaveBeenCalled();                                  // flipping never prints
+    await userEvent.click(screen.getByText("Work order"));
+    expect(itemised).toHaveBeenCalledTimes(1);
+    expect(printed.length).toBe(0);
+    expect(await screen.findByRole("button", { name: "Print Work order (itemised)" })).toBeTruthy();
+    expect(pickDefault([wo], ITEMISED, [wo], false)).toBe("t-wo");   // no kit any more: falls back
+  });
+
+  it("switches what prints by itself when any job closes (shop-wide), offers Undo, tags it Auto, and is read-only without the right", async () => {
+    let auto: Record<string, string[]> = { "t-wo": ["close"], "t-rc": [] };
+    const calls: { m: string; url: string; body?: any }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ m: init?.method || "GET", url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (init?.method === "PUT") { const id = url.split("/templates/")[1].split("/")[0]; auto[id] = JSON.parse(String(init.body)).events; return reply({ auto_print_events: auto[id] }); }
+      if (url.includes("/documents/templates")) return reply({ items: [
+        { ...wo, auto_print_allowed: ["create", "close"], auto_print_events: auto["t-wo"] },
+        { ...rcpt, auto_print_allowed: ["close"], auto_print_events: auto["t-rc"] },
+        { ...est, auto_print_allowed: ["create"], auto_print_events: [] },          // can't print on close: not listed
+      ] });
+      return reply({ invoices: [] });
+    }));
+    const { unmount } = render(<PrintMenu orderId="o3" onSticker={() => {}} autoPrint={{ canChange: true }} onError={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Choose what to print" }));
+    expect(await screen.findByText("Automatic")).toBeTruthy();
+    expect(screen.getByText("Applies to every job")).toBeTruthy();
+    expect(screen.getAllByText("Auto").length).toBe(1);                           // the work order, in Print now
+    const rc = screen.getByRole("switch", { name: "Print Pickup receipt by itself when a job closes" });
+    expect(screen.queryByRole("switch", { name: /Estimate/ })).toBeNull();
+    await userEvent.click(rc);
+    await waitFor(() => expect(rc.getAttribute("aria-checked")).toBe("true"));
+    expect(calls.find((c) => c.m === "PUT")).toMatchObject({ url: expect.stringContaining("/documents/templates/t-rc/auto-print"), body: { events: ["close"] } });
+    expect(screen.getByText("Pickup receipt will print when any job closes.")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(rc.getAttribute("aria-checked")).toBe("false"));
+    unmount();
+
+    render(<PrintMenu orderId="o4" onSticker={() => {}} autoPrint={{ canChange: false }} onError={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Choose what to print" }));
+    expect(((await screen.findAllByRole("switch"))[0] as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("Only a manager can change this.")).toBeTruthy();
   });
 });

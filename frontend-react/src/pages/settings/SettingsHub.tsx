@@ -18,7 +18,6 @@ import { StatusList, StatusEditor } from "./StatusesSettings";
 import GeneralSettings from "./GeneralSettings";
 import CustomerMessages from "./NotificationsPage";
 import PublicPagesSettings from "./PublicPagesSettings";
-import CheckinPointsSettings from "./CheckinPointsSettings";
 import { PricingPage, InventoryPage } from "./PricingInventory";
 import FinanceNumbering from "./FinanceNumbering";
 import InvoiceSettings from "./InvoiceSettings";
@@ -471,7 +470,6 @@ export default function SettingsHub() {
           {sec === "directories" && <DirectoriesManager />}
 
           {sec === "public" && <PublicPagesSettings shopName={co?.name || ""} logo={co?.logo_data} StatusPicker={(pp) => <StatusMultiSelect value={pp.value} list={pp.list} onChange={pp.onChange} />} />}
-          {sec === "public" && <div className="mt-8"><CheckinPointsSettings /></div>}
 
           {sec === "integrations" && (
             <div className="max-w-4xl space-y-5">
