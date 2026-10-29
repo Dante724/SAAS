@@ -241,4 +241,6 @@ async def test_own_status_message_replaces_every_status_message(client, tenant, 
     assert [(lg.channel, lg.rule_id) for lg in logs] == [("email", own)]
     await _move(client, tenant, oid, "diagnosed")          # other statuses keep the every-status email
     logs = await _logs(db, oid, "status_changed")
-    assert len(logs) == 2 and logs[-1].rule_id != own
+    # _logs has no order (Postgres returns rows in any order): "ready" sent the own rule once,
+    # "diagnosed" sent a different one.
+    assert len(logs) == 2 and [lg.rule_id for lg in logs].count(own) == 1

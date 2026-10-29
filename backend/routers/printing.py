@@ -39,7 +39,7 @@ from backend.services import printing
 from backend.services.codes import (
     label_barcode, normalize_gtin, unprintable_message, validate_barcode_options,
 )
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import assert_perm, get_current_employee, require_perm
 from backend.services.money import q2
 
 router = APIRouter(prefix="/api/print", tags=["print"])
@@ -319,6 +319,7 @@ async def print_purchase_order(
 @router.get("/invoices/{invoice_id}")
 async def print_invoice(
     invoice_id: str,
+    itemised: bool = False,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_invoices")),
 ):
@@ -330,9 +331,16 @@ async def print_invoice(
         Invoice.id == invoice_id, Invoice.org_id == current.org_id))).scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    if itemised:   # every line as itself, kits included (a customer can always ask for one)
+        await assert_perm(db, current, "can_print_itemised_copy")
+        from backend.services.audit import record as _audit
+        await _audit(db, org_id=current.org_id, actor_id=current.id, action="invoice.itemised_copy",
+                     entity_type="invoice", entity_id=inv.id, diff=None)
+        await db.commit()
     pdf = await build_invoice_pdf(db, inv, org_name=await _org_name(db, current.org_id),
-                                  lang=await _org_lang(db, current.org_id))
-    return _pdf(pdf, f"invoice-{inv.invoice_number or invoice_id[:8]}.pdf")
+                                  lang=await _org_lang(db, current.org_id), itemised=itemised)
+    suffix = "-itemised" if itemised else ""
+    return _pdf(pdf, f"invoice-{inv.invoice_number or invoice_id[:8]}{suffix}.pdf")
 
 
 @router.get("/credit-notes/{cn_id}")

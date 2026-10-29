@@ -87,6 +87,11 @@ INTERNAL_PROVIDER_FIELDS: dict[str, list[dict]] = {
         {"key": "auth_token", "label": "Auth token", "secret": True},
         {"key": "mode", "label": "Mode (test/live, set by the server)"},
     ],
+    # WS-C — Aircall: the token Aircall puts in every webhook payload. Written only by
+    # /api/telephony/aircall, and only while the server switch AIRCALL_ENABLED is on.
+    "aircall_voice": [
+        {"key": "webhook_token", "label": "Webhook token", "secret": True},
+    ],
 }
 
 

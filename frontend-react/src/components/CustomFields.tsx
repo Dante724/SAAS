@@ -26,7 +26,7 @@ export function isVisible(f: Pick<Field, "show_when_field_key" | "show_when_op" 
 }
 
 export default function CustomFields({ entity, typeId, value, onChange, creating, autofillCtx, inputSize = "xs", only, bare, closeIds }: {
-  entity?: "product" | "client" | "device"; typeId?: string; value: Record<string, any>; onChange: (v: Record<string, any>) => void; creating: boolean;
+  entity?: "product" | "client" | "device" | "lead"; typeId?: string; value: Record<string, any>; onChange: (v: Record<string, any>) => void; creating: boolean;
   autofillCtx?: { device_id?: string; client_id?: string };
   /** Match the host drawer's inputs: compact drawers use 12px ("xs"), the work-order drawer 14px ("sm"). */
   inputSize?: "xs" | "sm";

@@ -1,5 +1,42 @@
 # Changelog
 
+## WS-C — Inquiries everywhere (Orderry June–July sprint, gaps #8–#12, #17, #18, #20)
+
+Council note: `docs/council-ws-c-inquiries.md`. Migration `wsc1` (after `opd1`, additive only).
+
+- **Missed call → inquiry (Twilio now, Aircall and the generic call webhook too).** A missed inbound
+  call opens an inquiry linked to the contact (matched by phone), creates one "Call back" task and
+  alerts whoever is clocked in (else the contact's manager, a chosen person, or the admins). Repeat
+  calls from the same number within 24 h are added to the open inquiry ("3 missed calls"); a burst
+  alerts once. Settings → Calls & telephony → "Missed calls become inquiries". **On by default**:
+  shops that had the older "task on missed call" automation off now get a call-back task through the
+  inquiry. When the older automation is on, its priority and assignee still apply, and it never
+  creates a second task.
+- **Richer inquiries.** Types with their own respond-by time, device (brand/model, serial or IMEI),
+  custom fields (Settings → Forms → Inquiry), an activity timeline (`/api/feed/lead/{id}`), paged list
+  (`GET /api/leads`), idempotent create (`Idempotency-Key` header or `idempotency_key`). Convert
+  attaches the device (only the same customer's existing device is reused), closes the call-back task,
+  and needs `can_create_tickets` / `can_create_estimates`.
+  - API changes for clients of `/api/leads`: a bad status is now **422** (was 400); `won` without
+    converting is 422; changing the status of a converted inquiry is 409.
+- **API v2** (`/api/v2`): inquiries, inquiry types, tags, services, bundles, writable products,
+  contacts with address parts, webhook subscriptions. Keys can be narrowed to `<resource>:read|write`
+  and have a per-key requests-a-minute limit (default 120; 429 + Retry-After).
+  - **Integrators:** webhooks are never implied by `read,write` or `*`; a key needs `webhooks:read` /
+    `webhooks:write`. v1 reads now need the `read`, `write` or `*` scope (keys with other free-text
+    scopes get 403).
+- **Webhooks match the docs.** `order.closed` and `estimate.accepted` now fire; the docs say
+  `appointment.created` (an endpoint subscribed to the old `booking.created` still receives it); new
+  events for inquiries, tags, bundles and products. Unknown event names are refused when subscribing.
+- **Settings switched on.** Default visibility for new comments and files (used when a client doesn't
+  send one); how staff names show on public pages (full / first / first + initial; "Name on documents"
+  always wins); label templates can print automatically when a job is created.
+- **Structured addresses** on contacts (street, city, region, postcode, country), postcode checked for
+  countries with a fixed format; the single address line is rebuilt from them, and a typed line still
+  works (it clears the parts).
+- **Aircall adapter** behind `AIRCALL_ENABLED` (off): per-shop webhook token compared in constant time,
+  idempotent per Aircall call id, failed token attempts rate-limited.
+
 ## phase 4 — Customer status messages: the notification rules are the one source of truth
 
 - **Problem:** two settings disagreed. The status editor's "Text the customer" switch

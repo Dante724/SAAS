@@ -12,18 +12,37 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# Canonical event names other modules emit.
+# Canonical event names other modules emit. Every one of these fires somewhere (a test checks
+# the list against the code), and docs/public-api-v1.md lists the same set.
 EVENTS = [
     "order.created", "order.status_changed", "order.closed",
     "estimate.accepted", "payment.recorded", "appointment.created",
     "time_entry.stopped",
+    # WS-C: inquiries, tags, bundles and products (API v2)
+    "inquiry.created", "inquiry.updated", "inquiry.converted",
+    "tag.created", "tag.updated", "tag.deleted",
+    "bundle.created", "bundle.updated", "bundle.deleted",
+    "product.created", "product.updated",
 ]
+# Old names the docs once promised. An endpoint subscribed to one receives the real event.
+ALIASES = {"booking.created": "appointment.created"}
+
+
+def valid_events(raw: str) -> str:
+    """Normalise a subscription csv; raises ValueError naming any unknown event."""
+    if not raw or raw.strip() == "*":
+        return "*"
+    names = [e.strip() for e in raw.split(",") if e.strip()]
+    bad = [e for e in names if e not in EVENTS and e not in ALIASES]
+    if bad:
+        raise ValueError(", ".join(bad))
+    return ",".join(dict.fromkeys(names))
 
 
 def _subscribed(endpoint_events: str, event: str) -> bool:
     if not endpoint_events or endpoint_events.strip() == "*":
         return True
-    wanted = {e.strip() for e in endpoint_events.split(",") if e.strip()}
+    wanted = {ALIASES.get(e.strip(), e.strip()) for e in endpoint_events.split(",") if e.strip()}
     return event in wanted
 
 

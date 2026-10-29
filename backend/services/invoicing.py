@@ -69,15 +69,18 @@ async def free_lines(db: AsyncSession, inv: "Invoice") -> list[dict]:
              "total": float(l.total or (l.qty or 0) * (l.unit_price or 0))} for l in rows]
 
 
-async def display_lines(db: AsyncSession, inv: "Invoice") -> list[dict]:
+async def display_lines(db: AsyncSession, inv: "Invoice", *, itemised: bool = False) -> list[dict]:
     """Build 144dr/144dt/144du/144ed — resolve an invoice's lines according to its
     display_mode (the Orderry "Order display" feature), fanning out across EVERY
     work order the invoice bills AND its own free-form lines. detailed = every order
     line + every free line; simplified = one line per source order + each free line;
     one_line = a single line for the whole invoice. Computed on the fly so changing
-    the mode never rewrites stored data."""
+    the mode never rewrites stored data.
+
+    Detailed rows go through kit_print.customer_lines: a kit set to print as one line is folded
+    (only over the lines this invoice bills); itemised=True is the "Print itemised copy" path."""
     from backend.models import InvoiceLine, OrderLine
-    mode = getattr(inv, "display_mode", "detailed") or "detailed"
+    mode = "detailed" if itemised else (getattr(inv, "display_mode", "detailed") or "detailed")
     orders = await invoice_orders(db, inv)
     free = await free_lines(db, inv)
     # An invoice that bills only SOME of a job's lines (per-line sub-invoice, or several items
@@ -129,9 +132,9 @@ async def display_lines(db: AsyncSession, inv: "Invoice") -> list[dict]:
             n = names.get(getattr(l, "order_item_id", None))
             return (order_pos.get(l.order_id, 0), 0 if n else 1, n[1] if n else 0, n[0] if n else "")
         lines = sorted(lines, key=_k)
-        for l in lines:
-            row = {"description": l.description, "qty": l.qty, "unit_price": l.unit_price,
-                   "total": float(l.total or (l.qty or 0) * (l.unit_price or 0))}
+        from backend.services import kit_print
+        for l in kit_print.customer_lines(lines, itemised=itemised):
+            row = kit_print.row(l)
             if names:
                 n = names.get(getattr(l, "order_item_id", None))
                 row["item_id"] = l.order_item_id if n else None
@@ -140,13 +143,14 @@ async def display_lines(db: AsyncSession, inv: "Invoice") -> list[dict]:
     return out + free
 
 
-async def build_invoice_pdf(db: AsyncSession, inv: "Invoice", *, org_name: str, lang: str = "en") -> bytes:
+async def build_invoice_pdf(db: AsyncSession, inv: "Invoice", *, org_name: str, lang: str = "en",
+                            itemised: bool = False) -> bytes:
     """Build 144dw — render an invoice to PDF with its lines resolved through the
     Order-display mode across every linked order. Shared by the print endpoint and
     the send-by-email action so both produce an identical document."""
     from backend.models import Client
     from backend.services import printing
-    lines = await display_lines(db, inv)
+    lines = await display_lines(db, inv, itemised=itemised)
     orders = await invoice_orders(db, inv)
     from backend.services.multi_asset import group_rows
     rows = []
@@ -162,7 +166,7 @@ async def build_invoice_pdf(db: AsyncSession, inv: "Invoice", *, org_name: str, 
     payer = None
     if payer_id:
         payer = (await db.execute(select(Client).where(Client.id == payer_id))).scalar_one_or_none()
-    mode_label = {"detailed": "Detailed", "simplified": "Simplified (per order)",
+    mode_label = "Itemised copy" if itemised else {"detailed": "Detailed", "simplified": "Simplified (per order)",
                   "one_line": "Single line"}.get(inv.display_mode or "detailed", "Detailed")
     meta = [("Bill to", payer.name if payer else None),
             ("Work orders", ", ".join(o.order_number for o in orders) or None),

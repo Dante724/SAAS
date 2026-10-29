@@ -93,6 +93,7 @@ class LineIn(BaseModel):
     catalog_kind: Optional[str] = None     # service|product (when save_to_catalog)
     catalog_sku: Optional[str] = Field(None, max_length=100)      # 3: product saved to the catalog
     catalog_barcode: Optional[str] = Field(None, max_length=100)
+    bundle_group_id: Optional[str] = None  # add this line INSIDE a kit already on the job
 
     # Security phase 3: negative quantities/prices/discounts and >100% discounts used to
     # create phantom stock and zero/negative totals that slipped past every guard.
@@ -347,7 +348,10 @@ def _serialize_order(o: Order) -> dict:
                    "work_share": getattr(l, "work_share", 1.0), "booked_hours": getattr(l, "booked_hours", 0) or 0,
                    "co_technicians": getattr(l, "co_technicians", None) or [],
                    "pending_stock": l.pending_stock or 0, "ref_id": l.ref_id, "total": l.total,
-                   "order_item_id": getattr(l, "order_item_id", None)} for l in o.lines],
+                   "order_item_id": getattr(l, "order_item_id", None),
+                   "bundle_group_id": l.bundle_group_id, "bundle_name": l.bundle_name,
+                   "bundle_print_mode": l.bundle_print_mode, "bundle_price_locked": l.bundle_price_locked,
+                   "bundle_qty": l.bundle_qty} for l in o.lines],
         "comments": [{"id": c.id, "body": c.body, "visible_to_client": c.visible_to_client,
                       "created_at": c.created_at.isoformat()} for c in o.comments],
         "status_logs": [{"from": s.from_status, "to": s.to_status, "at": s.changed_at.isoformat(),
@@ -1610,6 +1614,10 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         await emit_event(db, current.org_id, "order.status_changed", {
             "id": order.id, "order_number": order.order_number,
             "from": prev, "to": data.status})
+        if is_closing:   # WS-C: registered and documented, but never fired before
+            await emit_event(db, current.org_id, "order.closed", {
+                "id": order.id, "order_number": order.order_number, "status": data.status,
+                "is_estimate": bool(order.is_estimate)})
         await db.commit()
     except Exception:
         pass
@@ -2294,8 +2302,14 @@ async def duplicate_order(
 
     new_lines = []
     labour = parts = 0.0
+    import uuid as _uuid
+    _groups: dict = {}   # each kit on the copy gets its own group id
     for l in src.lines:
+        _gid = (_groups.setdefault(l.bundle_group_id, str(_uuid.uuid4())) if l.bundle_group_id else None)
         nl = OrderLine(
+            bundle_group_id=_gid, bundle_name=l.bundle_name, bundle_print_mode=l.bundle_print_mode,
+            bundle_price_locked=l.bundle_price_locked, bundle_qty=l.bundle_qty,
+            bundle_std_price=l.bundle_std_price,
             line_type=l.line_type, ref_id=l.ref_id, description=l.description,
             qty=l.qty, unit_price=l.unit_price, cost_price=l.cost_price, kind=l.kind,
             technician_id=l.technician_id, work_share=l.work_share,
@@ -3547,31 +3561,63 @@ async def add_line(
             else:
                 item = (await db.execute(select(_Svc).where(_Svc.id == c.ref_id, _Svc.org_id == current.org_id))).scalar_one_or_none()
                 std.append((c, c.ref_id, item.name if item else "Service", item.price if item else 0, "labour", "service"))
-        total_std = sum(p * c.qty for c, _eid, _n, p, _lt, _k in std) or 0
-        factor = (bundle.price / total_std) if (bundle.price_mode == "fixed" and total_std > 0) else 1.0
+        # Every line from this kit is tagged with one group id (kit1p01) so customer documents can
+        # print the kit as one line. A fixed-price kit locks its total for the group and spreads it
+        # across the lines with the rounding remainder on one of them, so it adds up exactly.
+        import uuid as _uuid
+
+        from backend.services import kit_print
+        group_id = str(_uuid.uuid4())
+        locked = q2((bundle.price or 0) * data.qty) if bundle.price_mode == "fixed" else None
+        if locked is not None and not kit_print.price_ok(locked):
+            raise HTTPException(400, "That many kits comes to more than one job can hold")
         made = []
         for c, eff_ref_id, name, price, ltype, kind in std:
             li = LineIn(line_type=ltype, kind=kind, ref_id=eff_ref_id,
                         description=f"{name} ({bundle.name})",
-                        qty=c.qty * data.qty, unit_price=q2(price * factor))
+                        qty=c.qty * data.qty, unit_price=q2(price))
             t = _calc_line(li)
+            # The part's catalog cost, like any picked line, so profit reports see the kit's cost.
             nl = OrderLine(order_id=order_id, line_type=li.line_type, kind=li.kind, ref_id=li.ref_id,
                            description=li.description, qty=li.qty, unit_price=li.unit_price,
-                           technician_id=data.technician_id, order_item_id=data.order_item_id, total=t)
+                           cost_price=await _catalog_cost(db, current.org_id, kind, eff_ref_id),
+                           technician_id=data.technician_id, order_item_id=data.order_item_id, total=t,
+                           bundle_group_id=group_id, bundle_name=bundle.name,
+                           bundle_print_mode=kit_print.norm_mode(bundle.print_mode),
+                           bundle_price_locked=locked, bundle_qty=data.qty, bundle_std_price=q2(price))
             db.add(nl)
             await db.flush()
             if kind == "product" and not order.is_estimate:
                 await _maybe_deduct(db, order, nl, li.qty, perms, current)
             made.append(nl.id)
+        await _respread_kit(db, order_id, group_id)
         await _recalc_order(db, order)
         await db.commit()
-        return {"ok": True, "bundle": bundle.name, "lines_created": len(made)}
+        return {"ok": True, "bundle": bundle.name, "lines_created": len(made), "bundle_group_id": group_id}
+
+    # A line added INSIDE a kit already on this job joins its group: it prints with the kit, and a
+    # fixed kit price is re-spread so the customer's price for the kit doesn't change.
+    kit_group = None
+    if data.bundle_group_id:
+        kit_group = (await db.execute(select(OrderLine).where(
+            OrderLine.order_id == order_id, OrderLine.bundle_group_id == data.bundle_group_id)
+            .limit(1))).scalars().first()
+        if not kit_group:
+            raise HTTPException(404, "That kit isn't on this job")
+        if data.kind not in ("service", "product") or not data.ref_id:
+            raise HTTPException(400, "Only catalog services and products can go inside a kit. Add anything else as an extra.")
+        await _guard_kit_change(db, current, order_id, kit_group.bundle_group_id, adds_value=True)
+        # A line inside a kit takes the kit's item, and its weight is the catalog price, never a
+        # price the client sent (it decides how the kit's locked total is shared out).
+        data.order_item_id = kit_group.order_item_id
 
     # Merge: if the same product already exists on the order, just bump qty (Orderry)
     if data.kind == "product" and data.ref_id:
+        # A kit's lines are never merged into: an extra must stay a line of its own.
         existing = (await db.execute(select(OrderLine).where(
-            OrderLine.order_id == order_id, OrderLine.ref_id == data.ref_id, OrderLine.kind == "product"))).scalar_one_or_none()
-        if existing:
+            OrderLine.order_id == order_id, OrderLine.ref_id == data.ref_id, OrderLine.kind == "product",
+            OrderLine.bundle_group_id.is_(None)).limit(1))).scalars().first()
+        if existing and not kit_group:
             existing.qty += data.qty
             existing.total = q2(existing.qty * existing.unit_price *
                                    (1 - (existing.discount or 0)/100 if existing.discount_type != "fixed" else 1))
@@ -3609,12 +3655,22 @@ async def add_line(
         booked_hours=data.booked_hours or 0, co_technicians=data.co_technicians or [], total=total,
         order_item_id=data.order_item_id,
     )
+    if kit_group:
+        line.bundle_group_id, line.bundle_name = kit_group.bundle_group_id, kit_group.bundle_name
+        line.bundle_print_mode, line.bundle_qty = kit_group.bundle_print_mode, kit_group.bundle_qty
+        line.bundle_price_locked = kit_group.bundle_price_locked
+        line.bundle_std_price = q2(await _catalog_price(db, current.org_id, data.kind, data.ref_id))
+        line.tax_id, line.tax_rate, line.tax_mode = kit_group.tax_id, kit_group.tax_rate, kit_group.tax_mode
     db.add(line)
     await db.flush()
     # deduct stock for products (estimates never deduct)
     if data.kind == "product" and data.ref_id and not order.is_estimate:
         await _maybe_deduct(db, order, line, data.qty, perms, current)
     _prev_total = float(order.total or 0)
+    if kit_group:
+        line.total = _calc_line(_line_as_in(line))
+        await _respread_kit(db, order_id, kit_group.bundle_group_id, actor=current,
+                            change=f"Added {data.description}")
     await _recalc_order(db, order)
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order.id, f"Added {data.kind or data.line_type}: {data.description}")
@@ -3762,6 +3818,151 @@ async def _maybe_deduct(db, order, line, qty, perms, current):
     line.pending_stock = (line.pending_stock or 0) + shortfall
 
 
+def _line_as_in(line) -> "LineIn":
+    return LineIn(line_type=line.line_type, description=line.description or "", qty=line.qty,
+                  unit_price=line.unit_price or 0, cost_price=line.cost_price or 0,
+                  discount=line.discount or 0, discount_type=line.discount_type or "pct",
+                  tax_rate=line.tax_rate or 0, tax_mode=line.tax_mode or "imposed")
+
+
+async def _respread_kit(db, order_id, group_id, *, actor=None, change: str = ""):
+    """Fixed-price kit: the customer's price for the kit stays put. Re-divide the locked total
+    across the lines still in the kit, in proportion to their standard price (kit_print.spread).
+    A kit priced as the sum of its parts has no lock and is left alone. When a person's change
+    caused it (actor), the old and new line prices are audited."""
+    from backend.services import kit_print
+    members = (await db.execute(select(OrderLine).where(
+        OrderLine.order_id == order_id, OrderLine.bundle_group_id == group_id)
+        .order_by(OrderLine.id))).scalars().all()
+    locked = next((m.bundle_price_locked for m in members if m.bundle_price_locked is not None), None)
+    if locked is None:
+        return
+    moved = {}
+    for m, unit, adjust in kit_print.spread(locked, list(members)):
+        before = float(m.unit_price or 0)
+        m.unit_price = unit
+        m.bundle_price_locked = locked
+        m.total = q2(_calc_line(_line_as_in(m)) + adjust)
+        if before != unit:
+            moved[m.description or m.id] = [before, unit]
+    if actor is not None and moved:
+        from backend.services.audit import record as _audit
+        await _audit(db, org_id=actor.org_id, actor_id=actor.id, action="order.kit_respread",
+                     entity_type="order", entity_id=order_id,
+                     diff={"kit": members[0].bundle_name if members else None, "group_id": group_id,
+                           "change": change[:300], "kit_price": locked, "unit_prices": moved})
+
+
+async def _kit_invoice_statuses(db, order_id, members) -> list[str]:
+    """Statuses of the live (not cancelled) invoices that bill this kit's lines: a partial invoice
+    listing one of them, or an invoice for the whole job (one that lists no job lines of its own)."""
+    from backend.models import Invoice, InvoiceLine, InvoiceOrder
+    from backend.services.invoicing import VOID_STATUSES
+    ids = [m.id for m in members]
+    out = list((await db.execute(select(Invoice.status).join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id).where(
+        InvoiceLine.order_line_id.in_(ids), Invoice.status.notin_(VOID_STATUSES)))).scalars().all())
+    linked = select(InvoiceOrder.invoice_id).where(InvoiceOrder.order_id == order_id)
+    partial = select(InvoiceLine.invoice_id).where(InvoiceLine.order_line_id.isnot(None))
+    out += list((await db.execute(select(Invoice.status).where(
+        (Invoice.order_id == order_id) | Invoice.id.in_(linked),
+        Invoice.id.notin_(partial), Invoice.status.notin_(VOID_STATUSES)))).scalars().all())
+    return [x or "draft" for x in out]
+
+
+async def _guard_kit_change(db, current, order_id, group_id, *, adds_value: bool):
+    """What may change inside a kit on a job, before anything is written.
+    - Lines billed on a live partial invoice are frozen: re-sharing the kit price would rewrite them.
+    - In a fixed-price kit, more parts (or more of a part) at the same price is a giveaway:
+      it needs the kit-price permission. Fewer parts keeps the customer's price; anyone may.
+    - In a kit priced as the sum of its parts that prints as one line, adding a line puts a charge
+      under the kit's name: it needs the kit print permission."""
+    from backend.services import kit_print
+    members = (await db.execute(select(OrderLine).where(
+        OrderLine.order_id == order_id, OrderLine.bundle_group_id == group_id))).scalars().all()
+    if not members:
+        return
+    if await _kit_invoice_statuses(db, order_id, members):
+        raise HTTPException(409, "Part of this kit is already on an invoice. Cancel that invoice to change the kit.")
+    locked = any(m.bundle_price_locked is not None for m in members)
+    if adds_value and locked and not await has_perm(db, current, "can_change_kit_price"):
+        raise HTTPException(403, "This kit has a fixed price, so adding to it gives parts away. "
+                                 "Add it as an extra, or ask a manager to change the kit.")
+    if (adds_value and not locked and kit_print.norm_mode(members[0].bundle_print_mode) != kit_print.ITEMIZED
+            and not await has_perm(db, current, "can_change_kit_print")):
+        raise HTTPException(403, "This kit prints as one line, so the customer wouldn't see this charge. "
+                                 "Add it as an extra, or ask a manager.")
+
+
+class KitUpdate(BaseModel):
+    print_mode: Optional[str] = None     # itemized | one_line | one_line_includes (this job only)
+    price: Optional[float] = None        # a new fixed total for this kit on this job
+    reason: Optional[str] = None         # required with price; kept in the audit log
+
+
+
+@router.patch("/{order_id}/kits/{group_id}")
+async def update_kit(
+    order_id: str,
+    group_id: str,
+    data: KitUpdate,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """One kit on one job: how it prints for the customer, and (manager) its locked price.
+    Both changes are audited; money stays on the kit's real lines."""
+    from backend.services import kit_print
+    from backend.services.audit import record as _audit
+    order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_editable(db, order, current)
+    members = (await db.execute(select(OrderLine).where(
+        OrderLine.order_id == order_id, OrderLine.bundle_group_id == group_id))).scalars().all()
+    if not members:
+        raise HTTPException(404, "That kit isn't on this job")
+    name = members[0].bundle_name
+    if data.print_mode is not None:
+        await assert_perm(db, current, "can_change_kit_print")
+        if data.print_mode not in kit_print.PRINT_MODES:
+            raise HTTPException(400, "Choose One line, One line and what's included, or Item by item")
+        before = kit_print.norm_mode(members[0].bundle_print_mode)
+        if before != data.print_mode and any(
+                st != "draft" for st in await _kit_invoice_statuses(db, order_id, members)):
+            raise HTTPException(409, "This kit is on an invoice the customer already has, so it keeps printing "
+                                     "the same way. Print an itemised copy instead.")
+        if before != data.print_mode:
+            for m in members:
+                m.bundle_print_mode = data.print_mode
+            await _audit(db, org_id=current.org_id, actor_id=current.id, action="order.kit_print_mode",
+                         entity_type="order", entity_id=order.id,
+                         diff={"kit": name, "group_id": group_id, "print_mode": [before, data.print_mode]})
+    if data.price is not None:
+        await assert_perm(db, current, "can_change_kit_price")
+        if not kit_print.price_ok(data.price):     # checked here: a NaN can't be echoed in a 422
+            raise HTTPException(400, "Enter a kit price of 0 or more")
+        reason = (data.reason or "").strip()
+        if len(reason) < 3:
+            raise HTTPException(400, "Say why the kit price is changing")
+        await _guard_kit_change(db, current, order_id, group_id, adds_value=False)
+        before = members[0].bundle_price_locked
+        if before is None:
+            before = q2(sum(float(m.qty or 0) * float(m.unit_price or 0) for m in members))
+        new = q2(data.price)
+        for m in members:
+            m.bundle_price_locked = new
+        _prev_total = float(order.total or 0)
+        await db.flush()
+        await _respread_kit(db, order_id, group_id)
+        await _recalc_order(db, order)
+        await _audit(db, org_id=current.org_id, actor_id=current.id, action="order.kit_price_override",
+                     entity_type="order", entity_id=order.id,
+                     diff={"kit": name, "group_id": group_id, "price": [before, new], "reason": reason[:500]})
+        await _log_amount_change(db, current.org_id, order, _prev_total)
+    await db.commit()
+    return {"ok": True, "order_total": order.total, "print_mode": kit_print.norm_mode(members[0].bundle_print_mode),
+            "price": members[0].bundle_price_locked}
+
+
 class LineUpdate(BaseModel):
     order_item_id: Optional[str] = None              # several items per job ("" / null = whole job)
     qty: Optional[float] = None
@@ -3832,6 +4033,8 @@ async def update_line(
     if "discount" in payload and (payload["discount"] or 0) != (line.discount or 0):
         await assert_perm(db, current, "can_set_discount")
     if "unit_price" in payload and payload["unit_price"] is not None and float(payload["unit_price"]) != float(line.unit_price or 0):
+        if line.bundle_group_id and line.bundle_price_locked is not None:
+            raise HTTPException(409, "This line is part of a fixed-price kit. Change the kit's price instead.")
         await assert_perm(db, current, "can_edit_sale_price")
     if "order_item_id" in payload:
         payload["order_item_id"] = payload["order_item_id"] or None
@@ -3846,6 +4049,11 @@ async def update_line(
             technician_id=payload.get("technician_id", line.technician_id),
             co_technicians=payload.get("co_technicians", line.co_technicians))
     old_qty = line.qty or 0
+    if line.bundle_group_id and "qty" in payload and (payload["qty"] or 0) != old_qty:
+        await _guard_kit_change(db, current, order_id, line.bundle_group_id,
+                                adds_value=(payload["qty"] or 0) > old_qty)
+    if line.bundle_group_id and "order_item_id" in payload and payload["order_item_id"] != line.order_item_id:
+        raise HTTPException(409, "A kit's lines stay with the kit. Move the whole kit, or remove this line and add it again.")
     for k, v in payload.items():
         setattr(line, k, v)
     # Stock follows the qty change for product lines on real orders (Orderry).
@@ -3885,6 +4093,11 @@ async def update_line(
                  discount=line.discount or 0, discount_type=line.discount_type or "pct",
                  tax_rate=line.tax_rate or 0, tax_mode=line.tax_mode or "imposed")
     line.total = _calc_line(tmp)
+    if line.bundle_group_id and line.bundle_price_locked is not None:
+        # Any edit re-shares the locked price, so its last-cent correction isn't lost.
+        change = (f"{line.description}: qty {old_qty:g} → {line.qty:g}" if (line.qty or 0) != old_qty
+                  else f"{line.description} edited")
+        await _respread_kit(db, order_id, line.bundle_group_id, actor=current, change=change)
     await _recalc_order(db, order)
     await db.commit()
     resp = {"ok": True, "total": line.total, "order_total": order.total}
@@ -3908,14 +4121,19 @@ async def delete_line(
     line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id))).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
+    if line.bundle_group_id:
+        await _guard_kit_change(db, current, order_id, line.bundle_group_id, adds_value=False)
     # return previously-deducted stock for product lines (incl. serials + cost layers)
     if line.kind == "product" and line.ref_id and not order.is_estimate:
         deducted = (line.qty or 0) - (line.pending_stock or 0)
         if deducted > 0:
             await _reverse_fulfillment(db, order, line.ref_id, deducted)
     _prev_total = float(order.total or 0)
+    _kit = line.bundle_group_id
     await db.delete(line)
     await db.flush()
+    if _kit:
+        await _respread_kit(db, order_id, _kit, actor=current, change=f"Removed {line.description}")
     await _recalc_order(db, order)
     await _log_amount_change(db, current.org_id, order, _prev_total)
     await db.commit()

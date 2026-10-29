@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime as _dt
 from backend.db.database import get_db
+from backend.services.public_names import display_name as _public_name
 from backend.models import (
     Order, Client, Device, Organisation, Location,
     OrderStatusLog, EventFeedItem, DocumentSignature,
@@ -146,6 +147,9 @@ async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
 
     # 144ig — always record a tamper-evident signed-approval certificate (estimate OR work order)
     await _record_signature(db, order, decision, signature, who, request)
+    if decision == "accept" and order.is_estimate:   # WS-C: was registered but never fired
+        from backend.services.webhooks import emit_event
+        await emit_event(db, order.org_id, "estimate.accepted", {"id": order.id, "number": order.order_number})
 
     from backend.models import OrderStatus, OrderStatusLog
     converted_id = None
@@ -302,10 +306,17 @@ async def _track_payload(db: AsyncSession, order: "Order") -> dict:
     _inames = await _ma.item_names(db, order.org_id, [l.order_item_id for l in _lines])
     if _inames:
         _lines = _ma.sort_by_item(_lines, _inames, key=lambda l: l.order_item_id)
+    # A kit set to print as one line is one row here too (kit_print is the only way customer
+    # pages get lines); its amount is the sum of its real lines.
+    from backend.services import kit_print as _kp
+    def _amt(l):
+        return q2(sum(_line_amt(m) for m in l.members)) if getattr(l, "is_kit", False) else _line_amt(l)
     lines_pub = [{"label": l.description or (l.kind or l.line_type or "Item").title(),
                   "qty": l.qty or 1, "kind": l.kind or l.line_type,
-                  "amount": _line_amt(l),
-                  **({"item": (_inames.get(l.order_item_id) or (None,))[0]} if _inames else {})} for l in _lines]
+                  "amount": _amt(l),
+                  **({"includes": list(l.includes)} if getattr(l, "includes", None) else {}),
+                  **({"item": (_inames.get(l.order_item_id) or (None,))[0]} if _inames else {})}
+                 for l in _kp.customer_lines(_lines)]
 
     # 144ix — customer review capture: expose active feedback settings + whether this
     # order already has a submitted rating. Actual submit is token-gated below.
@@ -1093,7 +1104,8 @@ async def appointment_config(slug: str, response: Response, db: AsyncSession = D
                       "employee_ids": getattr(s, "allowed_employee_ids", None) or [],
                       "category": (_svc_cats.get(s.category_id) if s.category_id else None) or s.category}
                      for s in services],
-        "staff": [{"id": e.id, "name": e.name} for e in staff],
+        "staff": [{"id": e.id, "name": _public_name(e, getattr(org, "public_employee_name", None))}
+                  for e in staff],
         "locations": [{"id": l.id, "name": l.name,
                        "address": l.address, "phone": l.phone,
                        "working_hours": l.working_hours or {}} for l in locs],

@@ -6,6 +6,7 @@ import { api } from "../../api/client";
 import { useClientSearch } from "../../hooks/useClientSearch";
 import { readAsDataUrl } from "../../lib/files";
 import { alertDialog } from "../../lib/dialog";
+import { autoPrintAfterCreate } from "../../lib/autoPrint";
 import AuthedImage from "../../components/AuthedImage";
 import PhotoAnnotator from "./PhotoAnnotator";
 import { money } from "./types";
@@ -162,6 +163,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
         lines: lines.filter((l) => l.kind !== "bundle").map(lineBody),
       });
       for (const b of lines.filter((l) => l.kind === "bundle")) await api.post(`/orders/${created.id}/lines`, lineBody(b));
+      if (!estimate && created?.id) void autoPrintAfterCreate(created.id);   // WS-C #20: device label, if the shop set one up
       onCreated();
       if (!reopen) onClose();
       else { setClient(null); setQ(""); setComplaint(""); setBrand(""); setModel(""); setSerial(""); setImei(""); setVin(""); setHin(""); setColor(""); setCondition(""); setMoreOpen(false); setDeviceId(null); setLines([]); setWoCustom({}); setAssetCustom({}); setStep(1); }
