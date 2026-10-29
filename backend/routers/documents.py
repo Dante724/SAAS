@@ -112,7 +112,7 @@ VARIABLE_GROUPS = [
         "{Product Tax Amount}", "{Product Discount Pct}", "{Product Discount Sum}",
         "{Technician Name}", "{Technician Phone}", "{Technician Job Title}",
         # document-level totals
-        "{Subtotal}", "{Tax Name}", "{Tax Rate}", "{Tax Value}", "{Tax Value Spelled Out}",
+        "{Subtotal}", "{Tax Name}", "{Tax Rate}", "{Tax Summary}", "{Tax Value}", "{Tax Value Spelled Out}",
         "{Total Amount}", "{Total Amount Without Discount}",
         "{Total Amount Without Discount And Without Taxes}",
         "{Total Discount}", "{Total Discount Without Taxes}", "{Total Qty}"]),
@@ -512,7 +512,18 @@ def _line_numbers(line: OrderLine) -> dict:
     Honours tax_mode: when the stored unit_price already includes tax
     ("inclusive"), the pre-tax figures are derived by dividing out the rate,
     so {Product Price Without Taxes} and the ex-tax totals stay correct.
+
+    A folded kit (kit_print.KitLine) is the sum of its real lines, so document totals and tax
+    are identical however the kit prints.
     """
+    if getattr(line, "is_kit", False):
+        ns = [_line_numbers(m) for m in line.members]
+        qty = float(line.qty or 0) or 1.0
+        s = {k: sum(n[k] for n in ns) for k in ("disc", "base", "base_no_disc", "tax", "amount")}
+        rates = {n["rate"] for n in ns}
+        rate = rates.pop() if len(rates) == 1 else ((s["tax"] / s["base"]) if s["base"] else 0.0)
+        return {"qty": qty, "unit_ex": s["base_no_disc"] / qty,
+                "unit_inc": s["base_no_disc"] * (1 + rate) / qty, "rate": rate, **s}
     qty = float(line.qty or 0)
     unit = float(line.unit_price or 0)
     rate = float(line.tax_rate or 0) / 100.0
@@ -613,8 +624,11 @@ async def _status_name(db, org_id, order: Order) -> str:
     return name or (order.status or "").replace("_", " ").capitalize()
 
 
-async def _resolve(db, org_id, order: Order, current=None):
-    """Return (doc_map, rows) — document-level variables and per-line row maps."""
+async def _resolve(db, org_id, order: Order, current=None, *, itemised: bool = False):
+    """Return (doc_map, rows) — document-level variables and per-line row maps.
+
+    Lines come from kit_print.customer_lines: a kit set to print as one line is one row here
+    (itemised=True prints every line, for the customer's itemised copy)."""
     org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
     client = order.client
     dev = order.device
@@ -625,6 +639,12 @@ async def _resolve(db, org_id, order: Order, current=None):
     _inames = await _ma.item_names(db, org_id, [getattr(l, "order_item_id", None) for l in lines])
     if _inames:
         lines = _ma.sort_by_item(lines, _inames, key=lambda l: getattr(l, "order_item_id", None))
+    from backend.services import kit_print as _kp
+    real_lines = lines
+    lines = _kp.customer_lines(real_lines, itemised=itemised)
+
+    def _is_part(l):
+        return (l.line_type or "") == "part" or (getattr(l, "is_kit", False) and l.is_parts_only)
 
     # Multi-currency: resolve the document's display currency (order snapshot → client → base).
     # Shadow `_money` locally so every amount in this document renders in the display currency.
@@ -677,7 +697,7 @@ async def _resolve(db, org_id, order: Order, current=None):
         subtotal += n["base"]; tax_total += n["tax"]; total += n["amount"]
         total_qty += n["qty"]; total_disc += n["disc"]; base_no_disc_total += n["base_no_disc"]
         entry = [i, l.description or "", f"{n['qty']:g}", _money(n["unit_ex"]), _money(n["tax"]), _money(n["amount"])]
-        (prod_rows if (l.line_type or "") == "part" else serv_rows).append(entry)
+        (prod_rows if _is_part(l) else serv_rows).append(entry)
 
     hdr = ["#", "Description", "Qty", "Unit Price", "Tax", "Amount"]
     products_table = _table_block(hdr, prod_rows)
@@ -697,9 +717,15 @@ async def _resolve(db, org_id, order: Order, current=None):
                                  _money(n["tax"]), _money(n["amount"])])
         all_items_table = _table_block(hdr, _grouped)
 
+    # Tax split by rate, from the real lines (a folded kit never merges rates).
+    _tax_rows = _kp.tax_by_rate(real_lines, _line_numbers)
+    tax_summary = _table_block(["Tax rate", "Taxable", "Tax"],
+                               [[f"{r['rate']:g}%", _money(r["base"]), _money(r["tax"])] for r in _tax_rows]) \
+        if _tax_rows else ""
+
     # dominant tax (name/rate) for the document-level total line
     tax_name = tax_rate = ""
-    for l in lines:
+    for l in real_lines:
         if l.tax_rate:
             tax_rate = f"{float(l.tax_rate):g}%"
             tax_name = "Tax"
@@ -758,8 +784,8 @@ async def _resolve(db, org_id, order: Order, current=None):
 
     # Deterministic plain-English work summary from the order's own fields (no LLM,
     # so nothing is invented) — the prose techs hate writing, assembled for them.
-    _svcs = [l.description for l in lines if (l.line_type or "") != "part" and l.description]
-    _prts = [l.description for l in lines if (l.line_type or "") == "part" and l.description]
+    _svcs = [l.description for l in lines if not _is_part(l) and l.description]
+    _prts = [l.description for l in lines if _is_part(l) and l.description]
     _ws = []
     if order.complaint:
         _ws.append(f"Reported: {order.complaint}.")
@@ -886,6 +912,7 @@ async def _resolve(db, org_id, order: Order, current=None):
         "{Subtotal}": _money(subtotal),
         "{Tax Name}": tax_name,
         "{Tax Rate}": tax_rate,
+        "{Tax Summary}": tax_summary,
         "{Tax Value}": _money(tax_total),
         "{Tax Value Spelled Out}": _spell_money(tax_total * _fx),
         "{Total Amount}": _money(total),
@@ -1073,6 +1100,7 @@ def _apply(body: str, vars: dict) -> str:  # kept for backward compatibility
 async def render_document(
     order_id: str,
     template_id: str,
+    itemised: bool = False,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
@@ -1085,7 +1113,12 @@ async def render_document(
         DocumentTemplate.id == template_id, DocumentTemplate.org_id == current.org_id))).scalar_one_or_none()
     if not tpl:
         raise HTTPException(404, "Template not found")
-    doc, rows = await _resolve(db, current.org_id, order, current)
+    if itemised:
+        await assert_perm(db, current, "can_print_itemised_copy")
+        from backend.services.audit import record as _audit
+        await _audit(db, org_id=current.org_id, actor_id=current.id, action="order.itemised_copy",
+                     entity_type="order", entity_id=order.id, diff={"template": tpl.name})
+    doc, rows = await _resolve(db, current.org_id, order, current, itemised=itemised)
     body = await _expand_components(db, current.org_id, tpl.body_html)
     html = _render(body, doc, rows)
     db.add(GeneratedDocument(org_id=current.org_id, order_id=order.id, template_id=tpl.id,
@@ -1246,6 +1279,7 @@ class PrintViewIn(BaseModel):
     page_h_mm: Optional[float] = None
     margin_mm: Optional[float] = None
     font_family: str = "Inter"
+    itemised: bool = False              # the customer's itemised copy: kits print item by item
 
 
 @router.post("/print-view")
@@ -1257,10 +1291,12 @@ async def print_view(
     """144ia — return a print-ready HTML document, resolved against a real sample record and
     wrapped in an exact-size @page rule so it prints true-to-size on any printer."""
     await _assert_sample_perm(db, current, data.doc_type)   # samples are real invoices / credit notes
+    if data.itemised:
+        await assert_perm(db, current, "can_print_itemised_copy")
     if (data.doc_type or "") == "invoice":
         inv = (await db.execute(select(Invoice).where(Invoice.org_id == current.org_id)
             .order_by(Invoice.created_at.desc()))).scalars().first()
-        doc, rows = (await _resolve_invoice(db, current.org_id, inv)) if inv else ({}, [])
+        doc, rows = (await _resolve_invoice(db, current.org_id, inv, itemised=data.itemised)) if inv else ({}, [])
     elif (data.doc_type or "") == "credit_note":
         cn = await _sample_credit_note(db, current.org_id)
         doc, rows = (await _resolve_credit_note(db, current.org_id, cn)) if cn else ({}, [])
@@ -1270,14 +1306,14 @@ async def print_view(
         order = (await db.execute(q.options(
             selectinload(Order.lines), selectinload(Order.client),
             selectinload(Order.device), selectinload(Order.assigned_to)))).scalars().first()
-        doc, rows = (await _resolve(db, current.org_id, order, current)) if order else ({}, [])
+        doc, rows = (await _resolve(db, current.org_id, order, current, itemised=data.itemised)) if order else ({}, [])
     body = await _expand_components(db, current.org_id, data.body_html)
     html = _print_doc(body, doc, rows, font=data.font_family or "Inter",
                       page_size=data.page_size, w=data.page_w_mm, h=data.page_h_mm, margin=data.margin_mm)
     return {"html": html}
 
 
-async def _resolve_invoice(db, org_id, inv: Invoice):
+async def _resolve_invoice(db, org_id, inv: Invoice, *, itemised: bool = False):
     """Variable map + repeating rows for an INVOICE document — lets an invoice be
     designed in the customizable template editor (doc_type='invoice'), the same way
     work orders are. Line rows come from the invoice's display_mode (detailed /
@@ -1299,7 +1335,7 @@ async def _resolve_invoice(db, org_id, inv: Invoice):
         return (getattr(o, a, None) if o else "") or "—"
 
     from backend.services.multi_asset import group_rows
-    dl = await _inv_display(db, inv)
+    dl = await _inv_display(db, inv, itemised=itemised)
     hdr = ["#", "Description", "Qty", "Unit Price", "Amount"]
     rows, table_rows = [], []
     i = 0
@@ -1376,6 +1412,7 @@ async def _resolve_invoice(db, org_id, inv: Invoice):
 @router.get("/render-invoice/{invoice_id}/{template_id}")
 async def render_invoice_document(
     invoice_id: str, template_id: str,
+    itemised: bool = False,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
@@ -1388,7 +1425,13 @@ async def render_invoice_document(
         raise HTTPException(404, "Template not found")
     if not inv:
         raise HTTPException(404, "Invoice not found")
-    doc, rows = await _resolve_invoice(db, current.org_id, inv)
+    if itemised:
+        await assert_perm(db, current, "can_print_itemised_copy")
+        from backend.services.audit import record as _audit
+        await _audit(db, org_id=current.org_id, actor_id=current.id, action="invoice.itemised_copy",
+                     entity_type="invoice", entity_id=inv.id, diff={"template": tpl.name})
+        await db.commit()
+    doc, rows = await _resolve_invoice(db, current.org_id, inv, itemised=itemised)
     html = _render(tpl.body_html, doc, rows)
     return {"html": html, "name": tpl.name}
 

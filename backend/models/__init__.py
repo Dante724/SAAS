@@ -618,6 +618,15 @@ class OrderLine(Base):
     order: Mapped["Order"] = relationship(back_populates="lines")
     # Several items per job: which of the job's items this line is for (null = the whole job).
     order_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("order_items.id"), index=True)
+    # Kits print as one line (kit1p01). A kit still explodes into these real lines (money, stock,
+    # cost, tax stay here); the tags only say which kit a line came from, so customer documents can
+    # fold the group (services/kit_print.customer_lines) and a fixed kit price stays locked.
+    bundle_group_id: Mapped[Optional[str]] = mapped_column(String(36), index=True)
+    bundle_name: Mapped[Optional[str]] = mapped_column(String(200))
+    bundle_print_mode: Mapped[Optional[str]] = mapped_column(String(20))  # itemized|one_line|one_line_includes
+    bundle_price_locked: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
+    bundle_qty: Mapped[Optional[float]] = mapped_column(Float)
+    bundle_std_price: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
 
 
 class OrderItem(Base):
@@ -680,6 +689,8 @@ class Bundle(Base):
     price_mode: Mapped[str] = mapped_column(String(10), default="sum")  # sum|fixed
     price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)            # used when fixed
     category_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("categories.id"), index=True)  # 144ax
+    # How the kit prints for the customer: itemized (default) | one_line | one_line_includes.
+    print_mode: Mapped[Optional[str]] = mapped_column(String(20), default="itemized", server_default="itemized")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 

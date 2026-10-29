@@ -45,6 +45,9 @@ CATALOG = {
         ("can_approve_discount", "Approve discounts above the shop's limit"),
         ("can_add_without_stock", "Add products without deduction"),
         ("can_create_payment_links", "Create payment links"),
+        ("can_change_kit_print", "Change how a kit prints on a job"),
+        ("can_change_kit_price", "Change a fixed kit price on a job"),
+        ("can_print_itemised_copy", "Print an itemised copy for the customer"),
     ],
     "Inventory": [
         ("can_manage_inventory", "Manage inventory (stock, POs, receiving)"),
@@ -178,7 +181,7 @@ TEMPLATES = {
 
 
 # Codes that were always opt-in (only an explicit True grants them), even for legacy roles.
-OPT_IN = {"can_override_reservation"}
+OPT_IN = {"can_override_reservation", "can_change_kit_price"}
 
 
 def role_allows(role, perm_key: str) -> bool:

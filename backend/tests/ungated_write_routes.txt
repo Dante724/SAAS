@@ -162,6 +162,8 @@ PATCH /api/orders/{order_id}/deposit [staff]
 POST /api/orders/{order_id}/duplicate [staff]
 PATCH /api/orders/{order_id}/intake-markups [staff]
 PATCH /api/orders/{order_id}/intake-photos [staff]
+# kits: checked per field in the handler — can_change_kit_print / can_change_kit_price
+PATCH /api/orders/{order_id}/kits/{group_id} [staff]
 POST /api/orders/{order_id}/lines [staff]
 DELETE /api/orders/{order_id}/lines/{line_id} [staff]
 PATCH /api/orders/{order_id}/lines/{line_id} [staff]

@@ -64,6 +64,7 @@ export default function InvoiceDrawer({ id, onClose, onChanged }: { id: string; 
         sub={<>{billTo ? <>Bill to <span className="font-semibold text-ink-secondary">{billTo}</span> · </> : "Walk-in · "}Issued {fmtDate(inv.issued_at)}{inv.due_at ? <> · Due {fmtDate(inv.due_at)}{late > 0 && <span className="font-semibold text-rose-600"> · {lateText(late)}</span>}</> : null}</>}
         footer={<>
           <button onClick={() => openAuthedDoc(`/print/invoices/${inv.id}`).catch(() => alertDialog("Could not open invoice PDF"))} className={btnGhost}><M n="print" c="text-sm" />Print / PDF</button>
+          {can("can_print_itemised_copy") && <button onClick={() => openAuthedDoc(`/print/invoices/${inv.id}?itemised=true`).catch(() => alertDialog("Could not open the itemised copy"))} className={btnGhost} title="Every part and service on its own line, even when a kit prints as one line">Print itemised copy</button>}
           {can("can_create_credit_notes") && !voided && room > 0 && <button onClick={() => setNewNote(true)} className={btnGhost}>Create credit note</button>}
           {can("can_view_finance") && !voided && due > 0 && <button onClick={() => setPaying(true)} className={btnPrimary}>Record payment</button>}
         </>}>
