@@ -83,6 +83,10 @@ REAL_CODES = frozenset({
     "can_issue_credit_notes", "can_create_clients", "can_make_calls", "can_manage_chats",
     "can_use_sense_suggestions", "can_approve_agent_sends", "can_approve_rec_for_customer",
     "can_view_own_payroll",
+    # Kits (kit1p01) and memberships (mb145a1) may migrate before this one; keep their codes too.
+    "can_change_kit_print", "can_change_kit_price", "can_print_itemised_copy",
+    "can_sell_memberships", "can_change_memberships", "can_apply_membership_benefits",
+    "can_manage_membership_plans",
 })
 
 # legacy area -> (codes denied when the area is "read", extra codes denied when it is "none").
