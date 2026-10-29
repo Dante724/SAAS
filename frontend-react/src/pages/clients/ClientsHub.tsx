@@ -159,19 +159,18 @@ export default function ClientsHub() {
 
         <div className="p-6 space-y-4">
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-              <div className="relative w-full sm:w-72"><M n="search" c="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" /><input value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search contacts" className="w-full h-9 bg-white border border-slate-200 rounded-lg pl-8 pr-3 text-xs text-ink-primary placeholder:text-ink-placeholder outline-none focus:border-primary focus:ring-2 focus:ring-primary/10" placeholder="Search name, phone or email…" /></div>
-              {tab === "clients" && <TagFilterChip value={tagId} onChange={(id) => { setTagId(id); clearSel(); }} />}
-            </div>
-            {/* Page actions sit on the right, the main one last. */}
             {tab === "clients"
-              ? <div className="flex items-center gap-2 ml-auto">
+              ? <div className="flex items-center gap-2">
+                  {can("can_create_clients") && <button onClick={() => setNewClient(true)} className={btnPrimary}><M n="add" c="text-sm" />New client</button>}
                   <label className={`${btnGhost} bg-white cursor-pointer`}><M n="upload" c="text-sm" />Import CSV
                     <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) importCsv(f); e.target.value = ""; }} /></label>
-                  {can("can_create_clients") && <button onClick={() => setNewClient(true)} className={btnPrimary}><M n="add" c="text-sm" />New client</button>}
                 </div>
-              : tab === "suppliers" ? <button onClick={() => setNewSupplier(true)} className={`${btnPrimary} ml-auto`}><M n="add" c="text-sm" />New supplier</button>
-              : <a href="/catalog?tab=plans" className={`${btnGhost} bg-white ml-auto`}><M n="workspace_premium" c="text-sm" />Manage plans</a>}
+              : tab === "suppliers" ? <button onClick={() => setNewSupplier(true)} className={btnPrimary}><M n="add" c="text-sm" />New supplier</button>
+              : <a href="/catalog?tab=plans" className={`${btnGhost} bg-white`}><M n="workspace_premium" c="text-sm" />Manage plans</a>}
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+              {tab === "clients" && <TagFilterChip value={tagId} onChange={(id) => { setTagId(id); clearSel(); }} />}
+              <div className="relative w-full sm:w-72"><M n="search" c="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" /><input value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search contacts" className="w-full h-9 bg-white border border-slate-200 rounded-lg pl-8 pr-3 text-xs text-ink-primary placeholder:text-ink-placeholder outline-none focus:border-primary focus:ring-2 focus:ring-primary/10" placeholder="Search name, phone or email…" /></div>
+            </div>
           </div>
 
           {tab === "memberships" && <MembershipsView q={dq} />}
