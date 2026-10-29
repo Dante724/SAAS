@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
+import { sectionCard } from "../../components/Section";
 import { useMe } from "../../context/Me";
 import { readAsDataUrl } from "../../lib/files";
 import AuthedImage from "../../components/AuthedImage";
@@ -89,11 +90,11 @@ export default function NotesPanel({ orderId, onFlash }: { orderId: string; onFl
   const mayEdit = (it: FeedItem) => it.author_id === me?.id || can("can_delete_orders");
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
-      <div className="px-4 py-2.5 border-b border-slate-100 flex items-center gap-2">
-        <M n="sticky_note_2" c="text-base text-primary" />
-        <h5 className="text-xs font-bold text-ink-primary">Comments and files</h5>
-        {items && items.length > 0 && <span className="text-[11px] text-ink-tertiary tabular-nums">{items.length}</span>}
+    <div className={`${sectionCard} overflow-hidden`}>
+      <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
+        <M n="sticky_note_2" c="text-base text-ink-tertiary" />
+        <h4 className="text-sm font-semibold text-ink-primary">Comments and files</h4>
+        {items && items.length > 0 && <span className="text-xs text-ink-tertiary tabular-nums">{items.length}</span>}
       </div>
       <div className="max-h-72 overflow-y-auto divide-y divide-slate-100">
         {!items && <div className="text-xs text-ink-tertiary py-5 text-center">Loading…</div>}

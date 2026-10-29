@@ -16,9 +16,11 @@ function printWarning(): Promise<string | null> {
   return warningCache;
 }
 
-export default function KitGroupHeader({ orderId, groupId, name, qty, mode, locked, total, count, seePrices, closed, onChanged, onFlash, onAddInto, children }: {
+export default function KitGroupHeader({ orderId, groupId, name, qty, mode, locked, total, count, seePrices, closed, onChanged, onFlash, onAddInto, onRemove, children }: {
   orderId: string; groupId: string; name: string; qty: number; mode: KitPrintMode; locked: number | null; total: number; count: number;
-  seePrices: boolean; closed?: boolean; onChanged?: () => void; onFlash: (m: string) => void; onAddInto?: (groupId: string) => void; children: ReactNode;
+  seePrices: boolean; closed?: boolean; onChanged?: () => void; onFlash: (m: string) => void; onAddInto?: (groupId: string) => void;
+  onRemove?: () => void;   // removes the whole kit from the job (all its lines)
+  children: ReactNode;
 }) {
   const { can } = useMe();
   const [open, setOpen] = useState(true);
@@ -64,7 +66,7 @@ export default function KitGroupHeader({ orderId, groupId, name, qty, mode, lock
           </div>
           {seePrices && <span className="tabular-nums text-xs font-bold text-ink-primary flex-none">{money(total)}</span>}
         </div>
-        {(canPrint || canPrice || (onAddInto && !closed)) && (
+        {(canPrint || canPrice || (onAddInto && !closed) || (onRemove && !closed)) && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pl-16">
             {canPrint && (
               <select value={mode} onChange={(e) => save({ print_mode: e.target.value }, "Kit print setting saved")} aria-label={`How ${name} prints for the customer`}
@@ -77,6 +79,9 @@ export default function KitGroupHeader({ orderId, groupId, name, qty, mode, lock
             )}
             {onAddInto && !closed && (
               <button type="button" onClick={() => onAddInto(groupId)} className="text-[11px] font-semibold text-primary hover:underline">Add to kit</button>
+            )}
+            {onRemove && !closed && (
+              <button type="button" onClick={onRemove} className="text-[11px] font-semibold text-rose-600 hover:underline">Remove kit</button>
             )}
           </div>
         )}

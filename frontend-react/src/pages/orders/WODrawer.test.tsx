@@ -32,7 +32,7 @@ describe("InvoicesTab record payment", () => {
     const u = userEvent.setup();
     const onFlash = vi.fn();
     render(<InvoicesTab orderId="o1" total={100} onFlash={onFlash} />);
-    await u.click(await screen.findByRole("button", { name: /Take Payment/ }));
+    await u.click(await screen.findByRole("button", { name: /Take payment/ }));
     const btn = await screen.findByRole("button", { name: "Record payment" });
     await u.dblClick(btn);
     expect(posts).toEqual(["/api/cash/orders/o1/pay"]);

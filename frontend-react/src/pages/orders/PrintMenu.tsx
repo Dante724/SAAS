@@ -107,11 +107,11 @@ export default function PrintMenu({ orderId, status, canInvoices = true, onStick
   return (
     <div className="flex items-stretch">
       <button type="button" onClick={() => print(choice)} disabled={busy}
-        className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-1 border border-slate-200 rounded-l-lg px-2 py-1 bg-white disabled:opacity-60">
-        <M n="print" c="text-xs" />{busy ? "Preparing…" : `Print ${nameOf(choice)}`}</button>
+        className="h-9 px-3.5 text-xs text-ink-primary font-semibold flex items-center gap-1.5 border border-slate-200 rounded-l-xl bg-white hover:bg-slate-50 disabled:opacity-60">
+        <M n="print" c="text-sm" />{busy ? "Preparing…" : `Print ${nameOf(choice)}`}</button>
       <button type="button" data-print-menu={orderId} aria-label="Choose what to print" aria-expanded={open}
         onClick={() => setOpen((v) => !v)} disabled={busy}
-        className="text-ink-secondary hover:text-ink-primary border border-l-0 border-slate-200 rounded-r-lg px-1 bg-white">
+        className="h-9 px-2 text-ink-secondary hover:text-ink-primary border border-l-0 border-slate-200 rounded-r-xl bg-white hover:bg-slate-50">
         <M n="expand_more" c="text-[14px]" /></button>
       {open && (
         <FloatingMenu anchorSel={`[data-print-menu="${orderId}"]`} onClose={() => setOpen(false)} width={256}>

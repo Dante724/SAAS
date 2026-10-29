@@ -6,6 +6,7 @@ import { readAsDataUrl } from "../../lib/files";
 import { Gate, useMe } from "../../context/Me";
 import { money } from "./types";
 import { serverDate } from "../../lib/serverTime";
+import { sectionCard } from "../../components/Section";
 
 /* Recommendations on a job: the extra work the technician thinks the customer should do.
    Staff add them here (title, price, why, urgency, photo), send them to the customer's
@@ -85,23 +86,23 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
   const field = "w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-ink-primary outline-none focus:border-primary/50";
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white">
+    <section className={sectionCard}>
       <div className="flex flex-wrap items-center gap-2 px-4 pt-4">
-        <div className="min-w-0">
-          <h5 className="text-sm font-semibold text-ink-primary">Recommended to the customer</h5>
-          <p className="text-[12px] text-ink-tertiary">Extra work they can choose to add on their tracking page.</p>
+        <div className="min-w-0 basis-full">
+          <h4 className="text-sm font-semibold text-ink-primary">Recommended to the customer</h4>
+          <p className="text-xs text-ink-tertiary">Extra work they can choose to add on their tracking page.</p>
         </div>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="flex items-center gap-2">
+          <Gate perm="can_recommend">
+            {!form && <button onClick={() => setForm({ title: "", price: "", qty: "1", kind: "service", urgency: "", note: "", photo: null, item: "" })}
+              className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:brightness-110"><M n="add" c="text-sm" />Add</button>}
+          </Gate>
           {drafts.length > 1 && (
             <Gate perm="can_publish_recommend">
               <button disabled={busy} onClick={() => call(() => api.post(`/orders/${orderId}/recommendations/publish-all`, {}), `Sent ${drafts.length} to the customer`)}
-                className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Send all {drafts.length}</button>
+                className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-primary hover:bg-slate-50">Send all {drafts.length}</button>
             </Gate>
           )}
-          <Gate perm="can_recommend">
-            {!form && <button onClick={() => setForm({ title: "", price: "", qty: "1", kind: "service", urgency: "", note: "", photo: null, item: "" })}
-              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold hover:opacity-90"><M n="add" c="text-sm" />Add</button>}
-          </Gate>
         </div>
       </div>
       {!enabled && (
