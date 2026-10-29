@@ -30,12 +30,36 @@ import ApiKeysCard from "./ApiKeysCard";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
 import TelephonySettings from "./TelephonySettings";
 import WebhooksSettings from "./WebhooksSettings";
+import Switch from "../../components/Switch";
+import SaveFooter from "../../components/SaveFooter";
+import { SettingRow, SettingGroup, NumField } from "../../components/SettingRow";
+import { money } from "../orders/types";
 
 // Full section set = the registry sections + a few that have no nav entry of their own.
 type Section = SectionId | "overview" | "automation" | "payroll-rules";
 
-const lbl = "block text-[11px] font-bold text-ink-tertiary  mb-1";
-const field = "glass-input w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg";
+const lbl = "block text-sm font-medium text-ink-primary mb-1.5";
+const field = "glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary";
+const btnPrimary = "h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90 disabled:opacity-50 inline-flex items-center gap-1.5";
+const btnSecondary = "h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-secondary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 inline-flex items-center gap-1.5";
+
+// Plain-word labels for the stored option values shown in settings (events, actions, kinds…).
+const OPT_LABELS: Record<string, string> = {
+  status_change: "Status changes", status_changed: "Status changes", order_created: "Order created", order_closed: "Order closed",
+  payment_received: "Payment received", appointment_created: "Appointment booked", created: "Created", closed: "Closed", reminder: "Reminder",
+  sms: "SMS",
+  order: "Orders", client: "Clients", lead: "Inquiries", appointment: "Appointments", invoice: "Invoices",
+  email: "Email", push: "In-app / push", chat: "Chat",
+  estimate: "Estimate", receipt: "Receipt", work_order: "Work order", label: "Label", other: "Other",
+  a4: "A4", letter: "Letter", product: "Products", asset: "Assets", location: "One location", company: "Whole company",
+  new: "New", in_progress: "In progress", pending: "Pending", ready: "Ready", dropped: "Dropped",
+  all: "All locations", selected: "Selected locations",
+};
+// Turn a stored value like "quote_followup" into words ("Quote followup") when it has no label above.
+const humanize = (v: string) => { const s = String(v || "").replace(/_/g, " ").trim(); return s ? s[0].toUpperCase() + s.slice(1) : ""; };
+const optLabel = (v: string) => OPT_LABELS[v] || humanize(v);
+// What an automation rule does (its action_type).
+const ACTION_LABELS: Record<string, string> = { notify: "Send a notification", create_task: "Create a task", assign: "Assign someone", webhook: "Call a webhook", sms: "Send a text" };
 
 // General-settings option lists (legacy parity).
 // `country` is stored as an ISO 3166-1 alpha-2 code (String(2) column). Each country
@@ -196,26 +220,26 @@ export default function SettingsHub() {
   }, [sec]);
 
   // ── Inline editors for config entities (create / edit / delete) ──
-  type Field = { k: string; label: string; type: "text" | "number" | "select" | "color" | "checkbox" | "textarea" | "date"; opts?: string[]; def?: any; req?: boolean; vars?: boolean; counter?: boolean };
+  type Field = { k: string; label: string; type: "text" | "number" | "select" | "color" | "checkbox" | "textarea" | "date"; opts?: string[]; choices?: { value: string; label: string }[]; def?: any; req?: boolean; vars?: boolean; counter?: boolean; unit?: string; help?: string; labels?: Record<string, string> };
   const EDITORS: Record<string, { create: string; upd?: (id: string) => string; updMethod?: "put" | "patch"; del?: (id: string) => string; fields: Field[]; reload: () => void }> = {
     automation: { create: "/automations", upd: (id) => `/automations/${id}`, del: (id) => `/automations/${id}`, reload: () => reloadSec("automation"), fields: [
       { k: "name", label: "Rule name", type: "text", req: true }, { k: "event", label: "Event", type: "select", opts: ["status_change", "order_created", "order_closed", "payment_received", "appointment_created"], def: "status_change" },
-      { k: "trigger_status", label: "When status is (key)", type: "text" }, { k: "action_type", label: "Action", type: "select", opts: ["notify", "create_task", "assign", "webhook", "sms"], def: "notify", req: true }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
+      { k: "trigger_status", label: "When the status is", type: "text" }, { k: "action_type", label: "Action", type: "select", opts: ["notify", "create_task", "assign", "webhook", "sms"], labels: ACTION_LABELS, def: "notify", req: true }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
     notifications: { create: "/notifications/rules", upd: (id) => `/notifications/rules/${id}`, updMethod: "patch", del: (id) => `/notifications/rules/${id}`, reload: () => reloadSec("notifications"), fields: [
       { k: "module", label: "Module", type: "select", opts: ["order", "client", "lead", "appointment", "invoice"], def: "order" }, { k: "event", label: "Event", type: "select", opts: ["status_change", "created", "closed", "payment_received", "reminder"], def: "status_change" },
-      { k: "channel", label: "Channel", type: "select", opts: ["email", "sms", "push", "chat"], def: "email" }, { k: "delay_min", label: "Delay (minutes)", type: "number", def: 0 }, { k: "working_hours_only", label: "Working hours only", type: "checkbox" }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
+      { k: "channel", label: "Channel", type: "select", opts: ["email", "sms", "push", "chat"], def: "email" }, { k: "delay_min", label: "Delay", type: "number", unit: "min", def: 0 }, { k: "working_hours_only", label: "Working hours only", type: "checkbox" }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
     templates: { create: "/documents/templates", upd: (id) => `/documents/templates/${id}`, del: (id) => `/documents/templates/${id}`, reload: () => reloadSec("templates"), fields: [
       { k: "name", label: "Template name", type: "text", req: true }, { k: "doc_type", label: "Document type", type: "select", opts: ["estimate", "invoice", "receipt", "work_order", "label", "other"], def: "estimate" },
       { k: "page_size", label: "Page size", type: "select", opts: ["a4", "letter", "label"], def: "a4" }, { k: "font_family", label: "Font", type: "text", def: "Inter" },
-      { k: "is_default", label: "Default for type", type: "checkbox" }, { k: "body_html", label: "Body (HTML — use {Variables})", type: "textarea", req: true, vars: true } ] },
+      { k: "is_default", label: "Default for type", type: "checkbox" }, { k: "body_html", label: "Body", help: "Click a variable on the right to drop in job or customer details.", type: "textarea", req: true, vars: true } ] },
     notif_templates: { create: "/notifications/templates", upd: (id) => `/notifications/templates/${id}`, del: (id) => `/notifications/templates/${id}`, reload: () => reloadNotifTemplates(), fields: [
       { k: "name", label: "Template name", type: "text" }, { k: "channel", label: "Channel", type: "select", opts: ["sms", "email", "push"], def: "sms" },
-      { k: "trigger_event", label: "Trigger event", type: "select", opts: ["status_change", "created", "closed", "reminder"], def: "status_change" }, { k: "trigger_status", label: "When status (key)", type: "text" },
-      { k: "subject", label: "Subject (email)", type: "text" }, { k: "body_template", label: "Message body", type: "textarea", req: true, vars: true, counter: true }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
+      { k: "trigger_event", label: "Trigger event", type: "select", opts: ["status_change", "created", "closed", "reminder"], def: "status_change" }, { k: "trigger_status", label: "When the status is", type: "text" },
+      { k: "subject", label: "Email subject", type: "text" }, { k: "body_template", label: "Message body", type: "textarea", req: true, vars: true, counter: true }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
     invites: { create: "/staff/invites", del: (id) => `/staff/invites/${id}`, reload: () => reloadInvites(), fields: [
       { k: "email", label: "Email", type: "text", req: true }, { k: "name", label: "Name", type: "text" } ] },
     forms: { create: "/forms/types", upd: (id) => `/forms/types/${id}`, del: (id) => `/forms/types/${id}`, reload: () => reloadSec("forms"), fields: [
-      { k: "name", label: "Form name", type: "text", req: true }, { k: "color", label: "Colour", type: "color", def: "#4f8ef7" }, { k: "initial_status", label: "Initial status (key)", type: "text", def: "new" }, { k: "is_default", label: "Default", type: "checkbox" } ] },
+      { k: "name", label: "Form name", type: "text", req: true }, { k: "color", label: "Colour", type: "color", def: "#4f8ef7" }, { k: "initial_status", label: "Starting status", type: "text", def: "new" }, { k: "is_default", label: "Default", type: "checkbox" } ] },
     warehouses: { create: "/settings/warehouses", upd: (id) => `/settings/warehouses/${id}`, del: (id) => `/settings/warehouses/${id}`, reload: () => reloadSec("warehouses"), fields: [
       { k: "name", label: "Name", type: "text", req: true }, { k: "kind", label: "Kind", type: "select", opts: ["product", "asset"], def: "product" },
       { k: "scope", label: "Scope", type: "select", opts: ["location", "company"], def: "location" }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
@@ -223,10 +247,10 @@ export default function SettingsHub() {
       { k: "name", label: "Name", type: "text", req: true }, { k: "status_group", label: "Group", type: "select", opts: ["new", "in_progress", "pending", "ready", "closed", "dropped"], def: "in_progress" },
       { k: "color", label: "Colour", type: "color", def: "#888888" }, { k: "is_default", label: "Default status", type: "checkbox" },
       { k: "triggers_invoice", label: "Triggers invoice", type: "checkbox" }, { k: "triggers_payment", label: "Prompts payment", type: "checkbox" }, { k: "locks_edits", label: "Locks edits (freeze after this status)", type: "checkbox" },
-      { k: "time_limit_min", label: "Time limit (minutes, blank = none)", type: "number" }, { k: "moves_asset_to", label: "Auto-move asset to (warehouse/status key)", type: "text" },
+      { k: "time_limit_min", label: "Time limit", help: "Leave blank for no limit.", type: "number", unit: "min" }, { k: "moves_asset_to", label: "Move the item to", help: "A warehouse or item status, when a job enters this status.", type: "text" },
       { k: "require_comment", label: "Require a comment before entering", type: "checkbox" }, { k: "require_checklist", label: "Require all checklist items done", type: "checkbox" }, { k: "require_payment", label: "Require full payment before entering", type: "checkbox" } ] },
     pricing: { create: "/pricing/types", upd: (id) => `/pricing/types/${id}`, del: (id) => `/pricing/types/${id}`, reload: () => reloadSec("pricing"), fields: [
-      { k: "name", label: "Name", type: "text", req: true }, { k: "markup_pct", label: "Markup %", type: "number", def: 0 },
+      { k: "name", label: "Name", type: "text", req: true }, { k: "markup_pct", label: "Markup", type: "number", unit: "%", def: 0 },
       { k: "is_default", label: "Default", type: "checkbox" }, { k: "location_scope", label: "Scope", type: "select", opts: ["all", "selected"], def: "all" },
       { k: "starts_at", label: "Promo starts (optional)", type: "date" }, { k: "ends_at", label: "Promo ends (optional)", type: "date" } ] },
     directories: { create: "/directories", del: (id) => `/directories/${id}`, reload: () => reloadSec("directories"), fields: [
@@ -325,10 +349,7 @@ export default function SettingsHub() {
           )}
           {sec === "overview" && (
             <div className="max-w-3xl space-y-5">
-              <div>
-                <h2 className="text-xl font-semibold text-ink-primary">Settings</h2>
-                <p className="text-xs text-ink-tertiary mt-0.5">Set up your shop once, change anything later.</p>
-              </div>
+              <p className="text-sm text-ink-secondary">Set up your shop once, change anything later.</p>
               <SetupChecklist goSection={setSec} navigate={(to) => navigate(to)} />
               <div className="relative">
                 <M n="search" c="absolute left-4 top-3.5 text-lg text-ink-tertiary pointer-events-none" />
@@ -589,7 +610,7 @@ function NotificationsSettings({ fixedView, rules, templates, automations, reloa
   const remindersAllowed = !isInternal && (module === "order" || module === "appointment");
 
   const ruleCols: [string, (r: any) => string][] = [
-    ["Event", (r) => EVENT_LABEL(isInternal, r.module || "order", r.event) + (r.trigger_status_key ? ` → ${r.trigger_status_key}` : "")],
+    ["Event", (r) => EVENT_LABEL(isInternal, r.module || "order", r.event) + (r.trigger_status_key ? ` → ${humanize(r.trigger_status_key)}` : "")],
     ["Send via", (r) => (r.channel === "push" ? "In-app / push" : String(r.channel || "—").toUpperCase())],
     ["Template", (r) => (isInternal ? "—" : tplName(r.template_id))],
     ["Location", (r) => (r.location_id ? "Selected" : "All")],
@@ -618,7 +639,7 @@ function NotificationsSettings({ fixedView, rules, templates, automations, reloa
           <SectionCard title="Automation rules" count={automations?.length} onAdd={() => onEditAutomation(null)}>
             <p className="px-3.5 pt-3 text-[11px] text-ink-tertiary">Trigger an action when something happens — create a task, assign a tech, add a tag, call a webhook, or fire a notification. Also runs on overdue orders and low stock.</p>
             <SecTable rows={automations} onRowClick={(r) => onEditAutomation(r)} onDelete={onDeleteAutomation}
-              cols={[["Rule", (r) => r.name || "—"], ["Event", (r) => String(r.event || "—").replace(/_/g, " ")], ["Action", (r) => String(r.action_type || "—").replace(/_/g, " ")], ["Status", (r) => (r?.active ? "Active" : "Off")]]} />
+              cols={[["Rule", (r) => r.name || "—"], ["Event", (r) => (r.event ? optLabel(r.event) : "—")], ["Action", (r) => (r.action_type ? ACTION_LABELS[r.action_type] || humanize(r.action_type) : "—")], ["Status", (r) => (r?.active ? "Active" : "Off")]]} />
           </SectionCard>
         </>
       ) : (
@@ -668,7 +689,7 @@ function NotificationsSettings({ fixedView, rules, templates, automations, reloa
           <SectionCard title="Message templates" count={templates?.length ?? undefined} onAdd={() => setTplEdit("new")}>
             <SecTable rows={templates} onRowClick={(r) => setTplEdit(r)}
               onDelete={async (r) => { if (await confirmDialog("Delete this template?", { danger: true, confirmLabel: "Delete" })) { try { await api.del(`/notifications/templates/${r.id}`); flash("Deleted"); reloadTemplates(); } catch (e: any) { flash(`Failed: ${e.message}`); } } }}
-              cols={[["Title", (t) => t.name || t.trigger_event || "—"], ["Type", (t) => (t.channel === "email" ? "Email" : t.channel === "sms" ? "SMS" : String(t.channel || "—").toUpperCase())], ["Status", (t) => (t?.active ? "Active" : "Off")]]} />
+              cols={[["Title", (t) => t.name || (t.trigger_event ? optLabel(t.trigger_event) : "—")], ["Type", (t) => (t.channel === "email" ? "Email" : t.channel === "sms" ? "SMS" : String(t.channel || "—").toUpperCase())], ["Status", (t) => (t?.active ? "Active" : "Off")]]} />
           </SectionCard>
         </>
       )}
@@ -781,7 +802,7 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
               <div className="mt-1 text-[11px] text-ink-tertiary">Leave "Any" to fire on every status change, or pick a specific status.</div></div>
           )}
           {!isReminder && f.event === "status_changed" && !statusRT && (
-            <div><label className={lbl}>Only when status is (key, optional)</label>
+            <div><label className={lbl}>Only when the status is (optional)</label>
               <input value={f.trigger_status_key} onChange={(e) => set("trigger_status_key", e.target.value)} placeholder="blank = any" className={field} /></div>
           )}
           <div><label className={lbl}>Send via</label>
@@ -792,22 +813,26 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
             <div><label className={lbl}>Template</label>
               <select value={f.template_id} onChange={(e) => set("template_id", e.target.value)} className={field}>
                 <option value="">Default message</option>
-                {tplOpts.map((t) => <option key={t.id} value={t.id}>{t.name || t.trigger_event}</option>)}
+                {tplOpts.map((t) => <option key={t.id} value={t.id}>{t.name || optLabel(t.trigger_event)}</option>)}
               </select>
               <div className="mt-1 text-[11px] text-ink-tertiary">No template → a sensible default message is sent.</div>
             </div>
           )}
           {isReminder && (
-            <div><label className={lbl}>Send how long before?</label>
-              <div className="flex items-center gap-2">
-                <input type="number" min={1} value={f.reminder_offset_min} onChange={(e) => set("reminder_offset_min", e.target.value)} className={field + " w-28"} />
-                <span className="text-xs text-ink-tertiary">minutes before the appointment</span>
-              </div></div>
+            <div><label htmlFor="nr-offset" className={lbl}>Send how long before?</label>
+              <div className="glass-input w-40 rounded-xl flex items-center pr-3 focus-within:ring-2 focus-within:ring-primary/30">
+                <input id="nr-offset" type="number" min={1} value={f.reminder_offset_min} onChange={(e) => set("reminder_offset_min", e.target.value)} className="w-full min-w-0 bg-transparent pl-3 py-2 text-sm tabular-nums text-ink-primary outline-none" />
+                <span className="text-xs text-ink-tertiary shrink-0">min</span>
+              </div>
+              <div className="mt-1 text-xs text-ink-tertiary">Minutes before the appointment.</div></div>
           )}
           {!isReminder && (
-            <div><label className={lbl}>Delay sending (minutes)</label>
-              <input type="number" min={0} value={f.delay_min} onChange={(e) => set("delay_min", e.target.value)} className={field} />
-              <div className="mt-1 text-[11px] text-ink-tertiary">0 = send immediately.</div></div>
+            <div><label htmlFor="nr-delay" className={lbl}>Delay sending</label>
+              <div className="glass-input w-40 rounded-xl flex items-center pr-3 focus-within:ring-2 focus-within:ring-primary/30">
+                <input id="nr-delay" type="number" min={0} value={f.delay_min} onChange={(e) => set("delay_min", e.target.value)} className="w-full min-w-0 bg-transparent pl-3 py-2 text-sm tabular-nums text-ink-primary outline-none" />
+                <span className="text-xs text-ink-tertiary shrink-0">min</span>
+              </div>
+              <div className="mt-1 text-xs text-ink-tertiary">0 sends right away.</div></div>
           )}
           {locations.length > 1 && (
             <div><label className={lbl}>Location</label>
@@ -1025,41 +1050,58 @@ function NotifTemplateDrawer({ tpl, module, onClose, onSaved }: {
 
 function ToggleRow({ label, on, onToggle }: { label: string; on: boolean; onToggle: () => void }) {
   return (
-    <div className="flex items-center justify-between">
-      <span className="text-xs font-medium text-ink-secondary">{label}</span>
-      <button type="button" onClick={onToggle} className={`w-10 h-6 rounded-full transition-colors ${on ? "bg-primary" : "bg-slate-300"} relative`}>
-        <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${on ? "left-[18px]" : "left-0.5"}`} />
-      </button>
+    <div className="flex items-center justify-between gap-4">
+      <span className="text-sm font-medium text-ink-primary">{label}</span>
+      <Switch on={!!on} onChange={onToggle} label={label} />
     </div>
   );
 }
 
 /* ── Customer feedback settings → /feedback/settings ({settings} wrapper, SettingsIn) ── */
 function FeedbackSettingsEditor() {
-  const [c, setC] = useState<any>(null); const [saved, setSaved] = useState(false);
-  useEffect(() => { api.get<any>("/feedback/settings").then((r) => setC(r.settings || { system: "five_point", heading: "How did we do?", question: "How would you rate your experience?", clarify_question: "Tell us more", active: false })).catch(() => setC({})); }, []);
-  const set = (k: string, v: any) => setC((s: any) => ({ ...s, [k]: v }));
+  const [c, setC] = useState<any>(null); const [savedC, setSavedC] = useState<any>(null);
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => {
+    api.get<any>("/feedback/settings")
+      .then((r) => { const v = r.settings || { system: "five_point", heading: "How did we do?", question: "How would you rate your experience?", clarify_question: "Tell us more", active: false }; setC(v); setSavedC(v); })
+      .catch(() => { setC({}); setSavedC({}); });
+  }, []);
+  const set = (k: string, v: any) => { setC((s: any) => ({ ...s, [k]: v })); setMsg(null); };
+  const dirty = JSON.stringify(c) !== JSON.stringify(savedC);
   async function save() {
+    setBusy(true);
     try {
       await api.put("/feedback/settings", { system: c.system || "five_point", trigger_status_id: c.trigger_status_id || null, heading: c.heading || "How did we do?", subheading: c.subheading || null, question: c.question || "How would you rate your experience?", clarify_question: c.clarify_question || "Tell us more", bands: c.bands || {}, active: !!c.active, google_review_url: c.google_review_url || null });
-      setSaved(true); setTimeout(() => setSaved(false), 1500);
-    } catch (e: any) { alertDialog(e.message); }
+      setSavedC(c); setMsg({ ok: true, text: "Saved" });
+    } catch (e: any) { setMsg({ ok: false, text: e?.message || "Couldn't save" }); }
+    setBusy(false);
   }
+  const inp = "glass-input w-72 max-w-full rounded-xl px-3 py-2 text-sm text-ink-primary";
   return (
     <div className="max-w-3xl"><SectionCard title="Customer feedback">
       {!c ? <div className="p-5 text-xs text-ink-tertiary">Loading…</div> : (
-        <div className="p-5 space-y-4">
-          <label className="flex items-center gap-2 text-xs font-medium text-ink-secondary"><input type="checkbox" checked={!!c.active} onChange={(e) => set("active", e.target.checked)} className="accent-primary" />Ask customers for feedback after a work order closes</label>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl}>Rating system</label><select value={c.system || "five_point"} onChange={(e) => set("system", e.target.value)} className={field}>{[["five_point", "5-point stars"], ["like", "Like / dislike"], ["nps", "NPS (0–10)"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
-            <div><label className={lbl}>Heading</label><input value={c.heading || ""} onChange={(e) => set("heading", e.target.value)} className={field} /></div>
+        <>
+          <SettingGroup title="When to ask">
+            <SettingRow label="Ask for feedback" help="Send a short rating request after a work order closes.">
+              <Switch on={!!c.active} onChange={(v) => set("active", v)} label="Ask customers for feedback after a work order closes" />
+            </SettingRow>
+            <SettingRow label="Rating system" htmlFor="fb-system" dim={!c.active}>
+              <select id="fb-system" value={c.system || "five_point"} onChange={(e) => set("system", e.target.value)} className={inp}>{[["five_point", "5-point stars"], ["like", "Like / dislike"], ["nps", "NPS (0–10)"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+            </SettingRow>
+          </SettingGroup>
+          <div className="border-t border-slate-100">
+            <SettingGroup title="What customers see">
+              <SettingRow label="Heading" htmlFor="fb-heading"><input id="fb-heading" value={c.heading || ""} onChange={(e) => set("heading", e.target.value)} className={inp} /></SettingRow>
+              <SettingRow label="Subheading" htmlFor="fb-sub"><input id="fb-sub" value={c.subheading || ""} onChange={(e) => set("subheading", e.target.value)} className={inp} /></SettingRow>
+              <SettingRow label="Question" htmlFor="fb-q"><input id="fb-q" value={c.question || ""} onChange={(e) => set("question", e.target.value)} className={inp} /></SettingRow>
+              <SettingRow label="Follow-up question" help="Asked after they rate." htmlFor="fb-clarify"><input id="fb-clarify" value={c.clarify_question || ""} onChange={(e) => set("clarify_question", e.target.value)} className={inp} /></SettingRow>
+              <SettingRow label="Public review link" help="Happy customers get a one-tap button to post a public review here." htmlFor="fb-review">
+                <input id="fb-review" value={c.google_review_url || ""} onChange={(e) => set("google_review_url", e.target.value)} placeholder="https://g.page/r/…/review" className={inp} />
+              </SettingRow>
+            </SettingGroup>
           </div>
-          <div><label className={lbl}>Subheading</label><input value={c.subheading || ""} onChange={(e) => set("subheading", e.target.value)} className={field} /></div>
-          <div><label className={lbl}>Question</label><input value={c.question || ""} onChange={(e) => set("question", e.target.value)} className={field} /></div>
-          <div><label className={lbl}>Clarify prompt (after rating)</label><input value={c.clarify_question || ""} onChange={(e) => set("clarify_question", e.target.value)} className={field} /></div>
-          <div><label className={lbl}>Public review link (shown to happy customers)</label><input value={c.google_review_url || ""} onChange={(e) => set("google_review_url", e.target.value)} placeholder="https://g.page/r/…/review" className={field} /><div className="mt-1 text-[11px] text-ink-tertiary">Everyone is asked to rate; high raters also get a one-tap button to post this public review.</div></div>
-          <div className="flex justify-end items-center gap-2">{saved && <span className="text-[11px] font-semibold text-emerald-600">Saved</span>}<button onClick={save} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold">Save settings</button></div>
-        </div>
+          <SaveFooter className="border-t border-slate-100" dirty={dirty} busy={busy} msg={msg} onSave={save} onDiscard={() => { setC(savedC); setMsg(null); }} />
+        </>
       )}
     </SectionCard></div>
   );
@@ -1076,7 +1118,7 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
   const keyBadge = (p: string): { text: string; tone: "on" | "off" | "neutral" } => {
     const s = srcOf(p);
     if (s === "org") return { text: "Your keys", tone: "on" };
-    if (s === "env") return { text: "Shared default", tone: "neutral" };
+    if (s === "env") return { text: "Tekly default", tone: "neutral" };
     return { text: "Not set", tone: "off" };
   };
   const keyAction = (p: string) => ({ label: srcOf(p) === "org" ? "Edit keys" : "Add keys", onClick: () => setKeyProv(p) });
@@ -1099,7 +1141,7 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
     { group: "Payments", cards: [
       { name: "Online payments (Stripe)", desc: "Hosted checkout & payment links; reconciles into your cashboxes.",
         badge: payLive ? { text: `Live: ${payGw}`, tone: "on" } : keyBadge("stripe"),
-        hint: payAvail.length ? `Configured: ${payAvail.join(", ")}` : "Add your own Stripe secret key to go live",
+        hint: payAvail.length ? `Set up: ${payAvail.join(", ")}` : "Add your Stripe account keys to take card payments",
         action: keyAction("stripe"),
         webhook: hooks.stripe ? { url: hooks.stripe, help: "Paste this into Stripe under Developers › Webhooks › Add endpoint, and pick the event checkout.session.completed, so paid links mark jobs as paid." } : undefined },
       { name: "Square", desc: "In-person & online card payments with Square.",
@@ -1110,16 +1152,16 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
     { group: "Accounting", cards: [
       { name: "QuickBooks Online", desc: "Send invoices, payments and contacts to QuickBooks.",
         badge: data.qbo?.connected ? { text: "Connected", tone: "on" } : { text: data.qbo?.configured ? "Not connected" : "Not configured", tone: "off" },
-        hint: data.qbo?.configured ? undefined : "Set QBO_CLIENT_ID / SECRET on the server" },
+        hint: data.qbo?.configured ? undefined : "Contact Tekly support to turn this on" },
       { name: "Xero", desc: "Sync invoices, payments and clients both ways.",
         badge: data.xero?.connected ? { text: "Connected", tone: "on" } : { text: data.xero?.configured ? "Not connected" : "Not configured", tone: "off" },
-        hint: data.xero?.configured ? undefined : "Set XERO_CLIENT_ID / SECRET on the server" } ] },
+        hint: data.xero?.configured ? undefined : "Contact Tekly support to turn this on" } ] },
     { group: "Communication", cards: [
       { name: "Email (Gmail / Outlook)", desc: "Send from your own mailbox (OAuth). SMTP fallback available.",
         badge: emailOn ? { text: "Connected", tone: "on" } : keyBadge("smtp"),
-        hint: emailOn ? `${data.email.accounts.length} account(s) connected` : "Connect Gmail/Outlook, or add SMTP keys",
+        hint: emailOn ? `${data.email.accounts.length} account(s) connected` : "Connect Gmail or Outlook, or add your mail server details",
         action: keyAction("smtp") },
-      { name: "SMS & WhatsApp (Twilio)", desc: "Two-way messages; inbound webhook threads them to jobs.",
+      { name: "SMS & WhatsApp (Twilio)", desc: "Two-way messages; replies land on the right job.",
         badge: keyBadge("twilio"), action: keyAction("twilio") },
       { name: "Calls / VoIP", desc: "Click-to-call and an inbound-call feed through your Twilio account.",
         badge: telOn ? { text: telProv === "simulated" ? "Simulated" : telProv === "twilio" && data.tel?.twilio?.test_mode ? "Twilio: test mode" : `Live: ${telProv}`, tone: "on" } : { text: "Off", tone: "off" }, hint: telOn ? undefined : "Set up below in Calls & telephony" },
@@ -1129,13 +1171,13 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
       { name: "Shopify / WooCommerce", desc: "Sync products, orders and customers from your store.",
         badge: ecomN ? { text: `${ecomN} store(s)`, tone: "on" } : { text: "Not connected", tone: "off" },
         action: { label: "Manage stores", onClick: () => goSection("ecommerce") } } ] },
-    { group: "Automation & developer", cards: [
+    { group: "Automation & custom apps", cards: [
       { name: "Zapier / Make / n8n", desc: "Trigger thousands of apps from Tekly events — no code.",
-        badge: { text: "Available", tone: "on" }, hint: "Point them at your Webhooks (below)" },
+        badge: { text: "Available", tone: "on" }, hint: "Connect them through Webhooks, below" },
       { name: "Public REST API", desc: "Build custom integrations against orders, contacts, inventory & more.",
         badge: { text: "Available", tone: "on" }, hint: "Create an API key (below)" },
       { name: "Workflow AI (Anthropic)", desc: "Order summaries, estimate drafting, reply suggestions.",
-        badge: { text: "Server-keyed", tone: "neutral" }, hint: "Set ANTHROPIC_API_KEY on the server" } ] },
+        badge: { text: "Managed by Tekly", tone: "neutral" }, hint: "Contact Tekly support to turn this on" } ] },
     { group: "On your website", cards: [
       { name: "Repair-status widget", desc: "Embed a status checker on your site — customers look up a job by order # + phone.",
         badge: { text: "Available", tone: "on" }, action: { label: "Copy embed code", onClick: copyWidget } } ] },
@@ -1146,24 +1188,24 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
       <div className="px-5 pt-4 pb-1">
-        <h3 className="text-sm font-bold text-ink-primary">Integrations</h3>
-        <p className="text-[12px] text-ink-tertiary mt-0.5">Connect Tekly to the tools you already use. Credential-gated connectors go live the moment their keys are set on the server.</p>
+        <h3 className="text-sm font-semibold text-ink-primary">Integrations</h3>
+        <p className="text-xs text-ink-tertiary mt-0.5">Connect Tekly to the tools you already use. Each one starts working as soon as it's set up.</p>
       </div>
       <div className="p-4 space-y-5">
         {groups.map((g) => (
           <div key={g.group}>
-            <p className="text-[11px] font-bold text-ink-tertiary px-1 pb-2">{g.group}</p>
+            <p className="text-xs font-semibold text-ink-tertiary px-1 pb-2">{g.group}</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {g.cards.map((c) => (
                 <div key={c.name} className="border border-slate-200/90 rounded-xl p-3.5 flex flex-col gap-1.5 bg-white hover:border-slate-300 transition-colors">
                   <div className="flex items-start justify-between gap-2">
-                    <span className="text-[13px] font-bold text-ink-primary leading-tight">{c.name}</span>
-                    <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold whitespace-nowrap ${B[c.badge.tone]}`}>{c.badge.text}</span>
+                    <span className="text-sm font-semibold text-ink-primary leading-tight">{c.name}</span>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${B[c.badge.tone]}`}>{c.badge.text}</span>
                   </div>
-                  <p className="text-[12px] text-ink-secondary leading-snug">{c.desc}</p>
-                  {c.hint && <p className="text-[11px] text-ink-tertiary mt-0.5">{c.hint}</p>}
+                  <p className="text-xs text-ink-secondary leading-snug">{c.desc}</p>
+                  {c.hint && <p className="text-xs text-ink-tertiary mt-0.5">{c.hint}</p>}
                   {c.webhook && <WebhookUrl {...c.webhook} />}
-                  {c.action && <button type="button" onClick={c.action.onClick} className="mt-1 self-start px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[11px] font-semibold text-ink-primary">{c.action.label}</button>}
+                  {c.action && <button type="button" onClick={c.action.onClick} className={`mt-1 self-start ${btnSecondary}`}>{c.action.label}</button>}
                 </div>
               ))}
             </div>
@@ -1185,13 +1227,13 @@ function WebhookUrl({ url, help }: { url: string; help: string }) {
     catch { await promptDialog("Copy your webhook address:", { defaultValue: url }); }
   }
   return (
-    <div className="mt-1 rounded-lg bg-slate-50 border border-slate-200 p-2 space-y-1">
-      <p className="text-[11px] font-semibold text-ink-secondary">Your webhook address</p>
+    <div className="mt-1 rounded-xl bg-slate-50 border border-slate-200 p-2.5 space-y-1.5">
+      <p className="text-xs font-medium text-ink-secondary">Your webhook address</p>
       <div className="flex items-center gap-1.5">
-        <code className="flex-1 min-w-0 truncate text-[11px] font-mono text-ink-primary" title={url}>{url}</code>
-        <button type="button" onClick={copy} aria-label="Copy webhook address" className="shrink-0 px-2 py-0.5 rounded-md bg-white border border-slate-200 hover:bg-slate-100 text-[11px] font-semibold text-ink-primary">{copied ? "Copied" : "Copy"}</button>
+        <code className="flex-1 min-w-0 truncate text-xs font-mono text-ink-primary" title={url}>{url}</code>
+        <button type="button" onClick={copy} aria-label="Copy webhook address" className={`shrink-0 ${btnSecondary}`}>{copied ? "Copied" : "Copy"}</button>
       </div>
-      <p className="text-[11px] text-ink-tertiary leading-snug">{help}</p>
+      <p className="text-xs text-ink-tertiary leading-snug">{help}</p>
     </div>
   );
 }
@@ -1271,9 +1313,9 @@ function WebhooksCard() {
 function SectionCard({ title, count, onAdd, children }: { title: string; count?: number; onAdd?: () => void; children: React.ReactNode }) {
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-      <div className="p-3.5 border-b border-slate-100 flex items-center justify-between">
-        <span className="text-xs font-bold text-ink-primary ">{title}{count != null && <span className="ml-2 text-[11px] font-bold bg-slate-100 text-ink-secondary px-2 py-0.5 rounded-full">{count}</span>}</span>
-        {onAdd && <button onClick={onAdd} className="text-primary text-xs font-semibold hover:underline flex items-center gap-1"><M n="add" c="text-sm" />Add</button>}
+      <div className="p-3.5 border-b border-slate-100">
+        <h3 className="text-sm font-semibold text-ink-primary flex items-center">{title}{count != null && <span className="ml-2 text-xs font-medium bg-slate-100 text-ink-secondary px-2 py-0.5 rounded-full">{count}</span>}</h3>
+        {onAdd && <button type="button" onClick={onAdd} className={`mt-2.5 ${btnPrimary}`}><M n="add" c="text-sm" />Add</button>}
       </div>
       {children}
     </div>
@@ -1764,6 +1806,7 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   const set = (k: string) => (e: any) => setV({ ...v, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
   const hasVars = fields.some((f) => f.vars);
+  const edInp = "glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary";
   const areaRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
   // insert a {Token} at the caret of the field's textarea (append if not focused)
   function insertVar(k: string, tok: string) {
@@ -1792,39 +1835,54 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
           {fields.map((f) => (
+            f.type === "checkbox" ? (
+              <div key={f.k} className="flex items-center justify-between gap-4">
+                <span className="text-sm font-medium text-ink-primary">{f.label}</span>
+                <Switch on={!!v[f.k]} onChange={(x) => setV({ ...v, [f.k]: x })} label={f.label} />
+              </div>
+            ) : (
             <div key={f.k}>
-              <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">{f.label}{f.req ? " *" : ""}</label>
-              {f.type === "checkbox" ? (
-                <button type="button" onClick={() => setV({ ...v, [f.k]: !v[f.k] })} className={`w-10 h-6 rounded-full transition-colors ${v[f.k] ? "bg-primary" : "bg-slate-300"} relative`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${v[f.k] ? "left-[18px]" : "left-0.5"}`} /></button>
+              <label htmlFor={`ed-${f.k}`} className="block text-sm font-medium text-ink-primary mb-1.5">{f.label}{f.req ? " *" : ""}</label>
+              {f.type === "select" && f.choices ? (
+                <select id={`ed-${f.k}`} value={v[f.k]} onChange={set(f.k)} className={edInp}><option value="">Choose…</option>{f.choices.map((o: { value: string; label: string }) => <option key={o.value} value={o.value}>{o.label}</option>)}</select>
               ) : f.type === "select" ? (
-                <select value={v[f.k]} onChange={set(f.k)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary capitalize">{f.opts.map((o: string) => <option key={o} value={o}>{o.replace(/_/g, " ")}</option>)}</select>
+                <select id={`ed-${f.k}`} value={v[f.k]} onChange={set(f.k)} className={edInp}>{f.opts.map((o: string) => <option key={o} value={o}>{f.labels?.[o] || optLabel(o)}</option>)}</select>
               ) : f.type === "color" ? (
-                <input type="color" value={v[f.k]} onChange={set(f.k)} className="h-9 w-16 rounded border border-slate-200" />
+                <input id={`ed-${f.k}`} type="color" value={v[f.k]} onChange={set(f.k)} className="h-9 w-16 rounded-xl border border-slate-200" />
               ) : f.type === "textarea" ? (
                 f.vars ? (
                   <div>
                     <div className="grid grid-cols-1 sm:grid-cols-[1fr_260px] gap-3">
-                      <textarea ref={(el) => { areaRefs.current[f.k] = el; }} value={v[f.k]} onChange={set(f.k)} rows={12} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary font-mono" />
+                      <textarea id={`ed-${f.k}`} ref={(el) => { areaRefs.current[f.k] = el; }} value={v[f.k]} onChange={set(f.k)} rows={12} className={`${edInp} font-mono`} />
                       <VarPicker onInsert={(tok) => insertVar(f.k, tok)} module={varModule} />
                     </div>
                     {f.counter && <CharCounter text={String(v[f.k] ?? "")} sms={v.channel === "sms"} />}
                   </div>
                 ) : (
                   <div>
-                    <textarea ref={(el) => { areaRefs.current[f.k] = el; }} value={v[f.k]} onChange={set(f.k)} rows={5} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary font-mono" />
+                    <textarea id={`ed-${f.k}`} ref={(el) => { areaRefs.current[f.k] = el; }} value={v[f.k]} onChange={set(f.k)} rows={5} className={`${edInp} font-mono`} />
                     {f.counter && <CharCounter text={String(v[f.k] ?? "")} sms={v.channel === "sms"} />}
                   </div>
                 )
               ) : (
-                <input type={f.type} value={v[f.k]} onChange={set(f.k)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary" />
+                f.type === "date"
+                  ? <DateField value={v[f.k] || ""} onChange={(x) => setV({ ...v, [f.k]: x })} label={f.label} />
+                  : f.unit
+                    ? <div className="glass-input w-40 rounded-xl flex items-center pr-3 focus-within:ring-2 focus-within:ring-primary/30">
+                        <input id={`ed-${f.k}`} type={f.type} value={v[f.k] ?? ""} onChange={set(f.k)} className="w-full min-w-0 bg-transparent pl-3 py-2 text-sm tabular-nums text-ink-primary outline-none" />
+                        <span className="text-xs text-ink-tertiary shrink-0">{f.unit}</span>
+                      </div>
+                    : <input id={`ed-${f.k}`} type={f.type} value={v[f.k]} onChange={set(f.k)} className={edInp} />
               )}
+              {f.help && <p className="mt-1 text-xs text-ink-tertiary">{f.help}</p>}
             </div>
+            )
           ))}
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-          {onDelete && initial?.id && <button onClick={async () => { if (await confirmDialog("Delete this item?", { danger: true, confirmLabel: "Delete" })) { await onDelete(); } }} className="text-rose-600 font-semibold text-xs hover:underline mr-auto">Delete</button>}
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs ml-auto">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>
+          {onDelete && initial?.id && <button onClick={async () => { if (await confirmDialog("Delete this item?", { danger: true, confirmLabel: "Delete" })) { await onDelete(); } }} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 mr-auto">Delete</button>}
+          <button onClick={onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs ml-auto">Cancel</button>
+          <button onClick={save} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white font-semibold text-xs hover:opacity-90 disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>
         </div>
       </div>
     </div>
@@ -1965,37 +2023,56 @@ function StatusMultiSelect({ value, list, onChange, single, placeholder }: {
 // ── E-commerce integrations (Shopify/WooCommerce) — legacy gap, backend /api/ecommerce/integrations ──
 function EcommerceSettings() {
   const [items, setItems] = useState<any[] | null>(null);
-  const [f, setF] = useState<any>({ platform: "shopify", store_url: "", sync_products: true, sync_orders: true });
+  const blank = { platform: "shopify", store_url: "", sync_products: true, sync_orders: true };
+  const [f, setF] = useState<any>(blank);
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false); const [msg, setMsg] = useState("");
   const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(""), 2000); };
   function reload() { api.get<any>("/ecommerce/integrations").then((r) => setItems(r.items || [])).catch(() => setItems([])); }
   useEffect(reload, []);
   async function add() {
     if (!f.store_url.trim()) return; setBusy(true);
-    try { await api.post("/ecommerce/integrations", f); setF({ platform: "shopify", store_url: "", sync_products: true, sync_orders: true }); reload(); flash("Store connected"); }
+    try { await api.post("/ecommerce/integrations", f); setF(blank); setOpen(false); reload(); flash("Store connected"); }
     catch (e: any) { alertDialog(e.message || "Failed"); } finally { setBusy(false); }
   }
+  const platformName = (p: string) => (p === "woocommerce" ? "WooCommerce" : p === "shopify" ? "Shopify" : humanize(p));
   return (
     <div className="max-w-3xl"><SectionCard title="E-commerce stores" count={items?.length}>
+      <div className="px-5 py-3 border-b border-slate-100">
+        {!open && <button type="button" onClick={() => setOpen(true)} className={btnPrimary}><M n="add" c="text-sm" />Connect store</button>}
+        {open && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-3">
+              <div><label htmlFor="ecom-platform" className={lbl}>Platform</label><select id="ecom-platform" value={f.platform} onChange={(e) => setF({ ...f, platform: e.target.value })} className={field}><option value="shopify">Shopify</option><option value="woocommerce">WooCommerce</option></select></div>
+              <div><label htmlFor="ecom-url" className={lbl}>Store address</label><input id="ecom-url" value={f.store_url} onChange={(e) => setF({ ...f, store_url: e.target.value })} placeholder="my-shop.myshopify.com" className={field} /></div>
+            </div>
+            <div className="divide-y divide-slate-100">
+              <SettingRow label="Sync products" help="Keep your store's products and stock in step with Tekly.">
+                <Switch on={!!f.sync_products} onChange={(v) => setF({ ...f, sync_products: v })} label="Products" />
+              </SettingRow>
+              <SettingRow label="Sync orders" help="Bring store orders into Tekly.">
+                <Switch on={!!f.sync_orders} onChange={(v) => setF({ ...f, sync_orders: v })} label="Orders" />
+              </SettingRow>
+            </div>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={add} disabled={busy || !f.store_url.trim()} className={btnPrimary}>{busy ? "Connecting…" : "Connect store"}</button>
+              <button type="button" onClick={() => { setOpen(false); setF(blank); }} className={btnSecondary}>Cancel</button>
+            </div>
+          </div>
+        )}
+      </div>
       <div className="divide-y divide-slate-100">
         {(items || []).map((i) => (
-          <div key={i.id} className="px-5 py-3 flex items-center gap-2 text-xs">
-            <span className="px-2 py-0.5 rounded bg-slate-100 text-[11px] font-bold capitalize">{i.platform}</span>
-            <span className="font-semibold text-ink-primary">{i.store_url || "—"}</span>
-            <span className="text-ink-tertiary">{[i.sync_products && "products", i.sync_orders && "orders"].filter(Boolean).join(" + ")}</span>
+          <div key={i.id} className="px-5 py-3 flex items-center gap-2 text-sm">
+            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-xs font-medium text-ink-secondary">{platformName(i.platform)}</span>
+            <span className="font-medium text-ink-primary">{i.store_url || "—"}</span>
+            <span className="text-xs text-ink-tertiary">{[i.sync_products && "Products", i.sync_orders && "Orders"].filter(Boolean).join(" + ")}</span>
             <div className="flex-1" />
-            <span className="text-[11px] text-ink-tertiary">{i.last_synced_at ? `synced ${new Date(i.last_synced_at).toLocaleDateString()}` : "never synced"}</span>
-            <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${i.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{i.active ? "Active" : "Off"}</span>
+            <span className="text-xs text-ink-tertiary">{i.last_synced_at ? `Synced ${new Date(i.last_synced_at).toLocaleDateString()}` : "Never synced"}</span>
+            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${i.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{i.active ? "Active" : "Off"}</span>
           </div>
         ))}
         {items && items.length === 0 && <div className="px-5 py-3 text-xs text-ink-tertiary">No stores connected.</div>}
-        <div className="px-5 py-3 flex items-end gap-2 flex-wrap">
-          <div><label className={lbl}>Platform</label><select value={f.platform} onChange={(e) => setF({ ...f, platform: e.target.value })} className={field}><option value="shopify">Shopify</option><option value="woocommerce">WooCommerce</option></select></div>
-          <div className="flex-1 min-w-[180px]"><label className={lbl}>Store URL</label><input value={f.store_url} onChange={(e) => setF({ ...f, store_url: e.target.value })} placeholder="my-shop.myshopify.com" className={field} /></div>
-          <label className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-secondary"><input type="checkbox" checked={f.sync_products} onChange={(e) => setF({ ...f, sync_products: e.target.checked })} className="accent-primary" />Products</label>
-          <label className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-secondary"><input type="checkbox" checked={f.sync_orders} onChange={(e) => setF({ ...f, sync_orders: e.target.checked })} className="accent-primary" />Orders</label>
-          <button onClick={add} disabled={busy} className="px-3 py-1.5 rounded-lg bg-primary text-white text-[11px] font-bold shadow-clay-sm">Connect store</button>
-        </div>
       </div>
     </SectionCard>{msg && <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-drawer z-[70]">{msg}</div>}</div>
   );
@@ -2004,40 +2081,57 @@ function EcommerceSettings() {
 // ── Single sign-on (OIDC/SAML) — legacy gap, backend /api/sso/config ──
 function SsoSettings() {
   const [items, setItems] = useState<any[] | null>(null);
-  const [f, setF] = useState<any>({ protocol: "oidc", display_name: "", issuer: "", client_id: "", client_secret: "", metadata_url: "", email_domain: "", enabled: true });
+  const blank = { protocol: "oidc", display_name: "", issuer: "", client_id: "", client_secret: "", metadata_url: "", email_domain: "", enabled: true };
+  const [f, setF] = useState<any>(blank);
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   function reload() { api.get<any>("/sso/config").then((r) => setItems(r.items || [])).catch(() => setItems([])); }
   useEffect(reload, []);
   async function add() {
     if (!f.display_name.trim()) return; setBusy(true);
-    try { await api.post("/sso/config", f); setF({ protocol: "oidc", display_name: "", issuer: "", client_id: "", client_secret: "", metadata_url: "", email_domain: "", enabled: true }); reload(); }
+    try { await api.post("/sso/config", f); setF(blank); setOpen(false); reload(); }
     catch (e: any) { alertDialog(e.message || "Failed"); } finally { setBusy(false); }
   }
   async function del(id: string) { try { await api.del(`/sso/config/${id}`); reload(); } catch (e: any) { alertDialog(e.message); } }
+  const inp = (k: string, label: string, extra: { placeholder?: string; type?: string } = {}) => (
+    <div><label htmlFor={`sso-${k}`} className={lbl}>{label}</label><input id={`sso-${k}`} type={extra.type || "text"} value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} placeholder={extra.placeholder} className={field} /></div>
+  );
   return (
     <div className="max-w-3xl"><SectionCard title="SSO connections" count={items?.length}>
+      <div className="px-5 py-3 border-b border-slate-100">
+        {!open && <button type="button" onClick={() => setOpen(true)} className={btnPrimary}><M n="add" c="text-sm" />Add connection</button>}
+        {open && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><label htmlFor="sso-protocol" className={lbl}>Protocol</label><select id="sso-protocol" value={f.protocol} onChange={(e) => setF({ ...f, protocol: e.target.value })} className={field}><option value="oidc">OIDC</option><option value="saml">SAML</option></select></div>
+              {inp("display_name", "Display name", { placeholder: "Google Workspace" })}
+              {inp("metadata_url", "Issuer or metadata address", { placeholder: "https://…/.well-known/openid-configuration" })}
+              {inp("email_domain", "Email domain", { placeholder: "company.com" })}
+              {inp("client_id", "Client ID")}
+              {inp("client_secret", "Client secret", { type: "password" })}
+            </div>
+            <SettingRow label="Enabled" help="Staff with this email domain can sign in with it.">
+              <Switch on={!!f.enabled} onChange={(v) => setF({ ...f, enabled: v })} label="Enabled" />
+            </SettingRow>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={add} disabled={busy || !f.display_name.trim()} className={btnPrimary}>{busy ? "Adding…" : "Add connection"}</button>
+              <button type="button" onClick={() => { setOpen(false); setF(blank); }} className={btnSecondary}>Cancel</button>
+            </div>
+          </div>
+        )}
+      </div>
       <div className="divide-y divide-slate-100">
         {(items || []).map((s) => (
-          <div key={s.id} className="px-5 py-3 flex items-center gap-2 text-xs">
-            <span className="px-2 py-0.5 rounded bg-slate-100 text-[11px] font-bold ">{s.protocol}</span>
-            <span className="font-semibold text-ink-primary">{s.display_name}</span>
-            {s.email_domain && <span className="text-ink-tertiary">@{s.email_domain}</span>}
+          <div key={s.id} className="px-5 py-3 flex items-center gap-2 text-sm">
+            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-xs font-medium text-ink-secondary uppercase">{s.protocol}</span>
+            <span className="font-medium text-ink-primary">{s.display_name}</span>
+            {s.email_domain && <span className="text-xs text-ink-tertiary">@{s.email_domain}</span>}
             <div className="flex-1" />
-            <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${s.enabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{s.enabled ? "Enabled" : "Disabled"}</span>
-            <button aria-label="Delete" onClick={() => del(s.id)} className="text-rose-600"><M n="delete" c="text-sm" /></button>
+            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${s.enabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{s.enabled ? "Enabled" : "Disabled"}</span>
+            <button type="button" aria-label="Delete" onClick={() => del(s.id)} className="w-8 h-8 grid place-items-center rounded-lg text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-sm" /></button>
           </div>
         ))}
-        {items && items.length === 0 && <div className="px-5 py-3 text-xs text-ink-tertiary">No SSO connections. Staff sign in with email + password until one is enabled.</div>}
-        <div className="px-5 py-3 grid grid-cols-2 gap-2">
-          <div><label className={lbl}>Protocol</label><select value={f.protocol} onChange={(e) => setF({ ...f, protocol: e.target.value })} className={field}><option value="oidc">OIDC</option><option value="saml">SAML</option></select></div>
-          <div><label className={lbl}>Display name</label><input value={f.display_name} onChange={(e) => setF({ ...f, display_name: e.target.value })} placeholder="Google Workspace" className={field} /></div>
-          <div><label className={lbl}>Issuer / metadata URL</label><input value={f.metadata_url} onChange={(e) => setF({ ...f, metadata_url: e.target.value })} placeholder="https://…/.well-known/openid-configuration" className={field} /></div>
-          <div><label className={lbl}>Email domain</label><input value={f.email_domain} onChange={(e) => setF({ ...f, email_domain: e.target.value })} placeholder="company.com" className={field} /></div>
-          <div><label className={lbl}>Client ID</label><input value={f.client_id} onChange={(e) => setF({ ...f, client_id: e.target.value })} className={field} /></div>
-          <div><label className={lbl}>Client secret</label><input type="password" value={f.client_secret} onChange={(e) => setF({ ...f, client_secret: e.target.value })} className={field} /></div>
-          <label className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-secondary"><input type="checkbox" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} className="accent-primary" />Enabled</label>
-          <div className="text-right"><button onClick={add} disabled={busy} className="px-3 py-1.5 rounded-lg bg-primary text-white text-[11px] font-bold shadow-clay-sm">+ Add connection</button></div>
-        </div>
+        {items && items.length === 0 && <div className="px-5 py-3 text-xs text-ink-tertiary">No SSO connections. Staff sign in with email and password until one is enabled.</div>}
       </div>
     </SectionCard></div>
   );
@@ -2058,21 +2152,24 @@ function ApprovalsSettings() {
   const pill = (s: string) => s === "approved" ? "bg-emerald-100 text-emerald-700" : s === "rejected" ? "bg-rose-100 text-rose-700" : "bg-amber-100 text-amber-700";
   return (
     <div className="max-w-3xl"><SectionCard title="Approval requests" count={items?.length}>
-      <div className="px-5 py-2 flex gap-1.5 border-b border-slate-100">
-        {(["pending", "all"] as const).map((s) => <button key={s} onClick={() => setFilter(s)} className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold capitalize ${filter === s ? "bg-primary text-white" : "bg-slate-50 text-ink-secondary hover:bg-slate-100"}`}>{s}</button>)}
+      <div className="px-5 py-2.5 border-b border-slate-100">
+        <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+          {([["pending", "Pending"], ["all", "All"]] as const).map(([s, l]) => <button key={s} type="button" onClick={() => setFilter(s)} aria-pressed={filter === s}
+            className={"px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors " + (filter === s ? "bg-white text-ink-primary shadow-clay-sm" : "text-ink-tertiary hover:text-ink-secondary")}>{l}</button>)}
+        </div>
       </div>
       <div className="divide-y divide-slate-100">
         {!items && <div className="px-5 py-4 text-xs text-ink-tertiary">Loading…</div>}
-        {items && items.length === 0 && <div className="px-5 py-4 text-xs text-ink-tertiary">No {filter === "pending" ? "pending" : ""} approval requests.</div>}
+        {items && items.length === 0 && <div className="px-5 py-4 text-xs text-ink-tertiary">No {filter === "pending" ? "pending " : ""}approval requests.</div>}
         {(items || []).map((r) => (
-          <div key={r.id} className="px-5 py-3 flex items-center gap-2 text-xs">
-            <span className="px-2 py-0.5 rounded bg-slate-100 text-[11px] font-bold capitalize">{(r.kind || "").replace(/_/g, " ")}</span>
-            {r.amount != null && <span className="tabular-nums font-bold text-ink-primary">{r.amount}</span>}
+          <div key={r.id} className="px-5 py-3 flex items-center gap-2 text-sm">
+            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-xs font-medium text-ink-secondary">{humanize(r.kind || "")}</span>
+            {r.amount != null && <span className="tabular-nums font-semibold text-ink-primary">{money(Number(r.amount), undefined, true)}</span>}
             {r.reason && <span className="text-ink-secondary truncate max-w-[220px]">{r.reason}</span>}
             <div className="flex-1" />
             {r.status === "pending"
-              ? <><button onClick={() => decide(r.id, "approve")} disabled={busy} className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-bold">Approve</button><button onClick={() => decide(r.id, "reject")} disabled={busy} className="px-2.5 py-1 rounded-lg border border-rose-200 text-rose-600 text-[11px] font-bold">Reject</button></>
-              : <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold capitalize ${pill(r.status)}`}>{r.status}</span>}
+              ? <><button type="button" onClick={() => decide(r.id, "approve")} disabled={busy} className={btnPrimary}>Approve</button><button type="button" onClick={() => decide(r.id, "reject")} disabled={busy} className="h-9 px-3.5 rounded-xl border border-rose-200 bg-white text-rose-600 text-xs font-semibold hover:bg-rose-50 disabled:opacity-50">Reject</button></>
+              : <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${pill(r.status)}`}>{humanize(r.status || "")}</span>}
           </div>
         ))}
       </div>
@@ -2090,6 +2187,7 @@ function ApprovalsSettings() {
 const ID_LABEL: Record<string, string> = { imei: "IMEI", serial: "Serial", vin: "VIN", hin: "HIN", engine_serial: "Engine serial", barcode: "Barcode", asset_tag: "Asset tag" };
 function AssetCatalog() {
   const [tk, setTk] = useState<string>("");
+  const [tkLabel, setTkLabel] = useState<string>("");
   const [groups, setGroups] = useState<any[]>([]);
   const [brands, setBrands] = useState<any[]>([]);
   const [models, setModels] = useState<any[]>([]);
@@ -2109,6 +2207,7 @@ function AssetCatalog() {
   useEffect(() => {
     api.get<any>(`/settings/industry-template`).then((r) => {
       const t = r?.current || "general"; setTk(t);
+      setTkLabel((r?.templates || []).find((x: any) => x.key === t)?.label || humanize(t));
       loadGroups(t); loadBrands(t); loadModels(t); loadRules(t);
     }).catch(() => {});
   }, []);
@@ -2125,28 +2224,29 @@ function AssetCatalog() {
   async function runImport() { if (!csv.trim()) return; setBusy(true); try { const r = await api.post<any>(`/settings/asset-directory/import`, { template_key: tk, csv }); flash(`Imported ${r?.brands ?? 0} brands, ${r?.models ?? 0} models`); setCsv(""); setCsvOpen(false); loadBrands(tk); loadModels(tk); } catch (e: any) { flash(e.message || "Import failed"); } finally { setBusy(false); } }
 
   const box = "bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden";
-  const addInp = "glass-input flex-1 px-3 py-2 rounded-lg text-xs font-semibold text-ink-primary";
-  const addBtn = "px-3 py-2 rounded-lg bg-blue-50 text-primary border border-blue-100 text-xs font-bold hover:bg-blue-100 shrink-0";
+  const addInp = "glass-input flex-1 min-w-0 rounded-xl px-3 py-2 text-sm text-ink-primary";
+  const addBtn = `${btnSecondary} shrink-0`;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div><div className="text-sm font-bold text-ink-primary">Asset catalog</div><div className="text-xs text-ink-tertiary">Groups, brands, models &amp; identifier rules for the <span className="font-bold">{tk}</span> template.</div></div>
-        <button type="button" onClick={() => setCsvOpen((o) => !o)} className={addBtn}>{csvOpen ? "Close import" : "Import CSV"}</button>
+      <div>
+        <h3 className="text-sm font-semibold text-ink-primary">Asset catalog</h3>
+        <p className="text-xs text-ink-tertiary mt-0.5">Groups, brands, models and ID rules for {tkLabel ? <span className="font-medium text-ink-secondary">{tkLabel}</span> : "your shop"}.</p>
+        <button type="button" onClick={() => setCsvOpen((o) => !o)} className={`mt-2.5 ${btnSecondary}`}><M n={csvOpen ? "close" : "upload"} c="text-sm" />{csvOpen ? "Close import" : "Import CSV"}</button>
       </div>
 
       {csvOpen && (
         <div className="rounded-2xl bg-slate-50/70 border border-slate-200/80 p-3.5 space-y-2">
-          <div className="text-[11px] font-bold text-ink-tertiary">Bulk import — header row required: <span className="tabular-nums normal-case">brand,model,group</span></div>
-          <textarea value={csv} onChange={(e) => setCsv(e.target.value)} rows={5} className="glass-input block w-full py-2 px-3 text-xs tabular-nums text-ink-primary rounded-lg resize-none" placeholder={"brand,model,group\nApple,iPhone 15,Phone\nSamsung,Galaxy S24,Phone"} />
-          <div className="flex justify-end"><button type="button" onClick={runImport} disabled={busy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Importing…" : "Import"}</button></div>
+          <div className="text-xs text-ink-tertiary">Bulk import. The first row must be the headers: <span className="font-mono text-ink-secondary">brand,model,group</span></div>
+          <textarea value={csv} onChange={(e) => setCsv(e.target.value)} rows={5} aria-label="CSV to import" className="glass-input block w-full rounded-xl px-3 py-2 text-sm font-mono text-ink-primary resize-none" placeholder={"brand,model,group\nApple,iPhone 15,Phone\nSamsung,Galaxy S24,Phone"} />
+          <div><button type="button" onClick={runImport} disabled={busy} className={btnPrimary}>{busy ? "Importing…" : "Import"}</button></div>
         </div>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Groups */}
         <div className={box}>
-          <div className="px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold text-ink-tertiary">Groups ({groups.length})</div>
+          <div className="px-4 py-2.5 border-b border-slate-100 text-sm font-semibold text-ink-primary">Groups ({groups.length})</div>
           <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
             <button type="button" onClick={() => { setGsel(""); setBsel(""); }} className={`w-full text-left px-4 py-2 text-xs font-bold ${!gsel ? "bg-blue-50/60 text-primary" : "text-ink-secondary hover:bg-slate-50"}`}>All groups</button>
             {groups.map((g) => {
@@ -2155,7 +2255,7 @@ function AssetCatalog() {
                 <div key={g.id} className={`px-4 py-2 flex items-center gap-2 ${gsel === g.id ? "bg-blue-50/60" : "hover:bg-slate-50"}`}>
                   <button type="button" onClick={() => { setGsel(g.id); setBsel(""); }} className="flex-1 text-left min-w-0">
                     <div className="text-xs font-bold text-ink-primary truncate">{g.label}</div>
-                    {rule && <div className="text-[11px] text-ink-tertiary">ID: {(rule.allowed_kinds || []).map((k: string) => ID_LABEL[k] || k).join(" / ") || "—"}</div>}
+                    {rule && <div className="text-xs text-ink-tertiary">ID: {(rule.allowed_kinds || []).map((k: string) => ID_LABEL[k] || k).join(" / ") || "—"}</div>}
                   </button>
                   {!g.is_system && <button aria-label="Close" type="button" onClick={() => delRow("groups", g.id)} className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>}
                 </div>
@@ -2167,7 +2267,7 @@ function AssetCatalog() {
 
         {/* Brands */}
         <div className={box}>
-          <div className="px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold text-ink-tertiary">Brands ({shownBrands.length}){gsel ? ` · ${gName(gsel)}` : ""}</div>
+          <div className="px-4 py-2.5 border-b border-slate-100 text-sm font-semibold text-ink-primary">Brands ({shownBrands.length}){gsel ? ` · ${gName(gsel)}` : ""}</div>
           <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
             {shownBrands.length === 0 && <p className="px-4 py-3 text-xs text-ink-tertiary">No brands.</p>}
             {shownBrands.map((b) => (
@@ -2182,7 +2282,7 @@ function AssetCatalog() {
 
         {/* Models */}
         <div className={box}>
-          <div className="px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold text-ink-tertiary">Models ({shownModels.length}){bsel ? ` · ${brands.find((b) => b.id === bsel)?.name || ""}` : ""}</div>
+          <div className="px-4 py-2.5 border-b border-slate-100 text-sm font-semibold text-ink-primary">Models ({shownModels.length}){bsel ? ` · ${brands.find((b) => b.id === bsel)?.name || ""}` : ""}</div>
           <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
             {!bsel && <p className="px-4 py-3 text-xs text-ink-tertiary">Pick a brand to see and add its models.</p>}
             {bsel && shownModels.length === 0 && <p className="px-4 py-3 text-xs text-ink-tertiary">No models for this brand.</p>}
@@ -2253,19 +2353,19 @@ function MultiAssetSwitch() {
 function TierManager({ types }: { types: any[] }) {
   const [ptId, setPtId] = useState("");
   const [tiers, setTiers] = useState<any[]>([]);
-  const [minQty, setMinQty] = useState("");
-  const [markup, setMarkup] = useState("");
+  const [minQty, setMinQty] = useState<number | null>(null);
+  const [markup, setMarkup] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   useEffect(() => { if (!ptId) { setTiers([]); return; }
     api.get<any>(`/pricing/types/${ptId}/tiers`).then((r) => setTiers(r.items || [])).catch(() => setTiers([])); }, [ptId]);
   async function add() {
-    if (!ptId || minQty === "" || markup === "") return;
+    if (!ptId || minQty == null || markup == null) return;
     setBusy(true); setMsg("");
     try {
       await api.post(`/pricing/types/${ptId}/tiers`, { min_qty: Number(minQty), markup_pct: Number(markup) });
       const r = await api.get<any>(`/pricing/types/${ptId}/tiers`); setTiers(r.items || []);
-      setMinQty(""); setMarkup("");
+      setMinQty(null); setMarkup(null);
     } catch (e: any) { setMsg(e.message || "Could not add"); } finally { setBusy(false); }
   }
   async function del(id: string) {
@@ -2274,24 +2374,29 @@ function TierManager({ types }: { types: any[] }) {
   }
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-5 space-y-3">
-      <div><h4 className="text-sm font-bold text-ink-primary">Quantity break tiers</h4>
+      <div><h4 className="text-sm font-semibold text-ink-primary">Quantity break tiers</h4>
         <p className="text-xs text-ink-tertiary mt-0.5">Lower the markup automatically once a line reaches a quantity. The highest matching tier wins.</p></div>
-      <select value={ptId} onChange={(e) => setPtId(e.target.value)} className="glass-input px-3 py-2 rounded-lg text-xs max-w-xs">
+      <select value={ptId} onChange={(e) => setPtId(e.target.value)} aria-label="Price type" className="glass-input rounded-xl px-3 py-2 text-sm max-w-xs">
         <option value="">Choose a price type…</option>{types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
       {ptId && <div className="space-y-2">
-        {tiers.length === 0 && <p className="text-[11px] text-ink-tertiary">No tiers — uses the type's base markup at every quantity.</p>}
+        {tiers.length === 0 && <p className="text-xs text-ink-tertiary">No tiers yet. The type's base markup applies at every quantity.</p>}
         {tiers.map((t) => (
-          <div key={t.id} className="flex items-center gap-3 text-xs">
-            <span className="text-ink-secondary">At qty ≥ <b>{t.min_qty}</b> → markup <b>{t.markup_pct}%</b></span>
-            <button onClick={() => del(t.id)} className="text-red-500 hover:underline text-[11px]">Remove</button></div>
+          <div key={t.id} className="flex items-center gap-3 text-sm">
+            <span className="text-ink-secondary">From <b className="font-semibold text-ink-primary">{t.min_qty}</b> or more: markup <b className="font-semibold text-ink-primary">{t.markup_pct}%</b></span>
+            <button type="button" onClick={() => del(t.id)} className="text-xs font-semibold text-rose-600 hover:underline">Remove</button></div>
         ))}
-        <div className="flex items-end gap-2 pt-1">
-          <div className="space-y-1"><label className="block text-[11px] font-semibold text-ink-secondary">Min qty</label>
-            <input type="number" min={1} value={minQty} onChange={(e) => setMinQty(e.target.value)} className="glass-input w-24 px-3 py-2 rounded-lg text-xs" /></div>
-          <div className="space-y-1"><label className="block text-[11px] font-semibold text-ink-secondary">Markup %</label>
-            <input type="number" value={markup} onChange={(e) => setMarkup(e.target.value)} className="glass-input w-24 px-3 py-2 rounded-lg text-xs" /></div>
-          <button onClick={add} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">Add tier</button>
-          {msg && <span className="text-[11px] text-red-500 pb-2">{msg}</span>}
+        <div className="flex flex-wrap items-end gap-3 pt-1">
+          <div><label htmlFor="tier-min" className={lbl}>From quantity</label>
+            <NumField id="tier-min" value={minQty} onChange={setMinQty} unit="or more" width="w-36" /></div>
+          <div><label htmlFor="tier-markup" className={lbl}>Markup</label>
+            {/* A plain number input (not NumField) so a negative markup, which the API accepts, can still be typed. */}
+            <div className="glass-input h-9 w-28 rounded-xl flex items-center pr-3 focus-within:ring-2 focus-within:ring-primary/30">
+              <input id="tier-markup" type="number" value={markup ?? ""} onChange={(e) => setMarkup(e.target.value === "" ? null : Number(e.target.value))}
+                className="w-full min-w-0 bg-transparent pl-3 text-sm font-medium tabular-nums text-ink-primary outline-none" />
+              <span className="text-xs text-ink-tertiary shrink-0">%</span>
+            </div></div>
+          <button type="button" onClick={add} disabled={busy} className={btnPrimary}>Add tier</button>
+          {msg && <span className="text-xs text-rose-600 pb-2">{msg}</span>}
         </div>
       </div>}
     </div>

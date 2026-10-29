@@ -8,6 +8,7 @@ import { confirmDialog } from "../../lib/dialog";
 import SerialEntry from "../../components/SerialEntry";
 import PasteImport, { ImportedLine } from "./PasteImport";
 import { useMe } from "../../context/Me";
+import { fmtDay, fmtServerTime } from "../../lib/serverTime";
 
 /** PO detail + the missing Receive action. Receiving posts to the ONE real path
  * (`/inventory/po/{id}/receive`) that lands stock, moving-average cost, FIFO layers,
@@ -33,7 +34,8 @@ type PODetail = {
   lines: Line[]; supplier?: { id: string; name?: string; balance?: number };
 };
 
-const d = (s?: string | null) => (s ? new Date(s).toLocaleDateString() : "—");
+// A bare shop date as-is; a timestamp in the viewer's clock. Always "Oct 29, 2026".
+const d = (s?: string | null) => (!s ? "—" : (s.length <= 10 ? fmtDay(s) : fmtServerTime(s, { month: "short", day: "numeric", year: "numeric" })) || "—");
 
 export default function PODrawer({ poId, onClose, onChanged }: { poId: string; onClose: () => void; onChanged: () => void }) {
   const [po, setPo] = useState<PODetail | null>(null);
@@ -336,7 +338,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3 text-xs">
                 <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Supplier invoice #</label>
-                  <input value={ed.supplier_invoice_no} onChange={(e) => edSet({ supplier_invoice_no: e.target.value })} className="glass-input rounded-lg px-3 py-2 w-full" /></div>
+                  <input value={ed.supplier_invoice_no} onChange={(e) => edSet({ supplier_invoice_no: e.target.value })} className="glass-input rounded-xl px-3 py-2 w-full" /></div>
                 <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Invoice date</label>
                   <DateField value={ed.supplier_invoice_date} onChange={(v) => edSet({ supplier_invoice_date: v })} /></div>
                 <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Expected</label>
@@ -357,13 +359,13 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                           {(l.qty_received || 0) > 0 ? (
                             <span className="font-semibold text-ink-primary">{prodName(l.part_id)} <span className="text-[11px] text-ink-tertiary">· {l.qty_received} received, locked</span></span>
                           ) : (
-                            <select value={l.part_id} onChange={(e) => { const p: any = pool.find((x) => x.id === e.target.value); edLine(i, { part_id: e.target.value, unit_cost: l.unit_cost || (p && (p.cost_price ?? p.avg_cost)) || 0 }); }} className="glass-input rounded-lg px-2 py-1.5 w-full">
+                            <select value={l.part_id} onChange={(e) => { const p: any = pool.find((x) => x.id === e.target.value); edLine(i, { part_id: e.target.value, unit_cost: l.unit_cost || (p && (p.cost_price ?? p.avg_cost)) || 0 }); }} className="glass-input rounded-xl px-3 py-2 w-full">
                               <option value="">Select product…</option>{pool.map((p) => <option key={p.id} value={p.id}>{p.name}{p.sku ? ` · ${p.sku}` : ""}</option>)}
                             </select>
                           )}
                         </td>
-                        <td className="py-2 px-2"><input type="number" min={0} value={l.qty_ordered} onChange={(e) => edLine(i, { qty_ordered: Math.max(0, Number(e.target.value) || 0) })} className="glass-input rounded-lg px-2 py-1.5 w-full text-right font-mono" /></td>
-                        <td className="py-2 px-2"><input type="number" min={0} value={l.unit_cost} onChange={(e) => edLine(i, { unit_cost: Math.max(0, Number(e.target.value) || 0) })} className="glass-input rounded-lg px-2 py-1.5 w-full text-right font-mono" /></td>
+                        <td className="py-2 px-2"><input type="number" min={0} value={l.qty_ordered} onChange={(e) => edLine(i, { qty_ordered: Math.max(0, Number(e.target.value) || 0) })} className="glass-input rounded-xl px-3 py-2 w-full text-right font-mono" /></td>
+                        <td className="py-2 px-2"><input type="number" min={0} value={l.unit_cost} onChange={(e) => edLine(i, { unit_cost: Math.max(0, Number(e.target.value) || 0) })} className="glass-input rounded-xl px-3 py-2 w-full text-right font-mono" /></td>
                         <td className="py-2 px-1 text-center">{(l.qty_received || 0) === 0 && <button aria-label="Close" onClick={() => edDelLine(i)} className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>}</td>
                       </tr>
                     ))}
@@ -383,16 +385,16 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                 {(ed.charges || []).length === 0 && <div className="text-[11px] text-ink-tertiary">No charges. Add freight/customs to include them in the PO total.</div>}
                 {(ed.charges || []).map((c: any, i: number) => (
                   <div key={i} className="flex items-center gap-2">
-                    <input value={c.label} onChange={(e) => edCharge(i, { label: e.target.value })} placeholder="Label" className="glass-input rounded-lg px-2 py-1.5 text-xs flex-1" />
-                    <input type="number" min={0} value={c.amount} onChange={(e) => edCharge(i, { amount: Number(e.target.value) || 0 })} className="glass-input rounded-lg px-2 py-1.5 text-xs w-28 text-right font-mono" />
+                    <input value={c.label} onChange={(e) => edCharge(i, { label: e.target.value })} placeholder="Label" className="glass-input rounded-xl px-3 py-2 text-xs flex-1" />
+                    <input type="number" min={0} value={c.amount} onChange={(e) => edCharge(i, { amount: Number(e.target.value) || 0 })} className="glass-input rounded-xl px-3 py-2 text-xs w-28 text-right font-mono" />
                     <button aria-label="Close" onClick={() => edDelCharge(i)} className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>
                   </div>
                 ))}
-                <label className="flex items-center gap-2 text-[11px] text-ink-secondary cursor-pointer pt-1"><input type="checkbox" checked={ed.charges_to_cost} onChange={(e) => edSet({ charges_to_cost: e.target.checked })} />Capitalise charges into unit cost (landed cost) at receive</label>
+                <label className="flex items-center gap-2 text-[11px] text-ink-secondary cursor-pointer pt-1"><input type="checkbox" checked={ed.charges_to_cost} onChange={(e) => edSet({ charges_to_cost: e.target.checked })} />Add these charges to the cost of each part when the order is received</label>
                 {ed.charges_to_cost && (
                   <div className="flex items-center gap-2 pt-1 text-[11px] text-ink-secondary">
                     <span>Spread by</span>
-                    <select value={ed.alloc_basis || "value"} onChange={(e) => edSet({ alloc_basis: e.target.value })} className="glass-input rounded-lg px-2 py-1 text-[11px]">
+                    <select value={ed.alloc_basis || "value"} onChange={(e) => edSet({ alloc_basis: e.target.value })} className="glass-input rounded-xl px-3 py-2 text-[11px]">
                       <option value="value">Value (cost-weighted)</option>
                       <option value="qty">Quantity (per unit)</option>
                       <option value="weight">Weight (per kg)</option>
@@ -402,7 +404,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
               </div>
 
               <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Notes</label>
-                <textarea value={ed.notes} onChange={(e) => edSet({ notes: e.target.value })} rows={2} className="glass-input rounded-lg px-3 py-2 text-xs w-full" /></div>
+                <textarea value={ed.notes} onChange={(e) => edSet({ notes: e.target.value })} rows={2} className="glass-input rounded-xl px-3 py-2 text-xs w-full" /></div>
             </div>
           ) : <>
             {/* supplier doc row */}
@@ -421,7 +423,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
               <div className="flex items-center gap-2 rounded-xl bg-slate-50 border border-slate-200 px-3 py-2.5">
                 <M n="edit_note" c="text-base text-ink-tertiary" />
                 <span className="text-xs text-ink-secondary flex-1">This PO is a draft — edit freely, then mark it ordered to place it and begin receiving.</span>
-                <button onClick={() => setStatus("ordered")} disabled={busy} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50">Mark as ordered</button>
+                <button onClick={() => setStatus("ordered")} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">Mark as ordered</button>
               </div>
             )}
 
@@ -430,7 +432,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
               <div className="flex items-center gap-2 rounded-xl bg-blue-50/60 border border-blue-100 px-3 py-2">
                 <M n="barcode_scanner" c="text-base text-primary" />
                 <input value={scan} onChange={(e) => setScan(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") onScan(scan); }}
-                  placeholder="Scan or type a barcode / SKU to add 1 to receive" className="glass-input rounded-lg px-3 py-1.5 text-xs flex-1 font-mono" />
+                  placeholder="Scan or type a barcode / SKU to add 1 to receive" className="glass-input rounded-xl px-3 py-2 text-xs flex-1 font-mono" />
               </div>
             )}
 
@@ -458,7 +460,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                             : <input type="number" min={0} max={remain} value={recv[l.id] ?? 0}
                                 onChange={(e) => setRecv({ ...recv, [l.id]: Math.max(0, Math.min(remain, Number(e.target.value) || 0)) })}
                                 disabled={remain === 0} aria-label={`Receive now: ${l.part || "line"}`}
-                                className="glass-input rounded-lg px-2 py-1 w-20 text-right tabular-nums disabled:opacity-40" />}
+                                className="glass-input rounded-xl px-3 py-2 w-20 text-right tabular-nums disabled:opacity-40" />}
                         </td>}
                       </tr>
                       {scanRow && (
@@ -481,7 +483,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
               {(po.charges || []).map((c, i) => (
                 <div key={i} className="flex justify-between text-ink-tertiary"><span>{c.label}</span><span className="tabular-nums">{money(c.amount)}</span></div>
               ))}
-              {po.charges_to_cost && (po.charges_total || 0) > 0 && <div className="text-[11px] text-ink-tertiary italic">Charges capitalised into unit cost</div>}
+              {po.charges_to_cost && (po.charges_total || 0) > 0 && <div className="text-[11px] text-ink-tertiary italic">Charges added to the cost of each part</div>}
               <div className="flex justify-between font-bold text-ink-primary border-t border-slate-200 pt-1"><span>Total</span><span className="tabular-nums">{money(po.total)}</span></div>
             </div>
 
@@ -507,9 +509,9 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                       <div className="flex-1">
                         <label className="block text-[11px] font-bold text-ink-tertiary mb-1 flex items-center gap-1"><M n="paid" c="text-sm text-primary" />Freight bill arrived late?</label>
                         <input type="number" min={0} value={freight} onChange={(e) => setFreight(e.target.value)} placeholder="Shipping / customs amount"
-                          className="glass-input rounded-lg px-3 py-2 text-sm w-full tabular-nums" />
+                          className="glass-input rounded-xl px-3 py-2 text-sm w-full tabular-nums" />
                       </div>
-                      <button onClick={addFreightRecost} disabled={busy || !freight} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50">Add &amp; recost stock</button>
+                      <button onClick={addFreightRecost} disabled={busy || !freight} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50">Add &amp; recost stock</button>
                     </div>
                   )}
                   {anyRecvd && <div className="text-[11px] text-ink-tertiary">Spreads the freight into the cost of stock you've already received — inventory value updates instantly.</div>}
@@ -533,9 +535,9 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                   <div className="flex-1">
                     <label className="block text-[11px] font-bold text-ink-tertiary mb-1">Supplier invoice total</label>
                     <input type="number" min={0} value={inv} onChange={(e) => setInv(e.target.value)} placeholder="What they billed you"
-                      className="glass-input rounded-lg px-3 py-2 text-sm w-full tabular-nums" />
+                      className="glass-input rounded-xl px-3 py-2 text-sm w-full tabular-nums" />
                   </div>
-                  <button onClick={saveInvoice} disabled={busy} className="px-3 py-2 rounded-lg bg-slate-100 text-ink-primary text-xs font-bold hover:bg-slate-200 disabled:opacity-50">Save</button>
+                  <button onClick={saveInvoice} disabled={busy} className="h-9 px-3.5 rounded-xl bg-slate-100 text-ink-primary text-xs font-bold hover:bg-slate-200 disabled:opacity-50">Save</button>
                 </div>
                 <div className="flex items-center gap-2 pt-1">
                   {po.supplier_invoice_file ? (
@@ -562,7 +564,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                 <div className="divide-y divide-slate-100">
                   {receipts.map((r) => (
                     <div key={r.id} className="flex items-center gap-3 py-1.5 text-xs">
-                      <span className="tabular-nums text-ink-tertiary w-[92px] shrink-0">{(r.at || "").slice(0, 10)}</span>
+                      <span className="tabular-nums text-ink-tertiary w-[92px] shrink-0">{d(r.at)}</span>
                       <span className="text-ink-secondary flex-1 truncate">{r.part}{r.by ? ` · ${r.by}` : ""}</span>
                       <span className="tabular-nums text-ink-primary">+{r.qty}</span>
                       <span className="tabular-nums text-ink-tertiary w-16 text-right">{money(r.unit_cost)}</span>
@@ -579,8 +581,8 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
         {/* edit action bar */}
         {po && editing && (
           <div className="px-6 py-3 border-t border-slate-100 flex items-center justify-end gap-2 bg-raised">
-            <button onClick={() => { setEditing(false); setEd(null); }} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold hover:bg-slate-100">Cancel</button>
-            <button onClick={saveEdit} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50 flex items-center gap-1.5"><M n="check" c="text-sm" />{busy ? "Saving…" : "Save changes"}</button>
+            <button onClick={() => { setEditing(false); setEd(null); }} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary text-xs font-semibold hover:bg-slate-100">Cancel</button>
+            <button onClick={saveEdit} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50 flex items-center gap-1.5"><M n="check" c="text-sm" />{busy ? "Saving…" : "Save changes"}</button>
           </div>
         )}
         {/* receive action bar */}
@@ -589,28 +591,28 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
             <div className="flex items-center gap-3">
               <span className="text-[11px] text-ink-tertiary">{outstanding} outstanding · receiving {toReceive}</span>
               {/* 144ar — freight billed with THIS delivery, capitalised into these units' cost */}
-              <label className="flex items-center gap-1 text-[11px] text-ink-tertiary" title="Freight billed with this delivery — capitalised into the units received now">
-                <M n="local_shipping" c="text-sm" />
+              <label className="flex items-center gap-2 text-[11px] text-ink-secondary" title="Shipping billed with this delivery is added to the cost of the parts received now">
+                <span className="flex items-center gap-1"><M n="local_shipping" c="text-sm text-ink-tertiary" />Shipping on this delivery</span>
                 <input type="number" min={0} value={shipFreight} onChange={(e) => setShipFreight(e.target.value)}
-                  placeholder="Shipment freight" className="glass-input rounded-lg px-2 py-1 w-28 text-right tabular-nums text-[11px]" />
+                  placeholder="0.00" className="glass-input rounded-xl px-3 py-2 w-28 text-right tabular-nums text-sm" />
               </label>
             </div>
             <div className="flex items-center gap-2">
               <button onClick={() => receive(true)} disabled={busy}
-                className="px-3 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-bold hover:bg-slate-100 disabled:opacity-50 flex items-center gap-1.5">
+                className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary text-xs font-bold hover:bg-slate-100 disabled:opacity-50 flex items-center gap-1.5">
                 <M n="done_all" c="text-sm" />Receive all
               </button>
               <button onClick={() => receive(false)} disabled={busy || toReceive === 0}
-                className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50 flex items-center gap-1.5">
+                className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50 flex items-center gap-1.5">
                 <M n="inventory" c="text-sm" />{busy ? "Receiving…" : `Receive ${toReceive || ""}`.trim()}
               </button>
             </div>
           </div>
         )}
-        {po && received && <div className="px-6 py-3 border-t border-slate-100 text-[11px] text-emerald-700 font-semibold flex items-center gap-1.5"><M n="check_circle" c="text-sm" />Fully received {d(po.received_at)} — stock posted with cost layers</div>}
+        {po && received && <div className="px-6 py-3 border-t border-slate-100 text-[11px] text-emerald-700 font-semibold flex items-center gap-1.5"><M n="check_circle" c="text-sm" />Fully received {d(po.received_at)} — stock added to inventory</div>}
         {po && (st === "cancelled" || st === "canceled") && <div className="px-6 py-3 border-t border-slate-100 text-[11px] text-rose-600 font-semibold flex items-center gap-1.5"><M n="cancel" c="text-sm" />This purchase order was cancelled.</div>}
 
-        {toast && <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2 rounded-lg shadow-clay-card">{toast}</div>}
+        {toast && <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold h-9 px-3.5 rounded-xl shadow-clay-card">{toast}</div>}
       </div>
     </div>
   );

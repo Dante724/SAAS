@@ -67,7 +67,7 @@ export default function InvoiceDrawer({ id, onClose, onChanged }: { id: string; 
           {can("can_create_credit_notes") && !voided && room > 0 && <button onClick={() => setNewNote(true)} className={btnGhost}>Create credit note</button>}
           {can("can_view_finance") && !voided && due > 0 && <button onClick={() => setPaying(true)} className={btnPrimary}>Record payment</button>}
         </>}>
-        {voided && <div role="note" className="rounded-lg bg-slate-50 border border-slate-200 text-ink-secondary text-xs px-3 py-2">This invoice was cancelled. It no longer counts as owed.</div>}
+        {voided && <div role="note" className="rounded-xl bg-slate-50 border border-slate-200 text-ink-secondary text-xs px-3 py-2">This invoice was cancelled. It no longer counts as owed.</div>}
 
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-semibold text-ink-primary">Statement</h3>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
+import FloatingMenu from "../../components/FloatingMenu";
 import { api } from "../../api/client";
 import { alertDialog, confirmDialog } from "../../lib/dialog";
 
@@ -90,11 +91,6 @@ export function ChecklistList({ templates, onOpen, onNew, onChanged, onFlash }: 
   const [types, setTypes] = useState<any[]>([]);
   const [menu, setMenu] = useState<string | null>(null);
   useEffect(() => { api.get<any>("/forms/types").then((r) => setTypes(r.items || [])).catch(() => {}); }, []);
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
-    window.addEventListener("click", close); return () => window.removeEventListener("click", close);
-  }, [menu]);
 
   const appliesTo = (t: any) => t?.scope === "selected"
     ? ((t.type_ids || []).map((id: string) => types.find((x) => x.id === id)?.name).filter(Boolean).join(", ") || `${(t.type_ids || []).length} job types`)
@@ -116,12 +112,10 @@ export function ChecklistList({ templates, onOpen, onNew, onChanged, onFlash }: 
 
   return (
     <div className="max-w-3xl space-y-4">
-      <div className="flex items-center gap-2">
-        <div>
-          <h2 className="text-base font-semibold text-ink-primary">Checklists</h2>
-          <p className="text-xs text-ink-tertiary">Steps your team works through on a job. Customers see the checks you choose on their tracking page.</p>
-        </div>
-        <button onClick={() => onNew()} className="ml-auto inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-primary hover:border-slate-300 hover:bg-slate-50 flex-shrink-0"><M n="add" c="text-sm" />New checklist</button>
+      <div>
+        <h2 className="text-base font-semibold text-ink-primary">Checklists</h2>
+        <p className="text-xs text-ink-tertiary">Steps your team works through on a job. Customers see the checks you choose on their tracking page.</p>
+        <button onClick={() => onNew()} className="mt-3 inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n="add" c="text-sm" />New checklist</button>
       </div>
 
       {templates == null && <div className="bg-white rounded-2xl border border-slate-200/90 p-5 text-xs text-ink-tertiary">Loading checklists…</div>}
@@ -159,15 +153,17 @@ export function ChecklistList({ templates, onOpen, onNew, onChanged, onFlash }: 
                   {(t.auto_status_keys || []).length > 0 && <span title="Attaches itself when a job reaches a chosen status" className="inline-flex items-center h-6 px-2 rounded-md bg-primary/10 text-[11px] font-medium text-primary">Adds itself</span>}
                   {c.visible > 0 && <span title={`${c.visible} shown to the customer`} className="hidden sm:inline-flex items-center gap-1 h-6 px-2 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="visibility" c="text-[13px]" />{c.visible}</span>}
                   {c.required > 0 && <span title={`${c.required} must be filled in`} className="hidden sm:inline-flex items-center gap-1 h-6 px-2 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="priority_high" c="text-[13px]" />{c.required}</span>}
-                  <button aria-label={`More actions for ${t.name}`} onClick={(e) => { e.stopPropagation(); setMenu(menu === t.id ? null : t.id); }}
+                  <button aria-label={`More actions for ${t.name}`} data-checklist-menu={t.id} onClick={(e) => { e.stopPropagation(); setMenu(menu === t.id ? null : t.id); }}
                     className="w-8 h-8 rounded-lg grid place-items-center text-ink-tertiary hover:bg-slate-100 hover:text-ink-primary sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100"><M n="more_horiz" c="text-base" /></button>
                 </span>
                 {menu === t.id && (
-                  <div className="absolute right-2 top-12 z-20 w-40 bg-white rounded-xl border border-slate-200 shadow-clay-drawer py-1 text-xs" onClick={(e) => e.stopPropagation()}>
-                    <button onClick={() => { setMenu(null); onOpen(t); }} className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2"><M n="edit" c="text-sm" />Edit</button>
-                    <button onClick={() => duplicate(t)} className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2"><M n="content_copy" c="text-sm" />Duplicate</button>
-                    <button onClick={() => remove(t)} className="w-full text-left px-3 py-2 hover:bg-rose-50 text-rose-600 flex items-center gap-2"><M n="delete" c="text-sm" />Delete</button>
-                  </div>
+                  <FloatingMenu anchorSel={`[data-checklist-menu="${t.id}"]`} onClose={() => setMenu(null)} width={176}>
+                    <div className="text-xs" onClick={(e) => e.stopPropagation()}>
+                      <button onClick={() => { setMenu(null); onOpen(t); }} className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-50 flex items-center gap-2"><M n="edit" c="text-sm" />Edit</button>
+                      <button onClick={() => duplicate(t)} className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-50 flex items-center gap-2"><M n="content_copy" c="text-sm" />Duplicate</button>
+                      <button onClick={() => remove(t)} className="w-full text-left px-3 py-2 rounded-lg hover:bg-rose-50 text-rose-600 flex items-center gap-2"><M n="delete" c="text-sm" />Delete</button>
+                    </div>
+                  </FloatingMenu>
                 )}
               </div>
             );
@@ -321,7 +317,7 @@ export function ChecklistEditor({ tpl, onClose, onSaved }: { tpl: any | null; on
                           </div>
                           {hasOptions(it.field_kind) && (
                             <input value={it.options} onChange={(e) => upItem(si, ii, { options: e.target.value })} placeholder="Choices, separated by commas: Perfect, Scratched, Cracked" aria-label="Choices"
-                              className="w-full bg-white border border-slate-200 rounded-lg text-xs px-3 py-2 text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10" />
+                              className="glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary" />
                           )}
                           <div className="flex flex-wrap gap-1.5">
                             <Toggle on={it.required} onClick={() => upItem(si, ii, { required: !it.required })} icon="priority_high" label="Must be filled in" />

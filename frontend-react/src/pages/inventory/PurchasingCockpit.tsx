@@ -2,13 +2,14 @@ import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { money } from "./types";
+import { fmtDay } from "../../lib/serverTime";
 
 /** 144aq — Purchasing Cockpit: an action worklist (not a Kanban). Surfaces only what needs the
  * buyer now, each row one click from a fix. Reads /inventory/purchasing/cockpit. */
 type Row = any;
 type Cockpit = { buckets: Record<string, Row[]>; counts: Record<string, number> };
 
-const d = (s?: string | null) => (s ? new Date(s).toLocaleDateString() : "—");
+const d = (s?: string | null) => fmtDay(s) || "—";
 
 export default function PurchasingCockpit({ onClose, onOpenPO, onReorder }: {
   onClose: () => void; onOpenPO: (id: string) => void; onReorder: () => void;
@@ -34,7 +35,7 @@ export default function PurchasingCockpit({ onClose, onOpenPO, onReorder }: {
     );
   };
   const poCell = (r: Row) => (<><span className="font-mono font-bold text-ink-primary">{r.po_number}</span><span className="text-ink-tertiary truncate">{r.supplier}</span></>);
-  const openBtn = (id: string, label = "Open") => <button onClick={() => onOpenPO(id)} className="ml-auto px-2.5 py-1 rounded-lg bg-primary text-white text-[11px] font-bold hover:bg-primary-container">{label}</button>;
+  const openBtn = (id: string, label = "Open") => <button onClick={() => onOpenPO(id)} className="ml-auto h-8 px-3 rounded-xl border border-slate-200 bg-white text-primary text-[11px] font-semibold hover:bg-slate-50 whitespace-nowrap">{label}</button>;
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
@@ -51,7 +52,7 @@ export default function PurchasingCockpit({ onClose, onOpenPO, onReorder }: {
 
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
           {!c ? <div className="text-sm text-ink-tertiary">Loading…</div> : empty ? (
-            <div className="grid place-items-center h-64 text-center"><div><M n="check_circle" c="text-4xl text-emerald-500" /><div className="mt-2 text-sm font-semibold text-ink-secondary">All clear — nothing needs attention.</div></div></div>
+            <div className="grid place-items-center h-64 text-center"><div><M n="check_circle" c="text-4xl text-emerald-500" /><div className="mt-2 text-sm font-semibold text-ink-secondary">All clear. Nothing needs attention.</div></div></div>
           ) : <>
             <Section k="overdue" title="Overdue" icon="warning" tone="bg-rose-50 text-rose-700">
               {(r) => (<>{poCell(r)}<span className="text-rose-600 font-semibold">{r.days_late}d late</span>{openBtn(r.po_id, "Chase / receive")}</>)}
@@ -65,8 +66,8 @@ export default function PurchasingCockpit({ onClose, onOpenPO, onReorder }: {
             <Section k="awaiting_invoice" title="Awaiting supplier invoice" icon="request_quote" tone="bg-blue-50 text-primary">
               {(r) => (<>{poCell(r)}<span className="font-mono text-ink-tertiary">{money(r.total)}</span>{openBtn(r.po_id, "Add invoice")}</>)}
             </Section>
-            <Section k="below_min" title="Below minimum — not on order" icon="inventory_2" tone="bg-orange-50 text-orange-700">
-              {(r) => (<><span className="font-semibold text-ink-primary truncate">{r.name}</span><span className="text-ink-tertiary">{r.available}/{r.min_stock}</span><button onClick={onReorder} className="ml-auto px-2.5 py-1 rounded-lg bg-primary text-white text-[11px] font-bold hover:bg-primary-container">Create PO</button></>)}
+            <Section k="below_min" title="Below minimum, not on order" icon="inventory_2" tone="bg-orange-50 text-orange-700">
+              {(r) => (<><span className="font-semibold text-ink-primary truncate">{r.name}</span><span className="text-ink-tertiary">{r.available}/{r.min_stock}</span><button onClick={onReorder} className="ml-auto h-8 px-3 rounded-xl border border-slate-200 bg-white text-primary text-[11px] font-semibold hover:bg-slate-50 whitespace-nowrap">Create PO</button></>)}
             </Section>
             <Section k="supplier_balances" title="Supplier balances owed" icon="account_balance_wallet" tone="bg-slate-100 text-ink-secondary">
               {(r) => (<><span className="font-semibold text-ink-primary truncate">{r.name}</span><span className="ml-auto tabular-nums font-bold text-rose-600">{money(r.balance)}</span></>)}
