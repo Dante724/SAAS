@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { M } from "../../components/Shell";
+import Switch from "../../components/Switch";
 import { api } from "../../api/client";
 import { confirmDialog, selectDialog } from "../../lib/dialog";
 import { CHANNEL_LABEL, cellRules, channelPhrase, firesOnStatus, firingLabel, statusEvent, toggleCell, withOverrides, type NotifRule } from "../../lib/notifRules";
@@ -100,7 +101,8 @@ export function StatusList({ statuses, recordType, onRecordType, onOpen, onAdd, 
 
   return (
     <div className="max-w-3xl space-y-4">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <button onClick={onAdd} className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n="add" c="text-sm" />Add status</button>
         <div className="inline-flex items-center bg-slate-100 rounded-xl p-1">
           {RECORD_TYPES.slice(0, 2).map(([rt, label]) => (
             <button key={rt} onClick={() => onRecordType(rt)}
@@ -112,7 +114,6 @@ export function StatusList({ statuses, recordType, onRecordType, onOpen, onAdd, 
             {more.map(([rt, label]) => <option key={rt} value={rt}>{label}</option>)}
           </select>
         </div>
-        <button onClick={onAdd} className="ml-auto inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-primary hover:border-slate-300 hover:bg-slate-50"><M n="add" c="text-sm" />Add status</button>
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-3">
@@ -218,13 +219,13 @@ function MovesPanel({ statuses, onFlash }: { statuses: any[]; onFlash: (m: strin
         <span className="w-8 h-8 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n="swap_horiz" c="text-base" /></span>
         <span className="min-w-0">
           <span className="block text-sm text-ink-primary">Which status can follow which</span>
-          <span className="block text-[11px] text-ink-tertiary">{limited ? `${limited} ${limited === 1 ? "status has" : "statuses have"} limits. The rest can move anywhere.` : "Jobs can move to any status"}</span>
+          <span className="block text-xs text-ink-tertiary">{limited ? `${limited} ${limited === 1 ? "status has" : "statuses have"} limits. The rest can move anywhere.` : "Jobs can move to any status"}</span>
         </span>
         <span className="ml-auto text-xs font-semibold text-primary">{open ? "Done" : "Set rules"}</span>
       </button>
       {open && (
         <div className="px-3 pb-3">
-          <p className="text-[11px] text-ink-tertiary mb-2 pl-11">Choose where a job can go next. A status left open lets a job go anywhere.</p>
+          <p className="text-xs text-ink-tertiary mb-2 pl-11">Choose where a job can go next. A status left open lets a job go anywhere.</p>
           <div className="space-y-1">
             {statuses.map((fr) => {
               const mine = outs(fr.id).map((e) => e.to_status_id);
@@ -358,14 +359,14 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
     : terminal ? " Customers can still message for a few days." : " Customers can message the shop.";
 
   const order = [...statuses.filter((s) => s.id !== status?.id)];
-  const lbl = "block text-[11px] font-semibold text-ink-tertiary mb-1.5";
-  const Switch = ({ k, icon, label, hint }: { k: string; icon: string; label: string; hint?: string }) => (
-    <label className="flex items-center gap-3 py-2.5 border-t border-slate-100 first:border-0 cursor-pointer">
+  const lbl = "block text-sm font-medium text-ink-primary mb-1.5";
+  // A plain function (not a component), so the rows aren't remounted on every keystroke.
+  const switchRow = (k: string, icon: string, label: string, hint?: string) => (
+    <div key={k} className="flex items-center gap-3 py-2.5 border-t border-slate-100 first:border-0">
       <span className="w-8 h-8 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n={icon} c="text-base" /></span>
-      <span className="min-w-0"><span className="block text-sm text-ink-primary">{label}</span>{hint && <span className="block text-[11px] text-ink-tertiary">{hint}</span>}</span>
-      <button type="button" role="switch" aria-checked={!!f[k]} aria-label={label} onClick={() => set(k, !f[k])}
-        className={`ml-auto w-10 h-6 rounded-full flex-shrink-0 relative transition-colors ${f[k] ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${f[k] ? "left-[18px]" : "left-0.5"}`} /></button>
-    </label>
+      <span className="min-w-0"><span className="block text-sm text-ink-primary">{label}</span>{hint && <span className="block text-xs text-ink-tertiary">{hint}</span>}</span>
+      <span className="ml-auto"><Switch label={label} on={!!f[k]} onChange={(v) => set(k, v)} /></span>
+    </div>
   );
   const Pill = ({ k, label }: { k: string; label: string }) => (
     <button type="button" onClick={() => set(k, !f[k])} aria-pressed={!!f[k]}
@@ -406,13 +407,13 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
 
           <div>
             <label className={lbl}>Stage</label>
-            <select value={f.status_group} onChange={(e) => set("status_group", e.target.value)} className="glass-input w-full py-2 px-3 text-sm text-ink-primary rounded-lg">
+            <select value={f.status_group} onChange={(e) => set("status_group", e.target.value)} className="glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary">
               {GROUP_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
           </div>
 
           <div className="rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
-            <div className="text-[11px] font-semibold text-ink-tertiary mb-1">What happens</div>
+            <div className="text-xs font-medium text-ink-tertiary mb-1">What happens</div>
             <p className="text-sm text-ink-primary leading-relaxed">{summary}</p>
           </div>
 
@@ -427,14 +428,14 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
           )}
 
           <div>
-            <div className="text-[11px] font-semibold text-ink-tertiary mb-1">When a job moves here</div>
+            <div className="text-sm font-medium text-ink-primary mb-1">When a job moves here</div>
             {jobs && (
               <div className="py-2.5" data-testid="status-messages">
                 <div className="flex items-start gap-3">
                   <span className="w-8 h-8 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n="chat" c="text-base" /></span>
                   <span className="min-w-0">
                     <span className="block text-sm text-ink-primary">Message the customer</span>
-                    <span className="block text-[11px] text-ink-tertiary">
+                    <span className="block text-xs text-ink-tertiary">
                       {rules === null ? "Checking…" : fires.length ? fires.map((x) => firingLabel(x, rt)).join(", ") : "Nothing is sent"}
                     </span>
                   </span>
@@ -446,23 +447,19 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
                     const cov = !on && fires.some((x) => !x.own && x.channel === ch);
                     const label = CHANNEL_LABEL[ch] || ch;
                     return (
-                      <span key={ch} className="flex items-center gap-1.5">
-                        <button type="button" role="switch" aria-checked={on || cov} aria-label={`${label} when a job moves here`}
-                          disabled={!key || !rules || cov || msgBusy === ch} onClick={() => flipMessage(ch)}
-                          title={cov ? "Already sent to every status. Change it in Notifications." : undefined}
-                          className={`w-9 h-5 rounded-full relative transition-colors disabled:cursor-default ${on ? "bg-primary" : cov ? "bg-primary/30" : "bg-slate-300"}`}>
-                          <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${on || cov ? "left-[18px]" : "left-0.5"}`} />
-                        </button>
+                      <span key={ch} className="flex items-center gap-1.5" title={cov ? "Already sent to every status. Change it in Notifications." : undefined}>
+                        <Switch size="sm" label={`${label} when a job moves here`} on={on || cov}
+                          disabled={!key || !rules || cov || msgBusy === ch} onChange={() => flipMessage(ch)} />
                         <span className="text-xs text-ink-secondary">{label}</span>
                       </span>
                     );
                   })}
                 </div>
-                <p className="text-[11px] text-ink-tertiary mt-1.5 pl-11">{key ? "Switches save right away." : "Save the status first to give it its own message."}</p>
+                <p className="text-xs text-ink-tertiary mt-1.5 pl-11">{key ? "Switches save right away." : "Save the status first to give it its own message."}</p>
               </div>
             )}
-            <Switch k="triggers_invoice" icon="receipt_long" label="Create an invoice" />
-            <Switch k="triggers_payment" icon="payments" label="Ask for payment" />
+            {switchRow("triggers_invoice", "receipt_long", "Create an invoice")}
+            {switchRow("triggers_payment", "payments", "Ask for payment")}
             <div className="flex items-center gap-3 py-2.5 border-t border-slate-100">
               <span className="w-8 h-8 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n="timer" c="text-base" /></span>
               <span className="text-sm text-ink-primary">Alert if a job is stuck here</span>
@@ -481,21 +478,21 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
               )}
             </div>
             {rt === "estimate" && <>
-              <Switch k="shows_accept" icon="verified" label="Let the customer accept or decline" hint="Shows Accept / Decline on their estimate page" />
-              <Switch k="converts_to_order" icon="autorenew" label="Turn into a work order" />
+              {switchRow("shows_accept", "verified", "Let the customer accept or decline", "Shows Accept / Decline on their estimate page")}
+              {switchRow("converts_to_order", "autorenew", "Turn into a work order")}
             </>}
           </div>
 
           {jobs && (
             <div>
-              <div className="text-[11px] font-semibold text-ink-tertiary mb-1.5">Customer messages</div>
+              <div className="text-sm font-medium text-ink-primary mb-1.5">Customer messages</div>
               <div className="inline-flex rounded-xl bg-slate-100 p-1">
                 {([[null, "Automatic"], [true, "Allow"], [false, "Block"]] as [boolean | null, string][]).map(([v, l]) => (
                   <button key={l} type="button" onClick={() => set("allow_messages", v)} aria-pressed={(f.allow_messages ?? null) === v}
                     className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${(f.allow_messages ?? null) === v ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>{l}</button>
                 ))}
               </div>
-              <p className="text-[11px] text-ink-tertiary mt-1.5">
+              <p className="text-xs text-ink-tertiary mt-1.5">
                 {f.allow_messages === true ? "Customers can always message the shop from their tracking link."
                   : f.allow_messages === false ? "The message box is hidden. Customers see \"Start a new request\" instead."
                   : terminal ? "Open for a few days after the job finishes (Public pages), then \"Start a new request\"."
@@ -513,8 +510,8 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
             {adv && (
               <div className="px-4 pb-4 space-y-4">
                 <div>
-                  <Switch k="is_default" icon="flag" label="Start every new job here" />
-                  <Switch k="locks_edits" icon="lock" label="Lock the job" hint="No edits once a job is here" />
+                  {switchRow("is_default", "flag", "Start every new job here")}
+                  {switchRow("locks_edits", "lock", "Lock the job", "No edits once a job is here")}
                   <div className="flex items-center gap-3 py-2.5 border-t border-slate-100">
                     <span className="w-8 h-8 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n="inventory_2" c="text-base" /></span>
                     <span className="text-sm text-ink-primary">Move the item to</span>

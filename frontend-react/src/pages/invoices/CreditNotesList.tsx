@@ -27,13 +27,13 @@ export default function CreditNotesList() {
   return (
     <>
       <div className="flex flex-wrap items-center gap-2">
+        {can("can_create_credit_notes") && <button onClick={() => setCreating(true)} className={btnPrimary}><M n="add" c="text-sm" />New credit note</button>}
         <div className="flex gap-1 rounded-xl bg-slate-100 p-1" role="tablist" aria-label="Credit note status">
           {FILTERS.map((f) => <button key={f.key} role="tab" aria-selected={status === f.key} onClick={() => setStatus(f.key)}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${status === f.key ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>{f.label}</button>)}
         </div>
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search number, client, invoice" aria-label="Search credit notes"
-          className={`${inputCls} basis-full sm:basis-auto sm:!w-auto flex-1 min-w-[180px]`} />
-        {can("can_create_credit_notes") && <button onClick={() => setCreating(true)} className={btnPrimary}><M n="add" c="text-sm" />New credit note</button>}
+          className={`${inputCls} basis-full sm:basis-auto sm:!w-auto flex-1 min-w-[180px] sm:max-w-xs`} />
       </div>
       <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden mt-3">
         {/* Phones: one card per credit note instead of the table. */}
@@ -101,7 +101,7 @@ export function ClientCreditNotes({ clientId }: { clientId: string }) {
     <section aria-label="Credit notes" className="space-y-2">
       <div className="flex items-center justify-between">
         <div className="text-xs font-semibold text-ink-secondary">Credit notes{p.rows && p.rows.length > 0 ? ` · ${cash(issued)} issued` : ""}</div>
-        {can("can_create_credit_notes") && <button onClick={() => setCreating(true)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-xs font-semibold text-primary hover:bg-slate-50"><M n="add" c="text-sm" />Credit note</button>}
+        {can("can_create_credit_notes") && <button onClick={() => setCreating(true)} className="inline-flex items-center gap-1 h-8 px-3 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-primary hover:bg-slate-50"><M n="add" c="text-sm" />Credit note</button>}
       </div>
       {p.err ? <div className="text-xs text-rose-600">{p.err}</div>
         : !p.rows ? <div className="text-xs text-ink-tertiary">Loading…</div>

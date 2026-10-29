@@ -11,12 +11,17 @@ import { promptDialog } from "../../lib/dialog";
 import { todayTotals, txnDirection } from "../../lib/cashStats";
 import { isoDate } from "../../lib/localDate";
 import { useServerPage } from "../../hooks/useServerPage";
+import { fmtServerTime } from "../../lib/serverTime";
+import { btnGhost, btnPrimary } from "../invoices/billing";
 
 type TxnSummary = { count: number; income: number; expense: number; today_in?: number; today_out?: number; today_net?: number };
 type Txn = { id: string; txn_type?: string; amount?: number; account?: string; account_id?: string; cash_flow_item?: string; comment?: string; actual_date?: string; status?: string; balance_after?: number; reverses_txn_id?: string; void_reason?: string };
 type FlowItem = { id: string; name?: string; direction?: string };
 
 const CCY: Record<string, string> = { INR: "₹", EUR: "€", USD: "$", GBP: "£", AED: "د.إ" };
+const PAY_LABEL: Record<string, string> = { cash: "Cash", card: "Card", bank: "Bank", online: "Online", upi: "UPI" };
+const payLabel = (p?: string) => (p ? PAY_LABEL[p] || (p.charAt(0).toUpperCase() + p.slice(1).replace(/_/g, " ")) : "");
+const KIND_LABEL: Record<string, string> = { income: "Income", expense: "Expense", transfer: "Transfer" };
 const iconFor = (a: Account) => a.icon || (a.payment_option === "cash" ? "payments" : a.payment_option === "card" ? "credit_card" : "account_balance");
 
 export default function CashPanel() {
@@ -55,7 +60,7 @@ export default function CashPanel() {
       } else {
         await api.post("/cash/transactions", { account_id: sel!.id, txn_type: modal, amount: parseFloat(form.amount), cash_flow_item_id: form.cash_flow_item_id || null, comment: form.comment || null });
       }
-      flash(modal === "transfer" ? "Transfer recorded" : `${modal} recorded`); setModal(null);
+      flash(`${KIND_LABEL[modal || ""] || "Entry"} recorded`); setModal(null);
       const items = await loadAccounts(); const cur = (items as Account[]).find((a) => a.id === sel!.id); if (cur) setSel(cur); tp.reload();
     } catch (e: any) { flash(`Failed: ${e.message}`); }
   }
@@ -108,7 +113,7 @@ export default function CashPanel() {
                   <div className="text-xs font-bold text-ink-primary truncate">{a.name}</div>
                   <div className="font-mono text-xs font-bold text-ink-secondary">{money(a.balance, a.currency_code ? (CCY[a.currency_code] || "") : currencySymbol())}</div>
                 </div>
-                <button aria-label="More options" onClick={(e) => { e.stopPropagation(); setMenu(menu === a.id ? null : a.id); }} className="text-ink-tertiary hover:text-ink-primary p-1 -m-0.5 rounded-md shrink-0"><M n="more_vert" c="text-base" /></button>
+                <button aria-label="More options" aria-haspopup="menu" aria-expanded={menu === a.id} onClick={(e) => { e.stopPropagation(); setMenu(menu === a.id ? null : a.id); }} className="text-ink-tertiary hover:text-ink-primary p-1 -m-0.5 rounded-md shrink-0"><M n="more_vert" c="text-base" /></button>
                 {menu === a.id && (
                   <div className="absolute z-20 right-2 top-10 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 w-40 text-xs" onClick={(e) => e.stopPropagation()}>
                     {can("can_create_incomes") && <button onClick={() => { setSel(a); openTxn("income"); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-emerald-50 text-emerald-700 font-semibold"><M n="add" c="text-sm" />Income</button>}
@@ -131,7 +136,7 @@ export default function CashPanel() {
               <div className="w-14 h-14 rounded-2xl bg-primary text-white flex items-center justify-center shadow-clay-sm mb-3"><M n="point_of_sale" c="text-3xl" /></div>
               <h3 className="text-base font-bold text-ink-primary">Add your first cashbox</h3>
               <p className="text-xs text-ink-tertiary max-w-sm mt-1">A cashbox is where money lands — your till, a card account, UPI, petty cash. Create one to start taking payments and tracking the drawer.</p>
-              <button onClick={() => setDrawer({ edit: null })} className="mt-4 px-4 py-2.5 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm flex items-center gap-1.5"><M n="add" c="text-sm" />New cashbox</button>
+              <button onClick={() => setDrawer({ edit: null })} className={`${btnPrimary} mt-4`}><M n="add" c="text-sm" />New cashbox</button>
             </div>
           ) : (
           <>
@@ -140,7 +145,7 @@ export default function CashPanel() {
             <div className="flex items-center gap-2.5 mb-3">
               <div className="w-9 h-9 rounded-full bg-primary text-white flex items-center justify-center shadow-clay-sm"><M n={sel ? iconFor(sel) : "account_balance"} c="text-base" /></div>
               <div className="text-sm font-bold text-ink-primary">{sel?.name || "—"}</div>
-              {sel?.payment_option && <span className="text-[11px] font-bold text-ink-tertiary bg-slate-100 px-2 py-0.5 rounded-full">{sel.payment_option}</span>}
+              {sel?.payment_option && <span className="text-[11px] font-bold text-ink-tertiary bg-slate-100 px-2 py-0.5 rounded-full">{payLabel(sel.payment_option)}</span>}
             </div>
             <div className="text-xs font-bold text-ink-tertiary">{sel?.payment_option === "cash" ? "In the till right now" : "Balance"}</div>
             <div className="tabular-nums text-5xl font-bold text-ink-primary tracking-tight leading-none mt-1">{money(sel?.balance, sym)}</div>
@@ -158,13 +163,15 @@ export default function CashPanel() {
 
           {/* ACTIVITY: command bar + ledger */}
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-            <div className="bg-ink-primary px-4 py-2.5 flex items-center gap-3 flex-wrap">
-              <span className="text-xs font-bold text-white">Activity</span>
-              <span className="text-[11px] font-semibold text-white/60">· {sel?.name || "—"} · {live.length} transactions</span>
-              <div className="ml-auto flex items-center gap-1.5">
-                {can("can_create_incomes") && <button onClick={() => sel && openTxn("income")} disabled={!sel} className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 border border-white/15 text-white text-[11px] font-bold flex items-center gap-1 disabled:opacity-40"><M n="add" c="text-sm" />Income</button>}
-                {can("can_create_expenses") && <button onClick={() => sel && openTxn("expense")} disabled={!sel} className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 border border-white/15 text-white text-[11px] font-bold flex items-center gap-1 disabled:opacity-40"><M n="remove" c="text-sm" />Expense</button>}
-                <button onClick={() => sel && openTransfer()} disabled={!sel || accounts.length < 2} className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 border border-white/15 text-white text-[11px] font-bold flex items-center gap-1 disabled:opacity-40"><M n="swap_horiz" c="text-sm" />Transfer</button>
+            <div className="px-4 py-3 border-b border-slate-100 space-y-2.5">
+              <div className="flex items-baseline gap-1.5 flex-wrap">
+                <span className="text-sm font-bold text-ink-primary">Activity</span>
+                <span className="text-xs text-ink-tertiary">· {sel?.name || "—"} · {live.length} transactions</span>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                {can("can_create_incomes") && <button onClick={() => sel && openTxn("income")} disabled={!sel} className={btnGhost}><M n="add" c="text-sm text-emerald-600" />Income</button>}
+                {can("can_create_expenses") && <button onClick={() => sel && openTxn("expense")} disabled={!sel} className={btnGhost}><M n="remove" c="text-sm text-rose-600" />Expense</button>}
+                <button onClick={() => sel && openTransfer()} disabled={!sel || accounts.length < 2} className={btnGhost}><M n="swap_horiz" c="text-sm" />Transfer</button>
               </div>
             </div>
             <div className="overflow-x-auto">
@@ -183,8 +190,8 @@ export default function CashPanel() {
                   const corrected = t.status === "corrected";
                   return (
                     <tr key={t.id} className={`hover:bg-blue-50/30 ${del ? "opacity-50 line-through" : ""}`} title={del ? `Deleted${t.void_reason ? `: ${t.void_reason}` : ""}` : corrected ? "Corrected — see the linked adjustment row" : ""}>
-                      <td className="py-2.5 px-4 text-ink-tertiary">{t.actual_date ? new Date(t.actual_date).toLocaleString([], { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }) : "—"}</td>
-                      <td className="py-2.5 px-4 text-ink-primary font-semibold">{t.comment || "—"}{corrected && <span className="ml-2 text-[11px] font-bold text-amber-600 no-underline">CORRECTED</span>}{t.reverses_txn_id && <span className="ml-2 text-[11px] font-bold text-sky-600 no-underline">ADJUSTMENT</span>}</td>
+                      <td className="py-2.5 px-4 text-ink-tertiary">{fmtServerTime(t.actual_date, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }) || "—"}</td>
+                      <td className="py-2.5 px-4 text-ink-primary font-semibold">{t.comment || "—"}{corrected && <span className="ml-2 px-1.5 py-0.5 rounded-full bg-amber-50 text-[11px] font-semibold text-amber-700 no-underline">Corrected</span>}{t.reverses_txn_id && <span className="ml-2 px-1.5 py-0.5 rounded-full bg-sky-50 text-[11px] font-semibold text-sky-700 no-underline">Adjustment</span>}</td>
                       <td className="py-2.5 px-4">{t.cash_flow_item || "—"}</td>
                       <td className="py-2.5 px-4 text-right tabular-nums font-bold text-emerald-600">{inc ? money(Math.abs(t.amount || 0), sym) : ""}</td>
                       <td className="py-2.5 px-4 text-right tabular-nums font-bold text-rose-600">{!inc ? money(Math.abs(t.amount || 0), sym) : ""}</td>
@@ -220,16 +227,16 @@ export default function CashPanel() {
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-ink-primary/40" onClick={() => setModal(null)} />
           <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-md p-5 space-y-4">
-            <div className="flex items-center justify-between"><h4 className="text-sm font-bold text-ink-primary capitalize">{modal === "transfer" ? "Transfer money" : `Record ${modal}`} · {sel.name}</h4><button aria-label="Close" onClick={() => setModal(null)} className="text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-lg" /></button></div>
+            <div className="flex items-center justify-between"><h4 className="text-sm font-bold text-ink-primary">{modal === "transfer" ? "Transfer money" : `Record ${modal}`} · {sel.name}</h4><button aria-label="Close" onClick={() => setModal(null)} className="text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-lg" /></button></div>
             {modal === "transfer" && (
-              <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">To account</label><select value={form.to_account_id} onChange={(e) => setForm({ ...form, to_account_id: e.target.value })} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-lg">{accounts.filter((a) => a.id !== sel.id).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
+              <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">To account</label><select value={form.to_account_id} onChange={(e) => setForm({ ...form, to_account_id: e.target.value })} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl">{accounts.filter((a) => a.id !== sel.id).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
             )}
-            <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Amount ({sym})</label><input type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} className="glass-input w-full py-2 px-3 text-sm font-bold font-mono rounded-lg" /></div>
+            <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Amount ({sym})</label><input type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} className="glass-input w-full py-2 px-3 text-sm font-bold tabular-nums rounded-xl" /></div>
             {modal !== "transfer" && (
-              <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Category</label><select value={form.cash_flow_item_id} onChange={(e) => setForm({ ...form, cash_flow_item_id: e.target.value })} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-lg"><option value="">— None —</option>{flow.filter((f) => !f.direction || f.direction === modal).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></div>
+              <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Category</label><select value={form.cash_flow_item_id} onChange={(e) => setForm({ ...form, cash_flow_item_id: e.target.value })} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl"><option value="">— None —</option>{flow.filter((f) => !f.direction || f.direction === modal).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></div>
             )}
-            <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Comment</label><input value={form.comment} onChange={(e) => setForm({ ...form, comment: e.target.value })} className="glass-input w-full py-2 px-3 text-xs rounded-lg" placeholder="Optional…" /></div>
-            <div className="flex justify-end gap-2 pt-1"><button onClick={() => setModal(null)} className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200">Cancel</button><button onClick={submit} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm capitalize">{modal}</button></div>
+            <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Comment</label><input value={form.comment} onChange={(e) => setForm({ ...form, comment: e.target.value })} className="glass-input w-full py-2 px-3 text-xs rounded-xl" placeholder="Optional…" /></div>
+            <div className="flex justify-end gap-2 pt-1"><button onClick={() => setModal(null)} className={btnGhost}>Cancel</button><button onClick={submit} className={btnPrimary}>{KIND_LABEL[modal]}</button></div>
           </div>
         </div>
       )}

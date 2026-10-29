@@ -13,13 +13,14 @@ import CatalogPicker, { CatalogItem } from "../../components/CatalogPicker";
 import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../../lib/formLayout";
 import ServiceForm, { serviceBody } from "./ServiceForm";
 import { KIT_PRINT_LABELS } from "../../lib/kitGroups";
+import { fmtDay, fmtServerTime } from "../../lib/serverTime";
 
 export type DrawerKind = "product" | "service" | "asset" | "bundle";
 type Props = { kind: DrawerKind; id?: string | null; initial?: any; onClose: () => void; onSaved?: () => void };
 
 const BREADCRUMB: Record<DrawerKind, string> = { product: "Inventory › Stock", service: "Catalog › Services", asset: "Inventory › Devices & assets", bundle: "Catalog › Job Kits" };
 const lbl = "block font-semibold text-ink-secondary mb-1";
-const field = "glass-input w-full px-3 py-2 rounded-lg text-ink-primary text-xs";
+const field = "glass-input w-full px-3 py-2 rounded-xl text-ink-primary text-xs";
 
 type ProdTab = "details" | "stock" | "movements" | "purchasing" | "batches";
 type Movement = { type: string; qty: number; at?: string; ref_type?: string; ref_id?: string; location?: string; unit_cost?: number };
@@ -29,7 +30,9 @@ type StockRow = { location: string; available: number; reserved: number; value: 
 type StockResp = { total_available: number; total_reserved: number; total_value: number; unit_cost: number; items: StockRow[] };
 type Batch = { id: string; document?: string | null; supplier?: string | null; location?: string | null; warehouse?: string | null; unit_cost?: number; qty_received?: number; qty_remaining?: number; amount?: number; expiry_date?: string | null; received_at?: string | null; in_stock?: boolean };
 type LocLite = { id: string; name: string };
-const fmtDate = (s?: string) => (s ? new Date(s).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "—");
+const fmtDate = (s?: string) => (!s ? "—" : (s.length <= 10 ? fmtDay(s) : fmtServerTime(s, { month: "short", day: "numeric", year: "numeric" })) || "—");
+// A raw API value ("goods_received") as sentence-case words ("Goods received").
+const sentence = (v?: string | null) => { const h = humanize(v).toLowerCase(); return h ? h[0].toUpperCase() + h.slice(1) : ""; };
 
 // Inlines the authed barcode/QR SVG (/catalog/code.svg needs the bearer, so <img src> can't be used).
 type CodeType = BarcodeType;
@@ -325,7 +328,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                   <div className="text-[11px] font-bold text-ink-primary ">Stock tracking & policies</div>
                   <label className="flex items-center justify-between cursor-pointer"><span className="text-ink-secondary font-medium">Expiration tracking</span><input type="checkbox" checked={!!p.expiry_tracking} onChange={(e) => set("expiry_tracking", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
                   <label className="flex items-center justify-between cursor-pointer"><span className="text-ink-secondary font-medium">Enable serial-number tracking <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-800">one-way</span></span><input type="checkbox" checked={!!p.serialized} disabled={!p.serialized && !can("can_track_serials")} onChange={(e) => set("serialized", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
-                  <div className="flex items-center justify-between"><span className="text-ink-secondary font-medium">Min stock (reorder at)</span><input type="number" value={p.min_stock ?? 0} onChange={(e) => set("min_stock", Number(e.target.value))} className="glass-input w-20 px-2 py-1 rounded-lg text-xs text-right font-mono" /></div>
+                  <div className="flex items-center justify-between"><span className="text-ink-secondary font-medium">Min stock (reorder at)</span><input type="number" value={p.min_stock ?? 0} onChange={(e) => set("min_stock", Number(e.target.value))} className="glass-input w-20 px-3 py-2 rounded-xl text-xs text-right tabular-nums" /></div>
                 </div>
               </> },
               pricing: { el: <>
@@ -374,13 +377,13 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
               <div className="mb-3 rounded-2xl bg-slate-50/70 border border-slate-200/80 p-3.5 space-y-3">
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Location</label>
-                    <div className="relative"><select value={adjLoc} onChange={(e) => setAdjLoc(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg appearance-none">{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select><M n="expand_more" c="absolute right-2 top-2 text-ink-tertiary pointer-events-none text-xs" /></div></div>
+                    <div className="relative"><select value={adjLoc} onChange={(e) => setAdjLoc(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-xl appearance-none">{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select><M n="expand_more" c="absolute right-2 top-2 text-ink-tertiary pointer-events-none text-xs" /></div></div>
                   <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Type</label>
-                    <div className="relative"><select value={adjType} onChange={(e) => setAdjType(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg appearance-none"><option value="receive">Receive (+)</option><option value="writeoff">Write-off (−)</option><option value="adjust">Correction</option></select><M n="expand_more" c="absolute right-2 top-2 text-ink-tertiary pointer-events-none text-xs" /></div></div>
+                    <div className="relative"><select value={adjType} onChange={(e) => setAdjType(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-xl appearance-none"><option value="receive">Receive (+)</option><option value="writeoff">Write-off (−)</option><option value="adjust">Correction</option></select><M n="expand_more" c="absolute right-2 top-2 text-ink-tertiary pointer-events-none text-xs" /></div></div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Quantity</label><input type="number" value={adjQty} onChange={(e) => setAdjQty(e.target.value)} className="glass-input font-mono block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="0" /></div>
-                  <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Note</label><input value={adjNote} onChange={(e) => setAdjNote(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="Reason (optional)" /></div>
+                  <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Quantity</label><input type="number" value={adjQty} onChange={(e) => setAdjQty(e.target.value)} className="glass-input font-mono block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-xl" placeholder="0" /></div>
+                  <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Note</label><input value={adjNote} onChange={(e) => setAdjNote(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-xl" placeholder="Reason (optional)" /></div>
                 </div>
                 <div className="flex justify-end"><button type="button" onClick={submitAdjust} disabled={adjBusy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{adjBusy ? "Saving…" : "Apply adjustment"}</button></div>
               </div>
@@ -450,7 +453,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                       {shown.map((m, i) => (
                         <div key={i} className="grid grid-cols-[1fr_auto_auto] gap-3 px-4 py-2.5 items-center">
                           <div>
-                            <span className="font-bold text-ink-primary capitalize">{(m.type || "").replace(/_/g, " ")}</span>
+                            <span className="font-bold text-ink-primary">{sentence(m.type)}</span>
                             {m.location && <span className="text-ink-tertiary"> · {m.location}</span>}
                             {m.ref_type && <div className="text-[11px] text-ink-tertiary font-mono">{humanize(m.ref_type)}{m.ref_id ? ` #${String(m.ref_id).slice(0, 8)}` : ""}{m.unit_cost ? ` · ${money(m.unit_cost)}` : ""}</div>}
                           </div>
@@ -473,7 +476,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                 : <div className="divide-y divide-slate-100">
                     {pos.map((o) => (
                       <div key={o.id} className="px-4 py-2.5 flex items-center justify-between">
-                        <div><span className="font-bold text-ink-primary font-mono">{o.po_number || o.id.slice(0, 8)}</span><span className="ml-2 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-ink-secondary capitalize">{(o.status || "").replace(/_/g, " ")}</span></div>
+                        <div><span className="font-bold text-ink-primary font-mono">{o.po_number || o.id.slice(0, 8)}</span><span className="ml-2 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-ink-secondary">{sentence(o.status)}</span></div>
                         <div className="text-right text-ink-secondary"><span className="tabular-nums font-semibold">{o.qty_received ?? 0}/{o.qty_ordered ?? 0}</span><span className="text-ink-tertiary"> · exp {fmtDate(o.expected_at)}</span></div>
                       </div>
                     ))}
@@ -495,14 +498,14 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
 
           {kind === "asset" && (
             <div className="space-y-3.5">
-              <div><label className={lbl}>Device / model</label><div className="glass-input w-full px-3 py-2 rounded-lg text-ink-primary text-xs font-semibold">{[p.brand, p.model].filter(Boolean).join(" ") || "—"}</div></div>
+              <div><label className={lbl}>Device / model</label><div className="glass-input w-full px-3 py-2 rounded-xl text-ink-primary text-xs font-semibold">{[p.brand, p.model].filter(Boolean).join(" ") || "—"}</div></div>
               <div className="grid grid-cols-2 gap-3">
-                <div><label className={lbl}>Serial / IMEI</label><div className="glass-input w-full px-3 py-2 rounded-lg font-mono text-[11px]">{p.imei || p.serial || "—"}</div></div>
-                <div><label className={lbl}>Ownership</label><div className="glass-input w-full px-3 py-2 rounded-lg text-xs font-semibold capitalize">{p.owner_type || "client"}</div></div>
+                <div><label className={lbl}>Serial / IMEI</label><div className="glass-input w-full px-3 py-2 rounded-xl font-mono text-[11px]">{p.imei || p.serial || "—"}</div></div>
+                <div><label className={lbl}>Ownership</label><div className="glass-input w-full px-3 py-2 rounded-xl text-xs font-semibold">{sentence(p.owner_type || "client")}</div></div>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div><label className={lbl}>Condition</label><div className="glass-input w-full px-3 py-2 rounded-lg text-xs">{p.condition || "—"}</div></div>
-                <div><label className={lbl}>Status</label><div className="glass-input w-full px-3 py-2 rounded-lg text-xs">{p.asset_status || "in use"}</div></div>
+                <div><label className={lbl}>Condition</label><div className="glass-input w-full px-3 py-2 rounded-xl text-xs">{p.condition || "—"}</div></div>
+                <div><label className={lbl}>Status</label><div className="glass-input w-full px-3 py-2 rounded-xl text-xs">{sentence(p.asset_status || "in use")}</div></div>
               </div>
               <p className="text-[11px] text-ink-tertiary">Full editing opens from the Work Order → asset card. This drawer shows the registered profile.</p>
             </div>
@@ -530,7 +533,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                     <div className="flex items-center gap-2">
                       <span className={`text-[11px]  font-bold px-1.5 py-0.5 rounded ${c.ref_type === "service" ? "bg-emerald-100 text-emerald-700" : "bg-blue-100 text-primary"}`}>{c.ref_type === "service" ? "Service" : "Product"}</span>
                       <span className="flex-1 text-xs font-semibold text-ink-primary truncate">{c.name || c.ref_id}{c.missing && <span className="ml-1 text-[11px] font-bold text-amber-700">missing</span>}</span>
-                      <input type="number" min={1} value={c.qty} onChange={(e) => setQty(idx, Number(e.target.value))} className="w-14 glass-input px-2 py-1 text-xs rounded-lg text-center" aria-label="Quantity" />
+                      <input type="number" min={1} value={c.qty} onChange={(e) => setQty(idx, Number(e.target.value))} className="w-16 glass-input px-2 py-2 text-xs rounded-xl text-center tabular-nums" aria-label="Quantity" />
                       <span className="w-16 text-right tabular-nums text-[11px] text-ink-tertiary">{money((c.std_price || 0) * (c.qty || 1))}</span>
                       <button type="button" onClick={() => removeComp(idx)} aria-label="Remove" className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>
                     </div>

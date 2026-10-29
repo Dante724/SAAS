@@ -5,6 +5,7 @@ import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import { confirmDialog } from "../../lib/dialog";
+import Switch from "../../components/Switch";
 import { Drawer, ErrorNote, MoreMenu, btnGhost, btnPrimary, inputCls, labelCls } from "../invoices/billing";
 
 // Settings › Integrations › API keys. Create a key with the access it needs (read only by
@@ -113,12 +114,10 @@ export default function ApiKeysCard() {
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-      <div className="p-3.5 border-b border-slate-100 flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <h3 className="text-sm font-semibold text-ink-primary">API keys</h3>
-          {keys && <div className="text-xs text-ink-tertiary mt-0.5 tabular-nums">{live.length} {live.length === 1 ? "key" : "keys"}</div>}
-        </div>
-        {keys && keys.length > 0 && <button onClick={() => setCreating(true)} className={`${btnGhost} bg-white`}><M n="add" c="text-sm" />Create key</button>}
+      <div className="p-3.5 border-b border-slate-100">
+        <h3 className="text-sm font-semibold text-ink-primary">API keys</h3>
+        {keys && <div className="text-xs text-ink-tertiary mt-0.5 tabular-nums">{live.length} {live.length === 1 ? "key" : "keys"}</div>}
+        {keys && keys.length > 0 && <div className="mt-3"><button onClick={() => setCreating(true)} className={btnPrimary}><M n="add" c="text-sm" />Create key</button></div>}
       </div>
 
       {!keys && !err && <div className="p-4 text-xs text-ink-tertiary">Loading API keys…</div>}
@@ -244,7 +243,7 @@ function CreateKeyDrawer({ onClose, onCreated }: { onClose: () => void; onCreate
             <div key={k} className="flex items-center justify-between gap-3 px-3 py-2">
               <label htmlFor={`ak-scope-${k}`} className="text-sm text-ink-primary">{label}</label>
               <select id={`ak-scope-${k}`} value={pick[k] || ""} onChange={(e) => setPick({ ...pick, [k]: e.target.value as ScopePick[string] })}
-                className="bg-white border border-slate-200 rounded-lg text-xs px-2 py-1.5 outline-none focus:border-primary">
+                className="glass-input rounded-xl px-3 py-2 text-sm">
                 <option value="">No access</option><option value="read">Read</option><option value="write">Read and change</option>
               </select>
             </div>
@@ -252,10 +251,10 @@ function CreateKeyDrawer({ onClose, onCreated }: { onClose: () => void; onCreate
         </div>
       )}
       {canCosts && (
-        <label className="flex items-start gap-2.5 text-sm text-ink-primary cursor-pointer">
-          <input type="checkbox" checked={costs} onChange={(e) => setCosts(e.target.checked)} className="mt-0.5" />
-          <span><span className="block font-semibold">Include cost prices</span><span className="block text-xs text-ink-tertiary">Product costs and staff pay rates. Leave off unless the other system needs them.</span></span>
-        </label>
+        <div className="flex items-start gap-3 text-sm text-ink-primary">
+          <span className="min-w-0 flex-1"><span className="block font-medium">Include cost prices</span><span className="block text-xs text-ink-tertiary">Product costs and staff pay rates. Leave off unless the other system needs them.</span></span>
+          <Switch label="Include cost prices" on={costs} onChange={setCosts} />
+        </div>
       )}
       <div className="grid grid-cols-2 gap-3">
         <div><label htmlFor="ak-exp" className={labelCls}>Expires after</label>

@@ -232,7 +232,7 @@ export default function SalesPOS() {
       const red = r.redeemed && Object.keys(r.redeemed).length
         ? " · " + Object.entries(r.redeemed).map(([k, v]) => `${k === "gift_card" ? "gift card" : k} ${cash(v as number)}`).join(", ") : "";
       // No profit here: the customer is usually looking at this screen.
-      paid({ id: r.id, fromCart: true }, r.paid ? `Sale ${r.sale_number} · ${cash(r.total)}${red}` : `Sale ${r.sale_number} parked · ${cash(r.due)} to pay`, r.change_due);
+      paid({ id: r.id, fromCart: true }, r.paid ? `Sale ${r.sale_number} · ${cash(r.total)}${red}` : `Sale ${r.sale_number} saved · ${cash(r.due)} to pay later`, r.change_due);
     } catch (e: any) { flash(`Failed: ${e.message}`); setRequote((n) => n + 1); } finally { setBusy(false); }
   }
 
@@ -278,7 +278,7 @@ export default function SalesPOS() {
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); scan(q, true); } }} aria-label="Search or scan"
               className={`${inputCls} pl-9 transition-shadow ${miss ? "!border-rose-400 ring-2 ring-rose-400/30" : ""}`} placeholder={mode === "products" ? "Search or scan a barcode…" : `Search ${mode}…`} /></div>
             <ScanButton onScan={(c) => scan(c)} title="Scan barcode" />
-            <button onClick={() => setRecent((v) => !v)} aria-label="Recent sales" title="Recent sales" aria-expanded={recent} className={`ml-auto h-9 px-3 rounded-lg border text-xs font-semibold flex items-center gap-1.5 ${recent ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`}><M n="receipt_long" c="text-sm" /><span className="hidden sm:inline">Recent sales</span></button>
+            <button onClick={() => setRecent((v) => !v)} aria-label="Recent sales" title="Recent sales" aria-expanded={recent} className={`h-9 px-3.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 ${recent ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`}><M n="receipt_long" c="text-sm" /><span className="hidden sm:inline">Recent sales</span></button>
           </div>
           {recent && (
             <div className="mx-6 mb-3 rounded-2xl border border-slate-200 bg-white max-h-72 overflow-y-auto flex-shrink-0">
@@ -293,9 +293,9 @@ export default function SalesPOS() {
                   const s = saleRows.current[r.id];
                   if (!s || s.voided_at) return null;
                   if (!s.paid) return <button onClick={() => { setPending({ id: s.id, number: s.sale_number, due: s.due || 0, fromCart: false }); setCartOpen(true); }} disabled={locked}
-                    className="h-8 px-2.5 rounded-lg border border-slate-200 text-[11px] font-semibold text-primary hover:bg-primary/5 disabled:opacity-50">Take payment</button>;
+                    className="h-8 px-3 rounded-xl border border-slate-200 text-[11px] font-semibold text-primary hover:bg-primary/5 disabled:opacity-50">Take payment</button>;
                   return can("can_create_returns") ? <button onClick={() => setReturnFor(s.id)} aria-label={`Return items from sale ${s.sale_number}`}
-                    className="h-8 px-2.5 rounded-lg border border-slate-200 text-[11px] font-semibold text-ink-secondary hover:bg-slate-50">Return items</button> : null;
+                    className="h-8 px-3 rounded-xl border border-slate-200 text-[11px] font-semibold text-ink-secondary hover:bg-slate-50">Return items</button> : null;
                 }} />
               {can("can_take_card_payments") && <div className="border-t border-slate-100 p-2"><CardPaymentsList sales reloadKey={recentKey} /></div>}
             </div>
@@ -340,7 +340,7 @@ export default function SalesPOS() {
         <aside className={`md:static md:w-[340px] lg:w-[380px] flex-shrink-0 bg-white md:border-l border-slate-200 flex-col ${cartOpen ? "fixed inset-0 z-[60] flex" : "hidden md:flex"}`}>
           <div className="px-5 py-4 border-b border-slate-200/80 flex items-center justify-between gap-2">
             <h3 className="text-sm font-semibold text-ink-primary flex items-center gap-2">Current sale{itemCount > 0 && <span className="text-xs font-medium text-ink-tertiary tabular-nums">{itemCount} {itemCount === 1 ? "item" : "items"}</span>}</h3>
-            {cart.length > 0 && !locked && <button onClick={() => setCart([])} className="ml-auto h-8 px-2.5 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100">Clear</button>}
+            {cart.length > 0 && !locked && <button onClick={() => setCart([])} className="ml-auto h-8 px-3 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Clear</button>}
             <button onClick={() => setCartOpen(false)} aria-label="Back to items" className="md:hidden w-9 h-9 rounded-lg flex items-center justify-center text-ink-tertiary hover:bg-slate-100"><M n="close" c="text-base" /></button>
           </div>
 
@@ -413,9 +413,9 @@ export default function SalesPOS() {
                 {payTendered != null && payTendered >= pending.due && row("Change due", cash(payTendered - pending.due), true)}
                 <button onClick={payPending} disabled={busy || !payAccount || (payTendered != null && payTendered + 0.005 < pending.due)} className="w-full h-11 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary-container disabled:opacity-50 tabular-nums">Take payment {cash(pending.due)}</button>
                 <div className="flex gap-2">
-                  {can("can_take_card_payments") && pending.due > 0 && <button onClick={() => setReaderFor(pending)} disabled={busy} className="flex-1 h-10 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 flex items-center justify-center gap-1.5"><M n="contactless" c="text-sm text-ink-tertiary" />Try the card again</button>}
-                  {can("can_delete_sales") && <button onClick={deletePending} disabled={busy} className="h-10 px-3 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50">Delete sale</button>}
-                  {!pending.fromCart && <button onClick={() => setPending(null)} className="h-10 px-3 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Not now</button>}
+                  {can("can_take_card_payments") && pending.due > 0 && <button onClick={() => setReaderFor(pending)} disabled={busy} className="flex-1 h-9 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 flex items-center justify-center gap-1.5"><M n="contactless" c="text-sm text-ink-tertiary" />Try the card again</button>}
+                  {can("can_delete_sales") && <button onClick={deletePending} disabled={busy} className="h-9 px-3 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50">Delete sale</button>}
+                  {!pending.fromCart && <button onClick={() => setPending(null)} className="h-9 px-3 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Not now</button>}
                 </div>
               </div>
             ) : (<>
@@ -443,7 +443,7 @@ export default function SalesPOS() {
             {!!quote?.gift_card && <>{row("Paid by gift card", `−${cash(quote.gift_card)}`)}{row("To pay", cash(quote.due), true)}</>}
             <div><label htmlFor="pos-account" className="block text-xs font-semibold text-ink-tertiary mb-1">Take payment into</label>
               <select id="pos-account" value={accountId} onChange={(e) => setAccountId(e.target.value)} className={inputCls}>
-                <option value="">No payment (park sale)</option>
+                <option value="">Pay later (save the sale)</option>
                 {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
             </div>
@@ -452,8 +452,8 @@ export default function SalesPOS() {
             {quote?.change_due != null && !short && <div data-testid="change-due">{row("Change due", cash(quote.change_due), true)}</div>}
             {short && <p role="alert" className="text-[11px] text-rose-700">Cash received is less than the total.</p>}
             {quoteErr && <p role="alert" className="text-[11px] text-rose-700">{quoteErr}</p>}
-            <button onClick={() => charge()} disabled={busy || !quote || blocked || short} className="w-full h-12 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center justify-center gap-2 tabular-nums">{busy ? "Processing…" : cart.length === 0 ? "Charge" : quote ? `Charge ${cash(quote.due)}` : quoteErr ? "Can't price this sale" : "Pricing…"}</button>
-            {can("can_take_card_payments") && <button onClick={() => charge(true)} disabled={busy || !quote || blocked || quote.due <= 0} className="w-full h-11 rounded-xl border border-slate-200 bg-white text-ink-primary text-sm font-semibold hover:bg-slate-50 disabled:opacity-50 flex items-center justify-center gap-2"><M n="contactless" c="text-base text-ink-tertiary" />Charge on reader</button>}
+            <button onClick={() => charge()} disabled={busy || !quote || blocked || short} className="w-full h-11 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center justify-center gap-2 tabular-nums">{busy ? "Processing…" : cart.length === 0 ? "Charge" : quote ? `Charge ${cash(quote.due)}` : quoteErr ? "Can't price this sale" : "Pricing…"}</button>
+            {can("can_take_card_payments") && <button onClick={() => charge(true)} disabled={busy || !quote || blocked || quote.due <= 0} className="w-full h-9 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 flex items-center justify-center gap-2"><M n="contactless" c="text-base text-ink-tertiary" />Charge on reader</button>}
             <div className="flex justify-center"><AutoPrintPicker event="sale" /></div>
             </>)}
           </div>
@@ -561,19 +561,19 @@ function ReceiptSheet({ saleId, change, onClose, onFlash }: { saleId: string; ch
         {change ? <div data-testid="receipt-change" className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 flex items-baseline justify-between"><span className="text-xs font-semibold text-emerald-900">Give change</span><span className="text-xl font-semibold tabular-nums text-emerald-900">{cash(change)}</span></div> : null}
         <div className="mt-4 text-xs font-semibold text-ink-tertiary">Give the customer a receipt</div>
         <div className="mt-2 space-y-2.5">
-          <button onClick={print} disabled={!rc} className="w-full h-10 flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-ink-primary hover:bg-slate-50 disabled:opacity-50"><M n="print" c="text-base" />Print receipt</button>
+          <button onClick={print} disabled={!rc} className="w-full h-9 flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-primary hover:bg-slate-50 disabled:opacity-50"><M n="print" c="text-base" />Print receipt</button>
           <div className="flex gap-2">
             <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="Customer email" aria-label="Customer email" className={`${inputCls} min-w-0 flex-1`} />
-            <button onClick={sendEmail} disabled={!rc || sending || !email.includes("@")} className="flex-shrink-0 px-3 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center gap-1.5"><M n="mail" c="text-sm" />{sending ? "Sending…" : "Email"}</button>
+            <button onClick={sendEmail} disabled={!rc || sending || !email.includes("@")} className="flex-shrink-0 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center gap-1.5"><M n="mail" c="text-sm" />{sending ? "Sending…" : "Email"}</button>
           </div>
           <div className="flex gap-2">
             <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="WhatsApp number with country code" aria-label="WhatsApp number" className={`${inputCls} min-w-0 flex-1`} />
             {waHref
-              ? <a href={waHref} target="_blank" rel="noopener noreferrer" onClick={onClose} className="flex-shrink-0 px-3 rounded-lg border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 flex items-center gap-1.5"><M n="chat" c="text-sm text-emerald-600" />WhatsApp</a>
-              : <span className="flex-shrink-0 px-3 rounded-lg border border-slate-200 bg-white text-ink-primary text-xs font-semibold flex items-center gap-1.5 opacity-50" aria-disabled="true"><M n="chat" c="text-sm" />WhatsApp</span>}
+              ? <a href={waHref} target="_blank" rel="noopener noreferrer" onClick={onClose} className="flex-shrink-0 h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 flex items-center gap-1.5"><M n="chat" c="text-sm text-emerald-600" />WhatsApp</a>
+              : <span className="flex-shrink-0 h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold flex items-center gap-1.5 opacity-50" aria-disabled="true"><M n="chat" c="text-sm" />WhatsApp</span>}
           </div>
         </div>
-        <button onClick={onClose} className="mt-3 w-full h-10 rounded-lg text-xs font-semibold text-ink-secondary hover:text-ink-primary hover:bg-slate-50">No receipt</button>
+        <button onClick={onClose} className="mt-3 w-full h-9 rounded-xl text-xs font-semibold text-ink-secondary hover:text-ink-primary hover:bg-slate-50">No receipt</button>
       </div>
     </div>
   );

@@ -159,7 +159,7 @@ export default function StatusControl({
 
       {cur?.time_limit_min ? (
         <span className={`inline-flex items-center gap-1 text-[11px] font-semibold ${overdue ? "text-rose-700" : nearing ? "text-amber-700" : "text-ink-tertiary"}`}>
-          <M n="schedule" c="text-xs" />{fmtDur(elapsedMin)} · SLA {fmtDur(cur.time_limit_min)}
+          <M n="timer" c="text-xs" />{fmtDur(elapsedMin)} · SLA {fmtDur(cur.time_limit_min)}
         </span>
       ) : null}
 

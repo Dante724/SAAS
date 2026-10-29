@@ -16,9 +16,9 @@ import { inputCls } from "../invoices/billing";
 const CO_PAGE = 50;
 
 // Catalog toolbar look: a filter that is set reads as active in the primary tint.
-const filterCls = (on: boolean) => `h-9 text-sm font-semibold rounded-lg border px-3 cursor-pointer ${on ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`;
-const primaryBtn = "h-9 bg-primary text-white text-sm font-semibold px-4 rounded-lg hover:bg-primary-container flex items-center gap-1.5";
-const ghostBtn = "h-9 bg-white border border-slate-200 text-ink-secondary text-sm font-semibold px-4 rounded-lg hover:bg-slate-50 flex items-center gap-1.5";
+const filterCls = (on: boolean) => `h-9 text-xs font-semibold rounded-xl border px-3 cursor-pointer ${on ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`;
+const primaryBtn = "h-9 bg-primary text-white text-xs font-semibold px-3.5 rounded-xl hover:bg-primary-container flex items-center gap-1.5";
+const ghostBtn = "h-9 bg-white border border-slate-200 text-ink-secondary text-xs font-semibold px-3.5 rounded-xl hover:bg-slate-50 flex items-center gap-1.5";
 const thCls = "border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary";
 
 export type RowMenuItem = { label: string; icon: string; onClick: () => void; danger?: boolean };
@@ -505,7 +505,12 @@ export function Bundles({ onOpen, refresh }: { onOpen: (b?: Bundle) => void; ref
       </div>
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-6 space-y-3">
         {!items && <p className="text-xs text-ink-tertiary">Loading job kits…</p>}
-        {items?.length === 0 && <p className="text-xs text-ink-tertiary">No job kits configured yet.</p>}
+        {items?.length === 0 && (
+          <div className="flex flex-col items-start gap-3">
+            <p className="text-xs text-ink-tertiary">No job kits yet. A job kit sells a set of parts and services together at one price, like "Screen replacement".</p>
+            {can("can_manage_bundles") && <button onClick={() => onOpen()} className={primaryBtn}><M n="add" c="text-sm" />Create your first job kit</button>}
+          </div>
+        )}
         {items?.map((bd) => (
           <div key={bd.id} onClick={() => onOpen(bd)} className="border border-slate-200/80 rounded-xl p-4 bg-white flex items-center justify-between shadow-clay-sm hover:border-primary/40 cursor-pointer transition-all">
             <div><div className="font-bold text-ink-primary text-sm flex items-center gap-1.5">{bd.name}{bd.broken && <span className="text-[11px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">Needs fixing</span>}</div><div className="text-[11px] text-ink-tertiary">{(bd.components || []).length} components{bd.broken ? " · an item no longer exists" : ""}</div></div>
