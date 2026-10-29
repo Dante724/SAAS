@@ -8,7 +8,7 @@ import { money } from "../pages/orders/types";
 export type CatalogItem = { kind: "service" | "product" | "bundle"; ref_id: string; name: string; price?: number; category?: string; fits?: boolean };
 
 export default function CatalogPicker({ type = "all", placeholder = "Search services & products…", onPick, deviceId, openOnFocus = true }: {
-  type?: "all" | "service" | "product"; placeholder?: string; onPick: (i: CatalogItem) => void;
+  type?: "all" | "service" | "product" | "bundle"; placeholder?: string; onPick: (i: CatalogItem) => void;
   deviceId?: string;   // 144jt: when set, products get a "Fits" badge for this device
   openOnFocus?: boolean;   // focus shows the catalog to browse (dropdown-style), no typing needed
 }) {

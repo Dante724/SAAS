@@ -1430,7 +1430,9 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
           <CustomLineForm orderId={orderId} forItem={tagging ? forItem : ""} onFlash={onFlash} onClose={() => setCustom(false)} onAdded={() => { setCustom(false); onChanged?.(); }} />
         ) : (
           <div className="flex items-center gap-2">
-            <div className="flex-1 min-w-0"><CatalogPicker deviceId={deviceId} onPick={(i) => { setPick(i); setDisc(0); setQty(1); }} placeholder="Search catalog — service, product, or job kit…" /></div>
+            <div className="flex-1 min-w-0"><CatalogPicker key={filter} deviceId={deviceId} onPick={(i) => { setPick(i); setDisc(0); setQty(1); }}
+              type={filter === "Services" ? "service" : filter === "Products" ? "product" : filter === "Job Kits" ? "bundle" : "all"}
+              placeholder={filter === "Services" ? "Search services…" : filter === "Products" ? "Search products…" : filter === "Job Kits" ? "Search job kits…" : "Search services, products and job kits…"} /></div>
             {(can("can_add_custom_product") || can("can_add_custom_service")) && (
               <button type="button" onClick={() => setCustom(true)} className="px-3 py-2 rounded-lg border border-dashed border-primary/40 text-primary text-xs font-bold hover:bg-blue-50 flex items-center gap-1 whitespace-nowrap"><M n="add" c="text-sm" />Custom item</button>
             )}
