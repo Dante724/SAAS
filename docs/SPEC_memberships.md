@@ -22,6 +22,9 @@ Decisions taken with the owner:
 5. **The checkout prompt** is the main way plans get sold.
 6. **Roles control who can sell, set up, change and apply plans.**
 7. No new top-level menu: plans are set up under **Catalog › Plans**; memberships are worked from **Contacts › Memberships**.
+8. **The checkout prompt can be switched off**, and its threshold is a shop setting.
+9. **Each plan chooses its term:** from the join date, or a fixed season the shop sets (e.g. Apr 1 – Mar 31). Seasonal plans can be bought ahead of the season.
+10. **Cancelled and lapsed members keep a "Former member" tag** and a line on their client card, for win-back.
 
 ## 2. Goals and non-goals
 
@@ -57,6 +60,10 @@ What the shop sells. Belongs to the org; optionally limited to some locations an
 | name, description | Shown on invoices, the customer page and the checkout prompt |
 | template_key, asset_group_ids | Which assets it can be attached to |
 | price_monthly, price_yearly | Either may be empty (= not offered). At least one is required |
+| term | `rolling` (12 months from the join date) · `season` (fixed dates the shop chooses, see below) |
+| season_start, season_end | For `season`: month/day, e.g. 04-01 → 03-31. Repeats every year |
+| presale_days | For `season`: how many days before the season starts the plan can be sold (default 60). A pre-sold membership is `scheduled` until the season starts |
+| late_join | For `season`: `full` (late joiners pay full price, get the rest of the season) or `prorated` (price scaled to the months left). Default `prorated` |
 | tax_rule | The shop's normal tax rule for the plan line |
 | active | Inactive plans can't be sold; existing memberships continue |
 | commission | Optional, through existing commission rules (§10) |
@@ -81,7 +88,7 @@ One plan on one asset (the data model allows a group of assets; §15).
 | billing | `monthly` · `yearly` (chosen at join) |
 | price | Locked at join (plan price changes affect renewals only) |
 | starts_on, current_period_end, renews | Plan year and billing period |
-| status | `active` · `paused` (unpaid, in grace) · `lapsed` · `cancelled` |
+| status | `scheduled` (pre-sold, season not started) · `active` · `paused` (unpaid, in grace) · `lapsed` · `cancelled` |
 | manager_id | Assigned manager (defaults to the client's manager, else the seller) |
 | sold_by_id, sold_on_invoice_id | For commission and audit |
 
@@ -105,7 +112,7 @@ New tables (all org-scoped, every query filtered by `org_id`):
 Changes to existing tables:
 - `tags`: add `system` (bool, default false) and `source` (e.g. `plan:<id>`). System tags can't be edited, attached or removed by hand.
 - `order_lines`: add `membership_id` (nullable). Set when a line is covered or discounted by a plan.
-- `organisations` settings (existing settings JSON): `membership_spread_revenue` (bool, default false), `membership_grace_days` (default 7), `membership_lapse_days` (default 30), `membership_renewal_notice_days` (default 30).
+- `organisations` settings (existing settings JSON): `membership_spread_revenue` (bool, default false), `membership_grace_days` (default 7), `membership_lapse_days` (default 30), `membership_renewal_notice_days` (default 30), `membership_checkout_prompt` (bool, default true), `membership_prompt_threshold_pct` (default 25), `membership_prompt_snooze_days` (default 90).
 - Role permission catalog: four new permissions (§10).
 
 One Alembic migration, single head.
@@ -120,7 +127,7 @@ One Alembic migration, single head.
 | **Asset (boat/car/device) page** | The plan on this asset, included items with remaining counts, usage history |
 | **Work order** | A plan banner on the asset ("Boat Care · 1 haul-out left") and covered lines marked "Covered by Boat Care" |
 | **Checkout / POS** | The join prompt (§7.3) |
-| **Settings › Memberships** | The four shop settings in §5 |
+| **Settings › Memberships** | The shop settings in §5: revenue spreading, grace and lapse days, renewal notice, and the checkout prompt (on/off, threshold, snooze) |
 | **Self check-in** | Members are greeted: "Your Boat Care covers this visit" (data comes from the device match the check-in already does) |
 
 ### 6.1 Starter plans
@@ -144,7 +151,7 @@ From a client profile, an asset page, a work order or the POS: *Add plan* → pi
 ### 7.3 Checkout prompt (non-member)
 When an invoice for a non-member asset is being taken payment for, Tekly works out, per eligible plan:
 `saving today = value of lines this plan would cover or discount`
-and shows the prompt **only if** `saving today ≥ 25% of the plan's yearly price` *or* the job includes a windowed item. Wording: "Boat Care would save $90 today and covers your winterisation ($280). $449/yr or $45/mo." One tap = §7.2 on this invoice, savings applied. "Not now" hides it for this client for 90 days. Requires *Sell plans* (§10); others see nothing.
+and shows the prompt **only if** the shop has it switched on (*Settings › Memberships › Show plan offer at checkout*) and `saving today ≥ threshold % of the plan's yearly price` (default 25%) *or* the job includes a windowed item. Wording: "Boat Care would save $90 today and covers your winterisation ($280). $449/yr or $45/mo." One tap = §7.2 on this invoice, savings applied. "Not now" hides it for this client for the snooze period (default 90 days). Requires *Sell plans* (§10); others see nothing. Seasonal plans in pre-sale show as "Starts Apr 1 — join now".
 
 ### 7.4 Using benefits on a work order
 When a line is added for an asset with an active membership:
@@ -156,6 +163,11 @@ When a line is added for an asset with an active membership:
 
 ### 7.5 Billing
 **Yearly:** one invoice per plan year. Renewal invoice is created `renewal_notice_days` before the end and sent with a pay link; paying it starts the next year on the old end date (no gap, no overlap).
+
+**Plan term:**
+- `rolling`: the plan year runs 12 months from the join date.
+- `season`: every membership of that plan shares the shop's season dates. Sold during pre-sale → status `scheduled`, the invoice is taken now, benefits start on the season start date (with spreading on, the money is held until then). Sold mid-season → covers the rest of the season, priced per `late_join`; monthly billing simply starts that month. Renewal invoices for a season plan all go out `renewal_notice_days` before the season starts, which also gives the shop one clear renewal campaign a year.
+- Included-item counts are per plan year / season; a late joiner gets the full counts unless the shop marks an item "prorate with late join".
 
 **Monthly (phase 1):** the daily job creates the month's invoice on the period start and texts/emails the pay link. Paid → period `paid`. Unpaid → §7.7.
 
@@ -170,13 +182,20 @@ For items with a `window`: 14 days before the window opens, the customer gets "Y
 | 0 | Pay link sent |
 | 3 | Reminder to the customer |
 | `grace_days` (7) | Status `paused` (benefits stop, plan still shown). Manager alerted: "Call Sam — Boat Care unpaid" |
-| `lapse_days` (30) | Status `lapsed`; the system tag is removed; final message to the customer with a re-join link |
+| `lapse_days` (30) | Status `lapsed`; the member tag is swapped for "Former member" (§7.9); final message to the customer with a re-join link |
 Paying at any point before lapse restores `active` immediately. The shop sets both day counts.
 
 ### 7.8 Cancel, refund, transfer
 - **Cancel** (needs *Change a membership*): ends at period end by default, or now. Cancelling a yearly plan *now* proposes a refund of `unused months × monthly-equivalent − value already used`, never below 0, through the existing refund flow (needs the existing refund permission).
 - **Transfer to another asset** (customer replaced the car): moves the membership; usage history stays with the plan year.
 - **Asset sold:** when an asset's owner changes, Tekly asks "Move Boat Care to the new owner?" — yes moves the membership and billing to the new client; no cancels at period end.
+
+### 7.9 Former members
+When a membership ends (cancelled or lapsed) and the client has no other active membership of that plan:
+- the system tag "Boat Care member" is replaced by the system tag **"Former Boat Care member"**, so Contacts filters and marketing segments can target win-back;
+- the **client card** shows a quiet line: "Former Boat Care member · ended 12 Mar 2027 · *Re-join*" (re-join opens §7.2 with the last asset pre-filled);
+- **Contacts › Memberships** has a *Former members* filter with the end reason (cancelled / unpaid) and date;
+- re-joining removes the "Former" tag and restores the member tag.
 
 ## 8. Accounting
 
@@ -267,8 +286,8 @@ Frontend:
 
 **Phase 3:** fleet plans — one membership over several assets (`membership_assets` already allows it), shared or per-asset counts, per-asset pricing, one bill.
 
-## 16. Open questions
+## 16. Decisions (owner, after the first review)
 
-1. Should the checkout threshold (25% of the yearly price) be a shop setting? *Proposed: fixed in phase 1, revisit with data.*
-2. Do plan years follow the join date (proposed) or a fixed season (e.g. marine Apr–Mar)?
-3. Should a cancelled member's system tag change to "Former member" (useful for win-back campaigns) rather than disappear?
+1. **Checkout prompt:** a shop setting — on/off, threshold % (default 25) and snooze days (default 90), under Settings › Memberships (§5, §7.3).
+2. **Plan year:** chosen per plan — 12 months from joining, or a fixed season the shop sets, with pre-sale before the season and prorated or full-price late joins (§4.1, §7.5).
+3. **After cancellation:** a "Former member" system tag on the contact plus a line on the client card with *Re-join*, and a *Former members* filter (§7.9).
