@@ -36,15 +36,16 @@ describe("CheckinPointsSettings", () => {
   it("groups points by location, each with its own code", async () => {
     render(<CheckinPointsSettings />);
     expect(await screen.findByText("Harbor yard")).toBeInTheDocument();
-    expect(screen.getAllByLabelText("Point name").map((i) => (i as HTMLInputElement).value)).toEqual(["Front door", "Key box", "Dock 3"]);
-    expect(screen.getAllByText("12 scans · 5 check-ins")).toHaveLength(3);
+    expect(["Front door", "Key box", "Dock 3"].every((n) => screen.getByText(n))).toBe(true);
+    expect(screen.getAllByText(/12 scans · 5 check-ins/)).toHaveLength(3);
   });
 
   it("saves the job types a point offers", async () => {
     render(<CheckinPointsSettings />);
     await screen.findByText("Harbor yard");
-    await userEvent.click(screen.getAllByLabelText("Winterization")[2]);
-    await userEvent.click(screen.getAllByRole("button", { name: "Save" })[2]);
+    await userEvent.click(screen.getByRole("button", { name: "Edit Dock 3" }));
+    await userEvent.click(screen.getByLabelText("Winterization"));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(calls.some((c) => c.m === "PUT" && c.url.endsWith("/checkins/points/p9"))).toBe(true));
     expect(calls.find((c) => c.m === "PUT")!.body.job_type_ids).toEqual(["t2"]);
   });
@@ -54,7 +55,8 @@ describe("CheckinPointsSettings", () => {
     await screen.findByText("Harbor yard");
     await userEvent.click(screen.getAllByRole("button", { name: /Print poster/ })[0]);
     await waitFor(() => expect(printed).toEqual(["<p>poster</p>"]));
-    await userEvent.click(screen.getAllByRole("button", { name: "Replace QR code" })[0]);
+    await userEvent.click(screen.getByRole("button", { name: "More for Front door" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /Replace QR code/ }));
     await waitFor(() => expect(calls.some((c) => c.url.endsWith("/checkins/points/p1/rotate"))).toBe(true));
   });
 
@@ -63,7 +65,10 @@ describe("CheckinPointsSettings", () => {
     render(<CheckinPointsSettings />);
     await screen.findByText("Harbor yard");
     expect(screen.queryByRole("button", { name: "Add check-in point" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Replace QR code" })).toBeNull();
-    expect(screen.getAllByLabelText("Point name")[0]).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "More for Front door" }));
+    expect(screen.queryByRole("menuitem", { name: /Replace QR code/ })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Edit Front door" }));
+    expect(screen.getByLabelText("Point name")).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 });
