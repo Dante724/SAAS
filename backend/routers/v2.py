@@ -438,6 +438,7 @@ class BundleIn(_In):
     price_mode: Literal["sum", "fixed"] = "sum"
     price: float = Field(0.0, ge=0, le=10_000_000)
     category_id: Optional[str] = _ID
+    print_mode: Optional[Literal["itemized", "one_line", "one_line_includes"]] = None   # how the kit prints
     components: list[CompIn] = Field(default_factory=list, max_length=200)
 
 
