@@ -209,9 +209,13 @@ async def update_lead(db: AsyncSession, org_id: str, lead: Lead, payload: dict,
 
 
 async def convert_lead(db: AsyncSession, org_id: str, lead: Lead, *, actor: Optional[Employee] = None,
-                       is_estimate: bool = False) -> dict:
+                       is_estimate: bool = False, device_for=None, extra=None) -> dict:
     """Win the inquiry: link (or create) the contact, attach the device, open the job (or
-    estimate) at its default status. Commits."""
+    estimate) at its default status. Commits.
+
+    Self check-in passes `device_for(client) -> device_id` to pick or create the device itself
+    (VIN / HIN as well as IMEI / serial) and `extra(order, client)` to fill the job before the
+    commit, so the whole conversion lands at once."""
     from backend.services.call_contacts import find_client
     from backend.services.numbering import next_number
     if lead.converted_order_id:
@@ -229,7 +233,9 @@ async def convert_lead(db: AsyncSession, org_id: str, lead: Lead, *, actor: Opti
     lead.client_id = client.id
 
     device_id = None
-    if lead.device_brand or lead.device_model or lead.serial:
+    if device_for is not None:
+        device_id = await device_for(client)
+    elif lead.device_brand or lead.device_model or lead.serial:
         from backend.services import identifiers as ids
         kind = ids.guess_kind(lead.serial) if lead.serial else "serial"
         ident = {"imei": None, "serial": None}
@@ -264,6 +270,8 @@ async def convert_lead(db: AsyncSession, org_id: str, lead: Lead, *, actor: Opti
                   assigned_to_id=lead.manager_id or (actor.id if actor else None))
     db.add(order)
     await db.flush()
+    if extra is not None:
+        await extra(order, client)
     db.add(OrderStatusLog(order_id=order.id, from_status=None, to_status=order.status,
                           changed_by_id=actor.id if actor else None,
                           note=f"Created from inquiry ({lead.source})"))

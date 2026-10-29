@@ -10,6 +10,7 @@ import PublicTrack from "./public/PublicTrack";
 import TrackLookup from "./public/TrackLookup";
 import PublicAppointment from "./public/PublicAppointment";
 import PublicPortal from "./public/PublicPortal";
+import PublicCheckin, { PublicCheckinStatus } from "./public/PublicCheckin";
 import { publicRoute } from "./publicRoutes";
 import Login from "./public/Login";
 import { Signup, ResetPassword, VerifyEmail, AcceptInvite } from "./public/AuthPages";
@@ -34,6 +35,9 @@ if (route.page === "track" || route.page === "trackLookup") {
 } else if (route.page === "portal") {
   // Customer portal: all of one customer's jobs, behind their magic link.
   root.render(<React.StrictMode><PublicPortal token={route.token} /></React.StrictMode>);
+} else if (route.page === "checkin" || route.page === "checkinStatus") {
+  // Self check-in from a point's QR, and the customer's place in the queue.
+  root.render(<React.StrictMode>{route.page === "checkin" ? <PublicCheckin token={route.token} /> : <PublicCheckinStatus token={route.token} />}</React.StrictMode>);
 } else if (route.page === "book") {
   // Public online appointment — standalone, no session, follows device theme
   // (PublicAppointment sets the dark class itself).

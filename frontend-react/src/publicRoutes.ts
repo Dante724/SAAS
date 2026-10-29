@@ -6,6 +6,8 @@ export type PublicRoute =
   | { page: "trackLookup" }
   | { page: "book" }
   | { page: "portal"; token: string }
+  | { page: "checkin"; token: string }
+  | { page: "checkinStatus"; token: string }
   | { page: "auth"; path: string }
   | { page: "app" };
 
@@ -22,6 +24,9 @@ export function publicRoute(path: string): PublicRoute {
   if (path.startsWith("/book/")) return { page: "book" };
   // Customer portal: every job of one customer, behind their magic link.
   if (path.startsWith("/portal/")) return { page: "portal", token: tokenAfter(path, "/portal/") };
+  // Self check-in: a point's QR (/c/<token>) and the customer's own status page (/c/s/<token>).
+  if (path.startsWith("/c/s/")) return { page: "checkinStatus", token: tokenAfter(path, "/c/s/") };
+  if (path.startsWith("/c/")) return { page: "checkin", token: tokenAfter(path, "/c/") };
   if (AUTH_PATHS.includes(path)) return { page: "auth", path };
   return { page: "app" };
 }
