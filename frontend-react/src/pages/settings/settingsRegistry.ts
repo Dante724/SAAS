@@ -9,7 +9,7 @@ export type SectionId =
   | "general" | "team" | "locations" | "statuses" | "checklists" | "forms"
   | "industry" | "pricing" | "finance" | "warehouses" | "directories"
   | "templates" | "feedback" | "public" | "notifications" | "integrations"
-  | "ecommerce" | "sso" | "approvals";
+  | "ecommerce" | "sso" | "approvals" | "memberships";
 
 const ALL_NAV: { id: SectionId; label: string; icon: string }[] = [
   { id: "general", label: "General", icon: "tune" },
@@ -21,6 +21,7 @@ const ALL_NAV: { id: SectionId; label: string; icon: string }[] = [
   { id: "industry", label: "Industry & assets", icon: "smartphone" },
   { id: "pricing", label: "Pricing", icon: "attach_money" },
   { id: "finance", label: "Finance & numbering", icon: "account_balance" },
+  { id: "memberships", label: "Memberships", icon: "workspace_premium" },
   { id: "warehouses", label: "Inventory & warehouses", icon: "warehouse" },
   { id: "directories", label: "Directories", icon: "description" },
   { id: "templates", label: "Document templates", icon: "description" },
@@ -48,7 +49,7 @@ export const CATS: { id: string; label: string; icon: string }[] = [
 export const SEC_CAT: Record<SectionId, string> = {
   general: "workspace", team: "workspace", locations: "workspace", sso: "workspace",
   statuses: "workorders", checklists: "workorders", forms: "workorders", industry: "workorders", approvals: "workorders",
-  pricing: "money", finance: "money",
+  pricing: "money", finance: "money", memberships: "money",
   warehouses: "inventory",
   public: "comms", notifications: "comms", templates: "comms", feedback: "comms", directories: "comms",
   integrations: "connections", ecommerce: "connections",
@@ -72,6 +73,7 @@ export const SEC_KW: Record<SectionId, string> = {
   notifications: "notification sms email reminder rule appointment status",
   templates: "template document estimate invoice receipt label print",
   feedback: "feedback review nps rating survey",
+  memberships: "membership plan subscription member renewal recurring monthly yearly season grace lapse checkout offer",
   directories: "directory document export knowledge base files",
   integrations: "integration connect api webhook stripe quickbooks email",
   ecommerce: "ecommerce shop product sync online store shopify",

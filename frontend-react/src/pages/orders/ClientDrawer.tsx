@@ -18,6 +18,8 @@ import SupplierPanel from "../clients/SupplierPanel";
 import { useTerminology } from "../../lib/useTerminology";
 import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../../lib/formLayout";
 import { ClientCreditNotes } from "../invoices/CreditNotesList";
+import { MembershipsCard } from "../memberships/shared";
+import { MembershipDrawer } from "../memberships/MembershipsView";
 
 const BASE_TABS = ["General info", "Devices & Assets", "Work orders", "Purchases", "Loyalty & Payout", "Communications"];
 
@@ -39,6 +41,7 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
   const term = useTerminology();
   const [tab, setTab] = useState(0);
   const [assetOpen, setAssetOpen] = useState<string | null>(null);
+  const [planOpen, setPlanOpen] = useState<string | null>(null);
   const [newWO, setNewWO] = useState(false);
   // Open the specific device the user clicked. Self-contained so it works standalone
   // (Clients hub) and from a WO; falls back to the caller's handler if provided.
@@ -134,6 +137,9 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
         <div className="flex-1 overflow-y-auto p-6 bg-canvas space-y-4">
           {tab === 0 ? (
             <>
+              {/* Memberships: the client's plans across their boats, vehicles and devices */}
+              <MembershipsCard clientId={clientId} devices={c.devices} onOpen={setPlanOpen} />
+              {planOpen && <MembershipDrawer id={planOpen} onClose={() => setPlanOpen(null)} />}
               {/* Build 144am — one contact, switchable roles. Customer is always on; toggle
                   Supplier to unlock purchasing (a mirrored supplier profile + a Supplier tab). */}
               <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm">

@@ -379,6 +379,7 @@ def _serialize_order(o: Order) -> dict:
         "lines": [{"id": l.id, "line_type": l.line_type, "kind": l.kind, "description": l.description,
                    "qty": l.qty, "unit_price": l.unit_price, "cost_price": l.cost_price,
                    "discount": l.discount, "discount_type": l.discount_type, "discount_paid_by": l.discount_paid_by,
+                   "membership_id": getattr(l, "membership_id", None),
                    "tax_rate": l.tax_rate, "tax_mode": l.tax_mode, "technician_id": l.technician_id,
                    "work_share": getattr(l, "work_share", 1.0), "booked_hours": getattr(l, "booked_hours", 0) or 0,
                    "co_technicians": getattr(l, "co_technicians", None) or [],
@@ -1662,6 +1663,19 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
                     entity_type="order", entity_id=order.id,
                     diff={"status": [_prev_status, data.status],
                           **({"via_api_key": current.api_key_id} if via_api else {})})   # for status time-limit tracking
+    if is_closing and not order.is_estimate and not is_dropping:
+        # Memberships: re-check every plan-covered line (a paused plan or a used-up count puts the
+        # line back to full price), then count what the plan gave on this job.
+        from backend.services import memberships as _mb
+        _dropped = await _mb.check_order_lines(db, order)
+        if _dropped:
+            for _l in _dropped:
+                _l.total = _calc_line(_l)
+            await _recalc_order(db, order)
+            from backend.routers.feed import log_system_event
+            await log_system_event(db, current.org_id, "order", order.id,
+                                   "Plan no longer covers: " + ", ".join(_l.description for _l in _dropped))
+        await _mb.record_usage(db, order)
     if is_closing:
         order.closed_at = datetime.utcnow()
         # Build 144dr — auto-draft an invoice on close (org opt-in). Never blocks
@@ -1784,6 +1798,10 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
             await eng.accrue_for_order_close(order)
         elif prev_terminal and not is_closing:
             await eng.clawback_for_order_reopen(order)
+            # Reopened: what the plan gave on this job is counted again at the next close.
+            from sqlalchemy import delete as _sa_delete
+            from backend.models import MembershipUsage
+            await db.execute(_sa_delete(MembershipUsage).where(MembershipUsage.order_id == order.id))
         else:
             await db.refresh(order, ["lines"])
             await eng.accrue_on_status(order, order.status)
@@ -4056,6 +4074,16 @@ async def add_line(
     # deduct stock for products (estimates never deduct)
     if data.kind == "product" and data.ref_id and not order.is_estimate:
         await _maybe_deduct(db, order, line, data.qty, perms, current)
+    # Memberships: a line the asset's plan includes goes to $0 (or gets the plan discount)
+    # straight away, for staff allowed to apply plan benefits (docs/SPEC_memberships.md §7.4).
+    if not order.is_estimate and not (data.discount or 0) \
+            and await has_perm(db, current, "can_apply_membership_benefits"):
+        from backend.services import memberships as _mb
+        _hit = await _mb.coverage_for_line(db, await _mb.memberships_for_line(db, order, line), line)
+        if _hit:
+            _mb._cover(line, *_hit)
+            line.total = _calc_line(line)
+            await db.flush()
     _prev_total = float(order.total or 0)
     if kit_group:
         line.total = _calc_line(_line_as_in(line))
@@ -4407,6 +4435,9 @@ async def update_line(
     line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id))).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
+    if line.kind == "membership":
+        # The plan's own price: removing it would make the plan free. Cancel the membership instead.
+        raise HTTPException(409, "This is a membership plan. Cancel it from the customer's membership instead.")
     payload = data.model_dump(exclude_unset=True)
     if current.role_id and not (await _order_perms(db, current)).get("can_view_purchase_price"):
         payload.pop("cost_price", None)
@@ -4511,6 +4542,9 @@ async def delete_line(
     line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id))).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
+    if line.kind == "membership":
+        # The plan's own price: removing it would make the plan free. Cancel the membership instead.
+        raise HTTPException(409, "This is a membership plan. Cancel it from the customer's membership instead.")
     # Removing a line takes the same right as adding one (this had no check at all).
     perms = await _order_perms(db, current)
     need = "can_add_products" if line.kind == "product" else "can_add_services"

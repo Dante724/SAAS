@@ -90,6 +90,30 @@ async def sweep_contact_lifecycle() -> None:
         log.info("contact-lifecycle-sweep: sent %d birthday message(s)", sent)
 
 
+@job_runner.every(3600, "membership-sweep")
+async def sweep_memberships() -> None:
+    """Memberships (docs/SPEC_memberships.md): monthly and renewal invoices, missed-payment pause
+    and lapse, included-item reminders. Hourly, but every step is idempotent per day."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.models import Membership, Organisation
+    from backend.services import memberships as mb
+
+    async with AsyncSessionLocal() as db:
+        org_ids = (await db.execute(select(Membership.org_id).distinct())).scalars().all()
+        for oid in org_ids:
+            try:
+                org = (await db.execute(select(Organisation).where(
+                    Organisation.id == oid, Organisation.active == True))).scalar_one_or_none()  # noqa: E712
+                if org:
+                    stats = await mb.sweep(db, org)
+                    await db.commit()
+                    if any(stats.values()):
+                        log.info("membership-sweep %s: %s", oid, stats)
+            except Exception:  # noqa: BLE001 — one bad org never stalls the sweep
+                await db.rollback()
+                log.exception("membership-sweep failed for org %s", oid)
+
+
 @job_runner.every(60, "webhook-retry-sweep")
 async def retry_failed_webhooks() -> None:
     """Re-attempt webhook deliveries on the backoff schedule (1m, 5m, 30m, 2h, 8h, 24h), reclaim

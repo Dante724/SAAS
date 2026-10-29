@@ -1,4 +1,5 @@
 import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
+import { PlanBanner, CheckoutOffer } from "../memberships/WOPlan";
 import RecommendationsPanel from "./RecommendationsPanel";
 import { DeferredWork, MarginNote, ReadyWhy, ServiceDue, TogetherChips } from "../../components/sense/Sense";
 import PartsPOPanel from "./PartsPOPanel";
@@ -569,7 +570,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             </div>
           )}
           {tab === "checklists" && <ChecklistsTab orderId={order.id} typeId={(d as any).type_id} />}
-          {tab === "invoices" && <InvoicesTab orderId={order.id} total={d.total} writtenOff={(d as any).written_off || 0} deposit={(d as any).deposit_amount} currencyCode={(d as any).currency_code} fxRate={(d as any).fx_rate} currencySymbol={(d as any).currency_symbol} onCurrencyChange={(code, rate, symbol) => setD({ ...d, currency_code: code, fx_rate: rate, currency_symbol: symbol } as any)} onFlash={flash} />}
+          {tab === "invoices" && <InvoicesTab onChanged={reload} orderId={order.id} total={d.total} writtenOff={(d as any).written_off || 0} deposit={(d as any).deposit_amount} currencyCode={(d as any).currency_code} fxRate={(d as any).fx_rate} currencySymbol={(d as any).currency_symbol} onCurrencyChange={(code, rate, symbol) => setD({ ...d, currency_code: code, fx_rate: rate, currency_symbol: symbol } as any)} onFlash={flash} />}
           {tab === "activity" && (<>
             <ConversationPanel orderId={order.id} />
             <NotesPanel orderId={order.id} onFlash={flash} />
@@ -1174,7 +1175,8 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-none ${tagCls(k)}`}><M n={k.includes("serv") ? "build" : k.includes("lab") ? "search_check" : "inventory_2"} c="text-base" /></div>
             <div className="min-w-0">
               <div className="flex items-center gap-2"><h5 className="text-xs font-bold text-ink-primary truncate">{l.description || "Item"}</h5><span className={`text-[11px] px-1.5 py-0.5 rounded font-bold ${tagCls(k)}`}>{l.kind || l.line_type || "item"}</span></div>
-              <p className="text-[11px] text-ink-tertiary tabular-nums">Qty: {l.qty ?? 1}{seePrices && <> · Unit: {money(l.unit_price)}{l.discount ? ` · Disc ${l.discount}${l.discount_type === "pct" ? "%" : ""}` : ""}</>}</p>
+              <p className="text-[11px] text-ink-tertiary tabular-nums">Qty: {l.qty ?? 1}{seePrices && <> · Unit: {money(l.unit_price)}{l.discount && !(l as any).membership_id ? ` · Disc ${l.discount}${l.discount_type === "pct" ? "%" : ""}` : ""}</>}
+                {(l as any).membership_id && (l as any).kind !== "membership" && <span className="ml-1.5 inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-primary/10 px-1.5 py-px text-[10px] font-semibold text-primary"><M n="workspace_premium" c="text-[11px]" />{Number(l.discount) >= 100 ? "Covered by plan" : `Plan ${l.discount}% off`}</span>}</p>
               {tagging && (
                 <select value={l.order_item_id || ""} onChange={(e) => patchLine(l.id, { order_item_id: e.target.value })} aria-label={`Which item ${l.description || "this line"} is for`}
                   className="mt-1 max-w-[220px] text-[11px] font-medium text-ink-secondary bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5">
@@ -1190,7 +1192,10 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                 : <button type="button" onClick={() => onClockIn(l.id)} title={`Clock into ${l.description || "this line"}`}
                     className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-emerald-700 border border-emerald-200 hover:bg-emerald-50"><M n="play_arrow" c="text-[13px]" />clock in</button>
             )}
-            {seePrices && <div className="text-right"><p className="tabular-nums font-bold text-xs text-ink-primary">{money(l.total)}</p></div>}
+            {seePrices && <div className="text-right">
+              {/* A plan-covered line shows what the member would have paid, struck through. */}
+              {(l as any).membership_id && Number(l.discount) > 0 && <p className="tabular-nums text-[11px] text-ink-tertiary line-through">{money((l.qty ?? 1) * (l.unit_price ?? 0))}</p>}
+              <p className="tabular-nums font-bold text-xs text-ink-primary">{money(l.total)}</p></div>}
           </div>
         </div>
         {/* 144av — assignee + booked/actual on service & labour lines only */}
@@ -1294,6 +1299,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
 
   return (
     <div className="space-y-5">
+      {!isEstimate && <PlanBanner orderId={orderId} refreshKey={lines?.length} onChanged={onChanged} />}
       <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm">
         <div className="flex items-center space-x-1.5">
           {["All", "Services", "Products", "Job Kits"].map((f) => (
@@ -1545,7 +1551,7 @@ type PayCtx = { order_total: number; already_paid: number; prepaid: number; rema
 // Every account from the payment context in one list, each tagged with the method it sits under.
 const ctxAccounts = (c: PayCtx | null): PayAccount[] =>
   c ? Object.entries(c.accounts_by_method || {}).flatMap(([k, list]) => (list || []).map((a) => ({ ...a, payment_option: a.payment_option || k }))) : [];
-export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash }: { orderId: string; total?: number; writtenOff?: number; deposit?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: (m: string) => void }) {
+export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash, onChanged }: { orderId: string; total?: number; writtenOff?: number; deposit?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: (m: string) => void; onChanged?: () => void }) {
   const { base, opts: curOpts, multi: multiCurrency } = useCurrencies();
   const { can } = useMe();
   const changeCurrency = async (code: string) => {
@@ -1746,6 +1752,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
           <div className="absolute inset-0 bg-ink-primary/40" onClick={() => setModal(null)} />
           <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-md p-5 space-y-4">
             <div className="flex items-center justify-between"><h4 className="text-sm font-bold text-ink-primary">{modal === "prepay" ? "Take prepayment" : "Take payment"}</h4><button aria-label="Close" onClick={() => setModal(null)} className="text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-lg" /></button></div>
+            {modal === "pay" && <CheckoutOffer orderId={orderId} onJoined={() => { onChanged?.(); openPay("pay"); onFlash("Plan added to this job"); }} />}
             <div className="text-xs text-ink-secondary">Remaining balance: <b className="tabular-nums">{money(ctx.remaining)}</b></div>
             <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Amount <span className="text-ink-tertiary font-normal normal-case">({base?.code || "base"})</span></label><input value={amount} onChange={(e) => setAmount(e.target.value)} type="number" className="glass-input w-full py-2 px-3 text-sm font-bold font-mono rounded-xl" />
               {isForeign && amount && !isNaN(parseFloat(amount)) && (

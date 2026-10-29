@@ -22,6 +22,7 @@ import CheckinPointsSettings from "./CheckinPointsSettings";
 import { PricingPage, InventoryPage } from "./PricingInventory";
 import FinanceNumbering from "./FinanceNumbering";
 import InvoiceSettings from "./InvoiceSettings";
+import MembershipSettings from "./MembershipSettings";
 import DocumentTemplatesPage from "./DocumentTemplatesPage";
 import LocationsPage from "./LocationsPage";
 import { TeamPage, RoleEditor, Avatar } from "./TeamSettings";
@@ -416,6 +417,7 @@ export default function SettingsHub() {
           )}
 
           {sec === "finance" && <InvoiceSettings />}
+          {sec === "memberships" && <MembershipSettings />}
           {sec === "finance" && <FinanceNumbering currency={co?.currency || "$"} shop={{ name: co?.name, address: co?.company_address, phone: co?.company_phone, email: co?.company_email, logo: co?.logo_data }} />}
           {sec === "ecommerce" && FEATURES.ecommerce && <EcommerceSettings />}
           {sec === "sso" && <SsoSettings />}

@@ -206,6 +206,15 @@ class Organisation(Base):
     # whh1 (B8): every org gets one at creation, whatever the path (registration, platform admin,
     # seed); the migration backfilled orgs that had none, and inbound posts now fail closed.
     webhook_secret: Mapped[Optional[str]] = mapped_column(String(64), default=lambda: secrets.token_urlsafe(24))
+    # Memberships (docs/SPEC_memberships.md §5): how plan money shows in the books, how long an
+    # unpaid plan keeps its benefits, and whether checkout offers a plan to non-members.
+    membership_spread_revenue: Mapped[bool] = mapped_column(Boolean, default=False)
+    membership_grace_days: Mapped[int] = mapped_column(Integer, default=7)
+    membership_lapse_days: Mapped[int] = mapped_column(Integer, default=30)
+    membership_renewal_notice_days: Mapped[int] = mapped_column(Integer, default=30)
+    membership_checkout_prompt: Mapped[bool] = mapped_column(Boolean, default=True)
+    membership_prompt_threshold_pct: Mapped[float] = mapped_column(Float, default=25.0)
+    membership_prompt_snooze_days: Mapped[int] = mapped_column(Integer, default=90)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     locations: Mapped[list["Location"]] = relationship(back_populates="org")
@@ -367,6 +376,8 @@ class Client(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     name: Mapped[str] = mapped_column(String(200))
+    # Memberships: "Not now" on the checkout plan offer hides it for this client until this date.
+    membership_offer_snoozed_until: Mapped[Optional[date]] = mapped_column(Date)
     client_type: Mapped[str] = mapped_column(String(20), default="person")  # person|organization
     is_supplier: Mapped[bool] = mapped_column(Boolean, default=False)
     manager_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
@@ -652,8 +663,11 @@ class OrderLine(Base):
     qty: Mapped[float] = mapped_column(Float, default=1.0)
     unit_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     cost_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    kind: Mapped[Optional[str]] = mapped_column(String(20))  # service|product|custom
+    kind: Mapped[Optional[str]] = mapped_column(String(20))  # service|product|custom|membership
     technician_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)
+    # Memberships: set by the server only, when a plan covers or discounts this line (the
+    # selling line of a plan carries it too). Never accepted from the client.
+    membership_id: Mapped[Optional[str]] = mapped_column(String, index=True)
     work_share: Mapped[float] = mapped_column(Float, default=1.0)  # for split lines (0.5/0.5)
     # 144av #2 — flat-rate/estimated labour hours we bill, to compare against actual clocked time.
     booked_hours: Mapped[float] = mapped_column(Float, default=0.0)
@@ -1251,6 +1265,10 @@ class Tag(Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     name: Mapped[str] = mapped_column(String(40))
     color: Mapped[str] = mapped_column(String(20), default="#64748b")
+    # Memberships: a tag Tekly adds and removes itself ("Boat Care member"). Staff can't edit,
+    # attach or remove a system tag; `source` says what owns it (e.g. "plan:<id>").
+    system: Mapped[bool] = mapped_column(Boolean, default=False)
+    source: Mapped[Optional[str]] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
@@ -3937,3 +3955,115 @@ class ApiIdempotencyKey(Base):
     status_code: Mapped[Optional[int]] = mapped_column(Integer)
     response_body: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+
+
+# ── Memberships (docs/SPEC_memberships.md) ───────────────────────────────────────────────────────
+
+class MembershipPlan(Base):
+    """What a shop sells: a list of included items, priced monthly and/or yearly."""
+    __tablename__ = "membership_plans"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(Text, default="")
+    template_key: Mapped[Optional[str]] = mapped_column(String(30))       # null = any asset
+    asset_group_ids: Mapped[Optional[list]] = mapped_column(JSON)          # empty = any group
+    price_monthly: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
+    price_yearly: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
+    term: Mapped[str] = mapped_column(String(10), default="rolling")      # rolling|season
+    season_start: Mapped[Optional[str]] = mapped_column(String(5))        # "MM-DD"
+    season_end: Mapped[Optional[str]] = mapped_column(String(5))
+    presale_days: Mapped[int] = mapped_column(Integer, default=60)
+    late_join: Mapped[str] = mapped_column(String(10), default="prorated")  # prorated|full
+    color: Mapped[str] = mapped_column(String(20), default="#0059ba")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class MembershipPlanItem(Base):
+    """One included item: a catalog service with a count per plan year, a discount, or a perk."""
+    __tablename__ = "membership_plan_items"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    plan_id: Mapped[str] = mapped_column(String, ForeignKey("membership_plans.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(10), default="service")      # service|discount|perk
+    service_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("services.id"))
+    label: Mapped[str] = mapped_column(String(200), default="")
+    qty: Mapped[int] = mapped_column(Integer, default=1)
+    pct: Mapped[float] = mapped_column(Float, default=0.0)
+    applies_to: Mapped[str] = mapped_column(String(10), default="labour")  # labour|parts|both
+    window_start: Mapped[Optional[str]] = mapped_column(String(5))        # "MM-DD", seasonal items
+    window_end: Mapped[Optional[str]] = mapped_column(String(5))
+    rollover: Mapped[bool] = mapped_column(Boolean, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Membership(Base):
+    """One plan on one asset, paid by one client."""
+    __tablename__ = "memberships"
+    __table_args__ = (Index("ix_memberships_org_status_end", "org_id", "status", "period_end"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    plan_id: Mapped[str] = mapped_column(String, ForeignKey("membership_plans.id"), index=True)
+    client_id: Mapped[str] = mapped_column(String, ForeignKey("clients.id"), index=True)
+    device_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("devices.id"), index=True)
+    billing: Mapped[str] = mapped_column(String(10), default="yearly")    # monthly|yearly
+    price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    # scheduled (pre-sold) | active | paused (unpaid, in grace) | lapsed | cancelled
+    status: Mapped[str] = mapped_column(String(12), default="active")
+    term_start: Mapped[date] = mapped_column(Date)                         # plan year / season
+    term_end: Mapped[date] = mapped_column(Date)
+    period_start: Mapped[date] = mapped_column(Date)                       # current billing period
+    period_end: Mapped[date] = mapped_column(Date)
+    renews: Mapped[bool] = mapped_column(Boolean, default=True)            # off = ends at period end
+    manager_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    sold_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    ended_on: Mapped[Optional[date]] = mapped_column(Date)
+    ended_reason: Mapped[Optional[str]] = mapped_column(String(20))       # cancelled|unpaid|transferred
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class MembershipAsset(Base):
+    """The assets a membership covers. Phase 1 writes one row; fleet plans will write several."""
+    __tablename__ = "membership_assets"
+    __table_args__ = (UniqueConstraint("membership_id", "device_id", name="uq_membership_asset"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    membership_id: Mapped[str] = mapped_column(String, ForeignKey("memberships.id"), index=True)
+    device_id: Mapped[str] = mapped_column(String, ForeignKey("devices.id"), index=True)
+
+
+class MembershipPeriod(Base):
+    """One billing period and what charges it: a plan invoice, or the work order it was sold on."""
+    __tablename__ = "membership_periods"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    membership_id: Mapped[str] = mapped_column(String, ForeignKey("memberships.id"), index=True)
+    period_start: Mapped[date] = mapped_column(Date)
+    period_end: Mapped[date] = mapped_column(Date)
+    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    invoice_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("invoices.id"), index=True)
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
+    due_on: Mapped[date] = mapped_column(Date)
+    paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    nudges: Mapped[int] = mapped_column(Integer, default=0)                # reminders already sent
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class MembershipUsage(Base):
+    """An included item used on a work order, at the list price that was waived."""
+    __tablename__ = "membership_usage"
+    __table_args__ = (UniqueConstraint("order_line_id", name="uq_membership_usage_line"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    membership_id: Mapped[str] = mapped_column(String, ForeignKey("memberships.id"), index=True)
+    plan_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("membership_plan_items.id"))
+    device_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("devices.id"))
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
+    order_line_id: Mapped[Optional[str]] = mapped_column(String)
+    qty: Mapped[float] = mapped_column(Float, default=1.0)
+    value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    term_start: Mapped[date] = mapped_column(Date)                         # which plan year it counts in
+    used_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

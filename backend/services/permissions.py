@@ -80,6 +80,12 @@ CATALOG = {
         ("can_export_sales", "Export the sales"),
         ("can_take_card_payments", "Take card payments on a card reader"),
     ],
+    "Memberships": [
+        ("can_sell_memberships", "Sell membership plans"),
+        ("can_apply_membership_benefits", "Apply plan benefits on work orders"),
+        ("can_change_memberships", "Pause, cancel, switch or move a membership"),
+        ("can_manage_membership_plans", "Set up membership plans and settings"),
+    ],
     "Invoices": [
         ("can_view_invoices", "View invoices"),
         ("can_create_invoices", "Create invoices"),
@@ -196,9 +202,11 @@ TEMPLATES = {
     "Manager": {"can_delete_transactions": False, "can_manage_roles": False,
                 "can_use_sense_suggestions": True},
     "Partner": {"can_manage_settings": False, "can_manage_roles": False,
-                "can_manage_employees": False, "can_make_calls": False, **_NOT_FOR_STAFF},
+                "can_manage_employees": False, "can_make_calls": False, **_NOT_FOR_STAFF,
+                "can_manage_membership_plans": False, "can_change_memberships": False},
     "Specialist": {"can_manage_settings": False, "can_manage_roles": False,
-                   "can_manage_employees": False, **_NOT_FOR_STAFF},
+                   "can_manage_employees": False, **_NOT_FOR_STAFF,
+                   "can_manage_membership_plans": False, "can_change_memberships": False},
 }
 
 
@@ -291,3 +299,33 @@ def grant_go_codes(perms: dict, explicit: bool) -> tuple[dict, bool]:
         perms["can_take_payments"] = False
         perms["can_create_payment_links"] = False
     return perms, perms != before
+
+
+def grant_membership_codes(perms: dict, explicit: bool) -> tuple[dict, bool]:
+    """Migration mb145a1: the four membership codes, without anyone gaining or losing access
+    they'd expect. Selling and applying benefits follow "create work orders"; setting up and
+    changing memberships follow "manage settings".
+    - explicit (default-deny) roles: each code copies the code it follows.
+    - legacy (deny-wins) roles: a code is written False when the role already denies the code it
+      follows, so a restricted role doesn't suddenly get plan management by default.
+    The shop creator's admin role ({"all": "write"}) is left alone: it has everything."""
+    perms = dict(perms or {})
+    if perms.get("all") == "write":
+        return perms, False
+    changed = False
+    follow = {
+        "can_sell_memberships": "can_create_tickets",
+        "can_apply_membership_benefits": "can_create_tickets",
+        "can_change_memberships": "can_manage_settings",
+        "can_manage_membership_plans": "can_manage_settings",
+    }
+    for code, like in follow.items():
+        if code in perms:
+            continue
+        if explicit:
+            perms[code] = perms.get(like) is True
+            changed = True
+        elif perms.get(like) is False:
+            perms[code] = False
+            changed = True
+    return perms, changed
