@@ -227,7 +227,9 @@ export function CustomView() {
                     <select value={flt.op} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, op: e.target.value } : x))} className="glass-input px-2.5 py-1.5 rounded-lg text-xs min-w-[110px]">
                       {OPS_FOR(fType(flt.field)).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                     </select>
-                    <input value={flt.value} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} placeholder="value" className="glass-input px-2.5 py-1.5 rounded-lg text-xs w-32" />
+                    {fType(flt.field) === "date"
+                      ? <DateField className="w-40" value={flt.value} onChange={(d) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, value: d } : x))} label="Filter date" />
+                      : <input value={flt.value} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} placeholder="value" className="glass-input px-2.5 py-1.5 rounded-lg text-xs w-32" />}
                     <button aria-label="Remove filter" onClick={() => setFilters((fs) => fs.filter((_, j) => j !== i))} className="p-1 rounded-md text-ink-tertiary hover:text-rose-500 hover:bg-rose-50 shrink-0"><M n="close" c="text-sm" /></button>
                   </div>
                 ))}

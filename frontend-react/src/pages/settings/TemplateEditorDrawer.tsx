@@ -3,6 +3,7 @@ import LabelBarcodePicker, { LABEL_DOC_TYPES } from "./LabelBarcodePicker";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
+import Switch from "../../components/Switch";
 import { escapeHtml, printHtmlInFrame, sanitizeHtml } from "../../lib/safeHtml";
 
 /* 144hr — Full-screen visual document editor: Edit⇄Preview, rich text (font family /
@@ -301,7 +302,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
         <button onClick={newDoc} className="h-9 px-3 rounded-lg border border-slate-200 text-ink-secondary font-semibold text-xs hover:bg-slate-100 hover:border-slate-300 flex items-center gap-1 shrink-0"><M n="add" c="text-[16px]" /> New</button>
         {templates.length > 0 && (
           <select value={currentId || ""} onChange={(e) => { const t = templates.find((x) => x.id === e.target.value); if (t) openTpl(t); }}
-            className="h-9 max-w-[180px] bg-white border border-slate-200 rounded-lg text-sm px-2 focus:outline-none focus:ring-1 focus:ring-primary">
+            className="glass-input h-9 max-w-[180px] rounded-xl px-3 text-sm">
             <option value="" disabled>Switch template…</option>
             {templates.map((t) => <option key={t.id} value={t.id}>{t.name}{t.is_default ? " (default)" : ""}</option>)}
           </select>
@@ -326,10 +327,10 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
           <button aria-label="Document settings" onClick={() => setSettings((s) => !s)} title="Document settings" className="w-9 h-9 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="tune" c="text-lg" /></button>
           {settings && (
             <div className="absolute right-0 top-11 z-20 w-64 bg-white border border-slate-200 rounded-xl shadow-drawer p-3 space-y-3">
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Type</label>
-                <select value={meta.doc_type} onChange={(e) => setMeta({ ...meta, doc_type: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5 capitalize">{DOC_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}</select></div>
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Paper / label size</label>
-                <select value={meta.page_size} onChange={(e) => setMeta({ ...meta, page_size: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5">
+              <div><label className="block text-sm font-medium text-ink-primary mb-1">Type</label>
+                <select value={meta.doc_type} onChange={(e) => setMeta({ ...meta, doc_type: e.target.value })} className="glass-input w-full rounded-xl px-3 py-2 text-sm capitalize">{DOC_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}</select></div>
+              <div><label className="block text-sm font-medium text-ink-primary mb-1">Paper / label size</label>
+                <select value={meta.page_size} onChange={(e) => setMeta({ ...meta, page_size: e.target.value })} className="glass-input w-full rounded-xl px-3 py-2 text-sm">
                   <option value="a4">A4 (210×297mm)</option>
                   <option value="letter">Letter (8.5×11in)</option>
                   <option value="receipt80">Receipt 80mm</option>
@@ -338,17 +339,17 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
                 </select></div>
               {meta.page_size === "label" && (
                 <div className="grid grid-cols-2 gap-2">
-                  <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Width mm</label>
-                    <input type="number" value={meta.page_w_mm ?? ""} onChange={(e) => setMeta({ ...meta, page_w_mm: e.target.value ? +e.target.value : null })} placeholder="40" className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5" /></div>
-                  <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Height mm</label>
-                    <input type="number" value={meta.page_h_mm ?? ""} onChange={(e) => setMeta({ ...meta, page_h_mm: e.target.value ? +e.target.value : null })} placeholder="30" className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5" /></div>
+                  <div><label className="block text-sm font-medium text-ink-primary mb-1">Width mm</label>
+                    <input type="number" value={meta.page_w_mm ?? ""} onChange={(e) => setMeta({ ...meta, page_w_mm: e.target.value ? +e.target.value : null })} placeholder="40" className="glass-input w-full rounded-xl px-3 py-2 text-sm" /></div>
+                  <div><label className="block text-sm font-medium text-ink-primary mb-1">Height mm</label>
+                    <input type="number" value={meta.page_h_mm ?? ""} onChange={(e) => setMeta({ ...meta, page_h_mm: e.target.value ? +e.target.value : null })} placeholder="30" className="glass-input w-full rounded-xl px-3 py-2 text-sm" /></div>
                 </div>
               )}
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Margin mm (blank = auto)</label>
-                <input type="number" value={meta.margin_mm ?? ""} onChange={(e) => setMeta({ ...meta, margin_mm: e.target.value ? +e.target.value : null })} placeholder={(meta.page_size === "a4" || meta.page_size === "letter") ? "10" : "0"} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5" /></div>
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Default font</label>
-                <select value={meta.font_family} onChange={(e) => setMeta({ ...meta, font_family: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5">{FONTS.map((f) => <option key={f} value={f}>{f}</option>)}</select></div>
-              <label className="flex items-center gap-2 text-sm text-ink-secondary"><input type="checkbox" checked={meta.is_default} onChange={(e) => setMeta({ ...meta, is_default: e.target.checked })} /> Default for this type</label>
+              <div><label className="block text-sm font-medium text-ink-primary mb-1">Margin mm (blank = auto)</label>
+                <input type="number" value={meta.margin_mm ?? ""} onChange={(e) => setMeta({ ...meta, margin_mm: e.target.value ? +e.target.value : null })} placeholder={(meta.page_size === "a4" || meta.page_size === "letter") ? "10" : "0"} className="glass-input w-full rounded-xl px-3 py-2 text-sm" /></div>
+              <div><label className="block text-sm font-medium text-ink-primary mb-1">Default font</label>
+                <select value={meta.font_family} onChange={(e) => setMeta({ ...meta, font_family: e.target.value })} className="glass-input w-full rounded-xl px-3 py-2 text-sm">{FONTS.map((f) => <option key={f} value={f}>{f}</option>)}</select></div>
+              <div className="flex items-center gap-2 text-sm text-ink-secondary"><Switch size="sm" label="Default for this type" on={!!meta.is_default} onChange={(v) => setMeta({ ...meta, is_default: v })} /> Default for this type</div>
               {LABEL_DOC_TYPES.includes(meta.doc_type) && <LabelBarcodePicker value={meta} onChange={(v) => setMeta({ ...meta, ...v })} />}
               {LABEL_DOC_TYPES.includes(meta.doc_type) && (
                 <label className="flex items-start gap-2 text-sm text-ink-secondary"><input type="checkbox" className="mt-1" checked={meta.auto_print_on === "create"} onChange={(e) => setMeta({ ...meta, auto_print_on: e.target.checked ? "create" : null })} />
@@ -405,7 +406,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
           <span className="w-px h-5 bg-slate-200 mx-0.5" />
           <input value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") buildDoc(); }}
             placeholder="…or describe one — e.g. “estimate with logo, parts table, deposit line and signature”"
-            className="flex-1 min-w-[220px] bg-white border border-slate-200 rounded-lg text-xs px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary" />
+            className="glass-input flex-1 min-w-[220px] rounded-xl px-3 py-2 text-sm" />
           <button onClick={() => buildDoc()} disabled={aiBusy || !aiPrompt.trim()} className="h-8 px-3 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60 flex items-center gap-1 whitespace-nowrap">{aiBusy ? "Building…" : "Build"}</button>
         </div>
       )}

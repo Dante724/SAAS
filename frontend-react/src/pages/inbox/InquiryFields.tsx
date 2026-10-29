@@ -5,7 +5,7 @@ import CustomFields from "../../components/CustomFields";
 import { CHANNELS, type Lead, type LeadType } from "./inquiries";
 
 const lbl = "block font-semibold text-ink-secondary mb-1";
-const fld = "glass-input w-full px-3 py-2 rounded-lg";
+const fld = "glass-input w-full rounded-xl px-3 py-2 text-sm";
 
 export default function InquiryFields({ value, onChange, types, creating, showSla }: {
   value: Lead & { sla_minutes?: number }; onChange: (v: Lead & { sla_minutes?: number }) => void;
@@ -17,7 +17,7 @@ export default function InquiryFields({ value, onChange, types, creating, showSl
   return (
     <div className="space-y-4 text-xs">
       <div><label htmlFor="inq-name" className={lbl}>Name <span className="text-rose-500">*</span></label>
-        <input id="inq-name" autoFocus={creating} value={value.name || ""} onChange={(e) => set("name", e.target.value)} className={`${fld} py-2.5 text-sm font-semibold`} /></div>
+        <input id="inq-name" autoFocus={creating} value={value.name || ""} onChange={(e) => set("name", e.target.value)} className={`${fld} font-semibold`} /></div>
       <div className="grid grid-cols-2 gap-3">
         <div><label htmlFor="inq-phone" className={lbl}>Phone</label><input id="inq-phone" value={value.phone || ""} onChange={(e) => set("phone", e.target.value)} className={`${fld} tabular-nums`} /></div>
         <div><label htmlFor="inq-email" className={lbl}>Email</label><input id="inq-email" type="email" value={value.email || ""} onChange={(e) => set("email", e.target.value)} className={fld} /></div>
@@ -46,7 +46,7 @@ export default function InquiryFields({ value, onChange, types, creating, showSl
         <div><label htmlFor="inq-serial" className={lbl}>Serial number or IMEI</label><input id="inq-serial" value={value.serial || ""} onChange={(e) => set("serial", e.target.value)} className={`${fld} font-mono`} /></div>
       </fieldset>
       <div><label htmlFor="inq-text" className={lbl}>What they asked for</label>
-        <textarea id="inq-text" value={value.inquiry || ""} onChange={(e) => set("inquiry", e.target.value)} className={`${fld} py-2.5 h-24 resize-none`} placeholder="What is the customer asking about?" /></div>
+        <textarea id="inq-text" value={value.inquiry || ""} onChange={(e) => set("inquiry", e.target.value)} className={`${fld} h-24 resize-none`} placeholder="What is the customer asking about?" /></div>
       <CustomFields entity="lead" value={value.custom_data || {}} onChange={(v) => set("custom_data", v)} creating={creating} />
     </div>
   );

@@ -89,16 +89,16 @@ export default function AppointmentsHub() {
 
   const groups: Record<string, Appointment[]> = {};
   (rows || []).forEach((b) => { const k = dayKey(b.scheduled_for); (groups[k] ||= []).push(b); });
-  const inp = "glass-input w-full py-2.5 px-3 text-sm font-semibold text-ink-primary rounded-lg";
+  const inp = "glass-input w-full rounded-xl px-3 py-2 text-sm font-semibold text-ink-primary";
 
   return (
     <Shell title="Appointments">
       <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
         <div className="flex items-center gap-2">
-          <button onClick={() => setDrawer(true)} className="h-[38px] px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New appointment</button>
-          <div className="ml-auto flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200/70 text-xs">
-            <button onClick={() => setView("agenda")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1 ${view === "agenda" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="table_rows" c="text-xs" />Agenda</button>
-            <button onClick={() => setView("scheduler")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1 ${view === "scheduler" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="schedule" c="text-xs" />Scheduler</button>
+          <button onClick={() => setDrawer(true)} className="h-9 px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New appointment</button>
+          <div className="h-9 flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200/70 text-xs">
+            <button onClick={() => setView("agenda")} className={`h-full px-2.5 rounded-lg font-semibold flex items-center gap-1 ${view === "agenda" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="table_rows" c="text-xs" />Agenda</button>
+            <button onClick={() => setView("scheduler")} className={`h-full px-2.5 rounded-lg font-semibold flex items-center gap-1 ${view === "scheduler" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="calendar_month" c="text-xs" />Scheduler</button>
           </div>
         </div>
         {!rows && <p className="text-xs text-ink-tertiary">Loading…</p>}
@@ -131,7 +131,7 @@ export default function AppointmentsHub() {
             </div>
           );
         })()}
-        {view === "agenda" && rows?.length === 0 && <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-12 text-center"><M n="calendar_month" c="mx-auto mb-2 text-3xl text-ink-placeholder" /><p className="text-sm font-bold text-ink-secondary mt-2">No appointments yet</p><p className="text-xs text-ink-tertiary">Create an appointment or wait for online requests.</p></div>}
+        {view === "agenda" && rows?.length === 0 && <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-12 text-center"><M n="calendar_month" c="mx-auto mb-2 text-3xl text-ink-placeholder" /><p className="text-sm font-bold text-ink-secondary mt-2">No appointments yet</p><p className="text-xs text-ink-tertiary">Create an appointment or wait for online requests.</p><button onClick={() => setDrawer(true)} className="mt-4 h-9 px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 inline-flex items-center gap-1.5"><M n="add" c="text-sm" />New appointment</button></div>}
         {view === "agenda" && Object.entries(groups).map(([day, list]) => (
           <div key={day}>
             <div className="text-[11px] font-bold text-ink-tertiary mb-2">{day}</div>
@@ -143,7 +143,7 @@ export default function AppointmentsHub() {
                     <div className="text-center flex-shrink-0 w-16"><div className="text-sm font-bold tabular-nums text-ink-primary">{time(b.scheduled_for)}</div>{b.duration_min && <div className="text-[11px] text-ink-tertiary">{b.duration_min}m</div>}</div>
                     <div className="w-px h-9 bg-slate-200" />
                     <div className="flex-1 min-w-0"><div className="text-sm font-bold text-ink-primary truncate">{b.service_name || "Appointment"}</div><div className="text-[11px] text-ink-tertiary">{b.client_name || "Walk-in"}{b.employee_name ? ` · ${b.employee_name}` : ""}</div></div>
-                    {b.order_id && <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-blue-50 text-primary border border-blue-100">Converted</span>}
+                    {b.order_id && <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-blue-50 text-primary border border-blue-100">Work order created</span>}
                     <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${STATUS[st] || STATUS.booked}`}>{STATUS_LABEL[st] || st}</span>
                   </div>
                 );
@@ -217,13 +217,12 @@ export default function AppointmentsHub() {
               </div>
 
               {sel.order_id ? (
-                <div className="rounded-2xl bg-blue-50/60 border border-blue-100 p-3.5 text-[11px] font-semibold text-primary flex items-center gap-2"><M n="link" c="text-sm" />Converted — linked to a work order / estimate.</div>
+                <div className="rounded-2xl bg-blue-50/60 border border-blue-100 p-3.5 text-[11px] font-semibold text-primary flex items-center gap-2"><M n="link" c="text-sm" />Linked to a work order or estimate.</div>
               ) : (
                 <div>
-                  <div className="text-[11px] font-bold text-ink-tertiary mb-1.5">Convert to</div>
                   <div className="flex gap-2">
-                    <button disabled={selBusy} onClick={() => convert("work_order")} className="flex-1 px-3 py-2 rounded-xl bg-primary text-white text-[11px] font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60 flex items-center justify-center gap-1"><M n="handyman" c="text-sm" />Work order</button>
-                    <button disabled={selBusy} onClick={() => convert("estimate")} className="flex-1 px-3 py-2 rounded-xl bg-white text-primary border border-blue-100 text-[11px] font-bold hover:bg-blue-50 disabled:opacity-60 flex items-center justify-center gap-1"><M n="request_quote" c="text-sm" />Estimate</button>
+                    <button disabled={selBusy} onClick={() => convert("work_order")} className="flex-1 px-3 py-2 rounded-xl bg-primary text-white text-[11px] font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60 flex items-center justify-center gap-1"><M n="handyman" c="text-sm" />Create work order</button>
+                    <button disabled={selBusy} onClick={() => convert("estimate")} className="flex-1 px-3 py-2 rounded-xl bg-white text-primary border border-blue-100 text-[11px] font-bold hover:bg-blue-50 disabled:opacity-60 flex items-center justify-center gap-1"><M n="request_quote" c="text-sm" />Create estimate</button>
                   </div>
                 </div>
               )}
