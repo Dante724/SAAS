@@ -154,6 +154,22 @@ ALL_CODES = {code for group in CATALOG.values() for code, _ in group}
 
 # Every catalogue code is enforced somewhere; tests/test_permission_catalog.py keeps it that way.
 
+def permission_errors(perms) -> list:
+    """Problems with a role's permissions dict, empty when valid. Valid = known codes only,
+    each set to a real boolean. Anything else would be stored but silently ignored by
+    enforcement (which only honours an explicit False), so it must be rejected."""
+    if not isinstance(perms, dict):
+        return ["permissions must be an object of {code: true|false}"]
+    errors = []
+    unknown = sorted(set(perms) - ALL_CODES)
+    if unknown:
+        errors.append(f"Unknown permission codes: {unknown}")
+    not_bool = sorted(k for k, v in perms.items() if k in ALL_CODES and not isinstance(v, bool))
+    if not_bool:
+        errors.append(f"Permission values must be true or false: {not_bool}")
+    return errors
+
+
 # Seed templates (deny-lists per template; anything not listed = allowed).
 # Money, payroll, exports and destructive deletes are off for anyone who isn't running the
 # shop: a technician or outside partner must not pay themselves, move money or bulk-export
