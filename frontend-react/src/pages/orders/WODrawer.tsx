@@ -1217,7 +1217,18 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
   }
 
   const kindOf = (l: Line) => (l.kind || l.line_type || "item").toLowerCase();
-  const shown = (lines || []).filter((l) => filter === "All" || (filter === "Services" && kindOf(l).includes("serv")) || (filter === "Products" && (kindOf(l).includes("part") || kindOf(l).includes("prod"))) || (filter === "Job Kits" && kindOf(l).includes("bundle")));
+  // Which filter tab a line belongs to. Lines carry kind (service/product/custom) and line_type
+  // (labour/part): a custom labour line is a service. Kit items are ordinary lines tagged with a kit.
+  const lineGroup = (l: Line): "Services" | "Products" => {
+    const k = kindOf(l); const t = String((l as any).line_type || "").toLowerCase();
+    return k.includes("prod") || k.includes("part") || (!k.includes("serv") && t === "part") ? "Products" : "Services";
+  };
+  const inKit = (l: Line) => !!(l as any).bundle_group_id || kindOf(l).includes("bundle");
+  const matches = (l: Line, f: string) => f === "All" || (f === "Job Kits" ? inKit(l) : lineGroup(l) === f);
+  const countFor = (f: string) => f === "Job Kits"   // kits, not the items inside them
+    ? new Set((lines || []).filter(inKit).map((l) => (l as any).bundle_group_id || l.id)).size
+    : (lines || []).filter((l) => matches(l, f)).length;
+  const shown = (lines || []).filter((l) => matches(l, filter));
   // 144av #4 — flat by default; "By technician" groups into swimlanes (council: a lens, opt-in).
   const groups: Record<string, Line[]> = {};
   if (groupBy) shown.forEach((l) => { const k = l.technician_id || "Unassigned"; (groups[k] ||= []).push(l); });
@@ -1377,7 +1388,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
       <div className={`${sectionCard} flex flex-wrap items-center gap-3 p-3`}>
         <div className="flex items-center space-x-1.5">
           {["All", "Services", "Products", "Job Kits"].map((f) => (
-            <button key={f} onClick={() => setFilter(f)} className={`px-3 py-1 rounded-lg text-xs ${filter === f ? "bg-blue-50 text-primary font-bold" : "text-ink-secondary hover:text-ink-primary font-semibold"}`}>{f === "Job Kits" ? "Job kits" : f}</button>
+            <button key={f} onClick={() => setFilter(f)} className={`px-3 py-1 rounded-lg text-xs ${filter === f ? "bg-blue-50 text-primary font-bold" : "text-ink-secondary hover:text-ink-primary font-semibold"}`}>{f === "Job Kits" ? "Job kits" : f}{(lines || []).length > 0 && <span className={`ml-1 tabular-nums ${filter === f ? "text-primary/70" : "text-ink-tertiary"}`}>{countFor(f)}</span>}</button>
           ))}
         </div>
         {/* #4 swimlane toggle */}
@@ -1428,7 +1439,8 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
       </div>
 
       {!locked && <TogetherChips orderId={orderId} linesKey={(lines || []).map((l) => l.description).join("|")} onFlash={onFlash} onChanged={onChanged} />}
-      {shown.length === 0 && <p className="text-xs text-ink-tertiary">No line items yet — add a service or product.</p>}
+      {shown.length === 0 && <p className="text-xs text-ink-tertiary">{(lines || []).length === 0 ? "No line items yet. Add a service or product above."
+        : filter === "Job Kits" ? "No job kits on this job." : `No ${filter.toLowerCase()} on this job.`}</p>}
       {Object.entries(groups).map(([tech, ls], gi) => (
         <div key={tech || "all"} className={`${sectionCard} overflow-hidden`}>
           {groupBy && (
