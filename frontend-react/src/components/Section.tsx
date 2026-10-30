@@ -1,5 +1,5 @@
 import type React from "react";
-import { M } from "./Shell";
+import HexTile from "./HexTile";
 
 // The one card used for a section inside a drawer or page: white, one border, one shadow, one
 // header size. Actions sit on the left, under the title, main action first.
@@ -22,7 +22,7 @@ export default function Section({ title, icon, meta, description, actions, child
   const head = (
     <>
       <div className="flex items-center gap-2 min-w-0">
-        {icon && <M n={icon} c="text-base text-ink-tertiary" />}
+        {icon && <HexTile icon={icon} size={26} />}
         <h4 className="text-sm font-semibold text-ink-primary">{title}</h4>
         {meta != null && meta !== false && <span className="text-xs text-ink-tertiary tabular-nums">{meta}</span>}
       </div>

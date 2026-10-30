@@ -304,7 +304,9 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
       <div className="relative h-full w-full max-w-[840px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 
-        {/* Header */}
+        {/* Header. A thin edge in the job's own status colour (from Settings) says where it stands at a glance;
+            the status name stays in the header too, so colour is never the only signal. */}
+        <div aria-hidden="true" className="h-[3px] flex-shrink-0" style={{ background: statuses.find((st) => st.key === d.status)?.color || "#64748b" }} />
         <header className="relative z-20 px-4 sm:px-6 py-3 sm:py-4 border-b border-slate-200/90 bg-white flex flex-wrap items-center justify-between gap-2 flex-shrink-0">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 min-w-0">
             <span className="tabular-nums text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-100 text-ink-secondary whitespace-nowrap">{woNum}</span>

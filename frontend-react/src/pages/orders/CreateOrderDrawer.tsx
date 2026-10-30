@@ -1,5 +1,7 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { sectionCard } from "../../components/Section";
+import HexTile from "../../components/HexTile";
+import { Avatar } from "./look";
 import { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import ScanButton from "../../components/ScanButton";
@@ -215,7 +217,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                 <label className={lbl}>Customer{star("client")}</label>
                 {client ? (
                   <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2.5">
-                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary/10 text-xs font-semibold text-primary">{(client.name || "?").split(/\s+/).map((w: string) => w[0]).slice(0, 2).join("").toUpperCase()}</span>
+                    <Avatar name={client.name} size={36} />
                     <span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-ink-primary">{client.name}</span><span className="block text-xs text-ink-tertiary tabular-nums">{client.phone || "No phone"}</span></span>
                     <button type="button" className="h-8 rounded-lg px-2.5 text-xs font-semibold text-primary hover:bg-white" onClick={() => { setClient(null); setQ(""); }}>Change</button>
                   </div>
@@ -380,7 +382,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
     return <>{cards.map((c, i) => (
       <section key={i + c.title} className={`${sectionCard} p-5`}>
         <h3 className="mb-4 flex items-center gap-2 text-sm font-semibold text-ink-primary">
-          <span className="grid h-7 w-7 place-items-center rounded-lg bg-slate-100 text-ink-secondary"><M n={c.icon} c="text-[15px]" /></span>{c.title}
+          <HexTile icon={c.icon} />{c.title}
         </h3>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {c.parts.map((pt) => <div key={pt.key} className={pt.wide ? "sm:col-span-2" : ""}>{pt.el}</div>)}
@@ -399,6 +401,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
         <header className="px-7 pt-5 pb-4 flex items-center justify-between bg-white">
           <div className="flex items-center gap-3">
             <h2 className="text-xl font-semibold tracking-tight text-ink-primary">New {estimate ? "estimate" : "work order"}</h2>
+            {estimate && <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-200">Not billed until approved</span>}
           </div>
           <div className="flex items-center gap-1">
             {canCustomize && typeId && (
@@ -429,12 +432,12 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
           {step === 1 && (
             <section className="space-y-4">
               <div className={`${sectionCard} p-5`}>
-                <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-ink-primary"><span className="grid h-7 w-7 place-items-center rounded-lg bg-slate-100 text-ink-secondary"><M n="label" c="text-[15px]" /></span>{estimate ? "Estimate" : "Work order"} type</h3>
+                <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-ink-primary"><HexTile icon="label" />{estimate ? "Estimate" : "Work order"} type</h3>
                 <div className="flex flex-wrap items-center gap-2">
                   {(woTypes.length ? woTypes.map((t) => ({ t: t.name, dot: "", color: t.color })) : TYPES.map((x) => ({ ...x, color: null }))).map((tp) => (
                     <button key={tp.t} type="button" onClick={() => setType(tp.t)}
                       className={`h-9 px-3.5 rounded-xl text-sm font-medium flex items-center gap-2 border transition-all ${type === tp.t ? "border-primary/40 bg-primary/[0.06] text-primary ring-1 ring-primary/20" : "border-slate-200 bg-white text-ink-secondary hover:border-slate-300 hover:text-ink-primary"}`}>
-                      <span className={`w-2 h-2 rounded-full ${tp.dot}`} style={!("dot" in tp && tp.dot) && tp.color ? { background: tp.color } : undefined} /><span>{tp.t}</span>
+                      <span className={`w-2 h-2 rounded-full ${type === tp.t ? "bg-primary" : "bg-slate-300"}`} /><span>{tp.t}</span>
                     </button>
                   ))}
                 </div>
@@ -447,7 +450,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
           {step === 2 && (
             <section className={`${sectionCard} p-5 space-y-4`}>
               <div className="flex items-start gap-2">
-                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-slate-100 text-ink-secondary"><M n="inventory_2" c="text-[15px]" /></span>
+                <HexTile icon="inventory_2" />
                 <div><h3 className="text-sm font-semibold text-ink-primary">Services and products</h3>
                   <p className="text-xs text-ink-tertiary">Add them now, or create the {estimate ? "estimate" : "job"} and add them later at the bench.</p></div>
               </div>

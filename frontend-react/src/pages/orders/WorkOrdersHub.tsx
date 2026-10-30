@@ -9,6 +9,7 @@ import { api } from "../../api/client";
 import { alertDialog, promptDialog } from "../../lib/dialog";
 import { Order, deviceName, money } from "./types";
 import WODrawer from "./WODrawer";
+import { Avatar, dueText } from "./look";
 import { JobLabelsButton } from "./JobLabels";
 import CreateOrderDrawer from "./CreateOrderDrawer";
 import Pager from "../../components/Pager";
@@ -461,12 +462,12 @@ export default function WorkOrdersHub() {
               {pageRows.map((o) => (
                 <tr key={o.id} onClick={() => setOpen(o)} className={`hover:bg-slate-50/80 cursor-pointer transition-colors group ${sel.has(o.id) ? "bg-primary/5" : ""}`}>
                   <td className="py-3.5 px-4" onClick={(e) => e.stopPropagation()}><input className="rounded text-primary border-slate-300" type="checkbox" aria-label={`Select ${o.order_number || o.id}`} checked={sel.has(o.id)} onChange={() => toggle(o.id)} /></td>
-                  {showCol("order_id") && <td className="py-3.5 px-4 font-medium tabular-nums text-primary whitespace-nowrap"><span className="inline-flex items-center gap-1.5">{o.order_number || o.id}{!!(o.client_msg_unread && o.client_msg_unread > 0) && <span title={`${o.client_msg_unread} unread customer message(s)`} className="inline-flex items-center gap-0.5 text-[11px] font-bold bg-primary text-white px-1.5 py-0.5 rounded-full"><M n="forum" c="text-[11px]" />{o.client_msg_unread}</span>}{(o as any).checklists_pending && <span role="img" aria-label="Checklist incomplete" title="Checklist incomplete" className="w-2 h-2 rounded-full bg-amber-500" />}</span></td>}
-                  {showCol("client") && <td className="py-3.5 px-4"><span className="font-semibold text-[13px] text-ink-primary">{o.client?.name || "Walk-in"}</span><span className="text-[11px] font-normal text-ink-tertiary block">{o.client?.phone || ""}</span></td>}
+                  {showCol("order_id") && <td className="py-3.5 px-4 font-medium tabular-nums text-primary whitespace-nowrap"><span className="inline-flex items-center gap-1.5">{o.order_number || o.id}{(o.priority || 0) >= 1 && <span role="img" aria-label="Urgent" title="Urgent"><M n="flag" c="text-[14px] text-rose-600" /></span>}{!!(o.client_msg_unread && o.client_msg_unread > 0) && <span title={`${o.client_msg_unread} unread customer message(s)`} className="inline-flex items-center gap-0.5 text-[11px] font-bold bg-primary text-white px-1.5 py-0.5 rounded-full"><M n="forum" c="text-[11px]" />{o.client_msg_unread}</span>}{(o as any).checklists_pending && <span role="img" aria-label="Checklist incomplete" title="Checklist incomplete" className="w-2 h-2 rounded-full bg-amber-500" />}</span></td>}
+                  {showCol("client") && <td className="py-3.5 px-4"><span className="flex items-center gap-2.5"><Avatar name={o.client?.name} size={30} /><span className="min-w-0"><span className="block font-semibold text-[13px] text-ink-primary truncate">{o.client?.name || "Walk-in"}</span>{o.client?.phone && <span className="text-[11px] font-normal text-ink-tertiary block">{o.client.phone}</span>}</span></span></td>}
                   {showCol("device") && <td className="py-3.5 px-4 text-ink-primary font-semibold">{deviceName(o.device) === "—" ? "" : deviceName(o.device)}</td>}
                   {showCol("status") && <td className="py-3.5 px-4"><div className="flex items-center gap-1.5">{pill(o.status, stOf(o))}{stalledTag(o.id)}</div></td>}
-                  {showCol("assignee") && <td className="py-3.5 px-4">{o.assigned_to?.name || ""}</td>}
-                  {showCol("scheduled") && <td className="py-3.5 px-4">{o.scheduled_for ? fmtDay(o.scheduled_for) : ""}</td>}
+                  {showCol("assignee") && <td className="py-3.5 px-4">{o.assigned_to?.name ? <span className="flex items-center gap-2"><Avatar name={o.assigned_to.name} size={22} />{o.assigned_to.name}</span> : ""}</td>}
+                  {showCol("scheduled") && <td className="py-3.5 px-4 whitespace-nowrap">{o.scheduled_for ? fmtDay(o.scheduled_for) : ""}{(() => { const late = dueText(o.due_at, !["closed", "dropped"].includes(stOf(o)?.status_group || "")); return late?.[1] ? <span className="block text-[11px] font-semibold text-rose-600">{late[0]}</span> : null; })()}</td>}
                   {showCol("estimate") && <td className="py-3.5 px-4 text-right tabular-nums font-bold text-ink-primary">{money(o.total)}</td>}
                 </tr>
               ))}
@@ -498,15 +499,15 @@ export default function WorkOrdersHub() {
                       <div key={o.id} draggable onDragStart={() => setDrag(o.id)} onDragEnd={() => setDrag(null)} onClick={() => setOpen(o)}
                         className={`bg-white rounded-xl border border-slate-200/80 shadow-clay-sm p-3 cursor-grab active:cursor-grabbing hover:border-primary/40 transition-colors ${drag === o.id ? "opacity-50" : ""}`}>
                         <div className="flex items-center justify-between mb-1">
-                          <span className="font-medium tabular-nums text-primary text-xs">{o.order_number || o.id}</span>
+                          <span className="inline-flex items-center gap-1 font-medium tabular-nums text-primary text-xs">{o.order_number || o.id}{(o.priority || 0) >= 1 && <span role="img" aria-label="Urgent" title="Urgent"><M n="flag" c="text-[13px] text-rose-600" /></span>}</span>
                           <span className="text-[11px] text-ink-tertiary">{o.scheduled_for ? fmtDay(o.scheduled_for) : ""}</span>
                         </div>
                         {flags[o.id]?.stalled && <div className="mb-1">{stalledTag(o.id)}</div>}
-                        <div className="text-xs font-bold text-ink-primary truncate">{o.client?.name || "Walk-in"}</div>
+                        <div className="flex items-center gap-2"><Avatar name={o.client?.name} size={22} /><span className="text-xs font-semibold text-ink-primary truncate">{o.client?.name || "Walk-in"}</span></div>
                         <div className="text-[11px] text-ink-secondary truncate">{deviceName(o.device) === "—" ? "" : deviceName(o.device)}</div>
                         <div className="mt-1.5 flex items-center justify-between">
-                          <span className="text-[11px] text-ink-tertiary">{o.assigned_to?.name || "Unassigned"}</span>
-                          <span className="tabular-nums font-bold text-ink-primary text-xs">{money(o.total)}</span>
+                          <span className="flex items-center gap-1.5 text-[11px] text-ink-tertiary">{o.assigned_to?.name && <Avatar name={o.assigned_to.name} size={18} />}{o.assigned_to?.name || "Unassigned"}</span>
+                          <span className="tabular-nums font-semibold text-ink-primary text-xs">{money(o.total)}</span>
                         </div>
                       </div>
                     ))}
