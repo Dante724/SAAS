@@ -495,9 +495,10 @@ async def detach_order(
     return {"ok": True}
 
 class SendInvoiceIn(BaseModel):
-    to: Optional[str] = None       # override recipient; defaults to payer/client email
+    to: Optional[str] = None       # override recipient; defaults to payer/client email or phone
     subject: Optional[str] = None
     message: Optional[str] = None
+    channel: Optional[str] = None  # email (default) | sms
 
 @router.post("/invoices/{invoice_id}/send")
 async def send_invoice_email(
@@ -505,67 +506,86 @@ async def send_invoice_email(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
-    """Build 144dw — email the invoice PDF to the client (Orderry's envelope button).
-    Uses the org's connected email account; if none is connected the send is
-    'simulated' (logged) rather than failing, matching the app's gated-seam pattern.
-    A record is written to the client's inbox thread either way."""
-    from backend.models import Client, EmailConnection
+    """Build 144dw / I6 — "Send invoice": email the invoice PDF, or text the link, to the client
+    (Orderry's envelope button). Both carry the link to the customer's page, where they can pay.
+    Sends through the shop's connected email, SMTP or Twilio (services/customer_messages) and
+    says honestly whether it went out. A record is written to the client's inbox thread."""
+    from backend.models import Client, Order
     from backend.routers.printing import _org_lang, _org_name
-    from backend.services.email_oauth import send_via_connection
+    from backend.services.customer_messages import send_to_customer, track_link
     from backend.services.invoicing import build_invoice_pdf
 
     inv = (await db.execute(select(Invoice).where(
         Invoice.id == invoice_id, Invoice.org_id == current.org_id))).scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    channel = (data.channel or "email").lower()
+    if channel not in ("email", "sms"):
+        raise HTTPException(422, "channel must be email or sms")
 
-    # recipient: explicit override, else payer, else customer email
-    recipient = (data.to or "").strip() or None
     bill_to_id = getattr(inv, "payer_client_id", None) or inv.client_id
     client = None
+    order = None
+    if inv.order_id:
+        order = (await db.execute(select(Order).where(
+            Order.id == inv.order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    bill_to_id = bill_to_id or (order.client_id if order else None)
     if bill_to_id:
-        client = (await db.execute(select(Client).where(Client.id == bill_to_id))).scalar_one_or_none()
-    if not recipient and client:
-        recipient = client.email
-    if not recipient:
-        raise HTTPException(422, "No recipient email — add one to the client or pass 'to'.")
-
-    pdf = await build_invoice_pdf(db, inv, org_name=await _org_name(db, current.org_id),
-                                  lang=await _org_lang(db, current.org_id))
+        client = (await db.execute(select(Client).where(
+            Client.id == bill_to_id, Client.org_id == current.org_id))).scalar_one_or_none()
+    if order:
+        if not order.public_token:
+            from backend.routers.orders import unique_public_token
+            order.public_token = await unique_public_token(db)
+    link = track_link(order) if order else None
+    org_name = await _org_name(db, current.org_id)
     subject = data.subject or f"Invoice {inv.invoice_number}"
-    body = data.message or (f"Please find attached invoice {inv.invoice_number} "
-                            f"for {float(inv.total or 0):.2f}. Thank you.")
+    amount = f"{float(inv.total or 0):.2f}"
+    attachment = None
     fname = f"invoice-{inv.invoice_number or invoice_id[:8]}.pdf"
-
-    conn = (await db.execute(select(EmailConnection).where(
-        EmailConnection.org_id == current.org_id, EmailConnection.connected == True)  # noqa: E712
-        .order_by(EmailConnection.is_default.desc()))).scalars().first()
-    if conn:
-        result = await send_via_connection(conn, recipient=recipient, subject=subject,
-                                           body=body, attachment=(fname, pdf, "application/pdf"))
+    if channel == "email":
+        pdf = await build_invoice_pdf(db, inv, org_name=org_name, lang=await _org_lang(db, current.org_id))
+        attachment = (fname, pdf, "application/pdf")
+        body = data.message or (f"Please find attached invoice {inv.invoice_number} for {amount}. "
+                                + (f"You can view and pay it here: {link} " if link else "") + "Thank you.")
     else:
-        result = {"status": "simulated", "error": None}
+        body = data.message or (f"{org_name}: invoice {inv.invoice_number} for {amount}."
+                                + (f" View and pay: {link}" if link else ""))
+    delivery = await send_to_customer(db, org_id=current.org_id, client=client, body=body, subject=subject,
+                                      channel=channel, to=data.to, order_id=inv.order_id,
+                                      trigger_event="invoice_sent", attachment=attachment, saved=False)
+    recipient = (data.to or "").strip() or (
+        (client.email if channel == "email" else client.phone) if client else None)
+    if delivery["status"] == "no_contact" and not recipient:
+        raise HTTPException(422, "No email address or mobile number for this customer. Add one or type it in.")
 
-    # log to the client's inbox thread so there's a record it went out
+    # log to the client's inbox thread so there's a record of it
     if client:
         from backend.models import InboxMessage, InboxThread
         thread = (await db.execute(select(InboxThread).where(
             InboxThread.org_id == current.org_id, InboxThread.client_id == client.id,
-            InboxThread.channel == "email").order_by(InboxThread.last_message_at.desc()))).scalars().first()
+            InboxThread.channel == channel).order_by(InboxThread.last_message_at.desc()))).scalars().first()
         if not thread:
-            thread = InboxThread(org_id=current.org_id, channel="email", client_id=client.id,
+            thread = InboxThread(org_id=current.org_id, channel=channel, client_id=client.id,
                                  handle=recipient, status="open", unread=False,
                                  last_message_at=datetime.utcnow())
             db.add(thread)
             await db.flush()
         db.add(InboxMessage(org_id=current.org_id, thread_id=thread.id, direction="outbound",
-                            body=f"{subject}\n\n{body} (attached {fname})",
-                            author_id=current.id, delivered=result["status"] in ("sent", "simulated")))
+                            body=f"{subject}\n\n{body}" + (f" (attached {fname})" if attachment else ""),
+                            author_id=current.id, delivered=delivery["status"] == "sent"))
         thread.last_message_at = datetime.utcnow()
-        await db.commit()
+    if order:
+        from backend.routers.feed import log_system_event
+        await log_system_event(db, current.org_id, "order", order.id,
+                               f"Invoice {inv.invoice_number} sent: {delivery['message']}")
+    await db.commit()
 
-    return {"ok": result["status"] in ("sent", "simulated"), "status": result["status"],
-            "error": result.get("error"), "recipient": recipient}
+    raw = {"sent": "sent", "not_set_up": "simulated"}.get(delivery["status"], delivery["status"])
+    # ok = handled (sent, or simulated because nothing is set up); `delivery` says which.
+    return {"ok": delivery["status"] in ("sent", "not_set_up"), "status": raw,
+            "error": None if delivery["status"] == "sent" else delivery["message"],
+            "recipient": recipient, "delivery": delivery}
 
 @router.post("/invoices/{invoice_id}/pay")
 async def record_payment(

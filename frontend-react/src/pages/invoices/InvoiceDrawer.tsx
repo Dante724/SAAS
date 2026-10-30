@@ -6,7 +6,8 @@ import { humanize } from "../../lib/humanize";
 import { useMe } from "../../context/Me";
 import RecordPaymentDrawer from "./RecordPaymentDrawer";
 import CreditNoteDrawer from "./CreditNoteDrawer";
-import { DISPLAY_MODES, Drawer, ErrorNote, StatusPill, btnGhost, btnPrimary, cash, daysLate, fmtDate, isVoid, lateText, round2, type InvoiceDetail } from "./billing";
+import { DISPLAY_MODES, Drawer, ErrorNote, StatusPill, btnGhost, btnPrimary, cash, daysLate, fmtDate, isVoid, lateText, round2, sendInvoice, type InvoiceDetail } from "./billing";
+import SendMenu, { type SendWay } from "../../components/SendMenu";
 
 /* The invoice view, read like a statement: the lines (in the chosen display mode), the total,
    then every payment and credit note taken off it, a rule, and Balance due. Balance due is
@@ -23,6 +24,15 @@ export default function InvoiceDrawer({ id, onClose, onChanged }: { id: string; 
   const [paying, setPaying] = useState(false);
   const [noteId, setNoteId] = useState<string | null>(null);
   const [newNote, setNewNote] = useState(false);
+  // I6 — send the invoice to the customer; the note says whether it really went out.
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState<{ text: string; tone?: string } | null>(null);
+  async function send(way?: SendWay) {
+    setSending(true); setSent(null);
+    try { setSent(await sendInvoice(id, way)); load(); }
+    catch (e: any) { setSent({ text: e.message || "Couldn't send the invoice", tone: "warn" }); }
+    finally { setSending(false); }
+  }
   const load = () => api.get<InvoiceDetail>(`/finance/invoices/${id}`).then((r) => { setInv(r); setErr(null); })
     .catch((e) => setErr(e.message || "Could not load the invoice"));
   useEffect(() => { load(); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -63,11 +73,13 @@ export default function InvoiceDrawer({ id, onClose, onChanged }: { id: string; 
         title={<span className="flex items-center gap-2"><span className="font-mono">{inv.invoice_number}</span><StatusPill status={inv.status} label={humanize(inv.status)} /></span>}
         sub={<>{billTo ? <>Bill to <span className="font-semibold text-ink-secondary">{billTo}</span> · </> : "Walk-in · "}Issued {fmtDate(inv.issued_at)}{inv.due_at ? <> · Due {fmtDate(inv.due_at)}{late > 0 && <span className="font-semibold text-rose-600"> · {lateText(late)}</span>}</> : null}</>}
         footer={<>
+          {!voided && <SendMenu primary={false} label="Send invoice" busy={sending} onSend={send} />}
           <button onClick={() => openAuthedDoc(`/print/invoices/${inv.id}`).catch(() => alertDialog("Could not open invoice PDF"))} className={btnGhost}><M n="print" c="text-sm" />Print / PDF</button>
           {can("can_print_itemised_copy") && <button onClick={() => openAuthedDoc(`/print/invoices/${inv.id}?itemised=true`).catch(() => alertDialog("Could not open the itemised copy"))} className={btnGhost} title="Every part and service on its own line, even when a kit prints as one line">Print itemised copy</button>}
           {can("can_create_credit_notes") && !voided && room > 0 && <button onClick={() => setNewNote(true)} className={btnGhost}>Create credit note</button>}
           {can("can_view_finance") && !voided && due > 0 && <button onClick={() => setPaying(true)} className={btnPrimary}>Record payment</button>}
         </>}>
+        {sent && <div role="status" className={`rounded-lg border text-xs px-3 py-2 ${sent.tone ? "bg-amber-50 border-amber-200 text-amber-800" : "bg-emerald-50 border-emerald-200 text-emerald-700"}`}>{sent.text}</div>}
         {voided && <div role="note" className="rounded-lg bg-slate-50 border border-slate-200 text-ink-secondary text-xs px-3 py-2">This invoice was cancelled. It no longer counts as owed.</div>}
 
         <div className="flex flex-wrap items-center justify-between gap-2">

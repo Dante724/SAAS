@@ -63,7 +63,9 @@ class SmtpEmailAdapter(ChannelAdapter):
     def __init__(self, creds: Optional[dict] = None):
         self.creds = creds or {}   # 144jn: this shop's own SMTP settings
 
-    async def send(self, *, recipient: str, subject: Optional[str], body: str) -> dict:
+    async def send(self, *, recipient: str, subject: Optional[str], body: str,
+                   attachment: Optional[tuple] = None) -> dict:
+        """``attachment`` is an optional (filename, bytes, mimetype), e.g. an invoice PDF."""
         if not recipient:
             return {"status": "failed", "error": "No email address on file"}
         import asyncio
@@ -86,6 +88,16 @@ class SmtpEmailAdapter(ChannelAdapter):
             # carries markup, else plain text.
             subtype = "html" if re.search(r"<[a-zA-Z/][^>]*>", body or "") else "plain"
             msg = MIMEText(body, subtype)
+            if attachment:
+                from email.mime.application import MIMEApplication
+                from email.mime.multipart import MIMEMultipart
+                fname, data, mime = attachment
+                outer = MIMEMultipart()
+                outer.attach(msg)
+                part = MIMEApplication(data, _subtype=(mime or "application/octet-stream").split("/")[-1])
+                part.add_header("Content-Disposition", "attachment", filename=fname)
+                outer.attach(part)
+                msg = outer
             msg["Subject"] = subject or "Update on your order"
             msg["From"] = from_addr
             msg["To"] = recipient

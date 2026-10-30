@@ -82,6 +82,7 @@ def _ser(d: Device, order_count: int = 0, owner_name: str = None, inline_image: 
         "converted_to_part_id": getattr(d, "converted_to_part_id", None),
         "order_count": order_count,
         "custom_data": getattr(d, "custom_data", None) or {},   # 144bv: custom-field columns
+        "has_passcode": bool(getattr(d, "passcode_enc", None)),   # J3: the code itself only via /passcode
         "created_at": d.created_at.isoformat() if d.created_at else None,
     }
 
@@ -273,6 +274,71 @@ async def identify(
             "same_client": bool(data.client_id and d.client_id == data.client_id),
             "jobs": jobs, "last_order": last_out})
     return {"kind": kind, "normalized": norm, "problem": _ids.problem(kind, norm), "matches": matches}
+
+
+def store_passcode(d: Device, passcode: Optional[str]) -> None:
+    """J3 — keep the device's unlock code encrypted at rest (TOKEN_ENCRYPTION_KEY). Blank clears it."""
+    from backend.services import crypto
+    code = (passcode or "").strip()
+    if len(code) > 64:
+        raise HTTPException(422, "Passcode is too long")
+    d.passcode_enc = crypto.encrypt(code) if code else None
+
+
+class PasscodeIn(BaseModel):
+    passcode: Optional[str] = None
+
+
+async def _device_for_passcode(db, current, asset_id: str) -> Device:
+    """The device, if this person may see its passcode: anyone whose role sees every job, or a
+    restricted role (own jobs / some locations / hidden statuses) only through a job on this
+    device that they can see. The org-wide asset list would otherwise hand out every code."""
+    from backend.services import scoping
+    d = (await db.execute(select(Device).where(
+        Device.id == asset_id, Device.org_id == current.org_id))).scalar_one_or_none()
+    if not d:
+        raise HTTPException(404, "Asset not found")
+    role = await scoping.role_for(db, current)
+    unrestricted = role is None or (
+        (role.order_scope or "all") == "all" and (role.location_scope or "all") == "all"
+        and not scoping._ids(getattr(role, "hidden_status_keys", None)))
+    if not unrestricted:
+        jobs = (await db.execute(select(Order).where(
+            Order.device_id == d.id, Order.org_id == current.org_id))).scalars().all()
+        if not any([await scoping.can_view_order(db, current, o) for o in jobs]):
+            raise HTTPException(403, "You can only see passcodes for devices on your jobs")
+    return d
+
+
+@router.get("/{asset_id}/passcode")
+async def reveal_passcode(
+    asset_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_view_asset_info")),
+):
+    """J3 — show the device's unlock code to a technician who needs it. Every look is logged."""
+    from backend.services import audit, crypto
+    d = await _device_for_passcode(db, current, asset_id)
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="asset.passcode_viewed",
+                       entity_type="asset", entity_id=d.id)
+    await db.commit()
+    return {"passcode": crypto.decrypt(d.passcode_enc) if d.passcode_enc else None}
+
+
+@router.put("/{asset_id}/passcode")
+async def set_passcode(
+    asset_id: str,
+    data: PasscodeIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_create_tickets")),
+):
+    from backend.services import audit
+    d = await _device_for_passcode(db, current, asset_id)
+    store_passcode(d, data.passcode)
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="asset.passcode_set",
+                       entity_type="asset", entity_id=d.id, diff={"cleared": not d.passcode_enc})
+    await db.commit()
+    return {"ok": True, "has_passcode": bool(d.passcode_enc)}
 
 
 @router.get("/{asset_id}")

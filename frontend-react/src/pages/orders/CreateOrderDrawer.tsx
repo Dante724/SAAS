@@ -60,6 +60,8 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
   const [imei, setImei] = useState(""); const [vin, setVin] = useState(""); const [hin, setHin] = useState("");
   const [color, setColor] = useState(""); const [condition, setCondition] = useState("");
   const [moreOpen, setMoreOpen] = useState(false);
+  // J3: the device's unlock code, so the bench can test it. Stored locked on the device.
+  const [passcode, setPasscode] = useState(""); const [showPass, setShowPass] = useState(false);
   // An existing device picked from the "Seen before" card — the order attaches to it instead of
   // creating a duplicate asset.
   const [deviceId, setDeviceId] = useState<string | null>(null);
@@ -156,6 +158,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
         asset_imei: imei || null, asset_vin: vin || null, asset_hin: hin || null,
         asset_color: color || null, asset_condition: condition || null,
         asset_custom_data: assetCustom,
+        ...(passcode.trim() ? { device_passcode: passcode.trim() } : {}),
         intake_photos: intakePhotos.map((p) => p.id),
         is_estimate: estimate,
         currency_code: curCode || null,
@@ -166,7 +169,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
       if (!estimate && created?.id) void autoPrintAfterCreate(created.id);   // WS-C #20: device label, if the shop set one up
       onCreated();
       if (!reopen) onClose();
-      else { setClient(null); setQ(""); setComplaint(""); setBrand(""); setModel(""); setSerial(""); setImei(""); setVin(""); setHin(""); setColor(""); setCondition(""); setMoreOpen(false); setDeviceId(null); setLines([]); setWoCustom({}); setAssetCustom({}); setStep(1); }
+      else { setClient(null); setQ(""); setComplaint(""); setBrand(""); setModel(""); setSerial(""); setImei(""); setVin(""); setHin(""); setColor(""); setCondition(""); setPasscode(""); setShowPass(false); setMoreOpen(false); setDeviceId(null); setLines([]); setWoCustom({}); setAssetCustom({}); setStep(1); }
       return created;
     } catch (e: any) { setErr(e.message || "Failed to create"); } finally { setBusy(false); }
   }
@@ -298,6 +301,16 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                     </div>
                     <IdentifyHint value={idState[primaryId.kind][0]} kind={primaryId.kind} clientId={client?.id} usingId={deviceId}
                       onUse={pickExisting} onUndo={() => setDeviceId(null)} />
+                    <div className="space-y-1">
+                      <label htmlFor="intake-passcode" className="block text-[11px] font-bold text-ink-tertiary">Device passcode <span className="font-normal">(optional)</span></label>
+                      <div className="flex items-center space-x-1.5">
+                        <input id="intake-passcode" type={showPass ? "text" : "password"} autoComplete="off" value={passcode} onChange={(e) => setPasscode(e.target.value)}
+                          className="glass-input font-mono block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="So the technician can test it" />
+                        <button type="button" onClick={() => setShowPass((v) => !v)} aria-label={showPass ? "Hide passcode" : "Show passcode"} title={showPass ? "Hide" : "Show"}
+                          className="shrink-0 w-8 h-8 rounded-lg border border-slate-200 text-ink-tertiary hover:text-ink-primary hover:bg-slate-50 grid place-items-center"><M n={showPass ? "visibility_off" : "visibility"} c="text-sm" /></button>
+                      </div>
+                      <p className="text-[11px] text-ink-tertiary">Kept locked on the {term.asset.toLowerCase()}. Only staff who are allowed can see it.</p>
+                    </div>
                   </div>
                 </div>
 

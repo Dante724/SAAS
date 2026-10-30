@@ -77,6 +77,9 @@ class TypeIn(BaseModel):
     is_default: bool = False
     sched_default_duration: int = 60
     sched_required: bool = False
+    # Closing gates (J1). Omitted on an update = keep what's set.
+    requires_signature: Optional[bool] = None
+    requires_checklist: Optional[bool] = None
 
 
 SHOW_OPS = {"is", "is_not", "gt", "lt", "filled"}
@@ -152,6 +155,7 @@ def _ser_type(t: WorkOrderType) -> dict:
         "initial_status": t.initial_status, "default_asset_type": t.default_asset_type, "sort_order": t.sort_order,
         "is_default": t.is_default, "active": t.active,
         "sched_default_duration": t.sched_default_duration, "sched_required": t.sched_required,
+        "requires_signature": bool(t.requires_signature), "requires_checklist": bool(t.requires_checklist),
     }
 
 def _ser_field(f: CustomField) -> dict:
@@ -379,6 +383,7 @@ async def create_type(
         initial_status=data.initial_status, default_asset_type=data.default_asset_type,
         is_default=data.is_default, sort_order=count,
         sched_default_duration=data.sched_default_duration, sched_required=data.sched_required,
+        requires_signature=bool(data.requires_signature), requires_checklist=bool(data.requires_checklist),
     )
     db.add(t)
     await db.commit()
@@ -409,6 +414,10 @@ async def update_type(
     t.is_default = data.is_default
     t.sched_default_duration = data.sched_default_duration
     t.sched_required = data.sched_required
+    if data.requires_signature is not None:
+        t.requires_signature = data.requires_signature
+    if data.requires_checklist is not None:
+        t.requires_checklist = data.requires_checklist
     await db.commit()
     return _ser_type(t)
 

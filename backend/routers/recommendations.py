@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
-from backend.models import Employee, EventFeedItem, Order, OrderLine, Organisation, Recommendation
+from backend.models import Employee, Order, OrderLine, Organisation, Recommendation
 from backend.services.auth import get_current_employee, require_perm, record_scope
 from backend.services.money import q2
 
@@ -185,12 +185,33 @@ async def publish_recommendation(
 ):
     """Move a draft to the customer's view (status=sent)."""
     r = await _rec(db, current.org_id, order_id, rec_id)
+    delivery = None
     if r.status == "draft":
         r.status = "sent"
         r.published_at = datetime.utcnow()
+        delivery = await _tell_customer(db, current, order_id, 1)
         await db.commit()
         await db.refresh(r)
-    return serialize_rec(r)
+    return {**serialize_rec(r), "delivery": delivery}
+
+
+async def _tell_customer(db, current, order_id: str, n: int) -> dict:
+    """R1 — newly published recommendations: send the customer the link to their page."""
+    from backend.models import Client
+    from backend.services.customer_messages import send_to_customer, track_link
+    o = await _order(db, current.org_id, order_id)
+    if not o.public_token:
+        from backend.routers.orders import unique_public_token
+        o.public_token = await unique_public_token(db)
+    client = (await db.execute(select(Client).where(
+        Client.id == o.client_id, Client.org_id == current.org_id))).scalar_one_or_none() if o.client_id else None
+    org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
+    what = "a recommendation" if n == 1 else f"{n} recommendations"
+    body = (f"{org.name if org else 'Your repair shop'} has {what} for your job {o.order_number}. "
+            f"Take a look and choose what you'd like done: {track_link(o)}")
+    return await send_to_customer(db, org_id=current.org_id, client=client, body=body,
+                                  subject=f"Recommended work for {o.order_number}",
+                                  order_id=o.id, trigger_event="recommendation_published", saved=False)
 
 
 @router.post("/{order_id}/recommendations/publish-all")
@@ -207,8 +228,9 @@ async def publish_all(
     for r in rows:
         r.status = "sent"
         r.published_at = now
+    delivery = await _tell_customer(db, current, order_id, len(rows)) if rows else None
     await db.commit()
-    return {"published": len(rows)}
+    return {"published": len(rows), "delivery": delivery}
 
 
 @router.post("/{order_id}/recommendations/{rec_id}/unpublish")
@@ -285,6 +307,7 @@ async def approve_for_customer(
 
 class ReplyIn(BaseModel):
     body: str
+    channel: Optional[str] = None   # auto (default) | email | sms
 
 
 @router.post("/{order_id}/customer-reply", status_code=201)
@@ -294,27 +317,11 @@ async def customer_reply(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_reply_customer")),
 ):
-    """Build 144be — staff replies to the customer on the public page. Posts a
-    client-visible feed message (item_type=staff_reply) that shows on track/portal.
-    Gated by the org toggle ``oe_allow_staff_reply`` and the ``can_reply_customer``
-    role permission — turn either off and the reply capability disappears.
-    """
-    o = await _order(db, current.org_id, order_id)
-    org = (await db.execute(select(Organisation).where(
-        Organisation.id == current.org_id))).scalar_one_or_none()
-    if org is not None and getattr(org, "oe_allow_staff_reply", True) is False:
-        raise HTTPException(403, "Replying to customers is turned off for this shop")
-    body = (data.body or "").strip()
-    if not body:
-        raise HTTPException(400, "Message is empty")
-    if len(body) > 2000:
-        body = body[:2000]
-    db.add(EventFeedItem(
-        org_id=current.org_id, entity_type="order", entity_id=o.id,
-        item_type="staff_reply", body=body, author_id=current.id,
-        author_name=current.name, visibility="client"))
-    await db.commit()
-    return {"ok": True}
+    """Build 144be — staff replies to the customer from the job's activity box. Same path as the
+    conversation box (orders.post_customer_message): one thread, really sent, honest result.
+    Gated by the org toggle ``oe_allow_staff_reply`` and the ``can_reply_customer`` permission."""
+    from backend.routers.orders import post_customer_message
+    return await post_customer_message(db, current, order_id, data.body, data.channel)
 
 
 @router.post("/{order_id}/recommendations/seen")

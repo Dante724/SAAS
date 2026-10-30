@@ -14,7 +14,7 @@ import { money } from "../orders/types";
 import InvoiceDrawer from "./InvoiceDrawer";
 import CreditNotesList from "./CreditNotesList";
 import { Avatar } from "../orders/look";
-import { DISPLAY_MODES, Drawer, ErrorNote, MoreMenu, StatusPill, btnGhost, btnPrimary, daysLate, fmtDate, inputCls, labelCls, lateText, type MenuItem } from "./billing";
+import { DISPLAY_MODES, Drawer, ErrorNote, MoreMenu, StatusPill, btnGhost, btnPrimary, daysLate, fmtDate, inputCls, isVoid, labelCls, lateText, sendInvoice, type MenuItem } from "./billing";
 
 // Invoices are day-to-day front-desk work (issue, take payment, resend), so they get their own
 // page next to Sales instead of a tab inside Finance — which also kept staff who only need
@@ -55,6 +55,11 @@ export default function InvoicesHub() {
     try { await api.patch(`/finance/invoices/${id}/einvoice`, { status: "cleared" }); reloadInvoices(); }
     catch { await alertDialog("Could not update status"); }
   }
+  // I6 — send from the list; the answer says plainly if it didn't reach the customer.
+  async function sendFromList(i: Invoice, way: "email" | "sms") {
+    try { const r = await sendInvoice(i.id, way); await alertDialog(r.text, r.tone ? "Not sent" : "Invoice sent"); reloadInvoices(); }
+    catch (e: any) { await alertDialog(e.message || "Couldn't send the invoice"); }
+  }
   // Extra row actions live in "⋮"; the row itself opens the invoice.
   // On phones the e-invoice column isn't there, so its actions join the menu.
   const rowActions = (i: Invoice, phone = false): MenuItem[] => [
@@ -63,6 +68,8 @@ export default function InvoicesHub() {
       { label: "Download e-invoice XML", icon: "download", onClick: () => { openAuthedDoc(`/finance/invoices/${i.id}/einvoice.xml`).catch(() => alertDialog("Could not open e-invoice")); }, hidden: !i.einvoice_status || i.einvoice_status === "none" },
       { label: "Mark e-invoice cleared", icon: "check", onClick: () => { markEinvoiceCleared(i.id); }, hidden: i.einvoice_status !== "issued" },
     ] : []),
+    { label: "Send by email", icon: "mail", onClick: () => { sendFromList(i, "email"); }, hidden: isVoid(i.status) },
+    { label: "Send by text", icon: "sms", onClick: () => { sendFromList(i, "sms"); }, hidden: isVoid(i.status) },
     { label: "Print / PDF", icon: "print", onClick: () => { openAuthedDoc(`/print/invoices/${i.id}`).catch(() => alertDialog("Could not open invoice PDF")); } },
     { label: "Delete invoice", icon: "delete", danger: true, onClick: () => { deleteInvoice(i); },
       hidden: !can("can_delete_invoices") || ["cancelled", "canceled"].includes(i.status || "") || !!(i.amount_paid || 0) || !!(i.credited || 0) },
