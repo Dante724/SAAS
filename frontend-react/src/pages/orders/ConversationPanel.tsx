@@ -37,7 +37,7 @@ export default function ConversationPanel({ orderId }: { orderId: string }) {
       </div>
       <div className="max-h-64 overflow-y-auto p-3 space-y-2 bg-slate-50/40">
         {!msgs && <div className="text-xs text-ink-tertiary py-6 text-center">Loading…</div>}
-        {msgs?.length === 0 && <div className="text-xs text-ink-tertiary py-6 text-center">No messages yet. Say hello — the customer sees it on their status link.</div>}
+        {msgs?.length === 0 && <div className="text-xs text-ink-tertiary py-6 text-center">No messages yet. Messages you send here show on the customer's status page.</div>}
         {(msgs || []).map((m) => {
           const staff = m.from === "staff";
           return (

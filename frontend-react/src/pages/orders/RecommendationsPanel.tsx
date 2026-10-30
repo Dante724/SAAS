@@ -22,7 +22,7 @@ export type RecRow = {
 };
 type Item = { id: string; name: string };
 
-const URGENCY_LABEL: Record<string, string> = { now: "Needs attention now", soon: "Can wait" };
+const URGENCY_LABEL: Record<string, string> = { now: "Needs it now", soon: "Soon" };
 const STATUS: Record<string, { label: string; cls: string }> = {
   draft: { label: "Draft", cls: "bg-slate-100 text-ink-secondary" },
   sent: { label: "Waiting for the customer", cls: "bg-blue-50 text-blue-700" },
@@ -129,13 +129,13 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
 
       {form && (() => {
         const total = (Number(form.price) || 0) * (Math.max(1, Number(form.qty) || 1));
-        const photoInput = <input type="file" accept="image/*" capture="environment" className="hidden" onChange={async (e) => { const f = e.target.files?.[0]; if (f) setForm({ ...form, photo: await shrinkPhoto(f) }); }} />;
+        const photoInput = <input type="file" accept="image/*" capture="environment" className="hidden" onChange={async (e) => { const f = e.target.files?.[0]; if (f) { const photo = await shrinkPhoto(f); setForm((cur) => cur && { ...cur, photo }); } }} />;
         return (
           <div className="mx-4 mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_24px_-12px_rgba(15,23,42,0.12)] focus-within:border-primary/40">
             {/* What and why read like a note to the customer, with the photo as proof beside it. */}
             <div className="flex gap-4 px-5 pt-5">
               <div className="min-w-0 flex-1">
-                <input autoFocus value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="What do you recommend?" aria-label="Recommendation"
+                <input autoFocus value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Replace the swollen battery" aria-label="Recommendation"
                   className="w-full bg-transparent text-base font-semibold text-ink-primary placeholder:text-ink-tertiary/70 placeholder:font-medium outline-none" />
                 <textarea value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} rows={2} placeholder="Why, in plain words for the customer. e.g. The battery is swollen and pushing on the screen." aria-label="Why"
                   className="mt-1.5 w-full resize-none bg-transparent text-sm leading-relaxed text-ink-secondary placeholder:text-ink-tertiary/70 outline-none" />
@@ -163,16 +163,16 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
                 <div>
                   <span className="mb-1 block text-[11px] font-medium text-ink-tertiary">Qty</span>
                   <span className="flex h-9 items-center rounded-xl border border-slate-200 bg-white">
-                    <button type="button" aria-label="Less" onClick={() => setForm({ ...form, qty: String(Math.max(1, (Number(form.qty) || 1) - 1)) })} className="grid h-9 w-8 place-items-center text-ink-tertiary hover:text-ink-primary"><M n="remove" c="text-sm" /></button>
+                    <button type="button" aria-label="Decrease quantity" onClick={() => setForm({ ...form, qty: String(Math.max(1, (Number(form.qty) || 1) - 1)) })} className="grid h-9 w-8 place-items-center text-ink-tertiary hover:text-ink-primary"><M n="remove" c="text-sm" /></button>
                     <input inputMode="numeric" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value.replace(/\D/g, "") })} aria-label="Qty"
                       className="w-7 bg-transparent text-center text-sm font-medium tabular-nums text-ink-primary outline-none" />
-                    <button type="button" aria-label="More" onClick={() => setForm({ ...form, qty: String((Number(form.qty) || 1) + 1) })} className="grid h-9 w-8 place-items-center text-ink-tertiary hover:text-ink-primary"><M n="add" c="text-sm" /></button>
+                    <button type="button" aria-label="Increase quantity" onClick={() => setForm({ ...form, qty: String((Number(form.qty) || 1) + 1) })} className="grid h-9 w-8 place-items-center text-ink-tertiary hover:text-ink-primary"><M n="add" c="text-sm" /></button>
                   </span>
                 </div>
                 <Segmented label="Type" value={form.kind} onChange={(kind) => setForm({ ...form, kind })}
-                  options={[{ v: "service", t: "Service" }, { v: "product", t: "Part" }, { v: "custom", t: "Other" }]} />
+                  options={[{ v: "service", t: "Service" }, { v: "product", t: "Product" }, { v: "custom", t: "Other" }]} />
               <div className="sm:ml-auto"><Segmented label="How urgent" value={form.urgency} onChange={(urgency) => setForm({ ...form, urgency })}
-                options={[{ v: "", t: "Not urgent" }, { v: "soon", t: "Can wait", dot: "bg-amber-400" }, { v: "now", t: "Needs it now", dot: "bg-rose-500" }]} /></div>
+                options={[{ v: "", t: "Not urgent" }, { v: "soon", t: "Soon", dot: "bg-amber-400" }, { v: "now", t: "Needs it now", dot: "bg-rose-500" }]} /></div>
               {items.length > 1 && (
                 <label className="flex basis-full items-center gap-2 text-[11px] font-medium text-ink-tertiary">For
                   <select value={form.item} onChange={(e) => setForm({ ...form, item: e.target.value })} aria-label="Which item"
@@ -213,10 +213,10 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className="text-sm font-semibold text-ink-primary">{r.title}</span>
                     <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${st.cls}`}>{st.label}</span>
-                    {r.urgency && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">{URGENCY_LABEL[r.urgency]}</span>}
+                    {r.urgency && <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${r.urgency === "now" ? "bg-amber-50 text-amber-800" : "bg-slate-100 text-ink-secondary"}`}>{URGENCY_LABEL[r.urgency]}</span>}
                     {r.source === "checklist" && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-ink-tertiary">From checklist</span>}
                   </div>
-                  {r.note && <p className="mt-0.5 text-[12px] text-ink-secondary">{r.note}</p>}
+                  {r.note && <p className="mt-0.5 text-xs text-ink-secondary">{r.note}</p>}
                   <p className="mt-0.5 text-[11px] text-ink-tertiary">
                     {[itemName ? `For ${itemName}` : null,
                       r.status === "approved" && r.decided_by_name ? `Confirmed by ${r.decided_by_name}${r.decided_at ? `, ${fmtDay(r.decided_at)}` : ""}` : null,
@@ -226,29 +226,29 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
                     {(r.status === "draft" || r.status === "sent") && can("can_recommend") && (
                       <select value={r.urgency || ""} disabled={busy} onChange={(e) => call(() => api.patch(`/orders/${orderId}/recommendations/${r.id}`, { urgency: e.target.value || null }))}
                         aria-label={`How urgent ${r.title} is`} className="rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-ink-secondary">
-                        <option value="">Not urgent</option><option value="now">Needs attention now</option><option value="soon">Can wait</option>
+                        <option value="">Not urgent</option><option value="soon">Soon</option><option value="now">Needs it now</option>
                       </select>
                     )}
                     {r.status === "draft" && can("can_publish_recommend") && (
                       <button disabled={busy} onClick={() => call(() => api.post(`/orders/${orderId}/recommendations/${r.id}/publish`, {}), "Sent to the customer")}
-                        className="rounded-md bg-primary px-2.5 py-1 text-[11px] font-semibold text-white hover:opacity-90">Send to customer</button>
+                        className="h-8 rounded-lg bg-primary px-2.5 text-xs font-semibold text-white hover:brightness-110">Send to customer</button>
                     )}
                     {r.status === "sent" && can("can_publish_recommend") && (
                       <button disabled={busy} onClick={() => call(() => api.post(`/orders/${orderId}/recommendations/${r.id}/unpublish`, {}), "Taken back to draft")}
-                        className="rounded-md border border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-ink-secondary hover:bg-slate-50">Take back</button>
+                        className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Unsend</button>
                     )}
                     {(r.status === "sent" || r.status === "declined" || r.status === "draft") && can("can_approve_rec_for_customer") && (
                       <button disabled={busy} onClick={async () => {
                         const name = await promptDialog("Who said yes? (the customer's name)", { title: "Customer said yes", confirmLabel: `Add ${money(total)} to the job` });
                         if (name === null) return;
                         await call(() => api.post(`/orders/${orderId}/recommendations/${r.id}/approve-for-customer`, { how: "phone", customer_name: name || null }), `${r.title} added to the job`);
-                      }} className="rounded-md border border-emerald-200 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-50">Customer said yes</button>
+                      }} className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-ink-primary hover:bg-slate-50">Customer said yes</button>
                     )}
                     {r.status !== "approved" && can("can_recommend") && (
                       <button disabled={busy} aria-label={`Delete ${r.title}`} onClick={async () => {
                         if (!(await confirmDialog(`Delete "${r.title}"?`, { title: "Delete recommendation", confirmLabel: "Delete", danger: true }))) return;
                         await call(() => api.del(`/orders/${orderId}/recommendations/${r.id}`), "Deleted");
-                      }} className="rounded-md px-2 py-1 text-[11px] font-semibold text-ink-tertiary hover:text-rose-600">Delete</button>
+                      }} className="h-8 rounded-lg px-2 text-xs font-semibold text-ink-tertiary hover:text-rose-600">Delete</button>
                     )}
                   </div>
                 </div>

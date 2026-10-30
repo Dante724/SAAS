@@ -36,14 +36,14 @@ describe("adding and adjusting lines", () => {
     const body = calls.find((c) => c.m === "POST")!.body;
     expect(body).toMatchObject({ ref_id: "p1", qty: 1, kind: "product" });
     expect(body.discount).toBeUndefined();
-    expect(flash).toHaveBeenCalledWith(expect.stringMatching(/Thermal Paste added · out of stock/));
+    expect(flash).toHaveBeenCalledWith(expect.stringMatching(/Thermal Paste added\. It's out of stock/));
     expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
   });
 
   it("changes quantity and discount from the line and sends only what changed", async () => {
     render(<ServicesTab orderId="o1" lines={[line] as any} total={2} onFlash={() => {}} />);
     await userEvent.click(screen.getByRole("button", { name: "Change quantity or discount for Thermal Paste" }));
-    await userEvent.click(await screen.findByRole("button", { name: "More" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Increase quantity" }));
     await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(calls.some((c) => c.m === "PATCH")).toBe(true));
     expect(calls.find((c) => c.m === "PATCH")).toMatchObject({ url: expect.stringContaining("/orders/o1/lines/l9"), body: { qty: 2 } });

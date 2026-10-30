@@ -17,7 +17,8 @@ export default function LineQtyEditor({ lineId, label, qty, discount, canDiscoun
   const [d, setD] = useState(String(discount || ""));
   function done() {
     const nq = Math.max(1, Math.round(Number(q) || 1));
-    const nd = Math.min(100, Math.max(0, Number(d) || 0));
+    const parsed = Number(d);
+    const nd = Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : (discount || 0);   // a typo keeps the old discount
     const body: { qty?: number; discount?: number; discount_type?: "pct" } = {};
     if (nq !== qty) body.qty = nq;
     if (canDiscount && nd !== (discount || 0)) { body.discount = nd; body.discount_type = "pct"; }
@@ -32,17 +33,17 @@ export default function LineQtyEditor({ lineId, label, qty, discount, canDiscoun
         <div className="flex items-center justify-between gap-3">
           <span className="text-xs font-medium text-ink-secondary">Quantity</span>
           <span className="flex items-center rounded-xl border border-slate-200 bg-white">
-            <button type="button" aria-label="Less" onClick={() => step(-1)} className={stepBtn}><M n="remove" c="text-base" /></button>
+            <button type="button" aria-label="Decrease quantity" onClick={() => step(-1)} className={stepBtn}><M n="remove" c="text-base" /></button>
             <input autoFocus inputMode="numeric" value={q} onChange={(e) => setQ(e.target.value.replace(/\D/g, ""))} onFocus={(e) => e.target.select()} aria-label="Quantity"
               className="w-9 bg-transparent text-center text-sm font-semibold tabular-nums text-ink-primary outline-none" />
-            <button type="button" aria-label="More" onClick={() => step(1)} className={stepBtn}><M n="add" c="text-base" /></button>
+            <button type="button" aria-label="Increase quantity" onClick={() => step(1)} className={stepBtn}><M n="add" c="text-base" /></button>
           </span>
         </div>
         {canDiscount && (
           <label className="flex items-center justify-between gap-3">
             <span className="text-xs font-medium text-ink-secondary">Discount</span>
             <span className="flex h-10 w-[120px] items-center rounded-xl border border-slate-200 bg-white px-3 focus-within:border-primary/50">
-              <input inputMode="decimal" value={d} placeholder="0" onChange={(e) => setD(e.target.value.replace(/[^\d.]/g, ""))} aria-label="Discount percent"
+              <input inputMode="decimal" value={d} placeholder="0" onChange={(e) => setD(e.target.value.replace(/[^\d.]/g, "").replace(/(\..*)\./g, "$1"))} aria-label="Discount percent"
                 className="w-full min-w-0 bg-transparent text-right text-sm font-medium tabular-nums text-ink-primary outline-none" />
               <span className="ml-1 text-xs text-ink-tertiary">%</span>
             </span>

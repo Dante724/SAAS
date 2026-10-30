@@ -122,7 +122,7 @@ export default function PrintMenu({ orderId, status, canInvoices = true, onStick
     const cur = t.auto_print_events || [];
     const turningOn = !cur.includes("close");
     const events = turningOn ? [...cur, "close"] : cur.filter((e) => e !== "close");
-    if (await saveAuto(t, events)) setUndo({ t, prev: cur, text: turningOn ? `${t.name} will print when any job closes.` : `${t.name} won't print by itself any more.` });
+    if (await saveAuto(t, events)) setUndo({ t, prev: cur, text: turningOn ? `${t.name} will print automatically when any job closes.` : `${t.name} won't print automatically any more.` });
   }
 
   async function print(id: string) {
@@ -153,7 +153,7 @@ export default function PrintMenu({ orderId, status, canInvoices = true, onStick
   const printRow = (id: string, label: string, opts?: { auto?: boolean }) => (
     <button key={id} type="button" onClick={() => print(id)} className={row}>
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {opts?.auto && <span className={`${tag} bg-primary/10 text-primary`} title="Prints by itself when a job closes">Auto</span>}
+      {opts?.auto && <span className={`${tag} bg-primary/10 text-primary`} title="Prints automatically when a job closes">Auto</span>}
       {(id === last || (id === itemisedAnchor && last === ITEMISED)) && <span className="shrink-0 text-[11px] text-ink-tertiary">Last used</span>}
     </button>
   );
@@ -210,14 +210,14 @@ export default function PrintMenu({ orderId, status, canInvoices = true, onStick
                         <span className="block text-[11px] text-ink-tertiary">when a job closes</span>
                       </span>
                       <Switch size="sm" on={on} disabled={!autoPrint.canChange || autoSaving === t.id} onChange={() => toggleAuto(t)}
-                        label={`Print ${t.name} by itself when a job closes`} />
+                        label={`Print ${t.name} automatically when a job closes`} />
                     </div>
                   );
                 })}
                 {undo ? (
                   <p role="status" className="mx-1.5 mt-1 flex items-center gap-2 rounded-lg bg-white px-2.5 py-2 text-[11px] text-ink-secondary ring-1 ring-slate-200">
                     <span className="flex-1">{undo.text}</span>
-                    <button type="button" onClick={async () => { if (await saveAuto(undo.t, undo.prev)) setUndo(null); }} className="font-semibold text-primary hover:underline">Undo</button>
+                    <button type="button" disabled={!!autoSaving} onClick={async () => { if (await saveAuto(undo.t, undo.prev)) setUndo(null); }} className="font-semibold text-primary hover:underline disabled:opacity-50">Undo</button>
                   </p>
                 ) : !autoPrint.canChange && (
                   <p className="px-3 pt-1 text-[11px] text-ink-tertiary">Only a manager can change this.</p>

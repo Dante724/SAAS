@@ -149,12 +149,12 @@ describe("PrintMenu", () => {
     expect(await screen.findByText("Automatic")).toBeTruthy();
     expect(screen.getByText("Applies to every job")).toBeTruthy();
     expect(screen.getAllByText("Auto").length).toBe(1);                           // the work order, in Print now
-    const rc = screen.getByRole("switch", { name: "Print Pickup receipt by itself when a job closes" });
+    const rc = screen.getByRole("switch", { name: "Print Pickup receipt automatically when a job closes" });
     expect(screen.queryByRole("switch", { name: /Estimate/ })).toBeNull();
     await userEvent.click(rc);
     await waitFor(() => expect(rc.getAttribute("aria-checked")).toBe("true"));
     expect(calls.find((c) => c.m === "PUT")).toMatchObject({ url: expect.stringContaining("/documents/templates/t-rc/auto-print"), body: { events: ["close"] } });
-    expect(screen.getByText("Pickup receipt will print when any job closes.")).toBeTruthy();
+    expect(screen.getByText("Pickup receipt will print automatically when any job closes.")).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "Undo" }));
     await waitFor(() => expect(rc.getAttribute("aria-checked")).toBe("false"));
     unmount();

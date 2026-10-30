@@ -4367,6 +4367,43 @@ async def delete_line(
     await _log_amount_change(db, current.org_id, order, _prev_total)
     await db.commit()
     return {"ok": True, "order_total": order.total}
+
+
+@router.delete("/{order_id}/kits/{group_id}")
+async def delete_kit(
+    order_id: str,
+    group_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Remove a whole kit from a job in one go: every line goes, or none does (a kit is never left
+    half removed with its price re-spread over what's left). Stock taken for its parts goes back."""
+    order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_editable(db, order, current)
+    lines = (await db.execute(select(OrderLine).where(
+        OrderLine.order_id == order_id, OrderLine.bundle_group_id == group_id))).scalars().all()
+    if not lines:
+        raise HTTPException(404, "Kit not found on this job")
+    perms = await _order_perms(db, current)
+    for line in lines:
+        need = "can_add_products" if line.kind == "product" else "can_add_services"
+        if perms.get(need) is False:
+            raise HTTPException(403, "You don't have permission to remove this kit from the job")
+    await _guard_kit_change(db, current, order_id, group_id, adds_value=False)
+    _prev_total = float(order.total or 0)
+    for line in lines:
+        if line.kind == "product" and line.ref_id and not order.is_estimate:
+            deducted = (line.qty or 0) - (line.pending_stock or 0)
+            if deducted > 0:
+                await _reverse_fulfillment(db, order, line.ref_id, deducted)
+        await db.delete(line)
+    await db.flush()
+    await _recalc_order(db, order)
+    await _log_amount_change(db, current.org_id, order, _prev_total)
+    await db.commit()
+    return {"ok": True, "removed": len(lines), "order_total": order.total}
 from sqlalchemy import or_ as _or
 
 from backend.models import SavedFilter

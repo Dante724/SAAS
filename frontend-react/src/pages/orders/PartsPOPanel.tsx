@@ -6,7 +6,7 @@ import { api } from "../../api/client";
 // ⋯ menu (or the "Waiting on parts" chip): what the job still owes from stock, the purchase
 // orders linked to it, the stock held for it, and the actions to order or hold more.
 // Settings → Inventory decides whether arriving parts are written off to the job by the server
-// ("automatic") or left for staff ("manual", the Write off buttons here).
+// ("automatic") or left for staff ("manual", the Use from stock buttons here).
 type POLineView = { part: string; ordered: number; received: number; outstanding: number };
 type LinkedPO = {
   po_id: string; po_number: string; status: string; supplier?: string | null; raised_here: boolean;
@@ -110,7 +110,7 @@ export default function PartsPOPanel({ orderId, lines, canBuy, isEstimate, onClo
   });
   const writeOff = (l: JobLine) => run(`w${l.id}`, async () => {
     const r = await api.post<any>(`/orders/${orderId}/lines/${l.id}/receive-stock`, {});
-    return r.pending ? `Wrote off what's in stock. ${n(r.pending)} still owed` : `${l.description || "Part"} written off to this job`;
+    return r.pending ? `Used what's in stock. ${n(r.pending)} still owed` : `${l.description || "Part"} taken from stock for this job`;
   });
   const release = (id: string) => run(`r${id}`, async () => { await api.post(`/inventory/reservations/${id}/release`, {}); return "Hold released"; });
 
@@ -171,7 +171,7 @@ export default function PartsPOPanel({ orderId, lines, canBuy, isEstimate, onClo
 
   return (
     <div className="absolute inset-0 z-30 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/20 backdrop-blur-[1px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/30" onClick={onClose} />
       <div role="dialog" aria-label="Parts and purchase orders" className="relative w-[480px] max-w-full h-full bg-slate-50 border-l border-slate-200/90 shadow-clay-drawer flex flex-col animate-[panelIn_.24s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes panelIn{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}`}</style>
         <div className="px-5 pt-4 pb-3 bg-white border-b border-slate-200/90">
@@ -181,7 +181,7 @@ export default function PartsPOPanel({ orderId, lines, canBuy, isEstimate, onClo
               <div className="text-sm font-semibold text-ink-primary">Parts &amp; purchase orders</div>
               <div className="text-[11px] text-ink-tertiary flex items-center gap-1">
                 <M n={auto ? "bolt" : "back_hand"} c="text-xs" />
-                {auto ? "Parts that arrive are written off to this job automatically" : "Parts that arrive wait for you to write them off"}
+                {auto ? "Parts that arrive are taken from stock for this job automatically" : "Parts that arrive wait for you to use them from stock"}
               </div>
             </div>
             <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary"><M n="close" c="text-base" /></button>
@@ -206,7 +206,7 @@ export default function PartsPOPanel({ orderId, lines, canBuy, isEstimate, onClo
                     <span className="text-xs text-ink-primary truncate flex-1">{l.description || "Part"}</span>
                     <span className="text-xs tabular-nums text-amber-700">{n(l.pending_stock || 0)} owed</span>
                     {canBuy && <button type="button" onClick={() => writeOff(l)} disabled={busy !== null}
-                      className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-[11px] font-semibold text-ink-primary hover:bg-slate-50 disabled:opacity-50">{busy === `w${l.id}` ? "Writing off…" : "Write off"}</button>}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-[11px] font-semibold text-ink-primary hover:bg-slate-50 disabled:opacity-50">{busy === `w${l.id}` ? "Using…" : "Use from stock"}</button>}
                   </div>
                 ))}
               </div>

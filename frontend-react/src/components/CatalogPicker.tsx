@@ -12,7 +12,7 @@ export type CatalogItem = {
 };
 
 const ICON = { service: "build", product: "inventory_2", bundle: "package_2" } as const;
-const KIND = { service: "Service", product: "Product", bundle: "Job kit" } as const;
+const KIND = { service: "Service", product: "Product", bundle: "Kit" } as const;
 
 // How much is on the shelf, so nobody adds a part that isn't there without knowing.
 function Stock({ n }: { n: number }) {
@@ -25,7 +25,7 @@ function Stock({ n }: { n: number }) {
 function groupByCategory(items: CatalogItem[]) {
   const groups: { title: string; items: CatalogItem[] }[] = [];
   for (const i of items) {
-    const title = i.kind === "bundle" ? "Job kits" : i.category?.trim() || (i.kind === "service" ? "Other services" : "Other products");
+    const title = i.kind === "bundle" ? "Kits" : i.category?.trim() || (i.kind === "service" ? "Other services" : "Other products");
     let g = groups.find((x) => x.title === title);
     if (!g) groups.push((g = { title, items: [] }));
     g.items.push(i);
@@ -56,9 +56,10 @@ export default function CatalogPicker({ type = "all", placeholder = "Search serv
     if (!qs && !(openOnFocus && browse)) { setItems([]); setLoaded(false); return; }
     const dev = deviceId ? `&device_id=${encodeURIComponent(deviceId)}` : "";
     const lim = qs ? "&limit=30" : "&limit=100";   // empty box: browse the catalog
+    let live = true;   // a slower, older request must never replace newer results
     const h = setTimeout(() => api.get<{ items: CatalogItem[] }>(`/catalog/search?q=${encodeURIComponent(qs)}&type=${type}${dev}${lim}`)
-      .then((r) => { setItems(r.items || []); setLoaded(true); setOpen(true); }).catch(() => setItems([])), qs ? 200 : 0);
-    return () => clearTimeout(h);
+      .then((r) => { if (!live) return; setItems(r.items || []); setLoaded(true); setOpen(true); }).catch(() => { if (live) setItems([]); }), qs ? 200 : 0);
+    return () => { live = false; clearTimeout(h); };
   }, [q, type, deviceId, browse, openOnFocus]);
   const flat = !!q.trim() || view === "all";
   const groups = q.trim() ? [{ title: "", items }]
@@ -68,7 +69,7 @@ export default function CatalogPicker({ type = "all", placeholder = "Search serv
   return (
     <div className="relative" ref={box}>
       <input value={q} onChange={(e) => { setQ(e.target.value); setOpen(true); }} placeholder={placeholder} role="combobox" aria-expanded={open} autoComplete="off"
-        onFocus={() => { if (openOnFocus) setBrowse(true); setOpen(true); }} onClick={() => setOpen(true)}
+        onFocus={() => { if (openOnFocus) setBrowse(true); setOpen(true); }} onClick={() => { if (openOnFocus) setBrowse(true); setOpen(true); }}
         onKeyDown={(e) => { if (e.key === "Escape") setOpen(false); }}
         className="glass-input w-full px-3 py-2 rounded-lg text-sm font-semibold text-ink-primary" />
       {open && (items.length > 0 || (loaded && q.trim())) && (
@@ -77,7 +78,7 @@ export default function CatalogPicker({ type = "all", placeholder = "Search serv
           <div role="listbox" className="absolute z-40 left-0 right-0 mt-1.5 bg-white border border-slate-200 rounded-2xl shadow-clay-drawer p-1.5 max-h-80 overflow-y-auto">
             {items.length === 0 && <div className="px-3 py-3 text-xs text-ink-tertiary">Nothing matches "{q.trim()}"</div>}
             {!q.trim() && items.length > 0 && (
-              <div className="sticky -top-1.5 z-[2] -mx-1.5 -mt-1.5 mb-1 flex items-center gap-2 border-b border-slate-100 bg-white/95 px-3 py-2 backdrop-blur">
+              <div className="sticky -top-1.5 z-[2] -mx-1.5 -mt-1.5 mb-1 flex items-center gap-2 border-b border-slate-100 bg-white px-3 py-2">
                 <span role="tablist" aria-label="Show" className="inline-flex items-center gap-0.5 rounded-lg bg-slate-100 p-0.5">
                   {([["category", "By category"], ["all", "All items"]] as const).map(([v, t]) => (
                     <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => pickView(v)}
@@ -116,7 +117,7 @@ export default function CatalogPicker({ type = "all", placeholder = "Search serv
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center gap-1.5">
                           <span className="truncate text-sm font-medium text-ink-primary">{i.name}</span>
-                          {i.fits && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-px text-[10px] font-semibold text-emerald-700" title="Fits this device">Fits</span>}
+                          {i.fits && <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-px text-[11px] font-semibold text-emerald-700" title="Fits this device">Fits</span>}
                         </span>
                         <span className="block truncate text-xs text-ink-tertiary">{sub.filter(Boolean).join(" · ")}</span>
                       </span>

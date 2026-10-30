@@ -42,7 +42,7 @@ export default function KitGroupHeader({ orderId, groupId, name, qty, mode, lock
     if (!Number.isFinite(price) || price < 0) { onFlash("Enter a price of 0 or more"); return; }
     // Repeat both prices so a slip ("90008000" for "8000") is caught before it's saved.
     const reason = await promptDialog(`${name}: ${money(locked ?? 0)} → ${money(price)}. Why is the price changing? This is saved in the activity log.`,
-      { title: "Reason", placeholder: "e.g. Price match", confirmLabel: "Save price" });
+      { title: "Reason", placeholder: "Price match", confirmLabel: "Save price" });
     if (!reason || reason.trim().length < 3) { onFlash("Add a reason to change the kit price"); return; }
     await save({ price, reason: reason.trim() }, "Kit price changed");
   }
