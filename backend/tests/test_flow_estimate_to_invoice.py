@@ -214,7 +214,6 @@ async def test_gap_message_to_customer_is_delivered(client, capsys):
     assert any("[notify:" in ln and "Your phone is ready" in ln for ln in out.splitlines())
 
 
-@pytest.mark.xfail(strict=True, reason="G4: a deposit is never applied to the invoice, so it stays part-paid after full payment")
 async def test_gap_deposit_reaches_the_invoice(client):
     H, loc, cid, acc = await _shop(client)
     o = (await client.post("/api/orders", json={"client_id": cid, "location_id": loc, "complaint": "x"}, headers=H)).json()

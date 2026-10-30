@@ -12,7 +12,6 @@ Rules
   * The job's own device (orders.device_id) is item #1, created on demand, so everything that
     knows one item per job keeps working. Item #1 can't be removed.
 """
-from datetime import datetime
 from typing import Optional
 
 from fastapi import HTTPException
@@ -157,22 +156,7 @@ def group_rows(lines: list[dict]) -> list[dict]:
 async def bill_lines(db: AsyncSession, order, lines: list, *, display_mode: str = "detailed"):
     """An invoice for exactly these lines of this job (multi-invoice per order), grouped by item.
     Caller has already checked the lines belong to the job and aren't billed yet."""
-    from backend.models import Invoice, InvoiceLine, InvoiceOrder
-    from backend.services.money import msum
-    from backend.services.numbering import next_number
+    from backend.services.invoice_money import new_invoice
     names = await item_names(db, order.org_id, [l.order_item_id for l in lines])
     lines = sort_by_item(lines, names, key=lambda l: l.order_item_id)
-    subtotal = msum([float(l.total or 0) for l in lines])
-    inv = Invoice(invoice_number=await next_number(db, order.org_id, "invoice"), org_id=order.org_id,
-                  order_id=order.id, client_id=order.client_id, display_mode=display_mode, status="draft",
-                  subtotal=subtotal, discount=0.0, tax=0.0, total=subtotal, amount_paid=0.0,
-                  issued_at=datetime.utcnow())
-    db.add(inv)
-    await db.flush()
-    db.add(InvoiceOrder(invoice_id=inv.id, order_id=order.id, sort_order=0))
-    for n, l in enumerate(lines):
-        db.add(InvoiceLine(invoice_id=inv.id, order_line_id=l.id, kind=(l.kind or l.line_type or "custom")[:16],
-                           sort_order=n, description=(l.description or "")[:500],
-                           qty=l.qty, unit_price=l.unit_price, total=l.total))
-    await db.flush()
-    return inv
+    return await new_invoice(db, org_id=order.org_id, orders=[order], lines=lines, display_mode=display_mode)

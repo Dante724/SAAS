@@ -781,7 +781,12 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
         order.rec_unread = (order.rec_unread or 0) + decided
         # Add the chosen work to the job's total (a job priced at check-in may have no lines
         # yet, so recomputing from lines would wipe its quoted price).
-        order.total = q2(float(order.total or 0) + added)
+        prev_total = float(order.total or 0)
+        order.total = q2(prev_total + added)
+        if added:
+            # A draft invoice for the job follows the new total; a sent one keeps its own.
+            from backend.services.invoice_money import sync_order_invoices
+            await sync_order_invoices(db, order, prev_total)
         parts = []
         if approved:
             parts.append(f"added {approved} recommended item{'s' if approved != 1 else ''}")

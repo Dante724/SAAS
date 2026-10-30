@@ -372,3 +372,32 @@ async def test_converting_credits_the_estimate_creator(client, db):
     rows = (await db.execute(select(EmployeeBalanceLedger).where(
         EmployeeBalanceLedger.event == "order_created", EmployeeBalanceLedger.ref_id == o["id"]))).scalars().all()
     assert [r.employee_id for r in rows] == [me["id"]] and rows[0].amount == _pt.approx(5.0)
+
+
+async def test_approved_recommendations_update_the_draft_invoice(client):
+    """Online or by phone, approved recommended work lands on the job's draft invoice."""
+    H, _, loc, cid = await _shop(client)
+    o = (await client.post("/api/orders", json={"client_id": cid, "location_id": loc, "complaint": "x"}, headers=H)).json()
+    await client.post(f"/api/orders/{o['id']}/lines", json={"kind": "custom", "line_type": "labour",
+                                                            "description": "w", "qty": 1, "unit_price": 200}, headers=H)
+    iid = (await client.post("/api/finance/invoices", json={"order_id": o["id"]}, headers=H)).json()["id"]
+
+    async def total():
+        return float((await client.get(f"/api/finance/invoices/{iid}", headers=H)).json()["total"])
+    assert await total() == 200
+
+    async def rec(title, price):
+        r = (await client.post(f"/api/orders/{o['id']}/recommendations", json={"title": title, "kind": "custom",
+                                                                              "unit_price": price}, headers=H)).json()
+        await client.post(f"/api/orders/{o['id']}/recommendations/{r['id']}/publish", headers=H)
+        return r["id"]
+    online = await rec("Case", 40)
+    tok = (await client.post(f"/api/orders/{o['id']}/public-link", headers=H)).json()["token"]
+    r = await client.post(f"/api/public/track/{tok}/recommendations/decide", json={"approve_ids": [online]})
+    assert r.status_code == 200, r.text
+    assert await total() == 240
+    phone = await rec("Screen guard", 15)
+    r = await client.post(f"/api/orders/{o['id']}/recommendations/{phone}/approve-for-customer",
+                          json={"how": "phone"}, headers=H)
+    assert r.status_code == 200, r.text
+    assert await total() == 255

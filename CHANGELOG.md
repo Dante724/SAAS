@@ -1,5 +1,34 @@
 # Changelog
 
+## Invoice money: one set of rules for every payment and invoice (flow check G4, F2–F5)
+
+Audit: `docs/audits/2026-10-30-estimate-to-invoice-flow.md`. New service `backend/services/invoice_money.py`; migration
+`im01` (after `mkw01`).
+
+- **Deposits reach the invoice.** A deposit lands on the job's open invoice, or on the next invoice the job gets.
+  A $200 job with a $50 deposit and $150 at pickup now shows its invoice paid.
+- **Payments go where they're owed.** A job payment fills each open invoice only up to its own balance, oldest
+  first. Anything left is held on the job and pays its next invoice; it no longer piles onto the newest one. Till,
+  card reader and pay links all follow the same rule.
+- **One invoice for several jobs.** The invoice credits every job, so job B can't be paid twice, and lists every
+  job's lines. The bulk "group invoice" now links all its jobs. One job's deposit never pays another job's share.
+- **Invoices follow the job until sent or paid.** A draft or part-paid invoice that hasn't been sent updates when
+  job lines change. Removing work below what was paid moves the extra back to the job, where it can be refunded.
+  - Once sent or paid, an invoice keeps the lines it billed. Those lines can't be repriced or deleted (409), and
+    later work is owed on the job.
+  - Sending moves an invoice from draft to issued.
+- **Tax and discount are amounts everywhere.** A manual invoice takes `discount_pct`/`tax_pct`; the older
+  `discount`/`tax` inputs are still read as percentages. The migration rewrites older percentage invoices to
+  amounts without changing their totals.
+- **Smaller fixes:**
+  - attaching or detaching a job updates the total;
+  - auto-draft on close ignores cancelled and shared invoices, and runs in a savepoint;
+  - cancelling a draft hands its deposit back to the job;
+  - an invoice made from a job gets the job's customer;
+  - the payer must be one of this shop's customers;
+  - "payment received" fires on every payment path (invoice payment, pay link, deposit, client balance);
+  - a card refund of a split charge comes off every piece.
+
 ## WS-C — Inquiries everywhere (Orderry June–July sprint, gaps #8–#12, #17, #18, #20)
 
 Council note: `docs/council-ws-c-inquiries.md`. Migration `wsc1` (after `opd1`, additive only).

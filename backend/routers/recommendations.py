@@ -296,7 +296,10 @@ async def approve_for_customer(
     r.decided_by_name = f"{who}, {'by phone' if data.how == 'phone' else 'in person'} (taken by {current.name})"[:200]
     r.decline_reason = None
     r.remind_after = None
-    order.total = q2(float(order.total or 0) + float(line.total or 0))
+    prev_total = float(order.total or 0)
+    order.total = q2(prev_total + float(line.total or 0))
+    from backend.services.invoice_money import sync_order_invoices
+    await sync_order_invoices(db, order, prev_total)    # a draft invoice follows the job
     from backend.services import audit
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="rec.approve_for_customer",
                        entity_type="recommendation", entity_id=r.id, diff={"how": data.how, "name": who})

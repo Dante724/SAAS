@@ -434,42 +434,49 @@ async def _apply_labour_billing(db: AsyncSession, e: TimeEntry, *, remove: bool 
     Best-effort: never breaks the timer action if anything goes wrong.
     """
     try:
-        if not e.order_id:
-            return
-        from backend.models import Order, OrderLine
-        line = (await db.execute(select(OrderLine).where(
-            OrderLine.order_id == e.order_id, OrderLine.line_type == "labour",
-            OrderLine.ref_id == e.id))).scalar_one_or_none()
+        async with db.begin_nested():     # a refused invoice change undoes the line change too
+            if not e.order_id:
+                return
+            from backend.models import Order, OrderLine
+            line = (await db.execute(select(OrderLine).where(
+                OrderLine.order_id == e.order_id, OrderLine.line_type == "labour",
+                OrderLine.ref_id == e.id))).scalar_one_or_none()
 
-        hours = q2((e.duration_sec or 0) / 3600.0)
-        enabled = await _clock_labour_billing_on(db, e.org_id)
-        # remove the line when: caller asked, entry is void, billing is off, or no time
-        if remove or e.state == "void" or not enabled or hours <= 0 or not e.billable:
             if line:
-                await db.delete(line)
-                order = (await db.execute(select(Order).where(Order.id == e.order_id))).scalar_one_or_none()
-                if order:
-                    from backend.routers.orders import _recalc_order
-                    await _recalc_order(db, order)
-            return
+                from backend.services.invoice_money import locking_invoice
+                if await locking_invoice(db, line.id):
+                    return       # billed on a sent or paid invoice: the line stays as it was invoiced
+            hours = q2((e.duration_sec or 0) / 3600.0)
+            enabled = await _clock_labour_billing_on(db, e.org_id)
+            # remove the line when: caller asked, entry is void, billing is off, or no time
+            if remove or e.state == "void" or not enabled or hours <= 0 or not e.billable:
+                if line:
+                    from backend.services.invoice_money import release_line
+                    await release_line(db, line.id)   # off any draft invoice that lists it
+                    await db.delete(line)
+                    order = (await db.execute(select(Order).where(Order.id == e.order_id))).scalar_one_or_none()
+                    if order:
+                        from backend.routers.orders import _recalc_order
+                        await _recalc_order(db, order)
+                return
 
-        rate = float(e.billable_rate or 0)
-        total = q2(hours * rate)
-        desc = (e.note or "Labour (tracked time)")
-        if line:
-            line.qty = hours
-            line.unit_price = rate
-            line.total = total
-            line.description = desc
-        else:
-            db.add(OrderLine(
-                order_id=e.order_id, line_type="labour", kind="service", ref_id=e.id,
-                description=desc, qty=hours, unit_price=rate,
-                cost_price=float(e.cost_rate or 0), technician_id=e.employee_id, total=total))
-        order = (await db.execute(select(Order).where(Order.id == e.order_id))).scalar_one_or_none()
-        if order:
-            from backend.routers.orders import _recalc_order
-            await _recalc_order(db, order)
+            rate = float(e.billable_rate or 0)
+            total = q2(hours * rate)
+            desc = (e.note or "Labour (tracked time)")
+            if line:
+                line.qty = hours
+                line.unit_price = rate
+                line.total = total
+                line.description = desc
+            else:
+                db.add(OrderLine(
+                    order_id=e.order_id, line_type="labour", kind="service", ref_id=e.id,
+                    description=desc, qty=hours, unit_price=rate,
+                    cost_price=float(e.cost_rate or 0), technician_id=e.employee_id, total=total))
+            order = (await db.execute(select(Order).where(Order.id == e.order_id))).scalar_one_or_none()
+            if order:
+                from backend.routers.orders import _recalc_order
+                await _recalc_order(db, order)
     except Exception:
         pass
 
