@@ -27,10 +27,8 @@ from backend.config import settings
 from backend.models import (
     Account,
     CashFlowItem,
-    Invoice,
     Order,
     Organisation,
-    Payment,
     PaymentTerminal,
     Sale,
     TerminalCharge,
@@ -685,17 +683,13 @@ async def _post_refund(db: AsyncSession, ch: TerminalCharge, amount: float, ref:
             await post_transaction(db, ch.org_id, acc_id, "expense", -abs(amount),
                                    comment=f"Card refund {o.order_number}", ref_type="order",
                                    ref_id=o.id, employee_id=actor_id)
-        rp = Payment(order_id=o.id, client_id=o.client_id, method="card", kind="refund", account_id=acc_id,
-                     amount=amount, received_by_id=actor_id, reference="Card reader refund", provider_ref=ref)
-        db.add(rp)
-        await db.flush()
-        if ch.payment_id:
-            inv_id = (await db.execute(select(Payment.invoice_id).where(Payment.id == ch.payment_id))).scalar()
-            inv = (await db.execute(select(Invoice).where(Invoice.id == inv_id))).scalar_one_or_none() if inv_id else None
-            if inv:
-                inv.amount_paid = q2(max((inv.amount_paid or 0) - amount, 0))
-                from backend.services.invoicing import settle_status
-                settle_status(inv)
+        # The charge may have been split across invoices and money held on the job; the refund comes
+        # off those same rows (services/invoice_money). ch.refunded_amount still holds the earlier
+        # refunds here (the claim above updated the row, not this object).
+        from backend.services.invoice_money import reverse_charge
+        rp = (await reverse_charge(db, o, ch.provider_ref, ch.payment_id, amount, float(ch.refunded_amount or 0),
+                                   method="card", account_id=acc_id, received_by_id=actor_id,
+                                   reference="Card reader refund", provider_ref=ref))[0]
         if o.client_id:
             from backend.services.ledger import post_contact_ledger
             await post_contact_ledger(db, ch.org_id, o.client_id, "refund", abs(amount),

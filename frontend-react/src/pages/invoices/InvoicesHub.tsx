@@ -196,7 +196,7 @@ function NewInvoiceDrawer({ onClose, onCreated }: { onClose: () => void; onCreat
   const [comment, setComment] = useState("");
   const [due, setDue] = useState("");
   const [lines, setLines] = useState<{ kind: string; description: string; qty: number; unit_price: number }[]>([{ kind: "custom", description: "", qty: 1, unit_price: 0 }]);
-  const [discount, setDiscount] = useState(0); const [tax, setTax] = useState(0); // percentages, per backend InvoiceIn
+  const [discount, setDiscount] = useState(0); const [tax, setTax] = useState(0); // percentages; the invoice stores the amounts
   const [mode, setMode] = useState("detailed");   // starts at the shop's default (Settings › Finance)
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   useEffect(() => { api.get<{ items: any[] }>("/clients?limit=200").then((r) => setClients(r.items || [])).catch(() => {}); }, []);
@@ -205,14 +205,14 @@ function NewInvoiceDrawer({ onClose, onCreated }: { onClose: () => void; onCreat
   const subtotal = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unit_price) || 0), 0);
   const discountAmt = +(subtotal * (Number(discount) || 0) / 100).toFixed(2);
   const taxAmt = +((subtotal - discountAmt) * (Number(tax) || 0) / 100).toFixed(2);
-  const total = +(subtotal - discountAmt + taxAmt).toFixed(2); // matches backend: sub*(1-d/100)*(1+t/100)
+  const total = +(subtotal - discountAmt + taxAmt).toFixed(2); // matches backend: subtotal − discount + tax
   async function save() {
     const clean = lines.filter((l) => l.description.trim() && l.qty > 0);
     if (!clean.length) { setErr("Add at least one line."); return; }
     setBusy(true); setErr(null);
     try {
       await api.post("/finance/invoices", { client_id: clientId || null, comment, due_at: due || null, display_mode: mode,
-        discount: Number(discount) || 0, tax: Number(tax) || 0,
+        discount_pct: Number(discount) || 0, tax_pct: Number(tax) || 0,
         lines: clean.map((l) => ({ kind: l.kind || "custom", description: l.description.trim(), qty: Number(l.qty), unit_price: Number(l.unit_price) })) });
       onCreated();
     } catch (e: any) { setErr(e.message || "Could not create invoice"); setBusy(false); }

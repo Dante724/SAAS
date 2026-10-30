@@ -1140,6 +1140,9 @@ class Invoice(Base):
     legal_entity_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("legal_entities.id"))
     issued_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     due_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # When it was first sent to the customer. A sent invoice is locked: it keeps the job lines it
+    # billed instead of following later job changes (services/invoice_money).
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     # 144if — e-invoicing (in-house UBL 2.1). status: none|issued|cleared|rejected|cancelled.
     einvoice_status: Mapped[str] = mapped_column(String(12), default="none")
     einvoice_number: Mapped[Optional[str]] = mapped_column(String(60))   # fiscal / clearance ref

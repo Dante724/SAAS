@@ -683,20 +683,11 @@ async def bulk_action(
             except (TypeError, ValueError):
                 raise HTTPException(400, "priority must be a number")
         elif data.action == "create_invoice":
-            from backend.models import Invoice
-            # skip if order already has an invoice
-            existing = (await db.execute(
-                select(Invoice.id).where(Invoice.order_id == o.id).limit(1)
-            )).scalar_one_or_none()
-            if existing:
+            from backend.services.invoice_money import invoices_for_order, new_invoice
+            # skip if order already has a live invoice (a cancelled one doesn't count)
+            if await invoices_for_order(db, o.id):
                 continue
-            inv = Invoice(
-                invoice_number=await next_number(db, current.org_id, "invoice"),
-                org_id=current.org_id, order_id=o.id, client_id=o.client_id,
-                status="draft", subtotal=o.total or 0, total=o.total or 0,
-                issued_at=datetime.utcnow(),
-            )
-            db.add(inv)
+            inv = await new_invoice(db, org_id=current.org_id, orders=[o])
             await log_system_event(db, current.org_id, "order", o.id,
                                    f"Invoice {inv.invoice_number} created (bulk)")
         else:
@@ -708,19 +699,16 @@ async def bulk_action(
         # several jobs" case. Orders must share a client; we group by client_id.
         from collections import defaultdict
 
-        from backend.models import Invoice
+        from backend.services.invoice_money import new_invoice
         by_client: dict = defaultdict(list)
         for o in orders:
             if o.client_id:
                 by_client[o.client_id].append(o)
         made = 0
         for client_id, grp in by_client.items():
-            total = sum((o.total or 0) for o in grp)
-            inv = Invoice(
-                invoice_number=await next_number(db, current.org_id, "invoice"),
-                org_id=current.org_id, order_id=grp[0].id, client_id=client_id,
-                status="draft", subtotal=total, total=total, issued_at=datetime.utcnow())
-            db.add(inv)
+            # Links every job (so a payment credits each and the invoice lists all their lines)
+            # and applies their deposits.
+            inv = await new_invoice(db, org_id=current.org_id, orders=grp, client_id=client_id)
             for o in grp:
                 await log_system_event(db, current.org_id, "order", o.id,
                                        f"Added to group invoice {inv.invoice_number}")
@@ -1370,7 +1358,7 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     # Resolve the target status from the configurable status table, scoped to this
     # record's pipeline. .first() (not scalar_one_or_none) so legacy duplicate keys
     # across record types can never crash the status change.
-    from backend.models import Invoice, OrderStatus
+    from backend.models import OrderStatus
     _rt = "estimate" if order.is_estimate else "work_order"
     target = (await db.execute(
         select(OrderStatus).where(OrderStatus.org_id == current.org_id,
@@ -1465,9 +1453,11 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         if not order.is_estimate:
             try:
                 from backend.services.invoicing import auto_draft_on_close
-                await auto_draft_on_close(db, order)
+                async with db.begin_nested():     # a failure undoes only the half-made invoice
+                    await auto_draft_on_close(db, order)
             except Exception:  # noqa: BLE001
-                pass
+                import logging
+                logging.getLogger("tekly").exception("auto-draft invoice failed for order %s", order.id)
         # Phase E groundwork: activate warranty on close from the longest line warranty
         try:
             wdays = max([(getattr(l, "warranty_days", 0) or 0) for l in order.lines] or [0])
@@ -1508,12 +1498,9 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
 
     # Per-status trigger: auto-create invoice
     if target and target.triggers_invoice:
-        existing_inv = (await db.execute(select(Invoice.id).where(Invoice.order_id == order.id).limit(1))).scalar_one_or_none()
-        if not existing_inv:
-            _inv = Invoice(invoice_number=await next_number(db, current.org_id, "invoice"), org_id=current.org_id,
-                           order_id=order.id, client_id=order.client_id, status="draft",
-                           subtotal=order.total or 0, total=order.total or 0, issued_at=datetime.utcnow())
-            db.add(_inv)
+        from backend.services.invoice_money import invoices_for_order, new_invoice
+        if not await invoices_for_order(db, order.id):
+            _inv = await new_invoice(db, org_id=current.org_id, orders=[order])
             await log_system_event(db, current.org_id, "order", order.id, "Invoice auto-created on status change")
             # Build 144z: mirror the new invoice (and its customer) to QuickBooks if connected.
             try:
@@ -3308,7 +3295,8 @@ async def _log_amount_change(db, org_id, order, prev_total):
 
 
 async def _recalc_order(db, order):
-    """Recompute an order's labour/parts/total from its lines."""
+    """Recompute an order's labour/parts/total from its lines, and its unsent invoices with it."""
+    prev_total = float(order.total or 0)
     lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == order.id))).scalars().all()
     labour = sum(l.total for l in lines if l.line_type == "labour")
     parts = sum(l.total for l in lines if l.line_type == "part")
@@ -3321,6 +3309,8 @@ async def _recalc_order(db, order):
     if _org and getattr(_org, "rounding_enabled", False):
         total = q2(round(total / 0.05) * 0.05)
     order.total = total
+    from backend.services.invoice_money import sync_order_invoices
+    await sync_order_invoices(db, order, prev_total)
 
 
 def _all_codes():
@@ -4011,6 +4001,9 @@ async def update_line(
     if not line:
         raise HTTPException(404, "Line not found")
     payload = data.model_dump(exclude_unset=True)
+    if payload.keys() & {"qty", "unit_price", "discount", "discount_type", "tax_rate", "tax_mode"}:
+        from backend.services.invoice_money import assert_line_editable
+        await assert_line_editable(db, line.id)   # not under a sent or paid invoice
     if current.role_id and not (await _order_perms(db, current)).get("can_view_purchase_price"):
         payload.pop("cost_price", None)
     if "cost_price" in payload and float(payload["cost_price"] or 0) != float(line.cost_price or 0):
@@ -4118,6 +4111,8 @@ async def delete_line(
             await _reverse_fulfillment(db, order, line.ref_id, deducted)
     _prev_total = float(order.total or 0)
     _kit = line.bundle_group_id
+    from backend.services.invoice_money import release_line
+    await release_line(db, line.id)   # refused on a sent/paid invoice; off any draft that lists it
     await db.delete(line)
     await db.flush()
     if _kit:

@@ -319,7 +319,8 @@ async def test_tip_on_the_reader_is_booked(client, tenant, stripe, db):
     pi = dict(stripe.pi[ch["provider_ref"]], status="succeeded", amount_received=11500)
     assert (await _stripe_event(client, "payment_intent.succeeded", pi)).json()["status"] == "succeeded"
     pays = await _payments(db, oid)
-    assert [p.amount for p in pays] == [115]
+    # 100 pays the invoice; the 15 tip can't go past its total, so it's held on the job as overpaid
+    assert sorted(p.amount for p in pays) == [15, 100]
     got = (await client.get(f"/api/payments/terminal/charges/{ch['id']}", headers=tenant)).json()
     assert got["amount"] == 115
 
