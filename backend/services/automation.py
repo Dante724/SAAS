@@ -118,16 +118,19 @@ async def _do_action(db, org_id, rule: AutomationRule, order, part) -> Optional[
                    "order_number": getattr(order, "order_number", None),
                    "status": getattr(order, "status", None)}
         try:
-            # Build 144cq (SSRF fix): reject private/loopback/link-local hosts
-            # and cloud-metadata addresses before making the request.
-            from backend.core.ssrf import UnsafeURLError, assert_safe_url
+            # Build 144cq (SSRF fix): reject private/loopback/link-local hosts and cloud-metadata
+            # addresses, then connect to the exact address that was checked (as tenant webhooks
+            # do), so a DNS answer that changes in between can't point the call inside (audit M11).
+            import asyncio
+
+            from backend.core.ssrf import UnsafeURLError, pinned_target
             try:
-                assert_safe_url(cfg["url"])
+                target, host_header, extensions = await asyncio.to_thread(pinned_target, cfg["url"])
             except UnsafeURLError as ue:
                 return f"webhook blocked (unsafe url): {ue}"
             import httpx
             async with httpx.AsyncClient(timeout=4.0, follow_redirects=False) as client:
-                await client.post(cfg["url"], json=payload)
+                await client.post(target, json=payload, headers=host_header, extensions=extensions)
             return f"called webhook {cfg['url']}"
         except Exception as e:   # network best-effort — never fail the request
             return f"webhook {cfg['url']} failed: {type(e).__name__}"

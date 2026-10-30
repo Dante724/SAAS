@@ -32,8 +32,15 @@ def _ip_is_public(ip: str) -> bool:
             return _ip_is_public(str(addr.ipv4_mapped))
         if addr in _NAT64:
             return _ip_is_public(str(ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)))
-    return not (addr.is_private or addr.is_loopback or addr.is_link_local
-                or addr.is_multicast or addr.is_reserved or addr.is_unspecified)
+        # 6to4 (2002::/16) and Teredo carry an IPv4 address too.
+        if addr.sixtofour:
+            return _ip_is_public(str(addr.sixtofour))
+        if addr.teredo:
+            return all(_ip_is_public(str(a)) for a in addr.teredo)
+    # is_global, not "not private": 100.64.0.0/10 (carrier-grade NAT, which holds the
+    # 100.100.100.200 cloud metadata address), 198.18.0.0/15, 192.0.0.0/24 and similar ranges are
+    # neither private nor global. Multicast can be global, but is never a webhook receiver.
+    return addr.is_global and not addr.is_multicast
 
 
 def _resolve_public(url: str):
