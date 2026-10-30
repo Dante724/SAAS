@@ -346,7 +346,8 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
         from backend.services.mfa import consume_recovery_code
         from backend.services.mfa import verify_step as _mfa_step
         code = (getattr(form, "client_secret", None) or "").strip()  # OAuth2 form carries it
-        step = _mfa_step(employee.mfa_secret, code) if code else None
+        from backend.services.crypto import decrypt as _decrypt
+        step = _mfa_step(_decrypt(employee.mfa_secret), code) if code else None
         # Each TOTP code works once: refuse a step at or before the last one accepted.
         if step is not None and employee.mfa_last_step is not None and step <= employee.mfa_last_step:
             step = None

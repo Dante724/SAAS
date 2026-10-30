@@ -295,7 +295,7 @@ class Employee(Base):
     token_version: Mapped[int] = mapped_column(Integer, default=0)
     must_reset_password: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))  # H1: still on the old default password
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    mfa_secret: Mapped[Optional[str]] = mapped_column(String(64))          # base32 TOTP secret
+    mfa_secret: Mapped[Optional[str]] = mapped_column(String(255))         # base32 TOTP secret, encrypted (services/crypto)
     mfa_recovery_codes: Mapped[Optional[str]] = mapped_column(Text)        # JSON list of hashed single-use codes
     mfa_last_step: Mapped[Optional[int]] = mapped_column(Integer)          # last accepted TOTP time step (replay guard)  # bump to revoke all issued tokens (lost-device logout)
     # Build 144cb: email verification. Existing users default unverified; verification
@@ -933,6 +933,11 @@ class PlatformAdmin(Base):
     name: Mapped[str] = mapped_column(String(200))
     password_hash: Mapped[str] = mapped_column(String(255))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Audit M6: 2-step sign-in and revocable tokens for the super-admin.
+    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))  # bump = sign out everywhere
+    mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    mfa_secret: Mapped[Optional[str]] = mapped_column(String(255))     # TOTP secret, encrypted (services/crypto)
+    mfa_last_step: Mapped[Optional[int]] = mapped_column(Integer)      # last accepted TOTP step (replay guard)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 

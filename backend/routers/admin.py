@@ -6,6 +6,7 @@ organisations by lifecycle segment, control each account's term and per-employee
 access windows, set discounts, and generate coupon codes.
 """
 import asyncio
+import logging
 from datetime import date
 from typing import Optional
 
@@ -16,15 +17,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import Employee, Organisation, PlatformAdmin, PlatformCoupon
+from backend.services import crypto
+from backend.services.audit import record as audit_record
 from backend.services.auth import verify_password
+from backend.services.mfa import new_secret, provisioning_uri, verify_step
 from backend.services.platform_auth import (
+    authenticate,
     create_platform_token,
     get_current_platform_admin,
+    get_platform_admin_for_setup,
 )
 from backend.services.ratelimit import client_ip as _ip
 from backend.services.ratelimit import aenforce as _rate
 
 router = APIRouter(prefix="/api/admin", tags=["platform-admin"])
+_log = logging.getLogger("tekly.audit.platform")
 
 NEW_TRIAL_DAYS = 14
 
@@ -59,22 +66,125 @@ def _segment(org: Organisation) -> str:
 class AdminLogin(BaseModel):
     email: str
     password: str
+    code: Optional[str] = None       # 6-digit code from the authenticator app, once 2-step is on
+
+
+async def _audit_platform(db, admin: PlatformAdmin, action: str, *, org_id: Optional[str] = None,
+                          entity_type: str = "platform_admin", entity_id: Optional[str] = None,
+                          fields: Optional[list] = None) -> None:
+    """Who did what (audit M9). Changes to a shop go in that shop's audit trail; platform-only
+    changes go to the audit log stream. Field names only, never the values."""
+    diff = {"platform_admin": admin.email, **({"fields": sorted(fields)} if fields else {})}
+    if org_id:
+        await audit_record(db, org_id=org_id, actor_id=None, action=action,
+                           entity_type=entity_type, entity_id=entity_id, diff=diff)
+    _log.info("platform audit: %s by %s on %s %s %s", action, admin.id, entity_type, entity_id or "-",
+              diff.get("fields", ""))
+
+
+def _accept_code(admin: PlatformAdmin, code: Optional[str]) -> bool:
+    """A current TOTP code, each one usable once."""
+    step = verify_step(crypto.decrypt(admin.mfa_secret) or "", code or "")
+    if step is None or (admin.mfa_last_step is not None and step <= admin.mfa_last_step):
+        return False
+    admin.mfa_last_step = step
+    return True
 
 
 @router.post("/login")
 async def admin_login(data: AdminLogin, request: Request, db: AsyncSession = Depends(get_db)):
     await _rate("admin_login", f"{_ip(request)}:{(data.email or '').lower()}", limit=10, window_sec=300)
     await _rate("admin_login_acct", (data.email or "").strip().lower(), limit=20, window_sec=900)
-    admin = (await db.execute(select(PlatformAdmin).where(
-        PlatformAdmin.email == (data.email or "").lower()))).scalar_one_or_none()
-    if not admin or not admin.active or not await asyncio.to_thread(verify_password, data.password, admin.password_hash):
+    admin = await authenticate(db, data.email, data.password)
+    if not admin:
         raise HTTPException(401, "Invalid platform credentials")
-    return {"access_token": create_platform_token(admin.id), "token_type": "bearer", "name": admin.name}
+    if admin.mfa_enabled:
+        if not (data.code or "").strip():
+            raise HTTPException(401, "Enter the 6-digit code from your authenticator app",
+                                headers={"X-MFA-Required": "1"})
+        if not _accept_code(admin, data.code):
+            await _rate("admin_mfa_fail", admin.id, limit=5, window_sec=900)
+            raise HTTPException(401, "That code didn't work. Try the newest one from your app.",
+                                headers={"X-MFA-Required": "1"})
+    await _audit_platform(db, admin, "platform.login", entity_id=admin.id)
+    await db.commit()
+    return {"access_token": create_platform_token(admin), "token_type": "bearer", "name": admin.name,
+            "mfa_enabled": bool(admin.mfa_enabled)}
 
 
 @router.get("/me")
-async def admin_me(admin: PlatformAdmin = Depends(get_current_platform_admin)):
-    return {"id": admin.id, "name": admin.name, "email": admin.email}
+async def admin_me(admin: PlatformAdmin = Depends(get_platform_admin_for_setup)):
+    return {"id": admin.id, "name": admin.name, "email": admin.email, "mfa_enabled": bool(admin.mfa_enabled)}
+
+
+@router.post("/logout", status_code=204)
+async def admin_logout(db: AsyncSession = Depends(get_db),
+                       admin: PlatformAdmin = Depends(get_platform_admin_for_setup)):
+    """Sign out everywhere: every token issued so far stops working."""
+    admin.token_version = (admin.token_version or 0) + 1
+    await _audit_platform(db, admin, "platform.logout_all", entity_id=admin.id)
+    await db.commit()
+
+
+# ── 2-step sign-in (audit M6) ────────────────────────────────────
+@router.post("/mfa/setup")
+async def admin_mfa_setup(db: AsyncSession = Depends(get_db),
+                          admin: PlatformAdmin = Depends(get_platform_admin_for_setup)):
+    """Start 2-step: a new secret for the authenticator app. Not on until /mfa/enable."""
+    if admin.mfa_enabled:
+        raise HTTPException(400, "2-step sign-in is already on")
+    secret = new_secret()
+    admin.mfa_secret = crypto.encrypt(secret)
+    admin.mfa_last_step = None
+    await db.commit()
+    return {"secret": secret, "otpauth_uri": provisioning_uri(secret, account=admin.email, issuer="Tekly Admin")}
+
+
+class AdminCode(BaseModel):
+    code: str
+
+
+@router.post("/mfa/enable")
+async def admin_mfa_enable(data: AdminCode, db: AsyncSession = Depends(get_db),
+                           admin: PlatformAdmin = Depends(get_platform_admin_for_setup)):
+    """Confirm a code and turn 2-step on. Every other session is signed out; this one gets a
+    fresh token."""
+    await _rate("admin_mfa_enable", admin.id, limit=10, window_sec=900)
+    if admin.mfa_enabled:
+        raise HTTPException(400, "2-step sign-in is already on")
+    if not admin.mfa_secret:
+        raise HTTPException(400, "Start 2-step setup first")
+    if not _accept_code(admin, data.code):
+        raise HTTPException(400, "That code didn't work. Try the newest one from your app.")
+    admin.mfa_enabled = True
+    admin.token_version = (admin.token_version or 0) + 1
+    await _audit_platform(db, admin, "platform.mfa_enable", entity_id=admin.id)
+    await db.commit()
+    return {"enabled": True, "access_token": create_platform_token(admin)}
+
+
+class AdminDisable(BaseModel):
+    password: str
+    code: str
+
+
+@router.post("/mfa/disable")
+async def admin_mfa_disable(data: AdminDisable, db: AsyncSession = Depends(get_db),
+                            admin: PlatformAdmin = Depends(get_platform_admin_for_setup)):
+    """Turn 2-step off: needs the password and a current code. Signs out every session."""
+    await _rate("admin_mfa_disable", admin.id, limit=5, window_sec=900)
+    if not admin.mfa_enabled:
+        raise HTTPException(400, "2-step sign-in is already off")
+    if not await asyncio.to_thread(verify_password, data.password, admin.password_hash):
+        raise HTTPException(403, "Password incorrect")
+    if not _accept_code(admin, data.code):
+        raise HTTPException(403, "That code didn't work. Try the newest one from your app.")
+    admin.mfa_enabled = False
+    admin.mfa_secret = None
+    admin.token_version = (admin.token_version or 0) + 1
+    await _audit_platform(db, admin, "platform.mfa_disable", entity_id=admin.id)
+    await db.commit()
+    return {"enabled": False}
 
 
 # ── Tenants ──────────────────────────────────────────────────────
@@ -176,6 +286,8 @@ async def patch_tenant(org_id: str, data: TenantPatch, db: AsyncSession = Depend
         await db.execute(
             _update(Employee).where(Employee.org_id == org_id)
             .values(token_version=func.coalesce(Employee.token_version, 0) + 1))
+    await _audit_platform(db, admin, "platform.tenant_update", org_id=org.id, entity_type="organisation",
+                          entity_id=org.id, fields=list(p))
     await db.commit()
     return {"ok": True}
 
@@ -202,6 +314,8 @@ async def patch_employee_window(org_id: str, emp_id: str, data: EmployeeWindow,
     if "active" in p and p["active"] is not None:
         emp.active = bool(p["active"])
     emp.token_version = (emp.token_version or 0) + 1   # re-check on next request
+    await _audit_platform(db, admin, "platform.employee_access_update", org_id=org_id, entity_type="employee",
+                          entity_id=emp.id, fields=list(p))
     await db.commit()
     return {"ok": True}
 
@@ -236,6 +350,8 @@ async def create_coupon(data: CouponIn, db: AsyncSession = Depends(get_db),
     c = PlatformCoupon(code=code, percent=max(0.0, min(100.0, float(data.percent or 0))),
                        plan=data.plan or None, expires_at=_parse_date(data.expires_at), note=data.note)
     db.add(c)
+    await db.flush()
+    await _audit_platform(db, admin, "platform.coupon_create", entity_type="coupon", entity_id=c.id)
     await db.commit()
     return {"ok": True, "code": code}
 
@@ -257,5 +373,7 @@ async def apply_coupon(org_id: str, body: dict, db: AsyncSession = Depends(get_d
     if c.plan and c.plan != org.plan:
         raise HTTPException(400, f"This coupon only applies to the {c.plan} plan")
     org.discount_pct = c.percent
+    await _audit_platform(db, admin, "platform.coupon_apply", org_id=org.id, entity_type="organisation",
+                          entity_id=org.id, fields=["discount_pct"])
     await db.commit()
     return {"ok": True, "discount_pct": org.discount_pct}

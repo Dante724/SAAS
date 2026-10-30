@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import settings
 from backend.db.database import get_db
 from backend.models import PlatformAdmin
-from backend.services.auth import hash_password
+from backend.services.auth import hash_password, verify_password
 
 # Separate token URL from the tenant one; scope claim keeps the two worlds apart.
 oauth2_platform = OAuth2PasswordBearer(tokenUrl="/api/admin/login", auto_error=True)
@@ -24,16 +24,32 @@ oauth2_platform = OAuth2PasswordBearer(tokenUrl="/api/admin/login", auto_error=T
 _SCOPE = "platform"
 
 
-def create_platform_token(admin_id: str) -> str:
+# Unknown emails are checked against this so they cost the same bcrypt time as a wrong password.
+_DUMMY_HASH = hash_password("timing-equaliser-not-a-real-password")
+
+
+def create_platform_token(admin: PlatformAdmin) -> str:
     expire = datetime.utcnow() + timedelta(hours=12)
-    return jwt.encode({"sub": admin_id, "scope": _SCOPE, "exp": expire},
+    return jwt.encode({"sub": admin.id, "scope": _SCOPE, "tv": admin.token_version or 0, "exp": expire},
                       settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
-async def get_current_platform_admin(
-    token: str = Depends(oauth2_platform),
-    db: AsyncSession = Depends(get_db),
-) -> PlatformAdmin:
+async def authenticate(db: AsyncSession, email: str, password: str):
+    """The admin for these credentials, or None. Runs one bcrypt check whether or not the email
+    exists, so response time doesn't tell an attacker which addresses have accounts."""
+    import asyncio
+    admin = (await db.execute(select(PlatformAdmin).where(
+        PlatformAdmin.email == (email or "").strip().lower()))).scalar_one_or_none()
+    ok = await asyncio.to_thread(verify_password, password or "", admin.password_hash if admin else _DUMMY_HASH)
+    return admin if (admin and ok and admin.active) else None
+
+
+def _two_step_required() -> bool:
+    """Deployed, the portal shows nothing but the admin's own account until 2-step is on."""
+    return settings.is_deployed
+
+
+async def _platform_admin(token: str, db: AsyncSession) -> PlatformAdmin:
     exc = HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                         detail="Platform authentication required",
                         headers={"WWW-Authenticate": "Bearer"})
@@ -42,12 +58,34 @@ async def get_current_platform_admin(
         if payload.get("scope") != _SCOPE:
             raise exc
         admin_id = payload.get("sub")
+        tv = payload.get("tv")
     except JWTError:
         raise exc
     admin = (await db.execute(select(PlatformAdmin).where(
         PlatformAdmin.id == admin_id))).scalar_one_or_none()
     if not admin or not admin.active:
         raise exc
+    # Tokens from before token versions existed carry no "tv" and are refused too.
+    if not isinstance(tv, int) or tv != (admin.token_version or 0):
+        raise exc
+    return admin
+
+
+async def get_platform_admin_for_setup(
+    token: str = Depends(oauth2_platform),
+    db: AsyncSession = Depends(get_db),
+) -> PlatformAdmin:
+    """Signed-in admin, before 2-step is on: only for the account and 2-step setup routes."""
+    return await _platform_admin(token, db)
+
+
+async def get_current_platform_admin(
+    token: str = Depends(oauth2_platform),
+    db: AsyncSession = Depends(get_db),
+) -> PlatformAdmin:
+    admin = await _platform_admin(token, db)
+    if _two_step_required() and not admin.mfa_enabled:
+        raise HTTPException(403, "Turn on 2-step sign-in for this account before using the admin portal.")
     return admin
 
 
