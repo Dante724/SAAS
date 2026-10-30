@@ -31,7 +31,7 @@ from backend.models import (
 )
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.numbering import next_number
-from backend.services.money import q2
+from backend.services.money import claim_status, q2
 
 router = APIRouter(prefix="/api/transfers", tags=["transfers"])
 
@@ -180,36 +180,38 @@ async def change_status(
     if t.status in ("completed", "canceled"):
         raise HTTPException(409, f"Transfer is {t.status} — no further changes")
     new = data.status
+    prev = t.status
     lines = await _lines(db, tid)
+    if new != "canceled" and (new not in ORDERED or ORDERED.index(new) != ORDERED.index(prev) + 1):
+        raise HTTPException(400, f"Invalid move {prev} -> {new}")
+    if new == "canceled" and prev in ("in_transit", "received") and not data.return_location_id:
+        # goods already left the source — caller names the receiving warehouse
+        raise HTTPException(400, "Goods already shipped: pass return_location_id to choose the warehouse taking them back")
+    # Claim the move before touching stock: a second identical request (double click, retry)
+    # read the same old status, and must not reserve, ship, credit or un-reserve a second time.
+    if not await claim_status(db, t, prev, new):
+        raise HTTPException(409, "Someone else just changed this transfer. Refresh and try again.")
 
     if new == "canceled":
-        if t.status == "ready":
+        if prev == "ready":
             # un-reserve back to availability at source
             for l in lines:
                 sl = await _level(db, l.part_id, t.from_location_id)
                 sl.qty_reserved = max((sl.qty_reserved or 0) - l.qty, 0)
                 await _atomic_add(db, sl, "qty_available", l.qty, round_to=None)   # atomic
-        elif t.status in ("in_transit", "received"):
-            # goods already left the source — caller names the receiving warehouse
+        elif prev in ("in_transit", "received"):
             back = data.return_location_id
-            if not back:
-                raise HTTPException(400, "Goods already shipped: pass return_location_id to choose the warehouse taking them back")
             for l in lines:
                 sl = await _level(db, l.part_id, back)
                 await _atomic_add(db, sl, "qty_available", l.qty, round_to=None)   # atomic
                 db.add(StockMovement(part_id=l.part_id, location_id=back,
                                      movement_type="receive", qty=l.qty,
                                      ref_type="transfer_cancel", ref_id=t.id))
-        t.status = "canceled"
         from backend.routers.feed import log_system_event
         await log_system_event(db, current.org_id, "transfer", t.id,
                                f"Transfer {t.transfer_number} canceled")
         await db.commit()
         return {"ok": True, "status": t.status}
-
-    # forward-only moves, one step at a time
-    if new not in ORDERED or ORDERED.index(new) != ORDERED.index(t.status) + 1:
-        raise HTTPException(400, f"Invalid move {t.status} -> {new}")
 
     if new == "ready":
         # reserve at source: guarded decrement so two transfers can't grab the same units
@@ -260,7 +262,6 @@ async def change_status(
                                      ref_type="transfer", ref_id=t.id))
         t.completed_at = datetime.utcnow()
 
-    t.status = new
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "transfer", t.id,
                            f"Transfer {t.transfer_number}: {new.replace('_', ' ')}")
