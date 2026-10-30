@@ -99,8 +99,9 @@ async def test_sign_out_everywhere_revokes_tokens(client):
 @pytest.mark.asyncio
 async def test_old_tokens_without_a_version_are_refused(client):
     await _seed()
-    import jwt
     from datetime import datetime, timedelta
+
+    import jwt
     admin = await _admin()
     legacy = jwt.encode({"sub": admin.id, "scope": "platform", "exp": datetime.utcnow() + timedelta(hours=1)},
                         settings.SECRET_KEY, algorithm=settings.ALGORITHM)
