@@ -357,7 +357,7 @@ async def approve_recommendation(db: AsyncSession, rec: Recommendation) -> Order
     """
     from types import SimpleNamespace
 
-    from backend.routers.orders import _auto_apply_tax, _calc_line
+    from backend.routers.orders import _auto_apply_tax, _calc_line, _catalog_warranty
     line_type = "labour" if rec.kind == "service" else ("part" if rec.kind == "product" else "fee")
     shim = SimpleNamespace(
         qty=rec.qty or 1.0, unit_price=rec.unit_price or 0.0,
@@ -378,6 +378,7 @@ async def approve_recommendation(db: AsyncSession, rec: Recommendation) -> Order
         # per-line commission engine pays them when the order closes.
         technician_id=rec.author_id,
         order_item_id=await _live_item(db, rec),
+        warranty_days=await _catalog_warranty(db, rec.org_id, rec.kind, rec.ref_id),   # G2: catalog warranty
         total=total)
     db.add(ol)
     await db.flush()

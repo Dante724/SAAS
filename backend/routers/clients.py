@@ -7,6 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from backend.routers.assets import public_custom
 from backend.db.database import get_db
 from backend.models import Client, Device, Employee
 from backend.services.auth import get_current_employee, require_perm, record_scope
@@ -91,7 +92,7 @@ def _ser_client(c: Client, supplier=None, order_count=None) -> dict:
         "custom_data": c.custom_data or {},
         "devices": [{"id": d.id, "brand": d.brand, "model": d.model, "serial": d.serial,
                      "imei": d.imei, "vin": d.vin, "hin": d.hin, "condition": d.condition,
-                     "custom_data": d.custom_data or {}} for d in c.devices],
+                     "custom_data": public_custom(d.custom_data)} for d in c.devices],
         "order_count": len(c.orders) if order_count is None else order_count,
     }
 

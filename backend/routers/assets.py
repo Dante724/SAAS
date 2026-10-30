@@ -81,8 +81,8 @@ def _ser(d: Device, order_count: int = 0, owner_name: str = None, inline_image: 
         "sale_price": getattr(d, "sale_price", 0.0),
         "converted_to_part_id": getattr(d, "converted_to_part_id", None),
         "order_count": order_count,
-        "custom_data": getattr(d, "custom_data", None) or {},   # 144bv: custom-field columns
-        "has_passcode": bool(getattr(d, "passcode_enc", None)),   # J3: the code itself only via /passcode
+        "custom_data": public_custom(getattr(d, "custom_data", None)),   # 144bv: custom-field columns
+        "has_passcode": has_passcode(d),   # J3: the code itself only via /passcode
         "created_at": d.created_at.isoformat() if d.created_at else None,
     }
 
@@ -188,6 +188,7 @@ async def create_asset(
         asset_status=data.asset_status or ("in_use" if data.owner_type == "client" else "in_stock"),
         purchase_price=data.purchase_price or 0.0, sale_price=data.sale_price or 0.0,
     )
+    absorb_custom_passcode(d)
     _ids.tidy_device(d)
     d.brand, d.model = await _cat.canonical(db, current.org_id, template_key, d.brand, d.model)
     db.add(d)
@@ -285,6 +286,27 @@ def store_passcode(d: Device, passcode: Optional[str]) -> None:
     d.passcode_enc = crypto.encrypt(code) if code else None
 
 
+def absorb_custom_passcode(d: Device) -> None:
+    """The phone template's "Passcode" field used to land in custom_data as plain text. Move it
+    into the encrypted store (J3) so it never sits in clear or rides along in API responses."""
+    cd = dict(d.custom_data or {})
+    if "passcode" not in cd:
+        return
+    code = cd.pop("passcode")
+    if str(code or "").strip():
+        store_passcode(d, str(code))
+    d.custom_data = cd
+
+
+def public_custom(cd: Optional[dict]) -> dict:
+    """custom_data as the API shows it: never a plaintext passcode (older rows may still hold one)."""
+    return {k: v for k, v in (cd or {}).items() if k != "passcode"}
+
+
+def has_passcode(d) -> bool:
+    return bool(getattr(d, "passcode_enc", None) or str((getattr(d, "custom_data", None) or {}).get("passcode") or "").strip())
+
+
 class PasscodeIn(BaseModel):
     passcode: Optional[str] = None
 
@@ -322,7 +344,8 @@ async def reveal_passcode(
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="asset.passcode_viewed",
                        entity_type="asset", entity_id=d.id)
     await db.commit()
-    return {"passcode": crypto.decrypt(d.passcode_enc) if d.passcode_enc else None}
+    legacy = str((d.custom_data or {}).get("passcode") or "").strip() or None   # pre-J3 plaintext field
+    return {"passcode": crypto.decrypt(d.passcode_enc) if d.passcode_enc else legacy}
 
 
 @router.put("/{asset_id}/passcode")
@@ -335,6 +358,7 @@ async def set_passcode(
     from backend.services import audit
     d = await _device_for_passcode(db, current, asset_id)
     store_passcode(d, data.passcode)
+    d.custom_data = public_custom(d.custom_data)     # a set or a clear also drops any old plaintext copy
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="asset.passcode_set",
                        entity_type="asset", entity_id=d.id, diff={"cleared": not d.passcode_enc})
     await db.commit()
@@ -453,6 +477,7 @@ async def update_asset(
         payload["client_id"] = None
     for k, v in payload.items():
         setattr(d, k, v)
+    absorb_custom_passcode(d)
     _ids.tidy_device(d)
     if "brand" in payload or "model" in payload:
         d.brand, d.model = await _cat.canonical(db, current.org_id, d.template_key, d.brand, d.model)

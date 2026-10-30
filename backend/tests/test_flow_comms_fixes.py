@@ -325,3 +325,50 @@ async def test_send_estimate_refused_after_the_customer_answered(client):
     await client.post(f"/api/public/track/{tok}/respond", json={"decision": "decline", "name": "Dana"})
     r = await client.post(f"/api/orders/{o['id']}/send-estimate", json={}, headers=H)
     assert r.status_code == 409
+
+
+# ── follow-ups: warranty on recommendation lines, template passcode field, convert commission ──
+async def test_approved_recommendation_line_carries_catalog_warranty(client):
+    H, _, loc, cid = await _shop(client)
+    svc = (await client.post("/api/catalog/services", json={"name": "Battery fit", "price": 40, "warranty_days": 30},
+                             headers=H)).json()
+    o = (await client.post("/api/orders", json={"client_id": cid, "location_id": loc, "complaint": "x"}, headers=H)).json()
+    rec = (await client.post(f"/api/orders/{o['id']}/recommendations", json={"title": "Battery", "kind": "service",
+                                                                            "ref_id": svc["id"], "price": 40},
+                             headers=H)).json()
+    r = await client.post(f"/api/orders/{o['id']}/recommendations/{rec['id']}/approve-for-customer",
+                          json={"how": "phone"}, headers=H)
+    assert r.status_code == 200, r.text
+    lines = (await client.get(f"/api/orders/{o['id']}", headers=H)).json()["lines"]
+    assert [ln.get("warranty_days") for ln in lines if ln["ref_id"] == svc["id"]] == [30]
+
+
+async def test_template_passcode_field_is_stored_encrypted(client, db, monkeypatch):
+    from cryptography.fernet import Fernet
+
+    from backend.config import settings
+    monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    H, _, loc, cid = await _shop(client)
+    a = (await client.post("/api/assets", json={"owner_type": "client", "client_id": cid, "brand": "Apple",
+                                                "custom_data": {"passcode": "7391", "storage": "128GB"}},
+                           headers=H)).json()
+    assert a["has_passcode"] is True and "7391" not in str(a) and a["custom_data"] == {"storage": "128GB"}
+    row = (await db.execute(select(Device).where(Device.id == a["id"]))).scalar_one()
+    assert "passcode" not in (row.custom_data or {}) and "7391" not in (row.passcode_enc or "")
+    assert (await client.get(f"/api/assets/{a['id']}/passcode", headers=H)).json()["passcode"] == "7391"
+
+
+async def test_converting_credits_the_estimate_creator(client, db):
+    import pytest as _pt
+
+    from backend.models import CommissionRule, EmployeeBalanceLedger
+    H, me, loc, cid = await _shop(client)
+    db.add(CommissionRule(org_id=me["org_id"], employee_id=None, name="Create 10%", event="order_created",
+                          calc_type="percent", percent_basis="total", amount=10.0))
+    await db.commit()
+    o, _ = await _estimate(client, H, loc, cid)          # created with no lines → nothing accrues yet
+    H2 = await _limited(client, db, me["org_id"])
+    assert (await client.post(f"/api/orders/{o['id']}/convert", headers=H2)).status_code == 200
+    rows = (await db.execute(select(EmployeeBalanceLedger).where(
+        EmployeeBalanceLedger.event == "order_created", EmployeeBalanceLedger.ref_id == o["id"]))).scalars().all()
+    assert [r.employee_id for r in rows] == [me["id"]] and rows[0].amount == _pt.approx(5.0)

@@ -336,16 +336,26 @@ def _serialize_order_scalars(o: Order) -> dict:
     }
 
 
+def _asset_custom(cd):
+    from backend.routers.assets import public_custom
+    return public_custom(cd)
+
+
+def _asset_has_passcode(d) -> bool:
+    from backend.routers.assets import has_passcode
+    return has_passcode(d)
+
+
 def _serialize_order(o: Order) -> dict:
     row = _serialize_order_scalars(o)
     row.update({
         "signature": o.signature,   # J1: the drawer shows the in-shop signature (detail view only)
-        "device": {"id": o.device.id, "brand": o.device.brand, "model": o.device.model, "serial": o.device.serial, "imei": o.device.imei, "vin": o.device.vin, "hin": o.device.hin, "asset_type": o.device.asset_type, "asset_label": _ind.asset_label(getattr(o.device, "template_key", None)), "image_data": getattr(o.device, "image_data", None), "watch_out": getattr(o.device, "watch_out", None), "custom_data": o.device.custom_data or {}, "has_passcode": bool(getattr(o.device, "passcode_enc", None))} if o.device else None,
+        "device": {"id": o.device.id, "brand": o.device.brand, "model": o.device.model, "serial": o.device.serial, "imei": o.device.imei, "vin": o.device.vin, "hin": o.device.hin, "asset_type": o.device.asset_type, "asset_label": _ind.asset_label(getattr(o.device, "template_key", None)), "image_data": getattr(o.device, "image_data", None), "watch_out": getattr(o.device, "watch_out", None), "custom_data": _asset_custom(o.device.custom_data), "has_passcode": _asset_has_passcode(o.device)} if o.device else None,
         "lines": [{"id": l.id, "line_type": l.line_type, "kind": l.kind, "description": l.description,
                    "qty": l.qty, "unit_price": l.unit_price, "cost_price": l.cost_price,
                    "discount": l.discount, "discount_type": l.discount_type, "discount_paid_by": l.discount_paid_by,
                    "tax_rate": l.tax_rate, "tax_mode": l.tax_mode, "technician_id": l.technician_id,
-                   "work_share": getattr(l, "work_share", 1.0), "booked_hours": getattr(l, "booked_hours", 0) or 0,
+                   "work_share": getattr(l, "work_share", 1.0), "booked_hours": getattr(l, "booked_hours", 0) or 0, "warranty_days": l.warranty_days or 0,
                    "co_technicians": getattr(l, "co_technicians", None) or [],
                    "pending_stock": l.pending_stock or 0, "ref_id": l.ref_id, "total": l.total,
                    "order_item_id": getattr(l, "order_item_id", None),
@@ -447,7 +457,7 @@ def _serialize_order_row(o: Order, has_image: bool) -> dict:
                          "asset_label": _ind.asset_label(getattr(d, "template_key", None)),
                          "image_url": _device_image_url(d.id, has_image),
                          "watch_out": getattr(d, "watch_out", None),
-                         "custom_data": d.custom_data or {}}
+                         "custom_data": _asset_custom(d.custom_data)}
     return row
 
 
@@ -747,7 +757,7 @@ class SystemActor:
         self.name = name
 
 
-async def _new_job_steps(db, current, order):
+async def _new_job_steps(db, current, order, creator_id=None):
     """What happens once a job exists: checklists for its first status, the order.created
     webhook, the creator's commission, the assignee's alert, the "created" notification rules
     and automations. Shared by create_order and estimate conversion (flow check E3), so a job
@@ -775,12 +785,13 @@ async def _new_job_steps(db, current, order):
         except Exception:  # noqa: BLE001
             _log.exception("order.created webhook failed for order %s", order.id)
 
-    # Payroll: order_created commissions to the creator (idempotent). Nobody on staff
-    # created a job the customer approved online, so there's no creator commission then.
-    if current.id:
+    # Payroll: order_created commissions to the creator (idempotent per job and rule). For a
+    # converted estimate that's whoever wrote the estimate, not whoever converted it.
+    creator_id = creator_id or current.id
+    if creator_id:
         try:
             from backend.services.payroll import CommissionEngine
-            await CommissionEngine(db, current.org_id).commissions_for_order_create(order, current.id)
+            await CommissionEngine(db, current.org_id).commissions_for_order_create(order, creator_id)
         except Exception:  # noqa: BLE001
             _log.exception("creator commission failed for order %s", order.id)
 
@@ -953,8 +964,10 @@ async def create_order(
             custom_data=data.asset_custom_data or {},
             image_data=data.asset_image,
         )
+        from backend.routers.assets import absorb_custom_passcode
         from backend.services import asset_catalog as _cat
         from backend.services import identifiers as _ids
+        absorb_custom_passcode(new_asset)
         _ids.tidy_device(new_asset)
         new_asset.brand, new_asset.model = await _cat.canonical(
             db, current.org_id, order_template_key, new_asset.brand, new_asset.model)
@@ -1738,7 +1751,11 @@ async def _convert_estimate(db, current, estimate):
     await log_system_event(db, current.org_id, "order", estimate.id,
                            f"Converted from estimate {old_number} to work order {estimate.order_number}")
     await db.commit()
-    await _new_job_steps(db, current, estimate)
+    from backend.models import AuditLog
+    creator = (await db.execute(select(AuditLog.actor_id).where(
+        AuditLog.org_id == current.org_id, AuditLog.action == "order.create",
+        AuditLog.entity_id == estimate.id).limit(1))).scalar_one_or_none()
+    await _new_job_steps(db, current, estimate, creator_id=creator)
     return estimate.id
 
 
@@ -3729,6 +3746,7 @@ async def add_line(
             nl = OrderLine(order_id=order_id, line_type=li.line_type, kind=li.kind, ref_id=li.ref_id,
                            description=li.description, qty=li.qty, unit_price=li.unit_price,
                            cost_price=await _catalog_cost(db, current.org_id, kind, eff_ref_id),
+                           warranty_days=await _catalog_warranty(db, current.org_id, kind, eff_ref_id),   # G2
                            technician_id=data.technician_id, order_item_id=data.order_item_id, total=t,
                            bundle_group_id=group_id, bundle_name=bundle.name,
                            bundle_print_mode=kit_print.norm_mode(bundle.print_mode),
