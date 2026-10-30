@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
 from backend.models import OrgIntegrationCredential
+from backend.services.payment_guard import LivePaymentsRefused
 
 # ── Provider field schemas ───────────────────────────────────────────────────
 # `secret` fields are masked on read. `env` maps a field to the global-env
@@ -100,26 +101,70 @@ def _fields(provider: str) -> list[dict]:
 
 
 # ── Encryption ───────────────────────────────────────────────────────────────
-def _fernet() -> MultiFernet:
-    """Encrypt with TOKEN_ENCRYPTION_KEY (required when deployed) when set. The legacy key
-    derived from SECRET_KEY stays in the ring for decryption, so credentials saved before
-    this change still read back — and are written under the new key on their next save."""
-    from backend.services.crypto import fernet_keys
+
+
+class CredentialsUnreadable(LivePaymentsRefused):
+    """A shop's saved keys exist but can't be decrypted (key rotated away, damaged row).
+
+    Audit M10: this used to read as "no keys", so the operator's own env keys were used for that
+    shop. It fails closed instead. It is a LivePaymentsRefused so every payment path that already
+    refuses live keys refuses these the same way, with this message."""
+
+
+def _unreadable(provider: str) -> CredentialsUnreadable:
+    return CredentialsUnreadable(f"This shop's saved {provider} keys can't be read. "
+                                 "Enter them again in Settings › Integrations.")
+
+
+def _legacy_fernet() -> Fernet:
+    """The key derived from SECRET_KEY (the sign-in key) that credentials used before
+    TOKEN_ENCRYPTION_KEY existed. Only for local dev without a key, and for migration aud10m01."""
     digest = hashlib.sha256((settings.SECRET_KEY or "").encode("utf-8")).digest()
-    return MultiFernet(fernet_keys() + [Fernet(base64.urlsafe_b64encode(digest))])
+    return Fernet(base64.urlsafe_b64encode(digest))
+
+
+def _fernet() -> MultiFernet:
+    """TOKEN_ENCRYPTION_KEY (required when deployed). Without one — local dev and tests — the
+    legacy SECRET_KEY-derived key is used; it is never mixed into a real key ring, so rows saved
+    under it must be moved over by migration aud10m01."""
+    from backend.services.crypto import fernet_keys
+    return MultiFernet(fernet_keys() or [_legacy_fernet()])
 
 
 def _encrypt(data: dict) -> str:
     return _fernet().encrypt(json.dumps(data).encode("utf-8")).decode("ascii")
 
 
-def _decrypt(token: Optional[str]) -> dict:
+def _decrypt(token: Optional[str], provider: str = "integration") -> dict:
     if not token:
         return {}
     try:
-        return json.loads(_fernet().decrypt(token.encode("ascii")).decode("utf-8"))
-    except (InvalidToken, ValueError, TypeError):
-        return {}
+        data = json.loads(_fernet().decrypt(token.encode("ascii")).decode("utf-8"))
+    except (InvalidToken, ValueError, TypeError, UnicodeError):
+        raise _unreadable(provider) from None
+    if not isinstance(data, dict):
+        raise _unreadable(provider)
+    return data
+
+
+def reencrypt_legacy(token: Optional[str]) -> Optional[str]:
+    """Ciphertext under the legacy key → the same data under TOKEN_ENCRYPTION_KEY. None when
+    there's nothing to do: no dedicated key, already readable with it, or unreadable by both."""
+    from backend.services.crypto import fernet_keys
+    keys = fernet_keys()
+    if not token or not keys:
+        return None
+    ring = MultiFernet(keys)
+    try:
+        ring.decrypt(token.encode("ascii"))
+        return None
+    except (InvalidToken, ValueError, TypeError, UnicodeError):
+        pass
+    try:
+        plain = _legacy_fernet().decrypt(token.encode("ascii"))
+    except (InvalidToken, ValueError, TypeError, UnicodeError):
+        return None
+    return ring.encrypt(plain).decode("ascii")
 
 
 # ── Env fallback ─────────────────────────────────────────────────────────────
@@ -153,7 +198,7 @@ async def _row(db: AsyncSession, org_id: str, provider: str) -> Optional[OrgInte
 async def own(db: AsyncSession, org_id: str, provider: str) -> dict:
     """Only this shop's saved keys, with no operator env fallback (empty when none)."""
     row = await _row(db, org_id, provider)
-    return _decrypt(row.data_enc) if (row and row.active) else {}
+    return _decrypt(row.data_enc, provider) if (row and row.active) else {}
 
 
 async def effective(db: AsyncSession, org_id: str, provider: str, *, read_only: bool = False,
@@ -171,7 +216,7 @@ async def effective(db: AsyncSession, org_id: str, provider: str, *, read_only: 
     row = await _row(db, org_id, provider)
     data = None
     if row and row.active:
-        data = _decrypt(row.data_enc)
+        data = _decrypt(row.data_enc, provider)   # unreadable raises: never fall back to env keys
         if not any(v not in (None, "") for v in data.values()):
             data = None
     creds = data if data is not None else ({} if own_only else _env_creds(provider))
@@ -200,8 +245,12 @@ async def source(db: AsyncSession, org_id: str, provider: str) -> str:
     """'org' if the shop has its own keys, 'env' if only an operator default
     exists, else 'none'."""
     row = await _row(db, org_id, provider)
-    if row and row.active and _has_essential(provider, _decrypt(row.data_enc)):
-        return "org"
+    if row and row.active:
+        try:
+            if _has_essential(provider, _decrypt(row.data_enc, provider)):
+                return "org"
+        except CredentialsUnreadable:
+            return "unreadable"
     return "env" if _has_essential(provider, _env_creds(provider)) else "none"
 
 
@@ -236,11 +285,14 @@ async def status(db: AsyncSession, org_id: str) -> dict:
     out = {}
     for provider, fields in PROVIDER_FIELDS.items():
         row = await _row(db, org_id, provider)
-        stored = _decrypt(row.data_enc) if row else {}
+        try:
+            stored = _decrypt(row.data_enc, provider) if row else {}
+        except CredentialsUnreadable:
+            stored = {}
         src = await source(db, org_id, provider)
         out[provider] = {
-            "source": src,                       # org | env | none
-            "configured": src != "none",
+            "source": src,                       # org | env | none | unreadable
+            "configured": src not in ("none", "unreadable"),
             "fields": [
                 {"key": f["key"], "label": f["label"], "secret": bool(f.get("secret")),
                  "set": f["key"] in stored and stored[f["key"]] != "",

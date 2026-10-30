@@ -63,7 +63,10 @@ async def provider_secrets(db: AsyncSession, org_id: str, provider: str, field: 
     """Signing secrets that may have signed an event for this org: the shop's own
     (Settings → Integrations) first, then the operator-wide env value."""
     from backend.services import org_creds
-    own = (await org_creds.effective(db, org_id, provider, read_only=True)).get(field)   # verify only
+    try:
+        own = (await org_creds.effective(db, org_id, provider, read_only=True)).get(field)   # verify only
+    except org_creds.CredentialsUnreadable:
+        own = None   # the shop's secret can't be read: only the operator's may verify (or none)
     return [s for s in dict.fromkeys([own, global_secret]) if s]
 
 

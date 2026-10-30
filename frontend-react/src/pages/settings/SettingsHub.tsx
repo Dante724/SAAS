@@ -1073,14 +1073,15 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
   const [keyProv, setKeyProv] = useState<string | null>(null);
   if (!data) return <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-6 text-xs text-ink-tertiary">Loading integrations…</div>;
   const creds = data.creds || {};
-  const srcOf = (p: string) => creds[p]?.source as ("org" | "env" | "none" | undefined);
+  const srcOf = (p: string) => creds[p]?.source as ("org" | "env" | "none" | "unreadable" | undefined);
   const keyBadge = (p: string): { text: string; tone: "on" | "off" | "neutral" } => {
     const s = srcOf(p);
     if (s === "org") return { text: "Your keys", tone: "on" };
     if (s === "env") return { text: "Shared default", tone: "neutral" };
+    if (s === "unreadable") return { text: "Enter keys again", tone: "off" };
     return { text: "Not set", tone: "off" };
   };
-  const keyAction = (p: string) => ({ label: srcOf(p) === "org" ? "Edit keys" : "Add keys", onClick: () => setKeyProv(p) });
+  const keyAction = (p: string) => ({ label: srcOf(p) === "org" ? "Edit keys" : srcOf(p) === "unreadable" ? "Re-enter keys" : "Add keys", onClick: () => setKeyProv(p) });
   const emailOn = (data.email?.accounts?.length || 0) > 0;
   const payGw = data.pay?.gateway; const payLive = !!data.pay?.live;
   const payAvail = Object.entries(data.pay?.available || {}).filter(([, v]) => v).map(([k]) => k);
@@ -1225,7 +1226,7 @@ function CredDrawer({ provider, status, onClose, onSaved }: {
           {err && <div className="text-xs text-rose-600">{err}</div>}
         </div>
         <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-between">
-          {status?.source === "org"
+          {status?.source === "org" || status?.source === "unreadable"
             ? <button onClick={clearKeys} disabled={busy} className="text-[12px] font-semibold text-rose-600 hover:underline">Remove keys</button>
             : <span />}
           <div className="flex gap-2">

@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import EmailConnection, Employee
+from backend.services.audit import record as audit_record
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.email_oauth import authorize_url, exchange_code, provider_configured
 
@@ -50,6 +51,9 @@ async def email_connect(
     conn = EmailConnection(org_id=current.org_id, provider=data.provider,
                            sender_name=data.sender_name, state_nonce=nonce, connected=False)
     db.add(conn)
+    await db.flush()
+    await audit_record(db, org_id=current.org_id, actor_id=current.id, action="email_integration.connect_start",
+                       entity_type="email_connection", entity_id=conn.id, diff={"provider": data.provider})
     await db.commit()
     return {"authorize_url": authorize_url(data.provider, f"{conn.id}:{nonce}")}
 
@@ -89,6 +93,9 @@ async def email_callback(
         EmailConnection.org_id == conn.org_id, EmailConnection.connected == True))).scalars().all()  # noqa: E712
     if not any(o.is_default for o in others if o.id != conn.id):
         conn.is_default = True
+    # no signed-in user on the provider redirect; the employee who started it is on connect_start
+    await audit_record(db, org_id=conn.org_id, actor_id=None, action="email_integration.connected",
+                       entity_type="email_connection", entity_id=conn.id, diff={"provider": conn.provider})
     await db.commit()
     return {"ok": True, "provider": conn.provider, "connected": True}
 
@@ -110,6 +117,8 @@ async def email_set_default(
         EmailConnection.org_id == current.org_id))).scalars().all()
     for r in rows:
         r.is_default = (r.id == conn_id)
+    await audit_record(db, org_id=current.org_id, actor_id=current.id, action="email_integration.default",
+                       entity_type="email_connection", entity_id=conn_id)
     await db.commit()
     return {"ok": True, "default_id": conn_id}
 
@@ -134,6 +143,8 @@ async def email_disconnect(
             EmailConnection.connected == True))).scalars().first()  # noqa: E712
         if nxt:
             nxt.is_default = True
+    await audit_record(db, org_id=current.org_id, actor_id=current.id, action="email_integration.disconnect",
+                       entity_type="email_connection", entity_id=conn_id, diff={"provider": conn.provider})
     await db.commit()
     return {"ok": True}
 

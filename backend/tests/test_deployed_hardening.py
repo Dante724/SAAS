@@ -58,7 +58,9 @@ def test_shop_credentials_move_off_the_jwt_key_without_losing_old_rows(monkeypat
     legacy = org_creds._encrypt({"secret_key": "sk_test_1"})        # written before this change
     key = Fernet.generate_key().decode()
     monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", key)
-    assert org_creds._decrypt(legacy) == {"secret_key": "sk_test_1"}
+    # audit M10: the legacy key is no longer read at runtime; migration aud10m01 moves old rows
+    moved = org_creds.reencrypt_legacy(legacy)
+    assert org_creds._decrypt(moved) == {"secret_key": "sk_test_1"}
     fresh = org_creds._encrypt({"secret_key": "sk_test_2"})
     # new rows don't depend on SECRET_KEY: readable with the dedicated key alone
     assert Fernet(key.encode()).decrypt(fresh.encode())
