@@ -8,7 +8,7 @@ is recorded on the delivery row and never propagates into the caller's request.
 import json
 import hmac
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -130,13 +130,32 @@ async def claim_delivery(db, delivery, from_statuses) -> bool:
     from backend.models import WebhookDelivery
     res = await db.execute(update(WebhookDelivery)
         .where(WebhookDelivery.id == delivery.id, WebhookDelivery.status.in_(from_statuses))
-        .values(status="sending").execution_options(synchronize_session=False))
+        .values(status="sending", claimed_at=datetime.utcnow())
+        .execution_options(synchronize_session=False))
     await db.commit()
     return res.rowcount == 1
 
 
+# Retry backoff (R3): 1, 2, 4, 8… minutes after each failed attempt, at most 6 hours.
+_BACKOFF_BASE_S = 60
+_BACKOFF_MAX_S = 6 * 3600
+
+
+def next_attempt_after(attempts: int) -> datetime:
+    wait = min(_BACKOFF_BASE_S * (2 ** max(attempts - 1, 0)), _BACKOFF_MAX_S)
+    return datetime.utcnow() + timedelta(seconds=wait)
+
+
 async def _attempt(delivery, url: str, secret: str, body: str) -> None:
     """One delivery attempt. Records outcome on the delivery row; never raises."""
+    await _attempt_once(delivery, url, secret, body)
+    if delivery.status == "failed":
+        delivery.next_attempt_at = next_attempt_after(delivery.attempts)
+    elif delivery.status == "sent":
+        delivery.next_attempt_at = None
+
+
+async def _attempt_once(delivery, url: str, secret: str, body: str) -> None:
     delivery.attempts += 1
     signature = hmac.new((secret or "").encode(), body.encode(), hashlib.sha256).hexdigest()
     try:
