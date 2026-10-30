@@ -3,7 +3,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, field_validator, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -171,7 +171,14 @@ async def _denied_for_role(db: AsyncSession, org_id: str, role_id: Optional[str]
 
 
 async def _assert_can_assign_role(db: AsyncSession, current: Employee, role_id: Optional[str]) -> None:
-    mine = set() if await _is_owner(db, current) else await _denied_for_role(db, current.org_id, current.role_id)
+    owner = await _is_owner(db, current)
+    # "No role" means no limits at all: every permission and no location, record or payroll scope.
+    # Only the owner can hand that out — a manager whose role has every permission but is scoped
+    # to some locations or their own records used to pass the permission comparison below and
+    # widen themselves (audit 2026-10-29, H4).
+    if not role_id and not owner:
+        raise HTTPException(403, "Only the shop owner can give someone unlimited access. Pick a role instead.")
+    mine = set() if owner else await _denied_for_role(db, current.org_id, current.role_id)
     theirs = await _denied_for_role(db, current.org_id, role_id)
     if not mine <= theirs:
         raise HTTPException(403, "You can't assign a role with more access than your own")
@@ -324,6 +331,8 @@ async def update_employee(
         for k in PAY_FIELDS:
             payload.pop(k, None)
     if "role_id" in payload and payload["role_id"] != emp.role_id:
+        if emp.id == current.id and not await _is_owner(db, current):
+            raise HTTPException(403, "You can't change your own role. Ask the owner.")
         await _assert_can_assign_role(db, current, payload["role_id"])
     current_password = payload.pop("current_password", None)
     if "email" in payload:
@@ -438,6 +447,11 @@ class InviteIn(BaseModel):
     email: str
     name: Optional[str] = None
     role_id: Optional[str] = None
+
+    @field_validator("role_id")
+    @classmethod
+    def _blank_is_none(cls, v):
+        return v or None   # the invite form sends "" for "no role"
     location_id: Optional[str] = None
 
 
