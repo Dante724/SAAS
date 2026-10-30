@@ -22,6 +22,7 @@ def upgrade() -> None:
         b.alter_column("mfa_secret", existing_type=sa.String(64), type_=sa.String(255),
                        existing_nullable=True)
     from backend.services import crypto
+    _require_key_when_deployed(crypto)
     if not crypto.is_active():
         return
     conn = op.get_bind()
@@ -30,6 +31,14 @@ def upgrade() -> None:
         enc = crypto.encrypt(secret) if not crypto.is_encrypted(secret) else secret
         if enc != secret:
             conn.execute(sa.text("UPDATE employees SET mfa_secret = :s WHERE id = :id"), {"s": enc, "id": eid})
+
+
+def _require_key_when_deployed(crypto) -> None:
+    """A deployed migrate job without the app's TOKEN_ENCRYPTION_KEY would record this revision
+    as done while leaving the rows untouched; refuse instead so it is rerun with the key."""
+    from backend.config import settings
+    if settings.is_deployed and not crypto.is_active():
+        raise RuntimeError("TOKEN_ENCRYPTION_KEY must be set for this migration when deployed.")
 
 
 def downgrade() -> None:

@@ -28,6 +28,10 @@ def _scrub(event, _hint):
     # Exception and log text can quote the row a statement failed on (emails, phones, hashes).
     from backend.core.logging import RedactionFilter
     red = RedactionFilter.redact
+    if isinstance(req.get("url"), str):
+        req["url"] = red(req["url"])       # /pay/<token>, /api/portal/<token>
+    if isinstance(event.get("message"), str):
+        event["message"] = red(event["message"])
     for exc in (event.get("exception") or {}).get("values") or []:
         if isinstance(exc.get("value"), str):
             exc["value"] = red(exc["value"])

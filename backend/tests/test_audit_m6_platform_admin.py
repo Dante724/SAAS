@@ -147,3 +147,14 @@ async def test_turning_two_step_off_needs_password_and_code(client):
                             headers=_h(tok))
     assert off.status_code == 200, off.text
     assert (await _login(client)).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_code_guesses_are_capped_even_when_the_last_one_is_right(client):
+    await _seed()
+    secret, _new, _old = await _enroll(client)
+    for _ in range(5):
+        assert (await _login(client, code="000000")).status_code == 401
+    # the 7th code check in 15 minutes (enable used one) is refused before it is looked at
+    r = await _login(client, code=totp(secret, at=int(time.time()) + 30))
+    assert r.status_code == 429

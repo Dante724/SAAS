@@ -19,7 +19,9 @@ depends_on = None
 
 
 def upgrade() -> None:
+    from backend.services import crypto
     from backend.services.org_creds import reencrypt_legacy
+    _require_key_when_deployed(crypto)
     conn = op.get_bind()
     rows = conn.execute(sa.text("SELECT id, data_enc FROM org_integration_credentials "
                                 "WHERE data_enc IS NOT NULL")).fetchall()
@@ -28,6 +30,14 @@ def upgrade() -> None:
         if new:
             conn.execute(sa.text("UPDATE org_integration_credentials SET data_enc = :t WHERE id = :id"),
                          {"t": new, "id": cid})
+
+
+def _require_key_when_deployed(crypto) -> None:
+    """A deployed migrate job without the app's TOKEN_ENCRYPTION_KEY would record this revision
+    as done while leaving the rows untouched; refuse instead so it is rerun with the key."""
+    from backend.config import settings
+    if settings.is_deployed and not crypto.is_active():
+        raise RuntimeError("TOKEN_ENCRYPTION_KEY must be set for this migration when deployed.")
 
 
 def downgrade() -> None:

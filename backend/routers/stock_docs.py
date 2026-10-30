@@ -284,8 +284,9 @@ async def delete_return(
         raise HTTPException(
             409, "This return has been paid. Delete the payment first, then the return.")
     # Claim the delete before giving stock back, so a second identical request does nothing.
-    if not await claim_status(db, doc, doc.status, "deleted"):
-        raise HTTPException(404, "Return not found")
+    # `paid` re-checked in the same statement: a payment that lands in between must win.
+    if not await claim_status(db, doc, doc.status, "deleted", where=(PurchaseReturn.paid.isnot(True),)):
+        raise HTTPException(409, "This return just changed (deleted or paid). Refresh and try again.")
 
     w = await wh.resolve(db, current.org_id, warehouse_id=doc.warehouse_id)
     lines = (await db.execute(select(PurchaseReturnLine).where(
@@ -741,8 +742,8 @@ async def delete_posting(
                 409, f"“{name}” from this posting has already been used, sold or "
                      f"transferred (only {have:g} of {ln.qty:g} left on hand). Correct it "
                      f"with a write-off or supplier return instead of deleting the posting.")
-    if not await claim_status(db, doc, doc.status, "deleted"):
-        raise HTTPException(404, "Posting not found")
+    if not await claim_status(db, doc, doc.status, "deleted", where=(Posting.paid.isnot(True),)):
+        raise HTTPException(409, "This posting just changed (deleted or paid). Refresh and try again.")
     for ln in lines:
         await _apply_posting_line(db, current, w, ln, sign=-1)
     if doc.settlement == "cash" and doc.account_id and doc.total:

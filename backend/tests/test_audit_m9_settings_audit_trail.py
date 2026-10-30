@@ -110,7 +110,8 @@ async def test_platform_admin_changes_to_a_shop_are_in_its_audit_trail(client, t
     assert r.status_code == 200, r.text
     rows = await _rows(db, me["org_id"], "platform.")
     by = {r.action: r for r in rows}
-    assert by["platform.tenant_update"].diff == {"platform_admin": "m9ops@test.dev",
-                                                 "fields": ["admin_notes", "discount_pct"]}
+    diff = by["platform.tenant_update"].diff
+    assert diff["platform_admin"] == "Tekly support" and diff["fields"] == ["admin_notes", "discount_pct"]
+    assert "m9ops@test.dev" not in json.dumps(diff)       # shop owners read this trail
     assert "platform.employee_access_update" in by
     assert "private note" not in json.dumps([r.diff for r in rows])

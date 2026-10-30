@@ -83,3 +83,10 @@ def test_sentry_does_not_ship_local_variables(monkeypatch):
     monkeypatch.setattr(sentry_sdk, "init", lambda **kw: seen.update(kw))
     error_tracking.init_error_tracking()
     assert seen["include_local_variables"] is False
+
+
+def test_sentry_request_url_tokens_are_masked():
+    ev = {"request": {"url": "https://app.example.com/pay/Ab3dEf9hIjKlMnOpQrStUv12"},
+          "message": f"failed for {PII}"}
+    out = error_tracking._scrub(ev, None)
+    assert "Ab3dEf9hIjKlMnOpQrStUv12" not in out["request"]["url"] and PII not in out["message"]

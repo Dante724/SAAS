@@ -220,7 +220,7 @@ async def test_concurrent_return_delete_restores_once(client, tenant, db, monkey
     a, b = await asyncio.gather(
         client.delete(f"/api/stock-docs/returns/{r['id']}", headers=tenant),
         client.delete(f"/api/stock-docs/returns/{r['id']}", headers=tenant))
-    assert sorted([a.status_code, b.status_code]) == [200, 404], (a.text, b.text)
+    assert sorted([a.status_code, b.status_code]) == [200, 409], (a.text, b.text)
     assert await _on_hand(db, p["id"], loc) == 10
 
 
@@ -239,6 +239,29 @@ async def test_concurrent_posting_delete_removes_once(client, tenant, db, monkey
     a, b = await asyncio.gather(
         client.delete(f"/api/stock-docs/postings/{d.json()['id']}", headers=tenant),
         client.delete(f"/api/stock-docs/postings/{d.json()['id']}", headers=tenant))
-    assert sorted([a.status_code, b.status_code]) == [200, 404], (a.text, b.text)
+    assert sorted([a.status_code, b.status_code]) == [200, 409], (a.text, b.text)
     assert await _on_hand(db, p["id"], loc) == 10
 
+
+
+@pytest.mark.asyncio
+async def test_return_paid_after_the_check_is_not_deleted(client, tenant, db, monkeypatch):
+    """A payment that commits between the paid check and the delete must win."""
+    from backend.models import PurchaseReturn
+    from backend.routers import stock_docs
+    p, loc = await _part(client, tenant, qty=10, name="Cell")
+    w = await _default_wh(client, tenant)
+    r = (await client.post("/api/stock-docs/returns", json={
+        "warehouse_id": w["id"], "lines": [{"part_id": p["id"], "qty": 2, "unit_cost": 5}]},
+        headers=tenant)).json()
+    real = stock_docs.claim_status
+
+    async def pay_then_claim(db_, doc, *a, **kw):
+        from sqlalchemy import update
+        await db_.execute(update(PurchaseReturn).where(PurchaseReturn.id == doc.id).values(paid=True))
+        return await real(db_, doc, *a, **kw)
+
+    monkeypatch.setattr(stock_docs, "claim_status", pay_then_claim)
+    res = await client.delete(f"/api/stock-docs/returns/{r['id']}", headers=tenant)
+    assert res.status_code == 409, res.text
+    assert await _on_hand(db, p["id"], loc) == 8

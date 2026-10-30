@@ -74,7 +74,8 @@ async def _audit_platform(db, admin: PlatformAdmin, action: str, *, org_id: Opti
                           fields: Optional[list] = None) -> None:
     """Who did what (audit M9). Changes to a shop go in that shop's audit trail; platform-only
     changes go to the audit log stream. Field names only, never the values."""
-    diff = {"platform_admin": admin.email, **({"fields": sorted(fields)} if fields else {})}
+    # Shop owners can read their audit trail: name the operator team, not the admin's email.
+    diff = {"platform_admin": "Tekly support", "admin_id": admin.id, **({"fields": sorted(fields)} if fields else {})}
     if org_id:
         await audit_record(db, org_id=org_id, actor_id=None, action=action,
                            entity_type=entity_type, entity_id=entity_id, diff=diff)
@@ -82,10 +83,20 @@ async def _audit_platform(db, admin: PlatformAdmin, action: str, *, org_id: Opti
               diff.get("fields", ""))
 
 
-def _accept_code(admin: PlatformAdmin, code: Optional[str]) -> bool:
-    """A current TOTP code, each one usable once."""
+async def _accept_code(db: AsyncSession, admin: PlatformAdmin, code: Optional[str]) -> bool:
+    """A current TOTP code, each one usable once. Guesses are capped BEFORE checking (so the cap
+    really stops a guesser), and the step is recorded with a conditional UPDATE, so two requests
+    racing with the same intercepted code can't both pass."""
+    await _rate("admin_mfa_try", admin.id, limit=6, window_sec=900)
     step = verify_step(crypto.decrypt(admin.mfa_secret) or "", code or "")
-    if step is None or (admin.mfa_last_step is not None and step <= admin.mfa_last_step):
+    if step is None:
+        return False
+    from sqlalchemy import or_, update
+    res = await db.execute(update(PlatformAdmin).where(
+        PlatformAdmin.id == admin.id,
+        or_(PlatformAdmin.mfa_last_step.is_(None), PlatformAdmin.mfa_last_step < step),
+    ).values(mfa_last_step=step).execution_options(synchronize_session=False))
+    if res.rowcount != 1:
         return False
     admin.mfa_last_step = step
     return True
@@ -93,8 +104,9 @@ def _accept_code(admin: PlatformAdmin, code: Optional[str]) -> bool:
 
 @router.post("/login")
 async def admin_login(data: AdminLogin, request: Request, db: AsyncSession = Depends(get_db)):
-    await _rate("admin_login", f"{_ip(request)}:{(data.email or '').lower()}", limit=10, window_sec=300)
-    await _rate("admin_login_acct", (data.email or "").strip().lower(), limit=20, window_sec=900)
+    email = (data.email or "").strip().lower()
+    await _rate("admin_login", f"{_ip(request)}:{email}", limit=10, window_sec=300)
+    await _rate("admin_login_acct", email, limit=20, window_sec=900)
     admin = await authenticate(db, data.email, data.password)
     if not admin:
         raise HTTPException(401, "Invalid platform credentials")
@@ -102,8 +114,7 @@ async def admin_login(data: AdminLogin, request: Request, db: AsyncSession = Dep
         if not (data.code or "").strip():
             raise HTTPException(401, "Enter the 6-digit code from your authenticator app",
                                 headers={"X-MFA-Required": "1"})
-        if not _accept_code(admin, data.code):
-            await _rate("admin_mfa_fail", admin.id, limit=5, window_sec=900)
+        if not await _accept_code(db, admin, data.code):
             raise HTTPException(401, "That code didn't work. Try the newest one from your app.",
                                 headers={"X-MFA-Required": "1"})
     await _audit_platform(db, admin, "platform.login", entity_id=admin.id)
@@ -154,7 +165,7 @@ async def admin_mfa_enable(data: AdminCode, db: AsyncSession = Depends(get_db),
         raise HTTPException(400, "2-step sign-in is already on")
     if not admin.mfa_secret:
         raise HTTPException(400, "Start 2-step setup first")
-    if not _accept_code(admin, data.code):
+    if not await _accept_code(db, admin, data.code):
         raise HTTPException(400, "That code didn't work. Try the newest one from your app.")
     admin.mfa_enabled = True
     admin.token_version = (admin.token_version or 0) + 1
@@ -177,7 +188,7 @@ async def admin_mfa_disable(data: AdminDisable, db: AsyncSession = Depends(get_d
         raise HTTPException(400, "2-step sign-in is already off")
     if not await asyncio.to_thread(verify_password, data.password, admin.password_hash):
         raise HTTPException(403, "Password incorrect")
-    if not _accept_code(admin, data.code):
+    if not await _accept_code(db, admin, data.code):
         raise HTTPException(403, "That code didn't work. Try the newest one from your app.")
     admin.mfa_enabled = False
     admin.mfa_secret = None
