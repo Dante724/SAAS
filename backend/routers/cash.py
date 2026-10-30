@@ -387,9 +387,10 @@ async def delete_transaction(
     _guard_document_leg(t)
     legs = [t]
     if t.transfer_pair_id:
+        # by id, so two requests on the two legs lock them in the same order (no deadlock)
         legs = (await db.execute(select(Transaction).where(
             Transaction.org_id == current.org_id,
-            Transaction.transfer_pair_id == t.transfer_pair_id))).scalars().all()
+            Transaction.transfer_pair_id == t.transfer_pair_id).order_by(Transaction.id))).scalars().all()
     for leg in legs:
         if leg.status == "deleted":
             continue
@@ -431,7 +432,7 @@ async def restore_transaction(
     if t.transfer_pair_id:
         legs = (await db.execute(select(Transaction).where(
             Transaction.org_id == current.org_id,
-            Transaction.transfer_pair_id == t.transfer_pair_id))).scalars().all()
+            Transaction.transfer_pair_id == t.transfer_pair_id).order_by(Transaction.id))).scalars().all()
     for leg in legs:
         if leg.status != "deleted":
             continue

@@ -17,6 +17,13 @@ from sqlalchemy import select
 from backend.models import StockLevel, Transaction
 
 
+def _one_wins(a, b, loser=(400, 404, 409)):
+    """One request applies; the other is refused — 409 when both read the old row inside the
+    window, or the plain "already done" answer if a slow runner let it read after the commit."""
+    codes = sorted([a.status_code, b.status_code])
+    assert codes[0] == 200 and codes[1] in loser, (a.text, b.text)
+
+
 def _slow(monkeypatch, module, name):
     """Wrap an async helper so it pauses after returning — both racers read before either writes."""
     orig = getattr(module, name)
@@ -95,7 +102,7 @@ async def test_concurrent_delete_reverses_once(client, tenant, monkeypatch):
     a, b = await asyncio.gather(
         client.delete(f"/api/cash/transactions/{tid}", headers=tenant),
         client.delete(f"/api/cash/transactions/{tid}", headers=tenant))
-    assert sorted([a.status_code, b.status_code]) == [200, 409], (a.text, b.text)
+    _one_wins(a, b)
     assert await _balance(client, tenant, aid) == 0
 
 
@@ -112,7 +119,7 @@ async def test_concurrent_restore_applies_once(client, tenant, monkeypatch):
     a, b = await asyncio.gather(
         client.post(f"/api/cash/transactions/{tid}/restore", headers=tenant),
         client.post(f"/api/cash/transactions/{tid}/restore", headers=tenant))
-    assert sorted([a.status_code, b.status_code]) == [200, 409], (a.text, b.text)
+    _one_wins(a, b)
     assert await _balance(client, tenant, aid) == 100
 
 
@@ -135,7 +142,7 @@ async def test_concurrent_transfer_delete_reverses_each_leg_once(client, tenant,
     x, y = await asyncio.gather(
         client.delete(f"/api/cash/transactions/{leg.id}", headers=tenant),
         client.delete(f"/api/cash/transactions/{leg.id}", headers=tenant))
-    assert sorted([x.status_code, y.status_code]) == [200, 409], (x.text, y.text)
+    _one_wins(x, y)
     assert await _balance(client, tenant, a1) == 100
     assert await _balance(client, tenant, a2) == 0
 
@@ -158,7 +165,7 @@ async def test_concurrent_transfer_cancel_unreserves_once(client, tenant, db, mo
     a, b = await asyncio.gather(
         client.patch(f"/api/transfers/{t['id']}/status", json={"status": "canceled"}, headers=tenant),
         client.patch(f"/api/transfers/{t['id']}/status", json={"status": "canceled"}, headers=tenant))
-    assert sorted([a.status_code, b.status_code]) == [200, 409], (a.text, b.text)
+    _one_wins(a, b)
     assert await _on_hand(db, p["id"], loc) == 10
 
 
@@ -178,7 +185,7 @@ async def test_concurrent_transfer_complete_credits_once(client, tenant, db, mon
     a, b = await asyncio.gather(
         client.patch(f"/api/transfers/{t['id']}/status", json={"status": "completed"}, headers=tenant),
         client.patch(f"/api/transfers/{t['id']}/status", json={"status": "completed"}, headers=tenant))
-    assert sorted([a.status_code, b.status_code]) == [200, 409], (a.text, b.text)
+    _one_wins(a, b)
     assert await _on_hand(db, p["id"], loc_b) == 2
 
 
@@ -220,7 +227,7 @@ async def test_concurrent_return_delete_restores_once(client, tenant, db, monkey
     a, b = await asyncio.gather(
         client.delete(f"/api/stock-docs/returns/{r['id']}", headers=tenant),
         client.delete(f"/api/stock-docs/returns/{r['id']}", headers=tenant))
-    assert sorted([a.status_code, b.status_code]) == [200, 409], (a.text, b.text)
+    _one_wins(a, b)
     assert await _on_hand(db, p["id"], loc) == 10
 
 
@@ -239,7 +246,7 @@ async def test_concurrent_posting_delete_removes_once(client, tenant, db, monkey
     a, b = await asyncio.gather(
         client.delete(f"/api/stock-docs/postings/{d.json()['id']}", headers=tenant),
         client.delete(f"/api/stock-docs/postings/{d.json()['id']}", headers=tenant))
-    assert sorted([a.status_code, b.status_code]) == [200, 409], (a.text, b.text)
+    _one_wins(a, b)
     assert await _on_hand(db, p["id"], loc) == 10
 
 

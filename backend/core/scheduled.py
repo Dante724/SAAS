@@ -122,6 +122,10 @@ async def retry_failed_webhooks() -> None:
                 and_(WebhookDelivery.claimed_at.is_(None), WebhookDelivery.created_at < stale)),
         ).values(status="failed", attempts=WebhookDelivery.attempts + 1, next_attempt_at=None,
                  error="Interrupted while sending").execution_options(synchronize_session=False))
+        # Out of attempts: say so, instead of sitting at "failed" forever.
+        await db.execute(update(WebhookDelivery).where(
+            WebhookDelivery.status == "failed", WebhookDelivery.attempts >= _MAX_ATTEMPTS,
+        ).values(status="abandoned").execution_options(synchronize_session=False))
         await db.commit()
         rows = (await db.execute(
             select(WebhookDelivery).where(

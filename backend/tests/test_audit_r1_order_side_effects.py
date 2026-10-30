@@ -5,9 +5,9 @@ did nothing. Each hook is now logged and rolled back on its own; the rest still 
 import logging
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select
 
-from backend.models import Task
+from backend.models import AuditLog, Task
 
 
 async def _client_id(client, h):
@@ -20,7 +20,9 @@ async def test_a_failing_hook_is_logged_and_later_hooks_still_commit(client, ten
     from backend.services import automation
 
     async def broken_upsells(db_, org_id, order, current):
-        await db_.execute(text("SELECT * FROM no_such_table"))   # leaves the transaction failed
+        # a failed flush leaves the session needing a rollback on every database
+        db_.add(AuditLog(org_id=None, action="x", entity_type="x"))
+        await db_.flush()
 
     async def automation_adds_task(db_, org_id, event, *, order=None, part=None):
         db_.add(Task(org_id=org_id, title="Call the customer", order_id=order.id, status="open"))

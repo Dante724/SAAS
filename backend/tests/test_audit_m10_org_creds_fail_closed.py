@@ -116,3 +116,12 @@ async def test_round_trip_still_works(client, tenant, db, monkeypatch):
     row = (await db.execute(select(OrgIntegrationCredential).where(
         OrgIntegrationCredential.org_id == org_id))).scalar_one()
     assert "AC1" not in row.data_enc
+
+
+@pytest.mark.asyncio
+async def test_screens_that_read_unreadable_keys_answer_409_not_500(client, tenant, db, monkeypatch):
+    monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    org_id = await _org(client, tenant)
+    await _store_raw(db, org_id, "twilio_voice", "garbage-not-a-token")
+    r = await client.get("/api/telephony/config", headers=tenant)
+    assert r.status_code == 409 and "Enter them again" in r.json()["detail"]

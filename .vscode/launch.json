@@ -8,6 +8,6 @@
     "args": ["main:app", "--reload", "--host", "0.0.0.0", "--port", "8000"],
     "jinja": true,
     "justMyCode": false,
-    "env": { "PYTHONPATH": "${workspaceFolder}" }
+    "env": { "PYTHONPATH": "${workspaceFolder}", "ENVIRONMENT": "development" }
   }]
 }

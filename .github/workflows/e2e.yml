@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     env:
+      ENVIRONMENT: development   # unset now means production (audit M5); this job boots on SQLite
       SECRET_KEY: "ci-e2e-secret-key-min-32-chars-long-000"
       E2E_PORT: "8000"
       LH_PORT: "9222"
