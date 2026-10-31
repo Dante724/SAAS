@@ -11,7 +11,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -269,12 +269,17 @@ async def approve_for_customer(
         raise HTTPException(404, "Recommendation not found")
     if r.status not in ("draft", "sent", "declined"):
         raise HTTPException(409, "This recommendation was already approved")
-    line = await approve_recommendation(db, r)
+    from backend.routers.orders import _guard_editable, _order_perms
+    await _guard_editable(db, order, current)
+    line = await approve_recommendation(db, r, ("draft", "sent", "declined"),
+                                        current=current, perms=await _order_perms(db, current))
+    if line is None:
+        raise HTTPException(409, "This recommendation was already approved")
     who = (data.customer_name or "").strip()[:120] or "Customer"
     r.decided_by_name = f"{who}, {'by phone' if data.how == 'phone' else 'in person'} (taken by {current.name})"[:200]
     r.decline_reason = None
     r.remind_after = None
-    order.total = q2(float(order.total or 0) + float(line.total or 0))
+    await add_approved_to_total(db, order, [line.id])
     from backend.services import audit
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="rec.approve_for_customer",
                        entity_type="recommendation", entity_id=r.id, diff={"how": data.how, "name": who})
@@ -340,17 +345,30 @@ async def _live_item(db: AsyncSession, rec: Recommendation) -> Optional[str]:
         OrderItem.order_id == rec.order_id))).scalar_one_or_none()
 
 
-async def approve_recommendation(db: AsyncSession, rec: Recommendation) -> OrderLine:
-    """Shared by the public approve endpoints: mark approved + create the OrderLine.
+async def approve_recommendation(db: AsyncSession, rec: Recommendation,
+                                 from_statuses=("sent", "declined"), *, current=None,
+                                 perms=None) -> Optional[OrderLine]:
+    """Shared by the approve endpoints: mark approved + create the OrderLine.
 
     144be — the approved line runs the SAME price chain as a hand-added estimate line:
     the org's default tax stack is auto-applied (honouring tax-inclusive pricing and
     product/category exceptions) and the total is computed with ``_calc_line``, so an
     approved upsell can never disagree with the rest of the order's tax treatment.
+
+    The approval is claimed with a conditional UPDATE on the status, so a double tap (or the
+    customer and staff at once) adds the work once: the loser gets None. A product line takes
+    its catalog cost and its stock through the same deduction as a hand-added line, so removing
+    it later returns only what was really taken. Staff (``current``) follow the add-line rules;
+    the customer only takes free stock and anything else is booked as pending.
     """
     from types import SimpleNamespace
 
-    from backend.routers.orders import _auto_apply_tax, _calc_line
+    from backend.routers.orders import _auto_apply_tax, _calc_line, _catalog_cost, _maybe_deduct
+    won = await db.execute(update(Recommendation).where(
+        Recommendation.id == rec.id, Recommendation.status.in_(tuple(from_statuses)))
+        .values(status="approved").execution_options(synchronize_session=False))
+    if won.rowcount != 1:
+        return None
     line_type = "labour" if rec.kind == "service" else ("part" if rec.kind == "product" else "fee")
     shim = SimpleNamespace(
         qty=rec.qty or 1.0, unit_price=rec.unit_price or 0.0,
@@ -365,6 +383,7 @@ async def approve_recommendation(db: AsyncSession, rec: Recommendation) -> Order
     ol = OrderLine(
         order_id=rec.order_id, line_type=line_type, kind=rec.kind, ref_id=rec.ref_id,
         description=rec.title, qty=rec.qty or 1.0, unit_price=rec.unit_price or 0.0,
+        cost_price=await _catalog_cost(db, rec.org_id, rec.kind, rec.ref_id),
         discount=0.0, discount_type="pct",
         tax_id=shim.tax_id, tax_rate=shim.tax_rate or 0.0, tax_mode=shim.tax_mode or "imposed",
         # 144bl: attribute the upsell to whoever recommended it, so the existing
@@ -374,7 +393,40 @@ async def approve_recommendation(db: AsyncSession, rec: Recommendation) -> Order
         total=total)
     db.add(ol)
     await db.flush()
+    if rec.kind == "product" and rec.ref_id:
+        order = (await db.execute(select(Order).where(Order.id == rec.order_id))).scalar_one()
+        if not order.is_estimate:
+            if current is not None:
+                await _maybe_deduct(db, order, ol, ol.qty, perms or {}, current)
+            else:
+                from backend.services.reservations import plan_consumption
+                plan = await plan_consumption(db, part_id=ol.ref_id, location_id=order.location_id,
+                                              order_id=order.id, qty=ol.qty)
+                take = plan["free_take"]
+                customer = SimpleNamespace(id=None, role_id="customer")   # never overrides a hold
+                if take > 0:
+                    await _maybe_deduct(db, order, ol, take, {}, customer)
+                ol.pending_stock = (ol.pending_stock or 0) + (ol.qty - take)
+            await db.flush()
     rec.status = "approved"
     rec.order_line_id = ol.id
     rec.decided_at = datetime.utcnow()
     return ol
+
+
+async def add_approved_to_total(db: AsyncSession, order: Order, new_line_ids: list[str]) -> None:
+    """Fold approved lines into the job total. A total that is the sum of its lines is
+    recomputed from the lines (so concurrent approvals can't lose one another). A job priced
+    at check-in whose total isn't its lines keeps its quote and the new lines are added on."""
+    if not new_line_ids:
+        return
+    from backend.routers.orders import _recalc_order
+    await db.refresh(order, ["total"])
+    lines = (await db.execute(select(OrderLine.id, OrderLine.total).where(
+        OrderLine.order_id == order.id))).all()
+    added = sum(float(t or 0) for i, t in lines if i in new_line_ids)
+    before = sum(float(t or 0) for i, t in lines if i not in new_line_ids)
+    if abs(float(order.total or 0) - before) < 0.005:
+        await _recalc_order(db, order)
+    else:
+        order.total = q2(float(order.total or 0) + added)
