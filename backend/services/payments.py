@@ -247,11 +247,16 @@ async def create_intent(db: AsyncSession, *, org_id: str, order_id: Optional[str
                         currency: Optional[str] = None) -> PaymentIntent:
     # Stored money is always in the org's base currency, so that's what a checkout must charge.
     # Hard-coding "usd" turned an INR 5,000 balance into a $5,000 checkout.
-    if not currency:
-        from backend.models import Organisation
-        org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
-        currency = ((org.currency_code if org else None) or "usd")
-    currency = currency.lower()
+    from backend.models import Organisation
+    org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
+    base_code = ((org.currency_code if org else None) or "usd").lower()
+    currency = (currency or base_code).lower()
+    if order_id and currency != base_code:
+        # The order (and its invoice) is priced in the base currency: charging the same number
+        # in another currency would take the wrong amount.
+        from fastapi import HTTPException
+        raise HTTPException(422, f"Payment links for a job or invoice are in {base_code.upper()}, "
+                                 "the shop's own currency.")
     invoice_id = None
     description = "Tekly payment"
     if order_id:

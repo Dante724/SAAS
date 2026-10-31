@@ -67,7 +67,9 @@ def client_ip(request) -> str:
     if hops <= 0 or request is None:
         return peer
     chain = [p.strip() for p in (request.headers.get("x-forwarded-for") or "").split(",") if p.strip()]
-    return chain[-hops] if len(chain) >= hops else (chain[0] if chain else peer)
+    # A chain shorter than our own proxies didn't come through all of them: its entries are
+    # whatever the client wrote, so use the connection's address.
+    return chain[-hops] if len(chain) >= hops else peer
 
 
 def _too_many(retry: int) -> HTTPException:

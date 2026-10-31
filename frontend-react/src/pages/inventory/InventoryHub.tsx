@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
 import ScanStockPanel from "../../components/ScanStockPanel";
 import { api, openAuthedDoc } from "../../api/client";
+import { downloadSheet } from "../../lib/downloadSheet";
 import { isoDate } from "../../lib/localDate";
 import { Product, Supplier, PO, Service, Bundle, Asset, currencySymbol, money } from "./types";
 import { analyzePaste, gridToRows, mergeRemap, loadRememberedMap, saveRememberedMap, FIELD_LABELS, FIELD_ORDER } from "./pasteMap";
@@ -275,11 +276,8 @@ export default function InventoryHub() {
   function pExport() {
     const chosen = (products || []).filter((p) => psel.has(p.id));
     const head = ["Name", "SKU", "MPN", "Barcode", "Unit", "Cost", "Sell", "In stock"];
-    const esc = (x: any) => `"${String(x ?? "").replace(/"/g, '""')}"`;
-    const body = chosen.map((p) => [p.name, p.sku || p.code, p.mpn, p.barcode, p.uom || "pcs", p.avg_cost ?? p.cost_price ?? 0, p.sell_price ?? 0, p.qty_available ?? 0].map(esc).join(","));
-    const blob = new Blob([[head.join(","), ...body].join("\n")], { type: "text/csv" });
-    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
-    a.download = `products-${isoDate()}.csv`; a.click();
+    const body = chosen.map((p) => [p.name ?? "", p.sku || p.code || "", p.mpn ?? "", p.barcode ?? "", p.uom || "pcs", p.avg_cost ?? p.cost_price ?? 0, p.sell_price ?? 0, p.qty_available ?? 0]);
+    downloadSheet([head, ...body], "csv", `products-${isoDate()}`);
   }
 
   const newBtn = (label: string, kind: DrawerKind) => (

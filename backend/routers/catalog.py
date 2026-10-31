@@ -14,6 +14,7 @@ from backend.db.database import get_db
 from backend.models import Employee, Part, Service
 from backend.services.auth import get_current_employee, has_perm, require_perm
 from backend.core import paging as _paging
+from backend.core.likes import contains as _contains
 from backend.services.redact import can_see_costs
 
 router = APIRouter(prefix="/api/catalog", tags=["catalog"])
@@ -122,7 +123,7 @@ async def list_services(
     limit = _paging.clamp(limit)
     q = select(Service).where(Service.org_id == current.org_id, Service.active == True)  # noqa: E712
     if search:
-        q = q.where(Service.name.ilike(f"%{search}%"))
+        q = q.where(_contains(Service.name, search))
     if category:
         q = q.where(Service.category == category)
     if category_id:
@@ -322,7 +323,7 @@ async def catalog_search(
     if type in ("all", "service"):
         sq = select(Service).where(Service.org_id == current.org_id, Service.active == True)  # noqa: E712
         if q:
-            sq = sq.where(or_(Service.name.ilike(f"%{q}%"), Service.barcode == q))
+            sq = sq.where(or_(_contains(Service.name, q), Service.barcode == q))
         services = (await db.execute(sq.order_by(Service.name).limit(max(1, min(limit, 200))))).scalars().all()
         for s in services:
             out.append({
@@ -334,8 +335,8 @@ async def catalog_search(
     if type in ("all", "product"):
         pq = select(Part).where(Part.org_id == current.org_id, Part.active == True).options(selectinload(Part.stock_levels))  # noqa: E712
         if q:
-            pq = pq.where(or_(Part.name.ilike(f"%{q}%"), Part.sku.ilike(f"%{q}%"), Part.barcode == q,
-                              Part.mpn.ilike(f"%{q}%")))
+            pq = pq.where(or_(_contains(Part.name, q), _contains(Part.sku, q), Part.barcode == q,
+                              _contains(Part.mpn, q)))
         parts = (await db.execute(pq.order_by(Part.name).limit(max(1, min(limit, 200))))).scalars().all()
         for p in parts:
             avail = sum(sl.qty_available for sl in p.stock_levels)
@@ -355,7 +356,7 @@ async def catalog_search(
         from backend.models import Bundle, BundleComponent
         bq = select(Bundle).where(Bundle.org_id == current.org_id, Bundle.active == True)  # noqa: E712
         if q:
-            bq = bq.where(Bundle.name.ilike(f"%{q}%"))
+            bq = bq.where(_contains(Bundle.name, q))
         for b in (await db.execute(bq.order_by(Bundle.name).limit(5))).scalars().all():
             comps = (await db.execute(select(BundleComponent).where(
                 BundleComponent.bundle_id == b.id))).scalars().all()

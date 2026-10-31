@@ -492,7 +492,8 @@ async def _paid_fields(db: AsyncSession, order: "Order", fx) -> dict:
 async def _client_by_portal(db: AsyncSession, token: str) -> Client:
     if not token:
         raise HTTPException(404, "Not found")
-    client = (await db.execute(select(Client).where(Client.portal_token == token))).scalar_one_or_none()
+    from backend.services import portal_links
+    client = await portal_links.client_for(db, token)
     if not client:
         raise HTTPException(404, "Portal not found")
     return client

@@ -255,22 +255,23 @@ async def get_client(
 async def issue_portal_link(
     client_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_client_info")),
 ):
     """Issue (or rotate) a customer-portal magic link for this client.
 
-    Returns a durable token; the relative URL `/portal/{token}` lets the customer
-    see all their work orders/estimates/invoices and approve estimates without a login.
+    The relative URL `/portal/{token}` lets the customer see all their work orders, estimates
+    and invoices and approve estimates without a login. The link expires (services/portal_links)
+    and replaces every earlier one; the token is shown once and only its hash is kept.
     """
-    import secrets
+    from backend.services import portal_links
     client = (await db.execute(
         select(Client).where(Client.id == client_id, Client.org_id == current.org_id)
     )).scalar_one_or_none()
     if not client:
         raise HTTPException(404, "Client not found")
-    client.portal_token = secrets.token_urlsafe(24)
+    raw = await portal_links.issue(db, client, replace=True)
     await db.commit()
-    return {"portal_token": client.portal_token, "portal_url": f"/portal/{client.portal_token}"}
+    return {"portal_token": raw, "portal_url": f"/portal/{raw}", "expires_in_days": portal_links.LINK_DAYS}
 
 
 @router.put("/{client_id}")
@@ -416,6 +417,8 @@ async def delete_client(
             raise HTTPException(409, "This contact has history (orders, invoices, payments or "
                                      "devices) and can't be deleted. Merge it into another contact "
                                      "instead to preserve the records.")
+    from backend.services import portal_links
+    await portal_links.revoke_all(db, client.id)
     await db.delete(client)
     await db.commit()
     return {"ok": True}
@@ -668,14 +671,17 @@ def _client_fk_targets():
     the mapper so the merge can never silently miss a table as new ones are added. This is the
     COMPLETE set a merge must re-point before deleting a source (orphaning any of these would
     lose history on SQLite and raise an IntegrityError on Postgres). Includes the second FK on
-    Invoice (payer_client_id) and the Client self-reference (payer_id)."""
+    Invoice (payer_client_id) and the Client self-reference (payer_id).
+
+    Portal links are left out: they are access, not history. Delete and merge revoke them, so a
+    merged-away contact's old link never opens the other contact's jobs."""
     from sqlalchemy import inspect as _inspect
 
     import backend.models as _m
     out = []
     for name in dir(_m):
         cls = getattr(_m, name)
-        if not isinstance(cls, type) or not hasattr(cls, "__tablename__"):
+        if not isinstance(cls, type) or not hasattr(cls, "__tablename__") or cls is _m.ClientPortalLink:
             continue
         try:
             mapper = _inspect(cls)
@@ -785,6 +791,8 @@ async def merge_clients(
                 setattr(r, attr, target.id)
                 moved_map.setdefault(key, {})[r.id] = s.id
                 moved_counts[key] = moved_counts.get(key, 0) + 1
+        from backend.services import portal_links
+        await portal_links.revoke_all(db, s.id)
         await db.delete(s)
 
     # Guard the self-reference edge: if the target's own payer was one of the merged sources,

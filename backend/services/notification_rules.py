@@ -30,10 +30,14 @@ from backend.models import (
 from backend.services.notifications import _adapter_for, channel_consented, notif_creds
 
 
-async def _send(db, org_id, channel, *, recipient, subject, body):
-    """144jn: send through THIS shop's own provider credentials (per-tenant)."""
+async def _send(db, org_id, channel, *, recipient, subject, body, log=None):
+    """144jn: send through THIS shop's own provider credentials (per-tenant).
+    An email is HTML only when its template was when the message was filled (log.is_html, fixed
+    when the log row is first saved); built-in and template-less messages are plain text."""
+    from backend.services.notifications import log_is_html
     creds = await notif_creds(db, org_id, channel)
-    return await _adapter_for(channel, creds).send(recipient=recipient, subject=subject, body=body)
+    html = await log_is_html(db, log) if log is not None else False
+    return await _adapter_for(channel, creds).send(recipient=recipient, subject=subject, body=body, html=html)
 
 WORK_START_MIN = 9 * 60      # 09:00
 WORK_END_MIN = 18 * 60       # 18:00
@@ -219,7 +223,7 @@ async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
             log.status = "skipped"
             log.error = f"No client consent for {channel}"
         elif send_at <= now:
-            result = await _send(db, org_id, channel, recipient=recipient, subject=subject, body=body)
+            result = await _send(db, org_id, channel, recipient=recipient, subject=subject, body=body, log=log)
             log.status = result["status"]
             log.error = result.get("error")
             sent += 1 if log.status == "sent" else 0
@@ -302,7 +306,7 @@ async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = No
         if claimed.rowcount == 0:
             continue
         result = await _send(db, org_id, log.channel,
-            recipient=log.recipient, subject=log.subject, body=log.body)
+            recipient=log.recipient, subject=log.subject, body=log.body, log=log)
         log.status = result["status"]
         log.error = result.get("error")
         await db.commit()
@@ -362,7 +366,7 @@ async def evaluate_appointment(db: AsyncSession, *, org_id: str, appointment_id:
             log.error = f"No {rule.channel} on file"
         elif send_at <= now:
             res = await _send(db, org_id, rule.channel, 
-                recipient=recipient, subject=subject, body=body)
+                recipient=recipient, subject=subject, body=body, log=log)
             log.status = res["status"]
             log.error = res.get("error")
             sent += 1 if log.status == "sent" else 0
@@ -486,7 +490,7 @@ async def notify_staff_order(db: AsyncSession, *, org_id: str, order_id: str, ev
                 log.error = f"Employee has no {rule.channel}"
             else:
                 res = await _send(db, org_id, rule.channel, 
-                    recipient=recipient, subject=subject, body=body)
+                    recipient=recipient, subject=subject, body=body, log=log)
                 log.status = res["status"]
                 log.error = res.get("error")
                 sent += 1 if log.status == "sent" else 0
@@ -561,7 +565,7 @@ async def notify_contact_birthdays(db: AsyncSession, *, org_id: str,
                 log.error = f"No client consent for {rule.channel}"
             else:
                 res = await _send(db, org_id, rule.channel, 
-                    recipient=recipient, subject=subject, body=body)
+                    recipient=recipient, subject=subject, body=body, log=log)
                 log.status = res["status"]
                 log.error = res.get("error")
                 sent += 1 if log.status == "sent" else 0
@@ -625,7 +629,7 @@ async def notify_task(db: AsyncSession, *, org_id: str, task, event: str,
                 log.error = f"Employee has no {rule.channel}"
             elif send_at <= now:
                 res = await _send(db, org_id, rule.channel, 
-                    recipient=recipient, subject=subject, body=body)
+                    recipient=recipient, subject=subject, body=body, log=log)
                 log.status = res["status"]
                 log.error = res.get("error")
                 sent += 1 if log.status == "sent" else 0
