@@ -100,11 +100,11 @@ async def issue_giftcard(
             break
     if not code:
         raise HTTPException(500, "Could not allocate a unique gift-card code")
-    g = GiftCard(org_id=current.org_id, code=code, initial_value=q2(data.value),
-                 balance=q2(data.value), client_id=data.client_id, expires_at=data.expires_at)
+    g = GiftCard(org_id=current.org_id, code=code, initial_value=d2(data.value),
+                 balance=d2(data.value), client_id=data.client_id, expires_at=data.expires_at)
     db.add(g)
     await db.flush()
-    db.add(GiftCardLedger(org_id=current.org_id, gift_card_id=g.id, amount=q2(data.value),
+    db.add(GiftCardLedger(org_id=current.org_id, gift_card_id=g.id, amount=d2(data.value),
                           ref_type="manual", note="Issued"))
     await db.commit()
     await db.refresh(g)
@@ -170,7 +170,8 @@ async def redeem_giftcard(
     new_balance = q2(g.balance - amount)
     res = await db.execute(sa_update(GiftCard)
         .where(GiftCard.id == g.id, GiftCard.balance >= amount)
-        .values(balance=GiftCard.balance - amount))
+        .values(balance=GiftCard.balance - amount)
+        .execution_options(synchronize_session=False))   # don't re-evaluate on g (may hold a float)
     if res.rowcount == 0:
         raise HTTPException(409, "Gift card balance changed — please retry")
     db.add(GiftCardLedger(org_id=current.org_id, gift_card_id=g.id, amount=-amount,

@@ -4,7 +4,7 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime, date
+from datetime import date, datetime, timedelta
 from backend.db.database import get_db
 from backend.models import Invoice, Payment, CashShift, CashDrawerMovement, Expense, Order, Employee, Location
 from backend.services.auth import assert_perm, get_current_employee, require_perm, record_scope
@@ -12,7 +12,7 @@ from backend.core import paging as _paging
 from backend.services.money import d2, dec, msum, q2, q4  # noqa: F401 — money quantizers used module-wide
 from backend.core.spreadsheet import safe_row
 from backend.services.invoicing import DISPLAY_MODES, balance_due as _balance_due, settle_status
-from backend.services.dates import now_utc, shop_today
+from backend.services.dates import day_end_utc, day_start_utc, now_utc, shop_today, shop_tzname, today_in
 
 router = APIRouter(prefix="/api/finance", tags=["finance"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -1109,13 +1109,18 @@ async def accountant_export(
     file instead of re-keying into QuickBooks. Default period = current month to today."""
     import csv, io
     from backend.models import Transaction, Account, CashFlowItem
-    today = await shop_today(db, current.org_id)
-    df = datetime.fromisoformat(date_from) if date_from else datetime(today.year, today.month, 1)
+    tz = await shop_tzname(db, current.org_id)
+    today = today_in(tz)
+    # Default period: this month on the shop's calendar, as naive-UTC instants for actual_date.
+    df = datetime.fromisoformat(date_from) if date_from else day_start_utc(today.replace(day=1), tz)
+    exp_from = df.date() if date_from else today.replace(day=1)       # expense_date is a shop day
     if date_to:
         _dt = datetime.fromisoformat(date_to)
         dt = _dt.replace(hour=23, minute=59, second=59) if _dt.time() == datetime.min.time() else _dt
+        exp_to = dt.date()
     else:
-        dt = datetime(today.year, today.month, today.day, 23, 59, 59)
+        dt = day_end_utc(today, tz) - timedelta(microseconds=1)
+        exp_to = today
     rows = (await db.execute(
         select(Transaction, Account.name, CashFlowItem.name)
         .join(Account, Transaction.account_id == Account.id)
@@ -1134,7 +1139,7 @@ async def accountant_export(
                            f"{abs(amt):.2f}" if amt < 0 else "",
                            f"{float(txn.balance_after):.2f}" if txn.balance_after is not None else ""]))
     exps = (await db.execute(select(Expense).where(
-        Expense.org_id == current.org_id, Expense.expense_date >= df.date(), Expense.expense_date <= dt.date()))).scalars().all()
+        Expense.org_id == current.org_id, Expense.expense_date >= exp_from, Expense.expense_date <= exp_to))).scalars().all()
     for e in exps:
         ed = datetime.combine(e.expense_date, datetime.min.time()) if e.expense_date else None
         lines.append((ed, [e.expense_date.strftime("%Y-%m-%d") if e.expense_date else "", "(business expense)",
@@ -1147,6 +1152,6 @@ async def accountant_export(
         w.writerow(safe_row(cells))
     buf.seek(0)
     from fastapi.responses import StreamingResponse
-    fname = f"accountant_{df.strftime('%Y%m%d')}_{dt.strftime('%Y%m%d')}.csv"
+    fname = f"accountant_{exp_from.strftime('%Y%m%d')}_{exp_to.strftime('%Y%m%d')}.csv"
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
                              headers={"Content-Disposition": f'attachment; filename="{fname}"'})

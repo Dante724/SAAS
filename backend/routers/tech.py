@@ -27,7 +27,7 @@ from backend.models import (
     TimeEntry,
 )
 from backend.services.auth import get_current_employee, record_scope
-from backend.services.dates import now_utc
+from backend.services.dates import now_utc, shop_today
 
 router = APIRouter(prefix="/api/tech", tags=["technician"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -56,7 +56,9 @@ async def dashboard(
     """Today / upcoming / completed / overdue jobs for the signed-in technician,
     plus quick stats, clock status and the unread notification count."""
     now = now_utc()
-    today_start = datetime(now.year, now.month, now.day)
+    # scheduled_for is shop wall-clock time, so "today" is the shop's day on that clock.
+    today = await shop_today(db, current.org_id)
+    today_start = datetime(today.year, today.month, today.day)
     today_end = today_start + timedelta(days=1)
 
     # Terminal status keys for this org (a job is "completed" once terminal/closed).

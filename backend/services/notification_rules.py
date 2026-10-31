@@ -514,13 +514,16 @@ async def notify_contact_birthdays(db: AsyncSession, *, org_id: str,
     if not rules:
         return 0
 
-    from backend.services.dates import shop_tzname, zone
-    local = now.replace(tzinfo=timezone.utc).astimezone(zone(await shop_tzname(db, org_id)))
+    from backend.services.dates import day_start_utc, shop_tzname, zone
+    tz = await shop_tzname(db, org_id)
+    local = now.replace(tzinfo=timezone.utc).astimezone(zone(tz))
     today = f"{local.month:02d}-{local.day:02d}"   # the shop's calendar day, not UTC's
     clients = (await db.execute(select(Client).where(
         Client.org_id == org_id, Client.birthday.isnot(None),
         Client.blacklisted == False))).scalars().all()  # noqa: E712
-    year_start = datetime(now.year, 1, 1)
+    # The shop's year, as a UTC instant: a UTC year boundary inside the shop's 31 Dec / 1 Jan
+    # would otherwise forget this year's greeting and send it twice.
+    year_start = day_start_utc(local.date().replace(month=1, day=1), tz)
     sent = 0
     for rule in rules:
         tpl = None

@@ -180,3 +180,9 @@ async def test_order_cash_rounding_half_up(client, tenant, db):
     await db.commit()
     oid = await _order_with_lines(client, tenant, 10.025)
     assert (await client.get(f"/api/orders/{oid}", headers=tenant)).json()["total"] == 10.05
+
+
+async def test_app_engine_writes_decimal_json():
+    """The production engine (not just the test one) carries the Decimal-safe JSON serializer."""
+    from backend.db.database import engine
+    assert engine.sync_engine.dialect._json_serializer is json_dumps

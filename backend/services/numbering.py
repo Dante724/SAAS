@@ -10,7 +10,7 @@ Absent any configured sequence, a built-in default template is used so existing
 installs keep their current format (e.g. INV-00001).
 """
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -123,12 +123,16 @@ async def next_number(
     # Claim counters with an atomic UPDATE (row-locked on Postgres): reading next_value and writing
     # +1 in Python let two concurrent documents take the same number.
     from sqlalchemy import update
+
+    from backend.services.dates import shop_tzname, zone
+    # {D}/{M}/{Y} are the shop's date: a document made in the evening west of UTC is today's.
+    local_now = now_utc().replace(tzinfo=timezone.utc).astimezone(zone(await shop_tzname(db, org_id)))
     for _ in range(100):
         await db.execute(update(NumberSequence).where(NumberSequence.id == seq.id)
                          .values(next_value=NumberSequence.next_value + 1, updated_at=now_utc())
                          .execution_options(synchronize_session=False))
         await db.refresh(seq, attribute_names=["next_value"])
-        number = render(seq.template, seq.next_value - 1)
+        number = render(seq.template, seq.next_value - 1, now=local_now)
         # Skip numbers already taken (legacy count-based invoices, a sequence reset in Settings).
         if not await _number_taken(db, org_id, doc_type, number):
             return number

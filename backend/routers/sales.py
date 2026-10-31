@@ -133,7 +133,8 @@ async def _pos_redemptions(db, org_id, sale, client_id, gross, data):
             # concurrent redemption drained the card between the read above and this write.
             res = await db.execute(sa_update(GiftCard)
                 .where(GiftCard.id == g.id, GiftCard.balance >= amt)
-                .values(balance=GiftCard.balance - amt))
+                .values(balance=GiftCard.balance - amt)
+                .execution_options(synchronize_session=False))
             if res.rowcount == 0:
                 raise HTTPException(409, "Gift card balance changed — please retry")
             db.add(GiftCardLedger(org_id=org_id, gift_card_id=g.id, amount=-amt,
@@ -294,7 +295,8 @@ async def delete_sale(
         back = q2(-(g.amount or 0))
         if back > 0:
             await db.execute(sa_update(GiftCard).where(GiftCard.id == g.gift_card_id)
-                             .values(balance=GiftCard.balance + d2(back)))
+                             .values(balance=GiftCard.balance + d2(back))
+                             .execution_options(synchronize_session=False))
             db.add(GiftCardLedger(org_id=current.org_id, gift_card_id=g.gift_card_id, amount=back,
                                   ref_type="sale_void", ref_id=sale.id, note=f"Sale {sale.sale_number} deleted"))
     for pts in (await db.execute(select(LoyaltyLedger).where(
