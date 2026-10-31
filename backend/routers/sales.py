@@ -176,7 +176,10 @@ async def lookup_code(
     """F1 scan-to-cart: every active product whose SKU, barcode, internal code or MPN equals the
     scanned code (case-insensitive), else the product a serial number belongs to. One match goes
     straight into the cart; several let the cashier pick."""
-    code = (code or "").strip()
+    from backend.services import scan_codes
+    raw = (code or "").strip()
+    scan = scan_codes.parse(raw)        # ii144b: AIM prefix stripped, GS1 label read
+    code = scan.text
     if not code:
         raise HTTPException(422, "Scan or type a code")
     low = code.lower()
@@ -185,7 +188,7 @@ async def lookup_code(
     if mpn_col is not None:
         fields["mpn"] = mpn_col
     base = select(Part).where(Part.org_id == current.org_id, Part.active == True)  # noqa: E712
-    extra = product_codes.barcode_part_ids(current.org_id, code)     # ii144a: a product's extra barcodes
+    extra = product_codes.barcode_part_ids(current.org_id, raw)      # extra barcodes, any GTIN form
     parts = (await db.execute(base.where(or_(*[func.lower(c) == low for c in fields.values()], Part.id.in_(extra)))
                               .order_by(Part.name).limit(20))).scalars().all()
     matched = {p.id: next((k for k in fields if (getattr(p, k, None) or "").lower() == low), "barcode") for p in parts}
@@ -193,7 +196,9 @@ async def lookup_code(
         from backend.models import SerializedItem
         from backend.services.serial_intake import matches as _sn_matches
         si = (await db.execute(select(SerializedItem).where(
-            SerializedItem.org_id == current.org_id, _sn_matches(SerializedItem.serial_number, code)))).scalars().first()
+            SerializedItem.org_id == current.org_id,
+            or_(*[_sn_matches(SerializedItem.serial_number, t) for t in (scan.serial, scan.clean) if t])
+        ))).scalars().first()      # the GS1 (21) serial, or the code exactly as scanned
         if si:
             parts = (await db.execute(base.where(Part.id == si.part_id))).scalars().all()
             matched = {p.id: "serial" for p in parts}
@@ -738,12 +743,15 @@ async def scan_count(
 
     part = None
     unit = None
+    from backend.services import scan_codes
+    _scan = scan_codes.parse(data.code)    # ii144b: AIM prefix stripped; a GS1 label's (21) is the unit
     code = data.code.strip()
+    unit_codes = [t for t in (_scan.serial, _scan.clean) if t]
 
     # a serial identifies one specific unit
     from backend.services.serial_intake import matches as _sn_matches
     unit = (await db.execute(select(SerializedItem).where(
-        SerializedItem.org_id == current.org_id, _sn_matches(SerializedItem.serial_number, code)))).scalars().first()
+        SerializedItem.org_id == current.org_id, or_(*[_sn_matches(SerializedItem.serial_number, t) for t in unit_codes])))).scalars().first()
     if unit:
         part = (await db.execute(select(Part).where(Part.id == unit.part_id))).scalar_one_or_none()
     else:
@@ -756,6 +764,8 @@ async def scan_count(
         if not data.register_unknown:
             raise HTTPException(404, f"Nothing matches “{code}”. Tick “register unknown” "
                                      f"to add it as a new product.")
+        # a GS1 label registers its product number, not the unit's whole label (serial, batch…)
+        code = ((_scan.gtin[1:] if _scan.gtin[0] == "0" else _scan.gtin) if _scan.gtin else _scan.clean) or code
         part = Part(org_id=current.org_id, name=f"Unknown item {code}", sku=code,
                     barcode=code, cost_price=0, sell_price=0)
         db.add(part)

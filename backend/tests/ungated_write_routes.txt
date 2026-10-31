@@ -190,7 +190,8 @@ POST /api/push/unsubscribe [staff]
 POST /api/reports/insights/cards [staff]
 PATCH /api/reports/insights/cards/reorder [staff]
 DELETE /api/reports/insights/cards/{cid} [staff]
-# scan
+# scan — read-only: read a scanned code and look it up in the caller's shop, nothing is written
+POST /api/scan/parse [staff]
 POST /api/scan/resolve [staff]
 # settings
 POST /api/settings/numbering/preview [staff]

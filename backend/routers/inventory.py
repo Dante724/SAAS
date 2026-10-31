@@ -137,12 +137,15 @@ async def scan_resolve(
     """Build 144an — resolve a scanned/typed code to a product for the POS. Matches, in
     order: exact SKU, barcode, internal code, MPN, then a serialized unit's serial number.
     Returns the product (with stock) and, for a serial hit, which unit was matched."""
-    code = (code or "").strip()
+    from backend.services import scan_codes
+    raw = (code or "").strip()
+    scan = scan_codes.parse(raw)       # ii144b: AIM prefix stripped, GS1 label read
+    code = scan.text
     if not code:
         raise HTTPException(400, "No code provided")
     base = select(Part).where(Part.org_id == current.org_id, Part.active == True)  # noqa: E712
     part = (await db.execute(base.where(product_codes.matches_code(
-        current.org_id, code, include_mpn=True)))).scalars().first()    # MPNs are unique case-insensitively
+        current.org_id, raw, include_mpn=True)))).scalars().first()    # MPNs are unique case-insensitively
     matched_serial = None
     matched_on = None
     if part:
@@ -153,7 +156,8 @@ async def scan_resolve(
         from backend.services.serial_intake import matches as _sn_matches
         si = (await db.execute(select(SerializedItem).where(
             SerializedItem.org_id == current.org_id,
-            _sn_matches(SerializedItem.serial_number, code)))).scalars().first()
+            or_(*[_sn_matches(SerializedItem.serial_number, t) for t in (scan.serial, scan.clean) if t])
+        ))).scalars().first()      # the GS1 (21) serial, or the code exactly as scanned
         if si:
             part = (await db.execute(base.where(Part.id == si.part_id))).scalars().first()
             matched_serial = si.serial_number
@@ -164,7 +168,8 @@ async def scan_resolve(
     if location_id:
         _sq = _sq.where(StockLevel.location_id == location_id)
     stocks = (await db.execute(_sq)).scalars().all()
-    return {"matched_on": matched_on, "serial": matched_serial, "product": _ser_part(part, stocks)}
+    return {"matched_on": matched_on, "serial": matched_serial or scan.serial, "product": _ser_part(part, stocks),
+            "scan": scan.as_dict()}
 
 @router.post("/parts", status_code=201)
 async def create_part(
@@ -295,6 +300,7 @@ class PostingLine(BaseModel):
     markup_pct: Optional[float] = None   # if set, new sell price = purchase * (1 + markup/100)
     serials: Optional[list[SerialStr]] = Field(None, max_length=500)  # serial-tracked: one serial / IMEI per unit
     bin_id: Optional[str] = None         # ii144a: put away straight into a bin at the posting's location
+    lot: Optional[str] = Field(None, max_length=40)   # ii144b: batch / lot (GS1 (10) from the label)
 
 
 class PostingIn(BaseModel):
@@ -333,7 +339,7 @@ async def _do_posting(db, org_id, created_by_id, location_id, supplier_id, lines
             db, org_id=org_id, part=part, location_id=location_id,
             qty=qty, unit_cost=cost, created_by_id=created_by_id,
             ref_type="supplier" if supplier_id else "posting", ref_id=supplier_id,
-            serials=serials, create_batch=True, set_last_cost=True, bin_id=_g(ln, "bin_id"),
+            serials=serials, create_batch=True, set_last_cost=True, bin_id=_g(ln, "bin_id"), lot=_g(ln, "lot"),
             expiry_date=_g(ln, "expiry_date") if part.expiry_tracking else None)
         # 144bo: fresh stock arrived — reset low-stock dedupe + ping any job that was waiting.
         after_oh = await _alerts.global_on_hand(db, part.id)
@@ -417,14 +423,24 @@ async def preview_posting(
             by_mpn[p.mpn.strip().lower()] = p
     names = {p.name.strip().lower(): p for p in parts if p.name}
     name_list = list(names.keys())
+    # ii144b: every barcode by match key, so any form of a GTIN (or a GS1 label) finds its product
+    from backend.models import ProductBarcode
+    from backend.services import scan_codes
+    by_id = {p.id: p for p in parts}
+    by_key = {k: by_id[pid] for k, pid in (await db.execute(select(ProductBarcode.match_key, ProductBarcode.part_id)
+              .where(ProductBarcode.org_id == current.org_id, ProductBarcode.active == True))).all()  # noqa: E712
+              if pid in by_id}
 
     out = []
     for i, row in enumerate(data.rows):
-        code = (row.code or "").strip()
+        scan = scan_codes.parse(row.code) if row.code else None
+        code = (scan.text if scan else "").strip()
         mpn = (row.mpn or "").strip()
         nm = (row.name or "").strip()
         status, part, cands = "new", None, []
         hit = by_mpn.get(mpn.lower()) if mpn else None
+        if hit is None and scan:
+            hit = next((by_key[k] for k in scan.keys if k in by_key), None)
         if hit is None and code:     # a supplier sheet's "code" is often the MPN too
             hit = by_code.get(code.lower()) or by_mpn.get(code.lower())
         if hit is None and nm:
@@ -447,15 +463,21 @@ async def preview_posting(
         ptype = serial_intake.parse_product_type(row.product_type)
         serialized = bool(part.serialized) if part else ptype == "serialized"
         expiry = bool(part.expiry_tracking) if part else ptype == "expiry"
-        have = len([x for x in (row.serials or []) if x and x.strip()])
+        row_serials = [x for x in (row.serials or []) if x and x.strip()]
+        if serialized and scan and scan.serial and scan.serial not in row_serials:
+            row_serials.append(scan.serial)      # a GS1 label carries the unit's serial (21)
+        have = len(row_serials)
         need = max(0, int(_math.ceil(row.qty or 0)) - have) if serialized else 0
         whole = not serialized or abs((row.qty or 0) - round(row.qty or 0)) < 1e-9
         out.append({
             "index": i, "match_status": status,
             "product_type": "serialized" if serialized else "expiry" if expiry else "standard",
             "serialized": serialized, "expiry_tracking": expiry,
-            "serials": [x for x in (row.serials or []) if x and x.strip()],
+            "serials": row_serials,
             "needs_serials": need,
+            # ii144b: what a GS1 label says about this delivery (batch, expiry)
+            "lot": scan.lot if scan else None,
+            "expiry_date": scan.expiry.isoformat() if scan and scan.expiry else None,
             "qty_not_whole": not whole,          # a serial-tracked row needs a whole quantity
             "part_id": part.id if part else None,
             "part_name": part.name if part else None,
@@ -478,6 +500,7 @@ class CommitRow(BaseModel):
     markup_pct: Optional[float] = None
     serials: Optional[list[SerialStr]] = Field(None, max_length=500)  # one per unit for serial-tracked products
     expiry_date: Optional[date] = None   # dates this delivery's batch (expiry-tracked products)
+    lot: Optional[str] = Field(None, max_length=40)   # ii144b: batch / lot, e.g. GS1 (10) from the label
 
 
 class PostingCommitIn(BaseModel):
@@ -525,6 +548,7 @@ async def commit_posting(
             pid = part.id
             created += 1
         lines.append({"part_id": pid, "qty": r.qty, "serials": r.serials, "expiry_date": r.expiry_date,
+                      "lot": r.lot,
                       "purchase_price": r.purchase_price, "markup_pct": r.markup_pct})
     posted, total_cost = await _do_posting(
         db, current.org_id, current.id, data.location_id, data.supplier_id, lines)
@@ -610,8 +634,14 @@ async def resolve_import_products(
             if dup:
                 out.append({"part_id": dup[0], "created": False, "name": dup[1]})
                 continue
+        bc = (r.new_barcode or "").strip() or None
+        if bc:      # ii144b: the same product number in any barcode form is the same product
+            owner = await product_codes.barcode_owner(db, current.org_id, bc)
+            if owner:
+                out.append({"part_id": owner.id, "created": False, "name": owner.name})
+                continue
         part = Part(org_id=current.org_id, name=name, sku=sku,
-                    barcode=(r.new_barcode or "").strip() or None,
+                    barcode=bc,
                     mpn=await _checked_mpn(db, current.org_id, r.new_mpn),
                     cost_price=float(r.cost or 0),
                     serialized=ptype == "serialized", expiry_tracking=ptype == "expiry")
@@ -864,6 +894,7 @@ async def part_batches(
             "qty_remaining": remaining,
             "amount": q2(cost * remaining),
             "expiry_date": r.expiry_date.isoformat() if r.expiry_date else None,
+            "lot": r.lot_number,
             "received_at": r.received_at.isoformat() if r.received_at else None,
             "in_stock": remaining > 0,
         })

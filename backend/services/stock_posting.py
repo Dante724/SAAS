@@ -18,7 +18,7 @@ async def apply_receipt_line(
     db, *, org_id: str, part: Part, location_id: str, qty: float, unit_cost: float,
     created_by_id: str | None = None, ref_type: str = "posting", ref_id: str | None = None,
     bin_id: str | None = None, serials: list[str] | None = None,
-    create_batch: bool = True, set_last_cost: bool = False, expiry_date=None,
+    create_batch: bool = True, set_last_cost: bool = False, expiry_date=None, lot: str | None = None,
 ) -> float:
     """Post `qty` of `part` into `location_id` at `unit_cost`. Returns the unit cost used.
 
@@ -59,7 +59,8 @@ async def apply_receipt_line(
         batch = StockItemBatch(org_id=org_id, part_id=part.id, location_id=location_id,
                                bin_id=bin_id, po_id=ref_id if ref_type == "po" else None,
                                unit_cost=Decimal(str(unit_cost)), qty_received=Decimal(str(qty)),
-                               qty_remaining=Decimal(str(qty)), expiry_date=expiry_date)
+                               qty_remaining=Decimal(str(qty)), expiry_date=expiry_date,
+                               lot_number=(lot or "").strip()[:40] or None)
         db.add(batch)
         await db.flush()
         for sn in (serials or [])[:int(qty)]:

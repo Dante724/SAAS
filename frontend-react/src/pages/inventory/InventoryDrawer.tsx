@@ -3,7 +3,9 @@ import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { useMe } from "../../context/Me";
 import { api } from "../../api/client";
-import { sortBarcodes } from "../../lib/barcodes";
+import { BARCODE_TYPES, barcodeTypeLabel, sortBarcodes } from "../../lib/barcodes";
+import type { BarcodeType } from "../../lib/barcodes";
+import ScanButton from "../../components/ScanButton";
 import { Product, currencySymbol, money } from "./types";
 import CustomFields from "../../components/CustomFields";
 import CategoryPicker from "../../components/CategoryPicker";
@@ -30,8 +32,8 @@ type LocLite = { id: string; name: string };
 const fmtDate = (s?: string) => (s ? new Date(s).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "—");
 
 // Inlines the authed barcode/QR SVG (/catalog/code.svg needs the bearer, so <img src> can't be used).
-type CodeType = "code128" | "qr" | "ean13" | "upca";
-const svgType = (t?: string | null): CodeType => (t === "qr" || t === "ean13" || t === "upca" ? t : "code128");
+type CodeType = BarcodeType;
+const svgType = (t?: string | null): CodeType => (BARCODE_TYPES.some((x) => x.key === t) ? t as CodeType : "code128");
 
 function CodeSvg({ data, type }: { data: string; type: CodeType }) {
   const [svg, setSvg] = useState("");
@@ -40,7 +42,7 @@ function CodeSvg({ data, type }: { data: string; type: CodeType }) {
     fetch(`/api/catalog/code.svg?type=${type}&data=${encodeURIComponent(data)}`, { headers: tok ? { Authorization: `Bearer ${tok}` } : {} })
       .then((r) => (r.ok ? r.text() : "")).then(setSvg).catch(() => setSvg(""));
   }, [data, type]);
-  return <div className={`${type === "qr" ? "w-16 h-16" : "h-12 w-40"} bg-white flex items-center justify-center [&>svg]:max-w-full [&>svg]:max-h-full`} dangerouslySetInnerHTML={{ __html: svg || "" }} />;
+  return <div className={`${type === "qr" || type === "datamatrix" ? "w-16 h-16" : "h-12 w-40"} bg-white flex items-center justify-center [&>svg]:max-w-full [&>svg]:max-h-full`} dangerouslySetInnerHTML={{ __html: svg || "" }} />;
 }
 
 // How a kit prints on the customer's invoice and job printout. Plain words; the itemising-law
@@ -84,19 +86,21 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
   const [codeBusy, setCodeBusy] = useState(false);
   const [showCode, setShowCode] = useState(false);
   // ii144a — a product can answer to several barcodes (a supplier's EAN, a repack's UPC).
-  const [codes, setCodes] = useState<{ id: string; barcode: string; is_main: boolean }[] | null>(null);
+  const [codes, setCodes] = useState<{ id: string; barcode: string; barcode_type?: string | null; is_main: boolean }[] | null>(null);
   const [newCode, setNewCode] = useState("");
+  const [newType, setNewType] = useState<string>("");
   useEffect(() => {
     if (kind === "product" && id && codes === null)
       api.get<{ items: { id: string; barcode: string; is_main: boolean }[] }>(`/catalog/products/${id}/barcodes`)
         .then((r) => setCodes(sortBarcodes(r.items || []))).catch(() => setCodes([]));
   }, [kind, id, codes]);
-  async function addCode() {
-    const v = newCode.trim();
+  async function addCode(scanned?: string) {
+    const v = (scanned ?? newCode).trim();
     if (!v || !id) return;
     setCodeBusy(true);
     try {
-      const r = await api.post<{ barcode: string; is_main: boolean }>(`/catalog/products/${id}/barcodes`, { barcode: v });
+      const r = await api.post<{ barcode: string; is_main: boolean }>(`/catalog/products/${id}/barcodes`,
+        { barcode: v, barcode_type: newType || null });
       if (r.is_main) set("barcode", r.barcode);
       setNewCode(""); setCodes(null); flash("Barcode added");
     } catch (e: any) { flash(e.message || "Couldn't add the barcode"); }
@@ -284,6 +288,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                       {codes.map((c) => (
                         <li key={c.id} className="flex items-center gap-2 text-xs">
                           <span className="font-mono text-ink-primary break-all">{c.barcode}</span>
+                          {c.barcode_type && <span className="text-[11px] text-ink-tertiary">{barcodeTypeLabel(c.barcode_type)}</span>}
                           {c.is_main && <span className="px-1.5 py-0.5 rounded bg-slate-100 text-[11px] text-ink-secondary">Main</span>}
                           <button type="button" onClick={() => removeCode(c)} disabled={codeBusy} aria-label={`Remove barcode ${c.barcode}`}
                             className="ml-auto w-6 h-6 rounded-md grid place-items-center text-ink-tertiary hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"><M n="close" c="text-sm" /></button>
@@ -296,7 +301,13 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                     <input value={newCode} onChange={(e) => setNewCode(e.target.value)} maxLength={100} aria-label="Add a barcode"
                       onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCode(); } }}
                       placeholder="Scan or type another barcode" className={`${field} font-mono`} />
-                    <button type="button" onClick={addCode} disabled={codeBusy || !newCode.trim()}
+                    <select value={newType} onChange={(e) => setNewType(e.target.value)} aria-label="Barcode type"
+                      className={`${field} w-auto appearance-none`}>
+                      <option value="">Any type</option>
+                      {BARCODE_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+                    </select>
+                    <ScanButton title="Scan a barcode" onScan={(c) => addCode(c)} />
+                    <button type="button" onClick={() => addCode()} disabled={codeBusy || !newCode.trim()}
                       className="px-2.5 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-ink-secondary text-xs font-medium disabled:opacity-50 whitespace-nowrap">Add</button>
                   </div>
                 </div>

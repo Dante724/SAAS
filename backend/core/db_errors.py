@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 
 # (index name, SQLite column form) → message
 _MESSAGES = (
-    (("uq_product_barcodes_org_code", "product_barcodes.barcode"), "That barcode is already used by another product."),
+    (("uq_product_barcodes_org_key", "product_barcodes.match_key"), "That barcode is already used by another product."),
     (("uq_parts_org_sku_active",), "That SKU is already used by another product."),
     (("uq_parts_org_mpn_active",), "That MPN is already used by another product"),
     (("uq_storage_bins_name",), "A bin with that name already exists in this warehouse."),
