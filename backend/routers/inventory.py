@@ -18,6 +18,7 @@ from backend.services.batching import names_by_id
 from backend.services.numbering import next_number
 from backend.services.redact import can_see_costs, drop_cost_fields
 from backend.services.dates import now_utc
+from backend.services.owned import get_owned_or_404, require_location
 
 router = APIRouter(prefix="/api/inventory", tags=["inventory"])
 
@@ -242,6 +243,7 @@ async def adjust_stock(
     from backend.services import warehouses as _wh
     _action = "writeoff" if data.movement_type == "writeoff" else \
               "transfer" if data.movement_type == "transfer" else "post"
+    await require_location(db, current.org_id, data.location_id)
     _w = await _wh.guard_action(db, current, _action, location_id=data.location_id)
 
     if data.movement_type in ("receive", "adjust"):
@@ -1286,6 +1288,7 @@ async def create_po(
         Supplier.id == data.supplier_id, Supplier.org_id == current.org_id))).scalar_one_or_none()
     if not sup:
         raise HTTPException(404, "Supplier not found")
+    await require_location(db, current.org_id, data.location_id)
     total = sum(l.qty_ordered * l.unit_cost for l in data.lines)
     po = PurchaseOrder(supplier_id=data.supplier_id, location_id=data.location_id,
                        org_id=current.org_id, po_number=await next_number(db, current.org_id, "po"),
@@ -2563,6 +2566,9 @@ async def bulk_update_parts(
 
     changed = 0
     if data.action == "set_category":
+        if data.value:
+            from backend.models import Category
+            await get_owned_or_404(db, Category, data.value, current.org_id, "Category")
         for p in parts:
             p.category_id = data.value
             changed += 1

@@ -25,6 +25,7 @@ from backend.services.auth import assert_perm, get_current_employee, require_per
 from backend.routers.forms import resolve_custom_data
 from backend.services import product_codes, stock_rows
 from backend.services.money import q2
+from backend.services.owned import get_owned_or_404
 from backend.services.redact import can_see_costs, drop_cost_fields
 from backend.core.likes import contains as _contains
 from backend.core.spreadsheet import (
@@ -115,6 +116,8 @@ async def create_category(data: CategoryIn, db: AsyncSession = Depends(get_db),
     name = (data.name or "").strip()
     if not name:
         raise HTTPException(400, "Category name is required")
+    if data.parent_id:
+        await get_owned_or_404(db, Category, data.parent_id, current.org_id, "Parent category")
     c = Category(org_id=current.org_id, entity_type=data.entity_type, name=name,
                  parent_id=data.parent_id or None, auto_deduct=data.auto_deduct,
                  template_key=(data.template_key or None))
@@ -150,6 +153,7 @@ async def update_category(cid: str, data: CategoryPatch, db: AsyncSession = Depe
             raise HTTPException(400, "A category can't be its own parent")
         # 144bc security: block moving a node under one of its own descendants (would orphan a subtree)
         if data.parent_id:
+            await get_owned_or_404(db, Category, data.parent_id, current.org_id, "Parent category")
             all_cats = (await db.execute(select(Category).where(Category.org_id == current.org_id))).scalars().all()
             kids: dict = {}
             for x in all_cats:
@@ -385,6 +389,8 @@ async def bulk_products(data: BulkProductsIn, db: AsyncSession = Depends(get_db)
         raise HTTPException(422, "No products selected")
     if data.action == "delete":
         await assert_perm(db, current, "can_delete_products")
+    if data.action == "category" and data.category_id:
+        await get_owned_or_404(db, Category, data.category_id, current.org_id, "Category")
     parts = (await db.execute(select(Part).where(
         Part.id.in_(data.ids), Part.org_id == current.org_id))).scalars().all()
     n = 0

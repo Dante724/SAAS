@@ -16,6 +16,7 @@ from backend.models import Employee, Organisation, Warehouse, WarehouseAccess
 from backend.services import warehouses as wh
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.dates import now_utc
+from backend.services.owned import require_location
 
 router = APIRouter(prefix="/api/settings/warehouses", tags=["settings"])
 
@@ -78,6 +79,8 @@ async def create_warehouse(
         raise HTTPException(422, "scope must be location|company")
     if data.scope == "location" and not data.location_id:
         raise HTTPException(422, "A location warehouse needs a location_id")
+    if data.scope == "location":
+        await require_location(db, current.org_id, data.location_id)
     bad = set(data.allowed_actions or []) - set(wh.ACTIONS)
     if bad:
         raise HTTPException(422, f"Unknown actions: {sorted(bad)}")

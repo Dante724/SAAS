@@ -12,12 +12,14 @@ from backend.models import (
     Employee,
     LegalEntity,
     NumberSequence,
+    Tax,
     TaxException,
     TaxGroup,
     TaxRule,
 )
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.numbering import DEFAULT_TEMPLATES, peek_example
+from backend.services.owned import require_owned_ids
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -204,6 +206,7 @@ async def list_tax_groups(db: AsyncSession = Depends(get_db),
 @router.post("/tax-groups", status_code=201)
 async def create_tax_group(data: TaxGroupIn, db: AsyncSession = Depends(get_db),
                            current: Employee = Depends(require_perm("can_manage_settings"))):
+    await require_owned_ids(db, Tax, data.member_tax_ids, current.org_id, "tax id(s)")
     g = TaxGroup(org_id=current.org_id, name=data.name,
                  member_tax_ids=json.dumps(data.member_tax_ids))
     db.add(g)
@@ -233,6 +236,7 @@ async def set_tax_rules(data: TaxRuleIn, db: AsyncSession = Depends(get_db),
                         current: Employee = Depends(require_perm("can_manage_settings"))):
     if data.doc_family not in ("tickets_sales", "posting"):
         raise HTTPException(422, "doc_family must be tickets_sales|posting")
+    await require_owned_ids(db, Tax, data.tax_ids, current.org_id, "tax id(s)")
     # replace the stack for this family
     for r in (await db.execute(select(TaxRule).where(
             TaxRule.org_id == current.org_id, TaxRule.doc_family == data.doc_family))).scalars().all():
@@ -267,6 +271,7 @@ async def create_tax_exception(data: TaxExceptionIn, db: AsyncSession = Depends(
                                current: Employee = Depends(require_perm("can_manage_settings"))):
     if not data.exempt and not data.tax_id:
         raise HTTPException(422, "Provide tax_id or set exempt=true")
+    await require_owned_ids(db, Tax, [data.tax_id], current.org_id, "tax id(s)")
     e = TaxException(org_id=current.org_id, doc_family=data.doc_family,
                      target_type=data.target_type, target_id=data.target_id,
                      tax_id=data.tax_id, exempt=data.exempt, taxation_system=data.taxation_system)
