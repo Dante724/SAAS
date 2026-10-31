@@ -62,8 +62,14 @@ async def test_one_shops_db_error_does_not_stop_the_others(client, tenant, monke
 
 @pytest.fixture
 def net(monkeypatch):
-    monkeypatch.setattr(socket, "getaddrinfo", lambda host, port, *a, **kw: [
-        (socket.AF_INET, socket.SOCK_STREAM, 6, "", (PUBLIC, port))])
+    real_gai = socket.getaddrinfo
+
+    def fake(host, port, *a, **kw):
+        # only the webhook host is faked: the test database (a hostname on CI) resolves for real
+        if host != "hooks.example.com":
+            return real_gai(host, port, *a, **kw)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (PUBLIC, port))]
+    monkeypatch.setattr(socket, "getaddrinfo", fake)
     seen, codes = [], []
     real = httpx.AsyncClient
 

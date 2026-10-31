@@ -15,20 +15,22 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import settings
 from backend.db.database import get_db
 from backend.models import Employee, Organisation, PlatformAdmin, PlatformCoupon
-from backend.services import crypto
 from backend.services.audit import record as audit_record
 from backend.services.auth import verify_password
-from backend.services.mfa import new_secret, provisioning_uri, verify_step
 from backend.services.platform_auth import (
+    accept_code,
     authenticate,
+    begin_two_step,
     create_platform_token,
+    finish_two_step,
     get_current_platform_admin,
     get_platform_admin_for_setup,
 )
-from backend.services.ratelimit import client_ip as _ip
 from backend.services.ratelimit import aenforce as _rate
+from backend.services.ratelimit import client_ip as _ip
 
 router = APIRouter(prefix="/api/admin", tags=["platform-admin"])
 _log = logging.getLogger("tekly.audit.platform")
@@ -88,18 +90,11 @@ async def _accept_code(db: AsyncSession, admin: PlatformAdmin, code: Optional[st
     really stops a guesser), and the step is recorded with a conditional UPDATE, so two requests
     racing with the same intercepted code can't both pass."""
     await _rate("admin_mfa_try", admin.id, limit=6, window_sec=900)
-    step = verify_step(crypto.decrypt(admin.mfa_secret) or "", code or "")
-    if step is None:
-        return False
-    from sqlalchemy import or_, update
-    res = await db.execute(update(PlatformAdmin).where(
-        PlatformAdmin.id == admin.id,
-        or_(PlatformAdmin.mfa_last_step.is_(None), PlatformAdmin.mfa_last_step < step),
-    ).values(mfa_last_step=step).execution_options(synchronize_session=False))
-    if res.rowcount != 1:
-        return False
-    admin.mfa_last_step = step
-    return True
+    return await accept_code(db, admin, code)
+
+
+_SERVER_SETUP = ("On a live server, 2-step sign-in is turned on from the server itself, so a stolen "
+                 "password alone can't set it up: run `python -m scripts.platform_admin_2step <your email>`.")
 
 
 @router.post("/login")
@@ -141,14 +136,15 @@ async def admin_logout(db: AsyncSession = Depends(get_db),
 @router.post("/mfa/setup")
 async def admin_mfa_setup(db: AsyncSession = Depends(get_db),
                           admin: PlatformAdmin = Depends(get_platform_admin_for_setup)):
-    """Start 2-step: a new secret for the authenticator app. Not on until /mfa/enable."""
+    """Start 2-step: a new secret for the authenticator app. Not on until /mfa/enable.
+    Local only: deployed, a password-only session could otherwise enrol an attacker's phone."""
+    if settings.is_deployed:
+        raise HTTPException(403, _SERVER_SETUP)
     if admin.mfa_enabled:
         raise HTTPException(400, "2-step sign-in is already on")
-    secret = new_secret()
-    admin.mfa_secret = crypto.encrypt(secret)
-    admin.mfa_last_step = None
+    secret, uri = begin_two_step(admin)
     await db.commit()
-    return {"secret": secret, "otpauth_uri": provisioning_uri(secret, account=admin.email, issuer="Tekly Admin")}
+    return {"secret": secret, "otpauth_uri": uri}
 
 
 class AdminCode(BaseModel):
@@ -160,15 +156,16 @@ async def admin_mfa_enable(data: AdminCode, db: AsyncSession = Depends(get_db),
                            admin: PlatformAdmin = Depends(get_platform_admin_for_setup)):
     """Confirm a code and turn 2-step on. Every other session is signed out; this one gets a
     fresh token."""
+    if settings.is_deployed:
+        raise HTTPException(403, _SERVER_SETUP)
     await _rate("admin_mfa_enable", admin.id, limit=10, window_sec=900)
     if admin.mfa_enabled:
         raise HTTPException(400, "2-step sign-in is already on")
     if not admin.mfa_secret:
         raise HTTPException(400, "Start 2-step setup first")
-    if not await _accept_code(db, admin, data.code):
+    await _rate("admin_mfa_try", admin.id, limit=6, window_sec=900)
+    if not await finish_two_step(db, admin, data.code):
         raise HTTPException(400, "That code didn't work. Try the newest one from your app.")
-    admin.mfa_enabled = True
-    admin.token_version = (admin.token_version or 0) + 1
     await _audit_platform(db, admin, "platform.mfa_enable", entity_id=admin.id)
     await db.commit()
     return {"enabled": True, "access_token": create_platform_token(admin)}

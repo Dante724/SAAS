@@ -117,7 +117,47 @@ async def test_deployed_portal_needs_two_step_before_tenant_data(client, monkeyp
     assert blocked.status_code == 403 and "2-step" in blocked.json()["detail"]
     me = await client.get("/api/admin/me", headers=_h(tok))
     assert me.status_code == 200 and me.json()["mfa_enabled"] is False
-    assert (await client.post("/api/admin/mfa/setup", headers=_h(tok))).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_deployed_two_step_setup_needs_the_server_not_just_the_password(client, monkeypatch):
+    """Anyone holding the password could otherwise enrol their own phone on an admin that hasn't
+    set up 2-step yet, and lock the real admin out."""
+    await _seed()
+    tok = (await _login(client)).json()["access_token"]
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    r = await client.post("/api/admin/mfa/setup", headers=_h(tok))
+    assert r.status_code == 403 and "platform_admin_2step" in r.json()["detail"]
+    assert (await client.post("/api/admin/mfa/enable", json={"code": "123456"}, headers=_h(tok))).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_server_script_turns_two_step_on(client, monkeypatch, capsys):
+    from scripts import platform_admin_2step as script
+    await _seed()
+    old = (await _login(client)).json()["access_token"]
+    seen = {}
+
+    def answer(prompt):
+        out = capsys.readouterr().out
+        seen["secret"] = next(line.split()[-1] for line in out.splitlines() if line.startswith("Key:"))
+        return totp(seen["secret"])
+
+    monkeypatch.setattr("builtins.input", answer)
+    assert await script.run(EMAIL) == 0
+    assert (await _admin()).mfa_enabled is True
+    assert (await client.get("/api/admin/me", headers=_h(old))).status_code == 401      # signed out
+    assert (await _login(client)).status_code == 401                                     # code now needed
+    assert (await _login(client, code=totp(seen["secret"], at=int(time.time()) + 30))).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_server_script_refuses_a_wrong_code(monkeypatch):
+    from scripts import platform_admin_2step as script
+    await _seed()
+    monkeypatch.setattr("builtins.input", lambda prompt: "000000")
+    assert await script.run(EMAIL) == 1
+    assert (await _admin()).mfa_enabled is False
 
 
 @pytest.mark.asyncio

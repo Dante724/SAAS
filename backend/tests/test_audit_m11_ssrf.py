@@ -30,8 +30,11 @@ def test_real_public_addresses_still_pass(ip):
 @pytest.fixture
 def dns(monkeypatch):
     answers = {"hooks.example.com": [[PUBLIC]]}
+    real_gai = socket.getaddrinfo
 
     def fake(host, port, *a, **kw):
+        if host not in answers:          # the test database resolves for real
+            return real_gai(host, port, *a, **kw)
         seq = answers.get(host)
         ips = (seq.pop(0) if len(seq) > 1 else seq[0]) if seq else [host]
         return [(socket.AF_INET6 if ":" in ip else socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))

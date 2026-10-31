@@ -44,6 +44,46 @@ async def authenticate(db: AsyncSession, email: str, password: str):
     return admin if (admin and ok and admin.active) else None
 
 
+# ── 2-step sign-in (audit M6) ─────────────────────────────────────
+async def accept_code(db: AsyncSession, admin: PlatformAdmin, code) -> bool:
+    """A current TOTP code, each one usable once: the step is recorded with a conditional
+    UPDATE, so two requests racing with the same intercepted code can't both pass."""
+    from sqlalchemy import or_, update
+
+    from backend.services import crypto
+    from backend.services.mfa import verify_step
+    step = verify_step(crypto.decrypt(admin.mfa_secret) or "", code or "")
+    if step is None:
+        return False
+    res = await db.execute(update(PlatformAdmin).where(
+        PlatformAdmin.id == admin.id,
+        or_(PlatformAdmin.mfa_last_step.is_(None), PlatformAdmin.mfa_last_step < step),
+    ).values(mfa_last_step=step).execution_options(synchronize_session=False))
+    if res.rowcount != 1:
+        return False
+    admin.mfa_last_step = step
+    return True
+
+
+def begin_two_step(admin: PlatformAdmin) -> tuple[str, str]:
+    """A new secret (stored encrypted, not yet on) and its authenticator-app link."""
+    from backend.services import crypto
+    from backend.services.mfa import new_secret, provisioning_uri
+    secret = new_secret()
+    admin.mfa_secret = crypto.encrypt(secret)
+    admin.mfa_last_step = None
+    return secret, provisioning_uri(secret, account=admin.email, issuer="Tekly Admin")
+
+
+async def finish_two_step(db: AsyncSession, admin: PlatformAdmin, code) -> bool:
+    """Turn 2-step on with a code from the new secret; signs out every existing session."""
+    if not admin.mfa_secret or not await accept_code(db, admin, code):
+        return False
+    admin.mfa_enabled = True
+    admin.token_version = (admin.token_version or 0) + 1
+    return True
+
+
 def _two_step_required() -> bool:
     """Deployed, the portal shows nothing but the admin's own account until 2-step is on."""
     return settings.is_deployed

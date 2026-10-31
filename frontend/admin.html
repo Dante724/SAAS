@@ -375,7 +375,11 @@ const Admin = {
         <label class="muted" style="font-size:11px;display:block;margin-top:12px">Then enter the code it shows</label>
         <input id="m-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456">
         <button class="btn primary" style="margin-top:12px" onclick="Admin.enableTwoStep()">Turn on</button>`;
-    }catch(e){ toast(e.message); }
+    }catch(e){
+      // live servers: 2-step is turned on from the server, the message says how
+      if(e.status===403){ document.getElementById('m-setup').innerHTML = `<div style="margin-top:12px;font-size:12.5px">${esc(e.message)}</div>`; return; }
+      toast(e.message);
+    }
   },
   async enableTwoStep(){
     const code=(document.getElementById('m-code').value||'').trim();
