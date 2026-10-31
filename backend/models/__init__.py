@@ -559,6 +559,9 @@ class Order(Base):
     # Why a job was cancelled (a value from the "Cancellation reasons" directory), set when the
     # order enters a dropped-group status. Feeds the cancellations-by-reason report.
     cancel_reason: Mapped[Optional[str]] = mapped_column(String(120))
+    # What the customer still owed when the job was dropped, written off so it isn't left as a
+    # debt (balance due and the contact ledger both net it out). Back to 0 when reopened.
+    written_off: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0, server_default="0")
     tech_notes: Mapped[Optional[str]] = mapped_column(Text)   # 144bj: technician's working notes
     conclusion: Mapped[Optional[str]] = mapped_column(Text)   # 144bj: conclusion / client recommendations
     labour_total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
@@ -600,6 +603,8 @@ class Order(Base):
     archived_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     # Several items per job: the job an item was split off from ("Split into its own job").
     split_from_order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
+    # "Continue as a linked job": the job this one carries on from (any job, open or closed).
+    continued_from_order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id", ondelete="SET NULL"), index=True)
     client: Mapped[Optional["Client"]] = relationship(back_populates="orders")
     device: Mapped[Optional["Device"]] = relationship(back_populates="orders")
     location: Mapped["Location"] = relationship(back_populates="orders")

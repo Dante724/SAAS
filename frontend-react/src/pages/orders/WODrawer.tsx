@@ -96,8 +96,18 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
     let reason: string | null = null;
     { const ds = droppedStatus(statuses as any[], key); if (ds) { reason = await askCancelReason(ds.name); if (reason === null) return; } }
     const prev = d.status; setD({ ...d, status: key });
-    try { await api.patch(`/orders/${order.id}/status`, { status: key, reason: reason || undefined }); flash("Status updated"); onChanged?.(); }
+    try { await api.patch(`/orders/${order.id}/status`, { status: key, reason: reason || undefined }); flash("Status updated"); onChanged?.(); reload(); }
     catch (e: any) { setD({ ...d, status: prev }); flash(`Failed: ${e.message}`); }
+  }
+  const nav = useNavigate();
+  async function continueLinked() {
+    const why = await promptDialog(`Start a new job that carries on from ${d.order_number}? It keeps the customer, device and job details, and the two jobs are linked.`,
+      { title: "Continue as a linked job", placeholder: "What needs doing this time (optional)", defaultValue: "" });
+    if (why === null) return;
+    try {
+      const r = await api.post<{ id: string; order_number: string }>(`/orders/${order.id}/continue`, { complaint: why.trim() || undefined });
+      flash(`Job ${r.order_number} created`); onChanged?.(); nav(`/orders?open=${r.id}`);
+    } catch (e: any) { flash(`Failed: ${e.message}`); }
   }
   async function saveNotes(tech_notes: string, conclusion: string) {
     try { await api.patch(`/orders/${order.id}/notes`, { tech_notes, conclusion }); setD({ ...d, tech_notes, conclusion }); flash("Notes saved"); }
@@ -274,6 +284,16 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                     className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-50">
                     <M n="link" c="text-base text-ink-tertiary" /><span className="text-sm text-ink-primary">Copy link to this job</span>
                   </button>
+                  {!(order as any).is_estimate && can("can_create_tickets") && (
+                    <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); continueLinked(); }}
+                      className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-50">
+                      <M n="redo" c="text-base text-ink-tertiary" />
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-sm text-ink-primary">Continue as a linked job</span>
+                        <span className="block text-[11px] text-ink-tertiary">A new job for the same customer and device</span>
+                      </span>
+                    </button>
+                  )}
                 </div>
               </>)}
             </div>
@@ -451,6 +471,13 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><ChecklistRings orderId={order.id} onOpen={() => setTab("checklists")} /></div>
 
+              {(d as any).written_off > 0 && (
+                <div role="note" className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-xs text-ink-secondary">
+                  <M n="block" c="text-base text-ink-tertiary" />
+                  <span>Dropped{(d as any).cancel_reason ? `: ${(d as any).cancel_reason}` : ""}. The {money((d as any).written_off)} the customer still owed was written off, so it isn't counted as a debt or as profit.</span>
+                </div>
+              )}
+              <LinkedJobs orderId={order.id} />
               <JobItems orderId={order.id} onFlash={flash} onChanged={reload} />
 
               <IntakePhotos orderId={order.id} photos={d.intake_photos} onChanged={reload} onFlash={flash} />
@@ -474,7 +501,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             </div>
           )}
           {tab === "checklists" && <ChecklistsTab orderId={order.id} typeId={(d as any).type_id} />}
-          {tab === "invoices" && <InvoicesTab orderId={order.id} total={d.total} deposit={(d as any).deposit_amount} currencyCode={(d as any).currency_code} fxRate={(d as any).fx_rate} currencySymbol={(d as any).currency_symbol} onCurrencyChange={(code, rate, symbol) => setD({ ...d, currency_code: code, fx_rate: rate, currency_symbol: symbol } as any)} onFlash={flash} />}
+          {tab === "invoices" && <InvoicesTab orderId={order.id} total={d.total} writtenOff={(d as any).written_off || 0} deposit={(d as any).deposit_amount} currencyCode={(d as any).currency_code} fxRate={(d as any).fx_rate} currencySymbol={(d as any).currency_symbol} onCurrencyChange={(code, rate, symbol) => setD({ ...d, currency_code: code, fx_rate: rate, currency_symbol: symbol } as any)} onFlash={flash} />}
           {tab === "activity" && (<>
             <ConversationPanel orderId={order.id} />
             <ActivityTab orderId={order.id} clientName={c.name} clientPhone={c.phone} onFlash={flash} />
@@ -675,6 +702,24 @@ function JobItems({ orderId, onFlash, onChanged }: { orderId: string; onFlash: (
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// "Continue as a linked job": the job this one carries on from, and the jobs that carry it on.
+function LinkedJobs({ orderId }: { orderId: string }) {
+  const nav = useNavigate();
+  const [l, setL] = useState<{ continued_from: JobLink | null; continued_in: JobLink[] } | null>(null);
+  useEffect(() => { api.get<any>(`/orders/${orderId}/linked`).then(setL).catch(() => setL(null)); }, [orderId]);
+  if (!l || (!l.continued_from && !(l.continued_in || []).length)) return null;
+  const links = [...(l.continued_from ? [{ ...l.continued_from, rel: "Continued from" }] : []),
+                 ...(l.continued_in || []).map((x) => ({ ...x, rel: "Continued in" }))];
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-secondary">
+      <M n="link" c="text-sm text-ink-tertiary" />
+      {links.map((x) => (
+        <span key={x.rel + x.id}>{x.rel} <button type="button" onClick={() => nav(`/orders?open=${x.id}`)} className="font-mono font-semibold text-primary hover:underline">{x.order_number}</button></span>
+      ))}
     </div>
   );
 }
@@ -1302,7 +1347,7 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
 
 /* ---- Invoices tab ---- */
 type PayCtx = { order_total: number; already_paid: number; prepaid: number; remaining: number; accounts_by_method: Record<string, { id: string; name: string }[]> };
-export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash }: { orderId: string; total?: number; deposit?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: (m: string) => void }) {
+export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash }: { orderId: string; total?: number; writtenOff?: number; deposit?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: (m: string) => void }) {
   const { base, opts: curOpts, multi: multiCurrency } = useCurrencies();
   const { can } = useMe();
   const changeCurrency = async (code: string) => {
@@ -1383,7 +1428,8 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
 
   // Net of refunds, like the server's balance (services/order_money), so a refunded job isn't "Settled".
   const paid = (data?.payments || []).reduce((s, p) => s + (p.kind === "refund" ? -Math.abs(p.amount || 0) : (p.amount || 0)), 0);
-  const t = total ?? 0; const due = Math.max(t - paid, 0);
+  // A dropped job's unpaid part was written off (orders.written_off), so it isn't owed any more.
+  const t = total ?? 0; const due = Math.max(t - paid - (writtenOff || 0), 0);
   const settled = t > 0 && due <= 0;   // fully paid: no payment or deposit actions to offer
   const accts = ctx ? (ctx.accounts_by_method[method] || ctx.accounts_by_method.cash || []) : [];
 
@@ -1393,8 +1439,8 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
         <div className="relative z-10 flex flex-wrap items-center justify-between gap-4">
           <div>
             <span className="text-[11px] font-bold text-blue-200/80">Still to pay</span>
-            <div className="flex items-baseline gap-3 mt-1"><h2 className="text-3xl font-bold tabular-nums tracking-tight text-white">{money(due)}</h2><span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${settled ? "bg-emerald-400/20 text-emerald-300 border-emerald-400/30" : "bg-amber-400/20 text-amber-300 border-amber-400/30"}`}>{settled ? "Settled" : "Balance due"}</span></div>
-            <p className="text-xs text-blue-200/70 mt-1">Grand Total {money(t)} · {money(paid)} Collected</p>
+            <div className="flex items-baseline gap-3 mt-1"><h2 className="text-3xl font-bold tabular-nums tracking-tight text-white">{money(due)}</h2><span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${settled ? "bg-emerald-400/20 text-emerald-300 border-emerald-400/30" : "bg-amber-400/20 text-amber-300 border-amber-400/30"}`}>{settled ? (writtenOff > 0 ? "Written off" : "Settled") : "Balance due"}</span></div>
+            <p className="text-xs text-blue-200/70 mt-1">Grand Total {money(t)} · {money(paid)} Collected{writtenOff > 0 ? ` · ${money(writtenOff)} written off` : ""}</p>
             {isForeign && (
               <p className="text-xs text-blue-100 mt-1 font-mono">≈ {currencySymbol}{conv(due).toFixed(2)} {currencyCode} <span className="text-blue-200/60">(1 {currencyCode} = {fxRate && (1 / fxRate).toFixed(4)} {base?.code})</span></p>
             )}

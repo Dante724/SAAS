@@ -110,7 +110,7 @@ async def display_lines(db: AsyncSession, inv: "Invoice", *, itemised: bool = Fa
         for o in orders:
             amt = round(sums.get(o.id, 0.0), 2) if billed else _order_amount(o)
             desc = f"{o.order_number}" + (f" — {o.complaint}" if getattr(o, "complaint", None) else "")
-            out.append({"description": desc, "qty": 1, "unit_price": amt, "total": amt})
+            out.append({"description": desc, "qty": 1, "unit_price": amt, "total": amt, "order_id": o.id})
         return out + free
 
     # detailed (default): every order line across all orders, then free lines
@@ -135,6 +135,7 @@ async def display_lines(db: AsyncSession, inv: "Invoice", *, itemised: bool = Fa
         from backend.services import kit_print
         for l in kit_print.customer_lines(lines, itemised=itemised):
             row = kit_print.row(l)
+            row["order_id"] = getattr(l, "order_id", None)
             if names:
                 n = names.get(getattr(l, "order_item_id", None))
                 row["item_id"] = l.order_item_id if n else None
