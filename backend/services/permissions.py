@@ -188,6 +188,10 @@ TEMPLATES = {
 }
 
 
+# Who may read the role list (the role editor, the invite form, payroll's per-role filter). A
+# technician read every role's permissions (QA 31 Oct 2026); their own come from /auth/me.
+ROLE_READERS = ("can_manage_roles", "can_manage_employees", "can_view_payroll")
+
 # Codes that were always opt-in (only an explicit True grants them), even for legacy roles.
 OPT_IN = {"can_override_reservation", "can_change_kit_price"}
 

@@ -218,3 +218,24 @@ async def test_invoicing_a_job_uses_the_invoice_rights(client):
     H2 = await _owner(client)
     assert (await client.get(f"/api/cash/orders/{o['id']}/invoices", headers=H2)).status_code == 404
 
+
+# ── 5. a technician doesn't read the team's contact details, invites or roles ───────────────
+
+@pytest.mark.asyncio
+async def test_technician_reads_names_not_contacts_invites_or_roles(client):
+    H = await _owner(client)
+    T = await _person(client, H, (await _role(client, H, {"name": "Tech", "template": "Specialist"}))["id"], "Tess")
+    await client.post("/api/staff/invites", json={"email": f"new-{uuid.uuid4().hex[:6]}@test.dev", "name": "New"}, headers=H)
+    team = await client.get("/api/staff/employees", headers=T)
+    assert team.status_code == 200
+    rows = team.json()
+    others = [e for e in rows if e["name"] != "Tess"]
+    me = next(e for e in rows if e["name"] == "Tess")
+    assert others and all(e["email"] is None and e["phone"] is None for e in others)
+    assert me["email"]                                           # their own row stays whole
+    assert all(e["email"] for e in (await client.get("/api/staff/employees", headers=H)).json())
+    assert (await client.get("/api/staff/invites", headers=T)).status_code == 403
+    assert (await client.get("/api/staff/roles", headers=T)).status_code == 403
+    assert (await client.get("/api/settings/rbac/roles", headers=T)).status_code == 403
+    assert (await client.get("/api/staff/invites", headers=H)).json()["items"]
+    assert (await client.get("/api/settings/rbac/roles", headers=H)).status_code == 200

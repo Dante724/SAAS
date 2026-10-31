@@ -112,6 +112,9 @@ async def list_employees(
     # Pay and tax ids are payroll data: only roles allowed to view payroll see colleagues' values.
     see_pay = await has_perm(db, current, "can_view_payroll")
     see_own = see_pay or await has_perm(db, current, "can_view_own_compensation")
+    # Everyone needs the team's names (assignee pickers, schedules); their email, phone and the
+    # manager's note are for whoever manages staff (a technician read them all — QA 31 Oct 2026).
+    see_contact = await has_perm(db, current, "can_manage_employees")
     from backend.services.payroll_views import in_scope, payroll_scope_ids
     scope = await payroll_scope_ids(db, current)   # E3: colleagues' pay only inside the payroll scope
     listed = await _picker_lists(db, current.org_id, employees)
@@ -120,13 +123,15 @@ async def list_employees(
         if e.id == current.id:
             return v if see_own else None
         return v if (see_pay and in_scope(scope, e.id)) else None
-    return [{"id": e.id, "name": e.name, "email": e.email,
-             "phone": e.phone, "wage_type": pay(e, e.wage_type), "wage_value": pay(e, e.wage_value),
+    def contact(e, v):
+        return v if (see_contact or e.id == current.id) else None
+    return [{"id": e.id, "name": e.name, "email": contact(e, e.email),
+             "phone": contact(e, e.phone), "wage_type": pay(e, e.wage_type), "wage_value": pay(e, e.wage_value),
              "commission_labour": pay(e, e.commission_labour), "commission_parts": pay(e, e.commission_parts),
              "weekly_hours": e.weekly_hours, "hourly_basis": e.hourly_basis or "labour",
              "track_job_hours": e.track_job_hours, "track_attendance": e.track_attendance,
              "position": e.position, "hired_at": e.hired_at.isoformat() if e.hired_at else None,
-             "tax_id": pay(e, e.tax_id), "public_name": e.public_name, "note": e.note,
+             "tax_id": pay(e, e.tax_id), "public_name": e.public_name, "note": contact(e, e.note),
              "location_id": e.location_id, "role_id": e.role_id, "active": e.active,
              # whether their role shows them in the work order's Managers / Assignee pickers
              "in_managers": listed[e.id][0], "in_assignees": listed[e.id][1]} for e in employees]
@@ -458,7 +463,7 @@ class InviteIn(BaseModel):
 
 @router.get("/invites")
 async def list_invites(db: AsyncSession = Depends(get_db),
-                       current: Employee = Depends(get_current_employee)):
+                       current: Employee = Depends(require_perm("can_manage_employees"))):
     """Pending (unaccepted) invitations for this org."""
     from backend.models import Invite
     rows = (await db.execute(select(Invite).where(
@@ -550,6 +555,8 @@ async def list_roles(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    from backend.routers.rbac import assert_can_read_roles
+    await assert_can_read_roles(db, current)
     roles = (await db.execute(select(Role).where(Role.org_id == current.org_id))).scalars().all()
     counts = {}
     for e in (await db.execute(select(Employee).where(Employee.org_id == current.org_id, Employee.active == True))).scalars().all():  # noqa: E712
