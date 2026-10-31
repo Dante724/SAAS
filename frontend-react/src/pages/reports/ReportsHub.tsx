@@ -417,7 +417,7 @@ export default function ReportsHub() {
     { label: "Jobs and estimates", value: dash?.total_orders ?? "—", onClick: () => nav("/orders") },
     { label: "Still open", value: dash?.open_orders ?? "—", onClick: () => nav("/orders") },
     { label: "Customers", value: dash?.total_clients ?? "—", onClick: () => nav("/clients") },
-    { label: "Paid invoices", value: money(dash?.revenue), onClick: () => nav("/finance") },
+    { label: "Sales (ex tax)", value: money(dash?.revenue), onClick: () => nav("/finance") },
     { label: "Still owed to you", value: money(dash?.outstanding), onClick: () => nav("/invoices") },
   ];
 

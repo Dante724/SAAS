@@ -125,7 +125,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
   // Each KPI jumps to the Finance tab that explains it; Outstanding opens the Invoices page.
   const kpiStats: SummaryStat[] = [
     { label: "Cash and bank now", value: money(cash?.total_cash), onClick: () => setTab(can("can_view_cashbox") ? "cashboxes" : "balances") },
-    { label: "Paid invoices", value: money(fin?.total_revenue), onClick: () => setTab("pnl") },
+    { label: "Sales (ex tax)", value: money(fin?.total_revenue), onClick: () => setTab("pnl") },
     { label: "Still owed to you", value: money(fin?.total_outstanding), onClick: () => navigate("/invoices") },
     { label: "Expenses", value: money(fin?.total_expenses), onClick: () => setTab("pnl") },
     { label: "Profit before tax", value: money(fin?.gross_profit), tone: (fin?.gross_profit || 0) < 0 ? "bad" : undefined, onClick: () => setTab("pnl") },
@@ -146,7 +146,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
         {tab === "overview" && (<>
           {can("can_export_accountant") && (
             <div className="flex items-center justify-between flex-wrap gap-2">
-              <div><h3 className="text-sm font-bold text-ink-primary">Since you started</h3><p className="text-xs text-ink-tertiary">Paid invoices, money still owed and expenses, all time. Pick dates to export a period for your accountant.</p></div>
+              <div><h3 className="text-sm font-bold text-ink-primary">Since you started</h3><p className="text-xs text-ink-tertiary">Sales after returns (ex tax), money still owed and expenses, all time. Pick dates to export a period for your accountant.</p></div>
               <div className="flex items-center gap-1.5 flex-wrap">
                 <DateField mode="date" value={exFrom} onChange={setExFrom} placeholder="From" className="w-36" />
                 <span className="text-ink-tertiary text-xs">→</span>
