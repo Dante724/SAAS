@@ -19,6 +19,7 @@ from backend.services import identifiers as _ids
 from backend.services import industry as _ind
 from backend.core import paging as _paging
 from backend.services.auth import get_current_employee, has_perm, require_perm
+from backend.services.dates import shop_today
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
 
@@ -312,8 +313,7 @@ async def identify(
         conds += [_plate_col(k) == plate for k in PLATE_KEYS]
     rows = (await db.execute(select(Device).where(
         Device.org_id == current.org_id, or_(*conds)).limit(5))).scalars().all()
-    from datetime import date as _date
-    today = _date.today()
+    today = await shop_today(db, current.org_id)
     matches = []
     for d in rows:
         owner = None

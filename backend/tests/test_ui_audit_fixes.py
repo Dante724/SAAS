@@ -7,6 +7,7 @@ from datetime import datetime
 import pytest
 
 from backend.models import Account, Payment
+from backend.services.dates import now_utc
 
 
 async def _shop(client):
@@ -31,8 +32,8 @@ async def test_home_money_totals_only_count_this_shop(client, db):
     acc = Account(org_id=org_b, name="Till", payment_option="cash")
     db.add(acc)
     await db.flush()
-    db.add_all([Payment(account_id=acc.id, method="cash", kind="payment", amount=500, paid_at=datetime.utcnow()),
-                Payment(account_id=acc.id, method="cash", kind="refund", amount=40, paid_at=datetime.utcnow())])
+    db.add_all([Payment(account_id=acc.id, method="cash", kind="payment", amount=500, paid_at=now_utc()),
+                Payment(account_id=acc.id, method="cash", kind="refund", amount=40, paid_at=now_utc())])
     await db.commit()
     da = (await client.get("/api/reports/company-dashboard", headers=a)).json()
     assert da["monthly"]["revenue"] == 0 and da["today"]["refunds"] == 0 and da["today"]["revenue"] == 0

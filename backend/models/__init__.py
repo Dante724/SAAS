@@ -5,6 +5,7 @@ Tekly — all database models.
 import secrets
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
@@ -26,13 +27,14 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from backend.db.database import Base
 from backend.db.secret_json import SecretFieldsJSON   # passcode-like custom fields, encrypted
+from backend.services.dates import now_utc
 
 
 def _uuid() -> str:
     return str(uuid.uuid4())
 
 def _now() -> datetime:
-    return datetime.utcnow()
+    return now_utc()
 
 # ─────────────────────────────────────────────
 # ORGANISATION & LOCATIONS
@@ -93,10 +95,10 @@ class Organisation(Base):
     retention_days: Mapped[Optional[dict]] = mapped_column(JSON)
     # Build 144ah — POs whose total exceeds this need a manager (role with can_manage_settings)
     # to send. 0/None disables the gate.
-    po_approval_threshold: Mapped[Optional[float]] = mapped_column(Float)
+    po_approval_threshold: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
     payment_provider: Mapped[str] = mapped_column(String(20), default="auto")  # auto|stripe|square|sumup|simulated
     loyalty_earn_rate: Mapped[float] = mapped_column(Float, default=0.0)   # points per 1.00 paid; 0 = program off
-    loyalty_point_value: Mapped[float] = mapped_column(Float, default=0.0)  # currency value of 1 point at redemption
+    loyalty_point_value: Mapped[float] = mapped_column(Numeric(12, 4, asdecimal=False), default=0.0)  # currency value of 1 point at redemption
     price_type_tickets_id: Mapped[Optional[str]] = mapped_column(String)   # default price list per doc type
     price_type_sales_id: Mapped[Optional[str]] = mapped_column(String)
     price_type_invoices_id: Mapped[Optional[str]] = mapped_column(String)
@@ -281,9 +283,9 @@ class Employee(Base):
     pin_hash: Mapped[Optional[str]] = mapped_column(String(255))
     phone: Mapped[Optional[str]] = mapped_column(String(50))
     wage_type: Mapped[str] = mapped_column(String(20), default="fixed")  # fixed|hourly|commission
-    wage_value: Mapped[float] = mapped_column(Float, default=0.0)
-    hourly_cost_rate: Mapped[float] = mapped_column(Float, default=0.0)   # labor cost per hour (time clock)
-    billable_rate: Mapped[float] = mapped_column(Float, default=0.0)      # charge-out rate per hour
+    wage_value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    hourly_cost_rate: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)   # labor cost per hour (time clock)
+    billable_rate: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)      # charge-out rate per hour
     commission_labour: Mapped[float] = mapped_column(Float, default=0.0)
     commission_parts: Mapped[float] = mapped_column(Float, default=0.0)
     weekly_hours: Mapped[Optional[float]] = mapped_column(Float)   # build 144: expected working hours/week
@@ -338,11 +340,11 @@ class WageRecord(Base):
     employee_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"))
     period_start: Mapped[date] = mapped_column(Date)
     period_end: Mapped[date] = mapped_column(Date)
-    base_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    commission_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    bonus: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    deductions: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    net_payable: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    base_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    commission_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    bonus: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    deductions: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    net_payable: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
 
 # ─────────────────────────────────────────────
 # CLIENTS & DEVICES
@@ -392,10 +394,10 @@ class Client(Base):
     # Discount matrix (Orderry "Managing contact discounts") — orders & invoices.
     # mode: none | percent | price_type. Sales-page discounts arrive with the Sales module.
     disc_services_mode: Mapped[str] = mapped_column(String(12), default="none")
-    disc_services_value: Mapped[float] = mapped_column(Float, default=0.0)
+    disc_services_value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     disc_services_price_type_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("price_types.id"))
     disc_materials_mode: Mapped[str] = mapped_column(String(12), default="none")
-    disc_materials_value: Mapped[float] = mapped_column(Float, default=0.0)
+    disc_materials_value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     disc_materials_price_type_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("price_types.id"))
     devices: Mapped[list["Device"]] = relationship(back_populates="client")
     orders: Mapped[list["Order"]] = relationship(back_populates="client")
@@ -675,7 +677,7 @@ class OrderItem(Base):
     outcome: Mapped[str] = mapped_column(String(20), default="open")
     collected_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc)
 
 # 144df — the legacy JSON JobKit model was retired; the Bundle engine (relabelled "Job Kit" in the UI)
 # is now the single job-kit concept. Its table is dropped by migration jk144df01.
@@ -1306,9 +1308,9 @@ class CashShift(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
     opened_by_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"))
-    opening_float: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    closing_float: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
-    expected_cash: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
+    opening_float: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    closing_float: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
+    expected_cash: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
     opened_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     # 144bc — optional denomination breakdowns {"100": 2, "20": 5, ...} captured on open/close.
@@ -1326,7 +1328,7 @@ class CashDrawerMovement(Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     shift_id: Mapped[str] = mapped_column(String, ForeignKey("cash_shifts.id"), index=True)
     direction: Mapped[str] = mapped_column(String(4))        # in | out
-    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False))
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     note: Mapped[str] = mapped_column(String(300))
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -1342,9 +1344,9 @@ class ProcessorPayout(Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     provider: Mapped[str] = mapped_column(String(20), default="manual")   # stripe|square|sumup|manual
     payout_date: Mapped[date] = mapped_column(Date, default=date.today)
-    gross_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    fee_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    net_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    gross_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    fee_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    net_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
     reference: Mapped[Optional[str]] = mapped_column(String(120))
     note: Mapped[Optional[str]] = mapped_column(String(300))
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
@@ -1358,7 +1360,7 @@ class Expense(Base):
     category: Mapped[Optional[str]] = mapped_column(String(100))
     recorded_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     description: Mapped[str] = mapped_column(String(500))
-    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False))
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     receipt_url: Mapped[Optional[str]] = mapped_column(String(500))
     expense_date: Mapped[date] = mapped_column(Date, default=date.today)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -2151,8 +2153,8 @@ class TimeEntry(Base):
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     duration_sec: Mapped[int] = mapped_column(Integer, default=0)
     billable: Mapped[bool] = mapped_column(Boolean, default=True)
-    cost_rate: Mapped[float] = mapped_column(Float, default=0.0)      # per hour, snapshot
-    billable_rate: Mapped[float] = mapped_column(Float, default=0.0)  # per hour, snapshot
+    cost_rate: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)      # per hour, snapshot
+    billable_rate: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # per hour, snapshot
     note: Mapped[Optional[str]] = mapped_column(Text)
     gps_lat: Mapped[Optional[float]] = mapped_column(Float)  # capture at clock-in if permission granted
     gps_lng: Mapped[Optional[float]] = mapped_column(Float)
@@ -2801,8 +2803,8 @@ class GiftCard(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     code: Mapped[str] = mapped_column(String(40), index=True)          # e.g. GC-8F3K2P
-    initial_value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    balance: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    initial_value: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    balance: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -2815,7 +2817,7 @@ class GiftCardLedger(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     gift_card_id: Mapped[str] = mapped_column(String, ForeignKey("gift_cards.id"), index=True)
-    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False))                        # + load / − redeem
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))                        # + load / − redeem
     ref_type: Mapped[Optional[str]] = mapped_column(String(20))         # order|sale|manual
     ref_id: Mapped[Optional[str]] = mapped_column(String)
     note: Mapped[Optional[str]] = mapped_column(String(200))
@@ -2831,7 +2833,7 @@ class Coupon(Base):
     code: Mapped[str] = mapped_column(String(40), index=True)
     name: Mapped[str] = mapped_column(String(120), default="")
     kind: Mapped[str] = mapped_column(String(10), default="pct")        # pct|fixed
-    value: Mapped[float] = mapped_column(Float, default=0.0)
+    value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     min_total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     starts_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime)

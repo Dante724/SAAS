@@ -14,7 +14,6 @@ Every call refuses live credentials unless live payments are switched on (paymen
 """
 import logging
 import uuid
-from datetime import datetime
 from typing import Optional
 
 import httpx
@@ -35,6 +34,7 @@ from backend.models import (
 )
 from backend.services import payment_guard
 from backend.services.money import THREE_DECIMAL, ZERO_DECIMAL, minor_units, q2
+from backend.services.dates import now_utc
 
 log = logging.getLogger("tekly.terminal")
 
@@ -464,7 +464,7 @@ async def _checked_capture(db: AsyncSession, ch: TerminalCharge, minor, currency
 async def settle_failed(db: AsyncSession, ch: TerminalCharge, status: str, error: str) -> TerminalCharge:
     res = await db.execute(sa_update(TerminalCharge)
                            .where(TerminalCharge.id == ch.id, TerminalCharge.status.in_(OPEN))
-                           .values(status=status, error=error[:500], updated_at=datetime.utcnow())
+                           .values(status=status, error=error[:500], updated_at=now_utc())
                            .execution_options(synchronize_session=False))
     await db.commit()
     await db.refresh(ch)
@@ -546,7 +546,7 @@ async def settle_succeeded(db: AsyncSession, ch: TerminalCharge, *, provider_pay
     ch.status = "succeeded"
     ch.error = None
     ch.provider_payment_id = provider_payment_id or ch.provider_payment_id
-    ch.updated_at = datetime.utcnow()
+    ch.updated_at = now_utc()
     await db.commit()
     await db.refresh(ch)
     if ch.order_id:
@@ -745,7 +745,7 @@ async def claim_event(db: AsyncSession, provider: str, event_id: str, org_id: st
     from backend.models import PaymentWebhookEvent
     try:
         inserted = await insert_ignore(db, PaymentWebhookEvent, id=str(uuid.uuid4()), provider=provider,
-                                       event_id=event_id[:255], org_id=org_id, created_at=datetime.utcnow())
+                                       event_id=event_id[:255], org_id=org_id, created_at=now_utc())
     except IntegrityError:
         await db.rollback()
         return False

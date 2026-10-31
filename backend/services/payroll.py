@@ -10,7 +10,6 @@ reopened-and-re-closed order pays again. Claw-backs post the negative of what is
 (or a refunded share of it), so two reversals of the same order can never take it twice.
 """
 from decimal import ROUND_HALF_UP, Decimal
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import case, func, select
@@ -26,6 +25,7 @@ from backend.models import (
     Part,
     Refund,
 )
+from backend.services.dates import now_utc
 
 Q = Decimal("0.0001")  # 4-dp quantum
 
@@ -133,7 +133,7 @@ class CommissionEngine:
         if term == "any":
             return True
         urgent = (order.priority or 0) >= 1
-        overdue = bool(order.due_at and order.due_at < datetime.utcnow())
+        overdue = bool(order.due_at and order.due_at < now_utc())
         if term == "urgent":
             return urgent
         if term == "overdue":

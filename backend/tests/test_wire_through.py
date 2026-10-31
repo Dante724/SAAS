@@ -3,6 +3,8 @@ Each test proves OFF = no behavior change and ON = enforced."""
 import pytest
 from sqlalchemy import select
 
+from backend.services.dates import now_utc
+
 
 async def _loc(client, tenant):
     return (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]
@@ -113,7 +115,7 @@ async def test_warranty_count_from(client, tenant, db):
         o = (await client.post("/api/orders", json={"location_id": loc, "complaint": "x"}, headers=tenant)).json()
         # backdate created_at 100 days
         row = (await db.execute(select(Order).where(Order.id == o["id"]))).scalar_one()
-        row.created_at = datetime.utcnow() - timedelta(days=100)
+        row.created_at = now_utc() - timedelta(days=100)
         await db.commit()
         await client.post(f"/api/orders/{o['id']}/lines", json={
             "line_type": "labour", "kind": "custom", "description": "job",
@@ -126,10 +128,10 @@ async def test_warranty_count_from(client, tenant, db):
     await client.put("/api/staff/company", json={"warranty_count_from": "closure"}, headers=tenant)
     c_order = await _make_closed_order()
     assert c_order.warranty_until is not None
-    assert c_order.warranty_until > (datetime.utcnow() + timedelta(days=20)).date()
+    assert c_order.warranty_until > (now_utc() + timedelta(days=20)).date()
 
     # 'created': warranty = created(-100d) + 30d => already in the PAST
     await client.put("/api/staff/company", json={"warranty_count_from": "created"}, headers=tenant)
     cr_order = await _make_closed_order()
     assert cr_order.warranty_until is not None
-    assert cr_order.warranty_until < datetime.utcnow().date()
+    assert cr_order.warranty_until < now_utc().date()

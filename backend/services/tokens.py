@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import AuthToken, Employee
+from backend.services.dates import now_utc
 
 RESET_TTL_MIN = 60          # password-reset links live 1 hour
 VERIFY_TTL_MIN = 60 * 48    # email-verification links live 48 hours
@@ -31,7 +32,7 @@ async def issue(db: AsyncSession, *, employee_id: str, kind: str, ttl_min: int |
     ttl = ttl_min or (RESET_TTL_MIN if kind == "reset" else VERIFY_TTL_MIN)
     db.add(AuthToken(
         kind=kind, employee_id=employee_id, token_hash=_hash(raw),
-        expires_at=datetime.utcnow() + timedelta(minutes=ttl)))
+        expires_at=now_utc() + timedelta(minutes=ttl)))
     await db.flush()
     return raw
 
@@ -42,7 +43,7 @@ async def redeem(db: AsyncSession, *, raw: str, kind: str) -> Employee | None:
     None. Callers must treat None as a generic failure."""
     if not raw:
         return None
-    now = datetime.utcnow()
+    now = now_utc()
     # Claim it with one conditional UPDATE: two requests racing with the same link can both
     # read it as unused, but only one UPDATE matches `used_at IS NULL`.
     cond = (AuthToken.token_hash == _hash(raw), AuthToken.kind == kind,
@@ -63,4 +64,4 @@ async def invalidate_all(db: AsyncSession, *, employee_id: str, kind: str) -> No
         AuthToken.employee_id == employee_id, AuthToken.kind == kind,
         AuthToken.used_at.is_(None)))).scalars().all()
     for r in rows:
-        r.used_at = datetime.utcnow()
+        r.used_at = now_utc()

@@ -2,6 +2,8 @@
 import pytest
 from sqlalchemy import select
 
+from backend.services.dates import now_utc
+
 
 async def _loc(client, tenant):
     return (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]
@@ -23,7 +25,7 @@ async def _closed_order(client, tenant, db, *, client_id=None, device_id=None,
     o = (await client.post("/api/orders", json=body, headers=tenant)).json()
     # backdate created 2 days
     row = (await db.execute(select(Order).where(Order.id == o["id"]))).scalar_one()
-    row.created_at = datetime.utcnow() - timedelta(days=2)
+    row.created_at = now_utc() - timedelta(days=2)
     await db.commit()
     await client.post(f"/api/orders/{o['id']}/lines", json={
         "line_type": "labour", "kind": "custom", "description": "job",

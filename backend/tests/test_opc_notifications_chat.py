@@ -17,6 +17,7 @@ from backend.models import (
 )
 from backend.services import chat_status, message_vars
 from backend.services.currency import format_money
+from backend.services.dates import now_utc
 
 
 async def _me(client, H):
@@ -169,7 +170,7 @@ async def test_missing_client_fields_leave_no_gaps_in_a_real_send(client, tenant
 async def test_birthday_greeting_renders_short_client_variables(client, tenant, db):
     me = await _me(client, tenant)
     org_id = me["org_id"]
-    today = datetime.utcnow()
+    today = now_utc()
     cid = (await client.post("/api/clients", json={
         "name": "Ana Lopez", "phone": "+1777", "birthday": f"1990-{today.month:02d}-{today.day:02d}"},
         headers=tenant)).json()["id"]
@@ -269,8 +270,8 @@ async def test_replied_threads_auto_complete_after_24h(client, tenant, db):
         await client.post(f"/api/chats/threads/{tid}/send", json={"body": "done"}, headers=tenant)
     rows = {t.id: t for t in (await db.execute(select(ChatThread).where(
         ChatThread.id.in_([old, fresh, waiting])))).scalars().all()}
-    rows[old].last_outbound_at = datetime.utcnow() - timedelta(hours=25)
-    rows[fresh].last_outbound_at = datetime.utcnow() - timedelta(hours=23)
+    rows[old].last_outbound_at = now_utc() - timedelta(hours=25)
+    rows[fresh].last_outbound_at = now_utc() - timedelta(hours=23)
     await db.commit()
     assert await chat_status.autocomplete_replied(db) >= 1
     assert (await _status(client, tenant, old))["status"] == "completed"

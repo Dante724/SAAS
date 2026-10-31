@@ -8,7 +8,6 @@ in routers/apikeys.py under the normal employee session.
 import hashlib
 import secrets
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Optional
 
 from fastapi import Depends, Header, HTTPException
@@ -17,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import ApiKey
+from backend.services.dates import now_utc
 
 
 def generate_key() -> tuple[str, str, str]:
@@ -113,7 +113,7 @@ async def get_api_principal(
     from backend.services.ratelimit import aenforce
     limit = min(max(row.rate_limit_per_min or DEFAULT_RATE_PER_MIN, 1), MAX_RATE_PER_MIN)
     await aenforce("api-key-min", row.id, limit, 60)
-    row.last_used_at = datetime.utcnow()
+    row.last_used_at = now_utc()
     await db.commit()
     scopes = {s.strip() for s in (row.scopes or "").split(",") if s.strip()}
     # Same flush-time shop guard as signed-in staff (db/tenancy.py): an API write can't touch

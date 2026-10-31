@@ -15,7 +15,6 @@ All arithmetic is Decimal (services/money.d2); values are stored in the Numeric 
 """
 from __future__ import annotations
 
-from datetime import datetime
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -25,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.models import CreditNote, CreditNoteLine, Invoice
 from backend.services.invoicing import VOID_STATUSES, settle_status
 from backend.services.money import d2
+from backend.services.dates import now_utc
 
 STATUSES = ("draft", "issued", "canceled")
 _HUNDRED = Decimal(100)
@@ -90,7 +90,7 @@ async def issue(db: AsyncSession, cn: CreditNote, actor_id: str | None) -> None:
         raise HTTPException(422, "A credit note needs a client or an invoice")
     cn.number = await next_number(db, cn.org_id, "credit_note")
     cn.status = "issued"
-    cn.issued_at = datetime.utcnow()
+    cn.issued_at = now_utc()
     cn.issued_by_id = actor_id
     if inv is not None:
         inv.credited = float(d2(inv.credited or 0) + total)
@@ -126,7 +126,7 @@ async def cancel(db: AsyncSession, cn: CreditNote, actor_id: str | None) -> None
         raise HTTPException(409, "This credit note is already canceled")
     was_issued = cn.status == "issued"
     cn.status = "canceled"
-    cn.canceled_at = datetime.utcnow()
+    cn.canceled_at = now_utc()
     cn.canceled_by_id = actor_id
     if not was_issued:
         return

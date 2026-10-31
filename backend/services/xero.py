@@ -7,7 +7,6 @@ pretends: without a real connection it says "not connected", and since the live
 push isn't built yet a connected shop is told "not available" (nothing is sent).
 """
 import secrets
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import select
@@ -15,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
 from backend.models import XeroConnection
+from backend.services.dates import now_utc
 
 AUTH_URL = "https://login.xero.com/identity/connect/authorize"
 TOKEN_URL = "https://identity.xero.com/connect/token"
@@ -86,7 +86,7 @@ async def handle_callback(db: AsyncSession, org_id: str, code: str, state: str) 
         return {"ok": False, "error": "not_configured", "message": NOT_CONNECTED}
     # Live token exchange would happen here (httpx POST to TOKEN_URL).
     conn.connected = True
-    conn.updated_at = datetime.utcnow()
+    conn.updated_at = now_utc()
     await db.commit()
     return {"ok": True, "simulated": False}
 

@@ -14,7 +14,6 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
-from datetime import datetime
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -30,6 +29,8 @@ from backend.services.codes import (
     barcode_svg, code128_svg, label_barcode, qr_svg, unprintable_message, validate_barcode_options,
 )
 from backend.config import settings
+from backend.services.dates import now_utc
+from backend.services.money import d2
 
 
 class _Html(str):
@@ -512,9 +513,9 @@ def _spell_int(n: int) -> str:
 
 
 def _spell_money(amount) -> str:
-    amount = float(amount or 0)
+    amount = d2(amount)
     whole = int(amount)
-    cents = int(round((amount - whole) * 100))
+    cents = int((amount - whole) * 100)
     words = _spell_int(whole).capitalize()
     if cents:
         words += f" and {cents:02d}/100"
@@ -990,8 +991,8 @@ async def _resolve(db, org_id, order: Order, current=None, *, itemised: bool = F
         "{FX Rate}": (f"1 {_disp_code} = {(1.0 / _fx):,.4f} {_base_code}" if _is_foreign else ""),
         "{FX Note}": (f"Amounts shown in {_disp_code}. {_fmt_date(order.created_at)} rate: 1 {_disp_code} = {(1.0 / _fx):,.4f} {_base_code}." if _is_foreign else ""),
         # Date
-        "{Today Date}": _fmt_date(datetime.utcnow()),
-        "{Current Date}": _fmt_date(datetime.utcnow()),
+        "{Today Date}": _fmt_date(now_utc()),
+        "{Current Date}": _fmt_date(now_utc()),
         # Links — client-facing URLs (Orderry parity). Base is the org's public URL;
         # falls back to a relative path when PUBLIC_BASE_URL isn't configured.
         "{Tracking URL}": _track_url(order),
@@ -1058,7 +1059,7 @@ async def _resolve(db, org_id, order: Order, current=None, *, itemised: bool = F
         "{Total Amount Without Taxes}": _money(subtotal),
         "{Total Discount Pct}": _disc_pct,
         # Date — exact names
-        "{Today Datetime}": _fmt_dt(datetime.utcnow()),
+        "{Today Datetime}": _fmt_dt(now_utc()),
         "{Order Closed Date}": doc["{Order Done Date}"],
         "{Order Due Date Time}": (_fmt_dt(order.due_at) if order.due_at else "—"),
         # Links — exact names + QR variants
@@ -1423,8 +1424,8 @@ async def _resolve_invoice(db, org_id, inv: Invoice, *, itemised: bool = False):
         "{Invoice Subtotal}": m(inv.subtotal), "{Invoice Tax}": m(inv.tax), "{Invoice Total}": m(inv.total),
         "{Invoice Paid}": m(paid), "{Invoice Balance Due}": m(bal), "{Invoice Credited}": m(inv.credited),
         "{Invoice Table}": _table_block(hdr, table_rows), "{Invoice Payment URL}": pay_url,
-        "{Today Date}": _fmt_date(datetime.utcnow()), "{Current Date}": _fmt_date(datetime.utcnow()),
-        "{Today Datetime}": (datetime.utcnow()).strftime("%Y-%m-%d %H:%M"),
+        "{Today Date}": _fmt_date(now_utc()), "{Current Date}": _fmt_date(now_utc()),
+        "{Today Datetime}": (now_utc()).strftime("%Y-%m-%d %H:%M"),
         "{Currency}": (org.currency_code if org else "") or "",
     }
     # 144ho — Orderry-exact aliases + company/client parity on the shared catalog
@@ -1505,8 +1506,8 @@ async def _resolve_part(org, part: Part, price, tpl=None) -> dict:
         "{Product Price Without Taxes}": _money(price),
         "{Currency}": cur,
         "{Company Name}": org.name if org else "Tekly",
-        "{Today Date}": _fmt_date(datetime.utcnow()),
-        "{Current Date}": _fmt_date(datetime.utcnow()),
+        "{Today Date}": _fmt_date(now_utc()),
+        "{Current Date}": _fmt_date(now_utc()),
         "{Barcode}": _Html(bc_html),
         "{QR Code}": _Html(qr_svg(code_val)),
     }
@@ -1599,7 +1600,7 @@ async def _resolve_asset(db, org, asset: Device) -> dict:
         "{Asset Description}": g(asset, "asset_type"), "{Asset Address}": g(client, "address"),
         "{Client Name}": g(client, "name"), "{Client Phone}": g(client, "phone"),
         "{Company Name}": org.name if org else "Tekly",
-        "{Today Date}": _fmt_date(datetime.utcnow()), "{Current Date}": _fmt_date(datetime.utcnow()),
+        "{Today Date}": _fmt_date(now_utc()), "{Current Date}": _fmt_date(now_utc()),
         "{Barcode}": _Html(code128_svg(code_val)), "{QR Code}": _Html(qr_svg(code_val)),
     }
 
@@ -1697,7 +1698,7 @@ async def render_bin_labels(
             "{Bin Name}": b.name, "{Bin Code}": value, "{Bin Zone}": b.zone or "", "{Bin Shelf}": b.shelf or "",
             "{Bin Number}": b.bin_number or "", "{Warehouse Name}": whs.get(b.warehouse_id, ""),
             "{Company Name}": org.name if org else "Tekly",
-            "{Today Date}": _fmt_date(datetime.utcnow()), "{Current Date}": _fmt_date(datetime.utcnow()),
+            "{Today Date}": _fmt_date(now_utc()), "{Current Date}": _fmt_date(now_utc()),
             "{Barcode}": _Html(bc), "{QR Code}": _Html(qr_svg(value)),
         }
         tiles.extend([f"<div class='lbl'>{_render(tpl.body_html, varmap, [])}</div>"] * copies)
@@ -1767,7 +1768,7 @@ async def _resolve_client(db, org, client: Client) -> dict:
         "{Client Tax ID}": g(client, "tax_id"), "{Client Registration No}": g(client, "reg_no"),
         "{Client Tax Identification Number}": g(client, "tax_id"),
         "{Company Name}": org.name if org else "Tekly",
-        "{Today Date}": _fmt_date(datetime.utcnow()), "{Current Date}": _fmt_date(datetime.utcnow()),
+        "{Today Date}": _fmt_date(now_utc()), "{Current Date}": _fmt_date(now_utc()),
         "{Barcode}": _Html(code128_svg(code_val)), "{QR Code}": _Html(qr_svg(code_val)),
     }
 
@@ -1919,7 +1920,7 @@ async def _resolve_credit_note(db, org_id, cn):
         "{Credit Note Subtotal}": _money(cn.subtotal), "{Credit Note Tax}": _money(cn.tax_total),
         "{Credit Note Total}": _money(cn.total), "{Credit Note Total Spelled Out}": _spell_money(cn.total or 0),
         "{Credit Note Table}": _table_block(hdr, table_rows),
-        "{Today Date}": _fmt_date(datetime.utcnow()), "{Current Date}": _fmt_date(datetime.utcnow()),
+        "{Today Date}": _fmt_date(now_utc()), "{Current Date}": _fmt_date(now_utc()),
         "{Currency}": (org.currency_code if org else "") or "",
     }
     return doc, rows

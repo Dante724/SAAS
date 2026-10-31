@@ -90,10 +90,10 @@ ACCOUNT_OFF = "This account can't sign in right now. Please contact your shop ow
 def assert_org_active(org, today=None) -> None:
     """Suspended or lapsed orgs are locked out of every credential they hold — staff tokens
     and public-API keys alike."""
-    from datetime import date as _date
+    from backend.services.dates import platform_today
     if org is None:
         return
-    today = today or _date.today()
+    today = today or platform_today()
     if org.sub_status == "suspended":
         raise HTTPException(status_code=403, detail=ACCOUNT_OFF)
     if getattr(org, "sub_end", None) and org.sub_end < today:
@@ -152,11 +152,11 @@ async def get_current_employee(
     # suspension" wasn't instant). Fail-closed: block suspended/expired orgs and
     # out-of-window employees. Platform admins use a separate identity and are
     # unaffected.
-    from datetime import date as _date
     from backend.models import Organisation
-    today = _date.today()
+    from backend.services.dates import platform_today
     org = (await db.execute(select(Organisation).where(
         Organisation.id == employee.org_id))).scalar_one_or_none()
+    today = platform_today()   # platform-set dates: UTC, not the tenant-controlled timezone
     assert_org_active(org, today)
     if (employee.access_start and employee.access_start > today) or \
        (employee.access_end and employee.access_end < today):

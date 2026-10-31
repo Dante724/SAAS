@@ -16,6 +16,7 @@ from backend.db.database import get_db
 from backend.models import NotificationTemplate, Employee, Order
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.message_vars import SHORT_VARS, TOKENS
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 
@@ -441,12 +442,12 @@ async def rule_stats(
 ):
     """Per customer rule: how many went out in the last 7 days, failures, and when the last
     one was sent. Plus how many customers can be texted (have a phone and haven't opted out)."""
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
     from sqlalchemy import func
 
     from backend.models import Client, NotificationLog
-    since = datetime.utcnow() - timedelta(days=7)
+    since = now_utc() - timedelta(days=7)
     rows = (await db.execute(select(
         NotificationLog.rule_id, NotificationLog.status, func.count(), func.max(NotificationLog.created_at))
         .where(NotificationLog.org_id == current.org_id, NotificationLog.rule_id.isnot(None),

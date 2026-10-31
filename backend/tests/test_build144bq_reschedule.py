@@ -4,6 +4,8 @@ no-double-appointment guard as create; status-only PATCH still works."""
 import uuid
 from datetime import datetime, timedelta
 
+from backend.services.dates import now_utc
+
 
 async def _tenant(client):
     email = f"admin-{uuid.uuid4().hex[:8]}@test.dev"
@@ -18,7 +20,7 @@ async def _emp(client, H):
 
 
 async def _mk(client, H, emp_id, hhmm, dur=60, day=None):
-    day = day or datetime.utcnow().date().isoformat()
+    day = day or now_utc().date().isoformat()
     r = await client.post("/api/appointments", json={
         "employee_id": emp_id, "scheduled_for": f"{day}T{hhmm}:00",
         "duration_min": dur, "client_name": "Cust"}, headers=H)
@@ -30,7 +32,7 @@ async def test_reschedule_time(client):
     H = await _tenant(client)
     me = (await client.get("/api/auth/me", headers=H)).json()
     b = await _mk(client, H, me["id"], "10:00")
-    day = datetime.utcnow().date().isoformat()
+    day = now_utc().date().isoformat()
     r = await client.patch(f"/api/appointments/{b['id']}", json={"scheduled_for": f"{day}T14:00:00"}, headers=H)
     assert r.status_code == 200, r.text
     assert r.json()["scheduled_for"].endswith("14:00:00")
@@ -41,7 +43,7 @@ async def test_reschedule_clash_blocked(client):
     me = (await client.get("/api/auth/me", headers=H)).json()
     await _mk(client, H, me["id"], "15:00")          # occupies 15:00-16:00
     b2 = await _mk(client, H, me["id"], "10:00")
-    day = datetime.utcnow().date().isoformat()
+    day = now_utc().date().isoformat()
     # try to move b2 onto the 15:00 slot → clash
     r = await client.patch(f"/api/appointments/{b2['id']}", json={"scheduled_for": f"{day}T15:30:00"}, headers=H)
     assert r.status_code == 409, r.text

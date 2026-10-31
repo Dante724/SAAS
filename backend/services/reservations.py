@@ -17,10 +17,11 @@ from sqlalchemy import select
 
 from backend.models import StockReservation
 from backend.services.money import q4
+from backend.services.dates import now_utc
 
 
 async def _active_holds(db, part_id, location_id):
-    now = datetime.utcnow()
+    now = now_utc()
     rows = (await db.execute(select(StockReservation).where(
         StockReservation.part_id == part_id, StockReservation.location_id == location_id,
         StockReservation.released == False))).scalars().all()  # noqa: E712

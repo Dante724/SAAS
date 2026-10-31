@@ -11,6 +11,7 @@ import hashlib
 from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from backend.services.dates import now_utc
 
 # Canonical event names other modules emit. Every one of these fires somewhere (a test checks
 # the list against the code), and docs/public-api-v1.md lists the same set.
@@ -62,7 +63,7 @@ async def emit_event(db: AsyncSession, org_id: str, event: str, payload: dict) -
         return
 
     body = json.dumps({"event": event, "data": payload,
-                       "at": datetime.utcnow().isoformat()}, default=str)
+                       "at": now_utc().isoformat()}, default=str)
     for ep in endpoints:
         if not _subscribed(ep.events, event):
             continue
@@ -191,7 +192,7 @@ async def _attempt_once(delivery, url: str, secret: str, body: str) -> None:
         delivery.response_code = resp.status_code
         if 200 <= resp.status_code < 300:
             delivery.status = "sent"
-            delivery.delivered_at = datetime.utcnow()
+            delivery.delivered_at = now_utc()
         else:
             delivery.status = "failed"
             delivery.error = f"HTTP {resp.status_code}"

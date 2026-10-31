@@ -22,6 +22,7 @@ from backend.models import (
     OrderStatusLog, EventFeedItem, DocumentSignature,
     Feedback, FeedbackSettings,
 )
+from backend.services.dates import now_utc, shop_today
 
 router = APIRouter(prefix="/api/public", tags=["public"])
 
@@ -189,7 +190,7 @@ async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
     if decision == "accept" and order.is_estimate:
         # Build 75: record WHEN the customer approved, so the approval is auditable
         # independently of the status the estimate happens to land in.
-        order.estimate_approved_at = _dt.utcnow()
+        order.estimate_approved_at = now_utc()
         from backend.services.webhooks import emit_event   # WS-C: was registered but never fired
         await emit_event(db, order.org_id, "estimate.accepted", {"id": order.id, "number": order.order_number})
 
@@ -949,8 +950,6 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
     seam; the rows are locked so a double tap can't add the same work twice."""
     if not await _recommend_enabled(db, order.org_id):
         raise HTTPException(403, "Recommendations are turned off for this shop")
-    from datetime import date as _date
-    from datetime import datetime as _dt
     from datetime import timedelta as _td
 
     from backend.models import Recommendation as _R
@@ -981,6 +980,7 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
         r.decided_by_name = name
         added += float(line.total or 0)
         approved += 1
+    remind_on = await shop_today(db, order.org_id) + _td(days=REMIND_AFTER_DAYS) if later else None
     for rid in later:
         r = rows.get(rid)
         if not r or r.status != "sent":
@@ -988,8 +988,8 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
             continue
         r.status = "declined"
         r.decline_reason = "not_now"
-        r.decided_at = _dt.utcnow()
-        r.remind_after = _date.today() + _td(days=REMIND_AFTER_DAYS)
+        r.decided_at = now_utc()
+        r.remind_after = remind_on
         r.decided_by_name = name
         later_n += 1
     decided = approved + later_n
@@ -1127,7 +1127,7 @@ async def track_new_request(token: str, data: NewRequestIn, request: Request, db
                 name=(client.name if client else "Customer")[:200],
                 phone=(client.phone if client else None), email=(client.email if client else None),
                 client_id=client.id if client else None, source="web",
-                inquiry=f"{ref}: {body}"[:2000], sla_due_at=_dt.utcnow() + _td(minutes=60))
+                inquiry=f"{ref}: {body}"[:2000], sla_due_at=now_utc() + _td(minutes=60))
     db.add(lead)
     await db.flush()
     await log_system_event(db, order.org_id, "lead", lead.id, f"New request from the track page — {ref}")
@@ -1163,7 +1163,7 @@ async def track_submit_feedback(token: str, data: TrackFeedbackIn, db: AsyncSess
     fb.system = fset.system
     fb.rating = data.rating
     fb.comment = (data.comment or None)
-    fb.submitted_at = _dt.utcnow()
+    fb.submitted_at = now_utc()
     from backend.routers.feed import log_system_event
     await log_system_event(db, order.org_id, "order", order.id,
                            f"Customer left feedback: {data.rating}{' — ' + data.comment if data.comment else ''}")
@@ -1667,7 +1667,7 @@ async def appointment_request(slug: str, data: AppointmentRequestIn, request: Re
     lead = Lead(org_id=org.id, name=data.name.strip()[:200],
                 phone=(data.phone or "")[:40] or None, email=(data.email or "")[:200] or None,
                 source="web", inquiry=inquiry[:2000],
-                sla_due_at=_dt.utcnow() + _td(minutes=60))
+                sla_due_at=now_utc() + _td(minutes=60))
     db.add(lead)
     await db.flush()
     from backend.routers.feed import log_system_event

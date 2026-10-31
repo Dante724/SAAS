@@ -6,7 +6,6 @@ is stubbed and clearly marked: the value modelled here is the Tekly-side workflo
 storing the transcript, mapping an external order to an internal one without duplication,
 gating a refund above a role's ceiling — not the third-party call itself.
 """
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -25,6 +24,7 @@ from backend.models import (
     Role,
 )
 from backend.services.auth import get_current_employee, require_perm
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api", tags=["comms-ai"])
 
@@ -61,7 +61,7 @@ async def attach_ai(
         call.summary = data.summary
     if data.sentiment is not None:
         call.sentiment = data.sentiment
-    call.ai_processed_at = datetime.utcnow()
+    call.ai_processed_at = now_utc()
     await db.commit()
     return {"ok": True, "call_id": call.id, "sentiment": call.sentiment}
 
@@ -211,7 +211,7 @@ async def sync_order(
     if existing:
         if existing.order_id and data.external_status:
             existing.external_status = data.external_status
-        integ.last_synced_at = datetime.utcnow()
+        integ.last_synced_at = now_utc()
         await db.commit()
         return {"order_id": existing.order_id, "created": False, "updated": True}
 
@@ -241,7 +241,7 @@ async def sync_order(
     db.add(EcommerceOrderMap(org_id=current.org_id, integration_id=integration_id,
                              external_order_id=data.external_order_id, order_id=order.id,
                              external_status=data.external_status))
-    integ.last_synced_at = datetime.utcnow()
+    integ.last_synced_at = now_utc()
     await db.commit()
     return {"order_id": order.id, "created": True, "updated": False}
 
@@ -281,7 +281,7 @@ async def request_approval(
         requested_by_id=current.id,
         status="approved" if auto else "pending",
         decided_by_id=current.id if auto else None,
-        decided_at=datetime.utcnow() if auto else None)
+        decided_at=now_utc() if auto else None)
     db.add(req)
     await db.commit()
     await db.refresh(req)
@@ -330,7 +330,7 @@ async def decide_approval(
         raise HTTPException(422, "decision must be approve|reject")
     req.status = "approved" if data.decision == "approve" else "rejected"
     req.decided_by_id = current.id
-    req.decided_at = datetime.utcnow()
+    req.decided_at = now_utc()
     await db.commit()
     return {"id": req.id, "status": req.status}
 

@@ -3,6 +3,8 @@ rate limiting on login + public appointment (R2)."""
 import uuid
 from datetime import datetime, timedelta
 
+from backend.services.dates import now_utc
+
 
 async def _tenant(client):
     email = f"admin-{uuid.uuid4().hex[:8]}@test.dev"
@@ -15,7 +17,7 @@ async def _tenant(client):
 async def test_same_slot_same_tech_blocked_by_db(client):
     _, H = await _tenant(client)
     me = (await client.get("/api/auth/me", headers=H)).json()
-    day = datetime.utcnow().date().isoformat()
+    day = now_utc().date().isoformat()
     body = {"employee_id": me["id"], "scheduled_for": f"{day}T10:00:00", "duration_min": 60, "client_name": "A"}
     r1 = await client.post("/api/appointments", json=body, headers=H)
     assert r1.status_code == 201, r1.text
@@ -36,7 +38,7 @@ async def test_login_rate_limited(client):
 async def test_public_appointment_rate_limited(client):
     email, H = await _tenant(client)
     slug = (await client.get("/api/staff/public-pages", headers=H)).json()["slug"]
-    day = (datetime.utcnow().date() + timedelta(days=3)).isoformat()
+    day = (now_utc().date() + timedelta(days=3)).isoformat()
     codes = []
     for i in range(10):
         r = await client.post(f"/api/public/appointment/{slug}", json={

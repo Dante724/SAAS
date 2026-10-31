@@ -1,5 +1,4 @@
 """B2 — audit trail read API + GDPR data export & erasure."""
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -19,6 +18,7 @@ from backend.models import (
 )
 from backend.services.audit import record as audit_record
 from backend.services.auth import require_perm, record_scope
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/compliance", tags=["compliance"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -106,7 +106,7 @@ async def gdpr_export(
                        action="gdpr.export", entity_type="client", entity_id=client_id)
     await db.commit()
     return {
-        "exported_at": datetime.utcnow().isoformat(),
+        "exported_at": now_utc().isoformat(),
         "client": {"id": cl.id, "name": cl.name,
                    "phone": getattr(cl, "phone", None), "email": getattr(cl, "email", None),
                    "address": getattr(cl, "address", None), "client_type": cl.client_type},
@@ -328,7 +328,7 @@ async def export_org(
                        action="gdpr.export_org", entity_type="organisation", entity_id=current.org_id)
     await db.commit()
     return {
-        "exported_at": datetime.utcnow().isoformat(),
+        "exported_at": now_utc().isoformat(),
         "organisation": {"id": current.org_id, "name": getattr(org, "name", None),
                          "country": getattr(org, "country", None)},
         "counts": {"clients": len(clients), "assets": len(devices), "orders": len(orders)},

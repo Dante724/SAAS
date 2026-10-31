@@ -16,6 +16,7 @@ from backend.db.database import get_db
 from backend.models import Employee, PaymentIntent
 from backend.services import payments as pay
 from backend.services.auth import assert_perm, get_current_employee, require_perm
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
 log = logging.getLogger("tekly")
@@ -125,12 +126,11 @@ async def get_intent(
 async def mark_viewed(intent_id: str, db: AsyncSession = Depends(get_db)):
     """A2: public hook — the client opened the pay link. Advances Created→Viewed
     so staff can see the link was seen. Idempotent; never regresses a later state."""
-    from datetime import datetime as _dt
     i = (await db.execute(select(PaymentIntent).where(PaymentIntent.id == intent_id))).scalar_one_or_none()
     if not i:
         raise HTTPException(404, "Intent not found")
     if i.viewed_at is None:
-        i.viewed_at = _dt.utcnow()
+        i.viewed_at = now_utc()
     if i.status == "created":
         i.status = "viewed"
     await db.commit()

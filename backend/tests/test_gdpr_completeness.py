@@ -9,6 +9,8 @@ from datetime import datetime
 import pytest
 from sqlalchemy import select
 
+from backend.services.dates import now_utc
+
 
 async def _seed(client, tenant, db):
     from backend.models import Appointment, ChatMessage, ChatThread, NotificationLog
@@ -23,7 +25,7 @@ async def _seed(client, tenant, db):
     await db.flush()
     db.add(ChatMessage(thread_id=t.id, direction="in", body="my address is 1 Main St"))
     db.add(Appointment(org_id=org, client_id=cid, client_name="Jane Doe", client_phone="+15550001",
-                       scheduled_for=datetime.utcnow()))
+                       scheduled_for=now_utc()))
     await db.commit()
     return cid, t.id
 

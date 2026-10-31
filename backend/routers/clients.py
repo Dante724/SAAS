@@ -16,6 +16,7 @@ from backend.services.money import q2
 from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
 
 from backend.services import addresses as _addr
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/clients", tags=["clients"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -870,7 +871,7 @@ async def undo_merge(
             if merged_val != orig and getattr(target, f, None) == merged_val:
                 setattr(target, f, orig)
 
-    log.undone_at = datetime.utcnow()
+    log.undone_at = now_utc()
     await db.commit()
     return {"ok": True, "restored": len(log.source_snapshots or [])}
 
@@ -1126,13 +1127,13 @@ async def send_client_message(
     if not thread:
         thread = InboxThread(org_id=current.org_id, channel=data.channel, client_id=client_id,
                              handle=(c.email if data.channel == "email" else c.phone),
-                             status="open", unread=False, last_message_at=datetime.utcnow())
+                             status="open", unread=False, last_message_at=now_utc())
         db.add(thread)
         await db.flush()
     msg = InboxMessage(org_id=current.org_id, thread_id=thread.id, direction="outbound",
                        body=data.body.strip(), author_id=current.id, delivered=True)
     db.add(msg)
-    thread.last_message_at = datetime.utcnow()
+    thread.last_message_at = now_utc()
     await db.commit()
     return {"id": msg.id, "thread_id": thread.id, "channel": data.channel}
 

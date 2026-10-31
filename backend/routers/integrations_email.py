@@ -11,6 +11,7 @@ from backend.models import EmailConnection, Employee
 from backend.services.audit import record as audit_record
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.email_oauth import authorize_url, exchange_code, provider_configured
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/integrations/email", tags=["integrations"])
 
@@ -74,7 +75,7 @@ async def email_callback(
         EmailConnection.id == conn_id))).scalar_one_or_none()
     if not conn or conn.state_nonce != nonce:
         raise HTTPException(400, "Invalid or expired state")
-    from datetime import datetime, timedelta
+    from datetime import timedelta
     from backend.services.crypto import encrypt as _enc
     from backend.services.email_oauth import fetch_email
     tok = await exchange_code(conn.provider, code)
@@ -82,7 +83,7 @@ async def email_callback(
     conn.access_token = _enc(access)
     if tok.get("refresh_token"):
         conn.refresh_token = _enc(tok["refresh_token"])
-    conn.token_expires_at = datetime.utcnow() + timedelta(seconds=int(tok.get("expires_in", 3600)))
+    conn.token_expires_at = now_utc() + timedelta(seconds=int(tok.get("expires_in", 3600)))
     # read the account's own address from the provider (best-effort)
     if access and not conn.email_address:
         conn.email_address = await fetch_email(conn.provider, access)

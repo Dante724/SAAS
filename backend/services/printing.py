@@ -9,7 +9,6 @@ and no image round-trip: the barcode is drawn as vectors and stays crisp at any 
 resolution, which matters because a fuzzy barcode is a barcode that doesn't scan.
 """
 import io
-from datetime import datetime
 from xml.sax.saxutils import escape as _x
 from typing import Optional
 
@@ -24,6 +23,7 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+from backend.services.dates import now_utc
 
 # Fields a label template may show (validated by routers/printing.py templates).
 FIELDS = ["name", "sku", "mpn", "price", "barcode", "category", "brand"]
@@ -131,7 +131,7 @@ def render_document(*, title: str, org_name: str, number: Optional[str],
     story.append(sig)
     story.append(Spacer(1, 6))
     story.append(Paragraph(
-        f"Generated {datetime.utcnow():%Y-%m-%d %H:%M} UTC", ss["Small"]))
+        f"Generated {now_utc():%Y-%m-%d %H:%M} UTC", ss["Small"]))
 
     doc.build(story)
     return buf.getvalue()

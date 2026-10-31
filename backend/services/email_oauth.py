@@ -7,7 +7,7 @@ sandbox; unit-tested against a stubbed transport.
 """
 import base64
 import re
-from datetime import datetime, timedelta
+from datetime import timedelta
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -18,6 +18,7 @@ import httpx
 from backend.config import settings
 from backend.services.crypto import decrypt as _dec
 from backend.services.crypto import encrypt as _enc
+from backend.services.dates import now_utc
 
 GMAIL_AUTH = "https://accounts.google.com/o/oauth2/v2/auth"
 GMAIL_TOKEN = "https://oauth2.googleapis.com/token"
@@ -113,7 +114,7 @@ async def _refresh(provider: str, conn) -> None:
         conn.access_token = _enc(tok["access_token"])
     if tok.get("refresh_token"):
         conn.refresh_token = _enc(tok["refresh_token"])
-    conn.token_expires_at = datetime.utcnow() + timedelta(seconds=int(tok.get("expires_in", 3600)))
+    conn.token_expires_at = now_utc() + timedelta(seconds=int(tok.get("expires_in", 3600)))
 
 
 async def send_via_connection(conn, *, recipient: str, subject: Optional[str], body: str,
@@ -126,7 +127,7 @@ async def send_via_connection(conn, *, recipient: str, subject: Optional[str], b
     filled from an HTML template, whose values were escaped)."""
     if not conn or not conn.connected or not conn.access_token:
         return {"status": "failed", "error": "Email account not connected"}
-    if conn.token_expires_at and conn.token_expires_at <= datetime.utcnow():
+    if conn.token_expires_at and conn.token_expires_at <= now_utc():
         try:
             await _refresh(conn.provider, conn)
         except Exception as exc:
@@ -182,7 +183,7 @@ async def list_recent(conn, max_results: int = 12) -> list[dict]:
     """
     if not conn or not conn.connected or not conn.access_token or conn.provider != "gmail":
         return []
-    if conn.token_expires_at and conn.token_expires_at <= datetime.utcnow():
+    if conn.token_expires_at and conn.token_expires_at <= now_utc():
         try:
             await _refresh(conn.provider, conn)
         except Exception:

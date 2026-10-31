@@ -4,14 +4,15 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime, date
+from datetime import date, datetime, timedelta
 from backend.db.database import get_db
 from backend.models import Invoice, Payment, CashShift, CashDrawerMovement, Expense, Order, Employee, Location
 from backend.services.auth import assert_perm, get_current_employee, require_perm, record_scope
 from backend.core import paging as _paging
-from backend.services.money import q2, q4, msum  # noqa: F401 — money quantizers used module-wide
+from backend.services.money import d2, dec, msum, q2, q4  # noqa: F401 — money quantizers used module-wide
 from backend.core.spreadsheet import safe_row
 from backend.services.invoicing import DISPLAY_MODES, balance_due as _balance_due
+from backend.services.dates import day_end_utc, day_start_utc, now_utc, shop_today, shop_tzname, today_in
 
 router = APIRouter(prefix="/api/finance", tags=["finance"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -244,7 +245,7 @@ async def issue_einvoice(
     inv = await _load_invoice(db, invoice_id, current.org_id)
     if not inv.einvoice_number:
         inv.einvoice_number = await _next_einvoice_number(db, current.org_id)
-    inv.einvoice_issued_at = datetime.utcnow()
+    inv.einvoice_issued_at = now_utc()
     inv.einvoice_format = "ubl2.1"
     inv.einvoice_xml = await build_ubl(db, current.org_id, inv)
     inv.einvoice_status = "issued"
@@ -548,13 +549,13 @@ async def send_invoice_email(
         if not thread:
             thread = InboxThread(org_id=current.org_id, channel=channel, client_id=client.id,
                                  handle=recipient, status="open", unread=False,
-                                 last_message_at=datetime.utcnow())
+                                 last_message_at=now_utc())
             db.add(thread)
             await db.flush()
         db.add(InboxMessage(org_id=current.org_id, thread_id=thread.id, direction="outbound",
                             body=f"{subject}\n\n{body}" + (f" (attached {fname})" if attachment else ""),
                             author_id=current.id, delivered=delivery["status"] == "sent"))
-        thread.last_message_at = datetime.utcnow()
+        thread.last_message_at = now_utc()
     if order:
         from backend.routers.feed import log_system_event
         await log_system_event(db, current.org_id, "order", order.id,
@@ -621,13 +622,14 @@ async def record_payment(
         if data.overpay == "refund":
             await assert_perm(db, current, "can_create_returns")    # paying money back out
     # When the money came in: today by default; an earlier day is a retroactive cash entry.
-    paid_at, retro = datetime.utcnow(), False
+    paid_at, retro = now_utc(), False
     if data.paid_at:
         from backend.services.dates import parse_dt
         day = parse_dt(data.paid_at, "paid_at")
-        if day.date() > datetime.utcnow().date():
+        today = await shop_today(db, current.org_id)
+        if day.date() > today:
             raise HTTPException(422, "The payment date can't be in the future")
-        if day.date() < datetime.utcnow().date():
+        if day.date() < today:
             await assert_perm(db, current, "can_retroactive_cash")
             paid_at, retro = day, True
     acc = None
@@ -761,7 +763,9 @@ async def _expected_cash(db, shift: CashShift) -> dict:
     manual_cash = (await db.execute(select(func.coalesce(func.sum(Transaction.amount), 0.0)).where(
         Transaction.shift_id == shift.id, Transaction.status == "active",
         Transaction.txn_type.in_(("income", "expense"))))).scalar() or 0.0
-    expected = q2((shift.opening_float or 0.0) + cash_in - abs(cash_refunds) + pay_in - pay_out + manual_cash)
+    # Decimal throughout: opening_float and the drawer movements read back as Decimal (audit R4).
+    expected = d2(dec(shift.opening_float) + dec(cash_in) - abs(dec(cash_refunds))
+                  + dec(pay_in) - dec(pay_out) + dec(manual_cash))
     return {"opening_float": q2(shift.opening_float or 0.0), "cash_in": q2(cash_in),
             "cash_refunds": q2(abs(cash_refunds)), "pay_in": q2(pay_in), "pay_out": q2(pay_out),
             "manual_cash": q2(manual_cash), "expected_cash": expected}
@@ -877,7 +881,7 @@ async def record_payout(
     net = data.net_amount if data.net_amount is not None else (data.gross_amount - data.fee_amount)
     p = ProcessorPayout(
         org_id=current.org_id, provider=data.provider or "manual",
-        payout_date=date.fromisoformat(data.payout_date) if data.payout_date else date.today(),
+        payout_date=date.fromisoformat(data.payout_date) if data.payout_date else await shop_today(db, current.org_id),
         gross_amount=q2(data.gross_amount), fee_amount=q2(data.fee_amount), net_amount=q2(net),
         reference=data.reference, note=data.note, created_by_id=current.id)
     db.add(p)
@@ -1009,10 +1013,10 @@ async def close_shift(
     shift.expected_cash = parts["expected_cash"]
     shift.closing_float = counted
     shift.close_denoms = denoms
-    shift.closed_at = datetime.utcnow()
+    shift.closed_at = now_utc()
     await db.commit()
 
-    discrepancy = q2(counted - shift.expected_cash)
+    discrepancy = q2(dec(counted) - dec(shift.expected_cash))
     # 144bb blind count: only a finance-permitted user is shown expected + discrepancy.
     show_expected = True
     if current.role_id:
@@ -1055,7 +1059,7 @@ async def add_expense(
         recorded_by_id=current.id,
         description=data.description,
         amount=data.amount,
-        expense_date=date.fromisoformat(data.expense_date) if data.expense_date else date.today(),
+        expense_date=date.fromisoformat(data.expense_date) if data.expense_date else await shop_today(db, current.org_id),
     )
     db.add(expense)
     await db.commit()
@@ -1099,7 +1103,7 @@ async def finance_summary(
         "total_revenue": q2(total_revenue),
         "total_outstanding": q2(total_outstanding),
         "total_expenses": q2(total_expenses),
-        "gross_profit": q2(total_revenue - total_expenses),
+        "gross_profit": q2(dec(total_revenue) - dec(total_expenses)),
         "invoice_count": invoice_count,
     }
 
@@ -1116,13 +1120,18 @@ async def accountant_export(
     file instead of re-keying into QuickBooks. Default period = current month to today."""
     import csv, io
     from backend.models import Transaction, Account, CashFlowItem
-    today = date.today()
-    df = datetime.fromisoformat(date_from) if date_from else datetime(today.year, today.month, 1)
+    tz = await shop_tzname(db, current.org_id)
+    today = today_in(tz)
+    # Default period: this month on the shop's calendar, as naive-UTC instants for actual_date.
+    df = datetime.fromisoformat(date_from) if date_from else day_start_utc(today.replace(day=1), tz)
+    exp_from = df.date() if date_from else today.replace(day=1)       # expense_date is a shop day
     if date_to:
         _dt = datetime.fromisoformat(date_to)
         dt = _dt.replace(hour=23, minute=59, second=59) if _dt.time() == datetime.min.time() else _dt
+        exp_to = dt.date()
     else:
-        dt = datetime(today.year, today.month, today.day, 23, 59, 59)
+        dt = day_end_utc(today, tz) - timedelta(microseconds=1)
+        exp_to = today
     rows = (await db.execute(
         select(Transaction, Account.name, CashFlowItem.name)
         .join(Account, Transaction.account_id == Account.id)
@@ -1141,7 +1150,7 @@ async def accountant_export(
                            f"{abs(amt):.2f}" if amt < 0 else "",
                            f"{float(txn.balance_after):.2f}" if txn.balance_after is not None else ""]))
     exps = (await db.execute(select(Expense).where(
-        Expense.org_id == current.org_id, Expense.expense_date >= df.date(), Expense.expense_date <= dt.date()))).scalars().all()
+        Expense.org_id == current.org_id, Expense.expense_date >= exp_from, Expense.expense_date <= exp_to))).scalars().all()
     for e in exps:
         ed = datetime.combine(e.expense_date, datetime.min.time()) if e.expense_date else None
         lines.append((ed, [e.expense_date.strftime("%Y-%m-%d") if e.expense_date else "", "(business expense)",
@@ -1154,6 +1163,6 @@ async def accountant_export(
         w.writerow(safe_row(cells))
     buf.seek(0)
     from fastapi.responses import StreamingResponse
-    fname = f"accountant_{df.strftime('%Y%m%d')}_{dt.strftime('%Y%m%d')}.csv"
+    fname = f"accountant_{exp_from.strftime('%Y%m%d')}_{exp_to.strftime('%Y%m%d')}.csv"
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
                              headers={"Content-Disposition": f'attachment; filename="{fname}"'})
