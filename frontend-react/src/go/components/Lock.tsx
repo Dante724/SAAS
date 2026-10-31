@@ -105,7 +105,7 @@ export function LockProvider({ children }: { children: ReactNode }) {
           </div>
         )}
         {ask?.mode === "setup" && (
-          <SetupForm pinSet={pinSet} what={ask.what} onDone={async () => { setPinSetLocal(true); refresh().catch(() => {}); finish(true); }} />
+          <SetupForm pinSet={pinSet} what={ask.what} onDone={async () => { setPinSetLocal(true); refresh().catch(() => { /* silent: PIN is set; refreshing the session afterwards is best-effort */ }); finish(true); }} />
         )}
       </Sheet>
       {locked && pinSet && <LockScreen name={me?.name} uid={me?.id} onUnlock={() => { if (ask?.mode === "verify") finish(true); else done(); }} />}

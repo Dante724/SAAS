@@ -4,6 +4,7 @@ import { api } from "../../api/client";
 import DateField from "../../components/DateField";
 import { M } from "../../components/Shell";
 import { money } from "../orders/types";
+import { clickableRow } from "../../lib/clickable";
 import { KIND_LABEL, drillRows, trend, type Drill, type ProfitRow } from "./profitView";
 
 type Bucket = { count: number; revenue: number; tax: number; cogs?: number; labour_cost: number; commission: number; profit?: number; written_off: number };
@@ -134,7 +135,7 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
                   <tbody className="divide-y divide-slate-100">
                     {list.length === 0 && <tr><td colSpan={4} className="py-4 px-3 text-ink-tertiary">Nothing in this period.</td></tr>}
                     {list.map((g, i) => (
-                      <tr key={i} onClick={() => setDrill({ title: `${key === "location_id" ? "Location" : "Technician"}: ${key === "employee_id" && !g.employee_id ? "Nobody assigned" : g.name}`, d: { [key]: (g as any)[key] ?? "" } })}
+                      <tr key={i} {...clickableRow(() => setDrill({ title: `${key === "location_id" ? "Location" : "Technician"}: ${key === "employee_id" && !g.employee_id ? "Nobody assigned" : g.name}`, d: { [key]: (g as any)[key] ?? "" } }))}
                         className="cursor-pointer hover:bg-blue-50/50">
                         <td className="py-2 px-3 font-semibold text-ink-primary">{key === "employee_id" && !g.employee_id ? "Nobody assigned" : g.name}</td>
                         <td className="py-2 px-3 text-right tabular-nums">{g.jobs + g.dropped} · {g.sales}</td>

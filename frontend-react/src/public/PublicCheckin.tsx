@@ -483,14 +483,14 @@ export function PublicCheckinStatus({ token }: { token: string }) {
     const load = () => fetch(`/api/public/checkin/s/${token}`).then(async (r) => {
       if (!r.ok) { if (live) setErr("We couldn't find this check-in."); return; }
       const j = await r.json(); if (live) setS(j);
-    }).catch(() => {});
+    }).catch(() => { /* silent: status poll; retried every 20s */ });
     load();
     const t = setInterval(load, 20000);
     return () => { live = false; clearInterval(t); };
   }, [token]);
 
   async function leave() {
-    await fetch(`/api/public/checkin/s/${token}/cancel`, { method: "POST" }).catch(() => {});
+    await fetch(`/api/public/checkin/s/${token}/cancel`, { method: "POST" }).catch(() => { /* silent: the visitor is leaving either way; shown as left regardless */ });
     setS((x) => (x ? { ...x, state: "cancelled" } : x));
   }
 

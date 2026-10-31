@@ -10,6 +10,7 @@ import {
   countBy, errorsSheet, KIND_NOUN, missingRequired, sampleValues,
   type FieldDef, type ImportKind, type Parsed, type RowVerdict,
 } from "../lib/importRows";
+import { loadFailed } from "../lib/notice";
 
 type Batch = { id: string; file_name: string | null; created: number; updated: number; created_at: string; can_undo: boolean; undone_at: string | null };
 type Step = "start" | "columns" | "review" | "done";
@@ -52,9 +53,9 @@ export default function ImportDrawer({ kind, onClose, onDone }: { kind: ImportKi
 
   const loadLast = () => api.get<{ items: Batch[] }>(`/imports/batches?kind=${kind}`).then((r) => setLast(r.items?.[0] || null)).catch(() => setLast(null));
   useEffect(() => {
-    api.get<any>("/imports/kinds").then((r) => { setFields(r[kind]?.fields || []); setMatchOn(r[kind]?.match_on || ""); }).catch(() => {});
+    api.get<any>("/imports/kinds").then((r) => { setFields(r[kind]?.fields || []); setMatchOn(r[kind]?.match_on || ""); }).catch(loadFailed("the import fields"));
     loadLast();
-    if (kind === "products") api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setOpts((o) => ({ ...o, location_id: it[0].id })); }).catch(() => {});
+    if (kind === "products") api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setOpts((o) => ({ ...o, location_id: it[0].id })); }).catch(loadFailed("locations"));
   }, [kind]); // eslint-disable-line
 
   async function upload(f: File) {
@@ -117,7 +118,7 @@ export default function ImportDrawer({ kind, onClose, onDone }: { kind: ImportKi
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label={`Import ${many}`}>
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={busy ? undefined : onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={busy ? undefined : onClose} />
       <div className="relative w-[760px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <div>

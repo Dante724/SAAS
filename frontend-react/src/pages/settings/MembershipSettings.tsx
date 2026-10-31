@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
+import { loadFailed } from "../../lib/notice";
 
 // Settings › Memberships: the few shop-wide choices — the checkout offer, how forgiving unpaid
 // plans are, when renewals go out, and how plan money shows in the books.
@@ -63,7 +64,7 @@ export default function MembershipSettings() {
   const [saved, setSaved] = useState<S | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  useEffect(() => { api.get<S>("/memberships/settings/shop").then((r) => { setS(r); setSaved(r); }).catch(() => {}); }, []);
+  useEffect(() => { api.get<S>("/memberships/settings/shop").then((r) => { setS(r); setSaved(r); }).catch(loadFailed("membership settings")); }, []);
   if (!s) return <p className="text-xs text-ink-tertiary">Loading…</p>;
   const set = (patch: Partial<S>) => { if (canEdit) { setS({ ...s, ...patch }); setMsg(null); } };
   const dirty = JSON.stringify(s) !== JSON.stringify(saved);

@@ -35,7 +35,7 @@ export function dueCount(items: Task[], now = new Date()): number {
 export function useTaskBadge() {
   const [n, setN] = useState(0);
   const load = useCallback(() => {
-    api.get<{ items: Task[] }>("/tasks?mine=true").then((r) => setN(dueCount(r.items || []))).catch(() => {});
+    api.get<{ items: Task[] }>("/tasks?mine=true").then((r) => setN(dueCount(r.items || []))).catch(() => { /* silent: badge count only */ });
   }, []);
   useEffect(() => {
     load();

@@ -5,6 +5,7 @@ import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import { money } from "../orders/types";
 import { tint, hueText } from "../../lib/tint";
+import { loadFailed } from "../../lib/notice";
 
 // Memberships (docs/SPEC_memberships.md): the pieces every screen shares — the status pill, the
 // member card on a client or an asset, and the one-step "Add a plan" dialog.
@@ -175,7 +176,7 @@ export function SellPlanDialog({ clientId, deviceId, devices, orderId, presetPla
     if (!devices) api.get<any>(`/clients/${clientId}`).then((c) => {
       setAssets(c.devices || []);
       if (!deviceId && c.devices?.length === 1) setDevice(c.devices[0].id);
-    }).catch(() => {});
+    }).catch(loadFailed("the client's devices"));
   }, [clientId]);   // eslint-disable-line react-hooks/exhaustive-deps
   const plan = plans?.find((p) => p.id === planId);
   useEffect(() => { if (plan && !plan[billing === "yearly" ? "price_yearly" : "price_monthly"]) setBilling(plan.price_yearly ? "yearly" : "monthly"); }, [plan]);  // eslint-disable-line react-hooks/exhaustive-deps
@@ -194,7 +195,7 @@ export function SellPlanDialog({ clientId, deviceId, devices, orderId, presetPla
   // Portalled to <body> so it sits above whatever opened it (the payment dialog, a drawer).
   return createPortal(
     <div className="fixed inset-0 z-[90] grid place-items-center p-4">
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div role="dialog" aria-label="Add a membership plan" className="relative w-full max-w-md rounded-2xl bg-white shadow-clay-card border border-slate-200/90 p-5">
         <div className="flex items-center gap-2">
           <div className="text-base font-semibold text-ink-primary">Add a membership plan</div>

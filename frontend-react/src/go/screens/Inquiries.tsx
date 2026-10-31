@@ -194,7 +194,7 @@ export default function Inquiries() {
     const hit = items?.find((x) => x.id === leadId);
     if (hit) { setOpen(hit); return; }
     let live = true;
-    api.get<Inquiry>(`/leads/${encodeURIComponent(leadId)}`).then((x) => { if (live) setOpen(x); }).catch(() => {});
+    api.get<Inquiry>(`/leads/${encodeURIComponent(leadId)}`).then((x) => { if (live) setOpen(x); }).catch(() => { /* silent: deep-linked inquiry just doesn't open; the list still shows */ });
     return () => { live = false; };
   }, [leadId]); // eslint-disable-line react-hooks/exhaustive-deps
 

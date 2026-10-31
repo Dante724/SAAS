@@ -49,7 +49,7 @@ export default function SignaturePad({ title = "Customer signature", hint = "Ask
 
   return createPortal(
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-ink-primary/40" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div role="dialog" aria-label={title} className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-lg p-5 space-y-3">
         <div className="flex items-center justify-between">
           <h4 className="text-sm font-bold text-ink-primary">{title}</h4>

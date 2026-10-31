@@ -172,7 +172,7 @@ export default function NewJob() {
           try { ids.push(await uploadPhoto(p)); } catch { /* one bad upload doesn't lose the job */ }
           setBusy(`Uploading photos ${i + 1}/${photos.length}`);
         }
-        if (ids.length) await addPhotosToJob(o.id, ids, "intake").catch(() => {});
+        if (ids.length) await addPhotosToJob(o.id, ids, "intake").catch(() => { /* silent: the job is already created; the photo count warning below covers the rest */ });
         if (ids.length < photos.length) toast({ title: `${photos.length - ids.length} photo(s) didn't upload`, body: "Add them again from the job.", tone: "warn" });
       }
       if (depositAmount > 0) {

@@ -4,6 +4,7 @@ import { api } from "../../api/client";
 import { money } from "../orders/types";
 import { tint, hueText } from "../../lib/tint";
 import { type Member, SellPlanDialog, Ring, fmtDate } from "./shared";
+import { saveFailed } from "../../lib/notice";
 
 // Memberships on a work order: the plan banner above the lines, and the offer shown to a
 // non-member when payment is taken (docs/SPEC_memberships.md §7.3–7.4).
@@ -79,7 +80,7 @@ export function CheckoutOffer({ orderId, onJoined }: { orderId: string; onJoined
       <div className="mt-2.5 flex flex-wrap gap-1.5 pl-12">{o.includes.map((t) => <span key={t} className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-emerald-800">{t}</span>)}</div>
       <div className="mt-3 flex gap-2 pl-12">
         <button onClick={() => setSell(true)} className="h-9 px-4 rounded-lg bg-emerald-600 text-white text-xs font-semibold whitespace-nowrap shadow-clay-sm">Join · {money(planPrice)}{yearly ? "/yr" : "/mo"}</button>
-        <button onClick={() => { setHidden(true); api.post(`/memberships/order/${orderId}/snooze`, {}).catch(() => {}); }} className="h-9 px-3 rounded-lg text-xs font-semibold text-ink-tertiary hover:bg-white whitespace-nowrap">Not now</button>
+        <button onClick={() => { setHidden(true); api.post(`/memberships/order/${orderId}/snooze`, {}).catch(saveFailed("snooze the plan suggestion")); }} className="h-9 px-3 rounded-lg text-xs font-semibold text-ink-tertiary hover:bg-white whitespace-nowrap">Not now</button>
       </div>
       {sell && <SellPlanDialog clientId={d.client_id} deviceId={d.device_id || undefined} orderId={orderId} presetPlanId={o.plan_id}
         onClose={() => setSell(false)} onDone={() => { setSell(false); setHidden(true); onJoined(); }} />}

@@ -240,7 +240,7 @@ export function goQueue(): GoQueue {
     online: () => navigator.onLine,
     onRegister: () => {
       if ("serviceWorker" in navigator && "SyncManager" in window) {
-        navigator.serviceWorker.ready.then((reg: any) => reg.sync?.register("tekly-go-sync")).catch(() => {});
+        navigator.serviceWorker.ready.then((reg: any) => reg.sync?.register("tekly-go-sync")).catch(() => { /* silent: background sync is optional; the queue retries when online */ });
       }
     },
   });

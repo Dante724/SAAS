@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { X } from "lucide-react";
 import type { StatusMeta } from "../lib/useGo";
+import { clickable } from "../../lib/clickable";
 
 /** A screen with an iOS-style large title that collapses into a compact bar when scrolled.
  *  `caption` sits above the title; `footer` is docked below the scroll area (it reserves its own
@@ -210,7 +211,7 @@ export function Toast({ msg, onDone }: { msg: ToastMsg | null; onDone: () => voi
     : "border-emerald-200 bg-emerald-50 text-emerald-800";
   return (
     <div className="fixed inset-x-0 z-[60] flex justify-center px-4 pointer-events-none bottom-[calc(env(safe-area-inset-bottom)+10rem)]" role="status" aria-live="polite">
-      <div className={`pointer-events-auto max-w-md w-full rounded-xl border-[0.5px] px-4 py-3 shadow-menu ${tone}`} onClick={onDone}>
+      <div className={`pointer-events-auto max-w-md w-full rounded-xl border-[0.5px] px-4 py-3 shadow-menu ${tone}`} {...clickable(onDone)}>
         <p className="font-semibold text-go-body">{msg.title}</p>
         {msg.body && <p className="mt-0.5 text-go-sub opacity-90">{msg.body}</p>}
       </div>

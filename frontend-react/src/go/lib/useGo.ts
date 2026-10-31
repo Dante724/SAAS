@@ -26,7 +26,7 @@ export function useStatuses(recordType: "work_order" | "estimate" = "work_order"
   const [list, setList] = useState<StatusMeta[]>([]);
   useEffect(() => {
     let live = true;
-    loadStatuses(recordType).then((l) => { if (live) setList(l); }).catch(() => {});
+    loadStatuses(recordType).then((l) => { if (live) setList(l); }).catch(() => { /* silent: status labels fall back to defaults */ });
     return () => { live = false; };
   }, [recordType]);
   const byKey = new Map(list.map((s) => [s.key, s]));
@@ -37,7 +37,7 @@ export function useQueueStatus() {
   const [st, setSt] = useState<QueueStatus>({ pending: 0, online: navigator.onLine, syncing: false, conflicts: 0, held: false });
   useEffect(() => {
     const q = goQueue();
-    q.status().then(setSt).catch(() => {});
+    q.status().then(setSt).catch(() => { /* silent: offline queue storage may be unavailable; subscribe() keeps it current */ });
     const off = q.subscribe((s) => setSt(s));
     const net = () => setSt((s) => ({ ...s, online: navigator.onLine }));
     window.addEventListener("online", net);
@@ -72,7 +72,7 @@ export function useStaff() {
   useEffect(() => {
     let live = true;
     staffCache ??= api.get<Staff[]>("/staff/employees").then((r) => (Array.isArray(r) ? r : [])).catch((e) => { staffCache = null; throw e; });
-    staffCache.then((l) => { if (live) setList(l); }).catch(() => {});
+    staffCache.then((l) => { if (live) setList(l); }).catch(() => { /* silent: staff picker stays empty; nothing is lost */ });
     return () => { live = false; };
   }, []);
   return list;

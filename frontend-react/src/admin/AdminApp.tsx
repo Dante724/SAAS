@@ -3,6 +3,7 @@ import { adminApi, whenSignedOut, SEGMENTS, fmtDate, type Me, type Shop } from "
 import SignIn from "./SignIn";
 import ShopPanel from "./ShopPanel";
 import { TeamView, CodesView, LogView } from "./Views";
+import { clickableRow } from "../lib/clickable";
 
 type View = "today" | "shops" | "codes" | "team" | "log";
 const card = "bg-white rounded-xl border border-slate-200";
@@ -161,7 +162,7 @@ function ShopsView({ me, onOpenShop }: { me: Me; onOpenShop: (id: string) => voi
           </tr></thead>
           <tbody>
             {data?.items.map((s) => (
-              <tr key={s.id} onClick={() => onOpenShop(s.id)} className="border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer">
+              <tr key={s.id} {...clickableRow(() => onOpenShop(s.id))} className="border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer">
                 <td className="px-4 py-2.5 font-semibold">{s.name}</td>
                 <td className="px-4 py-2.5 font-mono text-xs">{s.account_id}</td>
                 <td className="px-4 py-2.5">{SEGMENTS[s.segment] || s.segment}</td>

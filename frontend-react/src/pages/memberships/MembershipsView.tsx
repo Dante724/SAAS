@@ -127,7 +127,7 @@ export function MembershipDrawer({ id, onClose, onChanged }: { id: string; onClo
   const btn = "h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 disabled:opacity-50";
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 55 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[520px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90">
         <header className="px-6 py-4 border-b border-slate-200/90 flex items-center gap-2">
           {m && <Avatar name={m.client} size={44} />}

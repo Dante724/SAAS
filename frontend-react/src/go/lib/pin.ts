@@ -20,7 +20,7 @@ export async function verifyPin(pin: string): Promise<string | null> {
     const err = e as ApiError;
     if (err?.status === 429) {
       // Five wrong PINs signs the person out on the server; the next call sends them to sign in.
-      api.get("/auth/me").catch(() => {});
+      api.get("/auth/me").catch(() => { /* silent: only nudges the client to notice the server sign-out */ });
       return err.message;
     }
     return err?.status === 403 ? "Wrong PIN. Try again." : err?.message || "Couldn't check your PIN";

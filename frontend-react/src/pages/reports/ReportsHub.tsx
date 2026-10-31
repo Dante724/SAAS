@@ -18,6 +18,7 @@ import TotalProfit from "./TotalProfit";
 import { DEFAULT_FILTERS, REPORTS_PREF, REPORT_FILTERS, filterParams, readReportsPref, type ReportFilters } from "./profitView";
 import { cachedPref, loadPref, savePref } from "../../lib/userPref";
 import GoPilotReport from "./GoPilotReport";
+import { loadFailed } from "../../lib/notice";
 
 const REPORT_PAGE = 50;
 
@@ -368,8 +369,8 @@ export default function ReportsHub() {
     }).catch(() => setCat({ tabs: [] }));
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    api.get<any>("/statuses?record_type=work_order").then((r) => setDropStatuses((r.items || r || []).filter((x: any) => x.status_group === "dropped"))).catch(() => {});
-    api.get<any>("/forms/types").then((r) => setWoTypes(r.items || [])).catch(() => {});
+    api.get<any>("/statuses?record_type=work_order").then((r) => setDropStatuses((r.items || r || []).filter((x: any) => x.status_group === "dropped"))).catch(loadFailed("job statuses"));
+    api.get<any>("/forms/types").then((r) => setWoTypes(r.items || [])).catch(loadFailed("job types"));
   }, []);
   const remember = (report: string | null, f: ReportFilters, loc: string) => savePref(REPORTS_PREF, { report, locId: loc, filters: f });
   function changeFilter(patch: Partial<ReportFilters>) {

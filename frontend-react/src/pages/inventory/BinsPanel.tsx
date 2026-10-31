@@ -7,6 +7,7 @@ import MoveStockDialog from "../../components/MoveStockDialog";
 import { api } from "../../api/client";
 import { barcodeTypeLabel } from "../../lib/barcodes";
 import { confirmDialog } from "../../lib/dialog";
+import { loadFailed } from "../../lib/notice";
 
 type Bin = { id: string; name: string; location_id: string; warehouse_id?: string | null; zone?: string | null; shelf?: string | null;
   bin_number?: string | null; barcode?: string | null; barcode_type?: string; is_default?: boolean; qty_on_hand?: number };
@@ -28,7 +29,7 @@ export default function BinsPanel() {
   const [q, setQ] = useState("");
 
   const load = () => api.get<any>("/bins").then((r) => setBins(r.items || [])).catch(() => setBins([]));
-  useEffect(() => { load(); api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); setNf((s) => ({ ...s, location_id: it[0]?.id || "" })); }).catch(() => {}); }, []);
+  useEffect(() => { load(); api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); setNf((s) => ({ ...s, location_id: it[0]?.id || "" })); }).catch(loadFailed("locations")); }, []);
   const loadContents = (id: string) => { setContents(null); api.get<any>(`/bins/${id}/contents`).then((r) => setContents(r.items || [])).catch(() => setContents([])); };
   function toggleOpen(id: string) { if (open === id) { setOpen(null); return; } setOpen(id); loadContents(id); }
 

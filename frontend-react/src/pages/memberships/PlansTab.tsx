@@ -5,6 +5,7 @@ import { useMe } from "../../context/Me";
 import { money } from "../orders/types";
 import { tint, hueText } from "../../lib/tint";
 import { type Plan, type PlanItem } from "./shared";
+import { loadFailed } from "../../lib/notice";
 
 // Catalog › Plans: what the shop sells as a membership. Each plan is a short list of what's
 // included; the editor keeps the everyday fields up front and the season options tucked away.
@@ -34,7 +35,7 @@ export default function PlansTab() {
     load();
     // Owners see what each plan brought in against the work it gave away (last 12 months).
     if (can("can_see_profit")) api.get<{ plans: { plan_id: string; money_in: number; value_given: number }[] }>("/memberships/reports/profitability")
-      .then((r) => setReport(Object.fromEntries((r.plans || []).map((p) => [p.plan_id, p])))).catch(() => {});
+      .then((r) => setReport(Object.fromEntries((r.plans || []).map((p) => [p.plan_id, p])))).catch(loadFailed("plan profitability"));
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {   // the template menu closes on an outside click or Escape
@@ -137,7 +138,7 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Omit<Plan, "id" | "membe
   const [more, setMore] = useState(plan.term === "season");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { api.get<{ items: Svc[] }>("/catalog/services").then((r) => setSvcs(r.items || [])).catch(() => {}); }, []);
+  useEffect(() => { api.get<{ items: Svc[] }>("/catalog/services").then((r) => setSvcs(r.items || [])).catch(loadFailed("services")); }, []);
   const set = (patch: Partial<typeof p>) => setP((x) => ({ ...x, ...patch }));
   const setItem = (i: number, patch: Partial<PlanItem>) => set({ items: p.items.map((it, j) => (j === i ? { ...it, ...patch } : it)) });
   const box = "glass-input h-10 rounded-xl px-3 text-sm";
@@ -156,7 +157,7 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Omit<Plan, "id" | "membe
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[560px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90">
         <header className="px-6 py-4 border-b border-slate-200/90 flex items-center gap-2">
           <div className="text-base font-semibold text-ink-primary">{p.id ? "Edit plan" : "New plan"}</div>

@@ -814,7 +814,7 @@ function ReviewSheet({ items, sym, total, accent, onAccent, defaultName, onClose
 function DeclineModal({ accent, onAccent, onClose, onDone }: { accent: string; onAccent: string; onClose: () => void; onDone: (reason: string) => void }) {
   const [reason, setReason] = useState("");
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" role="presentation" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div role="dialog" aria-label="Decline the estimate" className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5">
         <div className="mb-3 flex items-center justify-between">
           <span className="text-[17px] font-semibold text-ink-primary">Decline the estimate</span>

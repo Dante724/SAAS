@@ -625,7 +625,7 @@ function ReturnSheet({ saleId, accounts, onClose, onDone }: { saleId: string; ac
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Return items">
-      <div className="absolute inset-0 bg-ink-primary/40" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5 shadow-clay-drawer">
         <div className="flex items-start justify-between gap-3">
           <div><div className="text-sm font-semibold text-ink-primary">Return items</div>

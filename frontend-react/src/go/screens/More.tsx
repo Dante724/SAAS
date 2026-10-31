@@ -33,7 +33,7 @@ export default function More() {
   const [role, setRole] = useState<GoRole | "auto">(savedRole() ?? "auto");
   const [theme, setThemeState] = useState<ThemePref>(getTheme());
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
-  useEffect(() => { goQueue().conflicts().then(setConflicts).catch(() => {}); }, [q.conflicts]);
+  useEffect(() => { goQueue().conflicts().then(setConflicts).catch(() => { /* silent: offline queue storage may be unavailable */ }); }, [q.conflicts]);
   const [push, setPush] = useState<PushState | "busy" | null>(null);
   useEffect(() => { pushState().then(setPush).catch(() => setPush("unsupported")); }, []);
   async function togglePush() {

@@ -1053,7 +1053,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
     // mergeRemap keeps any cell the user hand-edited while the mapping bar is open
     setMapCols(next); setRows(mergeRemap(dataGrid, mapCols, next, rows));
     // a sheet's mapping is remembered per supplier on the server; a paste's in this browser
-    if (fileHeaders) api.put(`/imports/posting/mapping${supplierId ? `?supplier_id=${encodeURIComponent(supplierId)}` : ""}`, { mapping: mapByHeader(fileHeaders, next) }).catch(() => {});
+    if (fileHeaders) api.put(`/imports/posting/mapping${supplierId ? `?supplier_id=${encodeURIComponent(supplierId)}` : ""}`, { mapping: mapByHeader(fileHeaders, next) }).catch(() => { /* silent: remembering the column mapping is a convenience; this import is unaffected */ });
     else saveRememberedMap(next);
   }
   async function onSheet(e: any) {

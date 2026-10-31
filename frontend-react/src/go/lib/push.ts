@@ -58,8 +58,8 @@ export async function disablePush(): Promise<PushState> {
   if (!supported()) return "unsupported";
   const sub = await (await goRegistration())?.pushManager.getSubscription();
   if (sub) {
-    await api.post("/push/unsubscribe", { endpoint: sub.endpoint }).catch(() => {});
-    await sub.unsubscribe().catch(() => {});
+    await api.post("/push/unsubscribe", { endpoint: sub.endpoint }).catch(() => { /* silent: best-effort; the browser subscription is dropped next */ });
+    await sub.unsubscribe().catch(() => { /* silent: push may already be gone or unsupported */ });
   }
   return "off";
 }

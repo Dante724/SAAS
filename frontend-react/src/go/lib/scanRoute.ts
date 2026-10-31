@@ -51,7 +51,7 @@ export async function routeScan(raw: string, resolve: (code: string) => Promise<
   if (direct) {
     // Open the job without waiting, but still tell the server about the scan (the Go pilot counts
     // scans); a failure, offline included, never gets in the way.
-    Promise.resolve().then(() => resolve(code)).catch(() => {});
+    Promise.resolve().then(() => resolve(code)).catch(() => { /* silent: scan ping only; the job is already open */ });
     return direct;
   }
   return targetFor(await resolve(code), code);

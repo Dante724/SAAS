@@ -195,7 +195,7 @@ export default function Shell({ title, children }: { title: string; children: Re
   const loadWalkins = () => {
     if (!can(NAV_PERM["/inquiries"])) return;
     api.get<{ waiting: number }>("/checkins/count")
-      .then((r) => { if (liveRef.current) setWalkins(Number(r?.waiting) || 0); }).catch(() => {});
+      .then((r) => { if (liveRef.current) setWalkins(Number(r?.waiting) || 0); }).catch(() => { /* silent: background walk-in count poll; the next tick retries */ });
   };
   useVisibleInterval(loadWalkins, 30000);
   // The Walk-ins view says when the queue changed (call, no-show, convert) so the badge doesn't lag.

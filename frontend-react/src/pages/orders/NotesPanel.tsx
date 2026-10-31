@@ -53,7 +53,7 @@ export default function NotesPanel({ orderId, onFlash }: { orderId: string; onFl
                   file: (c?.default_file_visibility === "public" ? "client" : "private") as Vis };
       setDefaults(d);
       if (!touched.current) setVis(d.comment);
-    }).catch(() => {});
+    }).catch(() => { /* silent: visibility stays on the private default */ });
   }, []);
 
   async function post() {

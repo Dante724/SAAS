@@ -6,6 +6,7 @@ import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog, confirmDialog } from "../../lib/dialog";
 import { countRows } from "./countSheet";
 import type { Product } from "./types";
+import { loadFailed } from "../../lib/notice";
 
 type StLine = { id: string; part_id: string; part_name: string; sku?: string | null; bin_id?: string | null; bin?: string | null;
   system_qty: number | null; counted_qty: number | null; variance: number | null; is_unknown?: boolean; serial_mismatch?: boolean; note?: string | null };
@@ -40,13 +41,13 @@ export default function StocktakeDrawer({ id, onClose, onDone }:
     setSheet(r);
   }
   useEffect(() => {
-    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); setForm((f) => ({ ...f, location_id: f.location_id || it[0]?.id || "" })); }).catch(() => {});
-    api.get<any>("/bins").then((r) => setBins(r.items || [])).catch(() => {});
+    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); setForm((f) => ({ ...f, location_id: f.location_id || it[0]?.id || "" })); }).catch(loadFailed("locations"));
+    api.get<any>("/bins").then((r) => setBins(r.items || [])).catch(loadFailed("bins"));
     api.get<any>("/catalog/categories?entity_type=product").then((r) => {
       const flat: Opt[] = [];
       const walk = (nodes: any[], d: number) => (nodes || []).forEach((n) => { flat.push({ id: n.id, name: `${"— ".repeat(d)}${n.name}` }); walk(n.children, d + 1); });
       walk(r.tree || [], 0); setCats(flat);
-    }).catch(() => {});
+    }).catch(loadFailed("product categories"));
     if (id) load(id).catch(() => setErr("Could not load this stock take"));
   }, []); // eslint-disable-line
 

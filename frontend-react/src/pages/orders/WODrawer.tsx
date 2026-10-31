@@ -1461,7 +1461,7 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
         <div className="min-w-0">
           <h5 className="text-[13px] font-medium text-ink-primary truncate" title={full}>{displayName(full, kit?.name)}</h5>
           <p className="text-xs text-ink-secondary tabular-nums">{lineKindLabel(l)}{" · "}
-            {editable ? <span onClick={() => setQtyOpen(l.id)} className="cursor-pointer hover:text-ink-primary">{amountTxt}</span> : amountTxt}
+            {editable ? <span {...clickable(() => setQtyOpen(l.id))} className="cursor-pointer hover:text-ink-primary">{amountTxt}</span> : amountTxt}
             {onPlan && (l as any).kind !== "membership" && <span className="ml-1.5 inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-primary/10 px-1.5 py-px text-[11px] font-semibold text-primary"><M n="workspace_premium" c="text-[11px]" />{Number(l.discount) >= 100 ? "Covered by plan" : `Plan ${l.discount}% off`}</span>}</p>
           {tagging && (
             <select value={l.order_item_id || ""} onChange={(e) => patchLine(l.id, { order_item_id: e.target.value })} aria-label={`Which item ${l.description || "this line"} is for`}

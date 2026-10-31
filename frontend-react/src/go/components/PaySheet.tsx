@@ -177,7 +177,7 @@ export default function PaySheet({ open, onClose, orderId, orderNumber, customer
                     <img src={link.qr_svg} alt="Pay link QR code" className="mx-auto h-56 w-56 rounded-xl bg-white p-3" />
                     <p className="mt-2 text-go-sub text-ink-secondary inline-flex items-center gap-1.5"><Loader2 size={14} className="animate-spin" />Waiting for the customer to pay…</p>
                     {"share" in navigator && (
-                      <button onClick={() => navigator.share({ title: `Pay for ${orderNumber}`, url: link.url }).catch(() => {})}
+                      <button onClick={() => navigator.share({ title: `Pay for ${orderNumber}`, url: link.url }).catch(() => { /* silent: the share sheet rejects when the person cancels it */ })}
                         className="mt-3 min-h-[2.75rem] px-5 rounded-xl border border-slate-200 bg-white font-semibold text-ink-primary inline-flex items-center gap-2"><Share2 size={18} />Send the link</button>
                     )}
                   </>

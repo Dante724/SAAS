@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { adminApi, fmtDate, SEGMENTS, type Me, type Shop } from "./api";
+import { loadFailed } from "../lib/notice";
 
 type Action = "discount" | "trial" | "plan" | "suspend" | "unsuspend" | "assign" | null;
 const input = "w-full px-3 py-2 rounded-lg border border-slate-300 text-sm";
@@ -21,7 +22,7 @@ export default function ShopPanel({ id, me, onClose }: { id: string; me: Me; onC
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   useEffect(() => {
-    if (action === "assign") adminApi.get<{ items: { id: string; name: string }[] }>("/team").then((r) => setAdmins(r.items.map((a) => ({ ...a, active: true })))).catch(() => {});
+    if (action === "assign") adminApi.get<{ items: { id: string; name: string }[] }>("/team").then((r) => setAdmins(r.items.map((a) => ({ ...a, active: true })))).catch(loadFailed("the admin team"));
   }, [action]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function done(p: Promise<any>, ok: string) {
@@ -115,7 +116,7 @@ export default function ShopPanel({ id, me, onClose }: { id: string; me: Me; onC
 function Drawer({ children, onClose }: { children: ReactNode; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-40 flex justify-end" role="dialog" aria-modal="true">
-      <div className="absolute inset-0 bg-slate-900/20" onClick={onClose} />
+      <div className="absolute inset-0 bg-slate-900/20" aria-hidden="true" onClick={onClose} />
       <div className="relative w-full max-w-xl h-full bg-white shadow-xl overflow-y-auto">{children}</div>
     </div>
   );

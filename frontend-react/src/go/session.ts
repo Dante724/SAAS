@@ -14,8 +14,8 @@ export async function signOut() {
   const q = goQueue();
   const { pending } = await q.status();
   if (pending && !window.confirm(`${pending} change${pending > 1 ? "s haven't" : " hasn't"} been sent yet. Signing out deletes ${pending > 1 ? "them" : "it"}. Sign out anyway?`)) return;
-  await q.clear().catch(() => {});
-  await disablePush().catch(() => {});   // before the token goes: unsubscribing needs it
+  await q.clear().catch(() => { /* silent: clearing the offline queue on sign-out is best-effort */ });
+  await disablePush().catch(() => { /* silent: push may not be registered */ });   // before the token goes: unsubscribing needs it
   try { await fetch("/api/auth/logout", { method: "POST", headers: { Authorization: `Bearer ${localStorage.getItem("ros_tok") || ""}` } }); } catch { /* best effort */ }
   try { localStorage.removeItem("ros_tok"); } catch { /* ignore */ }
   navigator.serviceWorker?.controller?.postMessage("CLEAR_DATA");

@@ -24,7 +24,7 @@ if (!hasToken()) {
   noteLabelOpen(window.location.href, (code) => api.post("/scan/resolve", { code }),
     (url) => window.history.replaceState(window.history.state, "", url));
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/go/sw.js", { scope: "/go/" }).catch(() => {});
+    navigator.serviceWorker.register("/go/sw.js", { scope: "/go/" }).catch(() => { /* silent: the app works without the service worker */ });
   }
   goQueue();   // start replaying anything left over from last time
   ReactDOM.createRoot(document.getElementById("root")!).render(
