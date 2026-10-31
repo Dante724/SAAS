@@ -131,6 +131,15 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
     catch (e: any) { await alertDialog(e?.message || "Couldn't delete this customer. Try again, or merge them into another customer.", "Can't delete"); }
   }
 
+  // Contacts with history (jobs, invoices, payments, devices) can't be deleted; the server says so
+  // and points to Merge instead, which we show as is.
+  async function removeClient() {
+    if (!(await confirmDialog("This removes the contact for good. Contacts with jobs, invoices or payments can't be deleted; merge them into another contact instead.",
+      { title: "Delete this contact?", confirmLabel: "Delete", danger: true }))) return;
+    try { await api.del(`/clients/${clientId}`); onClose(); }
+    catch (e: any) { await alertDialog(e?.message || "Couldn't delete this contact.", "Can't delete"); }
+  }
+
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
       <div className="absolute inset-0 bg-ink-primary/30" onClick={onClose} />
