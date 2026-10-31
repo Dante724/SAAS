@@ -1442,8 +1442,6 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     arguments so both callers share one code path."""
     data = StatusChange(status=new_status, note=note, reason=reason)
     await _guard_order_access(db, current, order)
-    if data.status != order.status and await _is_closed(db, current.org_id, order):
-        await assert_perm(db, current, "can_edit_closed_ticket")   # reopening counts as editing it
 
     # Resolve the target status from the configurable status table, scoped to this
     # record's pipeline. .first() (not scalar_one_or_none) so legacy duplicate keys
@@ -1458,6 +1456,11 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         .order_by(OrderStatus.sort_order)
     )).scalars().first()
     is_closing = target.is_terminal if target else (data.status in ("done", "closed", "delivered"))
+    # Reopening a closed job counts as editing it. Moving it on between closed statuses
+    # (done -> delivered) doesn't: the desk hands the device over without "Edit the closed ticket".
+    if data.status != order.status and await _is_closed(db, current.org_id, order) \
+            and not (target and target.status_group == "closed"):
+        await assert_perm(db, current, "can_edit_closed_ticket")
     # Closing a job the customer still owes on is a money decision: it needs the payments right
     # (a technician could close an unpaid job — QA 31 Oct 2026). "Not collected" isn't a close.
     if target and target.status_group == "closed" and data.status != order.status \

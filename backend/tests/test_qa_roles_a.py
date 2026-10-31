@@ -179,3 +179,42 @@ async def test_closing_an_unpaid_job_needs_the_payments_right(client):
     r = await client.patch(f"/api/orders/{o['id']}/status", json={"status": "done"}, headers=T)
     assert r.status_code == 200, r.text
 
+
+_DESK = {"can_create_tickets": True, "can_view_client_info": True, "can_view_item_prices": True,
+         "can_view_finance": True, "can_view_invoices": True, "can_create_invoices": True,
+         "can_view_invoices_tab": True, "can_create_returns": True}
+
+
+@pytest.mark.asyncio
+async def test_desk_hands_over_a_done_job_without_edit_closed(client):
+    H = await _owner(client)
+    o, acc = await _shop_job(client, H)
+    D = await _person(client, H, (await _role(client, H, {"name": "Desk", "permissions": _DESK}))["id"], "Desk")
+    assert (await client.post(f"/api/cash/orders/{o['id']}/pay", json={"method": "cash", "account_id": acc},
+                              headers=D)).status_code == 200
+    assert (await client.patch(f"/api/orders/{o['id']}/status", json={"status": "done"}, headers=D)).status_code == 200
+    r = await client.patch(f"/api/orders/{o['id']}/status", json={"status": "delivered"}, headers=D)
+    assert r.status_code == 200, r.text
+    # reopening is still editing a closed job
+    r = await client.patch(f"/api/orders/{o['id']}/status", json={"status": "in_repair"}, headers=D)
+    assert r.status_code == 403, r.text
+
+
+@pytest.mark.asyncio
+async def test_invoicing_a_job_uses_the_invoice_rights(client):
+    H = await _owner(client)
+    o, _ = await _shop_job(client, H)
+    no_finance = {k: v for k, v in _DESK.items() if k != "can_view_finance"}
+    D = await _person(client, H, (await _role(client, H, {"name": "Biller", "permissions": no_finance}))["id"], "Bill")
+    r = await client.post(f"/api/cash/orders/{o['id']}/invoices", json={}, headers=D)
+    assert r.status_code == 201, r.text
+    r = await client.get(f"/api/cash/orders/{o['id']}/invoices", headers=D)
+    assert r.status_code == 200 and len(r.json()["invoices"]) == 1, r.text
+    # and a technician (no invoice rights) still can't
+    T = await _person(client, H, (await _role(client, H, {"name": "Tech", "template": "Specialist"}))["id"])
+    assert (await client.post(f"/api/cash/orders/{o['id']}/invoices", json={}, headers=T)).status_code == 403
+    assert (await client.get(f"/api/cash/orders/{o['id']}/invoices", headers=T)).status_code == 403
+    # another shop can't list this job's payments
+    H2 = await _owner(client)
+    assert (await client.get(f"/api/cash/orders/{o['id']}/invoices", headers=H2)).status_code == 404
+
