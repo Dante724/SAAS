@@ -12,7 +12,7 @@ from backend.services.auth import get_current_employee, require_perm
 
 router = APIRouter(prefix="/api/forms", tags=["forms-editor"])
 
-VALID_ENTITIES = {"order", "invoice", "contact", "product", "vehicle", "client", "device"}
+VALID_ENTITIES = {"order", "invoice", "contact", "product", "vehicle", "client", "device", "lead"}
 
 
 class LayoutIn(BaseModel):
@@ -117,7 +117,7 @@ class FieldReorder(BaseModel):
     ordered_ids: List[str]
 
 
-ENTITY_TYPES = {"client", "device", "product"}
+ENTITY_TYPES = {"client", "device", "product", "lead"}   # lead = inquiries (WS-C)
 
 
 class EntityFieldIn(BaseModel):
@@ -554,7 +554,7 @@ async def list_entity_fields(
     current: Employee = Depends(get_current_employee),
 ):
     if entity not in ENTITY_TYPES:
-        raise HTTPException(400, "entity must be client, device or product")
+        raise HTTPException(400, "entity must be client, device, product or lead")
     rows = (await db.execute(
         select(CustomField).where(
             CustomField.org_id == current.org_id,
@@ -572,7 +572,7 @@ async def add_entity_field(
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     if data.entity_type not in ENTITY_TYPES:
-        raise HTTPException(400, "entity_type must be client, device or product")
+        raise HTTPException(400, "entity_type must be client, device, product or lead")
     if data.field_type not in VALID_FIELD_TYPES:
         raise HTTPException(400, "Invalid field type")
     count = (await db.execute(select(func.count()).select_from(CustomField).where(
@@ -654,7 +654,7 @@ async def reorder_entity_fields(
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     if entity not in ENTITY_TYPES:
-        raise HTTPException(400, "entity must be client, device or product")
+        raise HTTPException(400, "entity must be client, device, product or lead")
     rows = {f.id: f for f in (await db.execute(select(CustomField).where(
         CustomField.org_id == current.org_id, CustomField.type_id.is_(None),
         CustomField.entity_type == entity))).scalars().all()}
@@ -670,7 +670,7 @@ async def reorder_entity_fields(
 # have no rows, so their order/visibility/required live in FormLayout.data as
 # [{ref: "sys:<key>" | "cf:<id>", visible, required}]. Custom fields keep sort_order/required
 # on their rows too (written on save) so older readers stay correct.
-LAYOUT_FORMS = {"order", "client", "device", "product"}
+LAYOUT_FORMS = {"order", "client", "device", "product", "lead"}
 
 # Built-in fields per form that the form actually renders and that can move / hide / be required.
 SYSTEM_FIELDS: dict[str, list[tuple[str, str]]] = {
@@ -684,10 +684,14 @@ SYSTEM_FIELDS: dict[str, list[tuple[str, str]]] = {
                ("identifiers", "Serial / IMEI / VIN"), ("color", "Color")],
     "product": [("category", "Category"), ("description", "Description"), ("code", "Code"), ("sku", "SKU"),
                 ("mpn", "MPN"), ("stock_policy", "Stock tracking"), ("pricing", "Pricing"), ("compatibility", "Compatible devices")],
+    # WS-C: the inquiry form (Inquiries → New inquiry). Built-ins can be reordered or hidden.
+    "lead": [("phone", "Phone"), ("email", "Email"), ("lead_type", "Inquiry type"), ("device", "Device"),
+             ("serial", "Serial / IMEI"), ("inquiry", "What they asked for")],
 }
 # Built-ins that always carry a value (or are whole sections), so "required" would mean nothing.
 _NO_REQUIRE = {"order": {"priority"}, "client": {"loyalty_tier"}, "device": {"asset_type"},
-               "product": {"stock_policy", "pricing", "compatibility"}}
+               "product": {"stock_policy", "pricing", "compatibility"},
+               "lead": {"phone", "email", "lead_type", "device", "serial", "inquiry"}}
 # Built-in key → which create-payload attributes fill it (any non-empty one counts).
 _ENTITY_SYS_ATTRS = {
     "client": {"phone": ("phone",), "email": ("email",), "address": ("address",), "source": ("source",),
@@ -935,7 +939,7 @@ async def get_layout(
     current: Employee = Depends(get_current_employee),
 ):
     if form not in LAYOUT_FORMS:
-        raise HTTPException(400, "form must be order, client, device or product")
+        raise HTTPException(400, "form must be order, client, device, product or lead")
     if form == "order" and not type_id:
         raise HTTPException(422, "type_id is required for the work order form")
     items = _public(await build_layout(db, current.org_id, form, type_id))
@@ -965,7 +969,7 @@ async def save_layout(
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     if data.form not in LAYOUT_FORMS:
-        raise HTTPException(400, "form must be order, client, device or product")
+        raise HTTPException(400, "form must be order, client, device, product or lead")
     customs = {f.id: f for f in (await db.execute(_layout_custom_q(current.org_id, data.form, data.type_id))).scalars().all()}
     sys_keys = {k for k, _ in SYSTEM_FIELDS.get(data.form, [])}
     clean, order = [], 0

@@ -16,6 +16,7 @@ import MoveStockDialog from "../../components/MoveStockDialog";
 import LabelPrintDialog from "../../components/LabelPrintDialog";
 import SerialPassport from "../../components/SerialPassport";
 import { rowLabel } from "../../lib/stockBins";
+import { KIT_PRINT_LABELS } from "../../lib/kitGroups";
 
 export type DrawerKind = "product" | "service" | "asset" | "bundle";
 type Props = { kind: DrawerKind; id?: string | null; initial?: any; onClose: () => void; onSaved?: () => void };
@@ -47,6 +48,26 @@ function CodeSvg({ data, type }: { data: string; type: CodeType }) {
       .then((r) => (r.ok ? r.text() : "")).then(setSvg).catch(() => setSvg(""));
   }, [data, type]);
   return <div className={`${type === "qr" || type === "datamatrix" ? "w-16 h-16" : "h-12 w-40"} bg-white flex items-center justify-center [&>svg]:max-w-full [&>svg]:max-h-full`} dangerouslySetInnerHTML={{ __html: svg || "" }} />;
+}
+
+// How a kit prints on the customer's invoice and job printout. Plain words; the itemising-law
+// reminder shows before a shop picks one of the one-line options.
+function KitPrintChoice({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [warning, setWarning] = useState<string | null>(null);
+  useEffect(() => { api.get<{ warning: string | null }>("/bundles/print-warning").then((r) => setWarning(r.warning)).catch(() => {}); }, []);
+  return (
+    <fieldset className="p-3 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-1.5">
+      <legend className="px-1 text-[11px] font-bold text-ink-primary">On the customer's invoice</legend>
+      {KIT_PRINT_LABELS.map((o) => (
+        <label key={o.value} className={`flex items-start gap-2 p-2 rounded-lg border cursor-pointer bg-white ${value === o.value ? "border-primary/40 shadow-clay-sm" : "border-slate-200 hover:border-slate-300"}`}>
+          <input type="radio" name="kit-print" value={o.value} checked={value === o.value} onChange={() => onChange(o.value)} className="mt-0.5" />
+          <span><span className="block text-xs font-semibold text-ink-primary">{o.label}</span><span className="block text-[11px] text-ink-tertiary">{o.hint}</span></span>
+        </label>
+      ))}
+      <p className="text-[11px] text-ink-tertiary">Stock, cost and profit still count every part. Staff always see each item, and you can print an itemised copy for the customer any time.</p>
+      {warning && value !== "itemized" && <p role="note" className="text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1.5">{warning}</p>}
+    </fieldset>
+  );
 }
 
 export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }: Props) {
@@ -183,7 +204,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
         if (!can("can_manage_bundles")) { flash("Your role can't change job kits"); return; }
         const components = (p.components || []).map((c: any) => ({ ref_type: c.ref_type, ref_id: c.ref_id, qty: Number(c.qty) || 1, device_variant: !!c.device_variant }));
         if (components.length === 0) { flash("Add at least one service or product"); return; }
-        const body = { name: p.name, price_mode: p.price_mode || "sum", price: Number(p.price) || 0, category_id: p.category_id || null, components };
+        const body = { name: p.name, price_mode: p.price_mode || "sum", price: Number(p.price) || 0, category_id: p.category_id || null, print_mode: p.print_mode || "itemized", components };
         if (editing) await api.put(`/bundles/${id}`, body); else await api.post("/bundles", body);
       } else { flash("Saved (view only for this type)"); onSaved?.(); return; }
       flash(editing ? "Saved" : "Created"); onSaved?.(); onClose();
@@ -588,6 +609,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                   <input type="number" value={(p.price_mode || "sum") === "fixed" ? (p.price ?? 0) : stdTotal} disabled={(p.price_mode || "sum") !== "fixed"} onChange={(e) => set("price", e.target.value)} className={`${field} font-mono font-bold disabled:opacity-60`} />
                 </div>
               </div>
+              <KitPrintChoice value={p.print_mode || "itemized"} onChange={(v) => set("print_mode", v)} />
             </div>
             );
           })()}

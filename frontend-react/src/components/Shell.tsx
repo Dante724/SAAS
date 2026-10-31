@@ -28,13 +28,14 @@ import {
   History, Hourglass, LineChart, Lightbulb, Unlink, Truck, Lock, LockOpen, Merge,
   CircleDollarSign, Percent, ShieldAlert, Globe, Gift, RotateCcw, SearchCheck, VideoOff,
   ShieldCheck, Target, EyeOff, Car, Sailboat, Bike, Laptop, Cog, Upload,
-  ShoppingBag, Split, Nfc, Phone, PhoneIncoming, PhoneOutgoing,
-  LogOut, Menu as MenuIcon,
+  ShoppingBag, Split, Nfc, Phone, PhoneIncoming, PhoneOutgoing, PhoneMissed, Network, HelpCircle,
+  LogOut, Menu as MenuIcon, PackageOpen, Info,
 } from "lucide-react";
 
 // Map the old Material-Symbols ligature names to bundled Lucide icons (no web font,
 // works under the app's Content-Security-Policy, and needs no server restart).
 const ICONS: Record<string, any> = {
+  package_2: PackageOpen, info: Info,
   build: Wrench, handyman: Wrench, engineering: HardHat, hammer: Hammer,
   task_alt: CheckCircle2, mail: Mail, chat: MessageSquare, chat_bubble: MessageCircle,
   calendar_month: Calendar, calendar_view_week: CalendarRange, schedule: Clock, timer: Timer,
@@ -73,7 +74,7 @@ const ICONS: Record<string, any> = {
   print: Printer, save: Save, send: Send, campaign: Send, smartphone: Smartphone,
   photo_camera: Camera, add_a_photo: Camera, image: ImageIcon,
   barcode: Barcode, qr_code_scanner: QrCode, scan: ScanLine, contactless: Nfc,
-  call: Phone, phone: Phone, call_received: PhoneIncoming, call_made: PhoneOutgoing,
+  call: Phone, phone: Phone, call_received: PhoneIncoming, phone_missed: PhoneMissed, hub: Network, help: HelpCircle, call_made: PhoneOutgoing,
   dashboard: LayoutDashboard, light_mode: Sun, dark_mode: Moon, language: Languages, logout: LogOut,
   // 144hx — document editor icons (were falling back to Circle)
   edit: Pencil, visibility: Eye, directions_car: Car, sailing: Sailboat, pedal_bike: Bike, laptop: Laptop, settings_suggest: Cog, upload: Upload, visibility_off: EyeOff, data_object: Braces, expand_less: ChevronUp,

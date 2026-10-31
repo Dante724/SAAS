@@ -3,6 +3,7 @@ import { useState } from "react";
 import { M } from "./Shell";
 import { api } from "../api/client";
 import CustomFields from "./CustomFields";
+import AddressFields, { addressPayload, hasParts } from "./AddressFields";
 import { useCurrencies } from "../hooks/useCurrencies";
 import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../lib/formLayout";
 
@@ -22,14 +23,14 @@ export default function NewClientDrawer({ prefillName, onClose, onCreated }: { p
 
   async function save() {
     if (!f.name?.trim()) { setErr("Name is required"); return; }
-    const m = missingRequired(layout, { phone: has(f.phone), email: has(f.email), address: has(f.address), source: has(f.source),
+    const m = missingRequired(layout, { phone: has(f.phone), email: has(f.email), address: has(f.address) || hasParts(f), source: has(f.source),
       discount_card: has(f.discount_card), notes: has(f.notes) }, f.custom_data);
     if (m) { setErr(m); return; }
     setBusy(true); setErr(null);
     try {
       const c = await api.post<NewClient>("/clients", {
         name: f.name.trim(), client_type: f.client_type, phone: f.phone || null, email: f.email || null,
-        address: f.address || null, source: f.source || null, loyalty_tier: f.loyalty_tier,
+        ...(hasParts(f) ? addressPayload(f) : {}), source: f.source || null, loyalty_tier: f.loyalty_tier,
         discount_card: f.discount_card || null, notes: f.notes || null, custom_data: f.custom_data || {},
         currency_code: f.currency_code || null,
       });
@@ -58,7 +59,7 @@ export default function NewClientDrawer({ prefillName, onClose, onCreated }: { p
           <LayoutFields layout={layout} blocks={{
             phone: { half: true, el: <div><label className={lbl}>Phone{star("phone")}</label><input value={f.phone || ""} onChange={(e) => set("phone", e.target.value)} className={`${field} tabular-nums`} placeholder="(555) 555-0123" /></div> },
             email: { half: true, el: <div><label className={lbl}>Email{star("email")}</label><input value={f.email || ""} onChange={(e) => set("email", e.target.value)} className={field} placeholder="name@email.com" /></div> },
-            address: { el: <div><label className={lbl}>Address{star("address")}</label><input value={f.address || ""} onChange={(e) => set("address", e.target.value)} className={field} placeholder="Billing / home address" /></div> },
+            address: { el: <AddressFields value={f} onChange={(a) => setF((s: any) => ({ ...s, ...a }))} idPrefix="nc-addr" required={!!star("address")} /> },
             source: { half: true, el: <div><label className={lbl}>Lead source{star("source")}</label><DirectorySelect dirKey="lead_source" value={f.source || ""} onChange={(v) => set("source", v)} className={field} /></div> },
             loyalty_tier: { half: true, el: <div><label className={lbl}>Loyalty tier</label>
               <select value={f.loyalty_tier} onChange={(e) => set("loyalty_tier", e.target.value)} className={`${field} appearance-none`}><option value="standard">Standard</option><option value="silver">Silver</option><option value="gold">Gold</option><option value="vip">VIP</option></select></div> },
