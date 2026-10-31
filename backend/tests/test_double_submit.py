@@ -441,7 +441,7 @@ async def test_sub_invoice_cannot_bill_a_line_twice_and_bills_the_rest(client, t
     cid, oid = await _priced_job(client, tenant)
     await client.post(f"/api/orders/{oid}/lines", headers=tenant, json={
         "line_type": "labour", "description": "Second", "qty": 1, "unit_price": 30})
-    first, second = [x["id"] for x in await K.lines(client, tenant, oid)]
+    first = (await K.lines(client, tenant, oid))[0]["id"]
     assert (await client.post(f"/api/cash/orders/{oid}/invoices", headers=tenant, json={"line_ids": [first]})).status_code == 201
     r = await client.post(f"/api/cash/orders/{oid}/invoices", headers=tenant, json={"line_ids": [first]})
     assert r.status_code == 409, r.text
@@ -466,7 +466,7 @@ async def test_cancelled_invoice_does_not_block_a_new_one(client, tenant, db):
 async def test_ensure_seeded_does_not_write_on_a_seeded_shop(client, tenant, db):
     from sqlalchemy import event
 
-    from backend.models import Organisation, OrderStatus
+    from backend.models import OrderStatus, Organisation
     from backend.routers.statuses import ensure_seeded
     await client.get("/api/statuses", headers=tenant)                     # seeds
     org_id = (await db.execute(select(Organisation.id))).scalars().first()
