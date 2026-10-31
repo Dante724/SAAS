@@ -138,6 +138,8 @@ async def product_to_asset(db: AsyncSession, org_id: str, employee_id: str, *,
                 pass      # taken concurrently — never below zero, as before
     unit.status = "converted_to_asset"
     unit.converted_asset_id = device.id
+    from backend.services import serial_log
+    serial_log.record(db, unit, "converted", ref_type="asset", ref_id=device.id, label="Turned into an asset")
 
     conv = AssetProductConversion(
         org_id=org_id, direction="product_to_asset", part_id=part.id,
@@ -288,6 +290,8 @@ async def asset_to_product(db: AsyncSession, org_id: str, employee_id: str, *,
             status="in_stock")
         db.add(unit)
         await db.flush()
+        from backend.services import serial_log
+        serial_log.record(db, unit, "received", ref_type="asset", ref_id=device.id, label="From an asset")
         loc = unit.location_id
         if loc:
             from backend.services import stock_rows

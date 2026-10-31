@@ -14,13 +14,15 @@ import InventoryDrawer, { DrawerKind } from "./InventoryDrawer";
 import PODrawer from "./PODrawer";
 import NewPODrawer from "./NewPODrawer";
 import PurchasingCockpit from "./PurchasingCockpit";
+import BinsPanel from "./BinsPanel";
+import BinScanField, { ScannedBin } from "../../components/BinScanField";
+import StocktakeDrawer from "./StocktakeDrawer";
 import AssetDrawer from "../orders/AssetDrawer";
 import { useTerminology, assetNoun } from "../../lib/useTerminology";
 import { assetStatusTone } from "./statusTone";
 import { cachedPref, loadPref, savePref } from "../../lib/userPref";
 import Pager from "../../components/Pager";
 import SerialEntry from "../../components/SerialEntry";
-import ScanButton from "../../components/ScanButton";
 import DateField from "../../components/DateField";
 import AssetStateTabs, { AssetCounts, useAssetState } from "../../components/AssetStateTabs";
 import { useDebounced, useServerPage } from "../../hooks/useServerPage";
@@ -249,7 +251,9 @@ export default function InventoryHub() {
     reservations: [["Part", (r) => av(r, ["part_name", "part", "product_name"])], ["Qty", (r) => av(r, ["qty", "quantity"])], ["Order", (r) => av(r, ["order_number", "order_id"])], ["Status", (r) => av(r, ["status", "state"])]],
     conversions: [["Date", (r) => dt(r, ["created_at", "date"])], ["From", (r) => av(r, ["from_name", "source_name", "source", "from"])], ["To", (r) => av(r, ["to_name", "target_name", "target", "to"])], ["Direction", (r) => av(r, ["direction", "type", "kind"])]],
     transfers: [["Date", (r) => dt(r, ["created_at", "date"])], ["From", (r) => av(r, ["from_location_name", "from_location", "source"])], ["To", (r) => av(r, ["to_location_name", "to_location", "dest"])], ["Items", (r) => av(r, ["item_count", "lines_count"], String((r?.lines || r?.items || []).length || 0))], ["Status", (r) => av(r, ["status", "state"])]],
-    "stock-takes": [["Date", (r) => dt(r, ["created_at", "date", "started_at"])], ["Location", (r) => av(r, ["location_name", "warehouse_name", "warehouse"])], ["Status", (r) => av(r, ["status", "state"])], ["Counted", (r) => `${r?.counted ?? 0} / ${r?.lines ?? 0}`]],
+    "stock-takes": [["Date", (r) => dt(r, ["created_at", "date", "started_at"])], ["Location", (r) => av(r, ["location_name", "warehouse_name", "warehouse"])],
+      ["Covers", (r) => [r?.bin_code ? `Bin ${r.bin_code}` : r?.by_bin ? "Bin by bin" : "Whole location", r?.category_name, r?.blind ? "blind" : null].filter(Boolean).join(" · ")],
+      ["Status", (r) => (r?.status === "posted" ? "Posted" : r?.status === "in_progress" ? "Draft" : av(r, ["status", "state"]))], ["Counted", (r) => `${r?.counted ?? 0} / ${r?.lines ?? 0}`]],
     "write-offs": [["Date", (r) => dt(r, ["created_at", "date"])], ["Part", (r) => av(r, ["part_name", "part", "product_name"])], ["Qty", (r) => av(r, ["qty", "quantity"])], ["Reason", (r) => av(r, ["reason", "note"])]],
     returns: [["Date", (r) => dt(r, ["created_at", "date"])], ["Order", (r) => av(r, ["order_number", "order_id"])], ["Client", (r) => av(r, ["client_name", "client"])], ["Amount", (r) => money(r?.amount ?? r?.refund_total ?? r?.total)], ["Status", (r) => av(r, ["status", "state"])]],
   };
@@ -700,147 +704,6 @@ export default function InventoryHub() {
   );
 }
 
-/* ── Stock take run-flow: New count → scan-to-count + manual edit → post variance ─ */
-type StLine = { id: string; part_id: string; part_name: string; system_qty: number; counted_qty: number | null; variance: number | null };
-function StocktakeDrawer({ id, products, onClose, onDone }:
-  { id?: string; products: Product[]; onClose: () => void; onDone: () => void }) {
-  const [stId, setStId] = useState<string | undefined>(id);
-  const [status, setStatus] = useState<string>("open");
-  const [lines, setLines] = useState<StLine[] | null>(null);
-  const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
-  const [locId, setLocId] = useState(""); const [kind, setKind] = useState<"full" | "partial">("full");
-  const [scan, setScan] = useState(""); const [scanQty, setScanQty] = useState(1); const [regUnknown, setRegUnknown] = useState(false);
-  const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null); const [flash, setFlash] = useState<string | null>(null);
-  const scanRef = useRef<HTMLInputElement>(null);
-
-  async function load(theId: string) {
-    const r = await api.get<any>(`/stocktake/${theId}`);
-    setStatus(r.status || "open"); setLines(r.lines || []);
-  }
-  useEffect(() => {
-    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(() => {});
-    if (id) load(id).catch(() => setErr("Could not load stock take"));
-  }, []); // eslint-disable-line
-
-  async function start() {
-    if (!locId) { setErr("Pick a location."); return; }
-    setBusy(true); setErr(null);
-    try {
-      const r = await api.post<any>("/stocktake", { location_id: locId, kind });
-      setStId(r.id); await load(r.id);
-    } catch (e: any) { setErr(e.message || "Could not start count"); }
-    finally { setBusy(false); }
-  }
-
-  async function doScan(scanned?: string) {
-    const code = (scanned ?? scan).trim(); if (!code || !stId) return;
-    setErr(null);
-    try {
-      const r = await api.post<any>(`/stocktake/${stId}/scan`, { code, qty: scanQty, register_unknown: regUnknown });
-      setFlash(`${r.part_name}: counted ${r.counted_qty}${r.is_unknown ? " (new)" : ""}`);
-      setScan(""); scanRef.current?.focus();
-      await load(stId);
-    } catch (e: any) {
-      setErr(e.message || "Scan failed");
-      if (/register/i.test(e.message || "")) setRegUnknown(true);
-    }
-  }
-
-  async function setCount(line: StLine, v: number) {
-    if (!stId) return;
-    setLines((ls) => ls!.map((l) => l.id === line.id ? { ...l, counted_qty: v, variance: Math.round((v - l.system_qty) * 1000) / 1000 } : l));
-    try { await api.patch(`/stocktake/${stId}/lines/${line.id}`, { counted_qty: v }); } catch { /* reload on failure */ await load(stId); }
-  }
-
-  async function post() {
-    if (!stId) return;
-    const counted = (lines || []).filter((l) => l.counted_qty != null);
-    const varLines = counted.filter((l) => (l.variance || 0) !== 0);
-    if (!(await confirmDialog(`Post this count? ${varLines.length} line(s) with a variance will adjust stock. ${(lines!.length - counted.length)} uncounted line(s) are left untouched.`))) return;
-    setBusy(true); setErr(null);
-    try { await api.post(`/stocktake/${stId}/post`, {}); onDone(); }
-    catch (e: any) { setErr(e.message || "Could not post"); setBusy(false); }
-  }
-
-  const posted = status === "posted";
-  const totVar = (lines || []).reduce((s, l) => s + (l.variance || 0), 0);
-  const nameFor = (l: StLine) => l.part_name || products.find((p) => p.id === l.part_id)?.name || "—";
-
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative w-[600px] max-w-full bg-white h-full shadow-drawer flex flex-col">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
-          <h2 className="font-bold text-ink-primary flex items-center gap-2"><M n="fact_check" c="text-base text-primary" />{stId ? (posted ? "Stock take (posted)" : "Count in progress") : "New stock take"}</h2>
-          <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
-          {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
-
-          {!stId ? (
-            <>
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Location</label>
-                <select value={locId} onChange={(e) => setLocId(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2">{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Count type</label>
-                <div className="flex gap-2">
-                  <button onClick={() => setKind("full")} className={`flex-1 rounded-lg border px-3 py-2 text-xs font-semibold text-left ${kind === "full" ? "border-primary bg-primary/5 text-primary" : "border-slate-200 text-ink-secondary"}`}>Full count<span className="block font-normal text-ink-tertiary mt-0.5">Seeds every part on hand at this location.</span></button>
-                  <button onClick={() => setKind("partial")} className={`flex-1 rounded-lg border px-3 py-2 text-xs font-semibold text-left ${kind === "partial" ? "border-primary bg-primary/5 text-primary" : "border-slate-200 text-ink-secondary"}`}>Partial count<span className="block font-normal text-ink-tertiary mt-0.5">Starts empty — only parts you scan or add are counted.</span></button>
-                </div></div>
-            </>
-          ) : (
-            <>
-              {!posted && (
-                <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 space-y-2">
-                  <label className="block text-[11px] font-semibold text-ink-tertiary ">Scan or type a code</label>
-                  <div className="flex items-center gap-2">
-                    <input ref={scanRef} autoFocus value={scan} onChange={(e) => setScan(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doScan(); }} placeholder="Barcode / SKU / serial" className="flex-1 bg-white border border-slate-200 rounded-lg text-sm px-3 py-2" />
-                    <input type="number" min={1} value={scanQty} onChange={(e) => setScanQty(Math.max(1, +e.target.value || 1))} className="w-16 bg-white border border-slate-200 rounded-lg text-sm px-2 py-2 text-right" title="Quantity per scan" />
-                    <ScanButton title="Count with camera" onScan={(c) => doScan(c)} />
-                    <button onClick={() => doScan()} className="px-3 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container flex items-center gap-1"><M n="qr_code_scanner" c="text-sm" />Count</button>
-                  </div>
-                  <label className="flex items-center gap-2 text-xs text-ink-secondary"><input type="checkbox" checked={regUnknown} onChange={(e) => setRegUnknown(e.target.checked)} />Register unknown codes as new products</label>
-                  {flash && <div className="text-xs text-emerald-700 font-semibold">{flash}</div>}
-                </div>
-              )}
-              <div className="flex items-center justify-between text-xs text-ink-tertiary">
-                <span>{lines?.length ?? 0} line(s) · {(lines || []).filter((l) => l.counted_qty != null).length} counted</span>
-                <span>Net variance: <b className={totVar === 0 ? "text-ink-secondary" : totVar < 0 ? "text-rose-600" : "text-emerald-600"}>{totVar > 0 ? "+" : ""}{totVar}</b></span>
-              </div>
-              <div className="rounded-xl border border-slate-200 overflow-hidden">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50/60 text-[11px] font-bold text-ink-tertiary "><tr>
-                    <th className="py-2 px-3">Part</th><th className="py-2 px-3 text-right">System</th><th className="py-2 px-3 text-right w-24">Counted</th><th className="py-2 px-3 text-right">Variance</th>
-                  </tr></thead>
-                  <tbody className="divide-y divide-slate-100 text-ink-secondary">
-                    {lines == null && <SkeletonRows cols={4} />}
-                    {lines?.length === 0 && <tr><td colSpan={4} className="py-5 px-3 text-ink-tertiary">No lines yet — scan a part to count it.</td></tr>}
-                    {lines?.map((l) => (
-                      <tr key={l.id}>
-                        <td className="py-2 px-3 font-semibold text-ink-primary">{nameFor(l)}</td>
-                        <td className="py-2 px-3 text-right tabular-nums">{l.system_qty}</td>
-                        <td className="py-2 px-3 text-right">
-                          {posted ? <span className="tabular-nums">{l.counted_qty ?? "—"}</span> :
-                            <input type="number" value={l.counted_qty ?? ""} onChange={(e) => setCount(l, e.target.value === "" ? 0 : Number(e.target.value))} className="w-20 bg-white border border-slate-200 rounded-lg text-xs px-2 py-1 text-right" />}
-                        </td>
-                        <td className={`py-2 px-3 text-right tabular-nums font-bold ${(l.variance || 0) === 0 ? "text-ink-tertiary" : (l.variance || 0) < 0 ? "text-rose-600" : "text-emerald-600"}`}>{l.counted_qty == null ? "—" : `${(l.variance || 0) > 0 ? "+" : ""}${l.variance || 0}`}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-        </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">{posted ? "Close" : "Cancel"}</button>
-          {!stId && <button onClick={start} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Starting…" : "Start count"}</button>}
-          {stId && !posted && <button onClick={post} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Posting…" : "Post variance"}</button>}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ── Stock action modal: Transfer + Write-off with a line builder ─────────── */
 function ActionModal({ kind, products, preselected, onClose, onDone }:
   { kind: "transfer" | "stocktake" | "write-off" | "return" | "conversion"; products: Product[]; preselected: string[]; onClose: () => void; onDone: () => void }) {
@@ -1103,6 +966,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [suppliers, setSuppliers] = useState<{ id: string; name: string }[]>([]);
   const [locId, setLocId] = useState(""); const [supplierId, setSupplierId] = useState(""); const [note, setNote] = useState("");
+  const [putBin, setPutBin] = useState<ScannedBin | null>(null);    // ii144c: put the delivery away into a bin
   const blank = (): PostRow => ({ code: "", mpn: "", name: "", qty: 1, purchase_price: 0, markup_pct: 0 });
   const [rows, setRows] = useState<PostRow[]>([blank()]);
   const [review, setReview] = useState<ReviewRow[] | null>(null);
@@ -1182,7 +1046,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
     setBusy(true); setErr(null);
     try {
       const body = {
-        location_id: locId, supplier_id: supplierId || null, note: note || null,
+        location_id: locId, supplier_id: supplierId || null, note: note || null, bin_id: putBin?.id || null,
         rows: review.map((r) => r.chosen && r.chosen !== "__new__"
           ? { part_id: r.chosen, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null, ...extras(r) }
           : { new_name: (r.name || r.code || r.mpn || "").trim(), new_sku: r.code || null, new_mpn: r.mpn || null, new_type: r.ptype, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null, ...extras(r) }),
@@ -1206,9 +1070,11 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
           {info && <div className="rounded-lg bg-blue-50 border border-blue-200 text-primary text-xs px-3 py-2">{info}</div>}
           <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl2}>Warehouse</label><select value={locId} onChange={(e) => setLocId(e.target.value)} className={`${fld} w-full`}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+            <div><label className={lbl2}>Warehouse</label><select value={locId} onChange={(e) => { setLocId(e.target.value); setPutBin(null); }} className={`${fld} w-full`}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
             <div><label className={lbl2}>Supplier (optional)</label><select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className={`${fld} w-full`}><option value="">—</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
           </div>
+          <div><label className={lbl2}>Put away into a bin (optional — otherwise the default bin)</label>
+            <BinScanField label="Into" current={putBin} locationId={locId} onBin={setPutBin} onClear={() => setPutBin(null)} /></div>
 
           {!review ? (<>
             <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={onFile} />
@@ -1455,51 +1321,3 @@ function PartsToOrderModal({ onClose, onCreated }: { onClose: () => void; onCrea
   );
 }
 
-/* ── Bins panel (revealed by Settings → Inventory → enable_bins) → /api/bins ── */
-function BinsPanel() {
-  const [bins, setBins] = useState<any[] | null>(null);
-  const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
-  const [nf, setNf] = useState({ location_id: "", name: "", zone: "", shelf: "" });
-  const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
-  const load = () => api.get<any>("/bins").then((r) => setBins(r.items || [])).catch(() => setBins([]));
-  useEffect(() => { load(); api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); setNf((s) => ({ ...s, location_id: it[0]?.id || "" })); }).catch(() => {}); }, []);
-  async function add() {
-    if (!nf.name.trim() || !nf.location_id) { setErr("Pick a warehouse and name the bin."); return; }
-    setBusy(true); setErr(null);
-    try { await api.post("/bins", { location_id: nf.location_id, name: nf.name.trim(), zone: nf.zone || null, shelf: nf.shelf || null }); setNf({ ...nf, name: "", zone: "", shelf: "" }); load(); }
-    catch (e: any) { setErr(e.message || "Could not add bin"); } finally { setBusy(false); }
-  }
-  async function del(id: string) { if (!(await confirmDialog("Delete this bin?", { danger: true, confirmLabel: "Delete" }))) return; try { await api.del(`/bins/${id}`); load(); } catch (e: any) { setErr(e.message || "In use — move its stock first"); } }
-  const locName = (id: string) => locations.find((l) => l.id === id)?.name || "—";
-  const fld = "bg-white border border-slate-200 rounded-lg text-sm px-3 py-2";
-  return (
-    <div className="max-w-3xl space-y-4">
-      <div><h3 className="text-sm font-bold text-ink-primary">Storage bins</h3><p className="text-xs text-ink-tertiary">Give every product an address inside a warehouse — shelf / bin. Enabled in Settings → Inventory &amp; warehouses.</p></div>
-      {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
-      <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
-        <table className="w-full text-xs">
-          <thead className="bg-slate-50/70 text-ink-tertiary text-[11px] font-bold"><tr><th className="text-left py-2.5 px-4">Bin</th><th className="text-left py-2.5 px-4">Warehouse</th><th className="text-left py-2.5 px-4">Zone / shelf</th><th className="py-2.5 px-4"></th></tr></thead>
-          <tbody className="divide-y divide-slate-100">
-            {bins == null && <SkeletonRows cols={4} />}
-            {bins?.length === 0 && <tr><td colSpan={4} className="py-6 text-center text-ink-tertiary">No bins yet — add one below.</td></tr>}
-            {bins?.map((b) => (
-              <tr key={b.id}>
-                <td className="py-2.5 px-4 font-bold text-ink-primary">{b.name}</td>
-                <td className="py-2.5 px-4 text-ink-secondary">{locName(b.location_id)}</td>
-                <td className="py-2.5 px-4 text-ink-tertiary">{[b.zone, b.shelf, b.bin_number].filter(Boolean).join(" / ") || "—"}</td>
-                <td className="py-2.5 px-4 text-right"><button onClick={() => del(b.id)} className="text-rose-600 font-semibold">Delete</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div className="p-3 border-t border-slate-100 flex items-end gap-2 flex-wrap">
-          <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Warehouse</label><select value={nf.location_id} onChange={(e) => setNf({ ...nf, location_id: e.target.value })} className={fld}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
-          <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Bin name</label><input value={nf.name} onChange={(e) => setNf({ ...nf, name: e.target.value })} placeholder="A-01" className={fld} /></div>
-          <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Zone</label><input value={nf.zone} onChange={(e) => setNf({ ...nf, zone: e.target.value })} className={`${fld} w-24`} /></div>
-          <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Shelf</label><input value={nf.shelf} onChange={(e) => setNf({ ...nf, shelf: e.target.value })} className={`${fld} w-24`} /></div>
-          <button onClick={add} disabled={busy} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">+ Add bin</button>
-        </div>
-      </div>
-    </div>
-  );
-}

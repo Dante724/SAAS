@@ -122,8 +122,10 @@ POST /api/documents/ai-generate [staff]
 POST /api/documents/preview [staff]
 POST /api/documents/print-view [staff]
 POST /api/documents/render-asset-labels [staff]
+POST /api/documents/render-bin-labels [staff]
 POST /api/documents/render-client-labels [staff]
 POST /api/documents/render-labels [staff]
+POST /api/documents/render-serial-labels [staff]
 # ecommerce
 POST /api/ecommerce/integrations/{integration_id}/sync-order [staff]
 # feed
@@ -181,8 +183,6 @@ PATCH /api/orders/{order_id}/type [staff]
 PUT /api/prefs/{pref_key} [staff]
 # pricing
 POST /api/pricing/margin-check [staff]
-# print
-POST /api/print/labels [staff]
 # push
 POST /api/push/subscribe [staff]
 POST /api/push/unsubscribe [staff]

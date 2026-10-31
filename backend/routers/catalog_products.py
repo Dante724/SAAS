@@ -822,6 +822,9 @@ async def write_off(pid: str, data: WriteOffIn, db: AsyncSession = Depends(get_d
             if not si:
                 raise HTTPException(404, f"Serial '{sn}' not in stock")
             si.status = "written_off"
+            from backend.services import serial_log
+            serial_log.record(db, si, "written_off", ref_type="product_write_off",
+                              label=(getattr(data, "reason", None) or "Written off"), actor_id=current.id)
             done.append((sn, si.bin_id))
         for _sn, unit_bin in done:      # out of the unit's own bin first; never below zero
             have, _res = await stock_rows.totals(db, pid, data.location_id)

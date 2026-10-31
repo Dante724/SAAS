@@ -340,6 +340,7 @@ async def _do_posting(db, org_id, created_by_id, location_id, supplier_id, lines
             qty=qty, unit_cost=cost, created_by_id=created_by_id,
             ref_type="supplier" if supplier_id else "posting", ref_id=supplier_id,
             serials=serials, create_batch=True, set_last_cost=True, bin_id=_g(ln, "bin_id"), lot=_g(ln, "lot"),
+            supplier_id=supplier_id,
             expiry_date=_g(ln, "expiry_date") if part.expiry_tracking else None)
         # 144bo: fresh stock arrived — reset low-stock dedupe + ping any job that was waiting.
         after_oh = await _alerts.global_on_hand(db, part.id)
@@ -501,12 +502,14 @@ class CommitRow(BaseModel):
     serials: Optional[list[SerialStr]] = Field(None, max_length=500)  # one per unit for serial-tracked products
     expiry_date: Optional[date] = None   # dates this delivery's batch (expiry-tracked products)
     lot: Optional[str] = Field(None, max_length=40)   # ii144b: batch / lot, e.g. GS1 (10) from the label
+    bin_id: Optional[str] = None         # ii144c: put this row away into a bin
 
 
 class PostingCommitIn(BaseModel):
     location_id: str
     supplier_id: Optional[str] = None
     note: Optional[str] = None
+    bin_id: Optional[str] = None         # ii144c: the bin every row without its own goes into (a scanned bin)
     rows: list[CommitRow] = Field(max_length=500)
 
 
@@ -548,7 +551,7 @@ async def commit_posting(
             pid = part.id
             created += 1
         lines.append({"part_id": pid, "qty": r.qty, "serials": r.serials, "expiry_date": r.expiry_date,
-                      "lot": r.lot,
+                      "lot": r.lot, "bin_id": r.bin_id or data.bin_id,
                       "purchase_price": r.purchase_price, "markup_pct": r.markup_pct})
     posted, total_cost = await _do_posting(
         db, current.org_id, current.id, data.location_id, data.supplier_id, lines)
@@ -831,18 +834,26 @@ async def part_movements(
         .limit(200)
     )
     movements = result.scalars().all()
-    # resolve location names in one pass
+    # resolve location, bin and people names in one pass each
+    from backend.models import Employee as _Emp
+    from backend.models import Location, StorageBin
     loc_ids = {m.location_id for m in movements if getattr(m, "location_id", None)}
-    locs = {}
-    if loc_ids:
-        from backend.models import Location
-        for loc in (await db.execute(select(Location).where(Location.id.in_(loc_ids)))).scalars().all():
-            locs[loc.id] = loc.name
+    bin_ids = {m.bin_id for m in movements if m.bin_id}
+    emp_ids = {m.created_by_id for m in movements if m.created_by_id}
+    locs = dict((await db.execute(select(Location.id, Location.name).where(
+        Location.id.in_(loc_ids), Location.org_id == current.org_id))).all()) if loc_ids else {}
+    bins = dict((await db.execute(select(StorageBin.id, StorageBin.name).where(
+        StorageBin.id.in_(bin_ids), StorageBin.org_id == current.org_id))).all()) if bin_ids else {}
+    emps = dict((await db.execute(select(_Emp.id, _Emp.name).where(
+        _Emp.id.in_(emp_ids), _Emp.org_id == current.org_id))).all()) if emp_ids else {}
+    show_cost = await can_see_costs(db, current)
     return [{"type": m.movement_type, "qty": m.qty,
              "at": m.created_at.isoformat(), "ref_type": m.ref_type,
              "ref_id": getattr(m, "ref_id", None),
              "location": locs.get(getattr(m, "location_id", None)),
-             "unit_cost": float(getattr(m, "unit_cost", 0) or 0)} for m in movements]
+             "bin_id": m.bin_id, "bin": bins.get(m.bin_id),           # ii144c
+             "created_by": emps.get(m.created_by_id),
+             "unit_cost": float(getattr(m, "unit_cost", 0) or 0) if show_cost else None} for m in movements]
 
 
 @router.get("/parts/{part_id}/batches")
@@ -907,27 +918,39 @@ async def part_stock(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
-    """Per-warehouse stock levels for the product's Stock tab."""
+    """Per-warehouse stock levels for the product's Stock tab. ii144c: one row per bin (and the
+    location's unbinned stock), so the card shows what each bin holds."""
     part = (await db.execute(select(Part).where(
         Part.id == part_id, Part.org_id == current.org_id)
         .options(selectinload(Part.stock_levels)))).scalar_one_or_none()
     if not part:
         raise HTTPException(404, "Product not found")
-    from backend.models import Location
+    from backend.models import Location, StorageBin
     unit_cost = float(part.avg_cost or part.cost_price or 0)   # valuation basis
+    loc_ids = {sl.location_id for sl in part.stock_levels}
+    bin_ids = {sl.bin_id for sl in part.stock_levels if sl.bin_id}
+    locs = dict((await db.execute(select(Location.id, Location.name).where(
+        Location.id.in_(loc_ids), Location.org_id == current.org_id))).all()) if loc_ids else {}
+    bins = dict((await db.execute(select(StorageBin.id, StorageBin.name).where(
+        StorageBin.id.in_(bin_ids), StorageBin.org_id == current.org_id))).all()) if bin_ids else {}
     rows = []
-    for sl in part.stock_levels:
-        loc = (await db.execute(select(Location).where(
-            Location.id == sl.location_id))).scalar_one_or_none()
+    for sl in sorted(part.stock_levels, key=lambda r: (locs.get(r.location_id) or "", r.bin_id is None,
+                                                       bins.get(r.bin_id) or "")):
         avail = sl.qty_available or 0
-        rows.append({"location": loc.name if loc else "—",
+        rows.append({"location": locs.get(sl.location_id) or "—", "location_id": sl.location_id,
+                     "warehouse_id": sl.warehouse_id, "bin_id": sl.bin_id, "bin": bins.get(sl.bin_id),
                      "available": avail, "reserved": sl.qty_reserved or 0,
                      "value": q2(avail * unit_cost)})   # 144jv: Amount column (Orderry parity)
     total = sum(r["available"] for r in rows)
-    return {"total_available": total,
-            "total_reserved": sum(r["reserved"] for r in rows),
-            "total_value": q2(sum(r["value"] for r in rows)),
-            "unit_cost": q2(unit_cost), "items": rows}
+    out = {"total_available": total,
+           "total_reserved": sum(r["reserved"] for r in rows),
+           "total_value": q2(sum(r["value"] for r in rows)),
+           "unit_cost": q2(unit_cost), "items": rows}
+    if not await can_see_costs(db, current):
+        out["total_value"] = out["unit_cost"] = None
+        for r in rows:
+            r["value"] = None
+    return out
 
 
 # ════════ Phase B.6 — Reservations & Purchase Orders ════════
@@ -1888,7 +1911,7 @@ async def receive_po(
         await stock_posting.apply_receipt_line(
             db, org_id=current.org_id, part=part, location_id=po.location_id,
             qty=recv, unit_cost=unit_cost, created_by_id=current.id,
-            ref_type="po", ref_id=po_id, bin_id=line_bin,
+            ref_type="po", ref_id=po_id, bin_id=line_bin, supplier_id=po.supplier_id,
             serials=checked_serials.get(pl.id) or None, create_batch=True)
         # 144bo: reset low-stock dedupe + notify any job that was waiting on this part.
         after_oh = await _alerts.global_on_hand(db, part.id)

@@ -36,7 +36,18 @@ async def resolve(data: ScanIn, db: AsyncSession = Depends(get_db),
         return {"matched": True, "type": "order", "id": o.id, "route": "/orders",
                 "label": o.order_number, "is_estimate": bool(o.is_estimate)}
 
-    # 2) product/part — sku / barcode / internal code
+    # 2) ii144c: a bin label — screens that count, move or receive stock use it to set which bin the
+    #    next scans mean; elsewhere it opens the bin. A typed bin name is tried after products.
+    from backend.routers.bins import find_by_code
+
+    def _bin_hit(b):
+        return {"matched": True, "type": "bin", "id": b.id, "route": "/inventory?tab=bins", "label": b.name,
+                "location_id": b.location_id, "warehouse_id": b.warehouse_id, "barcode": b.barcode}
+    b = await find_by_code(db, org, code, names=False)
+    if b:
+        return _bin_hit(b)
+
+    # 3) product/part — sku / barcode / internal code
     from backend.services import product_codes
     p = (await db.execute(select(Part).where(
         Part.org_id == org, product_codes.matches_code(org, code)))).scalars().first()   # ii144a: extra barcodes too
@@ -44,7 +55,11 @@ async def resolve(data: ScanIn, db: AsyncSession = Depends(get_db),
         return {"matched": True, "type": "product", "id": p.id, "route": "/inventory", "label": p.name,
                 "scan": scan.as_dict()}
 
-    # 3) asset — serial / imei / vin(upper) / hin(upper)
+    b = await find_by_code(db, org, code)
+    if b:
+        return _bin_hit(b)
+
+    # 4) asset — serial / imei / vin(upper) / hin(upper)
     from backend.services import identifiers as _ids
     conds = [col == v for col, v in ((Device.serial, _ids.normalize("serial", code)),
                                       (Device.imei, _ids.normalize("imei", code)),
