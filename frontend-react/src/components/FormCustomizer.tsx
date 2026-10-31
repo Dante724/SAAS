@@ -92,7 +92,7 @@ export default function FormCustomizer({ form, typeId, title }: { form: FormKey;
     if (!it.field) return;
     const what = it.kind === "header" ? "section heading" : "field";
     if (!(await confirmDialog(`Delete the “${it.label}” ${what}? Answers already saved on past records stay there.`, { danger: true, confirmLabel: "Delete" }))) return;
-    await api.del(`/forms/fields/${it.field.id}`).catch(saveFailed("delete the field"));
+    try { await api.del(`/forms/fields/${it.field.id}`); } catch (e) { saveFailed("delete the field")(e); return; }
     const next = (items || []).filter((x) => x.ref !== it.ref); setSel(null); persist(next);
   }
 

@@ -16,8 +16,17 @@ let nextId = 1;
 const SHOW_MS = 7000;
 
 function errText(e: unknown): string {
-  const m = e instanceof Error ? e.message : typeof e === "string" ? e : "";
-  return (m || "").trim();
+  const m = (e instanceof Error ? e.message : typeof e === "string" ? e : "").trim();
+  // A proxy's HTML error page (502/504) is not a reason a person can read.
+  if (m.startsWith("<")) return "";
+  return m.length > 200 ? m.slice(0, 200) + "…" : m;
+}
+
+// 401: the API client is already sending the user to sign in. 403: the screen shows what this
+// role may see, and a missing optional list (e.g. cash accounts for a cashier) isn't an error.
+function quiet(e: unknown): boolean {
+  const s = (e as { status?: number } | null)?.status;
+  return s === 401 || s === 403;
 }
 
 function render() {
@@ -62,6 +71,7 @@ export function showNotice(text: string) {
 /** A `.catch` handler for a load: "Couldn't load locations. <server reason>". */
 export function loadFailed(what: string) {
   return (e: unknown) => {
+    if (quiet(e)) return;
     const why = errText(e);
     showNotice(`Couldn't load ${what}.${why ? ` ${why}` : ""}`);
   };
@@ -70,6 +80,7 @@ export function loadFailed(what: string) {
 /** A `.catch` handler for a save or action: "Couldn't delete the list. <server reason>". */
 export function saveFailed(what: string) {
   return (e: unknown) => {
+    if ((e as { status?: number } | null)?.status === 401) return;
     const why = errText(e);
     showNotice(`Couldn't ${what}.${why ? ` ${why}` : ""}`);
   };

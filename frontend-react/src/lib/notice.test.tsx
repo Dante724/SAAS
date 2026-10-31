@@ -30,3 +30,20 @@ describe("notice", () => {
     expect(screen.queryByText("Couldn't load tags.")).toBeNull();
   });
 });
+
+describe("notice text", () => {
+  it("skips 401/403 loads, hides HTML bodies and caps long reasons", async () => {
+    const { loadFailed } = await import("./notice");
+    const host = () => document.querySelector("[data-notice-host]")?.textContent || "";
+    loadFailed("cash accounts")(Object.assign(new Error("Forbidden"), { status: 403 }));
+    loadFailed("orders")(Object.assign(new Error("Not authenticated"), { status: 401 }));
+    expect(host()).not.toContain("cash accounts");
+    expect(host()).not.toContain("orders");
+    loadFailed("parts")(new Error("<html><body>502 Bad Gateway</body></html>"));
+    expect(host()).toContain("Couldn't load parts.");
+    expect(host()).not.toContain("<html>");
+    loadFailed("clients")(new Error("x".repeat(500)));
+    expect(host()).toContain("x".repeat(200) + "…");
+    expect(host()).not.toContain("x".repeat(201));
+  });
+});
