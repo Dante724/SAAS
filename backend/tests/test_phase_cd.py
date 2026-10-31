@@ -41,8 +41,8 @@ async def test_bulk_accrual_runs_every_employee_once(client, tenant):
 
 @pytest.mark.asyncio
 async def test_bulk_accrual_blocks_current_month(client, tenant):
-    from datetime import date
-    today = date.today()
+    from backend.services.dates import today_in
+    today = today_in("Asia/Kolkata")   # the test shop's day: "current month" is the shop's
     r = await client.post("/api/payroll/run-all", json={
         "period_start": today.replace(day=1).isoformat(),
         "period_end": today.isoformat()}, headers=tenant)

@@ -205,7 +205,8 @@ async def test_coefficient_upsert_not_duplicated(client, tenant):
 @pytest.mark.asyncio
 async def test_current_month_accrual_rejected_draft_allowed(client, tenant):
     me = (await client.get("/api/auth/me", headers=tenant)).json()
-    today = date.today()
+    from backend.services.dates import today_in
+    today = today_in("Asia/Kolkata")   # the test shop's day: "current month" is the shop's
     ps, pe = today.replace(day=1).isoformat(), today.isoformat()
     r = await client.post("/api/payroll/run", json={
         "employee_id": me["id"], "period_start": ps, "period_end": pe, "base_salary": 1000}, headers=tenant)
