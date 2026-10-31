@@ -918,6 +918,9 @@ async def get_inventory_settings(
         "reservation_max_days": org.inv_reservation_max_days if org.inv_reservation_max_days is not None else 14,
         "product_serial_template": org.inv_product_serial_template or "",
         "asset_serial_template": org.inv_asset_serial_template or "",
+        "sku_template": org.inv_sku_template or "",
+        "bin_template": org.inv_bin_template or "",
+        "barcode_prefix": org.inv_barcode_prefix or "20",
         "default_product_type": org.inv_default_product_type or "default",
         "default_vehicle_type": org.inv_default_vehicle_type or "Car",
         "po_approval_threshold": org.po_approval_threshold or 0,
@@ -932,6 +935,9 @@ class InventorySettingsIn(BaseModel):
     reservation_max_days: Optional[int] = None
     product_serial_template: Optional[str] = None
     asset_serial_template: Optional[str] = None
+    sku_template: Optional[str] = None       # ii144a: empty = SKUs stay as typed
+    bin_template: Optional[str] = None
+    barcode_prefix: Optional[str] = None     # GS1 in-store 20–29
     default_product_type: Optional[str] = None
     default_vehicle_type: Optional[str] = None
     po_approval_threshold: Optional[float] = None
@@ -953,11 +959,24 @@ async def update_inventory_settings(
         raise HTTPException(422, "unique_identifier must be name|sku|barcode|code")
     if "po_to_job" in p and p["po_to_job"] not in ("auto", "manual"):
         raise HTTPException(422, "po_to_job must be auto or manual")
+    from backend.services import numbering
+    for k in ("product_serial_template", "asset_serial_template", "sku_template", "bin_template"):
+        if k in p:
+            p[k] = (p[k] or "").strip() or None
+            why = numbering.template_problem(p[k]) if p[k] else None
+            if why:
+                raise HTTPException(422, why)
+    if "barcode_prefix" in p:
+        p["barcode_prefix"] = (p["barcode_prefix"] or "").strip() or None
+        if p["barcode_prefix"] and p["barcode_prefix"] not in numbering.IN_STORE_PREFIXES:
+            raise HTTPException(422, "Generated barcodes start with 20 to 29 — the range set aside for "
+                                     "a shop's own codes, so they never clash with a manufacturer's.")
     mapping = {
         "po_to_job": "inv_po_to_job",
         "enable_bins": "inv_enable_bins", "unique_identifier": "inv_unique_identifier",
         "enable_reservations": "inv_enable_reservations", "reservation_max_days": "inv_reservation_max_days",
         "product_serial_template": "inv_product_serial_template", "asset_serial_template": "inv_asset_serial_template",
+        "sku_template": "inv_sku_template", "bin_template": "inv_bin_template", "barcode_prefix": "inv_barcode_prefix",
         "default_product_type": "inv_default_product_type", "default_vehicle_type": "inv_default_vehicle_type",
         "po_approval_threshold": "po_approval_threshold",
     }

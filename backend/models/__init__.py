@@ -69,6 +69,10 @@ class Organisation(Base):
     inv_reservation_max_days: Mapped[Optional[int]] = mapped_column(Integer)
     inv_product_serial_template: Mapped[Optional[str]] = mapped_column(String(40))
     inv_asset_serial_template: Mapped[Optional[str]] = mapped_column(String(40))
+    # ii144a: code generator (Settings > Inventory > Product codes). Empty = built-in default.
+    inv_sku_template: Mapped[Optional[str]] = mapped_column(String(40))      # empty = SKUs stay as typed
+    inv_bin_template: Mapped[Optional[str]] = mapped_column(String(40))      # default BIN-{C:4}
+    inv_barcode_prefix: Mapped[Optional[str]] = mapped_column(String(2))     # GS1 in-store 20–29, default 20
     inv_default_product_type: Mapped[Optional[str]] = mapped_column(String(30))
     inv_default_vehicle_type: Mapped[Optional[str]] = mapped_column(String(30))
     company_details: Mapped[Optional[str]] = mapped_column(Text)  # registration / tax ID
@@ -799,7 +803,11 @@ class Part(Base):
                       # also the per-org index for MPN scans, which match on lower(mpn))
                       Index("uq_parts_org_mpn_active", "org_id", text("lower(mpn)"), unique=True,
                             sqlite_where=text("active = 1 AND mpn IS NOT NULL"),
-                            postgresql_where=text("active AND mpn IS NOT NULL")))
+                            postgresql_where=text("active AND mpn IS NOT NULL")),
+                      # ii144a: one active product per SKU per shop, case-insensitive
+                      Index("uq_parts_org_sku_active", "org_id", text("lower(sku)"), unique=True,
+                            sqlite_where=text("active = 1 AND sku IS NOT NULL AND sku <> ''"),
+                            postgresql_where=text("active AND sku IS NOT NULL AND sku <> ''")))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     sku: Mapped[Optional[str]] = mapped_column(String(100))
@@ -988,9 +996,36 @@ class Tax(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
+class ProductBarcode(Base):
+    """ii144a — every barcode a product answers to. A product can have several (a supplier's EAN, a
+    repackaged unit's UPC, the shop's own label). `is_main` mirrors `parts.barcode` and is kept in sync
+    by services/product_codes.py on every flush; `active` mirrors the product's, so an archived product
+    releases its codes. Unique per shop among active rows — another shop's codes never clash."""
+    __tablename__ = "product_barcodes"
+    __table_args__ = (Index("uq_product_barcodes_org_code", "org_id", "barcode", unique=True,
+                            sqlite_where=text("active = 1"), postgresql_where=text("active")),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id", ondelete="CASCADE"), index=True)
+    barcode: Mapped[str] = mapped_column(String(100))
+    barcode_type: Mapped[Optional[str]] = mapped_column(String(12))    # upca|ean13|ean8|code128|qr
+    is_main: Mapped[bool] = mapped_column(Boolean, default=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    part: Mapped["Part"] = relationship()     # many-to-one only: orders the insert after a new product
+
+
 class StockLevel(Base):
+    """On-hand for one product in one place. ii144a: a row is keyed (product, location, bin) — one row
+    per bin, plus one unbinned row per (location, warehouse tag). Read and write it only through
+    services/stock_rows.py, which sums and draws across a location's rows."""
     __tablename__ = "stock_levels"
-    __table_args__ = (Index("ix_stock_levels_part_location", "part_id", "location_id"),)   # phase 4 perf: hot lookup path
+    __table_args__ = (Index("ix_stock_levels_part_location", "part_id", "location_id"),   # phase 4 perf: hot lookup path
+                      Index("uq_stock_levels_part_bin", "part_id", "bin_id", unique=True,
+                            sqlite_where=text("bin_id IS NOT NULL"), postgresql_where=text("bin_id IS NOT NULL")),
+                      Index("uq_stock_levels_part_loc_unbinned", "part_id", "location_id",
+                            text("coalesce(warehouse_id, '')"), unique=True,
+                            sqlite_where=text("bin_id IS NULL"), postgresql_where=text("bin_id IS NULL")))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
@@ -1780,6 +1815,13 @@ class StorageBin(Base):
     A warehouse divides into zones/shelves, and each bin is the smallest pick unit
     (e.g. A1, B2, C18H036). Bins carry a barcode for scan-based posting/stocktake."""
     __tablename__ = "storage_bins"
+    # ii144a: bin name unique per warehouse (case-insensitive), bin code unique per shop — active bins only
+    __table_args__ = (Index("uq_storage_bins_name", "location_id", text("coalesce(warehouse_id, '')"),
+                            text("lower(name)"), unique=True,
+                            sqlite_where=text("active = 1"), postgresql_where=text("active")),
+                      Index("uq_storage_bins_barcode", "org_id", "barcode", unique=True,
+                            sqlite_where=text("active = 1 AND barcode IS NOT NULL"),
+                            postgresql_where=text("active AND barcode IS NOT NULL")))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))  # the warehouse
@@ -1788,8 +1830,7 @@ class StorageBin(Base):
     zone: Mapped[Optional[str]] = mapped_column(String(40))      # section / area
     shelf: Mapped[Optional[str]] = mapped_column(String(40))     # stand / shelf / row
     bin_number: Mapped[Optional[str]] = mapped_column(String(40))
-    barcode: Mapped[Optional[str]] = mapped_column(String(60), index=True,
-                                                   default=lambda: _uuid().replace("-", "")[:12].upper())
+    barcode: Mapped[Optional[str]] = mapped_column(String(60), index=True)   # ii144a: from the bin template (routers/bins.py)
     max_weight_capacity: Mapped[float] = mapped_column(Float, default=0.0)  # kg, 0 = unlimited
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -1950,6 +1991,12 @@ class SerializedItem(Base):
     """A unique serialized unit of a product, tracked individually through its
     lifecycle, with a hard link to the batch cost layer it came in on."""
     __tablename__ = "serialized_items"
+    # ii144a: a serial is in stock (or reserved on a job) at most once per shop — the same normalised
+    # form serial_intake compares (upper-case, no spaces). Sold / written-off history may repeat.
+    __table_args__ = (Index("uq_serialized_items_live_serial", "org_id",
+                            text("upper(replace(serial_number, ' ', ''))"), unique=True,
+                            sqlite_where=text("status IN ('in_stock', 'allocated_to_order')"),
+                            postgresql_where=text("status IN ('in_stock', 'allocated_to_order')")),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
@@ -3079,7 +3126,7 @@ all_models = [
     Organisation, Location, Role, Employee, Shift, WageRecord,
     Client, Device, OrderStatus, Order, OrderLine, OrderItem, OrderStatusLog, OrderComment,
     LegalEntity, NumberSequence,
-    Part, StockLevel, StockMovement, Supplier, PurchaseOrder, POLine, Service, SavedFilter, Tax,
+    Part, ProductBarcode, StockLevel, StockMovement, Supplier, PurchaseOrder, POLine, Service, SavedFilter, Tax,
     Invoice, InvoiceLine, Payment, CashShift, Expense, Account, CashFlowItem, Transaction,
     Task, NotificationTemplate, CustomField, AuditLog, EventFeedItem,
     WorkOrderType, StatusTransition, AssetMovement, StockReservation, StorageBin,
@@ -3548,3 +3595,7 @@ class PaymentWebhookEvent(Base):
     event_id: Mapped[str] = mapped_column(String(255))
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+# ii144a: registers the before-flush hook that mirrors parts.barcode into product_barcodes.
+from backend.services import product_codes as _product_codes  # noqa: E402,F401

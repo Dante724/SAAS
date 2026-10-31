@@ -22,8 +22,9 @@ from backend.models import (
     StocktakeLine,
 )
 from backend.services.auth import assert_perm, get_current_employee, require_perm
+from backend.services import product_codes, stock_rows
 from backend.services.numbering import next_number
-from backend.services.money import add_to_column, q2, q4
+from backend.services.money import q2, q4
 from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
 
 router = APIRouter(prefix="/api/sales", tags=["sales"])
@@ -184,9 +185,10 @@ async def lookup_code(
     if mpn_col is not None:
         fields["mpn"] = mpn_col
     base = select(Part).where(Part.org_id == current.org_id, Part.active == True)  # noqa: E712
-    parts = (await db.execute(base.where(or_(*[func.lower(c) == low for c in fields.values()]))
+    extra = product_codes.barcode_part_ids(current.org_id, code)     # ii144a: a product's extra barcodes
+    parts = (await db.execute(base.where(or_(*[func.lower(c) == low for c in fields.values()], Part.id.in_(extra)))
                               .order_by(Part.name).limit(20))).scalars().all()
-    matched = {p.id: next((k for k in fields if (getattr(p, k, None) or "").lower() == low), "code") for p in parts}
+    matched = {p.id: next((k for k in fields if (getattr(p, k, None) or "").lower() == low), "barcode") for p in parts}
     if not parts:
         from backend.models import SerializedItem
         from backend.services.serial_intake import matches as _sn_matches
@@ -260,13 +262,7 @@ async def delete_sale(
     for ln in lines:
         if ln.kind != "product" or not ln.ref_id:
             continue
-        sl = (await db.execute(select(StockLevel).where(
-            StockLevel.part_id == ln.ref_id, StockLevel.location_id == sale.location_id))).scalar_one_or_none()
-        if sl:
-            await add_to_column(db, sl, "qty_available", ln.qty, round_to=None)
-        else:
-            sl = StockLevel(part_id=ln.ref_id, location_id=sale.location_id, qty_available=ln.qty, qty_reserved=0)
-            db.add(sl)
+        await stock_rows.add(db, ln.ref_id, sale.location_id, ln.qty)
         db.add(StockMovement(part_id=ln.ref_id, location_id=sale.location_id, movement_type="return",
                              qty=ln.qty, unit_cost=ln.cost_price or 0, ref_type="sale_void", ref_id=sale.id,
                              created_by_id=current.id))
@@ -284,7 +280,7 @@ async def delete_sale(
             if hold:
                 hold.qty = (hold.qty or 0) + d["qty"]
                 hold.released = False
-                sl.qty_reserved = (sl.qty_reserved or 0) + d["qty"]
+                await stock_rows.reserve(db, ln.ref_id, sale.location_id, d["qty"])
 
     if sale.coupon_id:
         await db.execute(sa_update(Coupon).where(Coupon.id == sale.coupon_id, Coupon.uses > 0)
@@ -359,11 +355,9 @@ async def create_sale(
                 Part.id == li.ref_id, Part.org_id == current.org_id))).scalar_one_or_none()
             if not part:
                 raise HTTPException(404, f"Product not found: {li.description}")
-            sl = (await db.execute(select(StockLevel).where(
-                StockLevel.part_id == li.ref_id,
-                StockLevel.location_id == loc_id))).scalar_one_or_none()
-            if not sl or (sl.qty_available or 0) < li.qty:
-                raise HTTPException(409, f"Only {(sl.qty_available if sl else 0):g} of '{part.name}' in this warehouse")
+            have, _held = await stock_rows.totals(db, li.ref_id, loc_id)
+            if have < li.qty:
+                raise HTTPException(409, f"Only {have:g} of '{part.name}' in this warehouse")
             # 144at — reservation lock: a counter sale can't take stock reserved for a job
             # unless the seller can override. order_id=None → no own holds; only free stock is sellable.
             from backend.services import reservations as _rsv
@@ -377,10 +371,9 @@ async def create_sale(
                                          f"A manager with override permission must approve selling them.")
             draws = {"layers": [], "holds": [{"hold_id": o["hold_id"], "qty": o["qty"]}
                                              for o in _g["overrides"] if o.get("hold_id")]}
-            res = await db.execute(sa_update(StockLevel)
-                .where(StockLevel.id == sl.id, StockLevel.qty_available >= li.qty)
-                .values(qty_available=StockLevel.qty_available - li.qty))
-            if res.rowcount == 0:
+            try:      # guarded per-bin decrements: no bin goes negative under concurrency
+                await stock_rows.draw(db, li.ref_id, loc_id, li.qty)
+            except stock_rows.NotEnoughStock:
                 raise HTTPException(409, "Stock changed during the sale — please retry")
             unit_cost = part.avg_cost or part.cost_price or 0
             # FIFO cost layers → exact COGS when layers exist
@@ -516,20 +509,21 @@ async def email_sale_receipt(
 
 
 # ───────────────────────────── STOCKTAKE ─────────────────────────────
-async def _st_stock_row(db, part_id, st):
-    """144bh — resolve a part's StockLevel for a stocktake, preferring the warehouse-keyed
-    row but falling back to the location-level row that postings/sales/PO actually write
-    (warehouse_id NULL). Without this a count reads system_qty 0 and posting duplicates stock."""
-    row = None
+async def _st_stock_row(db, part_id, st, bin_id=None):
+    """144bh — the system quantity a count is compared with, or None when the place holds no row
+    for the product. ii144a: stock is one row per bin — a bin count reads that bin, any other count
+    the sum of the warehouse's rows, falling back to the location's rows that postings/sales/PO
+    actually write (warehouse_id NULL). Without the fallback a count reads 0 and posting duplicates stock."""
+    if bin_id:
+        row = await stock_rows.row_for(db, part_id, st.location_id, bin_id)
+        return None if row is None else float(row.qty_available or 0)
+    found = []
     if st.warehouse_id:
-        row = (await db.execute(select(StockLevel).where(
-            StockLevel.part_id == part_id,
-            StockLevel.warehouse_id == st.warehouse_id))).scalars().first()
-    if row is None:
-        row = (await db.execute(select(StockLevel).where(
-            StockLevel.part_id == part_id,
-            StockLevel.location_id == st.location_id))).scalars().first()
-    return row
+        found = (await db.execute(select(StockLevel).where(
+            StockLevel.part_id == part_id, StockLevel.warehouse_id == st.warehouse_id))).scalars().all()
+    if not found:
+        found = await stock_rows.rows(db, part_id, st.location_id)
+    return float(sum(r.qty_available or 0 for r in found)) if found else None
 
 
 class StocktakeIn(BaseModel):
@@ -559,6 +553,8 @@ async def start_stocktake(
         raise HTTPException(400, "No warehouse resolved — pass warehouse_id")
     if data.kind not in ("full", "partial"):
         raise HTTPException(422, "kind must be full|partial")
+    if data.bin_id:      # ii144a: this shop's bin, at this warehouse's location
+        await stock_rows.check_bin(db, current.org_id, w.location_id, data.bin_id)
 
     st = Stocktake(org_id=current.org_id, location_id=w.location_id, warehouse_id=w.id,
                    bin_id=data.bin_id, note=data.note, kind=data.kind,
@@ -567,18 +563,23 @@ async def start_stocktake(
     await db.flush()
     seeded = 0
     if data.kind == "full":
-        q = select(StockLevel).where(StockLevel.warehouse_id == w.id)
         if data.bin_id:
-            q = q.where(StockLevel.bin_id == data.bin_id)
-        rows = (await db.execute(q)).scalars().all()
-        if not rows and not data.bin_id:
-            # 144bh — stock is kept at location level (warehouse_id NULL); seed from there so a
-            # full count isn't empty on orgs whose stock was never warehouse-keyed.
-            rows = (await db.execute(select(StockLevel).where(
-                StockLevel.location_id == w.location_id))).scalars().all()
+            # ii144a: one bin — its own rows (bin rows aren't warehouse-tagged)
+            rows = (await db.execute(select(StockLevel).where(StockLevel.bin_id == data.bin_id))).scalars().all()
+        else:
+            rows = (await db.execute(select(StockLevel).where(StockLevel.warehouse_id == w.id))).scalars().all()
+            if not rows:
+                # 144bh — stock is kept at location level (warehouse_id NULL); seed from there so a
+                # full count isn't empty on orgs whose stock was never warehouse-keyed.
+                rows = (await db.execute(select(StockLevel).where(
+                    StockLevel.location_id == w.location_id))).scalars().all()
+        # ii144a: a warehouse count has one line per product (all its bins together); a bin count
+        # one line per product in that bin — so a scan always lands on the one line it means.
+        per_part: dict = {}
         for sl in rows:
-            db.add(StocktakeLine(stocktake_id=st.id, part_id=sl.part_id,
-                                 bin_id=sl.bin_id, system_qty=sl.qty_available or 0))
+            per_part[sl.part_id] = per_part.get(sl.part_id, 0) + (sl.qty_available or 0)
+        for pid, qty in per_part.items():
+            db.add(StocktakeLine(stocktake_id=st.id, part_id=pid, bin_id=data.bin_id, system_qty=qty))
             seeded += 1
     await db.commit()
     return {"id": st.id, "kind": st.kind, "warehouse_id": w.id, "lines": seeded}
@@ -648,16 +649,16 @@ async def post_stocktake(
     for l in lines:
         if not l.variance:
             continue
-        sl = await _st_stock_row(db, l.part_id, st)
-        if not sl:
-            # Build 91: a product found on the shelf that the system had no row for.
-            # Posting the count is what brings it into stock — that's the whole point of
-            # registering unknowns during a count.
-            sl = StockLevel(part_id=l.part_id, location_id=st.location_id,
-                            warehouse_id=st.warehouse_id, bin_id=l.bin_id or st.bin_id,
-                            qty_available=0, qty_reserved=0)
-            db.add(sl)
-        await _atomic_add(db, sl, "qty_available", l.variance, round_to=None)   # atomic
+        # Build 91: a product found on the shelf that the system had no row for gets one — posting
+        # the count is what brings registered unknowns into stock. ii144a: a bin's line adjusts that
+        # bin's row; a shortage on a location count is drawn across its bins (never below zero).
+        line_bin = l.bin_id or st.bin_id
+        if line_bin:
+            await stock_rows.check_bin(db, current.org_id, st.location_id, line_bin)
+        if line_bin or l.variance > 0:
+            await stock_rows.add(db, l.part_id, st.location_id, l.variance, bin_id=line_bin)
+        else:
+            await stock_rows.draw(db, l.part_id, st.location_id, -l.variance, allow_short=True)
         part = (await db.execute(select(Part).where(Part.id == l.part_id))).scalar_one_or_none()
         db.add(StockMovement(part_id=l.part_id, location_id=st.location_id,
                              warehouse_id=st.warehouse_id, bin_id=l.bin_id or st.bin_id,
@@ -748,7 +749,7 @@ async def scan_count(
     else:
         part = (await db.execute(select(Part).where(
             Part.org_id == current.org_id,
-            or_(Part.barcode == code, Part.sku == code)))).scalars().first()
+            product_codes.matches_code(current.org_id, code)))).scalars().first()   # ii144a: extra barcodes
 
     is_unknown = False
     if not part:
@@ -761,15 +762,18 @@ async def scan_count(
         await db.flush()
         is_unknown = True
 
+    scan_bin = data.bin_id or st.bin_id
     line = (await db.execute(select(StocktakeLine).where(
-        StocktakeLine.stocktake_id == st_id,
-        StocktakeLine.part_id == part.id))).scalars().first()
+        StocktakeLine.stocktake_id == st_id, StocktakeLine.part_id == part.id,
+        StocktakeLine.bin_id == scan_bin if scan_bin else StocktakeLine.bin_id.is_(None)))).scalars().first()
     if not line:
         # not seeded → either a partial count, or a product the warehouse had no row for
-        sl = await _st_stock_row(db, part.id, st)
+        if data.bin_id:
+            await stock_rows.check_bin(db, current.org_id, st.location_id, data.bin_id)
+        sl = await _st_stock_row(db, part.id, st, data.bin_id or st.bin_id)
         line = StocktakeLine(stocktake_id=st_id, part_id=part.id,
                              bin_id=data.bin_id or st.bin_id,
-                             system_qty=(sl.qty_available if sl else 0) or 0,
+                             system_qty=sl or 0,
                              counted_qty=0, is_unknown=is_unknown or sl is None)
         db.add(line)
         await db.flush()
@@ -879,7 +883,7 @@ async def import_counts(
 
         part = (await db.execute(select(Part).where(
             Part.org_id == current.org_id,
-            or_(Part.barcode == code, Part.sku == code)))).scalars().first()
+            product_codes.matches_code(current.org_id, code)))).scalars().first()   # ii144a: extra barcodes
         if not part:
             if not data.register_unknown:
                 errors.append({"row": i + 1, "error": f"Unknown code “{code}”"})
@@ -890,14 +894,12 @@ async def import_counts(
             await db.flush()
 
         line = (await db.execute(select(StocktakeLine).where(
-            StocktakeLine.stocktake_id == st_id,
-            StocktakeLine.part_id == part.id))).scalars().first()
+            StocktakeLine.stocktake_id == st_id, StocktakeLine.part_id == part.id,
+            StocktakeLine.bin_id == st.bin_id if st.bin_id else StocktakeLine.bin_id.is_(None)))).scalars().first()
         if not line:
-            sl = (await db.execute(select(StockLevel).where(
-                StockLevel.part_id == part.id,
-                StockLevel.warehouse_id == st.warehouse_id))).scalars().first()
-            line = StocktakeLine(stocktake_id=st_id, part_id=part.id,
-                                 system_qty=(sl.qty_available if sl else 0) or 0,
+            sl = await _st_stock_row(db, part.id, st, st.bin_id)
+            line = StocktakeLine(stocktake_id=st_id, part_id=part.id, bin_id=st.bin_id,
+                                 system_qty=sl or 0,
                                  is_unknown=sl is None)
             db.add(line)
             await db.flush()

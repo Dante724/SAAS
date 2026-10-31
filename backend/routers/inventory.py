@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 from backend.core import paging as _paging
 from backend.db.database import get_db
 from backend.models import Employee, Part, StockLevel, StockMovement
-from backend.services import stock_posting
+from backend.services import product_codes, stock_posting, stock_rows
 from backend.services.serial_intake import SerialStr
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.numbering import next_number
@@ -30,6 +30,7 @@ class PartIn(BaseModel):
     sell_price: float = 0.0
     repair_price: float = 0.0
     barcode: Optional[str] = None
+    code: Optional[str] = None           # internal code (ii144a: may be the shop's unique identifier)
     min_stock: int = 0
     min_order_qty: float = 0
     weight: Optional[float] = None       # kg — used for weight-basis freight allocation (144ar)
@@ -94,7 +95,8 @@ async def list_parts(
         # Build 144an — POS findability: match name, SKU, barcode, or internal code.
         s = search.strip()
         q = q.where(or_(Part.name.icontains(s), Part.sku.icontains(s),
-                        Part.barcode.icontains(s), Part.code.icontains(s), Part.mpn.icontains(s)))
+                        Part.barcode.icontains(s), Part.code.icontains(s), Part.mpn.icontains(s),
+                        Part.id.in_(product_codes.barcode_part_ids(current.org_id, s))))   # ii144a: extra barcodes
     if category_id:
         q = q.where(Part.category_id == category_id)
     if category:
@@ -139,14 +141,13 @@ async def scan_resolve(
     if not code:
         raise HTTPException(400, "No code provided")
     base = select(Part).where(Part.org_id == current.org_id, Part.active == True)  # noqa: E712
-    part = (await db.execute(base.where(or_(
-        Part.sku == code, Part.barcode == code, Part.code == code,
-        func.lower(Part.mpn) == code.lower())))).scalars().first()    # MPNs are unique case-insensitively
+    part = (await db.execute(base.where(product_codes.matches_code(
+        current.org_id, code, include_mpn=True)))).scalars().first()    # MPNs are unique case-insensitively
     matched_serial = None
     matched_on = None
     if part:
-        matched_on = ("sku" if part.sku == code else "barcode" if part.barcode == code
-                      else "code" if part.code == code else "mpn")
+        matched_on = ("sku" if (part.sku or "").lower() == code.lower() else "code" if part.code == code
+                      else "mpn" if (part.mpn or "").lower() == code.lower() else "barcode")
     else:
         from backend.models import SerializedItem
         from backend.services.serial_intake import matches as _sn_matches
@@ -175,10 +176,13 @@ async def create_part(
     if not await can_see_costs(db, current):
         drop_cost_fields(payload)
     part = Part(org_id=current.org_id, **payload)
+    await product_codes.ensure_identity_free(db, current.org_id, name=part.name, sku=part.sku,
+                                             barcode=part.barcode, code=part.code)
+    await product_codes.fill_new_product(db, part)
     db.add(part)
     await db.commit()
     await db.refresh(part)
-    return {"id": part.id, "name": part.name}
+    return {"id": part.id, "name": part.name, "sku": part.sku}
 
 @router.get("/parts/{part_id}")
 async def get_part(
@@ -209,6 +213,9 @@ async def update_part(
     payload = data.model_dump(exclude_unset=True)
     if not await can_see_costs(db, current):
         drop_cost_fields(payload)
+    await product_codes.ensure_identity_free(
+        db, current.org_id, exclude_part_id=part.id, fields=set(payload), **{
+            k: payload.get(k) for k in ("name", "sku", "barcode", "code")})
     for k, v in payload.items():
         setattr(part, k, v)
     await db.commit()
@@ -231,19 +238,15 @@ async def adjust_stock(
               "transfer" if data.movement_type == "transfer" else "post"
     _w = await _wh.guard_action(db, current, _action, location_id=data.location_id)
 
-    sl_result = await db.execute(
-        select(StockLevel).where(StockLevel.part_id == part_id, StockLevel.location_id == data.location_id)
-    )
-    sl = sl_result.scalar_one_or_none()
-    if not sl:
-        sl = StockLevel(part_id=part_id, location_id=data.location_id,
-                        warehouse_id=_w.id if _w else None, qty_available=0.0)
-        db.add(sl)
-
     if data.movement_type in ("receive", "adjust"):
-        await _atomic_add(db, sl, "qty_available", data.qty, round_to=None)   # atomic
+        # Into the location's main row; a first receipt creates it tagged with the warehouse it came through.
+        has_main = any(r.bin_id is None for r in await stock_rows.rows(db, part_id, data.location_id))
+        await stock_rows.add(db, part_id, data.location_id, data.qty,
+                             warehouse_id=None if has_main or not _w else _w.id)
     elif data.movement_type == "writeoff":
-        sl.qty_available = max(0, sl.qty_available - data.qty)
+        # Never below zero (the old clamp): take what is there, across bins.
+        have, _res = await stock_rows.totals(db, part_id, data.location_id)
+        await stock_rows.draw(db, part_id, data.location_id, min(data.qty, max(have, 0)))
 
     movement = StockMovement(
         part_id=part_id, location_id=data.location_id,
@@ -253,7 +256,7 @@ async def adjust_stock(
     )
     db.add(movement)
     await db.commit()
-    return {"ok": True, "qty_available": sl.qty_available}
+    return {"ok": True, "qty_available": (await stock_rows.totals(db, part_id, data.location_id))[0]}
 
 
 class ScanAdjust(BaseModel):
@@ -276,9 +279,7 @@ async def scan_adjust(
     code = (data.code or "").strip()
     if not code:
         raise HTTPException(422, "code required")
-    part = (await db.execute(select(Part).where(
-        Part.org_id == current.org_id,
-        or_(Part.sku == code, Part.barcode == code, Part.code == code)))).scalars().first()
+    part = await product_codes.find_by_code(db, current.org_id, code, active_only=False)
     if not part:
         raise HTTPException(404, "No part matches that code")
     out = await adjust_stock(part.id, StockAdjust(
@@ -293,6 +294,7 @@ class PostingLine(BaseModel):
     purchase_price: float = 0.0
     markup_pct: Optional[float] = None   # if set, new sell price = purchase * (1 + markup/100)
     serials: Optional[list[SerialStr]] = Field(None, max_length=500)  # serial-tracked: one serial / IMEI per unit
+    bin_id: Optional[str] = None         # ii144a: put away straight into a bin at the posting's location
 
 
 class PostingIn(BaseModel):
@@ -331,7 +333,7 @@ async def _do_posting(db, org_id, created_by_id, location_id, supplier_id, lines
             db, org_id=org_id, part=part, location_id=location_id,
             qty=qty, unit_cost=cost, created_by_id=created_by_id,
             ref_type="supplier" if supplier_id else "posting", ref_id=supplier_id,
-            serials=serials, create_batch=True, set_last_cost=True,
+            serials=serials, create_batch=True, set_last_cost=True, bin_id=_g(ln, "bin_id"),
             expiry_date=_g(ln, "expiry_date") if part.expiry_tracking else None)
         # 144bo: fresh stock arrived — reset low-stock dedupe + ping any job that was waiting.
         after_oh = await _alerts.global_on_hand(db, part.id)
@@ -925,10 +927,7 @@ async def _release_expired(db: AsyncSession, org_id: str):
         )
     )).scalars().all()
     for r in rows:
-        sl = (await db.execute(select(StockLevel).where(
-            StockLevel.part_id == r.part_id, StockLevel.location_id == r.location_id))).scalar_one_or_none()
-        if sl:
-            sl.qty_reserved = max((sl.qty_reserved or 0) - r.qty, 0)
+        await stock_rows.reserve(db, r.part_id, r.location_id, -r.qty)
         r.released = True
     if rows:
         await db.commit()
@@ -949,14 +948,20 @@ async def reserve_stock(
     current: Employee = Depends(require_perm("can_reserve_stock")),
 ):
     """Reserve stock for an order. Reserved qty is excluded from available."""
-    sl = (await db.execute(select(StockLevel).where(
-        StockLevel.part_id == data.part_id, StockLevel.location_id == data.location_id))).scalar_one_or_none()
-    free = (sl.qty_available - sl.qty_reserved) if sl else 0
+    from backend.models import Location
+    part = (await db.execute(select(Part.id).where(
+        Part.id == data.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
+    loc = (await db.execute(select(Location.id).where(
+        Location.id == data.location_id, Location.org_id == current.org_id))).scalar_one_or_none()
+    if not part or not loc:      # checked first: another shop's stock levels never show
+        raise HTTPException(404, "Product not found")
+    avail, held = await stock_rows.totals(db, data.part_id, data.location_id)
+    free = avail - held
     if data.qty > free:
         raise HTTPException(409, f"Only {free:g} available to reserve")
-    if not sl:
+    if avail <= 0:
         raise HTTPException(404, "No stock at this location")
-    sl.qty_reserved = (sl.qty_reserved or 0) + data.qty
+    await stock_rows.reserve(db, data.part_id, data.location_id, data.qty)
     r = StockReservation(org_id=current.org_id, part_id=data.part_id, location_id=data.location_id,
                          order_id=data.order_id, qty=data.qty,
                          expires_at=datetime.utcnow() + timedelta(days=data.hold_days))
@@ -976,10 +981,7 @@ async def release_reservation(
         StockReservation.id == res_id, StockReservation.org_id == current.org_id))).scalar_one_or_none()
     if not r or r.released:
         raise HTTPException(404, "Reservation not found or already released")
-    sl = (await db.execute(select(StockLevel).where(
-        StockLevel.part_id == r.part_id, StockLevel.location_id == r.location_id))).scalar_one_or_none()
-    if sl:
-        sl.qty_reserved = max((sl.qty_reserved or 0) - r.qty, 0)
+    await stock_rows.reserve(db, r.part_id, r.location_id, -r.qty)
     r.released = True
     await db.commit()
     return {"ok": True}
@@ -1867,13 +1869,10 @@ async def receive_po(
         to_reserve = recv - await apply_receipt_to_orders(db, current.org_id, po, pl, recv)
         if pl.reserved_order_id and to_reserve > 0:
             from backend.models import StockReservation
-            rsl = (await db.execute(select(StockLevel).where(
-                StockLevel.part_id == pl.part_id, StockLevel.location_id == po.location_id))).scalar_one_or_none()
-            if rsl:
-                rsl.qty_reserved = (rsl.qty_reserved or 0) + to_reserve
-                db.add(StockReservation(org_id=current.org_id, part_id=pl.part_id,
-                                        location_id=po.location_id, order_id=pl.reserved_order_id,
-                                        qty=to_reserve, released=False))
+            await stock_rows.reserve(db, pl.part_id, po.location_id, to_reserve)   # ii144a: on the location
+            db.add(StockReservation(org_id=current.org_id, part_id=pl.part_id,
+                                    location_id=po.location_id, order_id=pl.reserved_order_id,
+                                    qty=to_reserve, released=False))
         received_cost_now += recv * unit_cost
         received_any = True
     if received_any:
@@ -2323,6 +2322,10 @@ async def merge_parts(
 
     moved = {"stock": 0, "movements": 0, "units": 0, "batches": 0}
     for s in sources:
+        # ii144a: archive the source first, so its SKU / barcodes are free before the target takes them
+        s.active = False
+        s.name = f"{s.name} (merged into {target.name})"
+        await db.flush()
         # fill blanks on the target from the source (never overwrite real values)
         for field in ("sku", "barcode", "brand", "category", "code", "image_data",
                       "asset_brand", "asset_model", "template_key"):
@@ -2333,20 +2336,28 @@ async def merge_parts(
         if not target.sell_price and s.sell_price:
             target.sell_price = s.sell_price
 
-        # fold stock levels per location
+        # fold stock rows into the target's row with the same (location, bin)
         for sl in (await db.execute(select(StockLevel).where(
                 StockLevel.part_id == s.id))).scalars().all():
-            tgt_sl = (await db.execute(select(StockLevel).where(
-                StockLevel.part_id == target.id,
-                StockLevel.location_id == sl.location_id))).scalar_one_or_none()
+            tgt_sl = await stock_rows.row_for(db, target.id, sl.location_id, sl.bin_id,
+                                              warehouse_id=sl.warehouse_id)
             if tgt_sl:
                 await _atomic_add(db, tgt_sl, "qty_available", sl.qty_available, round_to=None)   # atomic
-                tgt_sl.qty_reserved += sl.qty_reserved
+                await _atomic_add(db, tgt_sl, "qty_reserved", sl.qty_reserved or 0, round_to=None)
                 sl.qty_available = 0
                 sl.qty_reserved = 0
             else:
                 sl.part_id = target.id
+                await db.flush()
             moved["stock"] += 1
+        # every barcode of the source now finds the target (old labels keep scanning): its main code
+        # becomes the target's main when the target had none (the hook does that), else an extra
+        await db.flush()
+        from backend.models import ProductBarcode
+        from sqlalchemy import update as _upd
+        await db.execute(_upd(ProductBarcode).where(
+            ProductBarcode.part_id == s.id, ProductBarcode.barcode != (target.barcode or ""))
+            .values(part_id=target.id, active=True, is_main=False).execution_options(synchronize_session=False))
 
         for m in (await db.execute(select(StockMovement).where(
                 StockMovement.part_id == s.id))).scalars().all():
@@ -2360,9 +2371,6 @@ async def merge_parts(
                 StockItemBatch.part_id == s.id))).scalars().all():
             b.part_id = target.id
             moved["batches"] += 1
-
-        s.active = False
-        s.name = f"{s.name} (merged into {target.name})"
 
     await db.commit()
     return {"ok": True, "target_id": target.id, "merged": len(sources), "moved": moved}
