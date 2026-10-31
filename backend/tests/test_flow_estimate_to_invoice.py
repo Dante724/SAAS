@@ -176,7 +176,6 @@ async def _shop(client):
     return H, loc, c["id"], acc
 
 
-@pytest.mark.xfail(strict=True, reason="G1: nobody on staff is told when a customer approves an estimate online")
 async def test_gap_staff_told_when_customer_approves(client):
     H, loc, cid, _ = await _shop(client)
     o = (await client.post("/api/orders", json={"client_id": cid, "location_id": loc, "complaint": "x",
@@ -189,11 +188,12 @@ async def test_gap_staff_told_when_customer_approves(client):
     assert any("approv" in (str(n.get("title", "")) + str(n.get("body", ""))).lower() for n in items)
 
 
-@pytest.mark.xfail(strict=True, reason="G2: a job line doesn't take its product's warranty, so no warranty starts at pickup")
 async def test_gap_warranty_from_catalog_starts_at_pickup(client):
     H, loc, cid, acc = await _shop(client)
     part = (await client.post("/api/catalog/products", json={"name": "Screen", "sell_price": 100, "warranty_days": 90},
                               headers=H)).json()
+    await client.post(f"/api/inventory/parts/{part['id']}/adjust", json={"location_id": loc, "qty": 1,
+                                                                        "movement_type": "adjust"}, headers=H)
     o = (await client.post("/api/orders", json={"client_id": cid, "location_id": loc, "complaint": "x"}, headers=H)).json()
     await client.post(f"/api/orders/{o['id']}/lines", json={"kind": "product", "line_type": "part", "ref_id": part["id"],
                                                             "description": "Screen", "qty": 1, "unit_price": 100}, headers=H)
@@ -204,7 +204,6 @@ async def test_gap_warranty_from_catalog_starts_at_pickup(client):
     assert (await client.get(f"/api/orders/{o['id']}", headers=H)).json().get("warranty_until")
 
 
-@pytest.mark.xfail(strict=True, reason="G3: a message to the customer from the job is saved but never sent by SMS/email")
 async def test_gap_message_to_customer_is_delivered(client, capsys):
     H, loc, cid, _ = await _shop(client)
     o = (await client.post("/api/orders", json={"client_id": cid, "location_id": loc, "complaint": "x"}, headers=H)).json()

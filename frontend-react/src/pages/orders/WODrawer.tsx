@@ -5,7 +5,10 @@ import { humanize } from "../../lib/humanize";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import ConversationPanel from "./ConversationPanel";
+import { ChannelPicker, DeliveryNote, useThread, type SendChannel, type ThreadSent } from "./ConversationPanel";
+import SignaturePad from "../../components/SignaturePad";
+import SendMenu, { type SendWay } from "../../components/SendMenu";
+import { deliveryText, deliveryTone, flashDelivery, type Delivery, type Flash, type Tone } from "../../lib/delivery";
 import PhotoAnnotator from "./PhotoAnnotator";
 import TagChips from "../../components/TagChips";
 import { M } from "../../components/Shell";
@@ -27,6 +30,7 @@ import JobCardFields from "../../components/JobCardFields";
 import ReaderCharge from "../../components/ReaderCharge";
 import CardPaymentsList from "../../components/CardPaymentsList";
 import KitGroupHeader from "./KitGroupHeader";
+import { sendInvoice } from "../invoices/billing";
 import { groupKitLines } from "../../lib/kitGroups";
 
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
@@ -38,7 +42,8 @@ type Detail = Order & {
   manager?: { id?: string; name?: string } | null;
   assigned_to?: { id?: string; name?: string } | null;
   client?: { id?: string; name?: string; phone?: string; email?: string; balance?: number; watch_out?: string | null } | null;
-  device?: { id?: string; brand?: string; model?: string; serial?: string; imei?: string; asset_type?: string; color?: string; watch_out?: string | null } | null;
+  device?: { id?: string; brand?: string; model?: string; serial?: string; imei?: string; asset_type?: string; color?: string; watch_out?: string | null; has_passcode?: boolean } | null;
+  signature?: string | null; is_estimate?: boolean;
   intake_photos?: { id: string; url: string; marked_id?: string; marked_url?: string }[];
   lines?: Line[];
 };
@@ -60,13 +65,15 @@ const fmtDur = (min?: number | null) => {
 
 export default function WODrawer({ order, onClose, onChanged }: { order: Order; onClose: () => void; onChanged?: () => void }) {
   const { can, me } = useMe();
+  const nav = useNavigate();
   const [tab, setTab] = useState<Tab>("general");
   const [sub, setSub] = useState<null | "client" | "asset">(null);
   const [d, setD] = useState<Detail>(order as Detail);
   const [statuses, setStatuses] = useState<FullStatus[]>([]);
   const [emps, setEmps] = useState<Emp[]>([]);
   const [timing, setTiming] = useState<Timing | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ m: string; tone?: Tone } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [labor, setLabor] = useState<any>(null);   // 144v: who's timing this WO, per person + line
   const loadLabor = () => api.get<any>(`/orders/${order.id}/labor`).then(setLabor).catch(() => setLabor(null));
   useEffect(() => { loadLabor(); /* eslint-disable-next-line */ }, [order.id]);
@@ -75,7 +82,12 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   const canBuy = can("can_manage_inventory");
   const [partsOpen, setPartsOpen] = useState(false);   // ADR-144po: the ⋯ → Parts & purchase orders panel
   const [menuOpen, setMenuOpen] = useState(false);
-  const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
+  // A warning (e.g. "saved, but not sent: set up text messages") stays up longer than a plain "Saved".
+  const flash: Flash = (m, tone) => {
+    setToast({ m, tone });
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), tone ? 6000 : 2200);
+  };
 
   const reload = () => api.get<Detail>(`/orders/${order.id}`).then(setD).catch(() => {});
   useEffect(() => { reload(); }, [order.id]);
@@ -85,10 +97,11 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   const [incomingPo, setIncomingPo] = useState<{ po_number?: string; status?: string; expected_at?: string | null; parts: { part: string; outstanding: number }[] }[]>([]);
   const loadIncomingPo = () => api.get<any>(`/orders/${order.id}/incoming-po`).then((r) => setIncomingPo(r.items || [])).catch(() => {});
   useEffect(() => { loadIncomingPo(); /* eslint-disable-next-line */ }, [order.id]);
+  const isEst = !!d.is_estimate;
   useEffect(() => {
-    const rt = (order as any).is_estimate ? "estimate" : "work_order";
+    const rt = isEst ? "estimate" : "work_order";
     api.get<any>(`/statuses?record_type=${rt}`).then((r) => setStatuses(r.items || r || [])).catch(() => {});
-  }, [order.id]);
+  }, [order.id, isEst]);
   useEffect(() => { api.get<Timing>(`/orders/${order.id}/timing`).then(setTiming).catch(() => setTiming(null)); }, [order.id, d.status]);
   useEffect(() => { api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(() => {}); }, []);
 
@@ -125,6 +138,44 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
       catch { flash("Couldn't copy. Use Open to see the link."); }
     } catch (e: any) { flash(`Failed: ${e.message}`); }
   }
+  // I6 — send the estimate (tracking link, plus the PDF by email). The server says whether it
+  // really went out; we show that sentence, never a blanket "sent".
+  const [estBusy, setEstBusy] = useState<"" | "send" | "convert">("");
+  async function sendEstimate(way?: SendWay) {
+    setEstBusy("send");
+    try {
+      const r = await api.post<{ ok: boolean; delivery?: Delivery }>(`/orders/${order.id}/send-estimate`, { channel: way || "auto" });
+      flashDelivery(flash, r?.delivery, "Estimate saved on the job");
+      setThreadKey((k) => k + 1);
+    } catch (e: any) { flash(e.message || "Couldn't send the estimate", "warn"); }
+    finally { setEstBusy(""); }
+  }
+  // E1/E4 — an approved estimate becomes the work order (parts come out of stock).
+  async function convertEstimate() {
+    if (!(await confirmDialog("Turn this estimate into a work order? Parts will be taken from stock.", { title: "Convert to work order", confirmLabel: "Convert" }))) return;
+    setEstBusy("convert");
+    try {
+      const r = await api.post<{ ok: boolean; order_id?: string }>(`/orders/${order.id}/convert`, {});
+      flash("Now a work order");
+      onChanged?.();
+      if (r?.order_id && r.order_id !== order.id) { onClose(); nav(`/orders?open=${r.order_id}`); }
+      else await reload();
+    } catch (e: any) { flash(e.message || "Couldn't convert the estimate", "warn"); }
+    finally { setEstBusy(""); }
+  }
+  // J1 — customer signs on the shop's screen (e.g. at pick-up).
+  const [sigOpen, setSigOpen] = useState(false);
+  const [sigBusy, setSigBusy] = useState(false);
+  async function saveSignature(signature: string, note: string) {
+    setSigBusy(true);
+    try {
+      await api.post(`/orders/${order.id}/signature`, { signature, note: note || undefined });
+      setSigOpen(false); flash("Signature saved"); await reload(); onChanged?.();
+    } catch (e: any) { flash(e.message || "Couldn't save the signature", "warn"); }
+    finally { setSigBusy(false); }
+  }
+  // G3 — both customer message boxes read one thread; bump this so the other box reloads.
+  const [threadKey, setThreadKey] = useState(0);
   async function markDone() {
     try { await api.post(`/orders/${order.id}/complete`, {}); onChanged?.(); onClose(); }
     catch (e: any) { flash(`Cannot close: ${e.message}`); }
@@ -198,7 +249,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   async function printItemised() {
     try {
       const t = await api.get<any>("/documents/templates");
-      const want = (order as any).is_estimate ? "estimate" : "work_order";
+      const want = isEst ? "estimate" : "work_order";
       const tpls = (t?.items || []).filter((x: any) => x.doc_type === want);
       const tpl = tpls.find((x: any) => x.is_default) || tpls[0];
       if (!tpl) { flash("Add a work order template first (Settings → Documents)"); return; }
@@ -239,7 +290,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             <span className="tabular-nums text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-100 text-ink-secondary whitespace-nowrap">{woNum}</span>
             <h3 className="text-base font-semibold text-ink-primary tracking-tight">{hasDevice ? devTitle : (c.name || "Work order")}</h3>
             <StatusControl statuses={statuses} currentKey={d.status} elapsedMin={timing?.elapsed_min}
-              isEstimate={!!(order as any).is_estimate} onChange={changeStatus} />
+              isEstimate={isEst} onChange={changeStatus} />
             {urgent && (
               <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200 flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />{(d.priority ?? 0) >= 2 ? "Urgent" : "High priority"}
@@ -248,7 +299,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
           </div>
           <div className="flex items-center gap-1.5 ml-auto">
             {/* 144au — job timer as a header pill: always reachable on every tab (Jobber pattern) */}
-            {!(order as any).is_estimate && (timerRunning ? (
+            {!isEst && (timerRunning ? (
               <button onClick={stopAllTimers} title="Stop the job timer"
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -300,7 +351,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100 transition-colors" title="Close"><M n="close" c="text-lg" /></button>
           </div>
         </header>
-        {partsOpen && <PartsPOPanel orderId={order.id} lines={(d.lines || []) as any[]} canBuy={canBuy} isEstimate={!!(order as any).is_estimate}
+        {partsOpen && <PartsPOPanel orderId={order.id} lines={(d.lines || []) as any[]} canBuy={canBuy} isEstimate={isEst}
           onClose={() => setPartsOpen(false)} onChanged={() => { loadIncomingPo(); reload(); }} />}
 
         <div className="px-6 py-2 border-b border-slate-200/70 bg-white/95 flex-shrink-0">
@@ -331,6 +382,18 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                 {timing.confidence === "low" && <span className="text-ink-tertiary" title={`Based on ${timing.sample_n} past job(s)`}>· rough</span>}
               </span>
             )}
+          </div>
+        )}
+
+        {/* I6/E1 — an estimate's own actions: send it to the customer, or turn it into the job */}
+        {isEst && (
+          <div className="px-4 sm:px-6 py-2.5 border-b border-slate-200/70 bg-white flex-shrink-0 flex flex-wrap items-center gap-2">
+            <SendMenu label="Send estimate" busy={estBusy === "send"} onSend={sendEstimate} />
+            <button type="button" onClick={convertEstimate} disabled={!!estBusy}
+              className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 flex items-center gap-1.5 disabled:opacity-60">
+              <M n="build" c="text-xs" />{estBusy === "convert" ? "Converting…" : "Convert to work order"}
+            </button>
+            <span className="ml-auto text-[11px] text-ink-tertiary">{(d as any).estimate_approved_at ? "The customer approved this estimate." : "The customer can approve it from their tracking link."}</span>
           </div>
         )}
 
@@ -409,6 +472,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                   <div className="mt-3 pt-2.5 border-t border-slate-100 text-xs text-ink-tertiary flex items-center justify-between">
                     {dev.serial && <span>Serial <span className="font-mono text-ink-secondary">{dev.serial}</span></span>}{dev.imei && <span>IMEI <span className="font-mono text-ink-secondary">{dev.imei}</span></span>}
                   </div>)}
+                  <DevicePasscode assetId={String(dev.id)} hasPasscode={!!dev.has_passcode} onFlash={flash}
+                    onChanged={(has) => setD((p) => (p.device ? { ...p, device: { ...p.device, has_passcode: has } } : p))} />
                 </div>
                 ) : (
                 <div className="bg-slate-50/60 rounded-xl border border-dashed border-slate-200 p-4 flex items-center justify-between">
@@ -482,6 +547,17 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
               <IntakePhotos orderId={order.id} photos={d.intake_photos} onChanged={reload} onFlash={flash} />
 
+              {/* J1 — the customer's signature on this job, if they've signed */}
+              {d.signature && (
+                <div className="bg-white rounded-xl border border-slate-200/90 p-3.5 flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2"><M n="draw" c="text-base text-primary" /><h5 className="text-xs font-bold text-ink-primary">Customer signature</h5></div>
+                    <img src={d.signature} alt="Customer signature" style={{ background: "#fff" }} className="mt-2 h-16 max-w-[260px] object-contain rounded-lg border border-slate-200" />
+                  </div>
+                  <button onClick={() => setSigOpen(true)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Sign again</button>
+                </div>
+              )}
+
               {/* Barcode */}
               <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 flex items-center justify-between shadow-clay-sm">
                 <div className="flex items-center gap-3">
@@ -496,16 +572,17 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
           {tab === "services" && (
             <div className="space-y-4">
               <ServicesTab orderId={order.id} deviceId={d.device?.id} lines={d.lines} total={d.total} onFlash={flash} onChanged={reload}
-                labor={labor} onClockIn={(lineId) => startTimer(lineId)} isEstimate={!!(order as any).is_estimate} emps={emps}
+                labor={labor} onClockIn={(lineId) => startTimer(lineId)} isEstimate={isEst} emps={emps}
                 locked={isClosed && !can("can_edit_closed_ticket")} />
             </div>
           )}
           {tab === "checklists" && <ChecklistsTab orderId={order.id} typeId={(d as any).type_id} />}
           {tab === "invoices" && <InvoicesTab orderId={order.id} total={d.total} writtenOff={(d as any).written_off || 0} deposit={(d as any).deposit_amount} currencyCode={(d as any).currency_code} fxRate={(d as any).fx_rate} currencySymbol={(d as any).currency_symbol} onCurrencyChange={(code, rate, symbol) => setD({ ...d, currency_code: code, fx_rate: rate, currency_symbol: symbol } as any)} onFlash={flash} />}
-          {tab === "activity" && (<>
-            <ConversationPanel orderId={order.id} />
-            <ActivityTab orderId={order.id} clientName={c.name} clientPhone={c.phone} onFlash={flash} />
-          </>)}
+          {/* G3 — one customer conversation: ActivityTab shows the shared thread and its message box */}
+          {tab === "activity" && (
+            <ActivityTab orderId={order.id} clientName={c.name} clientPhone={c.phone} onFlash={flash}
+              threadKey={threadKey} onSent={() => setThreadKey((k) => k + 1)} />
+          )}
         </div>
 
         {/* Footer */}
@@ -517,6 +594,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               {(d as any).public_token && <a href={`/track/${(d as any).public_token}`} target="_blank" rel="noopener noreferrer" className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-0.5 hover:underline">Open<M n="open_in_new" c="text-xs" /></a>}
             </span>
             <button onClick={printWO} className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-1 border border-slate-200 rounded-lg px-2 py-1 bg-white"><M n="print" c="text-xs" />Print WO</button>
+            <button onClick={() => setSigOpen(true)} className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-1 border border-slate-200 rounded-lg px-2 py-1 bg-white"><M n="draw" c="text-xs" />{d.signature ? "Signed · sign again" : "Customer signature"}</button>
             {hasKit && can("can_print_itemised_copy") && <button onClick={printItemised} className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-1 border border-slate-200 rounded-lg px-2 py-1 bg-white"><M n="receipt_long" c="text-xs" />Print itemised copy</button>}
             <button onClick={del} className="text-xs text-rose-600 hover:text-rose-700 font-semibold flex items-center gap-1 hover:bg-rose-50 rounded-lg px-2 py-1 transition-colors"><M n="delete" c="text-xs" />Delete</button>
           </div>
@@ -526,11 +604,65 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
           </div>
         </footer>
 
-        {toast && <div className="absolute bottom-20 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2 rounded-xl shadow-clay-drawer z-20">{toast}</div>}
+        {toast && <div role="status" className={`absolute bottom-20 left-1/2 -translate-x-1/2 max-w-[90%] text-xs font-semibold px-4 py-2 rounded-xl shadow-clay-drawer z-20 ${toast.tone === "warn" ? "bg-amber-50 text-amber-900 border border-amber-300 flex items-start gap-1.5" : "bg-ink-primary text-white"}`}>{toast.tone === "warn" && <M n="info" c="text-sm" />}{toast.m}</div>}
+        {sigOpen && <SignaturePad busy={sigBusy} onSave={saveSignature} onClose={() => setSigOpen(false)}
+          hint={d.signature ? "This replaces the signature already on the job." : "Ask the customer to sign in the box."} />}
       </div>
 
       {sub === "client" && c.id && <ClientDrawer woNum={woNum} clientId={String(c.id)} onClose={() => setSub(null)} onOpenAsset={() => setSub("asset")} />}
       {sub === "asset" && dev.id && <AssetDrawer woNum={woNum} assetId={String(dev.id)} onClose={() => setSub(null)} />}
+    </div>
+  );
+}
+
+/* ---- J3 device passcode — hidden until someone allowed asks to see it (each look is logged) ---- */
+export function DevicePasscode({ assetId, hasPasscode, onFlash, onChanged }: {
+  assetId: string; hasPasscode: boolean; onFlash: Flash; onChanged: (has: boolean) => void;
+}) {
+  const [shown, setShown] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setShown(null); setEditing(false); }, [assetId]);
+  async function reveal() {
+    setBusy(true);
+    try { const r = await api.get<{ passcode: string | null }>(`/assets/${assetId}/passcode`); setShown(r?.passcode ?? ""); }
+    catch (e: any) { onFlash(e.message || "Couldn't show the passcode", "warn"); }
+    finally { setBusy(false); }
+  }
+  async function save(passcode: string | null) {
+    setBusy(true);
+    try {
+      const r = await api.put<{ ok: boolean; has_passcode: boolean }>(`/assets/${assetId}/passcode`, { passcode });
+      onChanged(!!r?.has_passcode); setEditing(false); setVal(""); setShown(null);
+      onFlash(passcode ? "Passcode saved" : "Passcode removed");
+    } catch (e: any) { onFlash(e.message || "Couldn't save the passcode", "warn"); }
+    finally { setBusy(false); }
+  }
+  const link = "text-[11px] font-semibold text-primary hover:underline disabled:opacity-50";
+  return (
+    <div onClick={(e) => e.stopPropagation()} className="mt-2.5 pt-2.5 border-t border-slate-100 text-xs text-ink-tertiary cursor-default">
+      {editing ? (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button type="button" disabled={busy || !val.trim()} onClick={() => save(val.trim())} className="px-2.5 py-1 rounded-lg bg-primary text-white text-[11px] font-bold disabled:opacity-50">Save</button>
+          <input type="password" autoComplete="off" autoFocus value={val} onChange={(e) => setVal(e.target.value)} aria-label="Device passcode"
+            onKeyDown={(e) => { if (e.key === "Enter" && val.trim()) save(val.trim()); if (e.key === "Escape") setEditing(false); }}
+            placeholder="New passcode" className="glass-input flex-1 min-w-[120px] py-1 px-2 text-xs font-mono rounded-lg" />
+          {hasPasscode && <button type="button" disabled={busy} onClick={() => save(null)} className="text-[11px] font-semibold text-rose-600 hover:underline">Remove</button>}
+          <button type="button" onClick={() => { setEditing(false); setVal(""); }} className="text-[11px] font-semibold text-ink-tertiary hover:text-ink-primary">Cancel</button>
+        </div>
+      ) : hasPasscode ? (
+        <div className="flex items-center gap-2">
+          <M n="lock" c="text-sm" />
+          <span>Passcode <span className="font-mono text-ink-secondary">{shown !== null ? (shown || "(empty)") : "••••"}</span></span>
+          {shown === null
+            ? <button type="button" disabled={busy} onClick={reveal} className={link}>Show</button>
+            : <button type="button" onClick={() => setShown(null)} className={link}>Hide</button>}
+          <button type="button" onClick={() => setEditing(true)} className="ml-auto text-[11px] font-semibold text-ink-tertiary hover:text-ink-primary">Change</button>
+        </div>
+      ) : (
+        <button type="button" onClick={() => setEditing(true)} className="flex items-center gap-1 text-[11px] font-semibold text-ink-tertiary hover:text-primary"><M n="lock" c="text-sm" />Add device passcode</button>
+      )}
     </div>
   );
 }
@@ -1369,6 +1501,13 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
   const [amount, setAmount] = useState(""); const [account, setAccount] = useState(""); const [method, setMethod] = useState("cash");
   const load = () => api.get<any>(`/cash/orders/${orderId}/invoices`).then(setData).catch(() => setData({ invoices: [], payments: [] }));
   useEffect(() => { load(); }, [orderId]);
+  // I6 — email or text the invoice to the customer; show what really happened.
+  const [sendingInv, setSendingInv] = useState<string | null>(null);
+  async function sendInv(id: string, way?: SendWay) {
+    setSendingInv(id);
+    try { const r = await sendInvoice(id, way); onFlash(r.text, r.tone); load(); } catch (e: any) { onFlash(e.message || "Couldn't send the invoice", "warn"); }
+    finally { setSendingInv(null); }
+  }
   // Rewards & credits — redeem loyalty points / coupon / gift card against this order.
   const [rwPts, setRwPts] = useState(""); const [rwCoupon, setRwCoupon] = useState(""); const [rwGift, setRwGift] = useState(""); const [rwBusy, setRwBusy] = useState(false);
   async function redeem(kind: "loyalty" | "coupon" | "gift") {
@@ -1509,12 +1648,13 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
           <div className="p-3.5 border-b border-slate-100 flex items-center justify-between"><h5 className="text-xs font-bold text-ink-primary">Invoices</h5><span className="text-[11px] text-ink-tertiary">{data.invoices.length} billing records</span></div>
           <table className="w-full text-xs text-left">
-            <thead className="bg-slate-50 text-[11px] text-ink-tertiary font-bold"><tr><th className="py-2.5 px-4">Invoice #</th><th className="py-2.5 px-4">Status</th><th className="py-2.5 px-4 text-right">Amount</th></tr></thead>
+            <thead className="bg-slate-50 text-[11px] text-ink-tertiary font-bold"><tr><th className="py-2.5 px-4">Invoice #</th><th className="py-2.5 px-4">Status</th><th className="py-2.5 px-4 text-right">Amount</th><th className="py-2.5 px-4"><span className="sr-only">Send</span></th></tr></thead>
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
               {data.invoices.map((i) => (
                 <tr key={i.id} className="hover:bg-slate-50/50"><td className="py-2.5 px-4 font-mono font-bold text-primary">{i.invoice_number}</td>
                   <td className="py-2.5 px-4"><span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${/(paid|settled)/i.test(i.status) ? "bg-emerald-100 text-emerald-800" : "bg-blue-100 text-blue-800"}`}>{humanize(i.status)}</span></td>
-                  <td className="py-2.5 px-4 text-right tabular-nums font-bold text-ink-primary">{money(i.total)}</td></tr>
+                  <td className="py-2.5 px-4 text-right tabular-nums font-bold text-ink-primary">{money(i.total)}</td>
+                  <td className="py-2 px-4 text-right">{!/(cancel|void)/i.test(i.status || "") && <SendMenu small primary={false} label="Send invoice" busy={sendingInv === i.id} onSend={(w) => sendInv(i.id, w)} />}</td></tr>
               ))}
             </tbody>
           </table>
@@ -1576,7 +1716,114 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
 }
 
 /* ---- Activity tab ---- */
-function ActivityTab({ orderId, onFlash }: { orderId: string; clientName?: string; clientPhone?: string; onFlash: (m: string) => void }) {
+type FeedItem = { id: string; item_type: string; body?: string | null; media_data?: string | null; media_url?: string | null; media_name?: string | null; media_mime?: string | null;
+  visibility?: string | null; author_name?: string | null; created_at?: string };
+type Vis = "private" | "client";
+const FEED_FILTER: Record<string, (i: FeedItem) => boolean> = {
+  "Status changes": (i) => i.item_type === "system" || i.item_type === "status",
+  "Messages": (i) => i.item_type === "client_message",
+  "Notes": (i) => i.item_type === "comment",
+  "Files": (i) => ["photo", "file", "signature"].includes(i.item_type),
+};
+
+/** J2 — who can see a note or file: only the team, or the customer too (on their tracking page). */
+export function VisibilitySwitch({ value, onChange }: { value: Vis; onChange: (v: Vis) => void }) {
+  const opts: [Vis, string, string][] = [["private", "Only staff", "lock"], ["client", "Customer can see", "visibility"]];
+  return (
+    <div role="radiogroup" aria-label="Who can see this" className="inline-flex gap-0.5 rounded-lg bg-slate-100 p-0.5 shrink-0">
+      {opts.map(([k, l, icon]) => (
+        <button key={k} type="button" role="radio" aria-checked={value === k} onClick={() => onChange(k)}
+          className={`px-2 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1 ${value === k ? (k === "client" ? "bg-white text-amber-800 shadow-sm" : "bg-white text-ink-primary shadow-sm") : "text-ink-tertiary hover:text-ink-primary"}`}>
+          <M n={icon} c="text-[13px]" />{l}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** J2 — the job's notes & files: add a note or attach a photo/file, choosing who can see it. */
+export function JobNotes({ orderId, filter, onFlash }: { orderId: string; filter: string; onFlash: Flash }) {
+  const [items, setItems] = useState<FeedItem[] | null>(null);
+  const [text, setText] = useState("");
+  const [vis, setVis] = useState<Vis>("private");
+  const [busy, setBusy] = useState(false);
+  const load = () => api.get<{ items: FeedItem[] }>(`/feed/order/${orderId}`).then((r) => setItems(r.items || [])).catch(() => setItems([]));
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [orderId]);
+  async function addNote() {
+    const body = text.trim(); if (!body || busy) return;
+    setBusy(true);
+    try { await api.post(`/feed/order/${orderId}`, { item_type: "comment", body, visibility: vis }); setText(""); onFlash(vis === "client" ? "Note added. The customer can see it." : "Note added for staff only"); load(); }
+    catch (e: any) { onFlash(e.message || "Couldn't add the note", "warn"); }
+    finally { setBusy(false); }
+  }
+  async function attach(files: FileList | null) {
+    if (!files?.length) return;
+    setBusy(true);
+    try {
+      for (const f of Array.from(files)) {
+        const data = await readAsDataUrl(f);
+        await api.post(`/feed/order/${orderId}`, { item_type: f.type.startsWith("image/") ? "photo" : "file", media_data: data, media_name: f.name, media_mime: f.type || undefined, body: text.trim() || undefined, visibility: vis });
+      }
+      setText(""); onFlash(files.length === 1 ? "File added" : `${files.length} files added`); load();
+    } catch (e: any) { onFlash(e.message || "Upload failed (the file may be too large)", "warn"); }
+    finally { setBusy(false); }
+  }
+  const pick = FEED_FILTER[filter];
+  const shown = (items || []).filter((i) => (pick ? pick(i) : true));
+  const icon = (t: string) => t === "photo" ? "image" : t === "file" ? "attach_file" : t === "signature" ? "draw" : t === "client_message" ? "forum" : t === "comment" ? "sticky_note_2" : "bolt";
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm space-y-3">
+      <div className="flex items-center gap-2"><M n="sticky_note_2" c="text-primary text-base" /><h5 className="text-xs font-bold text-ink-primary">Notes &amp; files</h5></div>
+      <div className="space-y-2">
+        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} aria-label="Add a note" placeholder="Add a note, e.g. ordered the screen, back Thursday"
+          className="glass-input w-full py-2 px-3 text-xs rounded-xl resize-none" />
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={addNote} disabled={busy || !text.trim()} className="px-3.5 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-40">Add note</button>
+          <label className={`px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex items-center gap-1 cursor-pointer ${busy ? "opacity-50 pointer-events-none" : ""}`}>
+            <input type="file" multiple className="hidden" aria-label="Attach photo or file" onChange={(e) => { attach(e.target.files); e.currentTarget.value = ""; }} />
+            <M n="attach_file" c="text-sm" />Attach photo or file
+          </label>
+          <span className="ml-auto"><VisibilitySwitch value={vis} onChange={setVis} /></span>
+        </div>
+        {vis === "client" && <p className="text-[11px] text-amber-700">The customer will see this on their tracking page.</p>}
+      </div>
+      {!items && <div className="text-[11px] text-ink-tertiary">Loading…</div>}
+      {items && shown.length === 0 && <div className="text-[11px] text-ink-tertiary">{items.length ? "Nothing of this kind yet." : "No notes or files yet."}</div>}
+      {shown.length > 0 && (
+        <ol className="space-y-2.5">
+          {shown.map((i) => {
+            const isImg = i.item_type === "photo" || i.item_type === "signature" || (i.media_mime || "").startsWith("image/");
+            return (
+              <li key={i.id} className="flex gap-2.5">
+                <span className="mt-0.5 w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 bg-slate-100 text-ink-tertiary"><M n={icon(i.item_type)} c="text-[13px]" /></span>
+                <div className="min-w-0 flex-1">
+                  {i.body && <p className="text-xs text-ink-primary whitespace-pre-line break-words">{i.body}</p>}
+                  {isImg && (i.media_url || i.media_data) && (i.media_url
+                    ? <AuthedImage src={i.media_url} alt={i.media_name || "attachment"} className="mt-1 h-20 max-w-[200px] object-cover rounded-lg border border-slate-200" />
+                    : <img src={i.media_data!} alt={i.media_name || "attachment"} className="mt-1 h-20 max-w-[200px] object-cover rounded-lg border border-slate-200" />)}
+                  {!isImg && i.media_name && <p className="text-xs text-ink-secondary flex items-center gap-1"><M n="description" c="text-sm" />{i.media_name}</p>}
+                  <p className="text-[11px] text-ink-tertiary flex flex-wrap items-center gap-1.5">
+                    <span>{i.item_type === "system" ? "Automatic" : i.author_name || "Staff"} · {i.created_at ? new Date(i.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}</span>
+                    {i.visibility === "client" && <span className="px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-200 font-semibold flex items-center gap-0.5"><M n="visibility" c="text-[11px]" />Customer can see</span>}
+                  </p>
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+function ActivityTab({ orderId, clientPhone, onFlash, threadKey, onSent }: { orderId: string; clientName?: string; clientPhone?: string; onFlash: Flash; threadKey?: number; onSent?: () => void }) {
+  const [msg, setMsg] = useState("");
+  const [channel, setChannel] = useState<SendChannel>("auto");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ text: string; tone?: "warn" | "error" } | null>(null);
+  // G3 — the same customer thread the conversation box above shows.
+  const { msgs, load: loadThread } = useThread(orderId, threadKey);
+  const [f, setF] = useState("All");
   const [aiSum, setAiSum] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
   async function aiSummary() {
@@ -1586,9 +1833,28 @@ function ActivityTab({ orderId, onFlash }: { orderId: string; clientName?: strin
   }
   // 144jc — real notification delivery log for this order
   const [logs, setLogs] = useState<any[]>([]);
-  useEffect(() => { api.get<any>(`/notifications/log?order_id=${orderId}`).then((r) => setLogs(r.items || [])).catch(() => setLogs([])); }, [orderId]);
+  const loadLogs = () => api.get<any>(`/notifications/log?order_id=${orderId}`).then((r) => setLogs(r.items || [])).catch(() => setLogs([]));
+  useEffect(() => { loadLogs(); /* eslint-disable-next-line */ }, [orderId, threadKey]);
+  const send = async () => {
+    const body = msg.trim(); if (!body || busy) return;
+    setBusy(true);
+    try {
+      const r = await api.post<ThreadSent>(`/orders/${orderId}/customer-reply`, { body, channel });
+      setMsg("");
+      const text = deliveryText(r?.delivery, "Saved on the job.");
+      const tone = deliveryTone(r?.delivery);
+      setNote({ text, tone }); onFlash(text, tone);
+      await loadThread(); onSent?.();
+    } catch (e: any) {
+      const text = e?.message || "Couldn't send that message";
+      setNote({ text, tone: "error" }); onFlash(text, "warn");
+    } finally { setBusy(false); }
+  };
   const statusStyle = (s: string) => s === "sent" ? "bg-emerald-500" : s === "failed" ? "bg-rose-500" : s === "scheduled" ? "bg-amber-500" : "bg-slate-400";
   const fmtWhen = (iso?: string) => { if (!iso) return ""; try { return new Date(iso).toLocaleString(); } catch { return iso; } };
+  const fmtShort = (iso?: string) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
+  const showLogs = f === "All" || f === "Messages";
+  const showThread = f === "All" || f === "Messages";
   return (
     <div className="space-y-5">
       <div className="bg-indigo-50 rounded-2xl border border-indigo-100 p-3.5 shadow-sm">
@@ -1598,7 +1864,14 @@ function ActivityTab({ orderId, onFlash }: { orderId: string; clientName?: strin
         </div>
         {aiSum && <p className="text-xs text-ink-secondary mt-2 leading-relaxed">{aiSum}</p>}
       </div>
-      <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm space-y-4">
+      <div className="flex flex-wrap items-center gap-1.5 text-xs">
+        {["All", "Status changes", "Payments", "Messages", "Notes", "Files"].map((c) => (
+          <button key={c} onClick={() => setF(c)} aria-pressed={f === c} className={`px-2.5 py-1 rounded-full text-[11px] ${f === c ? "bg-primary text-white font-semibold" : "bg-white border border-slate-200 text-ink-secondary hover:bg-slate-50"}`}>{c}</button>
+        ))}
+      </div>
+      {f !== "Payments" && <JobNotes orderId={orderId} filter={f} onFlash={onFlash} />}
+      {f === "Payments" && <p className="text-[11px] text-ink-tertiary">Payments for this job are on the Invoices &amp; payments tab.</p>}
+      {showLogs && <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm space-y-4">
         <h5 className="text-xs font-bold text-ink-primary">Notifications &amp; delivery</h5>
         {logs.length === 0 ? (
           <div className="text-[11px] text-ink-tertiary">No notifications sent for this order yet.</div>
@@ -1620,7 +1893,32 @@ function ActivityTab({ orderId, onFlash }: { orderId: string; clientName?: strin
             ))}
           </div>
         )}
-      </div>
+      </div>}
+      {showThread && <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm space-y-3">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+          <div className="flex items-center gap-2"><M n="chat" c="text-primary text-base" /><h5 className="text-xs font-bold text-ink-primary">Messages with the customer</h5></div>
+          <span className="text-[11px] text-ink-tertiary font-semibold flex items-center gap-1"><M n="call" c="text-[13px]" />{clientPhone || "No phone number"}</span>
+        </div>
+        {msgs && msgs.length > 0 && (
+          <div className="space-y-3 p-2 bg-slate-50/70 rounded-xl max-h-48 overflow-y-auto">
+            {msgs.map((m) => {
+              const staff = m.from === "staff";
+              return (
+                <div key={m.id} className={`flex flex-col max-w-[80%] ${staff ? "items-end ml-auto" : "items-start"}`}>
+                  <div className={`p-2.5 rounded-2xl shadow-2xs text-xs whitespace-pre-wrap break-words ${staff ? "bg-primary text-white rounded-tr-none" : "bg-white border border-slate-200 text-ink-primary rounded-tl-none"}`}>{m.body}</div>
+                  <span className="text-[11px] text-slate-400 mx-1 mt-0.5 tabular-nums">{m.who || (staff ? "Staff" : "Customer")} · {fmtShort(m.at)}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div className="flex items-center gap-2 pt-1">
+          <ChannelPicker id={`act-ch-${orderId}`} value={channel} onChange={setChannel} />
+          <input value={msg} onChange={(e) => setMsg(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} aria-label="Message to the customer" className="glass-input flex-1 py-2 px-3 text-xs rounded-xl" placeholder="Send the customer an update…" />
+          <button onClick={send} disabled={busy || !msg.trim()} className="px-3.5 py-2 rounded-xl bg-primary text-white text-xs font-bold hover:brightness-110 flex items-center gap-1 disabled:opacity-40"><span>{busy ? "Sending…" : "Send"}</span><M n="send" c="text-xs" /></button>
+        </div>
+        <DeliveryNote note={note} />
+      </div>}
     </div>
   );
 }
