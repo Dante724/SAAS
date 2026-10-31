@@ -5,13 +5,13 @@
 - organisations.max_sessions_per_login: how many devices one login may use at once (null = no limit).
 
 Revision ID: ds144a1
-Revises: opd1
+Revises: wsc1
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "ds144a1"
-down_revision = "opd1"
+down_revision = "wsc1"
 branch_labels = None
 depends_on = None
 
