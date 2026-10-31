@@ -1,16 +1,15 @@
+import base64 as _base64
 from typing import Optional
 
-import base64 as _base64
-
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from backend.core import paging as _paging
 from backend.db.database import get_db
-from backend.models import Employee, Part, StockLevel, StockMovement
+from backend.models import Employee, Part, SerializedItem, StockLevel, StockMovement
 from backend.services import stock_posting
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.numbering import next_number
@@ -44,6 +43,7 @@ class StockAdjust(BaseModel):
 # qty field (e.g. a 13-digit EAN), not a real count — reject it at the boundary so
 # it never lands in qty_available and blows up the inventory reports.
 import math as _math
+
 MAX_STOCK_QTY = 1_000_000
 
 
@@ -146,7 +146,6 @@ async def scan_resolve(
         matched_on = ("sku" if part.sku == code else "barcode" if part.barcode == code
                       else "code" if part.code == code else "mpn")
     else:
-        from backend.models import SerializedItem
         si = (await db.execute(select(SerializedItem).where(
             SerializedItem.org_id == current.org_id,
             SerializedItem.serial_number == code))).scalars().first()
@@ -322,7 +321,7 @@ async def _do_posting(db, org_id, created_by_id, location_id, supplier_id, lines
             db, org_id=org_id, part=part, location_id=location_id,
             qty=qty, unit_cost=cost, created_by_id=created_by_id,
             ref_type="supplier" if supplier_id else "posting", ref_id=supplier_id,
-            create_batch=True, set_last_cost=True)
+            serials=_g(ln, "serials") or None, create_batch=True, set_last_cost=True)
         # 144bo: fresh stock arrived — reset low-stock dedupe + ping any job that was waiting.
         after_oh = await _alerts.global_on_hand(db, part.id)
         await _alerts.on_received(db, org_id, part, before_oh, after_oh)
@@ -444,6 +443,7 @@ class CommitRow(BaseModel):
     qty: float = 1
     purchase_price: Optional[float] = None
     markup_pct: Optional[float] = None
+    serials: Optional[list[str]] = Field(None, max_length=1000)   # one per unit (serialized products)
 
 
 class PostingCommitIn(BaseModel):
@@ -451,6 +451,49 @@ class PostingCommitIn(BaseModel):
     supplier_id: Optional[str] = None
     note: Optional[str] = None
     rows: list[CommitRow]
+    generate_serials: bool = False       # fill missing serials from the shop's serial template
+
+
+async def _check_posting_serials(db, current, rows: list, parts: dict, generate: bool) -> None:
+    """Serials on a posting: one per unit of a serialized product, none already in stock, none
+    twice in the file; missing ones generated on request. Fills each row's `serials` in place."""
+    from backend.models import Organisation
+    from backend.services import importer
+    org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one()
+    ctx = importer.Ctx(db=db, current=current, org=org, options={}, perms={})
+    ctx.data["serials_in_stock"] = set((await db.execute(select(SerializedItem.serial_number).where(
+        SerializedItem.org_id == current.org_id,
+        SerializedItem.status.in_(("in_stock", "allocated_to_order"))))).scalars())
+    ctx.data["serial_n"] = (await db.execute(select(func.count()).select_from(SerializedItem).where(
+        SerializedItem.org_id == current.org_id))).scalar() or 0
+    seen: set = set()
+    for i, ln in enumerate(rows, start=1):
+        sns = [s.strip() for s in (ln.get("serials") or []) if s and s.strip()]
+        part = parts[ln["part_id"]]
+        if not part.serialized:
+            if sns:
+                raise HTTPException(422, f"Line {i}: {part.name} isn't serialized — remove the serial numbers")
+            continue
+        if not sns and not generate:
+            continue                  # serials are optional on a posting unless asked for
+        qty = float(ln["qty"] or 0)
+        if not qty.is_integer():
+            raise HTTPException(422, f"Line {i}: serialized stock must be a whole number of units")
+        for sn in sns:
+            if sn in seen:
+                raise HTTPException(422, f"Serial {sn} is listed twice")
+            if sn in ctx.data["serials_in_stock"]:
+                raise HTTPException(409, f"Serial {sn} is already in stock")
+            seen.add(sn)
+            ctx.seen[("serial", sn)] = i
+        if len(sns) > qty:
+            raise HTTPException(422, f"Line {i}: more serial numbers ({len(sns)}) than units ({int(qty)})")
+        if len(sns) < qty:
+            if not generate:
+                raise HTTPException(422, f"Line {i}: {int(qty)} units of {part.name} need {int(qty)} serial numbers "
+                                         f"({len(sns)} given)")
+            sns += importer.generate_serials(ctx, int(qty) - len(sns), importer.Row(row=i, rec={}))
+        ln["serials"] = sns
 
 
 @router.post("/postings/commit", status_code=201)
@@ -478,13 +521,19 @@ async def commit_posting(
             part = Part(org_id=current.org_id, name=r.new_name.strip(),
                         sku=(r.new_sku or "").strip() or None,
                         mpn=await _checked_mpn(db, current.org_id, r.new_mpn),   # one active product per MPN
-                        cost_price=cost, sell_price=sell)
+                        cost_price=cost, sell_price=sell, serialized=bool(r.serials))
             db.add(part)
             await db.flush()
             pid = part.id
             created += 1
-        lines.append({"part_id": pid, "qty": r.qty,
+        lines.append({"part_id": pid, "qty": r.qty, "serials": r.serials,
                       "purchase_price": r.purchase_price, "markup_pct": r.markup_pct})
+    ids = {ln["part_id"] for ln in lines}
+    parts = {p.id: p for p in (await db.execute(select(Part).where(
+        Part.id.in_(ids), Part.org_id == current.org_id))).scalars()}
+    if len(parts) != len(ids):
+        raise HTTPException(404, "Product not found")
+    await _check_posting_serials(db, current, lines, parts, data.generate_serials)
     posted, total_cost = await _do_posting(
         db, current.org_id, current.id, data.location_id, data.supplier_id, lines)
     from backend.routers.catalog_products import commit_mpn_safe
@@ -576,6 +625,7 @@ async def parts_to_order(
     supplier group into a PO via the existing /inventory/po endpoint."""
     from collections import defaultdict
     from datetime import datetime as _dt
+
     from backend.models import Order, OrderLine, OrderStatus, POLine, Supplier
 
     closed = {"closed", "done", "delivered", "dropped", "cancelled", "completed", "picked_up"}
@@ -1733,8 +1783,7 @@ async def receive_po(
     if received_any:
         fully = all((pl.qty_received or 0) >= pl.qty_ordered for pl in po_lines)
         po.status = "received" if fully else "partial"
-        from backend.services.po_links import notify_po_change
-        from backend.services.po_links import writes_off_automatically
+        from backend.services.po_links import notify_po_change, writes_off_automatically
         arrived = "all parts arrived" if fully else "some parts arrived"
         if not await writes_off_automatically(db, current.org_id):
             arrived += ", ready to write off on the job"

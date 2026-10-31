@@ -13,12 +13,13 @@ import SupplierDrawer from "./SupplierDrawer";
 import { useTerminology } from "../../lib/useTerminology";
 import Pager from "../../components/Pager";
 import { useDebounced, useServerPage } from "../../hooks/useServerPage";
-import { confirmDialog, alertDialog } from "../../lib/dialog";
+import { confirmDialog } from "../../lib/dialog";
 import TagFilterChip from "./TagFilterChip";
 import { useMe } from "../../context/Me";
 import { Avatar } from "../orders/look";
 import { MoreMenu, btnGhost, btnPrimary } from "../invoices/billing";
 import { hueText, tint } from "../../lib/tint";
+import ImportDrawer from "../../components/ImportDrawer";
 
 type Client = { id: string; name?: string; phone?: string; email?: string; loyalty_tier?: string; balance?: number; devices?: any[]; order_count?: number };
 type Tab = "clients" | "suppliers";
@@ -37,6 +38,7 @@ export default function ClientsHub() {
   const term = useTerminology();
   const { can } = useMe();
   const [tab, setTab] = useState<Tab>("clients");
+  const [importing, setImporting] = useState<"clients" | "suppliers" | null>(null);
   const [suppliers, setSuppliers] = useState<Supplier[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState("");
@@ -115,25 +117,6 @@ export default function ClientsHub() {
     catch (e: any) { setErr(e.message || "Undo failed"); }
     finally { setBulkBusy(false); }
   }
-  async function importCsv(file: File) {
-    const text = await file.text();
-    const lines = text.split(/\r?\n/).filter((l) => l.trim());
-    if (lines.length < 2) { await alertDialog("CSV needs a header row and at least one contact."); return; }
-    const parse = (l: string) => l.match(/("([^"]|"")*"|[^,]*)(,|$)/g)!.slice(0, -1).map((c) => c.replace(/,$/, "").replace(/^"|"$/g, "").replace(/""/g, '"').trim());
-    const IMPORTABLE = ["name", "phone", "email", "address", "notes", "source", "discount_card"];
-    const header = parse(lines[0]);
-    const mapping: Record<string, string> = {};
-    header.forEach((h) => { const f = h.toLowerCase().trim(); if (IMPORTABLE.includes(f)) mapping[h] = f; });
-    if (!Object.values(mapping).includes("name")) { await alertDialog('CSV needs a "Name" column (plus Phone or Email).'); return; }
-    const rows = lines.slice(1).map((l) => { const cells = parse(l); return Object.fromEntries(header.map((h, i) => [h, cells[i] ?? ""])); });
-    setBulkBusy(true);
-    try {
-      const r = await api.post<any>("/clients/import", { rows, mapping });
-      await alertDialog(`Imported: ${r.created ?? 0} new, ${r.updated ?? 0} updated, ${r.skipped ?? 0} skipped.`);
-      loadClients();
-    } catch (e: any) { await alertDialog(e.message || "Import failed"); }
-    finally { setBulkBusy(false); }
-  }
   function bulkExport() {
     const chosen = [...sel].map((id) => cp.seen.get(id)).filter(Boolean) as Client[];
     const head = ["Name", "Phone", "Email", "Tier", "Balance", "Orders"];
@@ -146,6 +129,7 @@ export default function ClientsHub() {
 
   return (
     <Shell title="Contacts">
+      {importing && <ImportDrawer kind={importing} onClose={() => setImporting(null)} onDone={() => { if (importing === "clients") loadClients(); else loadSuppliers(); }} />}
       <div className="flex-1 overflow-y-auto">
         <div className="px-6 pt-4 flex items-center gap-1 border-b border-slate-200/70">
           {(["clients", "suppliers"] as Tab[]).map((t) => (
@@ -161,10 +145,12 @@ export default function ClientsHub() {
             {tab === "clients"
               ? <div className="flex items-center gap-2">
                   {can("can_create_clients") && <button onClick={() => setNewClient(true)} className={btnPrimary}><M n="add" c="text-sm" />New client</button>}
-                  <label className={`${btnGhost} bg-white cursor-pointer`}><M n="upload" c="text-sm" />Import CSV
-                    <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) importCsv(f); e.target.value = ""; }} /></label>
+                  {can("can_create_clients") && <button onClick={() => setImporting("clients")} className={`${btnGhost} bg-white`}><M n="upload_file" c="text-sm" />Import</button>}
                 </div>
-              : <button onClick={() => setNewSupplier(true)} className={btnPrimary}><M n="add" c="text-sm" />New supplier</button>}
+              : <div className="flex items-center gap-2">
+                  <button onClick={() => setNewSupplier(true)} className={btnPrimary}><M n="add" c="text-sm" />New supplier</button>
+                  {can("can_manage_inventory") && <button onClick={() => setImporting("suppliers")} className={`${btnGhost} bg-white`}><M n="upload_file" c="text-sm" />Import</button>}
+                </div>}
             <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
               {tab === "clients" && <TagFilterChip value={tagId} onChange={(id) => { setTagId(id); clearSel(); }} />}
               <div className="relative w-full sm:w-72"><M n="search" c="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" /><input value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search contacts" className="w-full h-9 bg-white border border-slate-200 rounded-lg pl-8 pr-3 text-xs text-ink-primary placeholder:text-ink-placeholder outline-none focus:border-primary focus:ring-2 focus:ring-primary/10" placeholder="Search name, phone or email…" /></div>

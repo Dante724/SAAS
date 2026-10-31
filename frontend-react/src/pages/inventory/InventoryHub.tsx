@@ -6,7 +6,7 @@ import ScanStockPanel from "../../components/ScanStockPanel";
 import { api, openAuthedDoc } from "../../api/client";
 import { isoDate } from "../../lib/localDate";
 import { Product, Supplier, PO, Service, Bundle, Asset, currencySymbol, money } from "./types";
-import { analyzePaste, gridToRows, mergeRemap, loadRememberedMap, saveRememberedMap, FIELD_LABELS, FIELD_ORDER } from "./pasteMap";
+import { analyzePaste, gridToRows, mergeRemap, loadRememberedMap, saveRememberedMap, fileToGrid, mapByHeader, splitSerials, FIELD_LABELS, FIELD_ORDER } from "./pasteMap";
 import type { PasteField, PostRow } from "./pasteMap";
 import InventoryDrawer, { DrawerKind } from "./InventoryDrawer";
 import PODrawer from "./PODrawer";
@@ -1066,7 +1066,11 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
   const [pasteOpen, setPasteOpen] = useState(false); const [pasteText, setPasteText] = useState("");
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null); const [info, setInfo] = useState<string | null>(null);
   const [mapCols, setMapCols] = useState<PasteField[] | null>(null); const [dataGrid, setDataGrid] = useState<string[][] | null>(null);
+  const [fileHeaders, setFileHeaders] = useState<string[] | null>(null);   // set when rows came from an uploaded sheet
+  const [sent, setSent] = useState<PostRow[]>([]);                          // rows sent to preview (serials stay client-side)
+  const [genSerials, setGenSerials] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const sheetRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(() => {});
     api.get<any>("/suppliers").then((r) => setSuppliers(r.items || [])).catch(() => {});
@@ -1080,17 +1084,35 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
     const parsed = gridToRows(grid, map);
     if (!parsed.length) { setErr("Couldn't read any rows from that paste."); return; }
     setErr(null);
-    setRows(parsed); setDataGrid(grid); setMapCols(map); setPasteOpen(false); setPasteText("");
+    setRows(parsed); setDataGrid(grid); setMapCols(map); setFileHeaders(null); setPasteOpen(false); setPasteText("");
     setInfo(hadHeader ? "Detected a header row and mapped columns automatically — check the mapping below." : "Mapped columns automatically — check the mapping below if a column looks wrong.");
   }
-  const clearMap = () => { setMapCols(null); setDataGrid(null); };
+  const clearMap = () => { setMapCols(null); setDataGrid(null); setFileHeaders(null); };
+  const supQ = () => (supplierId ? `&supplier_id=${encodeURIComponent(supplierId)}` : "");
   function remap(col: number, field: PasteField) {
     if (!mapCols || !dataGrid) return;
     // a field can only map to one column: clear it elsewhere first
     const next = mapCols.map((f, c) => (field !== "ignore" && f === field && c !== col ? "ignore" : f)) as PasteField[];
     next[col] = field;
     // mergeRemap keeps any cell the user hand-edited while the mapping bar is open
-    setMapCols(next); setRows(mergeRemap(dataGrid, mapCols, next, rows)); saveRememberedMap(next);
+    setMapCols(next); setRows(mergeRemap(dataGrid, mapCols, next, rows));
+    // a sheet's mapping is remembered per supplier on the server; a paste's in this browser
+    if (fileHeaders) api.put(`/imports/posting/mapping${supplierId ? `?supplier_id=${encodeURIComponent(supplierId)}` : ""}`, { mapping: mapByHeader(fileHeaders, next) }).catch(() => {});
+    else saveRememberedMap(next);
+  }
+  async function onSheet(e: any) {
+    const f = e.target.files?.[0]; if (!f) return;
+    setBusy(true); setErr(null); setInfo(null);
+    try {
+      const fd = new FormData(); fd.append("file", f);
+      const r = await api.postForm<any>(`/imports/parse?kind=posting${supQ()}`, fd);
+      const { grid, map } = fileToGrid(r.headers || [], r.rows || [], r.suggested || {});
+      const parsed = gridToRows(grid, map);
+      if (!parsed.length) { setErr("Couldn't find any product rows in that file — check the column mapping."); }
+      setRows(parsed.length ? parsed : [blank()]); setDataGrid(grid); setMapCols(map); setFileHeaders(r.headers || []);
+      setInfo(`Read ${parsed.length} line${parsed.length === 1 ? "" : "s"} from ${r.file_name || "the file"}. Check the column mapping below — it's remembered${supplierId ? " for this supplier" : ""}.`);
+    } catch (e: any) { setErr(e.message || "Could not read file"); }
+    finally { setBusy(false); if (sheetRef.current) sheetRef.current.value = ""; }
   }
   async function onFile(e: any) {
     const f = e.target.files?.[0]; if (!f) return;
@@ -1107,7 +1129,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
   async function doPreview() {
     const clean = rows.filter((r) => (r.code.trim() || r.mpn.trim() || r.name.trim()) && r.qty > 0);
     if (!clean.length) { setErr("Add at least one row (code, MPN or name + qty)."); return; }
-    setBusy(true); setErr(null);
+    setBusy(true); setErr(null); setSent(clean);
     try {
       const r = await api.post<any>("/inventory/postings/preview", { rows: clean.map((x) => ({ code: x.code || null, mpn: x.mpn || null, name: x.name || null, qty: Number(x.qty), purchase_price: Number(x.purchase_price) || null, markup_pct: x.markup_pct ? Number(x.markup_pct) : null })) });
       setReview((r.rows || []).map((rr: any) => ({ ...rr, chosen: rr.match_status === "matched" ? rr.part_id : (rr.candidates?.[0]?.id || "__new__") })));
@@ -1117,11 +1139,12 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
     if (!review) return;
     setBusy(true); setErr(null);
     try {
+      const sn = (i: number) => { const s = splitSerials(sent[(review[i] as any).index ?? i]?.serials); return s.length ? s : null; };
       const body = {
-        location_id: locId, supplier_id: supplierId || null, note: note || null,
-        rows: review.map((r) => r.chosen && r.chosen !== "__new__"
-          ? { part_id: r.chosen, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null }
-          : { new_name: (r.name || r.code || r.mpn || "").trim(), new_sku: r.code || null, new_mpn: r.mpn || null, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null }),
+        location_id: locId, supplier_id: supplierId || null, note: note || null, generate_serials: genSerials,
+        rows: review.map((r, i) => r.chosen && r.chosen !== "__new__"
+          ? { part_id: r.chosen, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null, serials: sn(i) }
+          : { new_name: (r.name || r.code || r.mpn || "").trim(), new_sku: r.code || null, new_mpn: r.mpn || null, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null, serials: sn(i) }),
       };
       await api.post("/inventory/postings/commit", body);
       onDone();
@@ -1148,9 +1171,11 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
 
           {!review ? (<>
             <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={onFile} />
+            <input ref={sheetRef} type="file" accept=".xlsx,.csv,text/csv" className="hidden" onChange={onSheet} />
             <div className="flex items-center justify-between flex-wrap gap-2">
-              <label className={lbl2} style={{ marginBottom: 0 }}>Rows — Code/SKU · MPN · Name · Qty · Cost · Markup%</label>
-              <div className="flex gap-2">
+              <label className={lbl2} style={{ marginBottom: 0 }}>Rows — Code/SKU · MPN · Name · Qty · Cost · Markup% · Serials</label>
+              <div className="flex gap-2 flex-wrap">
+                <button onClick={() => sheetRef.current?.click()} disabled={busy} className="text-primary text-xs font-semibold flex items-center gap-1 disabled:opacity-50"><M n="upload_file" c="text-sm" />Excel / CSV file</button>
                 <button onClick={() => fileRef.current?.click()} disabled={busy} className="text-primary text-xs font-semibold flex items-center gap-1 disabled:opacity-50"><M n="document_scanner" c="text-sm" />Scan invoice / photo</button>
                 <button onClick={() => setPasteOpen((o) => !o)} className="text-primary text-xs font-semibold flex items-center gap-1"><M n="content_paste" c="text-sm" />Paste from Excel</button>
                 <button onClick={() => { setRows([...rows, blank()]); clearMap(); }} className="text-primary text-xs font-semibold">+ Add row</button>
@@ -1176,13 +1201,13 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
                     </div>
                   ))}
                 </div>
-                <p className="text-[11px] text-ink-tertiary mt-1.5">Remembered for next time.</p>
+                <p className="text-[11px] text-ink-tertiary mt-1.5">{fileHeaders && supplierId ? "Remembered for this supplier." : "Remembered for next time."}</p>
               </div>
             )}
             <div className="space-y-1.5">
               <div className="flex items-center gap-1.5 text-[11px] font-bold text-ink-tertiary px-1"><span className="w-24">Code/SKU</span><span className="w-24">MPN</span><span className="flex-1">Name</span><span className="w-12 text-right">Qty</span><span className="w-16 text-right">Cost</span><span className="w-12 text-right">Mk%</span><span className="w-8" /></div>
               {rows.map((r, i) => (
-                <div key={i} className="flex items-center gap-1.5">
+                <div key={i} className="flex items-center gap-1.5 flex-wrap">
                   <input value={r.code} onChange={(e) => setRow(i, "code", e.target.value)} placeholder="SKU" aria-label="Code or SKU" className={`${fld} w-24 min-w-0`} />
                   <input value={r.mpn} onChange={(e) => setRow(i, "mpn", e.target.value)} placeholder="MPN" aria-label="MPN" className={`${fld} w-24 min-w-0`} />
                   <input value={r.name} onChange={(e) => setRow(i, "name", e.target.value)} placeholder="Product name (if new)" className={`${fld} flex-1`} />
@@ -1190,12 +1215,14 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
                   <input type="number" min={0} value={r.purchase_price} onChange={(e) => setRow(i, "purchase_price", Number(e.target.value))} className={`${fld} w-16 text-right`} />
                   <input type="number" min={0} value={r.markup_pct} onChange={(e) => setRow(i, "markup_pct", Number(e.target.value))} className={`${fld} w-12 text-right`} />
                   <button aria-label="Delete" onClick={() => { setRows(rows.filter((_, j) => j !== i)); clearMap(); }} className="w-8 h-8 rounded-lg hover:bg-rose-50 text-ink-tertiary hover:text-rose-600 flex items-center justify-center"><M n="delete" c="text-sm" /></button>
+                  {r.serials !== undefined && <input value={r.serials} onChange={(e) => setRow(i, "serials", e.target.value)} placeholder="Serials, comma-separated" aria-label="Serial numbers" className={`${fld} basis-full text-xs font-mono`} />}
                 </div>
               ))}
             </div>
             <div><label className={lbl2}>Note / reference</label><textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className={`${fld} w-full`} /></div>
           </>) : (<>
             <p className="text-xs text-ink-secondary">Confirm each row before stock moves. {newCount > 0 && <b className="text-primary">{newCount} new product{newCount === 1 ? "" : "s"} will be created.</b>}</p>
+            <label className="flex items-center gap-2 text-xs text-ink-secondary"><input type="checkbox" checked={genSerials} onChange={(e) => setGenSerials(e.target.checked)} />Generate missing serial numbers for serialized products</label>
             <div className="space-y-1.5">
               {review.map((r, i) => (
                 <div key={i} className="flex items-center gap-2 border border-slate-100 rounded-lg px-2.5 py-2">
@@ -1211,6 +1238,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
                       <div className="text-[11px] text-ink-tertiary">{r.part_id ? `SKU ${r.sku || "—"}` : `New product${r.code ? ` · SKU ${r.code}` : ""}${r.mpn ? ` · MPN ${r.mpn}` : ""}`}</div>
                     )}
                   </div>
+                  {splitSerials(sent[(r as any).index ?? i]?.serials).length > 0 && <span className="text-[11px] text-ink-tertiary">{splitSerials(sent[(r as any).index ?? i]?.serials).length} serials</span>}
                   <span className="text-[11px] text-ink-tertiary">×{r.qty}</span>
                   <span className="text-[11px] tabular-nums text-ink-secondary w-14 text-right">{money(r.purchase_price || 0)}</span>
                 </div>

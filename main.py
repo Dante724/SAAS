@@ -44,6 +44,7 @@ from backend.routers import (
     feedback,
     finance,
     forms,
+    imports,
     inbox,
     industry,
     insights,
@@ -107,7 +108,7 @@ ROUTERS = [
     bins, payroll, leads, pricing, sales, returns, transfers, bundles, appointments,
     chats, resources, timeclock, webhooks, payments, apikeys, v1,
     integrations_qbo, ai, catalog_products, tech, push, checklists, lookups, engage, settings_finance, rbac, directories, analytics, media, compliance, platform, mfa, sso, comms, integrations_xero, integrations_email, integrations_credentials, industry, schedules, conversions, warehouses, tasks, stock_docs, suppliers, printing, inbox, comms_ai, automations, insights, recommendations, order_items, prefs, admin, currencies, tags, telephony, custom_reports, regions, scan,
-    terminals, auto_print, v2,
+    terminals, auto_print, v2, imports,
 ]
 
 

@@ -3520,3 +3520,35 @@ class PaymentWebhookEvent(Base):
     event_id: Mapped[str] = mapped_column(String(255))
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class ImportBatch(Base):
+    """One committed spreadsheet import (Products, Services, Clients, Assets, Suppliers): who,
+    which file, the counts, and what the undo needs — ids created, field values before an update,
+    stock posted. `undone_at` is set once it has been rolled back."""
+    __tablename__ = "import_batches"
+    __table_args__ = (Index("ix_import_batches_org_kind", "org_id", "kind", "created_at"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
+    kind: Mapped[str] = mapped_column(String(20))
+    file_name: Mapped[Optional[str]] = mapped_column(String(255))
+    actor_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id", ondelete="SET NULL"))
+    created_count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0)
+    undo: Mapped[Optional[dict]] = mapped_column(JSON)
+    undone_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class ImportMapping(Base):
+    """A remembered column mapping {sheet header: field} per list, and per supplier for
+    postings / purchase orders (supplier_id NULL = the list's own default)."""
+    __tablename__ = "import_mappings"
+    __table_args__ = (Index("ix_import_mappings_org_kind", "org_id", "kind", "supplier_id"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
+    kind: Mapped[str] = mapped_column(String(20))
+    supplier_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("suppliers.id", ondelete="CASCADE"))
+    mapping: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
