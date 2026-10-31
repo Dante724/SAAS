@@ -247,31 +247,36 @@ async def _build_payload(db, org_id, entity_type, local_id) -> Optional[dict]:
             payload["CustomerRef"] = {"value": cust}
         # J6 — the lines this invoice really bills (a sub-invoice's chosen lines, every job of a
         # multi-job invoice, its own free lines), referencing mapped QBO items where possible.
-        lines = []
-        tax_total = 0.0
+        # Line amounts are before tax (QuickBooks wants Amount = Qty × UnitPrice); the tax is sent
+        # once, as the invoice's own tax when it has one, else the lines' tax.
+        sales = []
+        line_tax = 0.0
         for row, ln in await _invoice_rows(db, i):
-            amt = float(row.total or 0)
-            detail = {"Qty": float(row.qty or 1), "UnitPrice": float(row.unit_price or 0)}
+            net, tax = _net_and_tax(row, ln)
+            qty = float(row.qty or 1) or 1.0
+            detail = {"Qty": qty, "UnitPrice": q2(net / qty)}
             if ln is not None and (ln.line_type or "") == "part" and ln.ref_id:
                 item_ref = await _remote_id(db, org_id, "item", ln.ref_id)
                 if item_ref:
                     detail["ItemRef"] = {"value": item_ref}
-            lines.append({"Amount": amt, "Description": row.description or None,
+            sales.append({"Amount": q2(net), "Description": row.description or None,
                           "DetailType": "SalesItemLineDetail", "SalesItemLineDetail": detail})
-            if ln is not None:
-                tax_total += amt * float(ln.tax_rate or 0) / 100.0
-        if lines and float(i.discount or 0) > 0:
-            lines.append({"Amount": q2(float(i.discount)), "Description": "Discount",
-                          "DetailType": "DiscountLineDetail",
-                          "DiscountLineDetail": {"PercentBased": False}})
-        if float(i.tax or 0) > 0:
-            tax_total = float(i.tax)          # the invoice's own tax amount wins
-        if not lines:   # fall back to a single summary line
-            lines = [{"Amount": i.total, "DetailType": "SalesItemLineDetail",
-                      "SalesItemLineDetail": {"Qty": 1, "UnitPrice": i.total}}]
+            line_tax += tax
+        tax_total = q2(float(i.tax or 0)) if float(i.tax or 0) > 0 else q2(line_tax)
+        discount = q2(float(i.discount or 0))
+        if not sales or abs(sum(ln["Amount"] for ln in sales) - discount + tax_total - float(i.total or 0)) > 0.02:
+            # The lines can't add up to what this invoice billed (a sent invoice whose job changed
+            # since, a typed-in subtotal, rounding): send one honest summary line instead.
+            net = q2(float(i.total or 0) - tax_total + discount)
+            sales = [{"Amount": net, "Description": f"Invoice {i.invoice_number}",
+                      "DetailType": "SalesItemLineDetail", "SalesItemLineDetail": {"Qty": 1, "UnitPrice": net}}]
+        lines = sales
+        if discount > 0:
+            lines = sales + [{"Amount": discount, "Description": "Discount", "DetailType": "DiscountLineDetail",
+                              "DiscountLineDetail": {"PercentBased": False}}]
         payload["Line"] = lines
         if tax_total > 0:
-            payload["TxnTaxDetail"] = {"TotalTax": q2(tax_total)}
+            payload["TxnTaxDetail"] = {"TotalTax": tax_total}
         return payload
 
     if entity_type == "payment":
@@ -285,6 +290,23 @@ async def _build_payload(db, org_id, entity_type, local_id) -> Optional[dict]:
             payload["CustomerRef"] = {"value": cust}
         return payload
     return None
+
+
+def _net_and_tax(row, ln) -> tuple[float, float]:
+    """A billed row's amount before tax, and its tax. Job lines carry their own discount and tax
+    (added on top, or included in the price); free invoice lines have neither."""
+    if ln is None:
+        return float(row.total or 0), 0.0
+    after = float(row.qty or 0) * float(row.unit_price or 0)
+    d = float(ln.discount or 0)
+    after -= after * d / 100 if (ln.discount_type or "pct") == "pct" else d
+    rate = float(ln.tax_rate or 0) / 100
+    if not rate:
+        return after, 0.0
+    if (ln.tax_mode or "imposed") == "included":
+        net = after / (1 + rate)
+        return net, after - net
+    return after, after * rate
 
 
 async def _invoice_rows(db: AsyncSession, inv: Invoice) -> list[tuple]:

@@ -7,7 +7,7 @@ import {
 // A real part of the React app (Liquid Clay tokens, flat styling) — NOT the
 // legacy vanilla-JS track.html. Served at /track/:token, no auth, no shell.
 
-type Line = { id?: string; label: string; qty?: number; kind?: string; line_type?: string; amount: number; item?: string | null };
+type Line = { id?: string; total?: number; group?: string | null; label: string; qty?: number; kind?: string; line_type?: string; amount: number; item?: string | null };
 
 // Several items per job: recommendations grouped item by item (job's item order), whole job last.
 function byItem(recs: Rec[]): { item: string | null; recs: Rec[] }[] {
@@ -308,7 +308,15 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
   const chosen = openRecs.filter((x) => recSel[x.id]);
   const recSum = chosen.reduce((a, x) => a + x.line_total, 0);
   const choosing = !!d.can_choose_lines;
-  const skippedSum = choosing ? (d.lines || []).filter((l) => l.id && skip[l.id]).reduce((a, l) => a + (l.amount || 0), 0) : 0;
+  // a row's own total includes its tax, so the new total matches what the shop will charge
+  const skippedSum = choosing ? (d.lines || []).filter((l) => l.id && skip[l.id]).reduce((a, l) => a + (l.total ?? l.amount ?? 0), 0) : 0;
+  // a kit is approved or left out as a whole: unticking one of its rows unticks them all
+  const toggleLine = (l: Line) => {
+    if (!l.id) return;
+    const off = !skip[l.id];
+    const ids = l.group ? (d.lines || []).filter((x) => x.group === l.group && x.id).map((x) => x.id!) : [l.id];
+    setSkip((s) => ({ ...s, ...Object.fromEntries(ids.map((i) => [i, off])) }));
+  };
   const allSkipped = choosing && (d.lines || []).every((l) => l.id && skip[l.id]);
   const total = docTotal(d) - skippedSum;
   const dep = d.deposit || null;
@@ -509,7 +517,7 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
                       {choosing && (
                         <td className="border-b border-slate-100 py-3 align-top">
                           <input type="checkbox" checked={!(l.id && skip[l.id])} aria-label={`Include ${l.label}`}
-                            onChange={() => l.id && setSkip((s) => ({ ...s, [l.id!]: !s[l.id!] }))}
+                            onChange={() => toggleLine(l)}
                             className="mt-1 h-4 w-4" style={{ accentColor: accent }} />
                         </td>
                       )}

@@ -53,7 +53,7 @@ def upgrade() -> None:
             sa.Column("note", sa.String(500), nullable=True),
             sa.Column("created_by_id", sa.String(), sa.ForeignKey("employees.id"), nullable=True),
             sa.Column("created_by_name", sa.String(200), nullable=True),
-            sa.Column("created_at", sa.DateTime(), nullable=True),
+            sa.Column("created_at", sa.DateTime(), nullable=False),
         )
         op.create_index("ix_estimate_revisions_org_id", "estimate_revisions", ["org_id"])
         op.create_index("ix_estimate_revisions_order_id", "estimate_revisions", ["order_id"])

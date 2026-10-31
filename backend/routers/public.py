@@ -130,10 +130,19 @@ def _revision(order: "Order") -> int:
     return int(getattr(order, "estimate_revision", None) or 1)
 
 
-def _expired(order: "Order") -> bool:
-    """E5 — an estimate past its "valid until" date can't be approved online any more."""
+async def _expired(db: AsyncSession, order: "Order") -> bool:
+    """E5 — an estimate past its "valid until" date can't be approved online any more. The date
+    is the shop's: it lasts to the end of that day in the shop's time zone."""
     vu = getattr(order, "estimate_valid_until", None)
-    return bool(order.is_estimate and vu and vu < _date.today())
+    if not (order.is_estimate and vu):
+        return False
+    from backend.services.dates import shop_tzname
+    try:
+        from zoneinfo import ZoneInfo
+        today = _dt.now(ZoneInfo(await shop_tzname(db, order.org_id, order.location_id))).date()
+    except Exception:  # noqa: BLE001 — an unknown zone name falls back to UTC
+        today = _date.today()
+    return vu < today
 
 
 async def _already_decided(db: AsyncSession, order: "Order") -> bool:
@@ -341,7 +350,12 @@ async def _track_payload(db: AsyncSession, order: "Order") -> dict:
     from backend.services import kit_print as _kp
     def _amt(l):
         return q2(sum(_line_amt(m) for m in l.members)) if getattr(l, "is_kit", False) else _line_amt(l)
-    lines_pub = [{"id": _row_id(l), "label": l.description or (l.kind or l.line_type or "Item").title(),
+    lines_pub = [{"id": _row_id(l),
+                  # E5 — what leaving this row out takes off the total (tax included), and its kit:
+                  # a kit is approved or left out as a whole
+                  "total": q2(sum(float(m.total or 0) for m in _row_members(l)) * (_fx or 1)),
+                  "group": getattr(_row_members(l)[0], "bundle_group_id", None),
+                  "label": l.description or (l.kind or l.line_type or "Item").title(),
                   "qty": l.qty or 1, "kind": l.kind or l.line_type,
                   "amount": _amt(l),
                   **({"includes": list(l.includes)} if getattr(l, "includes", None) else {}),
@@ -417,7 +431,7 @@ async def _track_payload(db: AsyncSession, order: "Order") -> dict:
         "awaiting_approval": (awaiting := await _can_sign(db, order)),
         # E5 — estimate terms: valid until, which version, picking lines, the deposit at approval
         "valid_until": order.estimate_valid_until.isoformat() if (order.is_estimate and order.estimate_valid_until) else None,
-        "expired": _expired(order),
+        "expired": await _expired(db, order),
         "revision": _revision(order) if order.is_estimate else None,
         "can_choose_lines": bool(awaiting and order.is_estimate and len(lines_pub) > 1
                                  and getattr(org, "oe_estimate_line_choice", True)),
@@ -475,7 +489,7 @@ async def _respond(db: AsyncSession, order: "Order", data: AcceptIn, who: str, r
         raise HTTPException(409, "You've already responded to this. Contact the shop to change your answer.")
     if data.decision not in ("accept", "decline"):
         raise HTTPException(400, "Invalid decision")
-    if _expired(order):
+    if await _expired(db, order):
         raise HTTPException(410, f"This estimate expired on {order.estimate_valid_until:%d %b %Y}. "
                                  "Contact the shop for an up-to-date one.")
     if not await _can_sign(db, order):
@@ -543,6 +557,9 @@ async def _skip_lines(db: AsyncSession, order: "Order", skip_ids: list[str], who
     for lid in drop:
         await release_line(db, lid)
     await db.execute(_TE.__table__.update().where(_TE.order_line_id.in_(drop)).values(order_line_id=None))
+    from backend.models import Recommendation as _R      # an approved extra whose line is left out
+    await db.execute(_R.__table__.update().where(_R.order_id == order.id, _R.order_line_id.in_(drop)).values(
+        order_line_id=None, status="declined", decline_reason="not_needed", decided_at=_dt.utcnow()))
     await db.execute(_OL.__table__.delete().where(_OL.order_id == order.id, _OL.id.in_(drop)))
     await db.flush()
     db.expire(order, ["lines"])
@@ -580,6 +597,22 @@ async def snapshot_revision(db: AsyncSession, order: "Order", *, decision: Optio
     return rev
 
 
+async def _paid_toward_deposit(db: AsyncSession, order: "Order") -> float:
+    """Money that counts toward the deposit: for a deposit asked at an estimate's approval, what
+    was paid since the approval (an earlier diagnostic fee doesn't count); otherwise all of it."""
+    from sqlalchemy import func
+
+    from backend.models import Payment
+    from backend.services.order_money import net_paid
+    since = getattr(order, "estimate_approved_at", None)
+    if not since:
+        return await net_paid(db, order.id)
+    rows = dict((await db.execute(select(Payment.kind, func.coalesce(func.sum(Payment.amount), 0)).where(
+        Payment.order_id == order.id, Payment.paid_at >= since).group_by(Payment.kind))).all())
+    return q2(float(rows.get("payment", 0) or 0) + float(rows.get("prepayment", 0) or 0)
+              - abs(float(rows.get("refund", 0) or 0)))
+
+
 async def _deposit_block(db: AsyncSession, order: "Order", fx) -> Optional[dict]:
     """E5 — the deposit the shop asks for at approval: how much, what's paid, and whether the
     customer can pay it online now (once they've approved, while the job is open and before it's
@@ -595,8 +628,7 @@ async def _deposit_block(db: AsyncSession, order: "Order", fx) -> Optional[dict]
     if not stopped:
         from backend.services.invoice_money import invoices_for_order
         stopped = bool(await invoices_for_order(db, order.id))
-    from backend.services.order_money import net_paid
-    paid = q2(min(max(0.0, await net_paid(db, order.id)), amount))
+    paid = q2(min(max(0.0, await _paid_toward_deposit(db, order)), amount))
     due = q2(amount - paid)
     approved = (not order.is_estimate) or bool(order.estimate_approved_at)
     rate = fx or 1
@@ -827,7 +859,7 @@ async def _can_sign(db: AsyncSession, order: "Order") -> bool:
     oe_allow_approval; work orders are opt-in (oe_wo_allow_approval). Each has an
     optional comma-separated status allow-list; empty = any status (Orderry parity)."""
     org = (await db.execute(select(Organisation).where(Organisation.id == order.org_id))).scalar_one_or_none()
-    if not org or _expired(order) or await _already_decided(db, order):
+    if not org or await _expired(db, order) or await _already_decided(db, order):
         return False
     if order.is_estimate:
         if not getattr(org, "oe_allow_approval", True):

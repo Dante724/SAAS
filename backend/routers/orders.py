@@ -1445,6 +1445,12 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         if _block:
             raise HTTPException(409, _block)
 
+    # J6 — nobody keeps clocking time on a finished job. Before the gates, so time billed as labour
+    # is in the total the "fully paid" check sees (and on the auto-drafted invoice). A cancelled
+    # job's time is stopped but not billed. A refused change rolls back with the request.
+    if is_closing and order.status != data.status:
+        await _stop_job_timers(db, order, bill=not (target and (target.status_group or "") == "dropped"))
+
     # 144gj — Orderry requirement gates on ENTERING the target status.
     if target and order.status != data.status:
         from backend.models import OrderChecklistItem, OrderComment
@@ -1512,9 +1518,6 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
                     entity_type="order", entity_id=order.id, diff={"status": [_prev_status, data.status]})   # for status time-limit tracking
     if is_closing:
         order.closed_at = datetime.utcnow()
-        # J6 — nobody keeps clocking time on a finished job. Before the auto-draft, so time billed
-        # as labour lands on the draft invoice.
-        await _stop_job_timers(db, order)
         # Build 144dr — auto-draft an invoice on close (org opt-in). Never blocks
         # the status change if it fails.
         if not order.is_estimate:
@@ -1972,6 +1975,7 @@ async def set_priority(
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
+    await _guard_editable(db, order, current)       # a closed job keeps its priority
     if order.priority != data.priority:
         prev = order.priority
         order.priority = data.priority
@@ -3618,7 +3622,7 @@ async def _log_amount_change(db, org_id, order, prev_total):
                            f"Amount changed: {prev_total:.2f} → {new_total:.2f}")
 
 
-async def _stop_job_timers(db, order) -> None:
+async def _stop_job_timers(db, order, bill: bool = True) -> None:
     from backend.models import TimeEntry
     from backend.routers.timeclock import _apply_labour_billing, _maybe_emit_stop, _stop
     running = (await db.execute(select(TimeEntry).where(
@@ -3628,8 +3632,10 @@ async def _stop_job_timers(db, order) -> None:
         _stop(e)
         e.note = ((e.note + " · ") if e.note else "") + "Stopped when the job closed"
         await _maybe_emit_stop(db, e)
-        await _apply_labour_billing(db, e)
+        if bill:
+            await _apply_labour_billing(db, e)
     if running:
+        await db.refresh(order, ["lines"])      # billed time may have added a labour line
         from backend.routers.feed import log_system_event
         await log_system_event(db, order.org_id, "order", order.id,
                                f"{len(running)} running timer{'s' if len(running) != 1 else ''} stopped (job closed)")

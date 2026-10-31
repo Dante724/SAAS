@@ -362,3 +362,118 @@ async def test_xero_simulated_connection_never_reports_a_push(client, db):
     res = await xero.push_entity(db, me["org_id"], "contact", cid)
     assert res["ok"] is False and res["error"] == "not_connected" and "simulated" not in res
     assert (await xero.status(db, me["org_id"]))["connected"] is False
+
+
+# ── Review follow-ups ──
+async def test_qbo_taxed_lines_send_tax_once(client, db):
+    from backend.services import qbo
+    H, me, loc, cid = await _shop(client)
+    o = (await client.post("/api/orders", json={"client_id": cid, "location_id": loc, "complaint": "x"}, headers=H)).json()
+    for desc, mode in (("Screen", "imposed"), ("Glass", "included")):
+        r = await client.post(f"/api/orders/{o['id']}/lines", json={"kind": "custom", "line_type": "labour", "description": desc,
+                                                                    "qty": 2, "unit_price": 55, "tax_rate": 10, "tax_mode": mode},
+                              headers=H)
+        assert r.status_code == 201, r.text
+    lines = (await client.get(f"/api/orders/{o['id']}", headers=H)).json()["lines"]
+    screen = next(ln["id"] for ln in lines if ln["description"] == "Screen")
+    sub = (await client.post(f"/api/cash/orders/{o['id']}/invoices", json={"line_ids": [screen]}, headers=H)).json()
+    whole = (await client.post("/api/finance/invoices", json={"order_id": o["id"]}, headers=H)).json()
+    for iid in (sub["invoice_id"], whole["id"]):
+        inv = (await client.get(f"/api/finance/invoices/{iid}", headers=H)).json()
+        p = await qbo._build_payload(db, me["org_id"], "invoice", iid)
+        sales = [ln for ln in p["Line"] if ln["DetailType"] == "SalesItemLineDetail"]
+        for ln in sales:     # QuickBooks: Amount = Qty × UnitPrice, before tax
+            d = ln["SalesItemLineDetail"]
+            assert abs(ln["Amount"] - d["Qty"] * d["UnitPrice"]) < 0.02
+        tax = p.get("TxnTaxDetail", {}).get("TotalTax", 0)
+        assert abs(sum(ln["Amount"] for ln in sales) + tax - float(inv["total"])) < 0.02, (p, inv)
+    p = await qbo._build_payload(db, me["org_id"], "invoice", sub["invoice_id"])
+    assert [ln["Description"] for ln in p["Line"]] == ["Screen"] and p["Line"][0]["Amount"] == 110
+    assert p["TxnTaxDetail"]["TotalTax"] == 11
+
+
+async def test_customer_can_be_asked_to_take_the_whole_estimate(client):
+    H, _, loc, cid = await _shop(client)
+    r = await client.put("/api/staff/public-pages", json={"oe_estimate_line_choice": False}, headers=H)
+    assert r.status_code == 200, r.text
+    o, tok = await _estimate(client, H, loc, cid, prices=(50, 30))
+    page = await _track(client, tok)
+    assert page["can_choose_lines"] is False
+    r = await client.post(f"/api/public/track/{tok}/respond",
+                          json={"decision": "accept", "signature": PNG, "skip_line_ids": [page["lines"][1]["id"]]})
+    assert r.status_code == 403
+    assert len((await client.get(f"/api/orders/{o['id']}", headers=H)).json()["lines"]) == 2
+
+
+async def test_skipped_line_totals_include_tax_and_staff_hear_what_was_left_out(client):
+    H, _, loc, cid = await _shop(client)
+    o, tok = await _estimate(client, H, loc, cid, prices=(50,))
+    await client.post(f"/api/orders/{o['id']}/lines", json={"kind": "custom", "line_type": "labour", "description": "Case",
+                                                            "qty": 1, "unit_price": 100, "tax_rate": 10}, headers=H)
+    page = await _track(client, tok)
+    case = next(ln for ln in page["lines"] if ln["label"] == "Case")
+    assert case["total"] == 110
+    r = await client.post(f"/api/public/track/{tok}/respond",
+                          json={"decision": "accept", "signature": PNG, "skip_line_ids": [case["id"]]})
+    assert r.status_code == 200, r.text
+    assert (await client.get(f"/api/orders/{o['id']}", headers=H)).json()["total"] == page["total"] - 110
+    items = (await client.get("/api/tech/notifications", headers=H)).json()["items"]
+    assert any("Left out: Case" in n["body"] for n in items)
+
+
+async def test_deposit_counts_only_money_paid_since_approval_and_stops_once_invoiced(client):
+    H, _, loc, cid = await _shop(client)
+    o, tok = await _estimate(client, H, loc, cid, prices=(200,))
+    await client.patch(f"/api/orders/{o['id']}/deposit", json={"amount": 50}, headers=H)
+    await client.post(f"/api/public/track/{tok}/respond", json={"decision": "accept", "signature": PNG})
+    assert (await _track(client, tok))["deposit"]["due"] == 50
+    await client.post("/api/finance/invoices", json={"order_id": o["id"]}, headers=H)
+    assert (await _track(client, tok))["deposit"]["can_pay"] is False
+    assert (await client.post(f"/api/public/track/{tok}/deposit")).status_code == 409
+
+
+async def test_deposit_link_replaces_a_stale_link(client, db):
+    from backend.models import PaymentIntent
+    H, _, loc, cid = await _shop(client)
+    o, tok = await _estimate(client, H, loc, cid, prices=(200,))
+    await client.patch(f"/api/orders/{o['id']}/deposit", json={"amount": 50}, headers=H)
+    await client.post(f"/api/public/track/{tok}/respond", json={"decision": "accept", "signature": PNG})
+    first = (await client.post(f"/api/public/track/{tok}/deposit")).json()["intent_id"]
+    await client.patch(f"/api/orders/{o['id']}/deposit", json={"amount": 60}, headers=H)
+    second = (await client.post(f"/api/public/track/{tok}/deposit")).json()
+    assert second["intent_id"] != first and second["amount"] == 60
+    old = (await db.execute(select(PaymentIntent).where(PaymentIntent.id == first))).scalar_one()
+    await db.refresh(old)
+    assert old.status not in ("created", "viewed", "pending")
+
+
+async def test_approved_extra_never_moves_a_job_backwards(client):
+    H, _, loc, cid = await _shop(client)
+    wo = [s for s in await _statuses(client, H) if s.get("record_type", "work_order") == "work_order"]
+    early = next(s for s in wo if s.get("status_group") == "in_progress")
+    later = max((s for s in wo if s.get("status_group") in ("in_progress", "ready")
+                 and s["sort_order"] > early["sort_order"] and not s.get("is_terminal")), key=lambda s: s["sort_order"])
+    await client.put("/api/staff/public-pages", json={"oe_wo_accept_status": early["key"]}, headers=H)
+    o = (await client.post("/api/orders", json={"client_id": cid, "location_id": loc, "complaint": "x"}, headers=H)).json()
+    r = await client.patch(f"/api/orders/{o['id']}/status", json={"status": later["key"]}, headers=H)
+    assert r.status_code == 200, r.text
+    rec = (await client.post(f"/api/orders/{o['id']}/recommendations", json={"title": "Case", "kind": "custom",
+                                                                            "unit_price": 20}, headers=H)).json()
+    await client.post(f"/api/orders/{o['id']}/recommendations/{rec['id']}/publish", headers=H)
+    tok = (await client.post(f"/api/orders/{o['id']}/public-link", headers=H)).json()["token"]
+    await client.post(f"/api/public/track/{tok}/recommendations/decide", json={"approve_ids": [rec["id"]]})
+    assert (await client.get(f"/api/orders/{o['id']}", headers=H)).json()["status"] == later["key"]
+
+
+async def test_cancelling_a_job_stops_its_timer_without_billing(client, db):
+    H, me, loc, cid = await _shop(client)
+    o = (await client.post("/api/orders", json={"client_id": cid, "location_id": loc, "complaint": "x"}, headers=H)).json()
+    await client.post("/api/timeclock/start", json={"order_id": o["id"], "category": "job"}, headers=H)
+    dropped = next(s for s in await _statuses(client, H)
+                   if s.get("status_group") == "dropped" and s.get("record_type", "work_order") == "work_order")
+    r = await client.patch(f"/api/orders/{o['id']}/status", json={"status": dropped["key"], "reason": "Customer left"},
+                           headers=H)
+    assert r.status_code == 200, r.text
+    rows = (await db.execute(select(TimeEntry).where(TimeEntry.order_id == o["id"]))).scalars().all()
+    await db.refresh(rows[0])
+    assert rows[0].state == "stopped"
