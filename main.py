@@ -201,7 +201,7 @@ async def health():
         log.exception("health check: database unreachable")
     status = "ok" if db_ok else "degraded"
     return JSONResponse(
-        {"status": status, "environment": settings.ENVIRONMENT, "database": "up" if db_ok else "down"},
+        {"status": status, "database": "up" if db_ok else "down"},   # no environment name: it helps an attacker
         status_code=200 if db_ok else 503,
     )
 

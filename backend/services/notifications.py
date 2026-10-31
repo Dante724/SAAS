@@ -25,12 +25,21 @@ from backend.models import (
 )
 
 
+def one_line(subject: Optional[str]) -> str:
+    """An email subject with no CR/LF, so a value filled into it can't add mail headers."""
+    import re
+    return re.sub(r"[\r\n]+", " ", subject or "").strip()
+
+
 # ── Channel adapters ─────────────────────────────────────────────────────────
 class ChannelAdapter:
-    """Base adapter. Real providers subclass and implement send()."""
+    """Base adapter. Real providers subclass and implement send(). `html` says whether an
+    email body is HTML; it comes from the template (message_vars.is_html), never from the
+    filled-in text. None (old callers) falls back to looking at the body."""
     name = "base"
 
-    async def send(self, *, recipient: str, subject: Optional[str], body: str) -> dict:
+    async def send(self, *, recipient: str, subject: Optional[str], body: str,
+                   html: Optional[bool] = None) -> dict:
         raise NotImplementedError
 
 
@@ -39,7 +48,8 @@ class SimulatedAdapter(ChannelAdapter):
     def __init__(self, channel: str):
         self.name = channel
 
-    async def send(self, *, recipient: str, subject: Optional[str], body: str) -> dict:
+    async def send(self, *, recipient: str, subject: Optional[str], body: str,
+                   html: Optional[bool] = None) -> dict:
         if not recipient:
             return {"status": "failed", "error": "No recipient address/number on file"}
         from backend.config import settings
@@ -63,7 +73,8 @@ class SmtpEmailAdapter(ChannelAdapter):
     def __init__(self, creds: Optional[dict] = None):
         self.creds = creds or {}   # 144jn: this shop's own SMTP settings
 
-    async def send(self, *, recipient: str, subject: Optional[str], body: str) -> dict:
+    async def send(self, *, recipient: str, subject: Optional[str], body: str,
+                   html: Optional[bool] = None) -> dict:
         if not recipient:
             return {"status": "failed", "error": "No email address on file"}
         import asyncio
@@ -82,11 +93,11 @@ class SmtpEmailAdapter(ChannelAdapter):
             import re
             import smtplib
             from email.mime.text import MIMEText
-            # 144jd: email templates are now rich HTML — send as html when the body
-            # carries markup, else plain text.
-            subtype = "html" if re.search(r"<[a-zA-Z/][^>]*>", body or "") else "plain"
-            msg = MIMEText(body, subtype)
-            msg["Subject"] = subject or "Update on your order"
+            # 144jd: email templates can be rich HTML. The caller says which (from the
+            # template); the body check is only for callers that don't.
+            is_html = html if html is not None else bool(re.search(r"<[a-zA-Z/][^>]*>", body or ""))
+            msg = MIMEText(body, "html" if is_html else "plain")
+            msg["Subject"] = one_line(subject) or "Update on your order"
             msg["From"] = from_addr
             msg["To"] = recipient
             try:
@@ -109,7 +120,8 @@ class TwilioAdapter(ChannelAdapter):
         self.name = channel  # 'sms' or 'whatsapp'
         self.creds = creds or {}   # 144jn: this shop's own Twilio account
 
-    async def send(self, *, recipient: str, subject: Optional[str], body: str) -> dict:
+    async def send(self, *, recipient: str, subject: Optional[str], body: str,
+                   html: Optional[bool] = None) -> dict:
         if not recipient:
             return {"status": "failed", "error": "No phone number on file"}
         from backend.config import settings
@@ -195,7 +207,7 @@ async def send_direct_email(recipient: str, subject: str, body: str) -> dict:
     verification, teammate invite) through the same adapter seam as order
     notifications. With SMTP configured it delivers for real; otherwise it logs
     (dev) so the flow is testable without a mail server."""
-    return await _adapter_for("email").send(recipient=recipient, subject=subject, body=body)
+    return await _adapter_for("email").send(recipient=recipient, subject=subject, body=body, html=False)
 
 
 # ── Engine ───────────────────────────────────────────────────────────────────
@@ -270,7 +282,9 @@ async def dispatch_order_notifications(db: AsyncSession, *, org_id: str, order_i
                 result = await try_oauth_email(db, org_id, recipient=recipient, subject=subject, body=body)
             if result is None:
                 _creds = await notif_creds(db, org_id, t.channel)
-                result = await _adapter_for(t.channel, _creds).send(recipient=recipient, subject=subject, body=body)
+                result = await _adapter_for(t.channel, _creds).send(
+                    recipient=recipient, subject=subject, body=body,
+                    html=message_vars.is_html(t.body_template))
             log.status = result["status"]
             log.error = result.get("error")
             if log.status == "sent":

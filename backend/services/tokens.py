@@ -12,7 +12,7 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import AuthToken, Employee
@@ -42,13 +42,18 @@ async def redeem(db: AsyncSession, *, raw: str, kind: str) -> Employee | None:
     None. Callers must treat None as a generic failure."""
     if not raw:
         return None
-    row = (await db.execute(select(AuthToken).where(
-        AuthToken.token_hash == _hash(raw), AuthToken.kind == kind))).scalar_one_or_none()
-    if not row or row.used_at is not None or row.expires_at < datetime.utcnow():
+    now = datetime.utcnow()
+    # Claim it with one conditional UPDATE: two requests racing with the same link can both
+    # read it as unused, but only one UPDATE matches `used_at IS NULL`.
+    cond = (AuthToken.token_hash == _hash(raw), AuthToken.kind == kind,
+            AuthToken.used_at.is_(None), AuthToken.expires_at >= now)
+    res = await db.execute(update(AuthToken).where(*cond).values(used_at=now)
+                           .execution_options(synchronize_session=False))
+    if res.rowcount != 1:
         return None
-    row.used_at = datetime.utcnow()
-    emp = (await db.execute(select(Employee).where(Employee.id == row.employee_id))).scalar_one_or_none()
-    return emp
+    emp_id = (await db.execute(select(AuthToken.employee_id).where(
+        AuthToken.token_hash == _hash(raw), AuthToken.kind == kind))).scalar_one_or_none()
+    return (await db.execute(select(Employee).where(Employee.id == emp_id))).scalar_one_or_none()
 
 
 async def invalidate_all(db: AsyncSession, *, employee_id: str, kind: str) -> None:

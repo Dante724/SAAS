@@ -309,5 +309,15 @@ class Settings(BaseSettings):
                 )
         return self
 
+    @model_validator(mode="after")
+    def _shared_rate_limits(self) -> "Settings":
+        """Deployed with several workers, limits (sign-in lockouts included) must be counted in
+        Redis: in-process counters let N workers allow N times every limit."""
+        import os
+        if self.is_deployed and not self.REDIS_URL and int(os.environ.get("WEB_CONCURRENCY", "1") or 1) > 1:
+            raise ValueError("REDIS_URL must be set when WEB_CONCURRENCY > 1 in production/staging, so "
+                             "rate limits are shared by every worker. Set REDIS_URL or run one worker.")
+        return self
+
 
 settings = Settings()

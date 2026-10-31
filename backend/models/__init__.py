@@ -25,6 +25,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from backend.db.database import Base
+from backend.db.secret_json import SecretFieldsJSON   # passcode-like custom fields, encrypted
 
 
 def _uuid() -> str:
@@ -83,6 +84,9 @@ class Organisation(Base):
     industry_template: Mapped[str] = mapped_column(String(30), default="generic")  # renames the asset entity app-wide (Orderry-style)
     # Build 144al: customizable purchase-order charge types (labels the buyer can add to a PO)
     po_charge_types: Mapped[Optional[list]] = mapped_column(JSON)  # e.g. ["Shipping","In-transit","Customs"]
+    # How many days to keep old records, by kind ({"notifications", "calls", "messages", "audit"});
+    # a missing kind or null keeps them for good (services/retention.py).
+    retention_days: Mapped[Optional[dict]] = mapped_column(JSON)
     # Build 144ah — POs whose total exceeds this need a manager (role with can_manage_settings)
     # to send. 0/None disables the gate.
     po_approval_threshold: Mapped[Optional[float]] = mapped_column(Float)
@@ -379,7 +383,6 @@ class Client(Base):
     currency_code: Mapped[Optional[str]] = mapped_column(String(8))
     notes: Mapped[Optional[str]] = mapped_column(Text)
     watch_out: Mapped[Optional[str]] = mapped_column(Text)   # Build 144ag — prominent per-contact warning shown on their work orders
-    portal_token: Mapped[Optional[str]] = mapped_column(String(64), unique=True, index=True)  # customer-portal magic link
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     # Discount matrix (Orderry "Managing contact discounts") — orders & invoices.
     # mode: none | percent | price_type. Sales-page discounts arrive with the Sales module.
@@ -392,7 +395,20 @@ class Client(Base):
     devices: Mapped[list["Device"]] = relationship(back_populates="client")
     orders: Mapped[list["Order"]] = relationship(back_populates="client")
     invoices: Mapped[list["Invoice"]] = relationship(back_populates="client", foreign_keys="Invoice.client_id")
-    custom_data: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)  # values for org custom client fields
+    custom_data: Mapped[Optional[dict]] = mapped_column(SecretFieldsJSON, default=dict)  # values for org custom client fields
+
+class ClientPortalLink(Base):
+    """A customer-portal magic link (/portal/{token}). Only the SHA-256 of the token is stored,
+    and every link expires. A client can hold several (each message mints one); issuing a link
+    from the client page replaces them all."""
+    __tablename__ = "client_portal_links"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    client_id: Mapped[str] = mapped_column(String, ForeignKey("clients.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
 
 class Device(Base):
     __tablename__ = "devices"
@@ -428,7 +444,7 @@ class Device(Base):
     template_key: Mapped[Optional[str]] = mapped_column(String(30), index=True)  # industry template this asset was created under (null = legacy)
     asset_group_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("asset_groups.id"))  # per-template group
     is_generated_serial: Mapped[bool] = mapped_column(Boolean, default=False)
-    custom_data: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)  # values for org custom asset fields
+    custom_data: Mapped[Optional[dict]] = mapped_column(SecretFieldsJSON, default=dict)  # values for org custom asset fields
     color: Mapped[Optional[str]] = mapped_column(String(50))
     condition: Mapped[Optional[str]] = mapped_column(String(50))
     watch_out: Mapped[Optional[str]] = mapped_column(Text)   # Build 144ag — prominent per-asset warning (e.g. "battery swollen") shown on its work orders
@@ -559,7 +575,7 @@ class Order(Base):
     resource_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("resources.id"))  # Phase G
     type_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("work_order_types.id"), index=True)
     template_key: Mapped[Optional[str]] = mapped_column(String(30), index=True)  # industry template at creation (null = legacy); historical records keep their own
-    custom_data: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
+    custom_data: Mapped[Optional[dict]] = mapped_column(SecretFieldsJSON, default=dict)
     intake_photos: Mapped[Optional[list]] = mapped_column(JSON, default=list)   # Build 144ak: media blob ids documenting device condition at check-in
     # 144dg — {original_blob_id: marked_blob_id}: a marked-up copy of an intake photo. The ORIGINAL
     # (in intake_photos) is never mutated, so the untouched check-in shot survives for disputes.
@@ -2106,7 +2122,7 @@ class Lead(Base):
     device_brand: Mapped[Optional[str]] = mapped_column(String(100))
     device_model: Mapped[Optional[str]] = mapped_column(String(100))
     serial: Mapped[Optional[str]] = mapped_column(String(100))        # serial number or IMEI
-    custom_data: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
+    custom_data: Mapped[Optional[dict]] = mapped_column(SecretFieldsJSON, default=dict)
     call_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # missed calls merged in
     last_call_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(64))

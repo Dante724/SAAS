@@ -83,6 +83,10 @@ def session_expired(auth_time: Optional[int]) -> bool:
 MFA_ENROLLMENT_PATHS = ("/api/mfa/", "/api/auth/me", "/api/auth/refresh", "/api/auth/logout")
 
 
+# One reply for a disabled person and a suspended shop, so it says nothing about which it is.
+ACCOUNT_OFF = "This account can't sign in right now. Please contact your shop owner or Tekly support."
+
+
 def assert_org_active(org, today=None) -> None:
     """Suspended or lapsed orgs are locked out of every credential they hold — staff tokens
     and public-API keys alike."""
@@ -91,7 +95,7 @@ def assert_org_active(org, today=None) -> None:
         return
     today = today or _date.today()
     if org.sub_status == "suspended":
-        raise HTTPException(status_code=403, detail="This account is suspended. Please contact support.")
+        raise HTTPException(status_code=403, detail=ACCOUNT_OFF)
     if getattr(org, "sub_end", None) and org.sub_end < today:
         raise HTTPException(status_code=403, detail="Your subscription has ended. Please contact support to renew.")
 

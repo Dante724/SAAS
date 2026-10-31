@@ -143,8 +143,9 @@ async def send_via_connection(conn, *, recipient: str, subject: Optional[str], b
                 msg.attach(part)
             else:
                 msg = MIMEText(body)
+            from backend.services.notifications import one_line
             msg["To"] = recipient
-            msg["Subject"] = subject or ""
+            msg["Subject"] = one_line(subject)
             if conn.email_address:
                 msg["From"] = f"{conn.sender_name} <{conn.email_address}>" if conn.sender_name else conn.email_address
             raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
@@ -153,7 +154,7 @@ async def send_via_connection(conn, *, recipient: str, subject: Optional[str], b
                                  headers={"Authorization": f"Bearer {access}"})
         else:  # outlook / graph
             message = {
-                "subject": subject or "",
+                "subject": (subject or "").replace("\r", " ").replace("\n", " "),
                 "body": {"contentType": "Text", "content": body},
                 "toRecipients": [{"emailAddress": {"address": recipient}}]}
             if attachment:

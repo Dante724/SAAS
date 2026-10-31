@@ -255,22 +255,23 @@ async def get_client(
 async def issue_portal_link(
     client_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_client_info")),
 ):
     """Issue (or rotate) a customer-portal magic link for this client.
 
-    Returns a durable token; the relative URL `/portal/{token}` lets the customer
-    see all their work orders/estimates/invoices and approve estimates without a login.
+    The relative URL `/portal/{token}` lets the customer see all their work orders, estimates
+    and invoices and approve estimates without a login. The link expires (services/portal_links)
+    and replaces every earlier one; the token is shown once and only its hash is kept.
     """
-    import secrets
+    from backend.services import portal_links
     client = (await db.execute(
         select(Client).where(Client.id == client_id, Client.org_id == current.org_id)
     )).scalar_one_or_none()
     if not client:
         raise HTTPException(404, "Client not found")
-    client.portal_token = secrets.token_urlsafe(24)
+    raw = await portal_links.issue(db, client, replace=True)
     await db.commit()
-    return {"portal_token": client.portal_token, "portal_url": f"/portal/{client.portal_token}"}
+    return {"portal_token": raw, "portal_url": f"/portal/{raw}", "expires_in_days": portal_links.LINK_DAYS}
 
 
 @router.put("/{client_id}")

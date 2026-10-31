@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -26,6 +26,7 @@ from backend.routers.forms import resolve_custom_data
 from backend.services.codes import gtin_check_digit
 from backend.services.money import q2
 from backend.services.redact import can_see_costs, drop_cost_fields
+from backend.core.likes import contains as _contains
 from backend.core.spreadsheet import (
     MAX_IMPORT_ROWS, MAX_XLSX_BYTES, open_xlsx, safe_row, too_many_rows, unguard_cell,
 )
@@ -243,9 +244,7 @@ async def list_products(search: Optional[str] = None, category_id: Optional[str]
     if not include_variants:
         q = q.where(Part.parent_id.is_(None))  # base products only
     if search:
-        like = f"%{search}%"
-        q = q.where((Part.name.ilike(like)) | (Part.sku.ilike(like)) | (Part.barcode.ilike(like))
-                    | (Part.code.ilike(like)) | (Part.mpn.ilike(like)))
+        q = q.where(or_(*(_contains(c, search) for c in (Part.name, Part.sku, Part.barcode, Part.code, Part.mpn))))
     if category_id:
         q = q.where(Part.category_id == category_id)
     wh_location_id = None

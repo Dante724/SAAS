@@ -508,7 +508,7 @@ async def email_sale_receipt(
     if result is None:
         try:
             await _adapter_for("email", await notif_creds(db, current.org_id, "email")).send(
-                recipient=to, subject=subject, body=rc["text"])
+                recipient=to, subject=subject, body=rc["text"], html=False)
         except Exception:
             raise HTTPException(502, "Couldn't send the email. Check the shop's email settings and try again.")
     return {"ok": True, "recipient": to}

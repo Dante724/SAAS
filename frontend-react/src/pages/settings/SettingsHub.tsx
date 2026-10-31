@@ -27,6 +27,7 @@ import CardReadersCard from "./CardReadersCard";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
 import TelephonySettings from "./TelephonySettings";
 import ApiKeysCard from "./ApiKeysCard";
+import RetentionCard from "./RetentionCard";
 
 
 // Full section set = the registry sections + a few that have no nav entry of their own.
@@ -360,6 +361,7 @@ export default function SettingsHub() {
             <GeneralSettings co={co} setCo={setCo} saved={coSaved} onSave={saveCompany} rebuilding={rebuilding} onRebuild={rebuildBalances}
               opts={{ countries: COUNTRY_META, timezones: TIMEZONES, currencies: CURRENCIES, docLangs: DOC_LANGS, industries: INDUSTRIES }} />
           )}
+          {sec === "general" && co && <div className="max-w-4xl mt-5"><RetentionCard Card={SectionCard} /></div>}
 
           {sec === "statuses" && (
             <StatusList statuses={statuses} recordType={statusRT} onRecordType={(rt) => { setStatusRT(rt); setStatuses([]); }}
