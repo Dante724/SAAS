@@ -156,6 +156,19 @@ async def _already_decided(db: AsyncSession, order: "Order") -> bool:
         DocumentSignature.revision == _revision(order)).limit(1))).first() is not None
 
 
+async def _claim_estimate_decision(db: AsyncSession, order: "Order") -> None:
+    """A double tap on Accept, or Accept while staff press Convert, must not convert twice. Both
+    requests pass _already_decided before either has written, so claim the row with a conditional
+    UPDATE on the status this request read (row lock on Postgres, write lock on SQLite). If someone
+    moved or converted it meanwhile, nothing matches and this answer is refused."""
+    from sqlalchemy import update as _update
+    won = await db.execute(_update(Order).where(
+        Order.id == order.id, Order.is_estimate == True, Order.status == order.status)  # noqa: E712
+        .values(status=order.status).execution_options(synchronize_session=False))
+    if won.rowcount != 1:
+        raise HTTPException(409, "This estimate has already been answered")
+
+
 async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
                            signature: Optional[str], who: str,
                            request: Optional[Request] = None, reason: Optional[str] = None) -> Optional[str]:
@@ -168,6 +181,8 @@ async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
     rules, notifications, webhooks and auto-conversion with the new-job steps all run.
     """
     verb = "accepted" if decision == "accept" else "declined"
+    if order.is_estimate:
+        await _claim_estimate_decision(db, order)
     doc = "estimate" if order.is_estimate else "work order"
     reason = ((reason or "").strip()[:1000] or None) if decision == "decline" else None
     order.estimate_decline_reason = reason      # E5: shown to staff on the job
