@@ -2006,6 +2006,9 @@ class NotificationLog(Base):
     recipient: Mapped[Optional[str]] = mapped_column(String(200))  # phone or email actually targeted
     subject: Mapped[Optional[str]] = mapped_column(String(300))
     body: Mapped[str] = mapped_column(Text, default="")  # rendered message
+    # Whether the body is HTML, fixed from the template when the message is rendered (a later
+    # edit to the template mustn't change how an already-filled message is sent).
+    is_html: Mapped[Optional[bool]] = mapped_column(Boolean)
     status: Mapped[str] = mapped_column(String(20), default="queued")  # queued|scheduled|sent|failed|skipped
     rule_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("notification_rules.id", ondelete="SET NULL"))  # Build 80; SET NULL so deleting a rule that already fired keeps its log history
     send_at: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)  # due time for delayed/reminder sends

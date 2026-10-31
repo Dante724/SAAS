@@ -111,8 +111,10 @@ async def test_forgot_password_sends_the_email_after_answering(client, tenant, m
     r = await asyncio.wait_for(client.post("/api/auth/password/forgot", json={"email": email}), timeout=3)
     assert r.status_code == 200
     await asyncio.wait_for(started.wait(), timeout=3)   # ...and the email still goes
-    for t in list(auth_router._BACKGROUND):
+    pending = list(auth_router._BACKGROUND)
+    for t in pending:
         t.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
     r2 = await client.post("/api/auth/password/forgot", json={"email": "nobody-here@test.dev"})
     assert r.json() == r2.json()
 
@@ -297,13 +299,21 @@ async def test_rule_send_uses_the_templates_format(client, tenant, db, monkeypat
             seen.append(html)
             return {"status": "sent", "error": None}
     monkeypatch.setattr(nr, "_adapter_for", lambda ch, creds=None: Rec())
-    t = NotificationTemplate(org_id=me["org_id"], name="t", channel="email", trigger_event="status_change",
-                             subject="s", body_template="Hi {client_name}")
-    db.add(t)
+    from backend.models import NotificationLog
+    plain = NotificationTemplate(org_id=me["org_id"], name="t", channel="email", trigger_event="status_change",
+                                 subject="s", body_template="Hi {client_name}")
+    rich = NotificationTemplate(org_id=me["org_id"], name="r", channel="email", trigger_event="status_change",
+                                subject="s", body_template="<p>Hi {client_name}</p>")
+    db.add_all([plain, rich])
+    await db.flush()
+    logs = [NotificationLog(org_id=me["org_id"], channel="email", template_id=t.id, body="Hi <b>x</b>")
+            for t in (plain, rich)] + [NotificationLog(org_id=me["org_id"], channel="email", body="Hi <b>x</b>")]
+    db.add_all(logs)
     await db.commit()
-    await nr._send(db, me["org_id"], "email", recipient="a@b.c", subject="s", body="Hi <b>x</b>", template_id=t.id)
+    for lg in logs:
+        await nr._send(db, me["org_id"], "email", recipient="a@b.c", subject="s", body=lg.body, log=lg)
     await nr._send(db, me["org_id"], "email", recipient="a@b.c", subject="s", body="Hi <b>x</b>")
-    assert seen == [False, False]
+    assert seen == [False, True, False, False]
 
 
 # ── 9. LIKE wildcards are literal in search; brand/model dedupe is exact ─────────────────────
@@ -467,3 +477,200 @@ async def test_passcode_custom_field_is_encrypted_at_rest(client, tenant, db, mo
     db.expire_all()
     back = await db.get(Order, oid)
     assert back.custom_data == {"passcode": "4321", "pattern_lock": 1478, "accessories": "Case"}
+
+
+# ── Review follow-ups ─────────────────────────────────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_contact_with_only_a_portal_link_can_still_be_deleted(client, tenant):
+    cid = await _client_id(client, tenant)
+    raw = (await client.post(f"/api/clients/{cid}/portal-link", headers=tenant)).json()["portal_token"]
+    r = await client.delete(f"/api/clients/{cid}", headers=tenant)
+    assert r.status_code == 200, r.text
+    assert (await client.get(f"/api/public/portal/{raw}")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_merged_contacts_old_portal_link_stops(client, tenant):
+    keep = await _client_id(client, tenant, "Ana Lima")
+    dup = await _client_id(client, tenant, "Ana L.")
+    raw = (await client.post(f"/api/clients/{dup}/portal-link", headers=tenant)).json()["portal_token"]
+    r = await client.post("/api/clients/merge", json={"target_id": keep, "source_ids": [dup]}, headers=tenant)
+    assert r.status_code == 200, r.text
+    assert (await client.get(f"/api/public/portal/{raw}")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_sent_message_history_does_not_keep_the_live_portal_token(client, tenant, db):
+    from backend.models import NotificationLog
+    me = await _me(client, tenant)
+    sent = NotificationLog(org_id=me["org_id"], channel="sms", status="sent",
+                           body="Your jobs: https://app.test/portal/AbCdEfGhIjKlMnOpQrStUvWx1234 thanks")
+    later = NotificationLog(org_id=me["org_id"], channel="sms", status="scheduled",
+                            body="Your jobs: https://app.test/portal/AbCdEfGhIjKlMnOpQrStUvWx1234 thanks")
+    db.add_all([sent, later])
+    await db.commit()
+    assert "AbCdEf" not in sent.body and "/portal/… thanks" in sent.body
+    assert "AbCdEf" in later.body                    # still to send: keeps the link
+    later.status = "sent"
+    await db.commit()
+    assert "AbCdEf" not in later.body
+
+
+@pytest.mark.asyncio
+async def test_html_flag_is_fixed_when_the_message_is_filled(client, tenant, db):
+    from backend.models import NotificationLog, NotificationTemplate
+    from backend.services.notifications import log_is_html
+    me = await _me(client, tenant)
+    t = NotificationTemplate(org_id=me["org_id"], name="t", channel="email", trigger_event="status_change",
+                             subject="s", body_template="Hi {client_name}")
+    db.add(t)
+    await db.flush()
+    log = NotificationLog(org_id=me["org_id"], channel="email", status="scheduled", template_id=t.id,
+                          body="Hi <script>x</script>")
+    db.add(log)
+    await db.commit()
+    t.body_template = "<p>Hi {client_name}</p>"    # edited to HTML before the scheduled send
+    await db.commit()
+    assert await log_is_html(db, log) is False
+
+
+@pytest.mark.asyncio
+async def test_retention_only_touches_its_own_shop_and_covers_messages(client, tenant, db):
+    from backend.models import AuditLog, ChatMessage, ChatThread, InboxMessage, InboxThread
+    from backend.services import retention
+    me = await _me(client, tenant)
+    other = await client.post("/api/auth/register", json={
+        "org_name": "Other", "name": "O", "email": f"o-{uuid.uuid4().hex[:6]}@test.dev", "password": "pw-test-12345"})
+    other_org = other.json()["org_id"]
+    old = datetime.utcnow() - timedelta(days=400)
+    for oid in (me["org_id"], other_org):
+        th = ChatThread(org_id=oid, channel="sms", contact_phone="+15550100")
+        ib = InboxThread(org_id=oid, channel="email")
+        db.add_all([th, ib])
+        await db.flush()
+        db.add_all([ChatMessage(thread_id=th.id, direction="in", body="old", created_at=old),
+                    InboxMessage(org_id=oid, thread_id=ib.id, direction="in", body="old", created_at=old),
+                    AuditLog(org_id=oid, action="x", entity_type="x", created_at=old)])
+    await db.commit()
+    org = await db.get(Organisation, me["org_id"])
+    org.retention_days = {"messages": 30, "audit": 30}
+    await db.commit()
+    await retention.purge_all(db)
+
+    async def n(model, oid):
+        if model is ChatMessage:
+            q = select(func.count()).select_from(ChatMessage).join(ChatThread).where(ChatThread.org_id == oid)
+        else:
+            q = select(func.count()).select_from(model).where(model.org_id == oid)
+        return (await db.execute(q)).scalar()
+    for model in (ChatMessage, InboxMessage, AuditLog):
+        assert await n(model, me["org_id"]) == 0, model
+        assert await n(model, other_org) == 1, model
+
+
+@pytest.mark.asyncio
+async def test_device_search_wildcard_is_literal(client, tenant, db):
+    from backend.models import Device
+    me = await _me(client, tenant)
+    cid = await _client_id(client, tenant)
+    db.add_all([Device(org_id=me["org_id"], client_id=cid, brand="Apple", model="iPhone"),
+                Device(org_id=me["org_id"], client_id=cid, brand="50%", model="Gen")])
+    await db.commit()
+    r = await client.get("/api/assets", params={"search": "%"}, headers=tenant)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    items = body["items"] if isinstance(body, dict) else body
+    assert [d["brand"] for d in items] == ["50%"]
+
+
+def test_lock_and_code_fields_count_as_secret():
+    from backend.db.secret_json import is_secret_key
+    for k in ("passcode", "login_password", "pattern_lock", "screen_lock", "lock_code", "security_code", "pin"):
+        assert is_secret_key(k), k
+    for k in ("accessories_received", "mileage_in", "spinner"):
+        assert not is_secret_key(k), k
+
+
+@pytest.mark.asyncio
+async def test_daily_purge_removes_expired_portal_links_only(client, tenant, db):
+    from backend.models import ClientPortalLink
+    from backend.services import retention
+    cid = await _client_id(client, tenant)
+    live = (await client.post(f"/api/clients/{cid}/portal-link", headers=tenant)).json()["portal_token"]
+    me = await _me(client, tenant)
+    db.add(ClientPortalLink(org_id=me["org_id"], client_id=cid, token_hash="x" * 64,
+                            expires_at=datetime.utcnow() - timedelta(days=1)))
+    await db.commit()
+    assert (await retention.purge_all(db))["portal_links"] == 1
+    assert (await client.get(f"/api/public/portal/{live}")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_one_shops_failed_purge_does_not_undo_the_others(client, tenant, db, monkeypatch):
+    from backend.models import Call
+    from backend.services import retention
+    me = await _me(client, tenant)
+    other = (await client.post("/api/auth/register", json={
+        "org_name": "Other", "name": "O", "email": f"o-{uuid.uuid4().hex[:6]}@test.dev",
+        "password": "pw-test-12345"})).json()["org_id"]
+    old = datetime.utcnow() - timedelta(days=400)
+    for oid in (me["org_id"], other):
+        db.add(Call(org_id=oid, created_at=old))
+        (await db.get(Organisation, oid)).retention_days = {"calls": 30}
+    await db.commit()
+    real = retention.purge_org
+
+    async def flaky(db_, org, now=None):
+        if org.id == other:
+            from sqlalchemy import text
+            await db_.execute(text("SELECT * FROM no_such_table"))
+        return await real(db_, org, now)
+    monkeypatch.setattr(retention, "purge_org", flaky)
+    await retention.purge_all(db)
+    db.expire_all()
+    left = {r for r in (await db.execute(select(Call.org_id))).scalars().all()}
+    assert left == {other}
+
+
+@pytest.mark.asyncio
+async def test_api_key_without_a_recorded_creator_still_works(client, tenant, db):
+    from backend.models import ApiKey
+    key = (await client.post("/api/api-keys", json={"name": "old", "scopes": "read"}, headers=tenant)).json()
+    row = await db.get(ApiKey, key["id"])
+    row.created_by_id = None            # keys made before creators were recorded
+    await db.commit()
+    assert (await client.get("/api/v1/contacts", headers={"Authorization": f"Bearer {key['key']}"})).status_code == 200
+
+
+def test_backfill_migration_encrypts_existing_passcodes(monkeypatch, tmp_path):
+    """aul2 on plain-text rows: secret keys encrypted, others untouched, a second run is a no-op."""
+    import importlib.util
+    import json as _json
+
+    import sqlalchemy as sa
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from cryptography.fernet import Fernet
+
+    from backend.config import settings
+    from backend.services import crypto
+    monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    spec = importlib.util.spec_from_file_location(
+        "aul2", "backend/migrations/versions/aul2_encrypt_custom_field_passcodes.py")
+    mig = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mig)
+    eng = sa.create_engine(f"sqlite:///{tmp_path}/m.db")
+    with eng.begin() as conn:
+        for t in ("orders", "devices", "clients", "leads"):
+            conn.execute(sa.text(f"CREATE TABLE {t} (id TEXT PRIMARY KEY, custom_data JSON)"))
+        conn.execute(sa.text("INSERT INTO orders VALUES ('o1', :d)"),
+                     {"d": _json.dumps({"passcode": "4321", "accessories": "Case"})})
+        conn.execute(sa.text("INSERT INTO devices VALUES ('d1', :d)"), {"d": _json.dumps({"screen_lock": 1478})})
+        for _ in range(2):
+            with Operations.context(MigrationContext.configure(conn)):
+                mig.upgrade()
+        o = _json.loads(conn.execute(sa.text("SELECT custom_data FROM orders")).scalar())
+        d = _json.loads(conn.execute(sa.text("SELECT custom_data FROM devices")).scalar())
+    assert o["accessories"] == "Case" and crypto.is_encrypted(o["passcode"])
+    assert _json.loads(crypto.decrypt(o["passcode"])) == "4321"      # encrypted once, not twice
+    assert _json.loads(crypto.decrypt(d["screen_lock"])) == 1478

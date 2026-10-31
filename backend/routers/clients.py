@@ -417,6 +417,8 @@ async def delete_client(
             raise HTTPException(409, "This contact has history (orders, invoices, payments or "
                                      "devices) and can't be deleted. Merge it into another contact "
                                      "instead to preserve the records.")
+    from backend.services import portal_links
+    await portal_links.revoke_all(db, client.id)
     await db.delete(client)
     await db.commit()
     return {"ok": True}
@@ -669,14 +671,17 @@ def _client_fk_targets():
     the mapper so the merge can never silently miss a table as new ones are added. This is the
     COMPLETE set a merge must re-point before deleting a source (orphaning any of these would
     lose history on SQLite and raise an IntegrityError on Postgres). Includes the second FK on
-    Invoice (payer_client_id) and the Client self-reference (payer_id)."""
+    Invoice (payer_client_id) and the Client self-reference (payer_id).
+
+    Portal links are left out: they are access, not history. Delete and merge revoke them, so a
+    merged-away contact's old link never opens the other contact's jobs."""
     from sqlalchemy import inspect as _inspect
 
     import backend.models as _m
     out = []
     for name in dir(_m):
         cls = getattr(_m, name)
-        if not isinstance(cls, type) or not hasattr(cls, "__tablename__"):
+        if not isinstance(cls, type) or not hasattr(cls, "__tablename__") or cls is _m.ClientPortalLink:
             continue
         try:
             mapper = _inspect(cls)
@@ -786,6 +791,8 @@ async def merge_clients(
                 setattr(r, attr, target.id)
                 moved_map.setdefault(key, {})[r.id] = s.id
                 moved_counts[key] = moved_counts.get(key, 0) + 1
+        from backend.services import portal_links
+        await portal_links.revoke_all(db, s.id)
         await db.delete(s)
 
     # Guard the self-reference edge: if the target's own payer was one of the merged sources,

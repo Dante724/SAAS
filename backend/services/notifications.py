@@ -12,9 +12,10 @@ adapter that prints and marks the message sent in development, and fails (withou
 body) when deployed. Either way a NotificationLog row
 captures recipient, body, status (queued|sent|failed|skipped) and any error.
 """
+import re
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -29,6 +30,42 @@ def one_line(subject: Optional[str]) -> str:
     """An email subject with no CR/LF, so a value filled into it can't add mail headers."""
     import re
     return re.sub(r"[\r\n]+", " ", subject or "").strip()
+
+
+# ── Notification log hooks ───────────────────────────────────────────────────
+_PORTAL_TOKEN = re.compile(r"(/portal/)[A-Za-z0-9_-]{16,}")
+
+
+def redact_portal_links(text):
+    """A message as kept in the history: its portal link no longer carries the live token (the
+    log is readable by staff who couldn't issue a link, and only hashes are stored otherwise)."""
+    return _PORTAL_TOKEN.sub(r"\1…", text) if text and "/portal/" in text else text
+
+
+async def log_is_html(db, log) -> bool:
+    """HTML or plain for a logged message, decided from its template once and then kept."""
+    if log.is_html is None:
+        html = False
+        if log.template_id:
+            from backend.services.message_vars import is_html
+            html = is_html((await db.execute(select(NotificationTemplate.body_template).where(
+                NotificationTemplate.id == log.template_id))).scalar_one_or_none())
+        log.is_html = html
+    return bool(log.is_html)
+
+
+@event.listens_for(NotificationLog, "before_insert")
+@event.listens_for(NotificationLog, "before_update")
+def _freeze_log(mapper, connection, target) -> None:
+    if target.is_html is None:
+        html = False
+        if target.template_id:
+            from backend.services.message_vars import is_html
+            html = is_html(connection.execute(select(NotificationTemplate.body_template).where(
+                NotificationTemplate.id == target.template_id)).scalar_one_or_none())
+        target.is_html = html
+    if target.status not in ("queued", "scheduled"):     # still to send: it needs the live link
+        target.body = redact_portal_links(target.body)
 
 
 # ── Channel adapters ─────────────────────────────────────────────────────────

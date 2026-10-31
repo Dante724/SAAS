@@ -85,9 +85,13 @@ async def purge_all(db: AsyncSession, now: datetime | None = None) -> dict:
     orgs = (await db.execute(select(Organisation).where(Organisation.retention_days.is_not(None)))).scalars().all()
     for org in orgs:
         try:
-            for k, n in (await purge_org(db, org, now)).items():
-                total[k] = total.get(k, 0) + n
+            # A savepoint per shop: on Postgres a failed statement aborts the transaction, which
+            # would lose every other shop's purge along with it.
+            async with db.begin_nested():
+                done = await purge_org(db, org, now)
         except Exception:  # noqa: BLE001 — one shop's bad setting mustn't stop the rest
             continue
+        for k, n in done.items():
+            total[k] = total.get(k, 0) + n
     await db.commit()
     return total

@@ -4,14 +4,16 @@ Custom fields such as "Passcode", "Login password" or "Pattern lock" (industry f
 the one-click suggestions) are stored in `custom_data`. With TOKEN_ENCRYPTION_KEY set, those
 values are Fernet-encrypted when written and decrypted when read, so the rest of the app sees
 plain values and a database copy doesn't hold customers' unlock codes. Which keys count is
-decided by name (SECRET_KEY_RE); everything else in the dict is stored as before.
+decided by name (SECRET_KEY_RE: the industry "password" fields are `passcode` / `password`, and
+custom fields are keyed by their label, e.g. "Screen lock" → screen_lock). Everything else in the
+dict is stored as before.
 """
 import json
 import re
 
 from sqlalchemy.types import JSON, TypeDecorator
 
-SECRET_KEY_RE = re.compile(r"passcode|password|pattern_lock|unlock|(^|_)pin($|_)")
+SECRET_KEY_RE = re.compile(r"passcode|password|lock|(security|access|unlock)_code|(^|_)pin($|_)")
 
 
 def is_secret_key(key) -> bool:

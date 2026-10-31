@@ -30,8 +30,9 @@ def upgrade() -> None:
     for table in _TABLES:
         rows = conn.execute(sa.text(
             f"SELECT id, custom_data FROM {table} WHERE custom_data IS NOT NULL AND ("  # noqa: S608 — fixed names
+            # a cheap pre-filter; is_secret_key() decides per key
             "LOWER(CAST(custom_data AS TEXT)) LIKE '%pass%' OR LOWER(CAST(custom_data AS TEXT)) LIKE '%pin%' "
-            "OR LOWER(CAST(custom_data AS TEXT)) LIKE '%unlock%' OR LOWER(CAST(custom_data AS TEXT)) LIKE '%pattern%')"
+            "OR LOWER(CAST(custom_data AS TEXT)) LIKE '%lock%' OR LOWER(CAST(custom_data AS TEXT)) LIKE '%code%')"
         )).fetchall()
         for rid, data in rows:
             if isinstance(data, str):

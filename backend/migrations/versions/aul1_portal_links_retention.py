@@ -5,6 +5,7 @@
   working until they expire) and the plain-text column is dropped.
 - organisations.retention_days: how long to keep old notifications, call data, messages and
   audit entries (null = keep, the default).
+- notification_logs.is_html: HTML or plain, fixed from the template when the message is filled.
 
 Revision ID: aul1
 Revises: mkw01
@@ -57,9 +58,13 @@ def upgrade() -> None:
 
     with op.batch_alter_table("organisations") as b:
         b.add_column(sa.Column("retention_days", sa.JSON(), nullable=True))
+    with op.batch_alter_table("notification_logs") as b:
+        b.add_column(sa.Column("is_html", sa.Boolean(), nullable=True))
 
 
 def downgrade() -> None:
+    with op.batch_alter_table("notification_logs") as b:
+        b.drop_column("is_html")
     with op.batch_alter_table("organisations") as b:
         b.drop_column("retention_days")
     # Hashed links can't be turned back into tokens: customers need a fresh link after a downgrade.

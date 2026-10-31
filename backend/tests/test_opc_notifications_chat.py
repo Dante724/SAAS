@@ -141,10 +141,10 @@ async def test_new_variables_render_in_a_rule_send(client, tenant, db):
     assert log.body.startswith("Hi Sam Rivera (+15550100). Born 14 March, age ")
     assert "Due $150.00 of $150.00." in log.body
     assert "Booked Fri 30 Oct, 10:00." in log.body
-    # the link in the message is a live one (only its hash is stored)
-    token = log.body.split("/portal/")[1].split()[0]
-    from backend.services import portal_links
-    assert (await portal_links.client_for(db, token)).id == cid
+    # a link went out (one link row, only its hash kept); the history copy hides the live token
+    from backend.models import ClientPortalLink
+    assert "/portal/…" in log.body
+    assert len((await db.execute(select(ClientPortalLink).where(ClientPortalLink.client_id == cid))).all()) == 1
     assert "{" not in log.body
 
 
