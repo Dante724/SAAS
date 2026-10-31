@@ -42,7 +42,7 @@ async def test_notification_sweep_commits_each_send_and_never_resends(client, te
     await db.commit()
     calls = []
 
-    async def flaky_send(_db, _org, _channel, *, recipient, subject, body):
+    async def flaky_send(_db, _org, _channel, *, recipient, subject, body, log=None):
         calls.append(recipient)
         if len(calls) == 2:
             raise RuntimeError("worker crashed mid-sweep")
