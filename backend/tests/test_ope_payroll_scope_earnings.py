@@ -411,7 +411,7 @@ async def test_scope_own_and_all(client, db):
 async def test_role_editor_payroll_scope_validation(client, db):
     H, org, owner, inside, outside, mgr, M, role = await _scoped_setup(client, db)
     assert role["payroll_scope"] == "selected" and role["payroll_employee_ids"] == [inside]
-    bad = await client.post("/api/settings/rbac/roles", json={"name": "X", "payroll_scope": "team"}, headers=H)
+    bad = await client.post("/api/settings/rbac/roles", json={"template": "Full access", "name": "X", "payroll_scope": "team"}, headers=H)
     assert bad.status_code == 422
     # a save that doesn't send the field keeps it (never silently widens)
     r = await client.put(f"/api/settings/rbac/roles/{role['id']}", json={"name": "Payroll mgr 2"}, headers=H)
@@ -424,14 +424,14 @@ async def test_role_editor_payroll_scope_validation(client, db):
     editor_role = await _role(client, H, "Role editor", template="Full access",
                               payroll_scope="selected", payroll_employee_ids=[inside])
     _, E = await _person(client, H, "Ed", editor_role["id"])
-    r = await client.post("/api/settings/rbac/roles", json={"name": "Wide", "payroll_scope": "all"}, headers=E)
+    r = await client.post("/api/settings/rbac/roles", json={"template": "Full access", "name": "Wide", "payroll_scope": "all"}, headers=E)
     assert r.status_code == 403
-    r = await client.post("/api/settings/rbac/roles", json={
+    r = await client.post("/api/settings/rbac/roles", json={"template": "Full access", 
         "name": "Wider", "payroll_scope": "selected", "payroll_employee_ids": [inside, outside]}, headers=E)
     assert r.status_code == 403
-    r = await client.post("/api/settings/rbac/roles", json={"name": "Own", "payroll_scope": "own"}, headers=E)
+    r = await client.post("/api/settings/rbac/roles", json={"template": "Full access", "name": "Own", "payroll_scope": "own"}, headers=E)
     assert r.status_code == 403            # "own" would cover whoever holds it, not just their people
-    r = await client.post("/api/settings/rbac/roles", json={
+    r = await client.post("/api/settings/rbac/roles", json={"template": "Full access", 
         "name": "Same", "payroll_scope": "selected", "payroll_employee_ids": [inside]}, headers=E)
     assert r.status_code == 201, r.text
 

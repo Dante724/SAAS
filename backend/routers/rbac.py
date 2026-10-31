@@ -64,7 +64,7 @@ async def list_roles(db: AsyncSession = Depends(get_db),
 
 class RoleIn(BaseModel):
     name: str
-    permissions: dict = {}          # {code: bool}; omitted => allowed (deny-wins)
+    permissions: dict = {}          # {code: bool}; without a template, omitted => off
     template: Optional[str] = None  # seed from a template
     location_scope: str = "all"
     location_ids: list[str] = []

@@ -225,10 +225,15 @@ def make_explicit(role) -> bool:
 
 
 def new_role_permissions(template: str | None = None, overrides: dict | None = None) -> dict:
-    """Permissions for a role created now: every current code on (except the opt-in ones),
-    then the template's denies, then what the editor set."""
-    perms = {code: code not in OPT_IN for code in ALL_CODES}
-    perms.update(TEMPLATES.get(template or "", {}))
+    """Permissions for a role created now. With a template: every current code on (except the
+    opt-in ones), then the template's denies. Without one: everything off. Then what the editor
+    set. (Starting a blank role from all-on let a role sent with a few codes get ~110 of them,
+    settings and roles included — QA 31 Oct 2026.)"""
+    if template:
+        perms = {code: code not in OPT_IN for code in ALL_CODES}
+        perms.update(TEMPLATES.get(template, {}))
+    else:
+        perms = {code: False for code in ALL_CODES}
     perms.update({k: bool(v) for k, v in (overrides or {}).items()})
     return perms
 

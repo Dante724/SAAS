@@ -94,7 +94,7 @@ async def second_tenant(client):
 
 
 async def limited(client, h, email, deny=("can_manage_settings",), phone=None):
-    role = await client.post("/api/settings/rbac/roles", json={
+    role = await client.post("/api/settings/rbac/roles", json={"template": "Full access", 
         "name": f"Limited {email}", "permissions": {k: False for k in deny}}, headers=h)
     body = {"name": "Limited", "email": email, "password": "pw-lim-12345", "role_id": role.json()["id"]}
     if phone:
@@ -636,7 +636,7 @@ def test_partner_template_cannot_call_and_new_roles_can():
     from backend.services.permissions import new_role_permissions
     assert new_role_permissions("Partner")["can_make_calls"] is False
     assert new_role_permissions("Specialist")["can_make_calls"] is True
-    assert new_role_permissions()["can_create_clients"] is True
+    assert new_role_permissions("Full access")["can_create_clients"] is True
 
 
 @pytest.mark.asyncio
