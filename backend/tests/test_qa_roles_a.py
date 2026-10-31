@@ -131,3 +131,51 @@ async def test_specialist_sees_no_money_and_no_cost(client):
     assert stock["total_value"] is None and stock.get("unit_cost") is None
     assert (await client.get(f"/api/inventory/parts/{part['id']}/stock", headers=H)).json()["total_value"] == 578
 
+
+# ── 3 + 4. job money: cost edits, closing unpaid, invoicing, done -> delivered ──────────────
+
+async def _shop_job(client, H, price=100):
+    loc = await _loc(client, H)
+    c = (await client.post("/api/clients", json={"name": "Dana", "phone": "+15550101010"}, headers=H)).json()
+    await client.post("/api/cash/accounts", json={"name": "Till", "payment_option": "cash"}, headers=H)
+    acc = (await client.get("/api/cash/accounts", headers=H)).json()["items"][0]["id"]
+    o = (await client.post("/api/orders", json={"client_id": c["id"], "location_id": loc, "complaint": "x"},
+                           headers=H)).json()
+    r = await client.post(f"/api/orders/{o['id']}/lines", json={
+        "kind": "custom", "line_type": "part", "description": "Screen", "qty": 1, "unit_price": price,
+        "cost_price": 40}, headers=H)
+    assert r.status_code in (200, 201), r.text
+    o = (await client.get(f"/api/orders/{o['id']}", headers=H)).json()
+    return o, acc
+
+
+@pytest.mark.asyncio
+async def test_technician_cost_edit_is_refused_not_ignored(client):
+    H = await _owner(client)
+    o, _ = await _shop_job(client, H)
+    line = o["lines"][0]
+    T = await _person(client, H, (await _role(client, H, {"name": "Tech", "template": "Specialist"}))["id"])
+    r = await client.patch(f"/api/orders/{o['id']}/lines/{line['id']}", json={"cost_price": 0.01}, headers=T)
+    assert r.status_code == 403, r.text
+    after = (await client.get(f"/api/orders/{o['id']}", headers=H)).json()["lines"][0]
+    assert float(after["cost_price"]) == 40
+    # a qty change that doesn't touch cost still works
+    r = await client.patch(f"/api/orders/{o['id']}/lines/{line['id']}", json={"qty": 2}, headers=T)
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_closing_an_unpaid_job_needs_the_payments_right(client):
+    H = await _owner(client)
+    o, acc = await _shop_job(client, H)
+    T = await _person(client, H, (await _role(client, H, {"name": "Tech", "template": "Specialist"}))["id"])
+    assert (await client.patch(f"/api/orders/{o['id']}/status", json={"status": "ready"}, headers=T)).status_code == 200
+    r = await client.patch(f"/api/orders/{o['id']}/status", json={"status": "done"}, headers=T)
+    assert r.status_code == 403, r.text
+    assert (await client.get(f"/api/orders/{o['id']}", headers=H)).json()["status"] == "ready"
+    # paid up, the technician can close it
+    r = await client.post(f"/api/cash/orders/{o['id']}/pay", json={"method": "cash", "account_id": acc}, headers=H)
+    assert r.status_code == 200, r.text
+    r = await client.patch(f"/api/orders/{o['id']}/status", json={"status": "done"}, headers=T)
+    assert r.status_code == 200, r.text
+

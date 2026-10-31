@@ -1458,6 +1458,14 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         .order_by(OrderStatus.sort_order)
     )).scalars().first()
     is_closing = target.is_terminal if target else (data.status in ("done", "closed", "delivered"))
+    # Closing a job the customer still owes on is a money decision: it needs the payments right
+    # (a technician could close an unpaid job — QA 31 Oct 2026). "Not collected" isn't a close.
+    if target and target.status_group == "closed" and data.status != order.status \
+            and not order.is_estimate and not await has_perm(db, current, "can_view_finance"):
+        from backend.services.order_money import balance_due as _due_now
+        if await _due_now(db, order) > 0:
+            raise HTTPException(403, "This job still has money owing. Someone who takes payments "
+                                     "needs to close it (permission: can_view_finance).")
 
     # Phase B.7: enforce status transfer rules (allowed from->to for this role)
     from backend.routers.statuses import is_transition_allowed
@@ -4469,10 +4477,12 @@ async def update_line(
     if payload.keys() & {"qty", "unit_price", "discount", "discount_type", "tax_rate", "tax_mode"}:
         from backend.services.invoice_money import assert_line_editable
         await assert_line_editable(db, line.id)   # not under a sent or paid invoice
-    if current.role_id and not (await _order_perms(db, current)).get("can_view_purchase_price"):
-        payload.pop("cost_price", None)
+    # A cost change from someone who may not set costs is refused, not silently dropped (a 200
+    # that changed nothing — QA 31 Oct 2026). The editor only sends cost when it showed it.
     if "cost_price" in payload and float(payload["cost_price"] or 0) != float(line.cost_price or 0):
         await assert_perm(db, current, "can_set_cost_price")
+    if current.role_id and not (await _order_perms(db, current)).get("can_view_purchase_price"):
+        payload.pop("cost_price", None)
     if "discount_type" in payload and (payload["discount_type"] or "pct") != (line.discount_type or "pct"):
         await assert_perm(db, current, "can_set_discount_type")
     # Changing what the customer pays needs the matching right (a technician can't zero a job).
