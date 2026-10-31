@@ -203,8 +203,10 @@ async def create_coupon(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
-    if data.kind not in ("pct", "fixed") or data.value <= 0:
-        raise HTTPException(422, "kind must be pct|fixed with a positive value")
+    from backend.services.coupons import check_coupon_value
+    check_coupon_value(data.kind, data.value)
+    if data.min_total < 0 or data.max_uses < 0:
+        raise HTTPException(422, "min_total and max_uses can't be negative")
     code = data.code.strip().upper()
     dup = (await db.execute(select(Coupon).where(
         Coupon.org_id == current.org_id, Coupon.code == code))).scalar_one_or_none()
@@ -254,10 +256,8 @@ async def generate_client_coupon(
         _Client.id == client_id, _Client.org_id == current.org_id))).scalar_one_or_none()
     if not cl:
         raise HTTPException(404, "Client not found")
-    if data.kind not in ("pct", "fixed") or data.value <= 0:
-        raise HTTPException(422, "kind must be pct|fixed with a positive value")
-    if data.kind == "pct" and data.value > 100:
-        raise HTTPException(422, "A percentage coupon can't be more than 100%")
+    from backend.services.coupons import check_coupon_value
+    check_coupon_value(data.kind, data.value)
     if not 1 <= data.max_uses <= 100:
         raise HTTPException(422, "A returning-customer coupon can be used 1 to 100 times")
     import random
@@ -321,10 +321,9 @@ async def apply_coupon(
     if (order.total or 0) < c.min_total:
         raise HTTPException(400, f"Order total below coupon minimum ({c.min_total:.2f})")
     already = (await db.execute(select(OrderLine).where(
-        OrderLine.order_id == order.id, OrderLine.description == f"Coupon {c.code}"))).scalar_one_or_none()
+        OrderLine.order_id == order.id, OrderLine.description == f"Coupon {c.code}"))).scalars().first()
     if already:
         raise HTTPException(400, "Coupon already applied to this order")
-    discount = q2((order.total or 0) * c.value / 100.0) if c.kind == "pct" else q2(c.value)
     # Cap at what's still owed, not the order total: a coupon on an order that's already
     # (partly) paid would otherwise leave it "overpaid", and that overpayment can be refunded
     # from the till — a coupon turned into cash (B12).
@@ -332,7 +331,14 @@ async def apply_coupon(
     owed = await balance_due(db, order)
     if owed <= 0:
         raise HTTPException(400, "Nothing is owed on this order, so a coupon can't be applied")
-    discount = min(discount, owed)
+    # QA 2026-10-31 B: the coupon reduces the pre-tax price and carries the lines' tax, so the
+    # tax on the invoice goes down with it (was a 0%-tax line off the tax-inclusive total).
+    from backend.services.coupons import order_coupon_lines
+    lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == order.id))).scalars().all()
+    parts = order_coupon_lines(lines, c.kind, c.value, owed)
+    if not parts:
+        raise HTTPException(400, "Nothing on this order for the coupon to reduce")
+    discount = q2(-sum(p["total"] for p in parts))
     # Guarded atomic increment: `c.uses += 1` let concurrent redemptions both pass the
     # max_uses check above and overshoot the limit.
     res = await db.execute(sa_update(type(c)).where(
@@ -341,7 +347,13 @@ async def apply_coupon(
         .values(uses=type(c).uses + 1).execution_options(synchronize_session=False))
     if res.rowcount == 0:
         raise HTTPException(409, "Coupon usage limit reached")
-    await _add_discount_line(db, order, f"Coupon {c.code}", discount)
+    from backend.routers.orders import _recalc_order
+    for p in parts:
+        db.add(OrderLine(order_id=order.id, line_type="fee", kind="custom",
+                         description=f"Coupon {c.code}", qty=1, unit_price=p["unit_price"],
+                         tax_rate=p["tax_rate"], tax_mode=p["tax_mode"], total=p["total"]))
+    await db.flush()
+    await _recalc_order(db, order)
     await db.commit()
     return {"ok": True, "discount": discount, "new_total": order.total}
 

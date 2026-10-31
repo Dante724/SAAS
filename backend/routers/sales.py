@@ -110,8 +110,9 @@ async def _pos_redemptions(db, org_id, sale, client_id, gross, data):
             raise HTTPException(400, "Coupon usage limit reached")
         if gross < c.min_total:
             raise HTTPException(400, f"Order total below coupon minimum ({c.min_total:.2f})")
-        amt = q2(gross * c.value / 100.0) if c.kind == "pct" else q2(c.value)
-        amt = min(amt, remaining)
+        # QA 2026-10-31 B: the percentage is of what's left after the sale discount.
+        from backend.services.coupons import coupon_amount
+        amt = coupon_amount(c.kind, c.value, remaining)
         # guarded atomic increment (like the gift-card path) — refuse if a concurrent
         # redemption hit max_uses between the read above and this write.
         res = await db.execute(sa_update(Coupon)
