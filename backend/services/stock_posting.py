@@ -18,7 +18,7 @@ async def apply_receipt_line(
     db, *, org_id: str, part: Part, location_id: str, qty: float, unit_cost: float,
     created_by_id: str | None = None, ref_type: str = "posting", ref_id: str | None = None,
     bin_id: str | None = None, serials: list[str] | None = None,
-    create_batch: bool = True, set_last_cost: bool = False,
+    create_batch: bool = True, set_last_cost: bool = False, expiry_date=None,
 ) -> float:
     """Post `qty` of `part` into `location_id` at `unit_cost`. Returns the unit cost used.
 
@@ -27,6 +27,8 @@ async def apply_receipt_line(
     - A FIFO `StockItemBatch` layer is born per receipt (so exact-COGS fulfilment works),
       plus one `SerializedItem` per provided serial.
     - `set_last_cost` also refreshes `part.cost_price` (postings do; PO-receive leaves it).
+    - `expiry_date` dates the cost layer for FEFO (expiry-tracked products).
+    - Serials are expected already checked by `serial_intake.validate_intake`.
     """
     sl = (await db.execute(select(StockLevel).where(
         StockLevel.part_id == part.id, StockLevel.location_id == location_id))).scalar_one_or_none()
@@ -59,7 +61,7 @@ async def apply_receipt_line(
         batch = StockItemBatch(org_id=org_id, part_id=part.id, location_id=location_id,
                                bin_id=bin_id, po_id=ref_id if ref_type == "po" else None,
                                unit_cost=Decimal(str(unit_cost)), qty_received=Decimal(str(qty)),
-                               qty_remaining=Decimal(str(qty)))
+                               qty_remaining=Decimal(str(qty)), expiry_date=expiry_date)
         db.add(batch)
         await db.flush()
         for sn in (serials or [])[:int(qty)]:

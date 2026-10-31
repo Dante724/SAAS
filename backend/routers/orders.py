@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -92,6 +92,8 @@ class LineIn(BaseModel):
     ref_id: Optional[str] = None
     save_to_catalog: bool = False          # build 126: persist a custom line as a catalog item
     catalog_kind: Optional[str] = None     # service|product (when save_to_catalog)
+    catalog_sku: Optional[str] = Field(None, max_length=100)      # 3: product saved to the catalog
+    catalog_barcode: Optional[str] = Field(None, max_length=100)
     bundle_group_id: Optional[str] = None  # add this line INSIDE a kit already on the job
 
     # Security phase 3: negative quantities/prices/discounts and >100% discounts used to
@@ -3518,11 +3520,21 @@ async def add_line(
     # the catalog record and re-point this line at it so it behaves like a picked item.
     if data.save_to_catalog and (data.kind in (None, "custom", "fee") or data.line_type == "fee"):
         ckind = data.catalog_kind or "service"
+        # Adding a line to a job doesn't by itself let someone grow the shop's catalog.
+        await assert_perm(db, current, "can_create_products" if ckind == "product" else "can_edit_labors")
         if ckind == "product":
             from backend.models import Part
+            sku = (data.catalog_sku or "").strip() or None
+            if sku:
+                dup = (await db.execute(select(Part.name, Part.sku).where(
+                    Part.org_id == current.org_id, Part.active == True,  # noqa: E712
+                    func.lower(Part.sku) == sku.lower()).limit(1))).first()
+                if dup:
+                    raise HTTPException(409, f"“{dup[0]}” already uses SKU {dup[1]}. Pick it from the catalog instead.")
             part = Part(org_id=current.org_id, name=data.description,
                         sell_price=data.unit_price or 0, cost_price=data.cost_price or 0,
-                        warranty_days=data.warranty_days or 0)
+                        warranty_days=data.warranty_days or 0, sku=sku,
+                        barcode=(data.catalog_barcode or "").strip() or None)
             db.add(part)
             await db.flush()
             data.kind, data.line_type, data.ref_id = "product", "part", part.id

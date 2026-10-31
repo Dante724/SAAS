@@ -3,6 +3,8 @@ import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import DateField from "../../components/DateField";
 import { Product, Supplier, money } from "./types";
+import PasteImport, { ImportedLine } from "./PasteImport";
+import { useMe } from "../../context/Me";
 
 /** Create a purchase order: supplier + location + line items → POST /inventory/po.
  * This is the entry point that was missing — the toolbar button used to open the
@@ -25,6 +27,8 @@ export default function NewPODrawer({ products, onClose, onCreated }:
   const [pool, setPool] = useState<Product[]>(products);
   // inline quick-create so an empty system is never a dead end
   const [newSup, setNewSup] = useState(false); const [supName, setSupName] = useState(""); const [supBusy, setSupBusy] = useState(false);
+  const { can } = useMe();
+  const [pasting, setPasting] = useState(false);       // 13b: paste the supplier's sheet
   const [newProd, setNewProd] = useState(false); const [prodName, setProdName] = useState(""); const [prodCost, setProdCost] = useState(""); const [prodBusy, setProdBusy] = useState(false);
 
   useEffect(() => {
@@ -34,6 +38,12 @@ export default function NewPODrawer({ products, onClose, onCreated }:
     if (!products || products.length === 0) api.get<any>("/catalog/products").then((r) => setPool(r.items || [])).catch(() => {});
   }, []);
 
+  // 13b: imported lines fill the empty first row, then append; new products join the picker.
+  function addImported(lines: ImportedLine[]) {
+    setPool((xs) => [...xs, ...lines.filter((l) => l.created && !xs.some((x) => x.id === l.part_id)).map((l) => ({ id: l.part_id, name: l.name, cost_price: l.cost } as any))]);
+    setRows((rs) => [...rs.filter((r) => r.part_id), ...lines.map((l) => ({ part_id: l.part_id, qty: l.qty, cost: l.cost }))]);
+    setPasting(false);
+  }
   const setRow = (i: number, patch: Partial<Row>) => setRows((rs) => rs.map((r, j) => j === i ? { ...r, ...patch } : r));
   const addRow = () => setRows((rs) => [...rs, { part_id: "", qty: 1, cost: 0 }]);
   const delRow = (i: number) => setRows((rs) => rs.filter((_, j) => j !== i));
@@ -158,7 +168,9 @@ export default function NewPODrawer({ products, onClose, onCreated }:
           <div className="flex items-center gap-4">
             <button onClick={addRow} className="text-xs font-bold text-primary hover:underline flex items-center gap-1"><M n="add" c="text-sm" />Add line</button>
             <button onClick={() => setNewProd((v) => !v)} className="text-xs font-bold text-primary hover:underline flex items-center gap-1"><M n="add_box" c="text-sm" />{newProd ? "Cancel new product" : "New product"}</button>
+            <button onClick={() => setPasting((v) => !v)} className="text-xs font-bold text-primary hover:underline flex items-center gap-1"><M n="content_paste" c="text-sm" />Paste from Excel</button>
           </div>
+          {pasting && <PasteImport onAdd={addImported} onClose={() => setPasting(false)} canCreate={can("can_create_products")} />}
           {newProd && (
             <div className="flex gap-1.5 items-end rounded-xl bg-slate-50/70 border border-slate-200/70 p-2.5">
               <div className="flex-1"><label className={lbl}>New product name</label>
