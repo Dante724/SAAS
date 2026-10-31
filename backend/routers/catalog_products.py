@@ -18,12 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import (
-    Part, StockLevel, StockMovement, StockItemBatch, SerializedItem,
+    Part, StockLevel, SerializedItem,
     Category, Employee,
 )
 from backend.services.auth import assert_perm, get_current_employee, require_perm
 from backend.routers.forms import resolve_custom_data
-from backend.services import product_codes, stock_rows
+from backend.services import product_codes
 from backend.services.money import q2
 from backend.services.owned import get_owned_or_404, require_unique_name
 from backend.services.redact import can_see_costs, drop_cost_fields
@@ -860,18 +860,22 @@ async def write_off(pid: str, data: WriteOffIn, db: AsyncSession = Depends(get_d
             from backend.services import serial_log
             serial_log.record(db, si, "written_off", ref_type="product_write_off",
                               label=(getattr(data, "reason", None) or "Written off"), actor_id=current.id)
-            done.append((sn, si.bin_id))
-        for _sn, unit_bin in done:      # out of the unit's own bin first; never below zero
-            have, _res = await stock_rows.totals(db, pid, data.location_id)
-            if have > 0:
-                try:
-                    await stock_rows.draw(db, pid, data.location_id, min(1, have), bin_id=unit_bin)
-                except stock_rows.NotEnoughStock:
-                    pass      # taken by a concurrent request: nothing left to clamp, as before
-        done = [sn for sn, _b in done]
-        qty = len(done)
-        db.add(StockMovement(part_id=pid, location_id=data.location_id, movement_type="writeoff",
-                             qty=qty, ref_type="writeoff", created_by_id=current.id))
+            done.append(si)
+        # one write-off path (services/stock_writeoff): out of the unit's own bin and its own cost
+        # layer, logged as an outflow (it was +qty here)
+        from backend.services import stock_writeoff
+        qty = 0
+        for si in done:
+            try:
+                await stock_writeoff.write_off(db, part=p, location_id=data.location_id, qty=1,
+                                               created_by_id=current.id, bin_id=si.bin_id, batch_id=si.batch_id)
+                qty += 1
+            except HTTPException as e:
+                if e.status_code != 409:
+                    raise
+                # the unit was in stock but the location's count was already 0 (taken by a concurrent
+                # request, or older data): nothing left to draw, as before
+        done = [si.serial_number for si in done]
         await db.commit()
         return {"ok": True, "written_off": done, "qty": qty}
 
@@ -879,28 +883,11 @@ async def write_off(pid: str, data: WriteOffIn, db: AsyncSession = Depends(get_d
     qty = data.qty or 0
     if qty <= 0:
         raise HTTPException(400, "Provide a positive qty to write off")
-    have, _res = await stock_rows.totals(db, pid, data.location_id)
-    if have < qty:
-        raise HTTPException(409, f"Only {have:g} in stock at this location")
-    # consume cost layers: FEFO when expiry tracking is on, else FIFO
-    batches = (await db.execute(select(StockItemBatch).where(
-        StockItemBatch.part_id == pid, StockItemBatch.location_id == data.location_id,
-        StockItemBatch.qty_remaining > 0).order_by(
-        StockItemBatch.expiry_date.asc().nullslast() if p.expiry_tracking
-        else StockItemBatch.received_at.asc()))).scalars().all()
-    remaining = qty
-    for b in batches:
-        if remaining <= 0:
-            break
-        take = min(float(b.qty_remaining), remaining)
-        b.qty_remaining = float(b.qty_remaining) - take
-        remaining -= take
-    try:
-        await stock_rows.draw(db, pid, data.location_id, qty)
-    except stock_rows.NotEnoughStock as e:
-        raise HTTPException(409, f"Only {e.have:g} in stock at this location")
-    db.add(StockMovement(part_id=pid, location_id=data.location_id, movement_type="writeoff",
-                         qty=qty, ref_type="writeoff", created_by_id=current.id))
+    # one write-off path (services/stock_writeoff): refused beyond stock, FEFO/FIFO layers consumed,
+    # the movement logged as an outflow (it was +qty here)
+    from backend.services import stock_writeoff
+    out = await stock_writeoff.write_off(db, part=p, location_id=data.location_id, qty=qty,
+                                         created_by_id=current.id)
     await db.commit()
     return {"ok": True, "qty": qty, "method": "FEFO" if p.expiry_tracking else "FIFO",
-            "qty_available": (await stock_rows.totals(db, pid, data.location_id))[0]}
+            "qty_available": out["qty_available"]}

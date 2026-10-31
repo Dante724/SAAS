@@ -278,13 +278,18 @@ async def adjust_stock(
             movement_type=data.movement_type, warehouse_id=_w.id if _w else None)
         await db.commit()
         return {"ok": True, "qty_available": (await stock_rows.totals(db, part_id, data.location_id))[0]}
-    if data.movement_type in ("receive", "adjust"):
-        # A count down: out of the location's main row.
-        await stock_rows.add(db, part_id, data.location_id, data.qty)
-    elif data.movement_type == "writeoff":
-        # Never below zero (the old clamp): take what is there, across bins.
-        have, _res = await stock_rows.totals(db, part_id, data.location_id)
-        await stock_rows.draw(db, part_id, data.location_id, min(data.qty, max(have, 0)))
+    if data.movement_type == "writeoff" or (data.movement_type in ("receive", "adjust") and data.qty < 0):
+        # Out of stock the one way (services/stock_writeoff): refused beyond what is on hand, FIFO
+        # layers consumed, outflow logged negative. A write-off is sent as a positive quantity.
+        if data.movement_type == "writeoff" and data.qty < 0:
+            raise HTTPException(422, "Send the quantity to write off as a positive number")
+        from backend.services import stock_writeoff
+        out = await stock_writeoff.write_off(
+            db, part=part, location_id=data.location_id, qty=abs(data.qty), created_by_id=current.id,
+            movement_type=data.movement_type, ref_type=data.movement_type,
+            warehouse_id=_w.id if _w else None)
+        await db.commit()
+        return {"ok": True, "qty_available": out["qty_available"]}
 
     movement = StockMovement(
         part_id=part_id, location_id=data.location_id,

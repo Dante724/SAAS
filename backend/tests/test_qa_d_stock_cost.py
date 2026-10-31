@@ -245,3 +245,64 @@ def test_backfill_tags_and_merges_untagged_stock(tmp_path):
         assert rows == {"s-own": ("W1", 6, 1), "s-p2": ("W1", 5, 0), "s-l2": (w2[0], 3, 0)}
         assert x("SELECT warehouse_id FROM stock_item_batches").scalar() == "W1"
         assert dict(x("SELECT id, warehouse_id FROM stock_movements").all()) == {"m1": "W1", "m2": w2[0]}
+
+
+# ── 3. one write-off path: layers consumed, outflow logged negative, no silent cut ─────────
+async def _two_layers(client, h, sku):
+    """5 units at 2.00 then 5 at 4.00 → 10 on hand worth 30."""
+    loc = await _loc(client, h)
+    pid = await _part(client, h, sku)
+    for cost in (2, 4):
+        await client.post(f"/api/inventory/parts/{pid}/adjust", headers=h, json={
+            "location_id": loc, "qty": 5, "movement_type": "receive", "unit_cost": cost})
+    return loc, pid
+
+
+@pytest.mark.asyncio
+async def test_adjust_writeoff_consumes_fifo_layers(client, tenant, db):
+    loc, pid = await _two_layers(client, tenant, "QD-3A")
+    r = await client.post(f"/api/inventory/parts/{pid}/adjust", headers=tenant, json={
+        "location_id": loc, "qty": 6, "movement_type": "writeoff"})
+    assert r.status_code == 200, r.text
+    assert r.json()["qty_available"] == 4
+    on_hand, value = await _assert_books(db, pid)
+    assert on_hand == 4 and value == pytest.approx(16.0)     # the oldest 5 @2 and one @4 went
+    mv = (await db.execute(select(StockMovement).where(
+        StockMovement.part_id == pid, StockMovement.movement_type == "writeoff"))).scalars().all()
+    assert sum(m.qty for m in mv) == -6
+
+
+@pytest.mark.asyncio
+async def test_catalog_writeoff_logs_outflow_negative(client, tenant, db):
+    loc, pid = await _two_layers(client, tenant, "QD-3B")
+    r = await client.post(f"/api/catalog/products/{pid}/write-off", headers=tenant,
+                          json={"location_id": loc, "qty": 3})
+    assert r.status_code == 200, r.text
+    on_hand, value = await _assert_books(db, pid)
+    assert on_hand == 7 and value == pytest.approx(2 * 2 + 5 * 4)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["adjust", "catalog"])
+async def test_writeoff_more_than_stock_is_refused(client, tenant, db, path):
+    loc, pid = await _two_layers(client, tenant, f"QD-3C-{path}")
+    if path == "adjust":
+        r = await client.post(f"/api/inventory/parts/{pid}/adjust", headers=tenant, json={
+            "location_id": loc, "qty": 25, "movement_type": "writeoff"})
+    else:
+        r = await client.post(f"/api/catalog/products/{pid}/write-off", headers=tenant,
+                              json={"location_id": loc, "qty": 25})
+    assert r.status_code == 409, r.text
+    assert "Only 10" in r.text
+    on_hand, value = await _assert_books(db, pid)
+    assert on_hand == 10 and value == pytest.approx(30.0)
+
+
+@pytest.mark.asyncio
+async def test_count_down_adjust_consumes_layers(client, tenant, db):
+    loc, pid = await _two_layers(client, tenant, "QD-3D")
+    r = await client.post("/api/inventory/parts/bulk-adjust", headers=tenant, json={
+        "location_id": loc, "rows": [{"part_id": pid, "set_qty": 8}]})
+    assert r.status_code == 200, r.text
+    on_hand, value = await _assert_books(db, pid)
+    assert on_hand == 8 and value == pytest.approx(3 * 2 + 5 * 4)
