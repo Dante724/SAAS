@@ -311,3 +311,74 @@ async def test_stocktake_posted_twice_applies_once(client, tenant, db):
     assert e.value.status_code == 409 and stale is not None
     await db.rollback()
     assert await K.stock(client, tenant, r["part_id"]) == 4
+
+
+# ── 7 + 8. two people on one line ──────────────────────────────────────────────────────────────
+async def _wo_line(client, h, db, qty=2):
+    from backend.models import OrderLine
+    loc = await K.loc(client, h)
+    pid = await K.part(client, h, loc, "Screen", 50, 10, qty=10)
+    oid, _ = await K.job(client, h, loc)
+    lid = (await K.add_line(client, h, oid, ref_id=pid, qty=qty, **P))["line_id"]
+    stale = (await db.execute(select(OrderLine).where(OrderLine.id == lid))).scalar_one()   # A's copy
+    return oid, pid, lid, stale, await _me_emp(db)
+
+
+@pytest.mark.asyncio
+async def test_qty_and_price_edited_at_once_keep_both(client, tenant, db):
+    from backend.routers.orders import LineUpdate, update_line
+    oid, pid, lid, stale, emp = await _wo_line(client, tenant, db)
+    r = await client.patch(f"/api/orders/{oid}/lines/{lid}", headers=tenant, json={"qty": 3})   # B: qty
+    assert r.status_code == 200, r.text
+    await update_line(oid, lid, LineUpdate(unit_price=30), db, emp)                             # A: price
+    o = await K.order(client, tenant, oid)
+    ln = next(x for x in o["lines"] if x["id"] == lid)
+    assert ln["qty"] == 3 and ln["unit_price"] == 30 and ln["total"] == pytest.approx(90)
+    assert o["total"] == pytest.approx(90)
+    assert await K.stock(client, tenant, pid) == 7 and stale is not None
+
+
+@pytest.mark.asyncio
+async def test_two_qty_edits_at_once_move_stock_to_match(client, tenant, db):
+    from backend.routers.orders import LineUpdate, update_line
+    oid, pid, lid, stale, emp = await _wo_line(client, tenant, db)
+    assert (await client.patch(f"/api/orders/{oid}/lines/{lid}", headers=tenant, json={"qty": 3})).status_code == 200
+    await update_line(oid, lid, LineUpdate(qty=4), db, emp)
+    ln = next(x for x in await K.lines(client, tenant, oid) if x["id"] == lid)
+    assert ln["qty"] == 4
+    assert await K.stock(client, tenant, pid) == 6 and stale is not None      # 10 − 4, nothing extra taken
+
+
+@pytest.mark.asyncio
+async def test_line_removed_twice_returns_stock_once(client, tenant, db, monkeypatch):
+    """Two real DELETEs in flight: both read the line before either removes it."""
+    import asyncio
+
+    from backend.routers import orders as orders_router
+    oid, pid, lid, stale, emp = await _wo_line(client, tenant, db)
+    await db.rollback()
+    real, arrived, go = orders_router._order_perms, [], asyncio.Event()
+
+    async def _both_read_the_line(*a, **kw):
+        arrived.append(1)
+        if len(arrived) >= 2:
+            go.set()
+        await asyncio.wait_for(go.wait(), 5)
+        return await real(*a, **kw)
+    monkeypatch.setattr(orders_router, "_order_perms", _both_read_the_line)
+    rs = await asyncio.gather(*[client.delete(f"/api/orders/{oid}/lines/{lid}", headers=tenant) for _ in range(2)])
+    monkeypatch.setattr(orders_router, "_order_perms", real)
+    assert sorted(r.status_code for r in rs)[0] == 200
+    assert sorted(r.status_code for r in rs)[1] in (404, 409), [r.text for r in rs]
+    assert await K.stock(client, tenant, pid) == 10 and stale is not None
+
+
+@pytest.mark.asyncio
+async def test_same_product_merged_at_once_counts_both(client, tenant, db):
+    from backend.routers.orders import LineIn, add_line
+    oid, pid, lid, stale, emp = await _wo_line(client, tenant, db)
+    await K.add_line(client, tenant, oid, ref_id=pid, qty=1, **P)                  # B merges +1 → 3
+    await add_line(oid, LineIn(ref_id=pid, qty=1, **P), db, emp)                   # A merges +1 on a stale 2
+    ln = next(x for x in await K.lines(client, tenant, oid) if x["id"] == lid)
+    assert ln["qty"] == 4
+    assert await K.stock(client, tenant, pid) == 6 and stale is not None

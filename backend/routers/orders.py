@@ -4038,6 +4038,7 @@ async def add_line(
             OrderLine.order_id == order_id, OrderLine.ref_id == data.ref_id, OrderLine.kind == "product",
             OrderLine.bundle_group_id.is_(None)).limit(1))).scalars().first()
         if existing and not kit_group:
+            await _lock_line(db, existing)
             existing.qty += data.qty
             existing.total = q2(existing.qty * existing.unit_price *
                                    (1 - (existing.discount or 0)/100 if existing.discount_type != "fixed" else 1))
@@ -4241,6 +4242,20 @@ async def _maybe_deduct(db, order, line, qty, perms, current):
                     except HTTPException:
                         break  # not a serialized part (or none left) — fine
     line.pending_stock = (line.pending_stock or 0) + shortfall
+
+
+async def _lock_line(db, line) -> None:
+    """Take the line's row lock and re-read it, so a change is made to what is saved now, not to
+    what this request read earlier. Two people editing (or a double-click removing) the same line
+    otherwise lose one edit or move its stock twice. A no-op UPDATE is the lock: a row lock on
+    Postgres, the write lock on SQLite; the second request waits, then sees the first one's work.
+    A line someone else removed meanwhile is a 404."""
+    from sqlalchemy import update as _update
+    won = await db.execute(_update(OrderLine).where(OrderLine.id == line.id)
+                           .values(qty=OrderLine.qty).execution_options(synchronize_session=False))
+    if won.rowcount != 1:
+        raise HTTPException(404, "Line not found. Someone else may have removed it.")
+    await db.refresh(line)
 
 
 def _line_as_in(line) -> "LineIn":
@@ -4447,6 +4462,7 @@ async def update_line(
     line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id))).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
+    await _lock_line(db, line)
     if line.kind == "membership":
         # The plan's own price: removing it would make the plan free. Cancel the membership instead.
         raise HTTPException(409, "This is a membership plan. Cancel it from the customer's membership instead.")
@@ -4564,6 +4580,7 @@ async def delete_line(
         raise HTTPException(403, "You don't have permission to remove lines from this job")
     if line.bundle_group_id:
         await _guard_kit_change(db, current, order_id, line.bundle_group_id, adds_value=False)
+    await _lock_line(db, line)   # a second click removing it at the same time gets a 404
     # return previously-deducted stock for product lines (incl. serials + cost layers)
     if line.kind == "product" and line.ref_id and not order.is_estimate:
         deducted = (line.qty or 0) - (line.pending_stock or 0)
