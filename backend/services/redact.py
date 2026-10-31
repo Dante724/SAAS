@@ -12,10 +12,19 @@ COST_PERM = "can_view_purchase_price"
 COST_KEYS = frozenset({
     "cost_price", "avg_cost", "unit_cost", "purchase_price", "last_cost", "landed_cost",
     "supplier_price", "purchase_cost", "cost_total", "total_cost",
-    "margin", "margin_pct", "profit", "cogs",
+    "margin", "margin_pct", "profit", "cogs", "received_cost", "expected_cost",
 })
+# A purchase order is priced at cost, so its money fields are cost too — only on a PO-shaped
+# object (one carrying "po_number"), since "total" means something else everywhere else.
+# QA 31 Oct 2026: a technician worked out unit cost from PO totals and the 3-way match.
+PO_KEY = "po_number"
+PO_COST_KEYS = frozenset({
+    "subtotal", "total", "charges_total", "supplier_invoice_total",
+    "freight_capitalised", "shipment_freight",
+})
+PO_MATCH_COST_KEYS = frozenset({"invoiced_total", "price_variance"})
 # Cheap pre-check on the raw JSON before parsing it.
-_NEEDLES = tuple(f'"{k}"'.encode() for k in COST_KEYS)
+_NEEDLES = tuple(f'"{k}"'.encode() for k in COST_KEYS | {PO_KEY})
 
 
 def mentions_costs(body: bytes) -> bool:
@@ -24,7 +33,15 @@ def mentions_costs(body: bytes) -> bool:
 
 def redact(obj: Any) -> Any:
     if isinstance(obj, dict):
-        return {k: redact(v) for k, v in obj.items() if k not in COST_KEYS}
+        out = {k: redact(v) for k, v in obj.items() if k not in COST_KEYS}
+        if PO_KEY in obj:
+            for k in PO_COST_KEYS:
+                out.pop(k, None)
+            if isinstance(out.get("match"), dict):
+                out["match"] = {k: v for k, v in out["match"].items() if k not in PO_MATCH_COST_KEYS}
+            if isinstance(out.get("supplier"), dict):
+                out["supplier"].pop("balance", None)      # what the shop owes them
+        return out
     if isinstance(obj, list):
         return [redact(v) for v in obj]
     return obj

@@ -78,3 +78,56 @@ async def test_existing_roles_keep_their_stored_permissions(client, db):
     after = (await client.get("/api/auth/me", headers=T)).json()["permissions"]
     assert after == {**before, "can_view_cashflow": False}
 
+
+# ── 2. the technician template keeps money with the desk ────────────────────────────────────
+
+async def _loc(client, H):
+    d = (await client.get("/api/staff/locations", headers=H)).json()
+    return (d if isinstance(d, list) else d["items"])[0]["id"]
+
+
+@pytest.mark.parametrize("template", ["Specialist", "Partner"])
+def test_technician_templates_deny_billing_and_balances(template):
+    perms = P.new_role_permissions(template)
+    for code in ("can_view_balance", "can_view_cashbox", "can_view_invoices", "can_create_invoices",
+                 "can_view_credit_notes", "can_create_credit_notes", "can_create_returns",
+                 "can_approve_discount", "can_set_discount", "can_view_purchase_price"):
+        assert perms[code] is False, code
+    assert perms["can_create_tickets"] is True and perms["can_add_products"] is True
+
+
+@pytest.mark.asyncio
+async def test_specialist_sees_no_money_and_no_cost(client):
+    H = await _owner(client)
+    loc = await _loc(client, H)
+    T = await _person(client, H, (await _role(client, H, {"name": "Tech", "template": "Specialist"}))["id"])
+    dash = await client.get(f"/api/reports/company-dashboard?location_id={loc}", headers=T)
+    assert dash.status_code == 200, dash.text
+    assert not dash.json().get("total_money")
+    assert (await client.get("/api/finance/invoices", headers=T)).status_code == 403
+    assert (await client.get("/api/finance/credit-notes", headers=T)).status_code == 403
+
+    sup = (await client.post("/api/suppliers", json={"name": "Acme"}, headers=H)).json()
+    part = (await client.post("/api/inventory/parts", json={
+        "name": "Screen", "sku": f"SKU-{uuid.uuid4().hex[:6]}"}, headers=H)).json()
+    po = (await client.post("/api/inventory/po", json={
+        "supplier_id": sup["id"], "location_id": loc,
+        "lines": [{"part_id": part["id"], "qty_ordered": 2, "unit_cost": 289}]}, headers=H)).json()
+    rec = await client.post(f"/api/inventory/po/{po['po_id']}/receive", json={"lines": []}, headers=H)
+    assert rec.status_code in (200, 201), rec.text
+
+    owner_view = (await client.get(f"/api/inventory/po/{po['po_id']}", headers=H)).json()
+    assert owner_view["total"] == 578 and owner_view["match"]["expected_cost"] == 578
+    tech_view = (await client.get(f"/api/inventory/po/{po['po_id']}", headers=T)).json()
+    assert tech_view["po_number"] == owner_view["po_number"]
+    for k in ("total", "subtotal", "charges_total", "supplier_invoice_total"):
+        assert k not in tech_view, k
+    assert "expected_cost" not in tech_view["match"] and "status" in tech_view["match"]
+    assert all("unit_cost" not in ln for ln in tech_view["lines"])
+    listed = (await client.get("/api/inventory/po", headers=T)).json()
+    assert listed["total"] >= 1                                  # the count stays
+    assert all("total" not in p for p in listed["items"])
+    stock = (await client.get(f"/api/inventory/parts/{part['id']}/stock", headers=T)).json()
+    assert stock["total_value"] is None and stock.get("unit_cost") is None
+    assert (await client.get(f"/api/inventory/parts/{part['id']}/stock", headers=H)).json()["total_value"] == 578
+

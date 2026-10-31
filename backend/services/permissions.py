@@ -169,6 +169,14 @@ _NOT_FOR_STAFF = {
     "can_refund_card_payments": False, "can_manage_terminals": False,
     "can_view_purchase_price": False, "can_see_profit": False, "can_set_cost_price": False,
     "can_see_asset_cost": False,
+    # QA 31 Oct 2026: the template still showed cash balances, every invoice and credit note,
+    # and let a technician give a 100% discount. Billing stays with the desk.
+    "can_view_balance": False, "can_view_cashbox": False,
+    "can_view_invoices": False, "can_create_invoices": False, "can_edit_invoices": False,
+    "can_edit_issued_invoices": False, "can_view_credit_notes": False, "can_create_credit_notes": False,
+    "can_create_incomes": False, "can_create_expenses": False, "can_create_returns": False,
+    "can_approve_discount": False, "can_set_discount": False, "can_set_discount_type": False,
+    "can_make_client_payments": False,
 }
 TEMPLATES = {
     "Full access": {},                       # nothing denied
