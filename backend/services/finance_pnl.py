@@ -22,7 +22,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import Invoice, InvoiceLine, OrderLine, Transaction
-from backend.services.money import q2, q4
+from backend.services.money import q2
+from backend.services.dates import now_utc
 
 _EXCLUDED_INVOICE = ("draft", "void", "cancelled", "canceled")
 
@@ -35,8 +36,8 @@ def _end_of_day(dt: datetime) -> datetime:
 
 async def compute_pnl(db: AsyncSession, org_id: str, date_from: Optional[str],
                       date_to: Optional[str], location_id: Optional[str] = None) -> dict:
-    df = datetime.fromisoformat(date_from) if date_from else datetime.utcnow() - timedelta(days=30)
-    dt = _end_of_day(datetime.fromisoformat(date_to)) if date_to else datetime.utcnow() + timedelta(days=1)
+    df = datetime.fromisoformat(date_from) if date_from else now_utc() - timedelta(days=30)
+    dt = _end_of_day(datetime.fromisoformat(date_to)) if date_to else now_utc() + timedelta(days=1)
 
     inv_date = func.coalesce(Invoice.issued_at, Invoice.created_at)
     inv_conds = [Invoice.org_id == org_id, Invoice.status.notin_(_EXCLUDED_INVOICE),

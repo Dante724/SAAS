@@ -1,5 +1,125 @@
 # Changelog
 
+## Invoice money: one set of rules for every payment and invoice (flow check G4, F2–F5)
+
+Audit: `docs/audits/2026-10-30-estimate-to-invoice-flow.md`. New service `backend/services/invoice_money.py`; migration
+`im01` (after `mkw01`).
+
+- **Deposits reach the invoice.** A deposit lands on the job's open invoice, or on the next invoice the job gets.
+  A $200 job with a $50 deposit and $150 at pickup now shows its invoice paid.
+- **Payments go where they're owed.** A job payment fills each open invoice only up to its own balance, oldest
+  first. Anything left is held on the job and pays its next invoice; it no longer piles onto the newest one. Till,
+  card reader and pay links all follow the same rule.
+- **One invoice for several jobs.** The invoice credits every job, so job B can't be paid twice, and lists every
+  job's lines. The bulk "group invoice" now links all its jobs. One job's deposit never pays another job's share.
+- **Invoices follow the job until sent or paid.** A draft or part-paid invoice that hasn't been sent updates when
+  job lines change. Removing work below what was paid moves the extra back to the job, where it can be refunded.
+  - Once sent or paid, an invoice keeps the lines it billed. Those lines can't be repriced or deleted (409), and
+    later work is owed on the job.
+  - Sending moves an invoice from draft to issued.
+- **Tax and discount are amounts everywhere.** A manual invoice takes `discount_pct`/`tax_pct`; the older
+  `discount`/`tax` inputs are still read as percentages. The migration rewrites older percentage invoices to
+  amounts without changing their totals.
+- **Smaller fixes:**
+  - attaching or detaching a job updates the total;
+  - auto-draft on close ignores cancelled and shared invoices, and runs in a savepoint;
+  - cancelling a draft hands its deposit back to the job;
+  - an invoice made from a job gets the job's customer;
+  - the payer must be one of this shop's customers;
+  - "payment received" fires on every payment path (invoice payment, pay link, deposit, client balance);
+  - a card refund of a split charge comes off every piece.
+
+## Audit 29 Oct 2026 — Medium fixes M3–M11 and reliability R1–R3
+
+Findings in `docs/audits/2026-10-29-full-codebase-audit.md`. Migrations `aud6m01` → `aud8m01` →
+`aud10m01` → `aud3r01` (after `mkw01`; additive, plus a data backfill in `aud8m01`/`aud10m01`).
+
+- **Deploy note: `ENVIRONMENT` unset now means production** (M5). Every fail-closed check applies
+  unless it is explicitly `development` or `test`, so set `ENVIRONMENT=development` in a local `.env`.
+- **Restoring a voided sale, payment or refund row is refused** (M3), like deleting one already was.
+- **Double clicks and retries apply once** (M4): cash delete/restore, transfer status moves and
+  deleting a supplier return, write-off or posting claim the row with a conditional update first.
+- **Operator portal 2-step sign-in** (M6): authenticator-app codes (each usable once), "Sign out on
+  every device", and old tokens stop working. Deployed, the portal shows only the 2-step setup until
+  it is on. Unknown emails take as long to refuse as wrong passwords.
+- **Logs and Sentry leave out customer data** (M7): deployed database errors hide query values;
+  tracebacks, log lines and Sentry events mask emails, secrets and `[parameters: …]`; Sentry no
+  longer sends local variables.
+- **Staff 2-step secrets are encrypted at rest** (M8); existing rows are encrypted by `aud8m01`.
+- **Audit trail** (M9) for payment/SMS key changes, webhooks, SSO, email accounts and operator
+  changes to a shop — field names only, never values.
+- **Unreadable shop keys fail closed** (M10) instead of quietly using the operator's keys; the screen
+  says "Enter keys again". Keys under the old SECRET_KEY-derived key are re-encrypted by `aud10m01`,
+  then that key is no longer used when `TOKEN_ENCRYPTION_KEY` is set.
+- **SSRF** (M11): only globally routable addresses count as public (blocks 100.64.0.0/10, which
+  holds a cloud metadata address, plus 6to4/Teredo forms); automation webhooks connect to the
+  address that was checked.
+- **Reliability**: order side effects are logged and rolled back one by one (R1); one shop's error no
+  longer stops the notification sweep for the rest (R2); interrupted webhook sends are retried and
+  failed ones back off 1, 2, 4… minutes up to 6 hours (R3).
+
+## WS-C — Inquiries everywhere (Orderry June–July sprint, gaps #8–#12, #17, #18, #20)
+
+Council note: `docs/council-ws-c-inquiries.md`. Migration `wsc1` (after `opd1`, additive only).
+
+- **Missed call → inquiry (Twilio now, Aircall and the generic call webhook too).** A missed inbound
+  call opens an inquiry linked to the contact (matched by phone), creates one "Call back" task and
+  alerts whoever is clocked in (else the contact's manager, a chosen person, or the admins). Repeat
+  calls from the same number within 24 h are added to the open inquiry ("3 missed calls"); a burst
+  alerts once. Settings → Calls & telephony → "Missed calls become inquiries". **On by default**:
+  shops that had the older "task on missed call" automation off now get a call-back task through the
+  inquiry. When the older automation is on, its priority and assignee still apply, and it never
+  creates a second task.
+- **Richer inquiries.** Types with their own respond-by time, device (brand/model, serial or IMEI),
+  custom fields (Settings → Forms → Inquiry), an activity timeline (`/api/feed/lead/{id}`), paged list
+  (`GET /api/leads`), idempotent create (`Idempotency-Key` header or `idempotency_key`). Convert
+  attaches the device (only the same customer's existing device is reused), closes the call-back task,
+  and needs `can_create_tickets` / `can_create_estimates`.
+  - API changes for clients of `/api/leads`: a bad status is now **422** (was 400); `won` without
+    converting is 422; changing the status of a converted inquiry is 409.
+- **API v2** (`/api/v2`): inquiries, inquiry types, tags, services, bundles, writable products,
+  contacts with address parts, webhook subscriptions. Keys can be narrowed to `<resource>:read|write`
+  and have a per-key requests-a-minute limit (default 120; 429 + Retry-After).
+  - **Integrators:** webhooks are never implied by `read,write` or `*`; a key needs `webhooks:read` /
+    `webhooks:write`. v1 reads now need the `read`, `write` or `*` scope (keys with other free-text
+    scopes get 403).
+- **Webhooks match the docs.** `order.closed` and `estimate.accepted` now fire; the docs say
+  `appointment.created` (an endpoint subscribed to the old `booking.created` still receives it); new
+  events for inquiries, tags, bundles and products. Unknown event names are refused when subscribing.
+- **Settings switched on.** Default visibility for new comments and files (used when a client doesn't
+  send one); how staff names show on public pages (full / first / first + initial; "Name on documents"
+  always wins); label templates can print automatically when a job is created.
+- **Structured addresses** on contacts (street, city, region, postcode, country), postcode checked for
+  countries with a fixed format; the single address line is rebuilt from them, and a typed line still
+  works (it clears the parts).
+- **Aircall adapter** behind `AIRCALL_ENABLED` (off): per-shop webhook token compared in constant time,
+  idempotent per Aircall call id, failed token attempts rate-limited.
+
+## phase 4 — Customer status messages: the notification rules are the one source of truth
+
+- **Problem:** two settings disagreed. The status editor's "Text the customer" switch
+  (`OrderStatus.triggers_notification`) drove a legacy template send that ran only when **no**
+  notification rule matched; every new shop is seeded with an "email on every status change" rule,
+  so the switch was nearly always ignored and owners couldn't tell which setting was real.
+- **Decision:** rules win, everywhere. The legacy fallback in `_apply_status_change` is **removed**
+  (not merely unreachable). `triggers_notification` stays as a column so old clients don't break, but
+  nothing reads it: a `true` from the API is converted into a rule and the flag cleared.
+- **No behaviour change for existing shops** (`services/legacy_status_notifs.py`, shared by
+  migration `nt144p4` and the dev startup self-heal): each flagged status becomes one active
+  per-status rule per status-change template the fallback would have sent (that template's channel,
+  event `closed` for a finishing status), **only** when no rule already fires for it (the fallback
+  never ran then) and only when such a template exists (it sent nothing otherwise). A
+  location-scoped rule counts as covering (can't double-send). Statuses not in the status table
+  (hard-coded `done/closed/delivered`) no longer get the template fallback.
+- **Status editor:** the switch is replaced by a live read-out from the rules ("Email · via Every
+  status change", "Text"), Text/Email(/WhatsApp) quick switches that create or turn off this
+  status's own rule (the same `toggleCell` the Notifications table uses, `src/lib/notifRules.ts`), and
+  "Edit message" → Settings › Notifications. The summary sentence and the list badge read the rules.
+- Changing a status between open and finishing stages moves its own rules between `status_changed`
+  and `closed`, so they keep firing. New shops no longer seed the flag.
+- Known gap (unchanged, follow-up): rule-engine email doesn't use the shop's connected Gmail/Outlook
+  the way the old template path did (`try_oauth_email`); it goes through SMTP / simulated.
+
 ## build 144ep — Enforce the last 11 foreign keys; fix checklist orphans; repair dev DB
 
 - **Root cause, checklist orphans:** `_write_structure` (template save) deleted steps and relied on the

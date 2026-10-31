@@ -4,20 +4,36 @@ import { useSearchParams } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
 import ScanStockPanel from "../../components/ScanStockPanel";
 import { api, openAuthedDoc } from "../../api/client";
+import { downloadSheet } from "../../lib/downloadSheet";
 import { isoDate } from "../../lib/localDate";
-import { Product, Supplier, PO, Service, Bundle, Asset, money } from "./types";
-import { analyzePaste, gridToRows, mergeRemap, loadRememberedMap, saveRememberedMap, FIELD_LABELS, FIELD_ORDER } from "./pasteMap";
+import { missingBarcodesMessage } from "../../lib/barcodes";
+import { Product, Supplier, PO, Service, Bundle, Asset, currencySymbol, money } from "./types";
+import { analyzePaste, gridToRows, mergeRemap, loadRememberedMap, saveRememberedMap, fileToGrid, mapByHeader, splitSerials, FIELD_LABELS, FIELD_ORDER } from "./pasteMap";
 import type { PasteField, PostRow } from "./pasteMap";
 import InventoryDrawer, { DrawerKind } from "./InventoryDrawer";
 import PODrawer from "./PODrawer";
 import NewPODrawer from "./NewPODrawer";
 import PurchasingCockpit from "./PurchasingCockpit";
+import BinsPanel from "./BinsPanel";
+import BinScanField, { ScannedBin } from "../../components/BinScanField";
+import StocktakeDrawer from "./StocktakeDrawer";
 import AssetDrawer from "../orders/AssetDrawer";
 import { useTerminology, assetNoun } from "../../lib/useTerminology";
 import { assetStatusTone } from "./statusTone";
 import { cachedPref, loadPref, savePref } from "../../lib/userPref";
 import Pager from "../../components/Pager";
+import SerialEntry from "../../components/SerialEntry";
+import DateField from "../../components/DateField";
+import AssetStateTabs, { AssetCounts, useAssetState } from "../../components/AssetStateTabs";
+import { useDebounced, useServerPage } from "../../hooks/useServerPage";
+import { useMe } from "../../context/Me";
 import { alertDialog, confirmDialog, promptDialog } from "../../lib/dialog";
+import { printHtmlInFrame } from "../../lib/safeHtml";
+import { inputCls } from "../invoices/billing";
+import { productGlyph } from "../sales/SalesPOS";
+import { RowMenu } from "../company/CompanyHub";
+import { loadFailed } from "../../lib/notice";
+import { clickableRow } from "../../lib/clickable";
 
 type Tab = "stock" | "devices" | "services" | "bundles" | "purchase-orders"
   | "postings" | "reservations" | "conversions" | "transfers" | "stock-takes" | "write-offs" | "returns" | "bins";
@@ -30,21 +46,41 @@ const TABS: { id: Tab; label: string; count?: string }[] = [
   { id: "write-offs", label: "Write-offs" }, { id: "returns", label: "Returns" },
 ];
 
-// colored SKU badge (matches redesign-3)
-const BADGE = [
-  { bg: "bg-blue-50 border-blue-100 text-primary" },
-  { bg: "bg-purple-50 border-purple-100 text-purple-600" },
-  { bg: "bg-amber-50 border-amber-200/60 text-amber-700" },
-  { bg: "bg-emerald-50 border-emerald-100 text-emerald-600" },
-  { bg: "bg-rose-50 border-rose-100 text-rose-600" },
-];
-function badgeFor(p: Product, i: number) {
-  const src = (p.sku || p.code || p.name || "").replace(/[^A-Za-z]/g, "");
-  const txt = (src.slice(0, 4) || "ITM").toUpperCase();
-  return { txt, cls: BADGE[i % BADGE.length].bg };
+// A set filter reads as active in the primary tint; an unset one stays neutral.
+const filterSel = (on: boolean) => `h-8 px-3 text-xs font-semibold rounded-lg border cursor-pointer ${on ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`;
+
+// Margin as a percentage: ink when healthy, red only when the part sells below cost.
+export function marginOf(p: Pick<Product, "margin_pct" | "sell_price" | "cost_price">): number | null {
+  if (p.margin_pct != null) return p.margin_pct;
+  return (p.sell_price || 0) > 0 && p.cost_price != null ? Math.round((((p.sell_price || 0) - (p.cost_price || 0)) / (p.sell_price || 1)) * 100) : null;
 }
+
 // Exception-only stock status: healthy rows show a plain number (returns null),
 // only out/low get a coloured pill — so the eye lands on what needs action.
+const primaryBtn = "h-9 px-4 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container flex items-center gap-1.5";
+const ghostBtn = "h-9 px-3.5 rounded-lg bg-white border border-slate-200 text-ink-secondary text-xs font-semibold hover:bg-slate-50 flex items-center gap-1.5";
+
+// Empty history tab: why it's worth having, and (when the header has no button) the first step.
+const AUDIT_EMPTY: Record<string, { why: string; action?: string }> = {
+  postings: { why: "Paste or type a supplier delivery to bring stock in. Every receipt, count and correction is listed here.", action: "New posting" },
+  reservations: { why: "Parts are held here when you add them to a work order or a confirmed appointment, so nobody sells them twice." },
+  conversions: { why: "Turn a traded-in device into parts, or parts into a device, and keep both sides of your stock right." },
+  transfers: { why: "Move stock between locations to keep each branch supplied. Every move is listed here." },
+  "stock-takes": { why: "Count what is on the shelf and see the difference from what your stock says, part by part." },
+  "write-offs": { why: "Record damaged, lost or expired parts so your stock and costs stay accurate." },
+  returns: { why: "Log a part a customer brings back, or one you send back to a supplier, and the stock follows." },
+};
+function AuditEmpty({ tab, title, sub, onStart }: { tab: string; title: string; sub: string; onStart?: () => void }) {
+  const e = AUDIT_EMPTY[tab];
+  return (
+    <div className="flex flex-col items-center text-center gap-1 max-w-sm mx-auto">
+      <div className="text-sm font-semibold text-ink-primary">No {title.toLowerCase()} yet</div>
+      <div className="text-xs text-ink-tertiary">{e?.why || sub}</div>
+      {onStart && e?.action && <button onClick={onStart} className={`${ghostBtn} mt-2`}><M n="add" c="text-sm" />{e.action}</button>}
+    </div>
+  );
+}
+
 function stockPill(p: Product): { cls: string; dot: string; label: string } | null {
   const q = p.qty_available ?? 0;
   if (q <= 0) return { cls: "bg-rose-50 text-rose-700 border-rose-200/60", dot: "bg-rose-500", label: "Out of stock" };
@@ -54,9 +90,17 @@ function stockPill(p: Product): { cls: string; dot: string; label: string } | nu
 
 export default function InventoryHub() {
   const term = useTerminology();
+  const { can } = useMe();
   const [tab, setTab] = useState<Tab>("stock");
   const [products, setProducts] = useState<Product[] | null>(null);
-  const [assets, setAssets] = useState<Asset[] | null>(null);
+  // Devices tab pages on the server (the API serves at most 200 rows per request).
+  const [aq, setAq] = useState("");
+  const daq = useDebounced(aq.trim());
+  const [aState, setAState] = useAssetState();                      // 19: active / written off, remembered
+  const [aOwner, setAOwner] = useState<"" | "company" | "client">("");
+  const ap = useServerPage<Asset, { counts?: AssetCounts }>("/assets", { search: daq || undefined, state: aState, owner_type: aOwner || undefined },
+    { pageSize: 50, enabled: tab === "devices" });
+  const assets = ap.rows;
   const [services, setServices] = useState<Service[] | null>(null);
   const [bundles, setBundles] = useState<Bundle[] | null>(null);
   const [pos, setPos] = useState<PO[] | null>(null);
@@ -72,7 +116,6 @@ export default function InventoryHub() {
   const [asel, setAsel] = useState<Set<string>>(new Set());   // asset selection
   const PAGE_SIZE = 50;                 // numbered pagination — 50 rows/page (Stock + Devices)
   const [pPage, setPPage] = useState(1);   // Stock page
-  const [aPage, setAPage] = useState(1);   // Devices page
   const [secPage, setSecPage] = useState(1);  // shared page for the other tabs (PO + audit) — one visible at a time
   const aToggle = (id: string) => setAsel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const [labelDlg, setLabelDlg] = useState(false);
@@ -80,6 +123,7 @@ export default function InventoryHub() {
   const [labelTpls, setLabelTpls] = useState<any[]>([]);
   const [labelTplId, setLabelTplId] = useState("");
   const [labelCopies, setLabelCopies] = useState(1);
+  const [labelErr, setLabelErr] = useState<string | null>(null);   // e.g. a product whose MPN isn't a valid EAN-13
   async function openLabelDlg(mode: "product" | "asset") {
     setLabelMode(mode);
     try {
@@ -88,7 +132,7 @@ export default function InventoryHub() {
       const items = (d?.items || []).filter((t: any) => wanted.includes(t.doc_type));
       setLabelTpls(items); setLabelTplId(items[0]?.id || "");
     } catch { setLabelTpls([]); }
-    setLabelDlg(true);
+    setLabelErr(null); setLabelDlg(true);
   }
   async function printLabels() {
     if (!labelTplId) return;
@@ -96,15 +140,12 @@ export default function InventoryHub() {
     const body = labelMode === "asset"
       ? { template_id: labelTplId, asset_ids: [...asel], copies: labelCopies || 1 }
       : { template_id: labelTplId, part_ids: [...psel], copies: labelCopies || 1 };
+    setLabelErr(null);
     try {
       const r = await api.post<any>(url, body);
       const html = r?.html; if (!html) return;
-      const ifr = document.createElement("iframe");
-      ifr.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
-      ifr.srcdoc = html;
-      ifr.onload = () => { try { ifr.contentWindow?.focus(); ifr.contentWindow?.print(); } catch { /* noop */ } setTimeout(() => ifr.remove(), 2000); };
-      document.body.appendChild(ifr); setLabelDlg(false);
-    } catch { /* noop */ }
+      printHtmlInFrame(html); setLabelDlg(false);
+    } catch (e: any) { setLabelErr(e?.message || "Couldn't print these labels"); }
   }
   const labelSelCount = labelMode === "asset" ? asel.size : psel.size;
   const [pBusy, setPBusy] = useState(false);
@@ -151,6 +192,7 @@ export default function InventoryHub() {
   const [cfg, setCfg] = useState<{ enable_bins?: boolean; enable_reservations?: boolean }>({});
   useEffect(() => { api.get<any>("/staff/inventory-settings").then(setCfg).catch(() => setCfg({})); }, []);
   const visibleTabs = TABS.filter((t) =>
+    (t.id !== "devices" || can("can_view_asset_info")) &&
     (t.id !== "reservations" || cfg.enable_reservations) &&
     (t.id !== "bins" || cfg.enable_bins));
 
@@ -178,10 +220,9 @@ export default function InventoryHub() {
   }, []);
   useEffect(() => {
     setSecPage(1);   // leaving a tab resets the shared (PO/audit) pager to page 1
-    if (tab === "devices" && !assets) api.get<{ items: Asset[] }>("/assets?limit=1000").then((r) => setAssets(r.items || [])).catch(() => setAssets([]));
     if (tab === "services" && !services) loadServices();
     if (tab === "bundles" && !bundles) api.get<{ items: Bundle[] }>("/bundles").then((r) => setBundles(r.items || [])).catch(() => setBundles([]));
-    if (tab === "purchase-orders" && !pos) { api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(() => setPos([])); api.get<{ items: Supplier[] }>("/suppliers").then((r) => setSuppliers(r.items || [])).catch(() => {}); }
+    if (tab === "purchase-orders" && !pos) { api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(() => setPos([])); api.get<{ items: Supplier[] }>("/suppliers").then((r) => setSuppliers(r.items || [])).catch(loadFailed("suppliers")); }
     if (AUDIT[tab] && auditRows[tab] === undefined) {
       const url = AUDIT_URL[tab];
       if (url) api.get<any>(url).then((r) => setAuditRows((s) => ({ ...s, [tab]: r.items || r || [] }))).catch(() => setAuditRows((s) => ({ ...s, [tab]: [] })));
@@ -198,6 +239,8 @@ export default function InventoryHub() {
     "write-offs": { icon: "delete_sweep", title: "Write-offs", sub: "Damaged, lost or expired stock removed from inventory." },
     returns: { icon: "assignment_return", title: "Returns", sub: "Customer and supplier returns processed here." },
   };
+  // The first step for a history tab whose header has no button of its own.
+  const AUDIT_START: Record<string, (() => void) | undefined> = { postings: () => setPostingOpen(true) };
   const AUDIT_URL: Record<string, string> = {
     postings: "/inventory/movements", reservations: "/inventory/reservations",
     conversions: "/conversions", transfers: "/transfers",
@@ -210,7 +253,9 @@ export default function InventoryHub() {
     reservations: [["Part", (r) => av(r, ["part_name", "part", "product_name"])], ["Qty", (r) => av(r, ["qty", "quantity"])], ["Order", (r) => av(r, ["order_number", "order_id"])], ["Status", (r) => av(r, ["status", "state"])]],
     conversions: [["Date", (r) => dt(r, ["created_at", "date"])], ["From", (r) => av(r, ["from_name", "source_name", "source", "from"])], ["To", (r) => av(r, ["to_name", "target_name", "target", "to"])], ["Direction", (r) => av(r, ["direction", "type", "kind"])]],
     transfers: [["Date", (r) => dt(r, ["created_at", "date"])], ["From", (r) => av(r, ["from_location_name", "from_location", "source"])], ["To", (r) => av(r, ["to_location_name", "to_location", "dest"])], ["Items", (r) => av(r, ["item_count", "lines_count"], String((r?.lines || r?.items || []).length || 0))], ["Status", (r) => av(r, ["status", "state"])]],
-    "stock-takes": [["Date", (r) => dt(r, ["created_at", "date", "started_at"])], ["Location", (r) => av(r, ["location_name", "warehouse_name", "warehouse"])], ["Status", (r) => av(r, ["status", "state"])], ["Counted", (r) => `${r?.counted ?? 0} / ${r?.lines ?? 0}`]],
+    "stock-takes": [["Date", (r) => dt(r, ["created_at", "date", "started_at"])], ["Location", (r) => av(r, ["location_name", "warehouse_name", "warehouse"])],
+      ["Covers", (r) => [r?.bin_code ? `Bin ${r.bin_code}` : r?.by_bin ? "Bin by bin" : "Whole location", r?.category_name, r?.blind ? "blind" : null].filter(Boolean).join(" · ")],
+      ["Status", (r) => (r?.status === "posted" ? "Posted" : r?.status === "in_progress" ? "Draft" : av(r, ["status", "state"]))], ["Counted", (r) => `${r?.counted ?? 0} / ${r?.lines ?? 0}`]],
     "write-offs": [["Date", (r) => dt(r, ["created_at", "date"])], ["Part", (r) => av(r, ["part_name", "part", "product_name"])], ["Qty", (r) => av(r, ["qty", "quantity"])], ["Reason", (r) => av(r, ["reason", "note"])]],
     returns: [["Date", (r) => dt(r, ["created_at", "date"])], ["Order", (r) => av(r, ["order_number", "order_id"])], ["Client", (r) => av(r, ["client_name", "client"])], ["Amount", (r) => money(r?.amount ?? r?.refund_total ?? r?.total)], ["Status", (r) => av(r, ["status", "state"])]],
   };
@@ -235,6 +280,23 @@ export default function InventoryHub() {
     catch (e: any) { await alertDialog(e.message || "Bulk action failed"); }
     finally { setPBusy(false); }
   }
+  // ii144a — give products without a barcode one (shop-made EAN-13 codes; existing ones untouched).
+  async function pAddBarcodes(onlySelected: boolean) {
+    const n = onlySelected ? psel.size : 0;
+    const q = onlySelected
+      ? `Add a barcode to the ${n} selected product${n === 1 ? "" : "s"} that don't have one yet?`
+      : "Add a barcode to every product that doesn't have one yet?";
+    if (!(await confirmDialog(`${q} Products that already have a barcode keep it.`, { confirmLabel: "Add barcodes" }))) return;
+    setPBusy(true);
+    try {
+      const r = await api.post<{ generated: number; more?: boolean }>("/catalog/products/barcodes/generate-missing",
+        onlySelected ? { ids: [...psel] } : {});
+      if (onlySelected) pClear();
+      loadProducts();
+      await alertDialog(missingBarcodesMessage(r, n), "Barcodes");
+    } catch (e: any) { await alertDialog(e.message || "Couldn't add barcodes"); }
+    finally { setPBusy(false); }
+  }
   async function pDelete() {
     if (!(await confirmDialog(`Archive ${psel.size} product(s)? History is kept; they leave active stock.`, { danger: true, confirmLabel: "Delete" }))) return;
     pBulk("delete");
@@ -246,31 +308,36 @@ export default function InventoryHub() {
   }
   function pExport() {
     const chosen = (products || []).filter((p) => psel.has(p.id));
-    const head = ["Name", "SKU", "Barcode", "Unit", "Cost", "Sell", "In stock"];
-    const esc = (x: any) => `"${String(x ?? "").replace(/"/g, '""')}"`;
-    const body = chosen.map((p) => [p.name, p.sku || p.code, p.barcode, p.uom || "pcs", p.avg_cost ?? p.cost_price ?? 0, p.sell_price ?? 0, p.qty_available ?? 0].map(esc).join(","));
-    const blob = new Blob([[head.join(","), ...body].join("\n")], { type: "text/csv" });
-    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
-    a.download = `products-${isoDate()}.csv`; a.click();
+    const head = ["Name", "SKU", "MPN", "Barcode", "Unit", "Cost", "Sell", "In stock"];
+    const body = chosen.map((p) => [p.name ?? "", p.sku || p.code || "", p.mpn ?? "", p.barcode ?? "", p.uom || "pcs", p.avg_cost ?? p.cost_price ?? 0, p.sell_price ?? 0, p.qty_available ?? 0]);
+    downloadSheet([head, ...body], "csv", `products-${isoDate()}`);
   }
 
   const newBtn = (label: string, kind: DrawerKind) => (
-    <button onClick={() => setDrawer({ kind })} className="h-[38px] px-4 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-[13px] font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-2 transition-all"><M n="add" c="text-sm font-bold" />{label}</button>
+    <button onClick={() => setDrawer({ kind })} className={primaryBtn}><M n="add" c="text-sm" />{label}</button>
   );
   const searchBar = (ph: string, value?: string, onChange?: (v: string) => void) => (
-    <div className="relative flex-1 max-w-md ml-1"><input value={value} onChange={onChange ? (e) => onChange(e.target.value) : undefined} className="glass-input w-full h-[38px] pl-4 pr-10 rounded-xl text-xs font-medium text-ink-primary" placeholder={ph} /><M n="search" c="absolute inset-y-0 right-0 pr-3.5 flex items-center text-ink-tertiary text-base" /></div>
+    <div className="relative flex-1 min-w-[200px] max-w-md"><M n="search" c="absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" /><input value={value} onChange={onChange ? (e) => onChange(e.target.value) : undefined} aria-label={ph.replace(/…$/, "")} className={`${inputCls} pl-9 text-ink-primary`} placeholder={ph} /></div>
   );
 
   // Client-side stock filter (data already loaded) — search + availability wired; warehouse/category left static (no resolved names loaded).
   const AVAIL_LABEL = { all: "All", in: "In stock", low: "Low stock", out: "Out of stock" } as const;
-  const shownProducts = (products || []).filter((p) => {
-    if (pq.trim()) { const q = pq.toLowerCase(); if (!`${p.name} ${p.sku || ""} ${p.code || ""} ${p.barcode || ""}`.toLowerCase().includes(q)) return false; }
+  const matchesSearch = (p: any) => {
+    if (!pq.trim()) return true;
+    const q = pq.toLowerCase();
+    return `${p.name} ${p.sku || ""} ${p.code || ""} ${p.barcode || ""} ${(p.extra_barcodes || []).join(" ")} ${p.mpn || ""}`.toLowerCase().includes(q);
+  };
+  const searchMatches = (products || []).filter(matchesSearch);
+  const shownProducts = searchMatches.filter((p) => {
     const qa = p.qty_available ?? 0;
     if (avail === "in") return qa > 0;
     if (avail === "low") return !!p.low_stock;
     if (avail === "out") return qa <= 0;
     return true;
   });
+  // A searched part that exists but is hidden by the availability filter (e.g. an MPN with no stock
+  // yet) used to look like "no such part"; the empty state offers to show those matches instead.
+  const hiddenByAvail = pq.trim() && avail !== "all" ? searchMatches.length - shownProducts.length : 0;
   const stockCols = cfg.enable_reservations ? 10 : 9;  // SKU folded into Product cell (Phase 3)
   const pAllSel = shownProducts.length > 0 && shownProducts.every((p) => psel.has(p.id));
   // Numbered pagination (50/page). Reset to page 1 when the filtered set changes, and
@@ -278,8 +345,7 @@ export default function InventoryHub() {
   useEffect(() => { setPPage(1); }, [pq, avail, cat, wh]);
   const pPages = Math.max(1, Math.ceil(shownProducts.length / PAGE_SIZE));
   const pageProducts = shownProducts.slice((Math.min(pPage, pPages) - 1) * PAGE_SIZE, Math.min(pPage, pPages) * PAGE_SIZE);
-  const aPages = Math.max(1, Math.ceil((assets?.length ?? 0) / PAGE_SIZE));
-  const pageAssets = (assets || []).slice((Math.min(aPage, aPages) - 1) * PAGE_SIZE, Math.min(aPage, aPages) * PAGE_SIZE);
+  const pageAssets = assets || [];
   // PO + audit tables share secPage (only one of these tabs renders at a time).
   const poPages = Math.max(1, Math.ceil((pos?.length ?? 0) / PAGE_SIZE));
   const pagePos = (pos || []).slice((Math.min(secPage, poPages) - 1) * PAGE_SIZE, Math.min(secPage, poPages) * PAGE_SIZE);
@@ -303,7 +369,7 @@ export default function InventoryHub() {
             const cnt = t.id === "stock" ? products?.length : t.id === "services" ? services?.length : undefined;
             return (
               <button key={t.id} onClick={() => setTab(t.id)} className={`pb-3 whitespace-nowrap flex items-center gap-2 border-b-2 transition-colors ${tab === t.id ? "text-primary font-bold border-primary" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>
-                {tabLabel(t)}{cnt != null && <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${tab === t.id ? "bg-blue-100 text-primary" : "bg-slate-100 text-ink-secondary"}`}>{cnt}</span>}
+                {tabLabel(t)}{cnt != null && <span className={`px-1.5 py-0.5 rounded-full text-[11px] font-bold ${tab === t.id ? "bg-blue-100 text-primary" : "bg-slate-100 text-ink-secondary"}`}>{cnt}</span>}
               </button>
             );
           };
@@ -316,7 +382,7 @@ export default function InventoryHub() {
                     {inOverflow ? tabLabel(overflowTabs.find((t) => t.id === tab)!) : "More"}<M n="expand_more" c="text-sm" />
                   </button>
                   {navMore && (<>
-                    <div className="fixed inset-0 z-30" onClick={() => setNavMore(false)} />
+                    <div className="fixed inset-0 z-30" aria-hidden="true" onClick={() => setNavMore(false)} />
                     <div className="absolute left-0 mt-1 w-52 bg-white rounded-xl border border-slate-200 shadow-drawer z-40 py-1.5 text-xs">
                       {overflowTabs.map((t) => (
                         <button key={t.id} onClick={() => { setTab(t.id); setNavMore(false); }} className={`w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-slate-50 ${tab === t.id ? "text-primary font-bold" : "text-ink-secondary"}`}>
@@ -337,34 +403,35 @@ export default function InventoryHub() {
         {tab === "stock" && (<>
           <div className="flex items-center gap-3 mb-5 flex-wrap">
             {newBtn("Product / Stock", "product")}
-            <button onClick={() => setScanStock(true)} className="h-[38px] px-3 rounded-xl bg-white border border-emerald-200 text-emerald-700 text-[13px] font-bold hover:bg-emerald-50 flex items-center gap-1.5"><M n="qr_code_scanner" c="text-sm" />Scan to stock</button>
-            <div className="flex items-center gap-1.5 bg-white/80 p-1 rounded-xl border border-slate-200/80 shadow-clay-sm">
-              <select value={wh} onChange={(e) => setWh(e.target.value)} className={`px-3 py-1.5 text-xs font-semibold rounded-lg border cursor-pointer ${wh ? "bg-emerald-50 text-emerald-700 border-emerald-200/60" : "bg-slate-50 text-ink-secondary border-slate-200/60"}`}>
+            <button onClick={() => setScanStock(true)} className={ghostBtn}><M n="qr_code_scanner" c="text-sm text-ink-tertiary" />Scan to stock</button>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <select aria-label="Warehouse" value={wh} onChange={(e) => setWh(e.target.value)} className={filterSel(!!wh)}>
                 <option value="">Warehouse: All</option>
                 {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
               </select>
-              <select value={avail} onChange={(e) => setAvail(e.target.value as any)} className={`px-3 py-1.5 text-xs font-semibold rounded-lg border cursor-pointer ${avail !== "all" ? "bg-emerald-50 text-emerald-700 border-emerald-200/60" : "bg-slate-50 text-ink-secondary border-slate-200/60"}`}>
+              <select aria-label="Availability" value={avail} onChange={(e) => setAvail(e.target.value as any)} className={filterSel(avail !== "in")}>
                 {(["all", "in", "low", "out"] as const).map((k) => <option key={k} value={k}>Availability: {AVAIL_LABEL[k]}</option>)}
               </select>
-              <select value={cat} onChange={(e) => setCat(e.target.value)} className={`px-3 py-1.5 text-xs font-semibold rounded-lg border cursor-pointer ${cat ? "bg-emerald-50 text-emerald-700 border-emerald-200/60" : "bg-slate-50 text-ink-secondary border-slate-200/60"}`}>
+              <select aria-label="Category" value={cat} onChange={(e) => setCat(e.target.value)} className={filterSel(!!cat)}>
                 <option value="">Category: All</option>
                 {cats.map((c) => <option key={c.id} value={c.id}>{`${"  ".repeat(c.depth)}${c.name}`}</option>)}
               </select>
               {(cat || wh || avail !== "in") && (
-                <button onClick={() => { setCat(""); setWh(""); setAvail("in"); }} className="px-2.5 py-1.5 text-xs font-semibold rounded-lg text-primary hover:bg-primary/10 flex items-center gap-1"><M n="filter_alt_off" c="text-sm" />Clear <span className="px-1.5 rounded-full bg-primary/15 text-[10px]">{(cat ? 1 : 0) + (wh ? 1 : 0) + (avail !== "in" ? 1 : 0)}</span></button>
+                <button onClick={() => { setCat(""); setWh(""); setAvail("in"); }} className="h-8 px-2.5 text-xs font-semibold rounded-lg text-primary hover:bg-primary/10 flex items-center gap-1"><M n="filter_alt_off" c="text-sm" />Clear <span className="px-1.5 rounded-full bg-primary/15 text-[11px] tabular-nums">{(cat ? 1 : 0) + (wh ? 1 : 0) + (avail !== "in" ? 1 : 0)}</span></button>
               )}
             </div>
-            {searchBar("Search products, SKU, barcode...", pq, setPq)}
+            {searchBar("Search products, SKU, MPN, barcode…", pq, setPq)}
             <div className="ml-auto relative">
-              <button onClick={() => setStockMenu((o) => !o)} className="h-[38px] px-4 rounded-xl bg-white hover:bg-slate-50 border border-slate-200/80 text-xs font-semibold text-ink-secondary flex items-center gap-2 shadow-clay-sm"><span>Actions</span><M n="expand_more" c="text-sm" /></button>
+              <button onClick={() => setStockMenu((o) => !o)} aria-expanded={stockMenu} className={ghostBtn}><span>Actions</span><M n="expand_more" c="text-sm" /></button>
               {stockMenu && (
                 <>
-                  <div className="fixed inset-0 z-30" onClick={() => setStockMenu(false)} />
+                  <div className="fixed inset-0 z-30" aria-hidden="true" onClick={() => setStockMenu(false)} />
                   <div className="absolute right-0 mt-1 w-56 bg-white rounded-xl border border-slate-200 shadow-drawer z-40 py-1.5 text-xs">
                     <button onClick={() => { setStockMenu(false); setToOrderOpen(true); }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-ink-secondary"><M n="assignment_late" c="text-sm" />Parts to order (jobs)</button>
                     <button onClick={() => { setStockMenu(false); setReorderOpen(true); }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-ink-secondary"><M n="sync_alt" c="text-sm" />Reorder list</button>
                     <button onClick={() => { setStockMenu(false); setPostingOpen(true); }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-ink-secondary"><M n="add" c="text-sm" />New posting</button>
                     <button onClick={() => { setStockMenu(false); if (products?.length) { setPsel(new Set(products.map((p) => p.id))); } }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-ink-secondary"><M n="filter_list" c="text-sm" />Bulk edit filtered</button>
+                    <button onClick={() => { setStockMenu(false); pAddBarcodes(false); }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-ink-secondary"><M n="barcode" c="text-sm" />Add missing barcodes</button>
                     <button onClick={() => { setStockMenu(false); setAction({ kind: "write-off" }); }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-ink-secondary"><M n="delete_sweep" c="text-sm" />New write-off</button>
                   </div>
                 </>
@@ -387,24 +454,26 @@ export default function InventoryHub() {
             </div>
           </div>
           {psel.size > 0 && (
-            <div className="bg-primary/5 rounded-2xl border border-primary/30 shadow-clay-sm px-4 py-2.5 mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold">
+            <div className="bg-primary/5 rounded-xl border border-primary/30 px-4 py-2.5 mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold">
               <span className="text-primary">{psel.size} selected</span>
               <div className="flex-1" />
               <button onClick={() => openLabelDlg("product")} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="print" c="text-sm" />Print labels</button>
               <button onClick={pExport} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="download" c="text-sm" />Export CSV</button>
+              <button onClick={() => pAddBarcodes(true)} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="barcode" c="text-sm" />Add missing barcodes</button>
               <button onClick={pMarkup} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="percent" c="text-sm" />Adjust price</button>
               <button onClick={() => setBulkAdj(true)} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="tune" c="text-sm" />Adjust qty</button>
               <button onClick={() => setAction({ kind: "write-off" })} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="delete_sweep" c="text-sm" />Write off</button>
-              <button onClick={pDelete} disabled={pBusy} className="px-3 py-1.5 rounded-lg bg-rose-600 text-white hover:bg-rose-700 flex items-center gap-1"><M n="archive" c="text-sm" />Archive</button>
+              {can("can_delete_products") && <button onClick={pDelete} disabled={pBusy} className="px-3 py-1.5 rounded-lg bg-rose-600 text-white hover:bg-rose-700 flex items-center gap-1"><M n="archive" c="text-sm" />Archive</button>}
               <button aria-label="Close" onClick={pClear} className="px-2 py-1.5 rounded-lg hover:bg-slate-200/60 text-ink-tertiary"><M n="close" c="text-sm" /></button>
             </div>
           )}
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-            <table data-density={density} className="w-full text-left border-collapse">
-              <thead><tr className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary uppercase tracking-wider">
-                <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" checked={pAllSel} onChange={pToggleAll} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
+          <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
+            <div className="overflow-x-auto">
+            <table data-density={density} className="w-full min-w-[880px] text-left border-collapse">
+              <thead><tr className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary">
+                <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" aria-label="Select all" checked={pAllSel} onChange={pToggleAll} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
                 <th className="py-3.5 px-3">Product</th><th className="py-3.5 px-3">Category</th><th className="py-3.5 px-3">Unit</th>
-                <th className="py-3.5 px-3 text-right">Cost (₹)</th><th className="py-3.5 px-3 text-right">Sell Price (₹)</th><th className="py-3.5 px-3 text-right">Margin</th><th className="py-3.5 px-3 text-center">In Stock</th>{cfg.enable_reservations && <th className="py-3.5 px-3 text-center">Reserved</th>}<th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
+                <th className="py-3.5 px-3 text-right">Cost ({currencySymbol()})</th><th className="py-3.5 px-3 text-right">Sell price ({currencySymbol()})</th><th className="py-3.5 px-3 text-right">Margin</th><th className="py-3.5 px-3 text-center">In stock</th>{cfg.enable_reservations && <th className="py-3.5 px-3 text-center">Reserved</th>}<th className="py-3.5 pr-5 pl-2 w-12"><span className="sr-only">Actions</span></th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-xs">
                 {/* 144bu — table-body skeleton (chrome stays real; geometry matches rows → no layout shift) */}
@@ -426,44 +495,59 @@ export default function InventoryHub() {
                   <tr><td colSpan={stockCols} className="py-14 px-5">
                     {products.length === 0 ? (
                       <div className="flex flex-col items-center text-center gap-3 max-w-sm mx-auto">
-                        <div className="w-12 h-12 rounded-2xl bg-slate-100 text-ink-tertiary flex items-center justify-center"><M n="inventory_2" c="text-2xl" /></div>
-                        <div><div className="font-bold text-ink-primary text-sm">No stock yet</div><div className="text-ink-tertiary mt-0.5">Add your first part, or paste a stock sheet to bring your inventory in.</div></div>
+                        <div className="w-11 h-11 rounded-full bg-slate-100 text-ink-tertiary flex items-center justify-center"><M n="inventory_2" c="text-2xl" /></div>
+                        <div><div className="font-semibold text-ink-primary text-sm">No stock yet</div><div className="text-ink-tertiary mt-0.5">Add your first part, or paste a stock sheet to bring your inventory in.</div></div>
                         <div className="flex gap-2 mt-1">
-                          <button onClick={() => setDrawer({ kind: "product" })} className="h-[36px] px-4 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-2"><M n="add" c="text-sm" />Add product/stock</button>
-                          <button onClick={() => setPostingOpen(true)} className="h-[36px] px-4 rounded-xl bg-white border border-slate-200 text-ink-secondary text-xs font-bold hover:bg-slate-50 flex items-center gap-2"><M n="content_paste" c="text-sm" />New posting</button>
+                          <button onClick={() => setDrawer({ kind: "product" })} className={primaryBtn}><M n="add" c="text-sm" />Add product/stock</button>
+                          <button onClick={() => setPostingOpen(true)} className={ghostBtn}><M n="content_paste" c="text-sm" />New posting</button>
                         </div>
                       </div>
                     ) : (
                       <div className="flex flex-col items-center text-center gap-3 max-w-sm mx-auto">
-                        <div className="w-12 h-12 rounded-2xl bg-slate-100 text-ink-tertiary flex items-center justify-center"><M n="search_off" c="text-2xl" /></div>
-                        <div><div className="font-bold text-ink-primary text-sm">No parts match these filters</div><div className="text-ink-tertiary mt-0.5">Try adjusting availability, category, warehouse or your search.</div></div>
-                        <button onClick={() => { setAvail("in"); setCat(""); setWh(""); setPq(""); }} className="h-[36px] px-4 rounded-xl bg-white border border-slate-200 text-ink-secondary text-xs font-bold hover:bg-slate-50 flex items-center gap-2 mt-1"><M n="filter_alt_off" c="text-sm" />Clear filters</button>
+                        <div className="w-11 h-11 rounded-full bg-slate-100 text-ink-tertiary flex items-center justify-center"><M n="search_off" c="text-2xl" /></div>
+                        {hiddenByAvail > 0 ? (
+                          <>
+                            <div><div className="font-semibold text-ink-primary text-sm">{hiddenByAvail === 1 ? "1 part matches, but it isn't shown" : `${hiddenByAvail} parts match, but they aren't shown`}</div><div className="text-ink-tertiary mt-0.5">The availability filter is set to {AVAIL_LABEL[avail].toLowerCase()}.</div></div>
+                            <button onClick={() => setAvail("all")} className={`${primaryBtn} mt-1`}><M n="visibility" c="text-sm" />Show all matches</button>
+                          </>
+                        ) : (
+                          <>
+                            <div><div className="font-semibold text-ink-primary text-sm">No parts match these filters</div><div className="text-ink-tertiary mt-0.5">Try adjusting availability, category, warehouse or your search.</div></div>
+                            <button onClick={() => { setAvail("in"); setCat(""); setWh(""); setPq(""); }} className={`${ghostBtn} mt-1`}><M n="filter_alt_off" c="text-sm" />Clear filters</button>
+                          </>
+                        )}
                       </div>
                     )}
                   </td></tr>
                 )}
-                {pageProducts.map((p, i) => {
-                  const b = badgeFor(p, i); const pill = stockPill(p);
+                {pageProducts.map((p) => {
+                  const pill = stockPill(p); const m = marginOf(p);
                   return (
-                    <tr key={p.id} onClick={() => setDrawer({ kind: "product", id: p.id })} className={`hover:bg-blue-50/30 transition-colors cursor-pointer group ${psel.has(p.id) ? "bg-primary/5" : ""}`}>
-                      <td className="py-3.5 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={psel.has(p.id)} onChange={() => pToggle(p.id)} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
+                    <tr key={p.id} {...clickableRow(() => setDrawer({ kind: "product", id: p.id }))} className={`hover:bg-slate-50 transition-colors cursor-pointer group ${psel.has(p.id) ? "bg-primary/5" : ""}`}>
+                      <td className="py-3.5 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label="Select row" checked={psel.has(p.id)} onChange={() => pToggle(p.id)} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
                       <td className="py-3.5 px-3"><div className="flex items-center gap-3">
-                        {p.image_data ? <img src={p.image_data} alt="" className="w-8 h-8 rounded-lg object-cover border border-slate-200 flex-shrink-0" /> : <div className={`w-8 h-8 rounded-lg border flex items-center justify-center flex-shrink-0 font-bold text-[10px] ${b.cls}`}>{b.txt}</div>}
-                        <div className="min-w-0"><span className="font-bold text-ink-primary group-hover:text-primary transition-colors block truncate">{p.name}</span><span className="text-[11px] text-ink-tertiary font-mono block truncate">{[p.sku || p.code, p.barcode, p.brand].filter(Boolean).join(" · ") || "—"}</span></div>
+                        {p.image_data ? <img src={p.image_data} alt="" className="w-8 h-8 rounded-lg object-cover border border-slate-200 flex-shrink-0" /> : <span data-testid="product-glyph" className="w-8 h-8 rounded-lg bg-slate-100 text-ink-tertiary flex items-center justify-center flex-shrink-0"><M n={productGlyph(p.name, p.brand)} c="text-sm" /></span>}
+                        <div className="min-w-0"><span className="font-semibold text-ink-primary block truncate">{p.name}</span><span className="text-[11px] text-ink-tertiary block truncate">{(() => { const codes = [p.sku || p.code, p.mpn ? `MPN ${p.mpn}` : "", p.barcode].filter(Boolean).join(" · "); return codes || p.brand ? <>{codes && <span className="font-mono">{codes}</span>}{codes && p.brand ? " · " : ""}{p.brand}</> : "—"; })()}</span></div>
                       </div></td>
                       <td className="py-3.5 px-3 text-ink-secondary font-medium">{p.category_id ? (catName[p.category_id] || "—") : <span className="text-ink-tertiary">Uncategorized</span>}</td>
                       <td className="py-3.5 px-3 text-ink-tertiary">{p.uom || "pcs"}</td>
-                      <td className="py-3.5 px-3 font-mono tabular-nums text-ink-secondary text-right">{money(p.avg_cost || p.cost_price)}</td>
-                      <td className="py-3.5 px-3 font-mono tabular-nums font-bold text-ink-primary text-right">{money(p.sell_price)}</td>
-                      <td className="py-3.5 px-3 font-semibold tabular-nums text-emerald-700 text-right">{p.margin_pct != null ? `${p.margin_pct}%` : "—"}</td>
+                      <td className="py-3.5 px-3 tabular-nums text-ink-secondary text-right">{money(p.avg_cost || p.cost_price)}</td>
+                      <td className="py-3.5 px-3 tabular-nums font-semibold text-ink-primary text-right">{money(p.sell_price)}</td>
+                      <td data-testid="margin" className={`py-3.5 px-3 tabular-nums text-right ${m == null ? "text-ink-tertiary" : m < 0 ? "text-rose-600 font-semibold" : "text-ink-secondary"}`}>{m != null ? `${m < 0 ? "−" : ""}${Math.abs(m)}%` : "—"}</td>
                       <td className="py-3.5 px-3 text-center">{pill ? <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${pill.cls}`}><span className={`w-1.5 h-1.5 rounded-full ${pill.dot}`} />{pill.label}</span> : <span className="font-semibold tabular-nums text-ink-primary">{p.qty_available ?? 0}</span>}</td>
                       {cfg.enable_reservations && <td className="py-3.5 px-3 text-center font-semibold tabular-nums text-ink-secondary">{p.qty_reserved ? <span className="text-amber-700">{p.qty_reserved}</span> : <span className="text-ink-tertiary">—</span>}</td>}
-                      <td className="py-3.5 pr-5 pl-2 text-right" onClick={(e) => e.stopPropagation()}><button aria-label="More options" className="p-1.5 rounded-lg text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="more_vert" c="text-base" /></button></td>
+                      <td className="py-3.5 pr-5 pl-2 text-right" onClick={(e) => e.stopPropagation()}><RowMenu label={`More actions for ${p.name}`} items={[
+                        { label: "Open", icon: "edit", onClick: () => setDrawer({ kind: "product", id: p.id }) },
+                        { label: "Adjust quantity", icon: "tune", onClick: () => { setPsel(new Set([p.id])); setBulkAdj(true); } },
+                        { label: "Print label", icon: "print", onClick: () => { setPsel(new Set([p.id])); openLabelDlg("product"); } },
+                        { label: "Write off", icon: "delete_sweep", onClick: () => { setPsel(new Set([p.id])); setAction({ kind: "write-off" }); } },
+                      ]} /></td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+            </div>
             <Pager total={shownProducts.length} page={Math.min(pPage, pPages)} pageSize={PAGE_SIZE} onPage={setPPage} noun="items in stock" />
           </div>
         </>)}
@@ -471,30 +555,33 @@ export default function InventoryHub() {
         {/* DEVICES & ASSETS */}
         {tab === "devices" && (<>
           <div className="flex items-center gap-3 mb-5 flex-wrap">
-            <button onClick={() => setAssetCreate(true)} className="h-[38px] px-4 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-[13px] font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-2 transition-all"><M n="add" c="text-sm font-bold" />+ Add {term.asset}</button>
-            <div className="flex items-center gap-1.5 bg-white/80 p-1 rounded-xl border border-slate-200/80 shadow-clay-sm"><Chip label="Ownership: All" active /><Chip label="Company-owned" /><Chip label="Client-owned" /></div>
-            {searchBar("Search serial, IMEI, client...")}
+            <button onClick={() => setAssetCreate(true)} className={primaryBtn}><M n="add" c="text-sm" />Add {term.asset}</button>
+            <AssetStateTabs value={aState} onChange={setAState} counts={ap.extra?.counts} />
+            <select value={aOwner} onChange={(e) => setAOwner(e.target.value as "" | "company" | "client")} aria-label="Ownership" className={`${inputCls} w-auto h-8 py-0 text-xs font-semibold`}>
+              <option value="">Ownership: all</option><option value="company">Company-owned</option><option value="client">Client-owned</option>
+            </select>
+            {searchBar("Search serial, IMEI, plate, client…", aq, setAq)}
           </div>
           {asel.size > 0 && (
-            <div className="bg-primary/5 rounded-2xl border border-primary/30 shadow-clay-sm px-4 py-2.5 mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold">
+            <div className="bg-primary/5 rounded-xl border border-primary/30 px-4 py-2.5 mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold">
               <span className="text-primary">{asel.size} selected</span>
               <div className="flex-1" />
               <button onClick={() => openLabelDlg("asset")} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="print" c="text-sm" />Print labels</button>
               <button aria-label="Close" onClick={() => setAsel(new Set())} className="px-2 py-1.5 rounded-lg hover:bg-slate-200/60 text-ink-tertiary"><M n="close" c="text-sm" /></button>
             </div>
           )}
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
+          <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
             <table className="w-full text-left border-collapse">
-              <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary uppercase tracking-wider"><tr>
-                <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" checked={!!assets?.length && assets.every((a) => asel.has(a.id))} onChange={(e) => setAsel(e.target.checked ? new Set((assets || []).map((a) => a.id)) : new Set())} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
+              <thead className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary"><tr>
+                <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" aria-label="Select all" checked={!!assets?.length && assets.every((a) => asel.has(a.id))} onChange={(e) => setAsel((s) => { const n = new Set(s); (assets || []).forEach((a) => (e.target.checked ? n.add(a.id) : n.delete(a.id))); return n; })} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
                 <th className="py-3.5 px-3">Device / Model</th><th className="py-3.5 px-3">Serial / IMEI</th><th className="py-3.5 px-3">Ownership</th><th className="py-3.5 px-3">Status</th><th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-xs">
                 {!assets && <SkeletonRows cols={6} />}
-                {assets?.length === 0 && <tr><td colSpan={6} className="py-6 px-5 text-ink-tertiary">No {term.assets.toLowerCase()} registered.</td></tr>}
+                {assets?.length === 0 && <tr><td colSpan={6} className="py-6 px-5 text-ink-tertiary">{daq ? `Nothing matches “${daq}”.` : aState === "written_off" ? `No written-off ${term.assets.toLowerCase()}.` : `No ${term.assets.toLowerCase()} registered.`}</td></tr>}
                 {pageAssets.map((a) => (
-                  <tr key={a.id} className="hover:bg-blue-50/30 transition-colors cursor-pointer" onClick={() => setAssetOpen(a.id)}>
-                    <td className="py-3.5 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={asel.has(a.id)} onChange={() => aToggle(a.id)} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
+                  <tr key={a.id} className="hover:bg-blue-50/30 transition-colors cursor-pointer" {...clickableRow(() => setAssetOpen(a.id))}>
+                    <td className="py-3.5 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label="Select row" checked={asel.has(a.id)} onChange={() => aToggle(a.id)} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
                     <td className="py-3.5 px-3"><div className="font-bold text-ink-primary">{[a.brand, a.model].filter(Boolean).join(" ") || a.asset_type || assetNoun(a, term)}</div><span className="text-[11px] text-ink-tertiary font-normal block">{a.asset_type && a.asset_type !== "Device" ? a.asset_type : assetNoun(a, term)}</span></td>
                     <td className="py-3.5 px-3 font-mono text-[11px] text-ink-secondary">{a.imei || a.serial || "—"}</td>
                     <td className="py-3.5 px-3"><span className={`px-2 py-0.5 rounded text-[11px] font-semibold border ${a.owner_type === "company" ? "bg-purple-50 text-purple-600 border-purple-100" : "bg-blue-50 text-primary border-blue-200/60"}`}>{a.owner_type === "company" ? "Company" : "Client"}</span></td>
@@ -504,7 +591,7 @@ export default function InventoryHub() {
                 ))}
               </tbody>
             </table>
-            <Pager total={assets?.length ?? 0} page={Math.min(aPage, aPages)} pageSize={PAGE_SIZE} onPage={setAPage} noun="devices & assets" />
+            <Pager total={ap.total} page={ap.page} pageSize={ap.pageSize} onPage={ap.setPage} noun="devices & assets" />
           </div>
         </>)}
 
@@ -512,12 +599,12 @@ export default function InventoryHub() {
 
         {/* PURCHASE ORDERS */}
         {tab === "purchase-orders" && (<>
-          <div className="flex items-center gap-3 mb-5 flex-wrap"><button onClick={() => setNewPo(true)} className="h-[38px] px-4 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-[13px] font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-2 transition-all"><M n="add" c="text-sm font-bold" />New Purchase Order</button><button onClick={() => setReorderOpen(true)} className="h-[38px] px-4 rounded-xl bg-white border border-slate-200 text-ink-primary text-[13px] font-bold hover:bg-slate-50 flex items-center gap-2" title="Suggest POs for products below minimum stock"><M n="auto_awesome" c="text-sm text-primary" />Reorder suggestions</button><button onClick={() => setCockpitOpen(true)} className="h-[38px] px-4 rounded-xl bg-white border border-slate-200 text-ink-primary text-[13px] font-bold hover:bg-slate-50 flex items-center gap-2" title="What needs attention: overdue, arriving, recost, invoices, low stock"><M n="target" c="text-sm text-primary" />Cockpit</button>{searchBar("Search purchase orders, supplier, PO#...")}</div>
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
+          <div className="flex items-center gap-3 mb-5 flex-wrap"><button onClick={() => setNewPo(true)} className={primaryBtn}><M n="add" c="text-sm" />New purchase order</button><button onClick={() => setReorderOpen(true)} className={ghostBtn} title="Suggest POs for products below minimum stock"><M n="sync_alt" c="text-sm text-ink-tertiary" />Reorder suggestions</button><button onClick={() => setCockpitOpen(true)} className={ghostBtn} title="What needs attention: overdue, arriving, recost, invoices, low stock"><M n="target" c="text-sm text-ink-tertiary" />Cockpit</button>{searchBar("Search purchase orders, supplier, PO#…")}</div>
+          <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
             <table className="w-full text-left border-collapse">
-              <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary uppercase tracking-wider"><tr>
-                <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" className="w-4 h-4 rounded border-slate-300 text-primary" /></th>
-                <th className="py-3.5 px-3">PO Number</th><th className="py-3.5 px-3">Supplier</th><th className="py-3.5 px-3">Expected</th><th className="py-3.5 px-3 text-right">Total (₹)</th><th className="py-3.5 px-3 text-center">Status</th><th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
+              <thead className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary"><tr>
+                <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" aria-label="Select all" className="w-4 h-4 rounded border-slate-300 text-primary" /></th>
+                <th className="py-3.5 px-3">PO number</th><th className="py-3.5 px-3">Supplier</th><th className="py-3.5 px-3">Expected</th><th className="py-3.5 px-3 text-right">Total ({currencySymbol()})</th><th className="py-3.5 px-3 text-center">Status</th><th className="py-3.5 pr-5 pl-2 text-right">Actions</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-xs">
                 {!pos && <SkeletonRows cols={7} />}
@@ -527,13 +614,13 @@ export default function InventoryHub() {
                   const cls = st === "received" ? "bg-emerald-50 text-emerald-700 border-emerald-200/60" : st === "partial" || st === "ordered" ? "bg-amber-50 text-amber-700 border-amber-200/60" : "bg-slate-100 text-slate-600 border-slate-200";
                   return (
                     <tr key={po.id} className="hover:bg-blue-50/30 transition-colors">
-                      <td className="py-3.5 pl-5 pr-2"><input type="checkbox" className="w-4 h-4 rounded border-slate-300 text-primary" /></td>
+                      <td className="py-3.5 pl-5 pr-2"><input type="checkbox" aria-label="Select row" className="w-4 h-4 rounded border-slate-300 text-primary" /></td>
                       <td className="py-3.5 px-3 font-mono font-bold text-primary">{po.po_number || po.id}</td>
                       <td className="py-3.5 px-3 font-semibold text-ink-primary">{supName[po.supplier_id || ""] || "—"}</td>
                       <td className="py-3.5 px-3 text-ink-secondary">{po.expected_at ? new Date(po.expected_at).toLocaleDateString() : "—"}</td>
-                      <td className="py-3.5 px-3 text-right font-mono font-bold text-ink-primary">{money(po.total)}</td>
+                      <td className="py-3.5 px-3 text-right tabular-nums font-bold text-ink-primary">{money(po.total)}</td>
                       <td className="py-3.5 px-3 text-center"><span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-semibold border capitalize ${cls}`}>{st}</span></td>
-                      <td className="py-3.5 pr-5 pl-2 text-right"><button aria-label="Print / PDF" onClick={() => openAuthedDoc(`/print/purchase-order/${po.id}`).catch(() => alertDialog("Could not open PO PDF"))} title="Print / PDF" className="p-1.5 rounded-lg text-ink-tertiary hover:text-primary hover:bg-slate-100 align-middle"><M n="print" c="text-sm" /></button><button onClick={() => setPoOpen(po.id)} className="text-primary font-semibold text-xs hover:underline ml-1">View Details</button></td>
+                      <td className="py-3.5 pr-5 pl-2 text-right"><button aria-label="Print / PDF" onClick={() => openAuthedDoc(`/print/purchase-order/${po.id}`).catch(() => alertDialog("Could not open PO PDF"))} title="Print / PDF" className="p-1.5 rounded-lg text-ink-tertiary hover:text-primary hover:bg-slate-100 align-middle"><M n="print" c="text-sm" /></button><button onClick={() => setPoOpen(po.id)} className="text-primary font-semibold text-xs hover:underline ml-1">View details</button></td>
                     </tr>
                   );
                 })}
@@ -547,23 +634,23 @@ export default function InventoryHub() {
         {AUDIT[tab] && (
           <>
             <div className="mb-4 flex items-start justify-between gap-3">
-              <div><h3 className="text-sm font-bold text-ink-primary">{AUDIT[tab].title}</h3><p className="text-xs text-ink-tertiary">{AUDIT[tab].sub}</p></div>
-              {tab === "transfers" && <button onClick={() => setAction({ kind: "transfer" })} className="h-[36px] px-4 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 whitespace-nowrap"><M n="add" c="text-sm" />New transfer</button>}
-              {tab === "write-offs" && <button onClick={() => setAction({ kind: "write-off" })} className="h-[36px] px-4 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 whitespace-nowrap"><M n="add" c="text-sm" />New write-off</button>}
-              {tab === "returns" && <button onClick={() => setAction({ kind: "return" })} className="h-[36px] px-4 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 whitespace-nowrap"><M n="add" c="text-sm" />New return</button>}
-              {tab === "conversions" && <button onClick={() => setConv(true)} className="h-[36px] px-4 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 whitespace-nowrap"><M n="add" c="text-sm" />New conversion</button>}
-              {tab === "stock-takes" && <button onClick={() => setStk({})} className="h-[36px] px-4 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 whitespace-nowrap"><M n="add" c="text-sm" />New stock take</button>}
+              <div><h3 className="text-sm font-semibold text-ink-primary">{AUDIT[tab].title}</h3><p className="text-xs text-ink-tertiary">{AUDIT[tab].sub}</p></div>
+              {tab === "transfers" && <button onClick={() => setAction({ kind: "transfer" })} className={`${primaryBtn} whitespace-nowrap`}><M n="add" c="text-sm" />New transfer</button>}
+              {tab === "write-offs" && <button onClick={() => setAction({ kind: "write-off" })} className={`${primaryBtn} whitespace-nowrap`}><M n="add" c="text-sm" />New write-off</button>}
+              {tab === "returns" && <button onClick={() => setAction({ kind: "return" })} className={`${primaryBtn} whitespace-nowrap`}><M n="add" c="text-sm" />New return</button>}
+              {tab === "conversions" && <button onClick={() => setConv(true)} className={`${primaryBtn} whitespace-nowrap`}><M n="add" c="text-sm" />New conversion</button>}
+              {tab === "stock-takes" && <button onClick={() => setStk({})} className={`${primaryBtn} whitespace-nowrap`}><M n="add" c="text-sm" />New stock take</button>}
             </div>
-            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
+            <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
               <table className="w-full text-left border-collapse text-xs">
-                <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary uppercase tracking-wider"><tr>
+                <thead className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary"><tr>
                   {(AUDIT_COLS[tab] || []).map(([h]) => <th key={h} className="py-3 px-4">{h}</th>)}
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 text-ink-secondary">
                   {auditRows[tab] == null && <SkeletonRows cols={8} />}
-                  {auditRows[tab]?.length === 0 && <tr><td colSpan={8} className="py-6 px-4 text-ink-tertiary">Nothing here yet.</td></tr>}
+                  {auditRows[tab]?.length === 0 && <tr><td colSpan={8} className="py-12 px-4"><AuditEmpty tab={tab} title={AUDIT[tab].title} sub={AUDIT[tab].sub} onStart={AUDIT_START[tab]} /></td></tr>}
                   {pageAudit.map((row: any, i: number) => (
-                    <tr key={row?.id || i} onClick={tab === "stock-takes" && row?.id ? () => setStk({ id: row.id }) : undefined} className={`hover:bg-blue-50/30 ${tab === "stock-takes" ? "cursor-pointer" : ""}`}>
+                    <tr key={row?.id || i} {...clickableRow(tab === "stock-takes" && row?.id ? () => setStk({ id: row.id }) : undefined)} className={`hover:bg-blue-50/30 ${tab === "stock-takes" ? "cursor-pointer" : ""}`}>
                       {(AUDIT_COLS[tab] || []).map(([h, fn], j) => <td key={h} className={`py-2.5 px-4 ${j === 0 ? "font-bold text-ink-primary" : ""}`}>{fn(row)}</td>)}
                     </tr>
                   ))}
@@ -578,17 +665,18 @@ export default function InventoryHub() {
       </div>
 
       {labelDlg && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-primary/40 backdrop-blur-[2px]" onClick={() => setLabelDlg(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-primary/40 backdrop-blur-[2px]" role="presentation" onClick={() => setLabelDlg(false)}>
           <div className="bg-white rounded-2xl shadow-drawer w-[380px] max-w-full p-5" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-3"><h3 className="font-bold text-ink-primary">Print labels</h3><button aria-label="Close" onClick={() => setLabelDlg(false)} className="w-7 h-7 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
             <p className="text-xs text-ink-tertiary mb-3">{labelSelCount} {labelMode === "asset" ? "asset" : "product"}{labelSelCount === 1 ? "" : "s"} selected. Each prints at the template's exact label size.</p>
-            <label className="block text-[11px] font-semibold text-ink-tertiary uppercase mb-1">Label template</label>
+            <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Label template</label>
             <select value={labelTplId} onChange={(e) => setLabelTplId(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2 mb-3">
               {labelTpls.length === 0 && <option value="">No label templates — create one in Settings</option>}
               {labelTpls.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
-            <label className="block text-[11px] font-semibold text-ink-tertiary uppercase mb-1">Copies each</label>
+            <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Copies each</label>
             <input type="number" min={1} max={500} value={labelCopies} onChange={(e) => setLabelCopies(Math.max(1, +e.target.value || 1))} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2 mb-4" />
+            {labelErr && <div role="alert" className="mb-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{labelErr}</div>}
             <div className="flex justify-end gap-2">
               <button onClick={() => setLabelDlg(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
               <button onClick={printLabels} disabled={!labelTplId} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60 flex items-center gap-1"><M n="print" c="text-[15px]" /> Print {labelSelCount * labelCopies} label{labelSelCount * labelCopies === 1 ? "" : "s"}</button>
@@ -596,11 +684,11 @@ export default function InventoryHub() {
           </div>
         </div>
       )}
-      {newPo && <NewPODrawer products={products || []} onClose={() => setNewPo(false)} onCreated={() => { setNewPo(false); api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(() => {}); }} />}
-      {poOpen && <PODrawer poId={poOpen} onClose={() => setPoOpen(null)} onChanged={() => { api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(() => {}); loadProducts(); }} />}
+      {newPo && <NewPODrawer products={products || []} onClose={() => setNewPo(false)} onCreated={() => { setNewPo(false); api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(loadFailed("purchase orders")); }} />}
+      {poOpen && <PODrawer poId={poOpen} onClose={() => setPoOpen(null)} onChanged={() => { api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(loadFailed("purchase orders")); loadProducts(); }} />}
       {drawer && <InventoryDrawer kind={drawer.kind} id={drawer.id} initial={drawer.initial} onClose={() => setDrawer(null)} onSaved={() => { if (drawer.kind === "product") loadProducts(); if (drawer.kind === "service") loadServices(); }} />}
-      {assetOpen && <AssetDrawer assetId={assetOpen} onClose={() => { setAssetOpen(null); api.get<{ items: Asset[] }>("/assets?limit=1000").then((r) => setAssets(r.items || [])).catch(() => {}); }} />}
-      {assetCreate && <AssetDrawer onClose={() => setAssetCreate(false)} onSaved={() => api.get<{ items: Asset[] }>("/assets?limit=1000").then((r) => setAssets(r.items || [])).catch(() => {})} />}
+      {assetOpen && <AssetDrawer assetId={assetOpen} onClose={() => { setAssetOpen(null); ap.reload(); }} />}
+      {assetCreate && <AssetDrawer onClose={() => setAssetCreate(false)} onSaved={() => ap.reload()} />}
       {action && <ActionModal kind={action.kind} products={products || []} preselected={[...psel]}
         onClose={() => setAction(null)}
         onDone={() => { setAction(null); pClear(); setAuditRows((s) => ({ ...s, transfers: undefined as any, "write-offs": undefined as any, returns: undefined as any })); loadProducts(); setTab(action.kind === "transfer" ? "transfers" : action.kind === "return" ? "returns" : "write-offs"); }} />}
@@ -615,146 +703,6 @@ export default function InventoryHub() {
       {toOrderOpen && <PartsToOrderModal onClose={() => setToOrderOpen(false)} onCreated={() => { setToOrderOpen(false); setPos(null); setTab("purchase-orders"); }} />}
       {scanStock && <ScanStockPanel onClose={() => setScanStock(false)} onPosted={loadProducts} />}
     </Shell>
-  );
-}
-
-/* ── Stock take run-flow: New count → scan-to-count + manual edit → post variance ─ */
-type StLine = { id: string; part_id: string; part_name: string; system_qty: number; counted_qty: number | null; variance: number | null };
-function StocktakeDrawer({ id, products, onClose, onDone }:
-  { id?: string; products: Product[]; onClose: () => void; onDone: () => void }) {
-  const [stId, setStId] = useState<string | undefined>(id);
-  const [status, setStatus] = useState<string>("open");
-  const [lines, setLines] = useState<StLine[] | null>(null);
-  const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
-  const [locId, setLocId] = useState(""); const [kind, setKind] = useState<"full" | "partial">("full");
-  const [scan, setScan] = useState(""); const [scanQty, setScanQty] = useState(1); const [regUnknown, setRegUnknown] = useState(false);
-  const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null); const [flash, setFlash] = useState<string | null>(null);
-  const scanRef = useRef<HTMLInputElement>(null);
-
-  async function load(theId: string) {
-    const r = await api.get<any>(`/stocktake/${theId}`);
-    setStatus(r.status || "open"); setLines(r.lines || []);
-  }
-  useEffect(() => {
-    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(() => {});
-    if (id) load(id).catch(() => setErr("Could not load stock take"));
-  }, []); // eslint-disable-line
-
-  async function start() {
-    if (!locId) { setErr("Pick a location."); return; }
-    setBusy(true); setErr(null);
-    try {
-      const r = await api.post<any>("/stocktake", { location_id: locId, kind });
-      setStId(r.id); await load(r.id);
-    } catch (e: any) { setErr(e.message || "Could not start count"); }
-    finally { setBusy(false); }
-  }
-
-  async function doScan() {
-    const code = scan.trim(); if (!code || !stId) return;
-    setErr(null);
-    try {
-      const r = await api.post<any>(`/stocktake/${stId}/scan`, { code, qty: scanQty, register_unknown: regUnknown });
-      setFlash(`${r.part_name}: counted ${r.counted_qty}${r.is_unknown ? " (new)" : ""}`);
-      setScan(""); scanRef.current?.focus();
-      await load(stId);
-    } catch (e: any) {
-      setErr(e.message || "Scan failed");
-      if (/register/i.test(e.message || "")) setRegUnknown(true);
-    }
-  }
-
-  async function setCount(line: StLine, v: number) {
-    if (!stId) return;
-    setLines((ls) => ls!.map((l) => l.id === line.id ? { ...l, counted_qty: v, variance: Math.round((v - l.system_qty) * 1000) / 1000 } : l));
-    try { await api.patch(`/stocktake/${stId}/lines/${line.id}`, { counted_qty: v }); } catch { /* reload on failure */ await load(stId); }
-  }
-
-  async function post() {
-    if (!stId) return;
-    const counted = (lines || []).filter((l) => l.counted_qty != null);
-    const varLines = counted.filter((l) => (l.variance || 0) !== 0);
-    if (!(await confirmDialog(`Post this count? ${varLines.length} line(s) with a variance will adjust stock. ${(lines!.length - counted.length)} uncounted line(s) are left untouched.`))) return;
-    setBusy(true); setErr(null);
-    try { await api.post(`/stocktake/${stId}/post`, {}); onDone(); }
-    catch (e: any) { setErr(e.message || "Could not post"); setBusy(false); }
-  }
-
-  const posted = status === "posted";
-  const totVar = (lines || []).reduce((s, l) => s + (l.variance || 0), 0);
-  const nameFor = (l: StLine) => l.part_name || products.find((p) => p.id === l.part_id)?.name || "—";
-
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative w-[600px] max-w-full bg-white h-full shadow-drawer flex flex-col">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
-          <h2 className="font-bold text-ink-primary flex items-center gap-2"><M n="fact_check" c="text-base text-primary" />{stId ? (posted ? "Stock take (posted)" : "Count in progress") : "New stock take"}</h2>
-          <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
-          {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
-
-          {!stId ? (
-            <>
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Location</label>
-                <select value={locId} onChange={(e) => setLocId(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2">{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Count type</label>
-                <div className="flex gap-2">
-                  <button onClick={() => setKind("full")} className={`flex-1 rounded-lg border px-3 py-2 text-xs font-semibold text-left ${kind === "full" ? "border-primary bg-primary/5 text-primary" : "border-slate-200 text-ink-secondary"}`}>Full count<span className="block font-normal text-ink-tertiary mt-0.5">Seeds every part on hand at this location.</span></button>
-                  <button onClick={() => setKind("partial")} className={`flex-1 rounded-lg border px-3 py-2 text-xs font-semibold text-left ${kind === "partial" ? "border-primary bg-primary/5 text-primary" : "border-slate-200 text-ink-secondary"}`}>Partial count<span className="block font-normal text-ink-tertiary mt-0.5">Starts empty — only parts you scan or add are counted.</span></button>
-                </div></div>
-            </>
-          ) : (
-            <>
-              {!posted && (
-                <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 space-y-2">
-                  <label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide">Scan or type a code</label>
-                  <div className="flex items-center gap-2">
-                    <input ref={scanRef} autoFocus value={scan} onChange={(e) => setScan(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doScan(); }} placeholder="Barcode / SKU / serial" className="flex-1 bg-white border border-slate-200 rounded-lg text-sm px-3 py-2" />
-                    <input type="number" min={1} value={scanQty} onChange={(e) => setScanQty(Math.max(1, +e.target.value || 1))} className="w-16 bg-white border border-slate-200 rounded-lg text-sm px-2 py-2 text-right" title="Quantity per scan" />
-                    <button onClick={doScan} className="px-3 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container flex items-center gap-1"><M n="qr_code_scanner" c="text-sm" />Count</button>
-                  </div>
-                  <label className="flex items-center gap-2 text-xs text-ink-secondary"><input type="checkbox" checked={regUnknown} onChange={(e) => setRegUnknown(e.target.checked)} />Register unknown codes as new products</label>
-                  {flash && <div className="text-xs text-emerald-700 font-semibold">{flash}</div>}
-                </div>
-              )}
-              <div className="flex items-center justify-between text-xs text-ink-tertiary">
-                <span>{lines?.length ?? 0} line(s) · {(lines || []).filter((l) => l.counted_qty != null).length} counted</span>
-                <span>Net variance: <b className={totVar === 0 ? "text-ink-secondary" : totVar < 0 ? "text-rose-600" : "text-emerald-600"}>{totVar > 0 ? "+" : ""}{totVar}</b></span>
-              </div>
-              <div className="rounded-xl border border-slate-200 overflow-hidden">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50/60 text-[11px] font-bold text-ink-tertiary uppercase"><tr>
-                    <th className="py-2 px-3">Part</th><th className="py-2 px-3 text-right">System</th><th className="py-2 px-3 text-right w-24">Counted</th><th className="py-2 px-3 text-right">Variance</th>
-                  </tr></thead>
-                  <tbody className="divide-y divide-slate-100 text-ink-secondary">
-                    {lines == null && <SkeletonRows cols={4} />}
-                    {lines?.length === 0 && <tr><td colSpan={4} className="py-5 px-3 text-ink-tertiary">No lines yet — scan a part to count it.</td></tr>}
-                    {lines?.map((l) => (
-                      <tr key={l.id}>
-                        <td className="py-2 px-3 font-semibold text-ink-primary">{nameFor(l)}</td>
-                        <td className="py-2 px-3 text-right font-mono">{l.system_qty}</td>
-                        <td className="py-2 px-3 text-right">
-                          {posted ? <span className="font-mono">{l.counted_qty ?? "—"}</span> :
-                            <input type="number" value={l.counted_qty ?? ""} onChange={(e) => setCount(l, e.target.value === "" ? 0 : Number(e.target.value))} className="w-20 bg-white border border-slate-200 rounded-lg text-xs px-2 py-1 text-right" />}
-                        </td>
-                        <td className={`py-2 px-3 text-right font-mono font-bold ${(l.variance || 0) === 0 ? "text-ink-tertiary" : (l.variance || 0) < 0 ? "text-rose-600" : "text-emerald-600"}`}>{l.counted_qty == null ? "—" : `${(l.variance || 0) > 0 ? "+" : ""}${l.variance || 0}`}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-        </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">{posted ? "Close" : "Cancel"}</button>
-          {!stId && <button onClick={start} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Starting…" : "Start count"}</button>}
-          {stId && !posted && <button onClick={post} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Posting…" : "Post variance"}</button>}
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -799,7 +747,7 @@ function ActionModal({ kind, products, preselected, onClose, onDone }:
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[520px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary">{title}</h2>
@@ -809,24 +757,24 @@ function ActionModal({ kind, products, preselected, onClose, onDone }:
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
           {kind === "transfer" ? (
             <div className="grid grid-cols-2 gap-3">
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">From location</label>
+              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">From location</label>
                 <select value={fromLoc} onChange={(e) => setFromLoc(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2">{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">To location</label>
+              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">To location</label>
                 <select value={toLoc} onChange={(e) => setToLoc(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2">{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
             </div>
           ) : kind === "return" ? (
-            <div><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Reason</label>
+            <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Reason</label>
               <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Faulty / wrong item / changed mind" className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2" /></div>
           ) : (
             <div className="grid grid-cols-2 gap-3">
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Location</label>
+              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Location</label>
                 <select value={fromLoc} onChange={(e) => setFromLoc(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2">{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Reason</label>
+              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Reason</label>
                 <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Damaged / lost / expired" className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2" /></div>
             </div>
           )}
           <div>
-            <div className="flex items-center justify-between mb-1"><label className="text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide">Lines</label>
+            <div className="flex items-center justify-between mb-1"><label className="text-[11px] font-semibold text-ink-tertiary ">Lines</label>
               <button onClick={addLine} className="text-primary text-xs font-semibold flex items-center gap-1"><M n="add" c="text-sm" />Add line</button></div>
             <div className="space-y-2">
               {lines.map((l, i) => (
@@ -841,7 +789,7 @@ function ActionModal({ kind, products, preselected, onClose, onDone }:
               ))}
             </div>
           </div>
-          <div><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Note</label>
+          <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Note</label>
             <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2" /></div>
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
@@ -865,7 +813,7 @@ function ConversionModal({ onClose, onDone }: { onClose: () => void; onDone: () 
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
     api.get<any>("/assets?limit=200").then((r) => setAssets(r.items || [])).catch(() => setAssets([]));
-    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(() => {});
+    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(loadFailed("locations"));
   }, []);
   // prefill name from the picked asset (never the serial → sku, per backend note)
   useEffect(() => {
@@ -885,10 +833,10 @@ function ConversionModal({ onClose, onDone }: { onClose: () => void; onDone: () 
     } catch (e: any) { setErr(e.message || "Could not convert"); setBusy(false); }
   }
   const fld = "w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2";
-  const lbl = "block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1";
+  const lbl = "block text-[11px] font-semibold text-ink-tertiary   mb-1";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[520px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200"><h2 className="font-bold text-ink-primary">Convert asset → product</h2><button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
@@ -944,7 +892,7 @@ function ReorderModal({ onClose, onCreated }: { onClose: () => void; onCreated?:
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[560px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200"><h2 className="font-bold text-ink-primary">Reorder</h2><button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
         <div className="px-5 pt-3 flex gap-1.5">
@@ -957,7 +905,7 @@ function ReorderModal({ onClose, onCreated }: { onClose: () => void; onCreated?:
             <>
               <p className="text-xs text-ink-tertiary mb-3">Products at or below their minimum stock. Suggested qty brings each back to 2× min.</p>
               <table className="w-full text-xs">
-                <thead className="text-ink-tertiary uppercase text-[10px] font-bold"><tr><th className="text-left py-2">Product</th><th className="text-right py-2">Available</th><th className="text-right py-2">Min</th><th className="text-right py-2">Suggested</th></tr></thead>
+                <thead className="text-ink-tertiary text-[11px] font-bold"><tr><th className="text-left py-2">Product</th><th className="text-right py-2">Available</th><th className="text-right py-2">Min</th><th className="text-right py-2">Suggested</th></tr></thead>
                 <tbody className="divide-y divide-slate-100">
                   {items == null && <SkeletonRows cols={4} />}
                   {items?.length === 0 && <tr><td colSpan={4} className="py-6 text-center text-ink-tertiary">Nothing to reorder — all above minimum.</td></tr>}
@@ -971,13 +919,13 @@ function ReorderModal({ onClose, onCreated }: { onClose: () => void; onCreated?:
             <>
               <p className="text-xs text-ink-tertiary mb-3">Based on 28-day sales velocity. Suggested qty covers each supplier's lead time plus a 14-day buffer, netting off what's already on order. Check the ones to buy, then create draft POs grouped by supplier.</p>
               <table className="w-full text-xs">
-                <thead className="text-ink-tertiary uppercase text-[10px] font-bold"><tr><th className="py-2 w-6"></th><th className="text-left py-2">Product</th><th className="text-right py-2">Free</th><th className="text-right py-2">Days left</th><th className="text-right py-2">Order</th><th className="text-left py-2 pl-2">Supplier</th></tr></thead>
+                <thead className="text-ink-tertiary text-[11px] font-bold"><tr><th className="py-2 w-6"></th><th className="text-left py-2">Product</th><th className="text-right py-2">Free</th><th className="text-right py-2">Days left</th><th className="text-right py-2">Order</th><th className="text-left py-2 pl-2">Supplier</th></tr></thead>
                 <tbody className="divide-y divide-slate-100">
                   {fc == null && <SkeletonRows cols={6} />}
                   {fc?.length === 0 && <tr><td colSpan={6} className="py-6 text-center text-ink-tertiary">Nothing forecast to run out — no moving parts below cover.</td></tr>}
                   {fc?.map((p) => (
                     <tr key={p.part_id}>
-                      <td className="py-2"><input type="checkbox" checked={!!sel[p.part_id]} onChange={(e) => setSel((s) => ({ ...s, [p.part_id]: e.target.checked }))} className="w-4 h-4 rounded border-slate-300 text-primary" /></td>
+                      <td className="py-2"><input type="checkbox" aria-label="Select row" checked={!!sel[p.part_id]} onChange={(e) => setSel((s) => ({ ...s, [p.part_id]: e.target.checked }))} className="w-4 h-4 rounded border-slate-300 text-primary" /></td>
                       <td className="py-2 font-semibold text-ink-primary">{p.name}{p.sku ? ` · ${p.sku}` : ""}</td>
                       <td className="py-2 text-right">{p.free}</td>
                       <td className={`py-2 text-right font-semibold ${p.days_left != null && p.days_left <= 7 ? "text-rose-600" : "text-ink-secondary"}`}>{p.days_left != null ? `${p.days_left}d` : "—"}</td>
@@ -1003,24 +951,46 @@ function ReorderModal({ onClose, onCreated }: { onClose: () => void; onCreated?:
 }
 
 /* ── New posting — bulk stock inflow → POST /inventory/postings ── */
-type ReviewRow = PostRow & { match_status: "matched" | "unsure" | "new"; part_id: string | null; part_name?: string | null; sku?: string | null; candidates?: { id: string; name: string; sku?: string }[]; chosen: string };
+type PType = "standard" | "serialized" | "expiry";
+type ReviewRow = Omit<PostRow, "serials"> & {
+  match_status: "matched" | "unsure" | "new"; part_id: string | null; part_name?: string | null; sku?: string | null;
+  candidates?: { id: string; name: string; sku?: string; serialized?: boolean; expiry_tracking?: boolean }[]; chosen: string;
+  serialized?: boolean; expiry_tracking?: boolean; ptype: PType;          // 16a: type for a new product
+  serials: string[]; serialState?: { blocked: number; checking: boolean }; expiry_date?: string;
+};
+// Is this review row serial-tracked, given what the user picked? (a match keeps its own type)
+const rowSerialized = (r: ReviewRow) => !r.chosen || r.chosen === "__new__" ? r.ptype === "serialized"
+  : r.chosen === r.part_id ? !!r.serialized : !!r.candidates?.find((c) => c.id === r.chosen)?.serialized;
+const rowExpiry = (r: ReviewRow) => !r.chosen || r.chosen === "__new__" ? r.ptype === "expiry"
+  : r.chosen === r.part_id ? !!r.expiry_tracking : !!r.candidates?.find((c) => c.id === r.chosen)?.expiry_tracking;
+const unitsOf = (r: ReviewRow) => Math.ceil(Number(r.qty) || 0);
 function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () => void; onDone: () => void }) {
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [suppliers, setSuppliers] = useState<{ id: string; name: string }[]>([]);
   const [locId, setLocId] = useState(""); const [supplierId, setSupplierId] = useState(""); const [note, setNote] = useState("");
-  const blank = (): PostRow => ({ code: "", name: "", qty: 1, purchase_price: 0, markup_pct: 0 });
+  const [putBin, setPutBin] = useState<ScannedBin | null>(null);    // ii144c: put the delivery away into a bin
+  const blank = (): PostRow => ({ code: "", mpn: "", name: "", qty: 1, purchase_price: 0, markup_pct: 0 });
   const [rows, setRows] = useState<PostRow[]>([blank()]);
   const [review, setReview] = useState<ReviewRow[] | null>(null);
+  const [kept, setKept] = useState<Record<string, { serials: string[]; ptype: PType; expiry_date?: string }>>({});
+  const rowKey = (r: { code?: string | null; mpn?: string | null; name?: string | null }) => [r.code || "", r.mpn || "", r.name || ""].join("|").toLowerCase();
+  const backToEdit = () => {
+    if (review) setKept(Object.fromEntries(review.map((r) => [rowKey(r), { serials: r.serials, ptype: r.ptype, expiry_date: r.expiry_date }])));
+    setReview(null);
+  };
   const [pasteOpen, setPasteOpen] = useState(false); const [pasteText, setPasteText] = useState("");
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null); const [info, setInfo] = useState<string | null>(null);
   const [mapCols, setMapCols] = useState<PasteField[] | null>(null); const [dataGrid, setDataGrid] = useState<string[][] | null>(null);
+  const [fileHeaders, setFileHeaders] = useState<string[] | null>(null);   // set when rows came from an uploaded sheet
+  const [genSerials, setGenSerials] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const sheetRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(() => {});
-    api.get<any>("/suppliers").then((r) => setSuppliers(r.items || [])).catch(() => {});
+    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(loadFailed("locations"));
+    api.get<any>("/suppliers").then((r) => setSuppliers(r.items || [])).catch(loadFailed("suppliers"));
   }, []);
   const fld = "bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2";
-  const lbl2 = "block text-[10px] font-bold text-ink-tertiary uppercase mb-1";
+  const lbl2 = "block text-[11px] font-bold text-ink-tertiary  mb-1";
   const setRow = (i: number, k: keyof PostRow, v: any) => setRows(rows.map((r, j) => j === i ? { ...r, [k]: v } : r));
 
   function applyPaste() {
@@ -1028,17 +998,35 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
     const parsed = gridToRows(grid, map);
     if (!parsed.length) { setErr("Couldn't read any rows from that paste."); return; }
     setErr(null);
-    setRows(parsed); setDataGrid(grid); setMapCols(map); setPasteOpen(false); setPasteText("");
+    setRows(parsed); setDataGrid(grid); setMapCols(map); setFileHeaders(null); setPasteOpen(false); setPasteText("");
     setInfo(hadHeader ? "Detected a header row and mapped columns automatically — check the mapping below." : "Mapped columns automatically — check the mapping below if a column looks wrong.");
   }
-  const clearMap = () => { setMapCols(null); setDataGrid(null); };
+  const clearMap = () => { setMapCols(null); setDataGrid(null); setFileHeaders(null); };
+  const supQ = () => (supplierId ? `&supplier_id=${encodeURIComponent(supplierId)}` : "");
   function remap(col: number, field: PasteField) {
     if (!mapCols || !dataGrid) return;
     // a field can only map to one column: clear it elsewhere first
     const next = mapCols.map((f, c) => (field !== "ignore" && f === field && c !== col ? "ignore" : f)) as PasteField[];
     next[col] = field;
     // mergeRemap keeps any cell the user hand-edited while the mapping bar is open
-    setMapCols(next); setRows(mergeRemap(dataGrid, mapCols, next, rows)); saveRememberedMap(next);
+    setMapCols(next); setRows(mergeRemap(dataGrid, mapCols, next, rows));
+    // a sheet's mapping is remembered per supplier on the server; a paste's in this browser
+    if (fileHeaders) api.put(`/imports/posting/mapping${supplierId ? `?supplier_id=${encodeURIComponent(supplierId)}` : ""}`, { mapping: mapByHeader(fileHeaders, next) }).catch(() => { /* silent: remembering the column mapping is only a convenience */ });
+    else saveRememberedMap(next);
+  }
+  async function onSheet(e: any) {
+    const f = e.target.files?.[0]; if (!f) return;
+    setBusy(true); setErr(null); setInfo(null);
+    try {
+      const fd = new FormData(); fd.append("file", f);
+      const r = await api.postForm<any>(`/imports/parse?kind=posting${supQ()}`, fd);
+      const { grid, map } = fileToGrid(r.headers || [], r.rows || [], r.suggested || {});
+      const parsed = gridToRows(grid, map);
+      if (!parsed.length) { setErr("Couldn't find any product rows in that file — check the column mapping."); }
+      setRows(parsed.length ? parsed : [blank()]); setDataGrid(grid); setMapCols(map); setFileHeaders(r.headers || []);
+      setInfo(`Read ${parsed.length} line${parsed.length === 1 ? "" : "s"} from ${r.file_name || "the file"}. Check the column mapping below — it's remembered${supplierId ? " for this supplier" : ""}.`);
+    } catch (e: any) { setErr(e.message || "Could not read file"); }
+    finally { setBusy(false); if (sheetRef.current) sheetRef.current.value = ""; }
   }
   async function onFile(e: any) {
     const f = e.target.files?.[0]; if (!f) return;
@@ -1046,30 +1034,45 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
     try {
       const fd = new FormData(); fd.append("file", f);
       const r = await api.postForm<any>("/inventory/postings/extract", fd);
-      const rws: PostRow[] = (r.rows || []).map((x: any) => ({ code: x.code || "", name: x.name || "", qty: Number(x.qty) || 1, purchase_price: Number(x.purchase_price) || 0, markup_pct: 0 }));
+      const rws: PostRow[] = (r.rows || []).map((x: any) => ({ code: x.code || "", mpn: x.mpn || "", name: x.name || "", qty: Number(x.qty) || 1, purchase_price: Number(x.purchase_price) || 0, markup_pct: 0 }));
       if (rws.length) { setRows(rws); setMapCols(null); setDataGrid(null); setInfo(`Read ${rws.length} line${rws.length === 1 ? "" : "s"} from the file — check each before posting.`); }
       else setInfo(r.note || "Nothing detected in that file. Paste or type the rows instead.");
     } catch (e: any) { setErr(e.message || "Could not read file"); }
     finally { setBusy(false); if (fileRef.current) fileRef.current.value = ""; }
   }
   async function doPreview() {
-    const clean = rows.filter((r) => (r.code.trim() || r.name.trim()) && r.qty > 0);
-    if (!clean.length) { setErr("Add at least one row (code or name + qty)."); return; }
+    const clean = rows.filter((r) => (r.code.trim() || r.mpn.trim() || r.name.trim()) && r.qty > 0);
+    if (!clean.length) { setErr("Add at least one row (code, MPN or name + qty)."); return; }
     setBusy(true); setErr(null);
     try {
-      const r = await api.post<any>("/inventory/postings/preview", { rows: clean.map((x) => ({ code: x.code || null, name: x.name || null, qty: Number(x.qty), purchase_price: Number(x.purchase_price) || null, markup_pct: x.markup_pct ? Number(x.markup_pct) : null })) });
-      setReview((r.rows || []).map((rr: any) => ({ ...rr, chosen: rr.match_status === "matched" ? rr.part_id : (rr.candidates?.[0]?.id || "__new__") })));
+      const r = await api.post<any>("/inventory/postings/preview", { rows: clean.map((x) => ({ code: x.code || null, mpn: x.mpn || null, name: x.name || null, qty: Number(x.qty), purchase_price: Number(x.purchase_price) || null, markup_pct: x.markup_pct ? Number(x.markup_pct) : null, product_type: x.product_type || null, ...(splitSerials(x.serials).length ? { serials: splitSerials(x.serials) } : {}) })) });
+      // Back → edit → review again keeps what was scanned and chosen for the same row.
+      setReview((r.rows || []).map((rr: any) => {
+        const k = kept[rowKey(rr)];
+        return { ...rr, ptype: (k?.ptype || rr.product_type || "standard") as PType, serials: k?.serials?.length ? k.serials : (rr.serials || []),
+          expiry_date: k?.expiry_date, chosen: rr.match_status === "matched" ? rr.part_id : (rr.candidates?.[0]?.id || "__new__") };
+      }));
     } catch (e: any) { setErr(e.message || "Could not match rows"); } finally { setBusy(false); }
   }
+  const extras = (r: ReviewRow) => ({
+    ...(rowSerialized(r) ? { serials: r.serials } : {}),
+    ...(rowExpiry(r) && r.expiry_date ? { expiry_date: r.expiry_date } : {}),
+  });
+  const setReviewRow = (i: number, patch: Partial<ReviewRow>) => setReview((rv) => rv && rv.map((x, j) => j === i ? { ...x, ...patch } : x));
+  // 16b: serial-tracked rows need one good serial per unit before stock can move.
+  const needSerials = (review || []).filter((r) => rowSerialized(r) && (r.serials.length !== unitsOf(r) || unitsOf(r) !== Number(r.qty)));
+  const badSerials = (review || []).filter((r) => rowSerialized(r) && (r.serialState?.blocked || r.serialState?.checking));
   async function doCommit() {
     if (!review) return;
+    if (needSerials.length && !genSerials) { setErr(`${needSerials.length} row${needSerials.length === 1 ? " still needs" : "s still need"} a serial for each unit.`); return; }
+    if (badSerials.length) { setErr("Fix the serials marked in red first."); return; }
     setBusy(true); setErr(null);
     try {
       const body = {
-        location_id: locId, supplier_id: supplierId || null, note: note || null,
+        location_id: locId, supplier_id: supplierId || null, note: note || null, bin_id: putBin?.id || null, generate_serials: genSerials,
         rows: review.map((r) => r.chosen && r.chosen !== "__new__"
-          ? { part_id: r.chosen, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null }
-          : { new_name: (r.name || r.code || "").trim(), new_sku: r.code || null, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null }),
+          ? { part_id: r.chosen, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null, ...extras(r) }
+          : { new_name: (r.name || r.code || r.mpn || "").trim(), new_sku: r.code || null, new_mpn: r.mpn || null, new_type: r.ptype, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null, ...extras(r) }),
       };
       await api.post("/inventory/postings/commit", body);
       onDone();
@@ -1080,7 +1083,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[680px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary">{review ? "Review & confirm posting" : "New posting — bulk stock inflow"}</h2>
@@ -1090,15 +1093,19 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
           {info && <div className="rounded-lg bg-blue-50 border border-blue-200 text-primary text-xs px-3 py-2">{info}</div>}
           <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl2}>Warehouse</label><select value={locId} onChange={(e) => setLocId(e.target.value)} className={`${fld} w-full`}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+            <div><label className={lbl2}>Warehouse</label><select value={locId} onChange={(e) => { setLocId(e.target.value); setPutBin(null); }} className={`${fld} w-full`}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
             <div><label className={lbl2}>Supplier (optional)</label><select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className={`${fld} w-full`}><option value="">—</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
           </div>
+          <div><label className={lbl2}>Put away into a bin (optional — otherwise the default bin)</label>
+            <BinScanField label="Into" current={putBin} locationId={locId} onBin={setPutBin} onClear={() => setPutBin(null)} /></div>
 
           {!review ? (<>
             <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={onFile} />
+            <input ref={sheetRef} type="file" accept=".xlsx,.csv,text/csv" className="hidden" onChange={onSheet} />
             <div className="flex items-center justify-between flex-wrap gap-2">
-              <label className={lbl2} style={{ marginBottom: 0 }}>Rows — Code/SKU · Name · Qty · Cost · Markup%</label>
-              <div className="flex gap-2">
+              <label className={lbl2} style={{ marginBottom: 0 }}>Rows — Code/SKU · MPN · Name · Qty · Cost · Markup% · Serials</label>
+              <div className="flex gap-2 flex-wrap">
+                <button onClick={() => sheetRef.current?.click()} disabled={busy} className="text-primary text-xs font-semibold flex items-center gap-1 disabled:opacity-50"><M n="upload" c="text-sm" />Excel / CSV file</button>
                 <button onClick={() => fileRef.current?.click()} disabled={busy} className="text-primary text-xs font-semibold flex items-center gap-1 disabled:opacity-50"><M n="document_scanner" c="text-sm" />Scan invoice / photo</button>
                 <button onClick={() => setPasteOpen((o) => !o)} className="text-primary text-xs font-semibold flex items-center gap-1"><M n="content_paste" c="text-sm" />Paste from Excel</button>
                 <button onClick={() => { setRows([...rows, blank()]); clearMap(); }} className="text-primary text-xs font-semibold">+ Add row</button>
@@ -1107,7 +1114,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
             {pasteOpen && (
               <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
                 <p className="text-[11px] text-ink-tertiary mb-2">Paste tab- or comma-separated rows — with or without a header row. Columns are detected automatically and you can fix the mapping after.</p>
-                <textarea value={pasteText} onChange={(e) => setPasteText(e.target.value)} rows={4} placeholder={"SCR-IP13\tiPhone 13 Screen\t10\t60\t40\nBAT-GS22\t\t5\t14\t50"} className={`${fld} w-full font-mono text-xs`} />
+                <textarea value={pasteText} onChange={(e) => setPasteText(e.target.value)} rows={4} placeholder={"SCR-IP13\tiPhone 13 Screen\t10\t60\t40\nBAT-GS22\t\t5\t14\t50"} className={`${fld} w-full tabular-nums text-xs`} />
                 <div className="flex justify-end mt-2"><button onClick={applyPaste} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold">Fill {pasteText.split(/\r?\n/).filter((x) => x.trim()).length || 0} rows</button></div>
               </div>
             )}
@@ -1120,56 +1127,94 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
                       <select value={f} onChange={(e) => remap(c, e.target.value as PasteField)} className={`${fld} w-32`}>
                         {FIELD_ORDER.map((opt) => <option key={opt} value={opt}>{FIELD_LABELS[opt]}</option>)}
                       </select>
-                      <div className="text-[10px] text-ink-tertiary mt-1 px-1 truncate w-32" title={dataGrid[0]?.[c] || ""}>{dataGrid[0]?.[c] || <span className="opacity-40">—</span>}</div>
+                      <div className="text-[11px] text-ink-tertiary mt-1 px-1 truncate w-32" title={dataGrid[0]?.[c] || ""}>{dataGrid[0]?.[c] || <span className="opacity-40">—</span>}</div>
                     </div>
                   ))}
                 </div>
-                <p className="text-[10px] text-ink-tertiary mt-1.5">Remembered for next time.</p>
+                <p className="text-[11px] text-ink-tertiary mt-1.5">{fileHeaders && supplierId ? "Remembered for this supplier." : "Remembered for next time."}</p>
               </div>
             )}
             <div className="space-y-1.5">
-              <div className="flex items-center gap-1.5 text-[10px] font-bold text-ink-tertiary uppercase px-1"><span className="w-28">Code/SKU</span><span className="flex-1">Name</span><span className="w-12 text-right">Qty</span><span className="w-16 text-right">Cost</span><span className="w-12 text-right">Mk%</span><span className="w-8" /></div>
+              <div className="flex items-center gap-1.5 text-[11px] font-bold text-ink-tertiary px-1"><span className="w-24">Code/SKU</span><span className="w-24">MPN</span><span className="flex-1">Name</span><span className="w-12 text-right">Qty</span><span className="w-16 text-right">Cost</span><span className="w-12 text-right">Mk%</span><span className="w-8" /></div>
               {rows.map((r, i) => (
-                <div key={i} className="flex items-center gap-1.5">
-                  <input value={r.code} onChange={(e) => setRow(i, "code", e.target.value)} placeholder="SKU" className={`${fld} w-28`} />
+                <div key={i} className="flex items-center gap-1.5 flex-wrap">
+                  <input value={r.code} onChange={(e) => setRow(i, "code", e.target.value)} placeholder="SKU" aria-label="Code or SKU" className={`${fld} w-24 min-w-0`} />
+                  <input value={r.mpn} onChange={(e) => setRow(i, "mpn", e.target.value)} placeholder="MPN" aria-label="MPN" className={`${fld} w-24 min-w-0`} />
                   <input value={r.name} onChange={(e) => setRow(i, "name", e.target.value)} placeholder="Product name (if new)" className={`${fld} flex-1`} />
                   <input type="number" min={0} value={r.qty} onChange={(e) => setRow(i, "qty", Number(e.target.value))} className={`${fld} w-12 text-right`} />
                   <input type="number" min={0} value={r.purchase_price} onChange={(e) => setRow(i, "purchase_price", Number(e.target.value))} className={`${fld} w-16 text-right`} />
                   <input type="number" min={0} value={r.markup_pct} onChange={(e) => setRow(i, "markup_pct", Number(e.target.value))} className={`${fld} w-12 text-right`} />
                   <button aria-label="Delete" onClick={() => { setRows(rows.filter((_, j) => j !== i)); clearMap(); }} className="w-8 h-8 rounded-lg hover:bg-rose-50 text-ink-tertiary hover:text-rose-600 flex items-center justify-center"><M n="delete" c="text-sm" /></button>
+                  {r.serials !== undefined && <input value={r.serials} onChange={(e) => setRow(i, "serials", e.target.value)} placeholder="Serials, comma-separated" aria-label="Serial numbers" className={`${fld} basis-full text-xs font-mono`} />}
                 </div>
               ))}
             </div>
             <div><label className={lbl2}>Note / reference</label><textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className={`${fld} w-full`} /></div>
           </>) : (<>
             <p className="text-xs text-ink-secondary">Confirm each row before stock moves. {newCount > 0 && <b className="text-primary">{newCount} new product{newCount === 1 ? "" : "s"} will be created.</b>}</p>
+            {needSerials.length > 0 && !genSerials && (
+              <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2 flex items-center gap-1.5">
+                <M n="barcode_scanner" c="text-sm" />{needSerials.length} row{needSerials.length === 1 ? " still needs" : "s still need"} a serial for each unit. Scan them below.
+              </div>
+            )}
+            <label className="flex items-center gap-2 text-xs text-ink-secondary"><input type="checkbox" checked={genSerials} onChange={(e) => setGenSerials(e.target.checked)} />Generate the missing serial numbers for me</label>
             <div className="space-y-1.5">
-              {review.map((r, i) => (
-                <div key={i} className="flex items-center gap-2 border border-slate-100 rounded-lg px-2.5 py-2">
-                  <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${stBadge(r.chosen && r.chosen !== "__new__" ? "matched" : "new")}`}>{r.chosen && r.chosen !== "__new__" ? "match" : "new"}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-semibold text-ink-primary truncate">{r.part_name || r.name || r.code || "—"}</div>
-                    {(r.candidates && r.candidates.length > 0) ? (
-                      <select value={r.chosen} onChange={(e) => setReview(review.map((x, j) => j === i ? { ...x, chosen: e.target.value } : x))} className="mt-1 bg-white border border-slate-200 rounded text-[11px] px-1.5 py-1 w-full">
-                        {r.candidates.map((c) => <option key={c.id} value={c.id}>{c.name}{c.sku ? ` (${c.sku})` : ""}</option>)}
-                        <option value="__new__">+ Create new: {r.name || r.code}</option>
+              {review.map((r, i) => {
+                const ser = rowSerialized(r), exp = rowExpiry(r), isNew = !r.chosen || r.chosen === "__new__";
+                const units = unitsOf(r), missing = ser ? Math.max(0, units - r.serials.length) : 0;
+                return (
+                <div key={i} className="border border-slate-100 rounded-lg px-2.5 py-2 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[11px] font-bold  px-1.5 py-0.5 rounded ${stBadge(isNew ? "new" : "matched")}`}>{isNew ? "new" : "match"}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-semibold text-ink-primary truncate">{r.part_name || r.name || r.code || r.mpn || "—"}</div>
+                      {(r.candidates && r.candidates.length > 0) ? (
+                        <select value={r.chosen} onChange={(e) => setReviewRow(i, { chosen: e.target.value })} className="mt-1 bg-white border border-slate-200 rounded text-[11px] px-1.5 py-1 w-full">
+                          {r.candidates.map((c) => <option key={c.id} value={c.id}>{c.name}{c.sku ? ` (${c.sku})` : ""}</option>)}
+                          <option value="__new__">+ Create new: {r.name || r.code}</option>
+                        </select>
+                      ) : (
+                        <div className="text-[11px] text-ink-tertiary">{r.part_id ? `SKU ${r.sku || "—"}` : `New product${r.code ? ` · SKU ${r.code}` : ""}${r.mpn ? ` · MPN ${r.mpn}` : ""}`}</div>
+                      )}
+                    </div>
+                    {isNew ? (
+                      <select value={r.ptype} onChange={(e) => setReviewRow(i, { ptype: e.target.value as PType })} aria-label="Product type" className="bg-white border border-slate-200 rounded text-[11px] px-1.5 py-1">
+                        <option value="standard">Standard</option><option value="serialized">Serial-tracked</option><option value="expiry">Expiry-tracked</option>
                       </select>
-                    ) : (
-                      <div className="text-[10px] text-ink-tertiary">{r.part_id ? `SKU ${r.sku || "—"}` : `New product${r.code ? ` · SKU ${r.code}` : ""}`}</div>
-                    )}
+                    ) : (ser || exp) && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-ink-secondary">{ser ? "Serial-tracked" : "Expiry-tracked"}</span>}
+                    <span className="text-[11px] text-ink-tertiary">×{r.qty}</span>
+                    <span className="text-[11px] tabular-nums text-ink-secondary w-14 text-right">{money(r.purchase_price || 0)}</span>
                   </div>
-                  <span className="text-[11px] text-ink-tertiary">×{r.qty}</span>
-                  <span className="text-[11px] font-mono text-ink-secondary w-14 text-right">{money(r.purchase_price || 0)}</span>
+                  {ser && (
+                    <div className="ml-1 pl-2 border-l-2 border-primary/20 space-y-1">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-semibold text-ink-secondary">Serials / IMEIs</span>
+                        {missing > 0 ? <span className="text-amber-700 font-semibold">Needs {missing} more</span>
+                          : units !== Number(r.qty) ? <span className="text-rose-700 font-semibold">Quantity must be a whole number</span>
+                          : <span className="text-emerald-700 font-semibold flex items-center gap-0.5"><M n="check" c="text-[13px]" />All units entered</span>}
+                      </div>
+                      <SerialEntry value={r.serials} target={units} partId={isNew ? null : r.chosen}
+                        others={review.flatMap((x, j) => j !== i && rowSerialized(x) ? x.serials : [])}
+                        onChange={(v) => setReviewRow(i, { serials: v })}
+                        onState={(st) => setReviewRow(i, { serialState: { blocked: st.blocked, checking: st.checking } })} />
+                    </div>
+                  )}
+                  {exp && (
+                    <div className="ml-1 pl-2 border-l-2 border-primary/20 flex items-center gap-2 text-[11px] text-ink-secondary">
+                      <span className="whitespace-nowrap">Use by (optional)</span>
+                      <div className="w-44"><DateField value={r.expiry_date || ""} onChange={(v) => setReviewRow(i, { expiry_date: v })} /></div>
+                    </div>
+                  )}
                 </div>
-              ))}
+              ); })}
             </div>
           </>)}
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex justify-between gap-2">
-          <button onClick={review ? () => setReview(null) : onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">{review ? "Back" : "Cancel"}</button>
+          <button onClick={review ? backToEdit : onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">{review ? "Back" : "Cancel"}</button>
           {!review
             ? <button onClick={doPreview} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Matching…" : "Review & match →"}</button>
-            : <button onClick={doCommit} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Posting…" : "Post stock"}</button>}
+            : <button onClick={doCommit} disabled={busy || (needSerials.length > 0 && !genSerials) || badSerials.length > 0} title={needSerials.length && !genSerials ? "Enter a serial for each unit first" : undefined} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Posting…" : "Post stock"}</button>}
         </div>
       </div>
     </div>
@@ -1184,9 +1229,9 @@ function BulkAdjustModal({ items, onClose, onDone }: { items: Product[]; onClose
   const [vals, setVals] = useState<Record<string, number>>({});
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(loadFailed("locations")); }, []);
   const fld = "bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2";
-  const lbl2 = "block text-[10px] font-bold text-ink-tertiary uppercase mb-1";
+  const lbl2 = "block text-[11px] font-bold text-ink-tertiary  mb-1";
   async function save() {
     const rows = items.map((p) => ({ part_id: p.id, ...(mode === "set" ? { set_qty: vals[p.id] ?? (p.qty_available ?? 0) } : { delta: vals[p.id] || 0 }), note: note || null }))
       .filter((r) => mode === "set" ? true : (r as any).delta !== 0);
@@ -1197,7 +1242,7 @@ function BulkAdjustModal({ items, onClose, onDone }: { items: Product[]; onClose
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[520px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200"><h2 className="font-bold text-ink-primary">Adjust quantity — {items.length} item{items.length === 1 ? "" : "s"}</h2><button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
@@ -1212,11 +1257,11 @@ function BulkAdjustModal({ items, onClose, onDone }: { items: Product[]; onClose
             </div>
           </div>
           <div className="space-y-1.5">
-            <div className="flex items-center gap-2 text-[10px] font-bold text-ink-tertiary uppercase px-1"><span className="flex-1">Product</span><span className="w-16 text-right">On hand</span><span className="w-20 text-right">{mode === "set" ? "New qty" : "± Delta"}</span></div>
+            <div className="flex items-center gap-2 text-[11px] font-bold text-ink-tertiary px-1"><span className="flex-1">Product</span><span className="w-16 text-right">On hand</span><span className="w-20 text-right">{mode === "set" ? "New qty" : "± Delta"}</span></div>
             {items.map((p) => (
               <div key={p.id} className="flex items-center gap-2">
                 <span className="flex-1 text-xs font-semibold text-ink-primary truncate">{p.name}{p.sku ? <span className="text-ink-tertiary font-normal"> · {p.sku}</span> : null}</span>
-                <span className="w-16 text-right text-xs font-mono text-ink-tertiary">{p.qty_available ?? 0}</span>
+                <span className="w-16 text-right text-xs tabular-nums text-ink-tertiary">{p.qty_available ?? 0}</span>
                 <input type="number" value={vals[p.id] ?? (mode === "set" ? (p.qty_available ?? 0) : 0)} onChange={(e) => setVals({ ...vals, [p.id]: Number(e.target.value) })} className={`${fld} w-20 text-right`} />
               </div>
             ))}
@@ -1238,7 +1283,7 @@ function PartsToOrderModal({ onClose, onCreated }: { onClose: () => void; onCrea
   const [busy, setBusy] = useState(""); const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
     api.get<any>("/inventory/to-order").then((r) => { setRows(r.items || []); setSummary(r.summary || null); }).catch(() => setRows([]));
-    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(() => {});
+    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(loadFailed("locations"));
   }, []);
   // group by supplier
   const groups: Record<string, { name: string; sid: string | null; rows: ToOrderRow[] }> = {};
@@ -1255,7 +1300,7 @@ function PartsToOrderModal({ onClose, onCreated }: { onClose: () => void; onCrea
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[620px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <div><h2 className="font-bold text-ink-primary">Parts to order</h2><p className="text-[11px] text-ink-tertiary">What open jobs need, minus stock on hand and already on order.</p></div>
@@ -1280,16 +1325,16 @@ function PartsToOrderModal({ onClose, onCreated }: { onClose: () => void; onCrea
                 <button onClick={() => createPO(g)} disabled={!!busy} className="h-[28px] px-3 rounded-lg bg-primary text-white text-[11px] font-bold hover:bg-primary-container disabled:opacity-60 flex items-center gap-1"><M n="receipt_long" c="text-[13px]" />{busy === g.sid ? "Creating…" : "Create PO"}</button>
               </div>
               <table className="w-full text-left text-xs">
-                <thead className="text-[10px] font-bold text-ink-tertiary uppercase"><tr><th className="py-1.5 px-3">Part</th><th className="py-1.5 px-2 text-right">Need</th><th className="py-1.5 px-2 text-right">Have</th><th className="py-1.5 px-2 text-right">On order</th><th className="py-1.5 px-2 text-right">Order</th><th className="py-1.5 px-3">Jobs</th></tr></thead>
+                <thead className="text-[11px] font-bold text-ink-tertiary "><tr><th className="py-1.5 px-3">Part</th><th className="py-1.5 px-2 text-right">Need</th><th className="py-1.5 px-2 text-right">Have</th><th className="py-1.5 px-2 text-right">On order</th><th className="py-1.5 px-2 text-right">Order</th><th className="py-1.5 px-3">Jobs</th></tr></thead>
                 <tbody className="divide-y divide-slate-100">
                   {g.rows.map((r) => (
                     <tr key={r.part_id}>
-                      <td className="py-2 px-3"><div className="font-semibold text-ink-primary">{r.name}</div><div className="text-[10px] text-ink-tertiary">{r.sku || ""}{r.stalled_days > 0 ? <span className="text-amber-600 font-semibold"> · stalled {r.stalled_days}d</span> : null}</div></td>
-                      <td className="py-2 px-2 text-right font-mono">{r.needed}</td>
-                      <td className="py-2 px-2 text-right font-mono text-ink-tertiary">{r.on_hand}</td>
-                      <td className="py-2 px-2 text-right font-mono text-ink-tertiary">{r.on_order || "—"}</td>
-                      <td className="py-2 px-2 text-right font-mono font-bold text-primary">{Math.ceil(r.shortfall)}</td>
-                      <td className="py-2 px-3 text-[10px] text-ink-tertiary">{r.jobs.slice(0, 3).join(", ")}{r.jobs.length > 3 ? ` +${r.jobs.length - 3}` : ""}</td>
+                      <td className="py-2 px-3"><div className="font-semibold text-ink-primary">{r.name}</div><div className="text-[11px] text-ink-tertiary">{r.sku || ""}{r.stalled_days > 0 ? <span className="text-amber-600 font-semibold"> · stalled {r.stalled_days}d</span> : null}</div></td>
+                      <td className="py-2 px-2 text-right tabular-nums">{r.needed}</td>
+                      <td className="py-2 px-2 text-right tabular-nums text-ink-tertiary">{r.on_hand}</td>
+                      <td className="py-2 px-2 text-right tabular-nums text-ink-tertiary">{r.on_order || "—"}</td>
+                      <td className="py-2 px-2 text-right tabular-nums font-bold text-primary">{Math.ceil(r.shortfall)}</td>
+                      <td className="py-2 px-3 text-[11px] text-ink-tertiary">{r.jobs.slice(0, 3).join(", ")}{r.jobs.length > 3 ? ` +${r.jobs.length - 3}` : ""}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1303,55 +1348,3 @@ function PartsToOrderModal({ onClose, onCreated }: { onClose: () => void; onCrea
   );
 }
 
-/* ── Bins panel (revealed by Settings → Inventory → enable_bins) → /api/bins ── */
-function BinsPanel() {
-  const [bins, setBins] = useState<any[] | null>(null);
-  const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
-  const [nf, setNf] = useState({ location_id: "", name: "", zone: "", shelf: "" });
-  const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
-  const load = () => api.get<any>("/bins").then((r) => setBins(r.items || [])).catch(() => setBins([]));
-  useEffect(() => { load(); api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); setNf((s) => ({ ...s, location_id: it[0]?.id || "" })); }).catch(() => {}); }, []);
-  async function add() {
-    if (!nf.name.trim() || !nf.location_id) { setErr("Pick a warehouse and name the bin."); return; }
-    setBusy(true); setErr(null);
-    try { await api.post("/bins", { location_id: nf.location_id, name: nf.name.trim(), zone: nf.zone || null, shelf: nf.shelf || null }); setNf({ ...nf, name: "", zone: "", shelf: "" }); load(); }
-    catch (e: any) { setErr(e.message || "Could not add bin"); } finally { setBusy(false); }
-  }
-  async function del(id: string) { if (!(await confirmDialog("Delete this bin?", { danger: true, confirmLabel: "Delete" }))) return; try { await api.del(`/bins/${id}`); load(); } catch (e: any) { setErr(e.message || "In use — move its stock first"); } }
-  const locName = (id: string) => locations.find((l) => l.id === id)?.name || "—";
-  const fld = "bg-white border border-slate-200 rounded-lg text-sm px-3 py-2";
-  return (
-    <div className="max-w-3xl space-y-4">
-      <div><h3 className="text-sm font-bold text-ink-primary">Storage bins</h3><p className="text-xs text-ink-tertiary">Give every product an address inside a warehouse — shelf / bin. Enabled in Settings → Inventory &amp; warehouses.</p></div>
-      {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-        <table className="w-full text-xs">
-          <thead className="bg-slate-50/70 text-ink-tertiary uppercase text-[10px] font-bold"><tr><th className="text-left py-2.5 px-4">Bin</th><th className="text-left py-2.5 px-4">Warehouse</th><th className="text-left py-2.5 px-4">Zone / shelf</th><th className="py-2.5 px-4"></th></tr></thead>
-          <tbody className="divide-y divide-slate-100">
-            {bins == null && <SkeletonRows cols={4} />}
-            {bins?.length === 0 && <tr><td colSpan={4} className="py-6 text-center text-ink-tertiary">No bins yet — add one below.</td></tr>}
-            {bins?.map((b) => (
-              <tr key={b.id}>
-                <td className="py-2.5 px-4 font-bold text-ink-primary">{b.name}</td>
-                <td className="py-2.5 px-4 text-ink-secondary">{locName(b.location_id)}</td>
-                <td className="py-2.5 px-4 text-ink-tertiary">{[b.zone, b.shelf, b.bin_number].filter(Boolean).join(" / ") || "—"}</td>
-                <td className="py-2.5 px-4 text-right"><button onClick={() => del(b.id)} className="text-rose-600 font-semibold">Delete</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div className="p-3 border-t border-slate-100 flex items-end gap-2 flex-wrap">
-          <div><label className="block text-[10px] font-bold text-ink-tertiary uppercase mb-1">Warehouse</label><select value={nf.location_id} onChange={(e) => setNf({ ...nf, location_id: e.target.value })} className={fld}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
-          <div><label className="block text-[10px] font-bold text-ink-tertiary uppercase mb-1">Bin name</label><input value={nf.name} onChange={(e) => setNf({ ...nf, name: e.target.value })} placeholder="A-01" className={fld} /></div>
-          <div><label className="block text-[10px] font-bold text-ink-tertiary uppercase mb-1">Zone</label><input value={nf.zone} onChange={(e) => setNf({ ...nf, zone: e.target.value })} className={`${fld} w-24`} /></div>
-          <div><label className="block text-[10px] font-bold text-ink-tertiary uppercase mb-1">Shelf</label><input value={nf.shelf} onChange={(e) => setNf({ ...nf, shelf: e.target.value })} className={`${fld} w-24`} /></div>
-          <button onClick={add} disabled={busy} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">+ Add bin</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Chip({ label, active }: { label: string; active?: boolean }) {
-  return <button className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 border ${active ? "bg-emerald-50 text-emerald-700 border-emerald-200/60" : "bg-slate-50 text-ink-secondary hover:bg-slate-100 border-slate-200/60"}`}>{label}<M n="expand_more" c="text-xs" /></button>;
-}

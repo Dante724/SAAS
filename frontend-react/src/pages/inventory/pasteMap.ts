@@ -2,21 +2,28 @@
 // header auto-detect → content heuristics → caller shows a correctable mapping bar.
 // No UI, no network — just text in, {grid, map, rows} out, so it can be unit-tested.
 
-export type PasteField = "code" | "name" | "qty" | "cost" | "markup" | "ignore";
-export type PostRow = { code: string; name: string; qty: number; purchase_price: number; markup_pct: number };
+export type PasteField = "code" | "mpn" | "name" | "qty" | "cost" | "markup" | "type" | "serials" | "ignore";
+// product_type (16a): the sheet's "Type" cell — serialized / expiry-tracked; only shapes new products.
+// serials: one cell per line, comma / semicolon / newline separated (only set when a column maps to it)
+export type PostRow = { code: string; mpn: string; name: string; qty: number; purchase_price: number; markup_pct: number; product_type?: string; serials?: string };
 
 export const FIELD_LABELS: Record<PasteField, string> = {
-  code: "Code / SKU", name: "Name", qty: "Qty", cost: "Cost", markup: "Markup %", ignore: "Ignore",
+  code: "Code / SKU", mpn: "MPN", name: "Name", qty: "Qty", cost: "Cost", markup: "Markup %", type: "Product type", serials: "Serials", ignore: "Ignore",
 };
-export const FIELD_ORDER: PasteField[] = ["code", "name", "qty", "cost", "markup", "ignore"];
+export const FIELD_ORDER: PasteField[] = ["code", "mpn", "name", "qty", "cost", "markup", "type", "serials", "ignore"];
 
 // Header synonyms per field (normalised: lowercase, punctuation stripped).
 const SYN: Record<Exclude<PasteField, "ignore">, string[]> = {
-  code: ["code", "sku", "part", "part#", "partno", "partnumber", "part number", "item", "item#", "itemno", "mpn", "barcode", "upc", "ref"],
+  code: ["code", "sku", "part", "part#", "partno", "partnumber", "part number", "item", "item#", "itemno", "barcode", "upc", "ref"],
+  // opa: the manufacturer's part number has its own product field now, not an alias of code
+  mpn: ["mpn", "mfrpn", "mfr pn", "mfrpart", "mfr part", "mfr part#", "mfgpn", "mfg part", "mfg part#",
+    "manufacturer part", "manufacturer part number", "manufacturerpartnumber", "manufacturer pn", "oem part", "oem part#", "oempn"],
   name: ["name", "description", "desc", "product", "productname", "item name", "title", "details"],
   qty: ["qty", "quantity", "count", "units", "unit", "onhand", "on hand", "received", "qtyreceived", "qty received", "pcs", "stock"],
   cost: ["cost", "unitcost", "unit cost", "price", "unitprice", "unit price", "buy", "buyprice", "purchase", "purchaseprice", "purchase price", "wholesale", "net", "rate"],
   markup: ["markup", "margin", "markup%", "margin%", "mkup", "uplift"],
+  type: ["type", "product type", "producttype", "item type", "tracking", "tracked by", "serialized", "serialised"],
+  serials: ["serials", "serial", "serial numbers", "serialnumbers", "serial no", "serialno", "sn", "imei", "imeis"],
 };
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9%# ]/g, "").trim();
@@ -48,7 +55,7 @@ export function parseGrid(text: string): string[][] {
 
 export function headerFieldFor(cell: string): PasteField | null {
   const n = norm(cell); if (!n) return null;
-  for (const f of ["code", "name", "qty", "cost", "markup"] as const) {
+  for (const f of ["code", "mpn", "name", "qty", "cost", "markup", "type", "serials"] as const) {
     if (SYN[f].some((s) => n === s || n.replace(/ /g, "") === s.replace(/ /g, ""))) return f;
   }
   return null;
@@ -105,17 +112,20 @@ export function heuristicMap(grid: string[][]): PasteField[] {
 
 export function gridToRows(grid: string[][], map: PasteField[]): PostRow[] {
   return grid.map((cells) => {
-    const row: PostRow = { code: "", name: "", qty: 1, purchase_price: 0, markup_pct: 0 };
+    const row: PostRow = { code: "", mpn: "", name: "", qty: 1, purchase_price: 0, markup_pct: 0 };
     map.forEach((f, c) => {
       const v = (cells[c] ?? "").trim(); if (f === "ignore" || !v) return;
       if (f === "code") row.code = v;
+      else if (f === "mpn") row.mpn = v;
       else if (f === "name") row.name = v;
       else if (f === "qty") { const n = toNum(v); if (n !== null) row.qty = n; }
       else if (f === "cost") { const n = toNum(v); if (n !== null) row.purchase_price = n; }
       else if (f === "markup") { const n = toNum(v); if (n !== null) row.markup_pct = n; }
+      else if (f === "type") row.product_type = v;
+      else if (f === "serials") row.serials = v;
     });
     return row;
-  }).filter((r) => r.code || r.name);
+  }).filter((r) => r.code || r.mpn || r.name);
 }
 
 // Re-derive rows for a new column mapping while keeping any field the user hand-edited.
@@ -125,7 +135,7 @@ export function gridToRows(grid: string[][], map: PasteField[]): PostRow[] {
 export function mergeRemap(grid: string[][], oldMap: PasteField[], newMap: PasteField[], currentRows: PostRow[]): PostRow[] {
   const oldBase = gridToRows(grid, oldMap);
   const newBase = gridToRows(grid, newMap);
-  const keys: (keyof PostRow)[] = ["code", "name", "qty", "purchase_price", "markup_pct"];
+  const keys: (keyof PostRow)[] = ["code", "mpn", "name", "qty", "purchase_price", "markup_pct", "product_type", "serials"];
   return newBase.map((r, i) => {
     const old = oldBase[i], cur = currentRows[i];
     if (!old || !cur) return r;
@@ -151,4 +161,34 @@ export function loadRememberedMap(): PasteField[] | null {
 }
 export function saveRememberedMap(map: PasteField[]): void {
   try { localStorage.setItem(MAP_KEY, JSON.stringify(map)); } catch { /* ignore */ }
+}
+
+// A spreadsheet read by POST /imports/parse (headers + text rows + the server's suggested mapping,
+// which already includes the mapping remembered for this supplier) → the same grid + column map
+// the paste flow uses, so file uploads and pastes share one mapping bar and one preview.
+export function fileToGrid(headers: string[], rows: string[][], suggested: Record<string, string>): { grid: string[][]; map: PasteField[] } {
+  const ok = new Set<string>(FIELD_ORDER);
+  // the server's suggestion (incl. the supplier's remembered mapping) wins; header guesses only fill fields it left free
+  const used = new Set<string>(headers.map((h) => suggested[h]).filter((f) => f && f !== "ignore" && ok.has(f)));
+  const map = headers.map((h) => {
+    const s = suggested[h];
+    if (s && ok.has(s)) return s as PasteField;
+    const g = headerFieldFor(h);
+    if (g && !used.has(g)) { used.add(g); return g; }
+    return "ignore" as PasteField;
+  });
+  const seen = new Set<PasteField>();
+  const clean = map.map((f) => { if (f === "ignore" || seen.has(f)) return "ignore" as PasteField; seen.add(f); return f; });
+  return { grid: rows.map((r) => headers.map((_, c) => String(r[c] ?? ""))), map: clean };
+}
+
+// Column map → {header: field}, the shape saved per supplier (PUT /imports/{posting|po}/mapping).
+export function mapByHeader(headers: string[], map: PasteField[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  headers.forEach((h, c) => { out[h] = map[c] || "ignore"; });   // "ignore" is remembered too
+  return out;
+}
+
+export function splitSerials(s?: string): string[] {
+  return (s || "").split(/[,;\n\r|]+/).map((x) => x.trim()).filter(Boolean);
 }

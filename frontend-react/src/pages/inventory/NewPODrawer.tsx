@@ -1,8 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import DateField from "../../components/DateField";
 import { Product, Supplier, money } from "./types";
+import PasteImport, { ImportedLine } from "./PasteImport";
+import { useMe } from "../../context/Me";
+import { loadFailed } from "../../lib/notice";
+import { FIELD_LABELS, FIELD_ORDER, fileToGrid, gridToRows, mapByHeader, type PasteField } from "./pasteMap";
 
 /** Create a purchase order: supplier + location + line items → POST /inventory/po.
  * This is the entry point that was missing — the toolbar button used to open the
@@ -25,15 +29,27 @@ export default function NewPODrawer({ products, onClose, onCreated }:
   const [pool, setPool] = useState<Product[]>(products);
   // inline quick-create so an empty system is never a dead end
   const [newSup, setNewSup] = useState(false); const [supName, setSupName] = useState(""); const [supBusy, setSupBusy] = useState(false);
+  const { can } = useMe();
+  const [pasting, setPasting] = useState(false);       // 13b: paste the supplier's sheet
   const [newProd, setNewProd] = useState(false); const [prodName, setProdName] = useState(""); const [prodCost, setProdCost] = useState(""); const [prodBusy, setProdBusy] = useState(false);
+  // lines from a supplier's Excel/CSV: same column mapping as postings, remembered per supplier
+  const [sheet, setSheet] = useState<{ name: string; headers: string[]; grid: string[][]; map: PasteField[] } | null>(null);
+  const [unmatched, setUnmatched] = useState<string[]>([]);
+  const sheetRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    api.get<any>("/suppliers").then((r) => setSuppliers(r.items || r || [])).catch(() => {}).finally(() => setLoaded(true));
-    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocs(it); if (it[0]) setLocId(it[0].id); }).catch(() => {});
+    api.get<any>("/suppliers").then((r) => setSuppliers(r.items || r || [])).catch(loadFailed("suppliers")).finally(() => setLoaded(true));
+    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocs(it); if (it[0]) setLocId(it[0].id); }).catch(loadFailed("locations"));
     // self-fetch products if the parent hasn't loaded any yet
-    if (!products || products.length === 0) api.get<any>("/catalog/products").then((r) => setPool(r.items || [])).catch(() => {});
+    if (!products || products.length === 0) api.get<any>("/catalog/products").then((r) => setPool(r.items || [])).catch(loadFailed("products"));
   }, []);
 
+  // 13b: imported lines fill the empty first row, then append; new products join the picker.
+  function addImported(lines: ImportedLine[]) {
+    setPool((xs) => [...xs, ...lines.filter((l) => l.created && !xs.some((x) => x.id === l.part_id)).map((l) => ({ id: l.part_id, name: l.name, cost_price: l.cost } as any))]);
+    setRows((rs) => [...rs.filter((r) => r.part_id), ...lines.map((l) => ({ part_id: l.part_id, qty: l.qty, cost: l.cost }))]);
+    setPasting(false);
+  }
   const setRow = (i: number, patch: Partial<Row>) => setRows((rs) => rs.map((r, j) => j === i ? { ...r, ...patch } : r));
   const addRow = () => setRows((rs) => [...rs, { part_id: "", qty: 1, cost: 0 }]);
   const delRow = (i: number) => setRows((rs) => rs.filter((_, j) => j !== i));
@@ -56,6 +72,45 @@ export default function NewPODrawer({ products, onClose, onCreated }:
       await api.post("/inventory/po", { supplier_id: supplierId, location_id: locId, on_credit: onCredit, expected_at: expected || null, draft, lines });
       onCreated();
     } catch (e: any) { setErr(e.message || "Couldn't create purchase order"); setBusy(false); }
+  }
+
+  const supQ = (first: boolean) => (supplierId ? `${first ? "?" : "&"}supplier_id=${encodeURIComponent(supplierId)}` : "");
+  async function onSheet(e: any) {
+    const f = e.target.files?.[0]; if (!f) return;
+    setErr(null); setUnmatched([]); setBusy(true);
+    try {
+      const fd = new FormData(); fd.append("file", f);
+      const r = await api.postForm<any>(`/imports/parse?kind=po${supQ(false)}`, fd);
+      const { grid, map } = fileToGrid(r.headers || [], r.rows || [], r.suggested || {});
+      setSheet({ name: r.file_name || f.name, headers: r.headers || [], grid, map });
+    } catch (e: any) { setErr(e.message || "Couldn't read that file"); }
+    finally { setBusy(false); if (sheetRef.current) sheetRef.current.value = ""; }
+  }
+  function remapSheet(col: number, field: PasteField) {
+    if (!sheet) return;
+    const map = sheet.map.map((f, c) => (field !== "ignore" && f === field && c !== col ? "ignore" : f)) as PasteField[];
+    map[col] = field;
+    setSheet({ ...sheet, map });
+    api.put(`/imports/po/mapping${supQ(true)}`, { mapping: mapByHeader(sheet.headers, map) }).catch(() => { /* silent: remembering the column mapping is only a convenience */ });
+  }
+  async function matchSheet() {
+    if (!sheet) return;
+    const lines = gridToRows(sheet.grid, sheet.map).filter((x) => x.qty > 0);
+    if (!lines.length) return setErr("No lines with a product and a quantity — check the column mapping.");
+    setBusy(true); setErr(null);
+    try {
+      const r = await api.post<any>("/inventory/postings/preview", { rows: lines.map((x) => ({ code: x.code || null, mpn: x.mpn || null, name: x.name || null, qty: x.qty, purchase_price: x.purchase_price || null })) });
+      const found: Row[] = []; const missing: string[] = [];
+      (r.rows || []).forEach((m: any, i: number) => {
+        if (m.match_status === "matched" && m.part_id) {
+          const p = pool.find((x) => x.id === m.part_id) as any;
+          found.push({ part_id: m.part_id, qty: lines[i].qty, cost: lines[i].purchase_price || (p && (p.cost_price ?? p.avg_cost)) || 0 });
+        } else missing.push(lines[i].name || lines[i].code || lines[i].mpn);
+      });
+      setRows((rs) => [...rs.filter((x) => x.part_id), ...found].length ? [...rs.filter((x) => x.part_id), ...found] : [{ part_id: "", qty: 1, cost: 0 }]);
+      setUnmatched(missing); setSheet(null);
+    } catch (e: any) { setErr(e.message || "Couldn't match the lines"); }
+    finally { setBusy(false); }
   }
 
   async function addSupplier() {
@@ -85,12 +140,12 @@ export default function NewPODrawer({ products, onClose, onCreated }:
   }
 
   const fld = "glass-input rounded-lg px-3 py-2 text-sm w-full";
-  const lbl = "block text-[10px] font-bold uppercase text-ink-tertiary mb-1";
+  const lbl = "block text-[11px] font-bold  text-ink-tertiary mb-1";
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative h-full w-full max-w-[640px] bg-white dark:bg-[#151b2e] shadow-clay-card flex flex-col border-l border-slate-200/90">
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="relative h-full w-full max-w-[640px] bg-raised shadow-clay-card flex flex-col border-l border-slate-200/90">
         <div className="px-6 pt-5 pb-3 border-b border-slate-100 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="w-10 h-10 rounded-xl bg-blue-50 text-primary grid place-items-center"><M n="receipt_long" c="text-xl" /></div>
@@ -109,7 +164,7 @@ export default function NewPODrawer({ products, onClose, onCreated }:
           <div className="grid grid-cols-2 gap-3">
             <div>
               <div className="flex items-center justify-between mb-1"><label className={lbl} style={{ margin: 0 }}>Supplier *</label>
-                <button type="button" onClick={() => setNewSup((v) => !v)} className="text-[10px] font-bold text-primary hover:underline">{newSup ? "Cancel" : "+ New"}</button></div>
+                <button type="button" onClick={() => setNewSup((v) => !v)} className="text-[11px] font-bold text-primary hover:underline">{newSup ? "Cancel" : "+ New"}</button></div>
               {newSup ? (
                 <div className="flex gap-1.5">
                   <input autoFocus value={supName} onChange={(e) => setSupName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addSupplier(); }} placeholder="Supplier name" className={fld} />
@@ -134,7 +189,7 @@ export default function NewPODrawer({ products, onClose, onCreated }:
 
           <div className="rounded-2xl border border-slate-200/80 overflow-hidden">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50/70 text-[10px] font-bold uppercase text-ink-tertiary">
+              <thead className="bg-slate-50/70 text-[11px] font-bold text-ink-tertiary">
                 <tr><th className="py-2.5 px-3">Product</th><th className="py-2.5 px-2 text-right w-16">Qty</th><th className="py-2.5 px-2 text-right w-24">Unit cost</th><th className="py-2.5 px-2 text-right w-24">Total</th><th className="w-8" /></tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -148,17 +203,21 @@ export default function NewPODrawer({ products, onClose, onCreated }:
                     </td>
                     <td className="py-2 px-2"><input type="number" min={1} value={r.qty} onChange={(e) => setRow(i, { qty: Math.max(1, Number(e.target.value) || 1) })} className="glass-input rounded-lg px-2 py-1.5 text-xs w-full text-right font-mono" /></td>
                     <td className="py-2 px-2"><input type="number" min={0} value={r.cost} onChange={(e) => setRow(i, { cost: Math.max(0, Number(e.target.value) || 0) })} className="glass-input rounded-lg px-2 py-1.5 text-xs w-full text-right font-mono" /></td>
-                    <td className="py-2 px-2 text-right font-mono text-ink-primary">{money((r.qty > 0 ? r.qty : 0) * (r.cost || 0))}</td>
+                    <td className="py-2 px-2 text-right tabular-nums text-ink-primary">{money((r.qty > 0 ? r.qty : 0) * (r.cost || 0))}</td>
                     <td className="py-2 px-1 text-center">{rows.length > 1 && <button aria-label="Close" onClick={() => delRow(i)} className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 flex-wrap">
             <button onClick={addRow} className="text-xs font-bold text-primary hover:underline flex items-center gap-1"><M n="add" c="text-sm" />Add line</button>
+            <button onClick={() => sheetRef.current?.click()} disabled={busy} className="text-xs font-bold text-primary hover:underline flex items-center gap-1 disabled:opacity-50"><M n="upload" c="text-sm" />Lines from Excel / CSV</button>
+            <input ref={sheetRef} type="file" accept=".xlsx,.csv,text/csv" className="hidden" onChange={onSheet} />
             <button onClick={() => setNewProd((v) => !v)} className="text-xs font-bold text-primary hover:underline flex items-center gap-1"><M n="add_box" c="text-sm" />{newProd ? "Cancel new product" : "New product"}</button>
+            <button onClick={() => setPasting((v) => !v)} className="text-xs font-bold text-primary hover:underline flex items-center gap-1"><M n="content_paste" c="text-sm" />Paste from Excel</button>
           </div>
+          {pasting && <PasteImport onAdd={addImported} onClose={() => setPasting(false)} canCreate={can("can_create_products")} />}
           {newProd && (
             <div className="flex gap-1.5 items-end rounded-xl bg-slate-50/70 border border-slate-200/70 p-2.5">
               <div className="flex-1"><label className={lbl}>New product name</label>
@@ -169,6 +228,30 @@ export default function NewPODrawer({ products, onClose, onCreated }:
             </div>
           )}
 
+          {sheet && (
+            <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-3 space-y-2">
+              <p className="text-[11px] font-semibold text-primary flex items-center gap-1"><M n="tune" c="text-sm" />{sheet.name}: {sheet.grid.length} rows — check the columns{supplierId ? " (remembered for this supplier)" : ""}</p>
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {sheet.headers.map((h, c) => (
+                  <div key={h} className="shrink-0 w-32">
+                    <select aria-label={`Field for ${h}`} value={sheet.map[c]} onChange={(e) => remapSheet(c, e.target.value as PasteField)} className="glass-input rounded-lg px-2 py-1.5 text-xs w-full">
+                      {FIELD_ORDER.map((f) => <option key={f} value={f}>{FIELD_LABELS[f]}</option>)}
+                    </select>
+                    <div className="text-[11px] text-ink-tertiary mt-1 px-1 truncate" title={h}>{h}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={matchSheet} disabled={busy} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold disabled:opacity-50">{busy ? "Matching…" : "Add matching lines"}</button>
+                <button onClick={() => setSheet(null)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Cancel</button>
+              </div>
+            </div>
+          )}
+          {unmatched.length > 0 && (
+            <div className="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+              {unmatched.length} line{unmatched.length === 1 ? " isn't" : "s aren't"} in your catalog yet: {unmatched.slice(0, 8).join(", ")}{unmatched.length > 8 ? "…" : ""}. Add {unmatched.length === 1 ? "it" : "them"} with New product, or import products first.
+            </div>
+          )}
           {err && <div className="text-xs text-rose-600 font-semibold">{err}</div>}
         </div>
 

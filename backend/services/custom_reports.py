@@ -16,15 +16,21 @@ from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.likes import contains
 from backend.models import Order, Invoice, Payment, Client, Part
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 
 # ── Whitelist ────────────────────────────────────────────────────────────────
 # Each field: type drives which operators/aggregates are allowed and how the
 # value renders. `date_field` is what the report's date range filters on.
-def _f(label, type_):
-    return {"label": label, "type": type_}
+def _f(label, type_, sens=None):
+    # sens: which permission a viewer needs to see the field ("cost" or "contact").
+    return {"label": label, "type": type_, "sens": sens}
+
+
+# Sensitive field class -> the permission that unlocks it.
+SENSITIVE = {"cost": "can_view_purchase_price", "contact": "can_view_client_info"}
 
 
 SOURCES: dict[str, dict] = {
@@ -58,7 +64,7 @@ SOURCES: dict[str, dict] = {
         "label": "Clients", "model": Client, "date_field": "created_at", "has_location": False,
         "fields": {
             "name": _f("Name", "text"), "client_type": _f("Type", "text"),
-            "phone": _f("Phone", "text"), "email": _f("Email", "text"),
+            "phone": _f("Phone", "text", "contact"), "email": _f("Email", "text", "contact"),
             "loyalty_tier": _f("Loyalty tier", "text"), "created_at": _f("Created", "date"),
         },
     },
@@ -66,7 +72,7 @@ SOURCES: dict[str, dict] = {
         "label": "Products", "model": Part, "date_field": None, "has_location": False,
         "fields": {
             "sku": _f("SKU", "text"), "name": _f("Name", "text"), "brand": _f("Brand", "text"),
-            "category": _f("Category", "text"), "cost_price": _f("Cost", "money"),
+            "category": _f("Category", "text"), "cost_price": _f("Cost", "money", "cost"),
             "sell_price": _f("Sell price", "money"), "repair_price": _f("Repair price", "money"),
             "min_stock": _f("Min stock", "number"),
         },
@@ -80,12 +86,16 @@ _DATE_OPS = ("gt", "lt", "gte", "lte")
 AGG_FNS = ("count", "sum", "avg")
 
 
-def sources_meta() -> dict:
-    """Whitelist description for the builder UI (no models)."""
+def _visible(fields: dict, hidden: frozenset | set = frozenset()) -> dict:
+    return {k: v for k, v in fields.items() if v.get("sens") not in hidden}
+
+
+def sources_meta(hidden: frozenset | set = frozenset()) -> dict:
+    """Whitelist description for the builder UI (no models), minus fields the viewer can't see."""
     return {
         key: {
             "label": s["label"], "date_field": s["date_field"], "has_location": s["has_location"],
-            "fields": [{"key": k, "label": v["label"], "type": v["type"]} for k, v in s["fields"].items()],
+            "fields": [{"key": k, "label": v["label"], "type": v["type"]} for k, v in _visible(s["fields"], hidden).items()],
         }
         for key, s in SOURCES.items()
     }
@@ -115,7 +125,7 @@ def _clause(col, op: str, value):
     return {
         "eq": col == value, "ne": col != value,
         "gt": col > value, "lt": col < value, "gte": col >= value, "lte": col <= value,
-        "contains": col.ilike(f"%{value}%"),
+        "contains": contains(col, str(value)),
     }[op]
 
 
@@ -139,11 +149,12 @@ def _col(src, key):
 
 async def build_and_run(db: AsyncSession, org_id: str, config: dict,
                         date_from: Optional[str] = None, date_to: Optional[str] = None,
-                        location_id: Optional[str] = None) -> dict:
+                        location_id: Optional[str] = None, hidden: frozenset | set = frozenset()) -> dict:
     source = (config or {}).get("source")
     if source not in SOURCES:
         raise ValueError(f"Unknown source '{source}'")
-    src = SOURCES[source]
+    # Fields the viewer can't see simply don't exist for this run (columns, filters, grouping).
+    src = {**SOURCES[source], "fields": _visible(SOURCES[source]["fields"], hidden)}
     model, fields = src["model"], src["fields"]
 
     # ---- WHERE: org (always) + date range + location + user filters ----

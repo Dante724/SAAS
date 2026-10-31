@@ -38,8 +38,8 @@ export default function PurchasingCockpit({ onClose, onOpenPO, onReorder }: {
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative h-full w-full max-w-[640px] bg-white dark:bg-[#151b2e] shadow-clay-card flex flex-col border-l border-slate-200/90">
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="relative h-full w-full max-w-[640px] bg-raised shadow-clay-card flex flex-col border-l border-slate-200/90">
         <div className="px-6 pt-5 pb-3 border-b border-slate-100 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="w-10 h-10 rounded-xl bg-blue-50 text-primary grid place-items-center"><M n="target" c="text-xl" /></div>
@@ -69,7 +69,7 @@ export default function PurchasingCockpit({ onClose, onOpenPO, onReorder }: {
               {(r) => (<><span className="font-semibold text-ink-primary truncate">{r.name}</span><span className="text-ink-tertiary">{r.available}/{r.min_stock}</span><button onClick={onReorder} className="ml-auto px-2.5 py-1 rounded-lg bg-primary text-white text-[11px] font-bold hover:bg-primary-container">Create PO</button></>)}
             </Section>
             <Section k="supplier_balances" title="Supplier balances owed" icon="account_balance_wallet" tone="bg-slate-100 text-ink-secondary">
-              {(r) => (<><span className="font-semibold text-ink-primary truncate">{r.name}</span><span className="ml-auto font-mono font-bold text-rose-600">{money(r.balance)}</span></>)}
+              {(r) => (<><span className="font-semibold text-ink-primary truncate">{r.name}</span><span className="ml-auto tabular-nums font-bold text-rose-600">{money(r.balance)}</span></>)}
             </Section>
           </>}
         </div>

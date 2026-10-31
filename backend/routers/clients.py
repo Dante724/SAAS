@@ -1,18 +1,25 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from backend.routers.assets import public_custom
 from backend.db.database import get_db
 from backend.models import Client, Device, Employee
-from backend.services.auth import get_current_employee
-from backend.services.money import q2, q4
+from backend.services.auth import get_current_employee, require_perm, record_scope
+from backend.core import paging as _paging
+from backend.services.money import q2
+from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
 
-router = APIRouter(prefix="/api/clients", tags=["clients"])
+from backend.services import addresses as _addr
+from backend.services.dates import now_utc
+
+router = APIRouter(prefix="/api/clients", tags=["clients"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 class ClientIn(BaseModel):
     name: str
@@ -41,6 +48,11 @@ class ClientIn(BaseModel):
     reg_no: Optional[str] = None
     billing_address: Optional[str] = None
     custom_data: Optional[dict] = None
+    addr_street: Optional[str] = None     # WS-C #12: structured address; `address` is rebuilt from these
+    addr_city: Optional[str] = None
+    addr_region: Optional[str] = None
+    addr_postcode: Optional[str] = None
+    addr_country: Optional[str] = None
 
 class DeviceIn(BaseModel):
     brand: Optional[str] = None
@@ -56,7 +68,7 @@ class DeviceIn(BaseModel):
     asset_group_id: Optional[str] = None
     custom_data: Optional[dict] = None
 
-def _ser_client(c: Client, supplier=None) -> dict:
+def _ser_client(c: Client, supplier=None, order_count=None) -> dict:
     return {
         # Build 144am — supplier role facet: the mirrored PO-facing Supplier row (lead
         # time, PO currency, what we owe). None when this contact isn't a supplier. Lets
@@ -65,7 +77,9 @@ def _ser_client(c: Client, supplier=None) -> dict:
                       "lead_days": supplier.lead_days, "currency": supplier.currency,
                       "balance": float(supplier.balance or 0)} if supplier else None),
         "id": c.id, "name": c.name, "client_type": c.client_type, "phone": c.phone, "email": c.email,
-        "address": c.address, "source": c.source, "birthday": c.birthday, "loyalty_tier": c.loyalty_tier,
+        "address": c.address, "source": c.source, "birthday": c.birthday,
+        "addr_street": c.addr_street, "addr_city": c.addr_city, "addr_region": c.addr_region,
+        "addr_postcode": c.addr_postcode, "addr_country": c.addr_country, "loyalty_tier": c.loyalty_tier,
         "balance": c.balance, "blacklisted": c.blacklisted, "notes": c.notes,
         "watch_out": getattr(c, "watch_out", None),
         "is_supplier": c.is_supplier, "manager_id": c.manager_id, "payer_id": c.payer_id,
@@ -79,25 +93,39 @@ def _ser_client(c: Client, supplier=None) -> dict:
         "custom_data": c.custom_data or {},
         "devices": [{"id": d.id, "brand": d.brand, "model": d.model, "serial": d.serial,
                      "imei": d.imei, "vin": d.vin, "hin": d.hin, "condition": d.condition,
-                     "custom_data": d.custom_data or {}} for d in c.devices],
-        "order_count": len(c.orders),
+                     "custom_data": public_custom(d.custom_data)} for d in c.devices],
+        "order_count": len(c.orders) if order_count is None else order_count,
     }
 
 @router.get("")
 async def list_clients(
     search: Optional[str] = None,
     role: str = "all",                 # Build 114: all | client | supplier
-    skip: int = 0, limit: int = 50,
+    skip: int = _paging.skip_query(), limit: int = _paging.limit_query(50),
+    q: Optional[str] = Query(None, alias="q"),   # the pickers send ?q=; same as ?search=
+    sort: str = "name",                # name | recent (pickers list the newest clients before you type)
+    tag: Optional[str] = None,         # D3: only contacts carrying this tag (tag id)
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
     from backend.services import scoping
     scope_role = await scoping.role_for(db, current)
+    search = (search or q or "").strip() or None
+    limit = _paging.clamp(limit)
+    tagged = None
+    if tag:
+        from backend.models import Tag, Taggable
+        if not (await db.execute(select(Tag.id).where(
+                Tag.id == tag, Tag.org_id == current.org_id))).scalar_one_or_none():
+            raise HTTPException(404, "Tag not found")
+        tagged = select(Taggable.entity_id).where(
+            Taggable.org_id == current.org_id, Taggable.tag_id == tag,
+            Taggable.entity_type == "contact")
 
     q = (select(Client)
          .where(Client.org_id == current.org_id)
-         .options(selectinload(Client.devices), selectinload(Client.orders))
-         .order_by(Client.name))
+         .options(selectinload(Client.devices))   # order counts come from one grouped query below
+         .order_by(Client.created_at.desc() if sort == "recent" else Client.name, Client.id))
     q = scoping.scope_clients(q, scope_role, current)
     if role == "supplier":
         q = q.where(Client.is_supplier == True)  # noqa: E712
@@ -106,6 +134,8 @@ async def list_clients(
     if search:
         q = q.where(or_(Client.name.icontains(search), Client.phone.icontains(search),
                          Client.email.icontains(search), Client.discount_card.icontains(search)))
+    if tagged is not None:
+        q = q.where(Client.id.in_(tagged))
     result = await db.execute(q.offset(skip).limit(limit))
     clients = result.scalars().all()
     count_q = select(func.count()).select_from(Client).where(Client.org_id == current.org_id)
@@ -114,14 +144,24 @@ async def list_clients(
         count_q = count_q.where(Client.is_supplier == True)  # noqa: E712
     elif role == "client":
         count_q = count_q.where(Client.is_supplier == False)  # noqa: E712
+    if search:   # the total counts the searched rows, not the whole shop
+        count_q = count_q.where(or_(Client.name.icontains(search), Client.phone.icontains(search),
+                                    Client.email.icontains(search), Client.discount_card.icontains(search)))
+    if tagged is not None:
+        count_q = count_q.where(Client.id.in_(tagged))
     total = (await db.execute(count_q)).scalar()
-    return {"total": total, "items": [_ser_client(c) for c in clients]}
+    from backend.models import Order
+    ids = [c.id for c in clients]
+    counts = dict((await db.execute(select(Order.client_id, func.count()).where(
+        Order.client_id.in_(ids)).group_by(Order.client_id))).all()) if ids else {}
+    return {"total": total, "items": [_ser_client(c, order_count=counts.get(c.id, 0)) for c in clients],
+            "skip": skip, "limit": limit}
 
 @router.post("", status_code=201)
 async def create_client(
     data: ClientIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_clients")),
 ):
     from backend.models import Organisation
     org = (await db.execute(select(Organisation).where(
@@ -143,13 +183,16 @@ async def create_client(
         if payload.get(k) is None:
             payload.pop(k, None)
     # 144gp — enforce custom-field rules (required / lock / conditional visibility).
-    from backend.routers.forms import resolve_custom_data
+    from backend.routers.forms import resolve_custom_data, check_entity_required
+    await check_entity_required(db, current.org_id, "client", data)
     payload["custom_data"] = await resolve_custom_data(
         db, current.org_id, "client", data.custom_data, creating=True)
     # Consent defaults from org policy unless explicitly provided
     payload.setdefault("consent_phone", org.contact_consent_phone_default)
     payload.setdefault("consent_email", org.contact_consent_email_default)
+    addr = {k: payload.pop(k) for k in _addr.PARTS}
     client = Client(org_id=current.org_id, **payload)
+    _addr.apply(client, {k: v for k, v in addr.items() if k in data.model_fields_set})
     db.add(client)
     await db.flush()
     await _sync_supplier(db, current.org_id, client)   # Build 114: mirror to PO-facing Supplier
@@ -174,11 +217,15 @@ async def duplicate_phones(
         select(Client.phone, func.count(Client.id)).where(
             Client.org_id == current.org_id, Client.phone.isnot(None), Client.phone != "")
         .group_by(Client.phone).having(func.count(Client.id) > 1))).all()
+    by_phone: dict = {}
+    if rows:
+        for c in (await db.execute(select(Client).where(
+                Client.org_id == current.org_id, Client.phone.in_([phone for phone, _ in rows]))
+                .order_by(Client.created_at))).scalars().all():
+            by_phone.setdefault(c.phone, []).append(c)
     clusters = []
     for phone, n in rows:
-        members = (await db.execute(select(Client).where(
-            Client.org_id == current.org_id, Client.phone == phone)
-            .order_by(Client.created_at))).scalars().all()
+        members = by_phone.get(phone, [])
         clusters.append({
             "phone": phone, "count": n,
             "keep_hint_id": members[-1].id if members else None,  # latest-created wins
@@ -214,22 +261,23 @@ async def get_client(
 async def issue_portal_link(
     client_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_client_info")),
 ):
     """Issue (or rotate) a customer-portal magic link for this client.
 
-    Returns a durable token; the relative URL `/portal/{token}` lets the customer
-    see all their work orders/estimates/invoices and approve estimates without a login.
+    The relative URL `/portal/{token}` lets the customer see all their work orders, estimates
+    and invoices and approve estimates without a login. The link expires (services/portal_links)
+    and replaces every earlier one; the token is shown once and only its hash is kept.
     """
-    import secrets
+    from backend.services import portal_links
     client = (await db.execute(
         select(Client).where(Client.id == client_id, Client.org_id == current.org_id)
     )).scalar_one_or_none()
     if not client:
         raise HTTPException(404, "Client not found")
-    client.portal_token = secrets.token_urlsafe(24)
+    raw = await portal_links.issue(db, client, replace=True)
     await db.commit()
-    return {"portal_token": client.portal_token, "portal_url": f"/portal/{client.portal_token}"}
+    return {"portal_token": raw, "portal_url": f"/portal/{raw}", "expires_in_days": portal_links.LINK_DAYS}
 
 
 @router.put("/{client_id}")
@@ -242,12 +290,15 @@ async def update_client(
     client = result.scalar_one_or_none()
     if not client:
         raise HTTPException(404, "Client not found")
+    if "address" in data.model_fields_set and not any(k in data.model_fields_set for k in _addr.PARTS):
+        _addr.typed_line(client, data.address)
     for k, v in data.model_dump().items():
         if v is None and k in ("custom_data", "consent_phone", "consent_email"):
             continue  # don't wipe values / null NOT-NULL consent on a partial update
-        if k == "custom_data":
-            continue  # handled below through the rule resolver
+        if k == "custom_data" or k in _addr.PARTS:
+            continue  # handled below (rule resolver / address parts only when sent)
         setattr(client, k, v)
+    _addr.apply(client, {k: getattr(data, k) for k in _addr.PARTS if k in data.model_fields_set})
     if data.custom_data is not None:
         from backend.routers.forms import resolve_custom_data
         client.custom_data = await resolve_custom_data(
@@ -286,6 +337,11 @@ class ClientPatch(BaseModel):
     reg_no: Optional[str] = None
     billing_address: Optional[str] = None
     custom_data: Optional[dict] = None
+    addr_street: Optional[str] = None     # WS-C #12: structured address; `address` is rebuilt from these
+    addr_city: Optional[str] = None
+    addr_region: Optional[str] = None
+    addr_postcode: Optional[str] = None
+    addr_country: Optional[str] = None
 
 
 @router.patch("/{client_id}")
@@ -302,8 +358,12 @@ async def patch_client(
         raise HTTPException(404, "Client not found")
     fields = data.model_dump(exclude_unset=True)
     cd = fields.pop("custom_data", None)
+    addr = {k: fields.pop(k) for k in _addr.PARTS if k in fields}
+    if "address" in fields and not addr:
+        _addr.typed_line(client, fields["address"])
     for k, v in fields.items():
         setattr(client, k, v)
+    _addr.apply(client, addr)
     if cd is not None:
         from backend.routers.forms import resolve_custom_data
         client.custom_data = await resolve_custom_data(
@@ -344,7 +404,7 @@ async def _sync_supplier(db: AsyncSession, org_id: str, client: Client) -> None:
 async def delete_client(
     client_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_delete_clients")),
 ):
     result = await db.execute(select(Client).where(Client.id == client_id, Client.org_id == current.org_id))
     client = result.scalar_one_or_none()
@@ -363,6 +423,8 @@ async def delete_client(
             raise HTTPException(409, "This contact has history (orders, invoices, payments or "
                                      "devices) and can't be deleted. Merge it into another contact "
                                      "instead to preserve the records.")
+    from backend.services import portal_links
+    await portal_links.revoke_all(db, client.id)
     await db.delete(client)
     await db.commit()
     return {"ok": True}
@@ -429,7 +491,7 @@ async def client_purchases(
 
     # ── POS sales ──
     sales = (await db.execute(
-        select(Sale).where(Sale.client_id == client_id, Sale.org_id == current.org_id)
+        select(Sale).where(Sale.client_id == client_id, Sale.org_id == current.org_id, Sale.voided_at.is_(None))
         .order_by(Sale.created_at.desc()))).scalars().all()
     # Fetch every sale's lines in ONE query, then group — avoids an N+1 (a query per sale).
     sale_lines: dict[str, list] = {}
@@ -481,7 +543,7 @@ async def client_purchases(
 
 # ── Build 82: CRM data ops — import, merge, export ───────────────────────────
 class ImportIn(BaseModel):
-    rows: list[dict]                 # raw rows as parsed from the CSV/sheet
+    rows: list[dict] = Field(max_length=MAX_IMPORT_ROWS)  # raw rows as parsed from the CSV/sheet
     mapping: dict[str, str] = {}     # {source_column: client_field}
     update_existing: bool = True     # match on phone/email and update rather than duplicate
     dry_run: bool = False            # preview the outcome without writing
@@ -494,7 +556,7 @@ IMPORTABLE = {"name", "phone", "email", "address", "notes", "source", "discount_
 async def import_clients(
     data: ImportIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     """Import contacts from a CSV/sheet with an explicit column mapping.
 
@@ -615,14 +677,17 @@ def _client_fk_targets():
     the mapper so the merge can never silently miss a table as new ones are added. This is the
     COMPLETE set a merge must re-point before deleting a source (orphaning any of these would
     lose history on SQLite and raise an IntegrityError on Postgres). Includes the second FK on
-    Invoice (payer_client_id) and the Client self-reference (payer_id)."""
+    Invoice (payer_client_id) and the Client self-reference (payer_id).
+
+    Portal links are left out: they are access, not history. Delete and merge revoke them, so a
+    merged-away contact's old link never opens the other contact's jobs."""
     from sqlalchemy import inspect as _inspect
 
     import backend.models as _m
     out = []
     for name in dir(_m):
         cls = getattr(_m, name)
-        if not isinstance(cls, type) or not hasattr(cls, "__tablename__"):
+        if not isinstance(cls, type) or not hasattr(cls, "__tablename__") or cls is _m.ClientPortalLink:
             continue
         try:
             mapper = _inspect(cls)
@@ -692,7 +757,7 @@ async def merge_clients_preview(
 async def merge_clients(
     data: MergeClientsIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_delete_clients")),
 ):
     """Merge duplicate contacts into one — now reversible.
 
@@ -732,6 +797,8 @@ async def merge_clients(
                 setattr(r, attr, target.id)
                 moved_map.setdefault(key, {})[r.id] = s.id
                 moved_counts[key] = moved_counts.get(key, 0) + 1
+        from backend.services import portal_links
+        await portal_links.revoke_all(db, s.id)
         await db.delete(s)
 
     # Guard the self-reference edge: if the target's own payer was one of the merged sources,
@@ -753,7 +820,7 @@ async def merge_clients(
 async def undo_merge(
     log_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_delete_clients")),
 ):
     """Reverse a merge: recreate the deleted source contacts and move their records back."""
     from backend.models import MergeLog
@@ -804,7 +871,7 @@ async def undo_merge(
             if merged_val != orig and getattr(target, f, None) == merged_val:
                 setattr(target, f, orig)
 
-    log.undone_at = datetime.utcnow()
+    log.undone_at = now_utc()
     await db.commit()
     return {"ok": True, "restored": len(log.source_snapshots or [])}
 
@@ -812,7 +879,7 @@ async def undo_merge(
 @router.get("/export/csv")
 async def export_clients(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_export_clients")),
 ):
     """Export the contact book as CSV (respects the caller's contact scope)."""
     import csv
@@ -830,8 +897,8 @@ async def export_clients(
     w = csv.writer(buf)
     w.writerow(["name", "phone", "email", "address", "source", "balance", "notes"])
     for c in rows:
-        w.writerow([c.name, c.phone or "", c.email or "", c.address or "",
-                    c.source or "", c.balance or 0, c.notes or ""])
+        w.writerow(safe_row([c.name, c.phone or "", c.email or "", c.address or "",
+                             c.source or "", c.balance or 0, c.notes or ""]))
     buf.seek(0)
     return StreamingResponse(
         iter([buf.getvalue()]), media_type="text/csv",
@@ -891,10 +958,9 @@ async def client_balance(
         ClientLedgerEntry.client_id == client_id)
         .order_by(ClientLedgerEntry.created_at.desc()).limit(200))).scalars().all()
     # Build 122: include the client's display currency so balances can show converted.
-    cur = {"code": None, "symbol": "₹", "rate": 1.0}
-    if c.currency_code:
-        from backend.services import currency as _cur
-        cur = await _cur.rate_for_code(db, current.org_id, c.currency_code)
+    from backend.services import currency as _cur
+    cur = (await _cur.rate_for_code(db, current.org_id, c.currency_code) if c.currency_code
+           else await _cur.resolve_for_client(db, current.org_id, None))   # the org's own currency
     return {"balance": float(c.balance or 0),
             "currency": cur,
             "entries": [{"id": e.id, "entry_type": e.entry_type, "amount": float(e.amount),
@@ -913,7 +979,7 @@ class BalanceMoveIn(BaseModel):
 async def move_balance(
     client_id: str, data: BalanceMoveIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_make_client_payments")),
 ):
     """Post an advance, payout or manual adjustment against a contact's balance.
 
@@ -970,11 +1036,9 @@ async def client_payments(
         raise HTTPException(404, "Contact not found")
     rows = (await db.execute(select(Payment).where(Payment.client_id == client_id)
             .order_by(Payment.paid_at.desc()).limit(200))).scalars().all()
-    oids = {p.order_id for p in rows if p.order_id}
-    onum = {}
-    if oids:
-        for o in (await db.execute(select(Order).where(Order.id.in_(oids)))).scalars().all():
-            onum[o.id] = o.order_number
+    from backend.services.batching import names_by_id
+    onum = await names_by_id(db, Order.id, Order.order_number, [p.order_id for p in rows],
+                             org_col=Order.org_id, org_id=current.org_id)
     return {"items": [{
         "id": p.id, "kind": p.kind, "method": p.method, "amount": float(p.amount or 0),
         "order_id": p.order_id, "order_number": onum.get(p.order_id),
@@ -1005,17 +1069,32 @@ async def client_communication(
         msgs = (await db.execute(select(InboxMessage).where(
             InboxMessage.thread_id.in_(list(tmap.keys())))
             .order_by(InboxMessage.created_at.desc()).limit(200))).scalars().all()
-    author_ids = {m.author_id for m in msgs if m.author_id}
-    names = {}
-    if author_ids:
-        for e in (await db.execute(select(Emp).where(Emp.id.in_(author_ids)))).scalars().all():
-            names[e.id] = e.name
-    return {"items": [{
+    from backend.services.batching import names_by_id
+    names = await names_by_id(db, Emp.id, Emp.name, [m.author_id for m in msgs],
+                              org_col=Emp.org_id, org_id=current.org_id)
+    items = [{
         "id": m.id, "channel": tmap[m.thread_id].channel if m.thread_id in tmap else None,
         "direction": m.direction, "body": m.body,
         "author": names.get(m.author_id), "delivered": m.delivered,
         "created_at": m.created_at.isoformat() if m.created_at else None,
-    } for m in msgs]}
+    } for m in msgs]
+    # C4: conversations from Chats (texts, WhatsApp, Meta, inbound email) belong here too.
+    from backend.models import ChatMessage, ChatThread
+    chats = dict((await db.execute(select(ChatThread.id, ChatThread.channel).where(
+        ChatThread.org_id == current.org_id, ChatThread.client_id == client_id))).all())
+    if chats:
+        cmsgs = (await db.execute(select(ChatMessage).where(
+            ChatMessage.thread_id.in_(list(chats)), ChatMessage.status != "system")
+            .order_by(ChatMessage.created_at.desc()).limit(200))).scalars().all()
+        names.update(await names_by_id(db, Emp.id, Emp.name,
+                                       {m.author_id for m in cmsgs if m.author_id} - set(names),
+                                       org_col=Emp.org_id, org_id=current.org_id))
+        items += [{"id": m.id, "channel": chats.get(m.thread_id),
+                   "direction": "inbound" if m.direction == "in" else "outbound", "body": m.body,
+                   "author": names.get(m.author_id), "delivered": m.status != "failed",
+                   "created_at": m.created_at.isoformat() if m.created_at else None} for m in cmsgs]
+        items = sorted(items, key=lambda i: i["created_at"] or "", reverse=True)[:200]
+    return {"items": items}
 
 
 class MessageIn(BaseModel):
@@ -1048,13 +1127,13 @@ async def send_client_message(
     if not thread:
         thread = InboxThread(org_id=current.org_id, channel=data.channel, client_id=client_id,
                              handle=(c.email if data.channel == "email" else c.phone),
-                             status="open", unread=False, last_message_at=datetime.utcnow())
+                             status="open", unread=False, last_message_at=now_utc())
         db.add(thread)
         await db.flush()
     msg = InboxMessage(org_id=current.org_id, thread_id=thread.id, direction="outbound",
                        body=data.body.strip(), author_id=current.id, delivered=True)
     db.add(msg)
-    thread.last_message_at = datetime.utcnow()
+    thread.last_message_at = now_utc()
     await db.commit()
     return {"id": msg.id, "thread_id": thread.id, "channel": data.channel}
 
@@ -1110,7 +1189,7 @@ async def list_message_templates(
 async def create_message_template(
     data: MessageTemplateIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     from backend.models import MessageTemplate
     if not data.name.strip() or not data.body.strip():
@@ -1127,7 +1206,7 @@ async def create_message_template(
 async def delete_message_template(
     template_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     from backend.models import MessageTemplate
     t = (await db.execute(select(MessageTemplate).where(

@@ -5,7 +5,6 @@ that a scheduled task can hit, and a dry-run tester so users can see which
 orders a rule would fire on before enabling it.
 """
 import json
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,8 +15,9 @@ from sqlalchemy.orm import selectinload
 
 from backend.db.database import get_db
 from backend.models import AutomationRule, Employee, Order, Part, StockLevel
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, require_perm
 from backend.services import automation as auto
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/automations", tags=["automations"])
 
@@ -91,7 +91,7 @@ async def list_rules(db: AsyncSession = Depends(get_db),
 
 @router.post("", status_code=201)
 async def create_rule(data: RuleIn, db: AsyncSession = Depends(get_db),
-                      current: Employee = Depends(get_current_employee)):
+                      current: Employee = Depends(require_perm("can_manage_settings"))):
     _validate(data)
     r = AutomationRule(
         org_id=current.org_id, name=data.name, event=data.event,
@@ -108,7 +108,7 @@ async def create_rule(data: RuleIn, db: AsyncSession = Depends(get_db),
 
 @router.put("/{rule_id}")
 async def update_rule(rule_id: str, data: RuleIn, db: AsyncSession = Depends(get_db),
-                      current: Employee = Depends(get_current_employee)):
+                      current: Employee = Depends(require_perm("can_manage_settings"))):
     _validate(data)
     r = (await db.execute(select(AutomationRule).where(
         AutomationRule.id == rule_id, AutomationRule.org_id == current.org_id))).scalar_one_or_none()
@@ -128,7 +128,7 @@ async def update_rule(rule_id: str, data: RuleIn, db: AsyncSession = Depends(get
 
 @router.delete("/{rule_id}")
 async def delete_rule(rule_id: str, db: AsyncSession = Depends(get_db),
-                      current: Employee = Depends(get_current_employee)):
+                      current: Employee = Depends(require_perm("can_manage_settings"))):
     r = (await db.execute(select(AutomationRule).where(
         AutomationRule.id == rule_id, AutomationRule.org_id == current.org_id))).scalar_one_or_none()
     if r:
@@ -158,10 +158,10 @@ async def test_rule(rule_id: str, db: AsyncSession = Depends(get_db),
 
 @router.post("/sweep")
 async def sweep(db: AsyncSession = Depends(get_db),
-                current: Employee = Depends(get_current_employee)):
+                current: Employee = Depends(require_perm("can_manage_settings"))):
     """Fire time-based automations: overdue work orders and low-stock products.
     Intended to be called on a schedule (e.g. hourly)."""
-    now = datetime.utcnow()
+    now = now_utc()
     fired = 0
 
     # overdue orders: past their promised time (due_at or scheduled_to) and still open

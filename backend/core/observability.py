@@ -6,7 +6,7 @@
   Prometheus text format at /metrics — no prometheus_client dependency.
 """
 import time
-from collections import defaultdict, deque
+from collections import defaultdict
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
@@ -60,19 +60,29 @@ _SECURITY_HEADERS = {
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "Permissions-Policy": "camera=(self), microphone=(), geolocation=()",
     "Cross-Origin-Opener-Policy": "same-origin",
-    # SPA + inline handlers need 'unsafe-inline'; images/media may be data: URLs.
+    # Nothing the app serves belongs in a search index: staff screens, and /track, /portal and
+    # /pay pages whose URL is the customer's key.
+    "X-Robots-Tag": "noindex, nofollow",
+    # No inline script anywhere except the platform-admin page, which sends ADMIN_CSP itself, so a
+    # markup injection can't run code. Styles stay inline-friendly; media may be data: URLs.
     "Content-Security-Policy": (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob:; "
-        "font-src 'self' data: https://fonts.gstatic.com; "
+        "font-src 'self' data:; "
         "connect-src 'self'; "
         "frame-ancestors 'self'; "
         "base-uri 'self'; "
+        "form-action 'self'; "
         "object-src 'none'"
     ),
 }
+
+
+# /admin still has inline handlers (onclick=…); it renders escaped data only. Route-set headers win
+# over the defaults above (setdefault).
+ADMIN_CSP = _SECURITY_HEADERS["Content-Security-Policy"].replace("script-src 'self';", "script-src 'self' 'unsafe-inline';")
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -80,33 +90,106 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         for k, v in _SECURITY_HEADERS.items():
             response.headers.setdefault(k, v)
+        # Deployed behind TLS: pin HTTPS so a first plain-http visit can't be downgraded.
+        # (Browsers ignore HSTS on http responses, so local dev over http is unaffected.)
+        from backend.config import settings
+        if settings.is_deployed:
+            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         return response
 
 
 # ── rate limiter ─────────────────────────────────────────────────────────────
+def _rate_key(request) -> str:
+    """Who a request counts against. Signed-in calls count per user (or API key): staff
+    on one shop Wi-Fi, or every client behind a proxy that hides their IP, used to share one bucket
+    and lock each other out (launch QA B5). Anonymous calls, and forged or expired tokens, count
+    per IP so a made-up token can't buy a fresh budget."""
+    from backend.services import ratelimit
+    auth = request.headers.get("authorization", "")
+    if auth[:7].lower() == "bearer ":
+        tok = auth[7:].strip()
+        if tok.startswith("rok_"):
+            return "k:" + tok               # verified in dispatch (_key_bucket) before it gets its own budget
+        try:
+            import jwt
+
+            from backend.config import settings
+            sub = jwt.decode(tok, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]).get("sub")
+            if sub:
+                return "u:" + str(sub)
+        except Exception:
+            pass                                          # bad/expired token: counts by IP
+    return "ip:" + ratelimit.client_ip(request)
+
+
+# Verified API keys: sha256 → (prefix or None, expires_at). A made-up "rok_…" token must not
+# buy a fresh budget, so only a key that exists and is active gets its own bucket; anything else
+# counts against the caller's IP. Results are cached briefly so a busy integration costs one
+# lookup per minute, and the cache is capped so random tokens can't grow it without bound.
+_KEY_CACHE: dict[str, tuple[str | None, float]] = {}
+_KEY_CACHE_TTL_S = 60.0
+_KEY_CACHE_MAX = 5000
+
+
+async def _key_bucket(request, token: str) -> str:
+    import time
+
+    from backend.services import ratelimit
+    from backend.services.apikeys import hash_key
+    h = hash_key(token)
+    now = time.monotonic()
+    hit = _KEY_CACHE.get(h)
+    if hit and hit[1] > now:
+        prefix = hit[0]
+    else:
+        prefix = None
+        try:
+            from sqlalchemy import select
+
+            from backend.db.database import get_db
+            from backend.models import ApiKey
+            dep = request.app.dependency_overrides.get(get_db, get_db)   # the test suite swaps the DB
+            agen = dep()
+            db = await agen.__anext__()
+            try:
+                prefix = (await db.execute(select(ApiKey.prefix).where(
+                    ApiKey.key_hash == h, ApiKey.active == True))).scalar()  # noqa: E712
+            finally:
+                await agen.aclose()
+        except Exception:
+            prefix = None
+        if len(_KEY_CACHE) >= _KEY_CACHE_MAX:
+            _KEY_CACHE.clear()
+        _KEY_CACHE[h] = (prefix, now + _KEY_CACHE_TTL_S)
+    return ("k:" + prefix) if prefix else ("ip:" + ratelimit.client_ip(request))
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, *, limit: int = 300, window_s: int = 60,
+    """Global ceiling on API calls: per user or API key when signed in (RATE_LIMIT_USER_PER_MIN),
+    per IP otherwise (RATE_LIMIT_IP_PER_MIN). Only /api/ is counted: page loads pull dozens of
+    assets, and counting those let one busy screen use up a shop's whole budget. Counts through
+    services.ratelimit, so with REDIS_URL set every worker and instance shares one counter."""
+    def __init__(self, app, *, window_s: int = 60,
                  exempt_prefixes=("/metrics", "/health", "/api/health")):
         super().__init__(app)
-        self.limit = limit
         self.window = window_s
         self.exempt = exempt_prefixes
-        self._hits: dict = defaultdict(deque)
 
     async def dispatch(self, request, call_next):
+        from fastapi import HTTPException
+
+        from backend.config import settings
+        from backend.services import ratelimit
         path = request.url.path
-        if any(path.startswith(p) for p in self.exempt):
+        if not path.startswith("/api/") or any(path.startswith(p) for p in self.exempt):
             return await call_next(request)
-        ip = request.client.host if request.client else "anon"
-        key = f"{ip}"
-        now = time.time()
-        dq = self._hits[key]
-        while dq and dq[0] <= now - self.window:
-            dq.popleft()
-        if len(dq) >= self.limit:
-            retry = int(self.window - (now - dq[0])) + 1
-            return JSONResponse(status_code=429,
-                                content={"detail": "Rate limit exceeded"},
-                                headers={"Retry-After": str(retry)})
-        dq.append(now)
+        key = _rate_key(request)
+        if key.startswith("k:"):
+            key = await _key_bucket(request, key[2:])
+        limit = settings.RATE_LIMIT_IP_PER_MIN if key.startswith("ip:") else settings.RATE_LIMIT_USER_PER_MIN
+        try:
+            await ratelimit.aenforce("global", key, limit, self.window)
+        except HTTPException as e:
+            return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"},
+                                headers=e.headers or {})
         return await call_next(request)

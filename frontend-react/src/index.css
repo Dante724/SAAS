@@ -5,16 +5,9 @@
 @layer base {
   html, body, #root { height: 100%; }
   body {
-    font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: "Geist Variable", "Geist", "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-  }
-  .material-symbols-outlined {
-    font-family: "Material Symbols Outlined";
-    font-weight: normal; font-style: normal; line-height: 1;
-    letter-spacing: normal; text-transform: none; display: inline-block;
-    white-space: nowrap; word-wrap: normal; direction: ltr;
-    font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
   }
 }
 
@@ -39,7 +32,7 @@
   box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(0,89,186,.55);
 }
 .dark :where(button, a, [role="button"], [tabindex]):focus-visible {
-  box-shadow: 0 0 0 2px #0b1020, 0 0 0 4px rgba(122,176,255,.6);
+  box-shadow: 0 0 0 2px rgb(var(--c-canvas)), 0 0 0 4px #5b9bff;
 }
 
 /* Dense-table rows are a high-frequency hover target — keep the hover instant
@@ -57,13 +50,13 @@ table tbody tr { transition: none; }
 /* Skeleton shimmer (144bu) — table-body loading placeholder that matches row geometry
    so it prevents layout shift rather than causing it. */
 .sk { position: relative; overflow: hidden; background: #eef1f6; border-radius: 6px; }
-.dark .sk { background: #1c2438; }
+.dark .sk { background: rgb(var(--c-slate-100)); }
 .sk::after {
   content: ""; position: absolute; inset: 0; transform: translateX(-100%);
   background: linear-gradient(90deg, transparent, rgba(255,255,255,.65), transparent);
   animation: sk-shimmer 1.3s infinite;
 }
-.dark .sk::after { background: linear-gradient(90deg, transparent, rgba(255,255,255,.06), transparent); }
+.dark .sk::after { background: linear-gradient(90deg, transparent, rgba(255,255,255,.05), transparent); }
 @keyframes sk-shimmer { 100% { transform: translateX(100%); } }
 @media (prefers-reduced-motion: reduce) { .sk::after { animation: none; } }
 
@@ -71,39 +64,25 @@ table tbody tr { transition: none; }
    (comfortable is the default py-3.5). Horizontal padding and type stay put. */
 table[data-density="compact"] > tbody > tr > td { padding-top: .4rem; padding-bottom: .4rem; }
 
-/* Dark mode — ponytail: overrides core neutral utilities only (surfaces/text/borders);
-   accent tints (blue/emerald/etc) stay as-is. Upgrade path: migrate tailwind colors to
-   CSS variables and theme them, if per-accent dark tuning is ever needed. */
-.dark body, .dark .bg-\[\#f7f8fd\] { background:#0b1020 !important; }
-.dark .bg-surface { background:#0b1020 !important; }
-.dark .bg-white { background:#151b2e !important; }
-.dark .bg-white\/70, .dark .bg-white\/80, .dark .bg-white\/40 { background:rgba(21,27,46,.8) !important; }
-.dark .bg-slate-50, .dark .bg-slate-50\/60, .dark .bg-slate-50\/80, .dark .bg-slate-50\/70, .dark .bg-slate-100 { background:#1c2438 !important; }
-.dark .text-ink-primary { color:#e8ecf7 !important; }
-.dark .text-ink-secondary { color:#b6c0d9 !important; }
-.dark .text-ink-tertiary, .dark .text-ink-placeholder { color:#8593b0 !important; }
-.dark .text-slate-600, .dark .text-slate-700 { color:#b6c0d9 !important; }
-/* Craft (144bt): dark-mode edges catch light via a low-opacity white hairline instead of a
-   hard solid line — the Linear-style treatment; principle (lightness+borders over shadow in
-   dark) is consensus, the exact opacity is tuned. */
-.dark .border-slate-200, .dark .border-slate-200\/90, .dark .border-slate-200\/80, .dark .border-slate-200\/70, .dark .border-slate-100, .dark .border-slate-200\/60 { border-color:rgba(255,255,255,.08) !important; }
-.dark .divide-slate-100 > *, .dark .divide-slate-100 > * + * { border-color:rgba(255,255,255,.06) !important; }
-.dark .glass-input { background:#1c2438 !important; border-color:#2a3550 !important; color:#e8ecf7; }
-.dark .hover\:bg-slate-50:hover, .dark .hover\:bg-slate-100:hover, .dark .hover\:bg-blue-50\/30:hover, .dark .hover\:bg-blue-50\/40:hover { background:#232d44 !important; }
-.dark .shadow-clay-sm, .dark .shadow-clay-card, .dark .shadow-drawer { box-shadow:0 1px 3px rgba(0,0,0,.5) !important; }
-/* Accent-tint tuning: soft status/badge backgrounds darken toward their hue (keep the
-   colour, drop the glare) and their text lifts for contrast. Neutrals handled above. */
-.dark .bg-blue-50, .dark .bg-blue-50\/40, .dark .bg-blue-50\/60, .dark .bg-blue-100 { background:rgba(59,130,246,.16) !important; }
-.dark .bg-emerald-50, .dark .bg-emerald-100 { background:rgba(16,185,129,.16) !important; }
-.dark .bg-amber-50, .dark .bg-amber-100 { background:rgba(245,158,11,.16) !important; }
-.dark .bg-rose-50, .dark .bg-rose-100 { background:rgba(244,63,94,.16) !important; }
-.dark .bg-purple-50, .dark .bg-purple-100 { background:rgba(168,85,247,.16) !important; }
-.dark .text-primary { color:#7ab0ff !important; }
-.dark .text-blue-700, .dark .text-blue-800 { color:#93c0ff !important; }
-.dark .text-emerald-600, .dark .text-emerald-700, .dark .text-emerald-800 { color:#5fe0b0 !important; }
-.dark .text-amber-700, .dark .text-amber-800 { color:#f2c261 !important; }
-.dark .text-rose-600, .dark .text-rose-700 { color:#ff8fa3 !important; }
-.dark .text-purple-600, .dark .text-purple-800 { color:#c99cf5 !important; }
+/* Dark mode — every surface, border, text colour, the primary and the soft tints come from
+   theme tokens (theme.tokens.js → CSS variables on :root / .dark), so nothing needs a patch
+   here. What's left is the few things a utility can't express. */
+:root { --tint-boost: 1; --hue-lift: 0%; }
+.dark { --tint-boost: 1.8; --hue-lift: 35%; }
+body { background: rgb(var(--c-canvas)); color: rgb(var(--c-ink-primary)); }
+::selection { background: rgb(var(--c-primary-fill) / .25); }
+.dark ::selection { background: rgb(147 184 255 / .3); }
+/* Popovers and menus sit one step above the page (elevation = a lighter surface). */
+.dark .shadow-drawer, .dark .shadow-menu { background-color: rgb(var(--c-raised)) !important; }
+/* Scrims behind drawers and dialogs: a deep navy veil, never a grey wash. */
+.dark .bg-ink-primary\/30, .dark .bg-ink-primary\/35, .dark .bg-ink-primary\/40, .dark .bg-ink-primary\/50 { background-color: rgb(var(--scrim) / .62) !important; }
+/* Inputs sit slightly inset (darker than the card) with an edge you can see (3:1). */
+.dark .glass-input { background: rgb(var(--c-canvas)); border-color: rgb(var(--c-line-300)); color: rgb(var(--c-ink-primary)); }
+.dark .glass-input:hover { border-color: #6f7d9b; }
+.dark .glass-input:focus { background: rgb(var(--c-canvas)); border-color: #5b9bff; box-shadow: 0 0 0 3px rgba(91,155,255,.3); }
+.dark input, .dark select, .dark textarea { color-scheme: dark; }
+.dark ::-webkit-scrollbar-thumb { background: #2c3345; }
+.dark ::-webkit-scrollbar-thumb:hover { background: #3b4459; }
 
 /* 144hp — WYSIWYG document template editor */
 .tok-pill{display:inline-block;background:#eef2ff;color:#4338ca;border:1px solid #c7d2fe;border-radius:6px;padding:0 6px;margin:0 1px;font-size:.85em;font-weight:600;line-height:1.5;white-space:nowrap;user-select:all;cursor:default}
@@ -115,9 +94,30 @@ table[data-density="compact"] > tbody > tr > td { padding-top: .4rem; padding-bo
 .doc-canvas hr{border:0;border-top:1px solid #e5e7eb;margin:.8em 0}
 .doc-canvas ul{list-style:disc;margin:.4em 0;padding-left:1.4em}
 .doc-canvas table{width:100%;border-collapse:collapse;margin:8px 0}
-.doc-canvas:empty::before{content:"Type your document, or click “Starter layout” to begin…";color:#9ca3af}
+.doc-canvas:empty::before{content:"Type your document, or add a variable from the right…";color:#9ca3af}
 
 /* 144hr — block outlines in edit mode */
 .doc-canvas.editing section[data-block]{outline:1px dashed #dbe1ea;outline-offset:6px;border-radius:2px}
 .doc-canvas.editing section[data-block]:hover{outline-color:#a5b4fc}
 .doc-canvas section[data-block]+section[data-block]{margin-top:14px}
+
+/* Responsive (B3) — wide tables scroll sideways inside their card instead of being clipped by
+   the card's rounded overflow-hidden edge, and on narrow screens a table with five or more
+   columns keeps a readable width (it scrolls) rather than wrapping every cell one word per line. */
+.app-main .overflow-hidden:has(> table) { overflow-x: auto; }
+@media (max-width: 899.98px) {
+  .app-main table:has(> thead > tr > th:nth-child(5)) { min-width: 680px; }
+}
+/* Phone gutter: the desktop 24–32px page padding becomes 16px under 640px so content keeps the width. */
+@media (max-width: 639.98px) {
+  .app-main .px-6, .app-main .p-6, .app-main .px-8, .app-main .p-8 { padding-left: 1rem; padding-right: 1rem; }
+}
+/* Below 1280px the sidebar leaves less room: tighten table cell padding so the last column
+   (usually the row's action) stays on screen instead of scrolling out of the card. */
+@media (max-width: 1279.98px) {
+  .app-main :is(th, td):is(.px-4, .px-5, .px-6) { padding-left: .625rem; padding-right: .625rem; }
+}
+/* Touch / narrow screens: native checkboxes and radios grow to a 24px tap target (WCAG 2.5.8). */
+@media (max-width: 899.98px), (pointer: coarse) {
+  input[type="checkbox"], input[type="radio"] { width: 1.5rem; height: 1.5rem; flex-shrink: 0; }
+}

@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from backend.services.dates import now_utc
+
 
 async def _tenant(client):
     email = f"admin-{uuid.uuid4().hex[:8]}@test.dev"
@@ -41,7 +43,7 @@ async def test_margin_includes_parts_and_manual_labour(client):
         "line_type": "part", "kind": "product", "description": "Battery",
         "qty": 1, "unit_price": 100, "cost_price": 30}, headers=H)
     # manual labour: 60 min against this WO for that employee → labour cost 60
-    now = datetime.utcnow()
+    now = now_utc()
     await client.post("/api/timeclock/entries", json={
         "employee_id": emp["id"], "order_id": o["id"], "category": "job",
         "started_at": (now - timedelta(hours=2)).isoformat(),

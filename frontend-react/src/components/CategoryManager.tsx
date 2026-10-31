@@ -46,7 +46,7 @@ export default function CategoryManager({ entity, onClose, onChanged }: {
 
   return (
     <div className="fixed inset-0 z-[60] flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[460px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary capitalize">{entity} categories</h2>
@@ -59,7 +59,7 @@ export default function CategoryManager({ entity, onClose, onChanged }: {
           {flat.map(({ n, depth }) => (
             <div key={n.id} className="flex items-center gap-2 py-1.5 border-b border-slate-50" style={{ paddingLeft: depth * 16 }}>
               <M n="chevron_right" c="text-xs text-ink-tertiary" />
-              <span className="flex-1 text-sm font-semibold text-ink-primary truncate">{n.name}{typeof n.count === "number" && <span className="ml-1.5 text-[10px] text-ink-tertiary font-normal">({n.count})</span>}{entity === "bundle" && n.auto_deduct && <span className="ml-1.5 text-[9px] px-1 rounded bg-amber-100 text-amber-700 font-bold uppercase">auto-deduct</span>}</span>
+              <span className="flex-1 text-sm font-semibold text-ink-primary truncate">{n.name}{typeof n.count === "number" && <span className="ml-1.5 text-[11px] text-ink-tertiary font-normal">({n.count})</span>}{entity === "bundle" && n.auto_deduct && <span className="ml-1.5 text-[11px] px-1 rounded bg-amber-100 text-amber-700 font-bold ">auto-deduct</span>}</span>
               <select value={n.__parentId || ""} onChange={(e) => move(n.id, e.target.value)} title="Move under…" className="text-[11px] border border-slate-200 rounded-md px-1 py-0.5 bg-white max-w-[110px]">
                 <option value="">Top level</option>
                 {flat.filter((x) => x.n.id !== n.id).map((x) => <option key={x.n.id} value={x.n.id}>{"— ".repeat(x.depth)}{x.n.name}</option>)}
@@ -70,7 +70,7 @@ export default function CategoryManager({ entity, onClose, onChanged }: {
           ))}
         </div>
         <div className="px-5 py-4 border-t border-slate-200 space-y-2">
-          <div className="text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide">Add category</div>
+          <div className="text-[11px] font-semibold text-ink-tertiary ">Add category</div>
           <div className="flex items-center gap-2">
             <input value={nf.name} onChange={(e) => setNf({ ...nf, name: e.target.value })} placeholder="Name" className="glass-input flex-1 px-3 py-2 rounded-lg text-xs" />
             <select value={nf.parent_id} onChange={(e) => setNf({ ...nf, parent_id: e.target.value })} className="text-xs border border-slate-200 rounded-lg px-2 py-2 bg-white max-w-[130px]">

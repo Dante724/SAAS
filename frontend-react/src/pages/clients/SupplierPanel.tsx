@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { Supplier, money } from "../inventory/types";
+import { loadFailed } from "../../lib/notice";
 
 /** Build 144am — the supplier facet of a Contact, reused inside the unified contact form
  * (ClientDrawer's "Supplier" tab) and by the standalone SupplierDrawer. It owns the
@@ -41,13 +42,13 @@ export default function SupplierPanel({ supplierId, onSaved }: { supplierId: str
   const [payAcct, setPayAcct] = useState("");
 
   function reloadBalance() {
-    api.get<{ items: Supplier[] }>("/suppliers").then((r) => setF((r.items || []).find((s) => s.id === supplierId) || null)).catch(() => {});
+    api.get<{ items: Supplier[] }>("/suppliers").then((r) => setF((r.items || []).find((s) => s.id === supplierId) || null)).catch(loadFailed("suppliers"));
     api.get<Ledger>(`/suppliers/${supplierId}/ledger`).then(setLed).catch(() => setLed({ supplier_balance: 0, entries: [] }));
   }
   useEffect(() => {
     reloadBalance();
-    api.get<any>(`/suppliers/${supplierId}/performance`).then(setPerf).catch(() => {});
-    api.get<{ items: { id: string; name?: string }[] }>("/cash/accounts").then((r) => { setAccounts(r.items || []); if (r.items?.[0]) setPayAcct(r.items[0].id); }).catch(() => {});
+    api.get<any>(`/suppliers/${supplierId}/performance`).then(setPerf).catch(loadFailed("supplier details"));
+    api.get<{ items: { id: string; name?: string }[] }>("/cash/accounts").then((r) => { setAccounts(r.items || []); if (r.items?.[0]) setPayAcct(r.items[0].id); }).catch(loadFailed("cash accounts"));
   }, [supplierId]);
 
   async function paySupplier() {
@@ -73,7 +74,7 @@ export default function SupplierPanel({ supplierId, onSaved }: { supplierId: str
   }
 
   const fld = "glass-input rounded-lg px-3 py-2 text-sm w-full";
-  const lbl = "block text-[10px] font-bold uppercase text-ink-tertiary mb-1";
+  const lbl = "block text-[11px] font-bold  text-ink-tertiary mb-1";
 
   if (!f) return <div className="text-xs text-ink-tertiary py-4">Loading supplier…</div>;
 
@@ -94,26 +95,26 @@ export default function SupplierPanel({ supplierId, onSaved }: { supplierId: str
             <div><label className={lbl}>Lead time (days)</label>
               <input type="number" min={0} value={f.lead_days ?? ""} onChange={(e) => setF({ ...f, lead_days: e.target.value === "" ? undefined : Number(e.target.value) })} className={fld} /></div>
             <div><label className={lbl}>PO currency</label>
-              <input value={f.currency || ""} onChange={(e) => setF({ ...f, currency: e.target.value })} placeholder="₹" className={fld} /></div>
+              <input value={f.currency || ""} onChange={(e) => setF({ ...f, currency: e.target.value })} placeholder="$" className={fld} /></div>
           </div>
           <div className="flex justify-end"><button onClick={saveHeader} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : "Save supplier details"}</button></div>
 
           {perf && perf.total_pos > 0 && (
             <div className="rounded-2xl border border-slate-200/80 p-4 space-y-3">
-              <span className="text-[10px] font-bold uppercase text-ink-tertiary tracking-wide flex items-center gap-1.5"><M n="insights" c="text-sm text-primary" />Performance</span>
+              <span className="text-[11px] font-bold text-ink-tertiary flex items-center gap-1.5"><M n="insights" c="text-sm text-primary" />Performance</span>
               <div className="grid grid-cols-4 gap-2 text-center">
                 {[["Spend", money(perf.total_spend)], ["On-time", perf.on_time_pct == null ? "—" : `${perf.on_time_pct}%`], ["Open POs", String(perf.open_pos)], ["POs", String(perf.total_pos)]].map(([l, v]) => (
-                  <div key={l} className="rounded-xl bg-slate-50/70 py-2"><div className="text-sm font-bold text-ink-primary">{v}</div><div className="text-[10px] text-ink-tertiary uppercase">{l}</div></div>
+                  <div key={l} className="rounded-xl bg-slate-50/70 py-2"><div className="text-sm font-bold text-ink-primary">{v}</div><div className="text-[11px] text-ink-tertiary ">{l}</div></div>
                 ))}
               </div>
               {perf.price_trend?.length > 0 && (
                 <div className="space-y-1">
-                  <div className="text-[10px] font-bold uppercase text-ink-tertiary">Price trend</div>
+                  <div className="text-[11px] font-bold text-ink-tertiary">Price trend</div>
                   {perf.price_trend.map((t: any, i: number) => (
                     <div key={i} className="flex items-center justify-between text-[11px]">
                       <span className="text-ink-secondary truncate flex-1">{t.part}</span>
-                      <span className="font-mono text-ink-tertiary">{money(t.first)} → {money(t.latest)}</span>
-                      <span className={`font-mono font-bold w-14 text-right ${t.change_pct > 0 ? "text-rose-600" : "text-emerald-600"}`}>{t.change_pct > 0 ? "+" : ""}{t.change_pct}%</span>
+                      <span className="tabular-nums text-ink-tertiary">{money(t.first)} → {money(t.latest)}</span>
+                      <span className={`tabular-nums font-bold w-14 text-right ${t.change_pct > 0 ? "text-rose-600" : "text-emerald-600"}`}>{t.change_pct > 0 ? "+" : ""}{t.change_pct}%</span>
                     </div>
                   ))}
                 </div>
@@ -123,7 +124,7 @@ export default function SupplierPanel({ supplierId, onSaved }: { supplierId: str
 
           <div className="rounded-2xl bg-slate-50/70 border border-slate-200/80 p-4">
             <div className="flex items-baseline justify-between mb-3">
-              <span className="text-[10px] font-bold uppercase text-ink-tertiary tracking-wide">Statement — what we owe</span>
+              <span className="text-[11px] font-bold text-ink-tertiary ">Statement — what we owe</span>
               <div className="flex items-center gap-2">
                 <span className="text-lg font-bold text-ink-primary">{money(led?.supplier_balance ?? f.balance ?? 0)}</span>
                 <button onClick={() => setPaying((v) => !v)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold text-primary border border-primary/30 hover:bg-primary/10"><M n="payments" c="text-[13px]" />Record payment</button>
@@ -144,9 +145,9 @@ export default function SupplierPanel({ supplierId, onSaved }: { supplierId: str
                 : <div className="divide-y divide-slate-100">
                   {led.entries.map((e) => (
                     <div key={e.id} className="flex items-center gap-3 py-2 text-xs">
-                      <span className="text-ink-tertiary font-mono w-[92px] shrink-0">{(e.created_at || "").slice(0, 10)}</span>
+                      <span className="text-ink-tertiary tabular-nums w-[92px] shrink-0">{(e.created_at || "").slice(0, 10)}</span>
                       <span className="text-ink-secondary flex-1 truncate">{e.note || e.entry_type}</span>
-                      <span className={`font-mono font-bold ${e.amount < 0 ? "text-rose-600" : "text-emerald-600"}`}>{money(e.amount)}</span>
+                      <span className={`tabular-nums font-bold ${e.amount < 0 ? "text-rose-600" : "text-emerald-600"}`}>{money(e.amount)}</span>
                     </div>
                   ))}
                 </div>}
@@ -203,7 +204,7 @@ function PriceListTab({ supplierId, onDone }: { supplierId: string; onDone: (m: 
   }
 
   const opts: Field[] = ["", "sku", "barcode", "name", "cost_price", "sell_price"];
-  const lbl = "block text-[10px] font-bold uppercase text-ink-tertiary mb-1";
+  const lbl = "block text-[11px] font-bold  text-ink-tertiary mb-1";
 
   return (
     <div className="space-y-4">
@@ -217,10 +218,10 @@ function PriceListTab({ supplierId, onDone }: { supplierId: string; onDone: (m: 
       {rows && (
         <>
           <div className="rounded-xl border border-slate-200/80 p-3 space-y-2">
-            <span className="text-[10px] font-bold uppercase text-ink-tertiary">Map columns ({rows.length} rows)</span>
+            <span className="text-[11px] font-bold text-ink-tertiary">Map columns ({rows.length} rows)</span>
             {headers.map((h, i) => (
               <div key={i} className="flex items-center gap-2 text-xs">
-                <span className="font-mono text-ink-secondary flex-1 truncate">{h || `col ${i + 1}`}</span>
+                <span className="tabular-nums text-ink-secondary flex-1 truncate">{h || `col ${i + 1}`}</span>
                 <span className="text-ink-tertiary">→</span>
                 <select value={map[i] || ""} onChange={(e) => setMap({ ...map, [i]: e.target.value as Field })} className="glass-input rounded-lg px-2 py-1 text-xs">
                   {opts.map((o) => <option key={o} value={o}>{o === "" ? "— ignore —" : o}</option>)}
@@ -229,7 +230,7 @@ function PriceListTab({ supplierId, onDone }: { supplierId: string; onDone: (m: 
             ))}
           </div>
           <div className="flex items-center gap-4 text-xs">
-            <span className="text-ink-tertiary font-bold uppercase text-[10px]">Match on</span>
+            <span className="text-ink-tertiary font-bold text-[11px]">Match on</span>
             {(["sku", "barcode"] as const).map((m) => (
               <label key={m} className="flex items-center gap-1 cursor-pointer"><input type="radio" checked={matchOn === m} onChange={() => setMatchOn(m)} />{m}</label>
             ))}

@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
+import { loadFailed } from "../../lib/notice";
+import { clickable } from "../../lib/clickable";
 
 type Appointment = { id: string; client_name?: string; service_name?: string; employee_name?: string; scheduled_for?: string; ends_at?: string; duration_min?: number; status?: string; note?: string; order_id?: string | null };
 type Emp = { id: string; name: string };
@@ -12,10 +14,10 @@ type Service = { id: string; name?: string; duration_min?: number };
 const STATUS: Record<string, string> = { booked: "bg-amber-100 text-amber-800 border-amber-200", done: "bg-emerald-100 text-emerald-800 border-emerald-200", canceled: "bg-rose-100 text-rose-800 border-rose-200", no_show: "bg-slate-200 text-slate-700 border-slate-300" };
 const STATUS_LABEL: Record<string, string> = { booked: "Booked", done: "Done", canceled: "Canceled", no_show: "No-show" };
 function F({ l, v }: { l: string; v: string }) {
-  return <div><div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary mb-0.5">{l}</div><div className="text-sm font-semibold text-ink-primary">{v || "—"}</div></div>;
+  return <div><div className="text-[11px] font-bold text-ink-tertiary mb-0.5">{l}</div><div className="text-sm font-semibold text-ink-primary">{v || "—"}</div></div>;
 }
 const dayKey = (iso?: string) => (iso ? new Date(iso).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" }) : "Unscheduled");
-const time = (iso?: string) => (iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—");
+const time = (iso?: string) => (iso ? new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "—");
 
 export default function AppointmentsHub() {
   const [rows, setRows] = useState<Appointment[] | null>(null);
@@ -45,8 +47,8 @@ export default function AppointmentsHub() {
   }, [drawer, bkDate, f.employee_id, f.service_id, f.duration_min]);
   async function moveToHour(id: string, hour: number) {
     const b = (rows || []).find((x) => x.id === id); if (!b || !b.scheduled_for) return;
-    const d = new Date(b.scheduled_for); d.setHours(hour, 0, 0, 0);
-    const iso = d.toISOString();
+    // Scheduled times are shop wall-clock: keep the day as stored and send the new hour as-is.
+    const iso = `${b.scheduled_for.slice(0, 10)}T${String(hour).padStart(2, "0")}:00:00`;
     setRows((cur) => (cur || []).map((x) => x.id === id ? { ...x, scheduled_for: iso } : x)); // optimistic
     try { await api.patch(`/appointments/${id}`, { scheduled_for: iso }); flash("Rescheduled"); } catch { load(); }
   }
@@ -63,7 +65,7 @@ export default function AppointmentsHub() {
   async function reschedule() {
     if (!sel || !reDate || !reTime) { flash("Pick a new date & time"); return; }
     setSelBusy(true);
-    try { const iso = new Date(`${reDate}T${reTime}`).toISOString(); await api.patch(`/appointments/${sel.id}`, { scheduled_for: iso }); setSel({ ...sel, scheduled_for: iso }); flash("Rescheduled — client notified"); setReDate(""); setReTime(""); load(); }
+    try { const iso = `${reDate}T${reTime.slice(0, 5)}:00`; /* shop wall-clock, as picked */ await api.patch(`/appointments/${sel.id}`, { scheduled_for: iso }); setSel({ ...sel, scheduled_for: iso }); flash("Rescheduled — client notified"); setReDate(""); setReTime(""); load(); }
     catch (e: any) { flash(e.message || "Reschedule clashes with another appointment"); } finally { setSelBusy(false); }
   }
   async function convert(record: "work_order" | "estimate") {
@@ -76,7 +78,7 @@ export default function AppointmentsHub() {
   }
 
   function load() { api.get<{ items: Appointment[] }>("/appointments").then((r) => setRows(r.items || [])).catch(() => setRows([])); }
-  useEffect(() => { load(); api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(() => {}); api.get<{ items: Service[] }>("/catalog/services").then((r) => setServices(r.items || [])).catch(() => {}); }, []);
+  useEffect(() => { load(); api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(loadFailed("the staff list")); api.get<{ items: Service[] }>("/catalog/services").then((r) => setServices(r.items || [])).catch(loadFailed("services")); }, []);
 
   async function create() {
     if (!f.scheduled_for) { flash("Pick a date & time"); return; }
@@ -95,7 +97,7 @@ export default function AppointmentsHub() {
     <Shell title="Appointments">
       <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
         <div className="flex items-center gap-2">
-          <button onClick={() => setDrawer(true)} className="h-[38px] px-4 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New appointment</button>
+          <button onClick={() => setDrawer(true)} className="h-[38px] px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New appointment</button>
           <div className="ml-auto flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200/70 text-xs">
             <button onClick={() => setView("agenda")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1 ${view === "agenda" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="table_rows" c="text-xs" />Agenda</button>
             <button onClick={() => setView("scheduler")} className={`px-2.5 py-1 rounded-md font-semibold flex items-center gap-1 ${view === "scheduler" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="schedule" c="text-xs" />Scheduler</button>
@@ -114,13 +116,13 @@ export default function AppointmentsHub() {
                   const cards = today.filter((b) => new Date(b.scheduled_for!).getHours() === h);
                   return (
                     <div key={h} onDragOver={(e) => e.preventDefault()} onDrop={() => { if (drag) { moveToHour(drag, h); setDrag(null); } }} className="flex gap-3 px-5 py-2 min-h-[52px] hover:bg-blue-50/20">
-                      <div className="w-14 flex-shrink-0 text-[11px] font-mono font-bold text-ink-tertiary pt-1.5">{String(h).padStart(2, "0")}:00</div>
+                      <div className="w-14 flex-shrink-0 text-[11px] tabular-nums font-bold text-ink-tertiary pt-1.5">{String(h).padStart(2, "0")}:00</div>
                       <div className="flex-1 flex flex-wrap gap-2">
                         {cards.length === 0 && <div className="text-[11px] text-ink-placeholder pt-1.5">—</div>}
                         {cards.map((b) => (
-                          <div key={b.id} draggable onDragStart={() => setDrag(b.id)} onDragEnd={() => setDrag(null)} onClick={() => { setSel(b); setReDate(""); setReTime(""); }} className={`bg-white rounded-xl border border-slate-200/80 shadow-clay-sm px-3 py-1.5 cursor-pointer hover:border-primary/40 ${drag === b.id ? "opacity-50" : ""}`}>
+                          <div key={b.id} draggable onDragStart={() => setDrag(b.id)} onDragEnd={() => setDrag(null)} {...clickable(() => { setSel(b); setReDate(""); setReTime(""); })} className={`bg-white rounded-xl border border-slate-200/80 shadow-clay-sm px-3 py-1.5 cursor-pointer hover:border-primary/40 ${drag === b.id ? "opacity-50" : ""}`}>
                             <div className="text-xs font-bold text-ink-primary">{b.service_name || "Appointment"} · {time(b.scheduled_for)}</div>
-                            <div className="text-[10px] text-ink-tertiary">{b.client_name || "Walk-in"}{b.employee_name ? ` · ${b.employee_name}` : ""}</div>
+                            <div className="text-[11px] text-ink-tertiary">{b.client_name || "Walk-in"}{b.employee_name ? ` · ${b.employee_name}` : ""}</div>
                           </div>
                         ))}
                       </div>
@@ -131,19 +133,19 @@ export default function AppointmentsHub() {
             </div>
           );
         })()}
-        {view === "agenda" && rows?.length === 0 && <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-12 text-center"><M n="calendar_month" c="text-3xl text-ink-placeholder" /><p className="text-sm font-bold text-ink-secondary mt-2">No appointments yet</p><p className="text-xs text-ink-tertiary">Create an appointment or wait for online requests.</p></div>}
+        {view === "agenda" && rows?.length === 0 && <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-12 text-center"><M n="calendar_month" c="mx-auto mb-2 text-3xl text-ink-placeholder" /><p className="text-sm font-bold text-ink-secondary mt-2">No appointments yet</p><p className="text-xs text-ink-tertiary">Create an appointment or wait for online requests.</p></div>}
         {view === "agenda" && Object.entries(groups).map(([day, list]) => (
           <div key={day}>
-            <div className="text-[11px] font-bold uppercase tracking-wider text-ink-tertiary mb-2">{day}</div>
+            <div className="text-[11px] font-bold text-ink-tertiary mb-2">{day}</div>
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden divide-y divide-slate-100">
               {list.map((b) => {
                 const st = (b.status || "booked").toLowerCase();
                 return (
-                  <div key={b.id} onClick={() => { setSel(b); setReDate(""); setReTime(""); }} className="px-5 py-3.5 flex items-center gap-4 hover:bg-blue-50/30 transition-colors cursor-pointer">
-                    <div className="text-center flex-shrink-0 w-16"><div className="text-sm font-black font-mono text-ink-primary">{time(b.scheduled_for)}</div>{b.duration_min && <div className="text-[10px] text-ink-tertiary">{b.duration_min}m</div>}</div>
+                  <div key={b.id} {...clickable(() => { setSel(b); setReDate(""); setReTime(""); })} className="px-5 py-3.5 flex items-center gap-4 hover:bg-blue-50/30 transition-colors cursor-pointer">
+                    <div className="text-center flex-shrink-0 w-16"><div className="text-sm font-bold tabular-nums text-ink-primary">{time(b.scheduled_for)}</div>{b.duration_min && <div className="text-[11px] text-ink-tertiary">{b.duration_min}m</div>}</div>
                     <div className="w-px h-9 bg-slate-200" />
                     <div className="flex-1 min-w-0"><div className="text-sm font-bold text-ink-primary truncate">{b.service_name || "Appointment"}</div><div className="text-[11px] text-ink-tertiary">{b.client_name || "Walk-in"}{b.employee_name ? ` · ${b.employee_name}` : ""}</div></div>
-                    {b.order_id && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-primary border border-blue-100">Converted</span>}
+                    {b.order_id && <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-blue-50 text-primary border border-blue-100">Converted</span>}
                     <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${STATUS[st] || STATUS.booked}`}>{STATUS_LABEL[st] || st}</span>
                   </div>
                 );
@@ -155,7 +157,7 @@ export default function AppointmentsHub() {
 
       {drawer && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={() => setDrawer(false)} />
+          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setDrawer(false)} />
           <div className="relative h-full w-full max-w-[460px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
             <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70"><h3 className="text-base font-bold text-ink-primary">New appointment</h3><button aria-label="Close" onClick={() => setDrawer(false)} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
@@ -186,13 +188,13 @@ export default function AppointmentsHub() {
               <div><label className="block font-semibold text-ink-secondary mb-1">Exact time {f.scheduled_for ? "" : "(or pick a slot above)"}</label><DateField mode="datetime" value={f.scheduled_for ? f.scheduled_for.slice(0, 16) : ""} onChange={(v) => setF({ ...f, scheduled_for: v })} /></div>
               <div><label className="block font-semibold text-ink-secondary mb-1">Note</label><textarea value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} className={`${inp} h-20 resize-none`} placeholder="Optional…" /></div>
             </div>
-            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center justify-end gap-2"><button onClick={() => setDrawer(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button><button onClick={create} disabled={busy} className="px-5 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white font-bold text-xs shadow-clay-sm disabled:opacity-50">{busy ? "Creating…" : "Create appointment"}</button></div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center justify-end gap-2"><button onClick={() => setDrawer(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button><button onClick={create} disabled={busy} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm disabled:opacity-50">{busy ? "Creating…" : "Create appointment"}</button></div>
           </div>
         </div>
       )}
       {sel && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 55 }}>
-          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={() => setSel(null)} />
+          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setSel(null)} />
           <div className="relative h-full w-full max-w-[460px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
               <div><h3 className="text-base font-bold text-ink-primary">{sel.service_name || "Appointment"}</h3><div className="text-[11px] text-ink-tertiary">{dayKey(sel.scheduled_for)} · {time(sel.scheduled_for)}</div></div>
@@ -208,7 +210,7 @@ export default function AppointmentsHub() {
               {sel.note && <F l="Note" v={sel.note} />}
 
               <div>
-                <div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary mb-1.5">Status — changing it notifies the client</div>
+                <div className="text-[11px] font-bold text-ink-tertiary mb-1.5">Status — changing it notifies the client</div>
                 <div className="flex flex-wrap gap-1.5">
                   {["booked", "done", "canceled", "no_show"].map((s) => (
                     <button key={s} disabled={selBusy} onClick={() => setStatus(s)} className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-colors ${(sel.status || "booked") === s ? STATUS[s] : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`}>{STATUS_LABEL[s]}</button>
@@ -220,16 +222,16 @@ export default function AppointmentsHub() {
                 <div className="rounded-2xl bg-blue-50/60 border border-blue-100 p-3.5 text-[11px] font-semibold text-primary flex items-center gap-2"><M n="link" c="text-sm" />Converted — linked to a work order / estimate.</div>
               ) : (
                 <div>
-                  <div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary mb-1.5">Convert to</div>
+                  <div className="text-[11px] font-bold text-ink-tertiary mb-1.5">Convert to</div>
                   <div className="flex gap-2">
-                    <button disabled={selBusy} onClick={() => convert("work_order")} className="flex-1 px-3 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-[11px] font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60 flex items-center justify-center gap-1"><M n="handyman" c="text-sm" />Work order</button>
+                    <button disabled={selBusy} onClick={() => convert("work_order")} className="flex-1 px-3 py-2 rounded-xl bg-primary text-white text-[11px] font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60 flex items-center justify-center gap-1"><M n="handyman" c="text-sm" />Work order</button>
                     <button disabled={selBusy} onClick={() => convert("estimate")} className="flex-1 px-3 py-2 rounded-xl bg-white text-primary border border-blue-100 text-[11px] font-bold hover:bg-blue-50 disabled:opacity-60 flex items-center justify-center gap-1"><M n="request_quote" c="text-sm" />Estimate</button>
                   </div>
                 </div>
               )}
 
               <div>
-                <div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary mb-1.5">Reschedule</div>
+                <div className="text-[11px] font-bold text-ink-tertiary mb-1.5">Reschedule</div>
                 <div className="flex gap-2">
                   <DateField mode="date" value={reDate} onChange={setReDate} className="flex-1" />
                   <DateField mode="time" value={reTime} onChange={setReTime} className="w-28" />

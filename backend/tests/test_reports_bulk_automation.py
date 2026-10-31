@@ -12,6 +12,7 @@ from backend.models import (
     StockItemBatch,
     Task,
 )
+from backend.services.dates import now_utc
 
 
 async def _wh_tok(client, H):
@@ -120,13 +121,13 @@ async def test_expiration_report_flags_expired_and_soon(client, tenant, db):
     db.add_all([
         StockItemBatch(org_id=me["org_id"], part_id=p["id"], warehouse_id=w["id"],
                        location_id=loc, unit_cost=2, qty_received=10, qty_remaining=10,
-                       expiry_date=datetime.utcnow() - timedelta(days=3)),   # expired
+                       expiry_date=now_utc() - timedelta(days=3)),   # expired
         StockItemBatch(org_id=me["org_id"], part_id=p["id"], warehouse_id=w["id"],
                        location_id=loc, unit_cost=2, qty_received=5, qty_remaining=5,
-                       expiry_date=datetime.utcnow() + timedelta(days=10)),  # soon
+                       expiry_date=now_utc() + timedelta(days=10)),  # soon
         StockItemBatch(org_id=me["org_id"], part_id=p["id"], warehouse_id=w["id"],
                        location_id=loc, unit_cost=2, qty_received=5, qty_remaining=5,
-                       expiry_date=datetime.utcnow() + timedelta(days=200)), # ok
+                       expiry_date=now_utc() + timedelta(days=200)), # ok
     ])
     await db.commit()
 
@@ -198,7 +199,9 @@ async def test_missed_call_automation_off_by_default(client, tenant, db):
                           headers=tenant)).json()
     assert r["enabled"] is False
 
-    # a missed call with the automation off creates no task
+    # a missed call with the automation off creates no task (WS-C: the missed-call → inquiry
+    # flow is on by default and makes its own call-back task, so switch it off for this check)
+    await client.put("/api/leads/missed-call-settings", json={"enabled": False}, headers=tenant)
     await client.post(f"/api/comms/calls/webhook?org_id={me['org_id']}", json={
         "provider": "test", "direction": "inbound", "from_number": "+1555",
         "to_number": "+1999", "status": "missed"}, headers=await _wh_tok(client, tenant))

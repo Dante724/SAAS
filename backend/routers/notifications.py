@@ -13,19 +13,18 @@ from sqlalchemy import select
 from pydantic import BaseModel
 from typing import Optional
 from backend.db.database import get_db
-from backend.models import NotificationTemplate, Employee, Order, Client
+from backend.models import NotificationTemplate, Employee, Order
 from backend.services.auth import get_current_employee, require_perm
+from backend.services.message_vars import SHORT_VARS, TOKENS
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 
 VALID_CHANNELS = {"sms", "email", "whatsapp"}
 VALID_EVENTS = {"status_change", "order_created", "comment_added"}
 
-# Variables a template author can use
-AVAILABLE_VARS = [
-    "{order_number}", "{client_name}", "{status}", "{total}",
-    "{device}", "{technician}", "{shop_name}",
-]
+# Short variables a template author can use: services/message_vars renders them on every send.
+AVAILABLE_VARS = TOKENS
 
 
 class TemplateIn(BaseModel):
@@ -63,7 +62,7 @@ async def list_templates(
 async def create_template(
     data: TemplateIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     if data.channel not in VALID_CHANNELS:
         raise HTTPException(400, "Invalid channel")
@@ -84,7 +83,7 @@ async def create_template(
 async def update_template(
     template_id: str, data: TemplateIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     t = (await db.execute(
         select(NotificationTemplate).where(
@@ -108,7 +107,7 @@ async def update_template(
 async def delete_template(
     template_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     t = (await db.execute(
         select(NotificationTemplate).where(
@@ -125,18 +124,17 @@ async def delete_template(
 # ── rendering + firing ───────────────────────────────
 
 def render_template(body: str, ctx: dict) -> str:
-    out = body
-    for key, val in ctx.items():
-        out = out.replace("{" + key + "}", str(val if val is not None else ""))
-    return out
+    from backend.services.message_vars import apply
+    return apply(body, ctx)
 
 
 async def fire_notifications(db: AsyncSession, org_id: str, event: str,
-                             order: Order, *, shop_name: str = "RepairOS",
+                             order: Order, *, shop_name: str = None,
                              client_name: str = None, device: str = None,
                              technician: str = None, new_status: str = None):
     """Find matching active templates, render, and log each to the event feed."""
     from backend.routers.feed import log_system_event
+    from backend.services.message_vars import order_values
 
     q = select(NotificationTemplate).where(
         NotificationTemplate.org_id == org_id,
@@ -147,21 +145,17 @@ async def fire_notifications(db: AsyncSession, org_id: str, event: str,
     if not templates:
         return 0
 
-    ctx = {
-        "order_number": order.order_number,
-        "client_name": client_name or "Customer",
-        "status": (new_status or order.status or "").replace("_", " "),
-        "total": f"\u20b9{int(order.total or 0)}",
-        "device": device or "your device",
-        "technician": technician or "our team",
-        "shop_name": shop_name,
-    }
-
     fired = 0
     for t in templates:
         # for status_change templates with a specific status filter, must match
         if event == "status_change" and t.trigger_status and t.trigger_status != new_status:
             continue
+        # {total} / {balance_due} format in the order's currency with cents (order_values).
+        ctx = await order_values(db, org_id, order, t.body_template)
+        overrides = {"client_name": client_name, "device": device, "technician": technician,
+                     "shop_name": shop_name,
+                     "status": (new_status or "").replace("_", " ") if new_status else None}
+        ctx.update({k: v for k, v in overrides.items() if v and k in ctx})
         msg = render_template(t.body_template, ctx)
         label = (t.channel or "sms").upper()
         await log_system_event(
@@ -196,7 +190,6 @@ async def notification_log(
 
 
 # ── Build 80: notification rules engine ──────────────────────────────────────
-from datetime import datetime as _dt  # noqa: E402
 
 from backend.models import NotificationRule  # noqa: E402
 from backend.services import notification_rules as _rules  # noqa: E402
@@ -247,7 +240,7 @@ class RuleIn(BaseModel):
 
 class RulePatch(BaseModel):
     """Full-edit an existing rule. Every field optional — only supplied keys change.
-    (Orderry only lets you swap template/channel inline; RepairOS allows a full edit.)"""
+    (Orderry only lets you swap template/channel inline; Tekly allows a full edit.)"""
     module: Optional[str] = None
     event: Optional[str] = None
     scope: Optional[str] = None
@@ -332,7 +325,7 @@ async def delete_rule(
 @router.post("/rules/queue-reminders")
 async def queue_reminders(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     """Scan upcoming work orders AND appointments, queueing reminders now within lead time."""
     n = await _rules.queue_reminders(db, org_id=current.org_id)
@@ -343,7 +336,7 @@ async def queue_reminders(
 @router.post("/rules/run-due")
 async def run_due(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     """Worker tick: dispatch scheduled notifications whose send time has passed."""
     return await _rules.run_due(db, org_id=current.org_id)
@@ -387,7 +380,7 @@ MODULE_VAR_GROUPS = {
                 "Date", "Links", "Other", "Custom fields"],
     "appointment": ["Company", "Legal entity", "Client", "Date", "Links", "Other", "Custom fields"],
     "task":    ["Company", "Employees", "Date", "Other"],  # internal / staff-facing
-    "contact": ["Company", "Legal entity", "Client", "Date", "Links", "Other", "Custom fields"],
+    "contact": ["Message", "Company", "Legal entity", "Client", "Date", "Links", "Other", "Custom fields"],
 }
 
 
@@ -395,24 +388,122 @@ class TestSendIn(BaseModel):
     channel: str = "email"      # email|sms|whatsapp
     subject: Optional[str] = None
     body: str
+    sample: bool = False        # fill the placeholders from the shop's latest job
 
 
 @router.post("/test")
 async def send_test(
     data: TestSendIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    # Same gate as editing the messages: a sample is filled from a real customer's job.
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     """144jc — send a test message to the signed-in user, like Orderry's 'Send test'.
     Variables are sent literally (not resolved) so you can check delivery + formatting."""
     from backend.services.notifications import _adapter_for, notif_creds
     recipient = current.email if data.channel == "email" else getattr(current, "phone", None)
     if not recipient:
-        raise HTTPException(400, f"Your profile has no {data.channel} to send a test to")
+        what = "email address" if data.channel == "email" else "mobile number"
+        raise HTTPException(400, f"Add a {what} to your profile to get a sample")
+    subject, body = data.subject, data.body
+    from backend.services.message_vars import is_html
+    html = is_html(data.body)          # decided by what was typed, before any values go in
+    if data.sample:
+        # "Send me a sample": render against the newest job so the owner sees a real message.
+        from sqlalchemy.orm import selectinload
+
+        from backend.routers.documents import _resolve
+        from backend.services.message_vars import render_for_order
+        order = (await db.execute(select(Order).where(Order.org_id == current.org_id)
+                                  .order_by(Order.created_at.desc())
+                                  .options(selectinload(Order.client), selectinload(Order.lines),
+                                           selectinload(Order.device), selectinload(Order.assigned_to)))).scalars().first()
+        if order:
+            variables = await _resolve(db, current.org_id, order)
+            if isinstance(variables, tuple):
+                variables = variables[0]
+            # A preview never mints a customer's portal link (issue_links=False).
+            subject, body = await render_for_order(db, current.org_id, order, subject, body or "",
+                                                   doc_vars=variables, issue_links=False)
+        if data.channel in ("sms", "whatsapp"):
+            body = f"[Sample] {body}"
+        elif subject:
+            subject = f"[Sample] {subject}"
     _creds = await notif_creds(db, current.org_id, data.channel)
     res = await _adapter_for(data.channel, _creds).send(
-        recipient=recipient, subject=data.subject, body=data.body)
-    return {"status": res.get("status"), "recipient": recipient, "error": res.get("error")}
+        recipient=recipient, subject=subject, body=body, html=html)
+    return {"status": res.get("status"), "recipient": recipient, "error": res.get("error"), "body": body}
+
+
+@router.get("/rules/stats")
+async def rule_stats(
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Per customer rule: how many went out in the last 7 days, failures, and when the last
+    one was sent. Plus how many customers can be texted (have a phone and haven't opted out)."""
+    from datetime import timedelta
+
+    from sqlalchemy import func
+
+    from backend.models import Client, NotificationLog
+    since = now_utc() - timedelta(days=7)
+    rows = (await db.execute(select(
+        NotificationLog.rule_id, NotificationLog.status, func.count(), func.max(NotificationLog.created_at))
+        .where(NotificationLog.org_id == current.org_id, NotificationLog.rule_id.isnot(None),
+               NotificationLog.created_at >= since)
+        .group_by(NotificationLog.rule_id, NotificationLog.status))).all()
+    out: dict = {}
+    for rid, status, n, last in rows:
+        d = out.setdefault(rid, {"sent_7d": 0, "failed_7d": 0, "skipped_7d": 0, "last_sent_at": None})
+        if status == "sent":
+            d["sent_7d"] += n
+            d["last_sent_at"] = max(filter(None, [d["last_sent_at"], last.isoformat() if last else None]), default=None)
+        elif status == "failed":
+            d["failed_7d"] += n
+        elif status == "skipped":
+            d["skipped_7d"] += n
+    with_phone = (await db.execute(select(func.count()).select_from(Client).where(
+        Client.org_id == current.org_id, Client.phone.isnot(None), Client.phone != ""))).scalar() or 0
+    opted_out = (await db.execute(select(func.count()).select_from(Client).where(
+        Client.org_id == current.org_id, Client.phone.isnot(None), Client.phone != "",
+        Client.consent_phone == False))).scalar() or 0  # noqa: E712
+    return {"rules": out, "texting": {"with_phone": with_phone, "opted_out": opted_out}}
+
+
+class QuietHoursIn(BaseModel):
+    on: bool
+
+
+@router.get("/quiet-hours")
+async def get_quiet_hours(
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Shop-wide view of the per-rule 'only during opening hours' setting for customer messages
+    (reminders keep their own timing, as in PUT)."""
+    rows = (await db.execute(select(NotificationRule).where(
+        NotificationRule.org_id == current.org_id, NotificationRule.scope == "client",
+        NotificationRule.event != "reminder"))).scalars().all()
+    on = sum(1 for r in rows if r.working_hours_only)
+    return {"on": bool(rows) and on == len(rows), "some": 0 < on < len(rows)}
+
+
+@router.put("/quiet-hours")
+async def set_quiet_hours(
+    data: QuietHoursIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_manage_settings")),
+):
+    """Hold every customer message that falls outside opening hours until the shop opens
+    (reminders keep their own timing)."""
+    rows = (await db.execute(select(NotificationRule).where(
+        NotificationRule.org_id == current.org_id, NotificationRule.scope == "client",
+        NotificationRule.event != "reminder"))).scalars().all()
+    for r in rows:
+        r.working_hours_only = data.on
+    await db.commit()
+    return {"ok": True, "changed": len(rows)}
 
 
 @router.get("/variables")
@@ -437,7 +528,11 @@ async def variable_library(
 
     # Friendlier section names; keep the resolvable variable strings verbatim.
     RENAME = {"Ticket": "Order", "Device": "Asset"}
-    groups = {}
+    # Short message variables first: the everyday ones, resolved by services/message_vars.
+    from backend.services.message_vars import CLIENT_TOKENS
+    short = [t for t, _ in SHORT_VARS]
+    groups = {"Message": short if module in (None, "order") else
+              [t for t in short if t in CLIENT_TOKENS]}
     for name, items in VARIABLE_GROUPS:
         if name == "Tables":            # not meaningful in a notification body
             continue
@@ -454,7 +549,7 @@ async def variable_library(
         groups = {k: v for k, v in groups.items() if k in allow}
 
     # Preserve group order for the picker (dicts keep insertion order in py3.7+).
-    order = ["Company", "Legal entity", "Client", "Payer", "Order", "Asset",
+    order = ["Message", "Company", "Legal entity", "Client", "Payer", "Order", "Asset",
              "Employees", "Finance", "Date", "Links", "Other", "Custom fields"]
     ordered = {k: groups[k] for k in order if k in groups}
     for k in groups:                    # any group not in the explicit order

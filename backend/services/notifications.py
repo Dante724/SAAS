@@ -8,12 +8,14 @@ channel adapter, and writes a NotificationLog row for the communication history.
 Delivery goes through a channel adapter. When provider credentials are configured
 (SMTP for email, Twilio for SMS/WhatsApp) the matching real adapter sends for real
 and records the provider result; when they are absent it falls back to a simulated
-adapter that logs and marks the message sent. Either way a NotificationLog row
+adapter that prints and marks the message sent in development, and fails (without logging the
+body) when deployed. Either way a NotificationLog row
 captures recipient, body, status (queued|sent|failed|skipped) and any error.
 """
+import re
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -24,12 +26,57 @@ from backend.models import (
 )
 
 
+def one_line(subject: Optional[str]) -> str:
+    """An email subject with no CR/LF, so a value filled into it can't add mail headers."""
+    import re
+    return re.sub(r"[\r\n]+", " ", subject or "").strip()
+
+
+# ── Notification log hooks ───────────────────────────────────────────────────
+_PORTAL_TOKEN = re.compile(r"(/portal/)[A-Za-z0-9_-]{16,}")
+
+
+def redact_portal_links(text):
+    """A message as kept in the history: its portal link no longer carries the live token (the
+    log is readable by staff who couldn't issue a link, and only hashes are stored otherwise)."""
+    return _PORTAL_TOKEN.sub(r"\1…", text) if text and "/portal/" in text else text
+
+
+async def log_is_html(db, log) -> bool:
+    """HTML or plain for a logged message, decided from its template once and then kept."""
+    if log.is_html is None:
+        html = False
+        if log.template_id:
+            from backend.services.message_vars import is_html
+            html = is_html((await db.execute(select(NotificationTemplate.body_template).where(
+                NotificationTemplate.id == log.template_id))).scalar_one_or_none())
+        log.is_html = html
+    return bool(log.is_html)
+
+
+@event.listens_for(NotificationLog, "before_insert")
+@event.listens_for(NotificationLog, "before_update")
+def _freeze_log(mapper, connection, target) -> None:
+    if target.is_html is None:
+        html = False
+        if target.template_id:
+            from backend.services.message_vars import is_html
+            html = is_html(connection.execute(select(NotificationTemplate.body_template).where(
+                NotificationTemplate.id == target.template_id)).scalar_one_or_none())
+        target.is_html = html
+    if target.status not in ("queued", "scheduled"):     # still to send: it needs the live link
+        target.body = redact_portal_links(target.body)
+
+
 # ── Channel adapters ─────────────────────────────────────────────────────────
 class ChannelAdapter:
-    """Base adapter. Real providers subclass and implement send()."""
+    """Base adapter. Real providers subclass and implement send(). `html` says whether an
+    email body is HTML; it comes from the template (message_vars.is_html), never from the
+    filled-in text. None (old callers) falls back to looking at the body."""
     name = "base"
 
-    async def send(self, *, recipient: str, subject: Optional[str], body: str) -> dict:
+    async def send(self, *, recipient: str, subject: Optional[str], body: str,
+                   html: Optional[bool] = None) -> dict:
         raise NotImplementedError
 
 
@@ -38,10 +85,19 @@ class SimulatedAdapter(ChannelAdapter):
     def __init__(self, channel: str):
         self.name = channel
 
-    async def send(self, *, recipient: str, subject: Optional[str], body: str) -> dict:
+    async def send(self, *, recipient: str, subject: Optional[str], body: str,
+                   html: Optional[bool] = None) -> dict:
         if not recipient:
             return {"status": "failed", "error": "No recipient address/number on file"}
-        # No provider configured for this channel: log and mark sent (dev behaviour).
+        from backend.config import settings
+        if settings.is_deployed:
+            # A real deploy with no provider for this channel: nothing was delivered, so say so.
+            # Never write the body here: it holds reset / verification / invite links.
+            import logging
+            logging.getLogger(__name__).error("No %s provider configured; message to %s not sent",
+                                              self.name, recipient[:3] + "…")
+            return {"status": "failed", "error": f"No {self.name} provider is configured"}
+        # Development / tests: print it so a developer can follow the link locally.
         print(f"[notify:{self.name}:simulated] -> {recipient}: {(subject + ' | ') if subject else ''}{body[:120]}")
         return {"status": "sent", "error": None}
 
@@ -54,7 +110,9 @@ class SmtpEmailAdapter(ChannelAdapter):
     def __init__(self, creds: Optional[dict] = None):
         self.creds = creds or {}   # 144jn: this shop's own SMTP settings
 
-    async def send(self, *, recipient: str, subject: Optional[str], body: str) -> dict:
+    async def send(self, *, recipient: str, subject: Optional[str], body: str,
+                   html: Optional[bool] = None, attachment: Optional[tuple] = None) -> dict:
+        """``attachment`` is an optional (filename, bytes, mimetype), e.g. an invoice PDF."""
         if not recipient:
             return {"status": "failed", "error": "No email address on file"}
         import asyncio
@@ -68,20 +126,43 @@ class SmtpEmailAdapter(ChannelAdapter):
         from_addr = c.get("from") or settings.SMTP_FROM or user
         use_tls = c.get("use_tls") if c.get("use_tls") is not None else settings.SMTP_USE_TLS
         use_tls = str(use_tls).lower() in ("1", "true", "yes", "on") if isinstance(use_tls, str) else bool(use_tls)
+        # A shop's own SMTP server is a host we connect to for them: it must be public, and we
+        # connect to the address that was checked (as webhooks do). The operator's is trusted.
+        connect_to = host
+        if host and host != settings.SMTP_HOST:
+            from backend.core.ssrf import UnsafeURLError, public_ip_for
+            try:
+                connect_to = await asyncio.to_thread(public_ip_for, host, port)
+            except UnsafeURLError:
+                return {"status": "failed", "error": "SMTP: the server must be a public address"}
 
         def _blocking() -> dict:
             import re
             import smtplib
             from email.mime.text import MIMEText
-            # 144jd: email templates are now rich HTML — send as html when the body
-            # carries markup, else plain text.
-            subtype = "html" if re.search(r"<[a-zA-Z/][^>]*>", body or "") else "plain"
-            msg = MIMEText(body, subtype)
-            msg["Subject"] = subject or "Update on your order"
+            # 144jd: email templates can be rich HTML. The caller says which (from the
+            # template); the body check is only for callers that don't.
+            is_html = html if html is not None else bool(re.search(r"<[a-zA-Z/][^>]*>", body or ""))
+            msg = MIMEText(body, "html" if is_html else "plain")
+            if attachment:
+                from email.mime.application import MIMEApplication
+                from email.mime.multipart import MIMEMultipart
+                fname, data, mime = attachment
+                outer = MIMEMultipart()
+                outer.attach(msg)
+                part = MIMEApplication(data, _subtype=(mime or "application/octet-stream").split("/")[-1])
+                part.add_header("Content-Disposition", "attachment", filename=fname)
+                outer.attach(part)
+                msg = outer
+            msg["Subject"] = one_line(subject) or "Update on your order"
             msg["From"] = from_addr
             msg["To"] = recipient
             try:
-                with smtplib.SMTP(host, port, timeout=10) as s:
+                with smtplib.SMTP(timeout=10) as s:
+                    s.connect(connect_to, port)
+                    # starttls() checks the certificate against _host, which connect() set to the
+                    # address; put the real name back so verification uses the name.
+                    s._host = host
                     if use_tls:
                         s.starttls()
                     if user:
@@ -100,7 +181,8 @@ class TwilioAdapter(ChannelAdapter):
         self.name = channel  # 'sms' or 'whatsapp'
         self.creds = creds or {}   # 144jn: this shop's own Twilio account
 
-    async def send(self, *, recipient: str, subject: Optional[str], body: str) -> dict:
+    async def send(self, *, recipient: str, subject: Optional[str], body: str,
+                   html: Optional[bool] = None) -> dict:
         if not recipient:
             return {"status": "failed", "error": "No phone number on file"}
         from backend.config import settings
@@ -111,6 +193,10 @@ class TwilioAdapter(ChannelAdapter):
         from_addr = (c.get("whatsapp_from") or settings.TWILIO_WHATSAPP_FROM) if is_wa else (c.get("from") or settings.TWILIO_FROM)
         to_addr = f"whatsapp:{recipient}" if is_wa and not recipient.startswith("whatsapp:") else recipient
         text = ((subject + "\n\n") if subject else "") + body
+        from backend.services.twilio_voice import sms_refusal
+        refused = sms_refusal(c, whatsapp=is_wa)   # S7: no billed texts outside production
+        if refused:
+            return {"status": "failed", "error": refused}
         try:
             import httpx
             url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
@@ -182,7 +268,7 @@ async def send_direct_email(recipient: str, subject: str, body: str) -> dict:
     verification, teammate invite) through the same adapter seam as order
     notifications. With SMTP configured it delivers for real; otherwise it logs
     (dev) so the flow is testable without a mail server."""
-    return await _adapter_for("email").send(recipient=recipient, subject=subject, body=body)
+    return await _adapter_for("email").send(recipient=recipient, subject=subject, body=body, html=False)
 
 
 # ── Engine ───────────────────────────────────────────────────────────────────
@@ -222,7 +308,8 @@ async def dispatch_order_notifications(db: AsyncSession, *, org_id: str, order_i
         return 0
 
     # Reuse the document variable resolver so notification + document variables match.
-    from backend.routers.documents import _apply, _resolve
+    from backend.routers.documents import _resolve
+    from backend.services import message_vars
     variables = await _resolve(db, org_id, order)
     if isinstance(variables, tuple):   # build 144s made _resolve return (doc_map, rows)
         variables = variables[0]
@@ -230,8 +317,8 @@ async def dispatch_order_notifications(db: AsyncSession, *, org_id: str, order_i
 
     sent = 0
     for t in matched:
-        body = _apply(t.body_template or "", variables)
-        subject = _apply(t.subject or "", variables) if t.subject else None
+        subject, body = await message_vars.render_for_order(
+            db, org_id, order, t.subject or None, t.body_template or "", doc_vars=variables)
         recipient = None
         if client:
             recipient = client.email if t.channel == "email" else client.phone
@@ -253,10 +340,13 @@ async def dispatch_order_notifications(db: AsyncSession, *, org_id: str, order_i
             # simulated only when no account is connected.
             result = None
             if t.channel == "email":
-                result = await try_oauth_email(db, org_id, recipient=recipient, subject=subject, body=body)
+                result = await try_oauth_email(db, org_id, recipient=recipient, subject=subject, body=body,
+                                               html=message_vars.is_html(t.body_template))
             if result is None:
                 _creds = await notif_creds(db, org_id, t.channel)
-                result = await _adapter_for(t.channel, _creds).send(recipient=recipient, subject=subject, body=body)
+                result = await _adapter_for(t.channel, _creds).send(
+                    recipient=recipient, subject=subject, body=body,
+                    html=message_vars.is_html(t.body_template))
             log.status = result["status"]
             log.error = result.get("error")
             if log.status == "sent":
@@ -271,7 +361,7 @@ async def dispatch_order_notifications(db: AsyncSession, *, org_id: str, order_i
     await db.commit()
     return sent
 
-async def try_oauth_email(db, org_id, *, recipient, subject, body):
+async def try_oauth_email(db, org_id, *, recipient, subject, body, html: bool = False):
     """A6 seam: if the org has a connected Gmail/Outlook account, send through it
     and return the result; otherwise return None so the caller falls back to SMTP
     or the simulated adapter."""
@@ -288,6 +378,6 @@ async def try_oauth_email(db, org_id, *, recipient, subject, body):
         conns = (await db.execute(select(EmailConnection).where(
             EmailConnection.org_id == org_id, EmailConnection.connected == True))).scalars().all()  # noqa: E712
         conn = next((c for c in conns if c.is_default), conn)
-        return await send_via_connection(conn, recipient=recipient, subject=subject, body=body)
+        return await send_via_connection(conn, recipient=recipient, subject=subject, body=body, html=html)
     except Exception:
         return None

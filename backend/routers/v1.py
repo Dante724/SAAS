@@ -7,7 +7,7 @@ scopes (read/write) come from the key. Responses use a consistent envelope:
 Covered resources: contacts, orders, estimates, products, appointments, invoices,
 time-entries. Writes are gated by the 'write' scope.
 """
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -26,12 +26,14 @@ from backend.models import (
     Part,
     TimeEntry,
 )
-from backend.services.apikeys import ApiPrincipal, get_api_principal, require_scope
+from backend.services.apikeys import ApiPrincipal, require_scope
 from backend.services.numbering import next_number
+from backend.services.invoicing import balance_due as _inv_balance
 
 router = APIRouter(prefix="/api/v1", tags=["public-api-v1"])
 
-READ = Depends(get_api_principal)
+# v1 needs a broad scope: a key narrowed to one resource ("inquiries:read") is a v2 key.
+READ = Depends(require_scope("read"))
 WRITE = Depends(require_scope("write"))
 
 
@@ -50,9 +52,9 @@ async def index(principal: ApiPrincipal = READ):
         "resources": {
             "contacts": f"{base}/contacts", "orders": f"{base}/orders",
             "estimates": f"{base}/estimates", "products": f"{base}/products",
-            "appointments": f"{base}/appointments", "invoices": f"{base}/invoices",
+            "appointments": f"{base}/appointments", "invoices": f"{base}/invoices", "credit_notes": f"{base}/credit-notes",
             "time_entries": f"{base}/time-entries"},
-        "docs": "/api/v1/docs",
+        "docs": "/docs",
     }}
 
 
@@ -73,7 +75,7 @@ def _order(o: Order) -> dict:
 
 
 def _product(p: Part) -> dict:
-    return {"id": p.id, "sku": p.sku, "name": p.name, "brand": p.brand, "category": p.category,
+    return {"id": p.id, "sku": p.sku, "mpn": p.mpn, "name": p.name, "brand": p.brand, "category": p.category,
             "sell_price": p.sell_price, "cost_price": p.cost_price, "uom": p.uom,
             "barcode": p.barcode, "active": p.active}
 
@@ -88,7 +90,17 @@ def _appointment(b: Appointment) -> dict:
 def _invoice(i: Invoice) -> dict:
     return {"id": i.id, "number": i.invoice_number, "order_id": i.order_id, "client_id": i.client_id,
             "status": i.status, "subtotal": i.subtotal, "tax": i.tax, "total": i.total,
-            "amount_paid": i.amount_paid, "issued_at": i.issued_at.isoformat() if i.issued_at else None}
+            "amount_paid": i.amount_paid, "credited": i.credited or 0.0, "balance_due": _inv_balance(i),
+            "issued_at": i.issued_at.isoformat() if i.issued_at else None}
+
+
+def _credit_note(c) -> dict:
+    return {"id": c.id, "number": c.number, "status": c.status, "client_id": c.client_id,
+            "invoice_id": c.invoice_id, "reason": c.reason, "subtotal": c.subtotal, "tax": c.tax_total,
+            "total": c.total, "issued_at": c.issued_at.isoformat() if c.issued_at else None,
+            "canceled_at": c.canceled_at.isoformat() if c.canceled_at else None,
+            "lines": [{"description": l.description, "qty": l.qty, "unit_price": l.unit_price,
+                       "tax_rate": l.tax_rate, "net": l.net, "tax": l.tax, "total": l.total} for l in c.lines]}
 
 
 def _time_entry(e: TimeEntry) -> dict:
@@ -260,6 +272,33 @@ async def get_invoice(iid: str, db: AsyncSession = Depends(get_db), principal: A
     if not i:
         raise HTTPException(404, "Invoice not found")
     return {"data": _invoice(i)}
+
+
+# ── credit notes (read) ──────────────────────────────────────────────────────
+@router.get("/credit-notes")
+async def list_credit_notes(page: int = 1, page_size: int = Query(25, le=100),
+                            db: AsyncSession = Depends(get_db), principal: ApiPrincipal = READ):
+    from sqlalchemy.orm import selectinload
+
+    from backend.models import CreditNote
+    size, page = max(1, page_size), max(1, page)
+    cond = CreditNote.org_id == principal.org_id
+    total = (await db.execute(select(func.count()).select_from(CreditNote).where(cond))).scalar() or 0
+    rows = (await db.execute(select(CreditNote).where(cond).options(selectinload(CreditNote.lines))
+                             .order_by(desc(CreditNote.created_at)).limit(size).offset((page - 1) * size))).scalars().all()
+    return _page([_credit_note(r) for r in rows], total, page, size)
+
+
+@router.get("/credit-notes/{cn_id}")
+async def get_credit_note(cn_id: str, db: AsyncSession = Depends(get_db), principal: ApiPrincipal = READ):
+    from sqlalchemy.orm import selectinload
+
+    from backend.models import CreditNote
+    c = (await db.execute(select(CreditNote).where(CreditNote.id == cn_id, CreditNote.org_id == principal.org_id)
+                          .options(selectinload(CreditNote.lines)))).scalar_one_or_none()
+    if not c:
+        raise HTTPException(404, "Credit note not found")
+    return {"data": _credit_note(c)}
 
 
 # ── time entries ─────────────────────────────────────────────────────────────

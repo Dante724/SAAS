@@ -37,17 +37,23 @@ def totp(secret: str, *, at: int | None = None, step: int = 30, digits: int = 6)
 
 def verify(secret: str, code: str, *, window: int = 1) -> bool:
     """Verify a code, allowing +/- `window` steps for clock drift."""
+    return verify_step(secret, code, window=window) is not None
+
+
+def verify_step(secret: str, code: str, *, window: int = 1) -> int | None:
+    """Like verify(), but return the 30-second time step the code belongs to (or None), so a
+    caller can refuse to accept the same code twice."""
     if not code or not secret:
-        return False
+        return None
     code = code.strip().replace(" ", "")
     now = int(time.time())
     for w in range(-window, window + 1):
         if hmac.compare_digest(totp(secret, at=now + w * 30), code):
-            return True
-    return False
+            return (now + w * 30) // 30
+    return None
 
 
-def provisioning_uri(secret: str, *, account: str, issuer: str = "RepairOS") -> str:
+def provisioning_uri(secret: str, *, account: str, issuer: str = "Tekly") -> str:
     """otpauth:// URI for authenticator-app QR enrollment."""
     from urllib.parse import quote
     label = quote(f"{issuer}:{account}")

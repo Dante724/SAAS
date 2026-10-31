@@ -7,7 +7,6 @@ from backend.models import (
     ApprovalRequest,
     Call,
     EcommerceOrderMap,
-    InboxThread,
     Order,
     Role,
 )
@@ -42,114 +41,69 @@ async def test_bulk_accrual_runs_every_employee_once(client, tenant):
 
 @pytest.mark.asyncio
 async def test_bulk_accrual_blocks_current_month(client, tenant):
-    from datetime import date
-    today = date.today()
+    from backend.models import Organisation
+    from backend.services.dates import today_in
+    today = today_in(Organisation.__table__.c.timezone.default.arg)   # the shop's day, not the server's
     r = await client.post("/api/payroll/run-all", json={
         "period_start": today.replace(day=1).isoformat(),
         "period_end": today.isoformat()}, headers=tenant)
     assert r.status_code == 400
 
 
-# ══ Build 104: unified inbox ═════════════════════════════════════════════════
+# ══ Build 104: unified inbox (C4: inbound now lands in Chats; the old URL forwards) ═══
+async def _chat_threads(client, H, **params):
+    return (await client.get("/api/chats/threads", params=params, headers=H)).json()
+
+
 @pytest.mark.asyncio
 async def test_inbound_threads_by_handle(client, tenant, db):
     me = await _me(client, tenant)
     org = me["org_id"]
-    # two messages from the same handle land in one thread
-    for text in ("hello", "are you open?"):
-        r = await client.post(f"/api/inbox/webhook/{org}", json={
-            "channel": "whatsapp", "handle": "+15551000", "body": text},
-            headers=await _wh_headers(client, tenant))
+    # two messages from the same handle land in one thread — via the new URL and the old one
+    for url, text in ((f"/api/chats/webhook/{org}", "hello"), (f"/api/inbox/webhook/{org}", "are you open?")):
+        r = await client.post(url, json={"channel": "whatsapp", "handle": "+15551000", "body": text},
+                              headers=await _wh_headers(client, tenant))
         assert r.status_code == 201, r.text
-    threads = (await client.get("/api/inbox/threads", headers=tenant)).json()
-    mine = [t for t in threads["items"] if t["handle"] == "+15551000"]
-    assert len(mine) == 1
-    assert threads["unread_count"] >= 1
+        assert set(r.json()) >= {"thread_id", "message_id"}
+    threads = await _chat_threads(client, tenant)
+    mine = [t for t in threads["items"] if t["contact_phone"] == "+15551000"]
+    assert len(mine) == 1 and mine[0]["status"] == "new"
+    assert threads["counts"]["new"] >= 1
 
     # a different handle is a different thread
-    await client.post(f"/api/inbox/webhook/{org}", json={
+    await client.post(f"/api/chats/webhook/{org}", json={
         "channel": "whatsapp", "handle": "+15552000", "body": "hi"},
         headers=await _wh_headers(client, tenant))
-    threads2 = (await client.get("/api/inbox/threads", headers=tenant)).json()
+    threads2 = await _chat_threads(client, tenant)
     assert len({t["id"] for t in threads2["items"]}) >= 2
 
 
 @pytest.mark.asyncio
-async def test_open_thread_clears_unread_and_reply(client, tenant):
-    me = await _me(client, tenant)
-    org = me["org_id"]
-    w = (await client.post(f"/api/inbox/webhook/{org}", json={
-        "channel": "sms", "handle": "+15553000", "body": "quote please"},
-        headers=await _wh_headers(client, tenant))).json()
-    tid = w["thread_id"]
-
-    detail = (await client.get(f"/api/inbox/threads/{tid}", headers=tenant)).json()
-    assert detail["thread"]["unread"] is False       # opening clears it
-    assert len(detail["messages"]) == 1
-
-    rep = await client.post(f"/api/inbox/threads/{tid}/reply", json={
-        "body": "Sure, happy to help"}, headers=tenant)
-    assert rep.status_code == 201
-    after = (await client.get(f"/api/inbox/threads/{tid}", headers=tenant)).json()
-    assert len(after["messages"]) == 2
-    assert after["messages"][-1]["direction"] == "outbound"
+async def test_generic_webhook_dedupes_on_message_id(client, tenant):
+    org = (await _me(client, tenant))["org_id"]
+    body = {"channel": "sms", "handle": "+15553000", "body": "quote please", "external_message_id": "ext-1"}
+    first = (await client.post(f"/api/chats/webhook/{org}", json=body,
+                               headers=await _wh_headers(client, tenant))).json()
+    again = (await client.post(f"/api/chats/webhook/{org}", json=body,
+                               headers=await _wh_headers(client, tenant))).json()
+    assert again["message_id"] == first["message_id"] and again["duplicate"] is True
+    msgs = (await client.get(f"/api/chats/threads/{first['thread_id']}/messages", headers=tenant)).json()["items"]
+    assert len(msgs) == 1
 
 
 @pytest.mark.asyncio
-async def test_create_thread_new_conversation(client, tenant):
-    """Build 113: Chats can start a new outbound conversation on any channel."""
-    r = await client.post("/api/inbox/threads", json={
-        "channel": "email", "handle": "new@cust.dev", "body": "Hello there"}, headers=tenant)
-    assert r.status_code == 201, r.text
-    tid = r.json()["thread_id"]
-    detail = (await client.get(f"/api/inbox/threads/{tid}", headers=tenant)).json()
-    assert detail["thread"]["channel"] == "email"
-    assert detail["messages"][-1]["direction"] == "outbound"
-
-    # starting again on the same handle reuses the open thread, not a duplicate
-    again = await client.post("/api/inbox/threads", json={
-        "channel": "email", "handle": "new@cust.dev"}, headers=tenant)
-    assert again.json()["thread_id"] == tid
+async def test_generic_webhook_rejects_unknown_channel(client, tenant):
+    org = (await _me(client, tenant))["org_id"]
+    r = await client.post(f"/api/chats/webhook/{org}", json={"channel": "pigeon", "handle": "x", "body": "hi"},
+                          headers=await _wh_headers(client, tenant))
+    assert r.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_thread_to_order_creates_client_and_order(client, tenant, db):
-    me = await _me(client, tenant)
-    org = me["org_id"]
-    w = (await client.post(f"/api/inbox/webhook/{org}", json={
-        "channel": "whatsapp", "handle": "+15554000", "body": "screen cracked"},
-        headers=await _wh_headers(client, tenant))).json()
-    tid = w["thread_id"]
-
-    r = await client.post(f"/api/inbox/threads/{tid}/to-order", headers=tenant)
-    assert r.status_code == 201, r.text
-    assert r.json()["order_id"]
-
-    # links back; a second attempt is refused
-    again = await client.post(f"/api/inbox/threads/{tid}/to-order", headers=tenant)
-    assert again.status_code == 409
-
-    t = (await db.execute(select(InboxThread).where(InboxThread.id == tid))).scalar_one()
-    assert t.order_id and t.client_id
-
-
-@pytest.mark.asyncio
-async def test_thread_snooze_and_close(client, tenant):
-    me = await _me(client, tenant)
-    org = me["org_id"]
-    w = (await client.post(f"/api/inbox/webhook/{org}", json={
-        "channel": "email", "handle": "a@b.dev", "body": "hi"},
-        headers=await _wh_headers(client, tenant))).json()
-    tid = w["thread_id"]
-    r = await client.patch(f"/api/inbox/threads/{tid}?status=closed", headers=tenant)
-    assert r.status_code == 200 and r.json()["status"] == "closed"
-
-    # a new inbound reopens the closed thread
-    await client.post(f"/api/inbox/webhook/{org}", json={
-        "channel": "email", "handle": "a@b.dev", "body": "still there?"},
-        headers=await _wh_headers(client, tenant))
-    detail = (await client.get(f"/api/inbox/threads/{tid}", headers=tenant)).json()
-    assert detail["thread"]["status"] == "open"
+async def test_retired_inbox_thread_endpoints_are_gone(client, tenant):
+    assert (await client.get("/api/inbox/threads", headers=tenant)).status_code == 404
+    assert (await client.post("/api/inbox/threads", json={"channel": "sms", "handle": "1"},
+                              headers=tenant)).status_code in (404, 405)
 
 
 # ══ Build 105: VoIP + AI ═════════════════════════════════════════════════════
