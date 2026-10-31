@@ -15,8 +15,8 @@ async def test_invoice_preview_lines_add_up_to_the_total(client, tenant):
         r = await client.post(f"/api/orders/{oid}/lines", headers=tenant, json=body)
         assert r.status_code in (200, 201), r.text
     p = (await client.get(f"/api/orders/{oid}/invoice-preview", headers=tenant)).json()
-    by = {l["description"]: l for l in p["lines"]}
+    by = {ln["description"]: ln for ln in p["lines"]}
     assert by["Fix"]["total"] == pytest.approx(90.0)
     assert by["Screen"]["total"] == pytest.approx(96.05)        # (100 - 15) × 1.13
     assert by["Fix"]["discount"] == 10
-    assert sum(l["total"] for l in p["lines"]) == pytest.approx(p["total"])
+    assert sum(ln["total"] for ln in p["lines"]) == pytest.approx(p["total"])

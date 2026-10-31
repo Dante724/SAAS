@@ -46,7 +46,7 @@ async def test_coupon_reduces_the_tax_on_a_taxed_job(client, tenant):
     assert r.json()["discount"] == pytest.approx(11.30)
     o = (await client.get(f"/api/orders/{oid}", headers=tenant)).json()
     assert o["total"] == pytest.approx(101.70)
-    tax = sum(_tax_of(l) for l in o["lines"])
+    tax = sum(_tax_of(ln) for ln in o["lines"])
     assert tax == pytest.approx(11.70, abs=0.005)           # 13% of the 90 actually charged
 
 
@@ -68,7 +68,7 @@ async def test_coupon_on_tax_included_job_takes_value_off_the_shelf_price(client
     assert r.status_code == 200, r.text
     o = (await client.get(f"/api/orders/{oid}", headers=tenant)).json()
     assert o["total"] == pytest.approx(94.50)
-    assert sum(_tax_of(l) for l in o["lines"]) == pytest.approx(4.50, abs=0.005)
+    assert sum(_tax_of(ln) for ln in o["lines"]) == pytest.approx(4.50, abs=0.005)
 
 
 @pytest.mark.asyncio
@@ -103,4 +103,4 @@ def test_printed_tax_summary_takes_the_coupon_tax_off():
     from backend.routers.documents import _line_numbers
     work = L(qty=1, unit_price=100, tax_rate=13, tax_mode="imposed", discount=0, discount_type="pct", total=113)
     coupon = L(qty=1, unit_price=-10, tax_rate=13, tax_mode="imposed", discount=0, discount_type="pct", total=-11.3)
-    assert sum(_line_numbers(l)["tax"] for l in (work, coupon)) == pytest.approx(11.70)
+    assert sum(_line_numbers(ln)["tax"] for ln in (work, coupon)) == pytest.approx(11.70)
