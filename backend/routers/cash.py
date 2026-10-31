@@ -8,7 +8,7 @@ income transaction to the chosen account (or to client debt).
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -635,9 +635,26 @@ async def post_order_payment(db, org_id, o, amount, acc, method, *, actor_id=Non
 async def pay_order(
     order_id: str,
     data: OrderPaymentIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
+    # A retried click with the same Idempotency-Key returns the first payment's answer: the row
+    # lock below only stops a second "pay the balance", not a part payment sent twice.
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "cash.pay_order")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _pay_order(order_id, data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, current: Employee):
     # Lock the order row so two concurrent "pay" requests serialize (Postgres) — combined with the
     # remaining<=0 guard below this prevents a double-click / webhook-race from double-posting a
     # payment. (with_for_update is a no-op on SQLite, which already serializes writes.)
@@ -710,13 +727,31 @@ class PrepayIn(BaseModel):
 async def prepay_order(
     order_id: str,
     data: PrepayIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
     """Take a prepayment on an order. Posts income to the chosen cashbox and
     records a Payment(kind=prepayment) that the close-window math subtracts. It lands on the
-    job's open invoice now, or on the job's next invoice when it gets one (G4)."""
-    o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    job's open invoice now, or on the job's next invoice when it gets one (G4).
+    A double click with the same Idempotency-Key posts once and gets the first answer back."""
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "cash.prepay_order")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _prepay_order(order_id, data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _prepay_order(order_id: str, data: PrepayIn, db: AsyncSession, current: Employee):
+    # Row lock so two prepayments serialize: prepayment_total below is then read fresh.
+    o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
+                          .with_for_update())).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
     if data.amount <= 0:

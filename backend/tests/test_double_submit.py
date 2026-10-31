@@ -181,3 +181,78 @@ async def test_customer_cannot_add_recommendations_to_a_closed_job(client, tenan
     r = await client.post(f"/api/public/track/{tok}/recommendations/decide", json={"approve_ids": [rid]})
     assert r.status_code == 409, r.text
     assert await K.stock(client, tenant, pid) == 10
+
+
+# ── 4. payments: Idempotency-Key on every desktop money path ───────────────────────────────────
+async def _till(client, h):
+    return (await client.post("/api/cash/accounts", json={"name": "Till", "payment_option": "cash"},
+                              headers=h)).json()["id"]
+
+
+async def _balance(client, h, aid):
+    accs = (await client.get("/api/cash/accounts", headers=h)).json()
+    accs = accs if isinstance(accs, list) else accs.get("items", [])
+    return float(next(a for a in accs if a["id"] == aid)["balance"])
+
+
+async def _priced_job(client, h, total=100):
+    cid = (await client.post("/api/clients", json={"name": "C", "phone": "+15559"}, headers=h)).json()["id"]
+    oid = (await client.post("/api/orders", json={"client_id": cid}, headers=h)).json()["id"]
+    await client.post(f"/api/orders/{oid}/lines", json={
+        "line_type": "labour", "description": "Fix", "qty": 1, "unit_price": total}, headers=h)
+    return cid, oid
+
+
+@pytest.mark.asyncio
+async def test_prepay_double_click_with_same_key_posts_once(client, tenant):
+    _cid, oid = await _priced_job(client, tenant)
+    till = await _till(client, tenant)
+    h = {**tenant, "Idempotency-Key": "prepay-1"}
+    for _ in range(2):
+        r = await client.post(f"/api/cash/orders/{oid}/prepay", headers=h, json={"amount": 30, "account_id": till})
+        assert r.status_code == 201, r.text
+        assert r.json()["prepaid"] == 30
+    assert await _balance(client, tenant, till) == 30
+    o = await K.order(client, tenant, oid)
+    assert float(o.get("prepayment_total") or 30) == 30
+
+
+@pytest.mark.asyncio
+async def test_invoice_payment_double_click_with_same_key_posts_once(client, tenant):
+    cid, oid = await _priced_job(client, tenant)
+    till = await _till(client, tenant)
+    inv = await K.invoice(client, tenant, oid, cid)
+    h = {**tenant, "Idempotency-Key": "inv-pay-1"}
+    for _ in range(2):
+        r = await client.post(f"/api/finance/invoices/{inv}/pay", headers=h,
+                              json={"amount": 40, "method": "cash", "account_id": till})
+        assert r.status_code == 200, r.text
+        assert r.json()["amount_paid"] == 40
+    assert await _balance(client, tenant, till) == 40
+
+
+@pytest.mark.asyncio
+async def test_pos_charge_double_click_with_same_key_makes_one_sale(client, tenant):
+    till = await _till(client, tenant)
+    h = {**tenant, "Idempotency-Key": "sale-1"}
+    body = {"account_id": till, "lines": [
+        {"line_type": "labour", "kind": "custom", "description": "Diagnostic", "qty": 1, "unit_price": 45}]}
+    ids = set()
+    for _ in range(2):
+        r = await client.post("/api/sales", headers=h, json=body)
+        assert r.status_code == 201, r.text
+        ids.add(r.json()["id"])
+    assert len(ids) == 1
+    assert await _balance(client, tenant, till) == 45
+
+
+@pytest.mark.asyncio
+async def test_order_payment_double_click_with_same_key_posts_once(client, tenant):
+    _cid, oid = await _priced_job(client, tenant)
+    till = await _till(client, tenant)
+    h = {**tenant, "Idempotency-Key": "pay-1"}
+    for _ in range(2):
+        r = await client.post(f"/api/cash/orders/{oid}/pay", headers=h,
+                              json={"method": "cash", "account_id": till, "amount": 25})
+        assert r.status_code in (200, 201), r.text
+    assert await _balance(client, tenant, till) == 25

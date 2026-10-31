@@ -210,3 +210,15 @@ async def encrypt_plain_passcodes() -> None:
         await db.commit()
         if done:
             log.info("passcode-encrypt-sweep: encrypted %d record(s)", done)
+
+
+@job_runner.every(3600, "idempotency-sweep")
+async def sweep_idempotency_keys() -> None:
+    """Forget Idempotency-Keys older than 48h (services/idempotency.py)."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.services.idempotency import sweep
+
+    async with AsyncSessionLocal() as db:
+        removed = await sweep(db)
+        if removed:
+            log.info("idempotency-sweep: removed %d old key(s)", removed)
