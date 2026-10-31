@@ -20,6 +20,7 @@ async def apply_receipt_line(
     bin_id: str | None = None, serials: list[str] | None = None,
     create_batch: bool = True, set_last_cost: bool = False, expiry_date=None, lot: str | None = None,
     supplier_id: str | None = None, movement_type: str = "receive", warehouse_id: str | None = None,
+    cost_known: bool = False,
 ) -> float:
     """Post `qty` of `part` into `location_id` at `unit_cost`. Returns the unit cost used.
 
@@ -43,8 +44,9 @@ async def apply_receipt_line(
 
     # Global moving-average: weight existing on-hand (across ALL locations) against the
     # incoming qty at this receipt's unit cost. Only move the average when a real cost is
-    # supplied — a zero-cost line must not drag the average to zero.
-    if unit_cost:
+    # supplied — a zero-cost line must not drag the average to zero — unless the caller says 0 is
+    # the real cost (`cost_known`: a free PO line, opening stock entered at 0).
+    if unit_cost or cost_known:
         on_hand = (await db.execute(select(func.coalesce(func.sum(StockLevel.qty_available), 0))
             .where(StockLevel.part_id == part.id))).scalar() or 0
         old_avg = part.avg_cost or part.cost_price or 0
@@ -94,41 +96,59 @@ async def apply_receipt_line(
 async def apply_cost_adjustment(
     db, *, org_id: str, part: Part, add_cost_total: float,
     po_id: str | None = None, created_by_id: str | None = None, note: str | None = None,
+    received_qty: float | None = None,
 ) -> dict:
     """144ap — landed-cost recost. Add `add_cost_total` (e.g. a freight bill that landed after
     the goods) to the inventory value of `part` WITHOUT changing quantity.
 
-    - Bumps the global moving-average (`avg_cost`) by the on-hand share only — value tied to
-      units already consumed can't be pushed back into inventory (it's sunk COGS), matching how
-      lightweight inventory systems recost: only stock still on hand is revalued.
-    - Raises the remaining FIFO layers (this PO's first, else the part's) so exact-COGS
-      fulfilment carries the freight too.
-    - Writes a zero-qty `recost` StockMovement for the audit trail.
-    Returns {applied, on_hand} — `applied` is the portion that actually landed on inventory.
+    With `po_id` + `received_qty` (the PO's units of this part received so far) the cost belongs
+    to those units only (QA fix D): `add_cost_total / received_qty` per unit, landing on the PO's
+    units still on hand (its FIFO layers). The share of units already sold or used is sunk COGS
+    and is not pushed into inventory, and other stock (opening stock, other POs) is not touched.
+    Without them: spread over everything on hand (the older behaviour).
+
+    - The moving average (`avg_cost`) rises by what landed, over global on-hand.
+    - The PO's remaining FIFO layers rise by the per-unit amount, so exact COGS carries it too.
+    - A zero-qty `recost` StockMovement records it.
+    Returns {applied, on_hand, expensed}: `applied` landed on inventory, `expensed` went to units
+    already gone.
     """
     if not add_cost_total:
-        return {"applied": 0.0, "on_hand": 0.0}
+        return {"applied": 0.0, "on_hand": 0.0, "expensed": 0.0}
+    from backend.models import StockItemBatch
     rows = (await db.execute(select(StockLevel).where(StockLevel.part_id == part.id))).scalars().all()
     on_hand = float(sum(r.qty_available or 0 for r in rows))
     if on_hand <= 0:
-        return {"applied": 0.0, "on_hand": 0.0}   # nothing on hand to revalue
+        return {"applied": 0.0, "on_hand": 0.0, "expensed": q2(add_cost_total)}   # nothing on hand to revalue
     loc_id = next((r.location_id for r in rows if (r.qty_available or 0) > 0), rows[0].location_id if rows else None)
-    # Moving average carries the full added cost spread over what's still on hand.
-    part.avg_cost = q4((part.avg_cost or part.cost_price or 0) + add_cost_total / on_hand)
 
-    # Raise remaining FIFO layers by the same per-unit amount (prefer this PO's own layers).
-    from backend.models import StockItemBatch
-    add_per_unit = add_cost_total / on_hand
-    q = select(StockItemBatch).where(StockItemBatch.part_id == part.id, StockItemBatch.qty_remaining > 0)
-    if po_id:
-        q = q.where(StockItemBatch.po_id == po_id)
-    for b in (await db.execute(q)).scalars().all():
+    layers_q = select(StockItemBatch).where(StockItemBatch.part_id == part.id, StockItemBatch.qty_remaining > 0)
+    if po_id and received_qty and received_qty > 0:
+        add_per_unit = add_cost_total / received_qty
+        po_layers = (await db.execute(layers_q.where(StockItemBatch.po_id == po_id))).scalars().all()
+        has_po_layers = (await db.execute(select(StockItemBatch.id).where(
+            StockItemBatch.part_id == part.id, StockItemBatch.po_id == po_id).limit(1))).scalar_one_or_none()
+        if has_po_layers:
+            left = min(float(sum(float(b.qty_remaining or 0) for b in po_layers)), on_hand)
+        else:      # received before cost layers existed: assume the PO's units are what's left first
+            left = min(float(received_qty), on_hand)
+        layers = po_layers
+    else:
+        add_per_unit = add_cost_total / on_hand
+        left = on_hand
+        layers = (await db.execute(layers_q.where(StockItemBatch.po_id == po_id) if po_id else layers_q)).scalars().all()
+    applied = add_per_unit * left
+    if applied:
+        part.avg_cost = q4((part.avg_cost or part.cost_price or 0) + applied / on_hand)
+    for b in layers:
         b.unit_cost = (b.unit_cost or Decimal("0")) + Decimal(str(q4(add_per_unit)))
 
+    from backend.services import stock_rows
     db.add(StockMovement(part_id=part.id, location_id=loc_id, movement_type="recost", qty=0,
+                         warehouse_id=await stock_rows.warehouse_for(db, loc_id) if loc_id else None,
                          unit_cost=q4(add_per_unit), created_by_id=created_by_id,
                          ref_type="po" if po_id else "recost", ref_id=po_id))
-    return {"applied": q2(add_cost_total), "on_hand": on_hand}
+    return {"applied": q2(applied), "on_hand": on_hand, "expensed": q2(add_cost_total - applied)}
 
 
 async def _atomic_add(db, obj, attr, delta, *, round_to=None):

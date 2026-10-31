@@ -306,3 +306,71 @@ async def test_count_down_adjust_consumes_layers(client, tenant, db):
     assert r.status_code == 200, r.text
     on_hand, value = await _assert_books(db, pid)
     assert on_hand == 8 and value == pytest.approx(3 * 2 + 5 * 4)
+
+
+# ── 4. landed-cost recost lands on the PO's own units still on hand; free lines cost 0 ─────
+async def _layer_costs(db, pid):
+    await db.commit()
+    rows = (await db.execute(select(StockItemBatch).where(StockItemBatch.part_id == pid)
+                             .order_by(StockItemBatch.received_at))).scalars().all()
+    return [(float(b.qty_remaining), float(b.unit_cost)) for b in rows if float(b.qty_remaining) > 0]
+
+
+async def _recost(client, h, po_id, amount):
+    r = await client.post(f"/api/inventory/po/{po_id}/recost", headers=h, json={
+        "charges": [{"label": "Freight", "amount": amount}], "charges_to_cost": True})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+@pytest.mark.asyncio
+async def test_recost_leaves_opening_stock_alone(client, tenant, db):
+    loc = await _loc(client, tenant)
+    pid = await _part(client, tenant, "QD-4A")
+    await client.post(f"/api/inventory/parts/{pid}/adjust", headers=tenant, json={
+        "location_id": loc, "qty": 9, "movement_type": "adjust", "unit_cost": 2})
+    po_id, line = await _po(client, tenant, pid, 10, 2)
+    await client.post(f"/api/inventory/po/{po_id}/receive", headers=tenant,
+                      json={"lines": [{"po_line_id": line, "qty": 10}]})
+    out = await _recost(client, tenant, po_id, 20)
+    assert out["applied"] == pytest.approx(20.0)
+    assert await _layer_costs(db, pid) == [(9, pytest.approx(2.0)), (10, pytest.approx(4.0))]
+    assert (await _get(client, tenant, pid))["avg_cost"] == pytest.approx((18 + 20 + 20) / 19, abs=1e-3)
+    _on_hand, value = await _assert_books(db, pid)
+    assert value == pytest.approx(58.0)
+
+
+@pytest.mark.asyncio
+async def test_recost_skips_po_units_already_used(client, tenant, db):
+    loc = await _loc(client, tenant)
+    pid = await _part(client, tenant, "QD-4B")
+    po_id, line = await _po(client, tenant, pid, 10, 2)
+    await client.post(f"/api/inventory/po/{po_id}/receive", headers=tenant,
+                      json={"lines": [{"po_line_id": line, "qty": 10}]})
+    await client.post(f"/api/inventory/parts/{pid}/adjust", headers=tenant, json={
+        "location_id": loc, "qty": 6, "movement_type": "writeoff"})
+    out = await _recost(client, tenant, po_id, 20)
+    assert out["applied"] == pytest.approx(8.0)          # 4 units left × 2.00 freight each
+    assert out["expensed"] == pytest.approx(12.0)        # the 6 gone already carried their cost
+    assert await _layer_costs(db, pid) == [(4, pytest.approx(4.0))]
+    assert (await _get(client, tenant, pid))["avg_cost"] == pytest.approx(4.0)
+    again = await _recost(client, tenant, po_id, 20)      # same bill again: nothing more
+    assert again["applied"] == pytest.approx(0.0)
+    assert (await _get(client, tenant, pid))["avg_cost"] == pytest.approx(4.0)
+    await _assert_books(db, pid)
+
+
+@pytest.mark.asyncio
+async def test_free_po_line_is_received_at_zero(client, tenant, db):
+    loc = await _loc(client, tenant)
+    pid = await _part(client, tenant, "QD-4C", cost_price=5)
+    await client.post(f"/api/inventory/parts/{pid}/adjust", headers=tenant, json={
+        "location_id": loc, "qty": 10, "movement_type": "adjust", "unit_cost": 4})
+    po_id, line = await _po(client, tenant, pid, 10, 0)
+    r = await client.post(f"/api/inventory/po/{po_id}/receive", headers=tenant,
+                          json={"lines": [{"po_line_id": line, "qty": 10}]})
+    assert r.status_code == 200 and r.json()["received_cost"] == 0
+    assert await _layer_costs(db, pid) == [(10, pytest.approx(4.0)), (10, pytest.approx(0.0))]
+    assert (await _get(client, tenant, pid))["avg_cost"] == pytest.approx(2.0)
+    _on_hand, value = await _assert_books(db, pid)
+    assert value == pytest.approx(40.0)

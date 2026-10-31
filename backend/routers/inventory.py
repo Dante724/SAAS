@@ -275,7 +275,8 @@ async def adjust_stock(
         await stock_posting.apply_receipt_line(
             db, org_id=current.org_id, part=part, location_id=data.location_id, qty=data.qty,
             unit_cost=float(cost), created_by_id=current.id, ref_type=data.movement_type,
-            movement_type=data.movement_type, warehouse_id=_w.id if _w else None)
+            movement_type=data.movement_type, warehouse_id=_w.id if _w else None,
+            cost_known=data.unit_cost is not None)
         await db.commit()
         return {"ok": True, "qty_available": (await stock_rows.totals(db, part_id, data.location_id))[0]}
     if data.movement_type == "writeoff" or (data.movement_type in ("receive", "adjust") and data.qty < 0):
@@ -1844,6 +1845,7 @@ async def recost_po(
     # Freight that *should* now sit in the units already received, at current charges.
     target = 0.0
     per_part_target: dict[str, float] = {}
+    per_part_recvd: dict[str, float] = {}
     for pl in po_lines:
         recvd = pl.qty_received or 0
         if recvd <= 0:
@@ -1851,13 +1853,17 @@ async def recost_po(
         tline = per_unit_map.get(pl.id, 0.0) * recvd
         target += tline
         per_part_target[pl.part_id] = per_part_target.get(pl.part_id, 0.0) + tline
+        per_part_recvd[pl.part_id] = per_part_recvd.get(pl.part_id, 0.0) + recvd
 
     delta_total = q2(target - (po.freight_capitalised or 0))
     if abs(delta_total) < 0.005:
         await db.commit()
         return {"ok": True, "applied": 0.0, "note": "Already up to date"}
 
-    applied = 0.0
+    # QA fix D: the freight belongs to this PO's units only. What lands on stock is the share of its
+    # units still on hand; the share of units already sold / used is sunk COGS (`expensed`). Both
+    # count as accounted for, so the same bill recosted again applies nothing.
+    applied = expensed = 0.0
     scale = (delta_total / target) if target else 0
     for part_id, tpart in per_part_target.items():
         part = (await db.execute(select(Part).where(Part.id == part_id))).scalar_one_or_none()
@@ -1865,11 +1871,12 @@ async def recost_po(
             continue
         res = await stock_posting.apply_cost_adjustment(
             db, org_id=current.org_id, part=part, add_cost_total=q4(tpart * scale),
-            po_id=po_id, created_by_id=current.id)
+            po_id=po_id, created_by_id=current.id, received_qty=per_part_recvd.get(part_id))
         applied += res["applied"]
-    po.freight_capitalised = q2((po.freight_capitalised or 0) + applied)
+        expensed += res["expensed"]
+    po.freight_capitalised = q2((po.freight_capitalised or 0) + delta_total)
     await db.commit()
-    return {"ok": True, "applied": q2(applied), "delta_total": delta_total}
+    return {"ok": True, "applied": q2(applied), "expensed": q2(expensed), "delta_total": delta_total}
 
 
 class POInvoiceIn(BaseModel):
@@ -2008,7 +2015,9 @@ async def receive_po(
     for pl, recv, part, rline in plan:
         line_bin = (rline.bin_id if rline and rline.bin_id else data.bin_id)
         pl.qty_received = (pl.qty_received or 0) + recv
-        unit_cost = pl.unit_cost or part.cost_price or 0
+        # The PO line's price is what we pay — an explicit 0 (a free line) is 0, not the catalog cost;
+        # only a line with no price at all (older data) falls back to the catalog.
+        unit_cost = pl.unit_cost if pl.unit_cost is not None else (part.cost_price or 0)
         if allocate_freight:
             fpu = po_freight_pu.get(pl.id, 0.0)
             unit_cost = q4(unit_cost + fpu)
@@ -2024,7 +2033,8 @@ async def receive_po(
             db, org_id=current.org_id, part=part, location_id=po.location_id,
             qty=recv, unit_cost=unit_cost, created_by_id=current.id,
             ref_type="po", ref_id=po_id, bin_id=line_bin, supplier_id=po.supplier_id,
-            serials=checked_serials.get(pl.id) or None, create_batch=True)
+            serials=checked_serials.get(pl.id) or None, create_batch=True,
+            cost_known=pl.unit_cost is not None)
         # 144bo: reset low-stock dedupe + notify any job that was waiting on this part.
         after_oh = await _alerts.global_on_hand(db, part.id)
         await _alerts.on_received(db, current.org_id, part, before_oh, after_oh)
