@@ -18,7 +18,7 @@ from backend.models import (
     TaxRule,
 )
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.numbering import DEFAULT_TEMPLATES, peek_example
+from backend.services.numbering import DEFAULT_TEMPLATES, _existing_count, doc_template_problem, peek_example
 from backend.services.owned import require_owned_ids
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -28,8 +28,16 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 class NumberingIn(BaseModel):
     doc_type: str
     template: str
-    begins_from: int = 1
+    begins_from: Optional[int] = None   # omitted: keep the counter where it is (prefix-only change)
     scope_key: str = "org"
+
+
+def _check_template(template: str, begins_from: Optional[int]) -> None:
+    problem = doc_template_problem(template)
+    if problem:
+        raise HTTPException(422, problem)
+    if begins_from is not None and begins_from < 1:
+        raise HTTPException(422, "Numbering must start from 1 or higher")
 
 
 @router.get("/numbering")
@@ -66,26 +74,37 @@ async def set_numbering(
 ):
     if data.doc_type not in DEFAULT_TEMPLATES:
         raise HTTPException(422, f"Unknown doc_type. Valid: {sorted(DEFAULT_TEMPLATES)}")
-    if "{C" not in data.template:
-        raise HTTPException(422, "Template must contain a {C} counter token")
+    _check_template(data.template, data.begins_from)
     seq = (await db.execute(select(NumberSequence).where(
         NumberSequence.org_id == current.org_id, NumberSequence.doc_type == data.doc_type,
         NumberSequence.scope_key == data.scope_key))).scalar_one_or_none()
     if seq:
         seq.template = data.template
-        seq.next_value = data.begins_from
+        if data.begins_from is not None:
+            seq.next_value = data.begins_from
     else:
+        # Same starting point next_number would pick: past any documents already issued.
+        start = data.begins_from if data.begins_from is not None else \
+            await _existing_count(db, current.org_id, data.doc_type) + 1
         seq = NumberSequence(org_id=current.org_id, doc_type=data.doc_type,
                              scope_key=data.scope_key, template=data.template,
-                             next_value=data.begins_from)
+                             next_value=start)
         db.add(seq)
     await db.commit()
-    return {"ok": True, "example": await peek_example(data.template, data.begins_from)}
+    return {"ok": True, "example": await peek_example(data.template, seq.next_value)}
 
 
 @router.post("/numbering/preview")
 async def preview_numbering(data: NumberingIn, current: Employee = Depends(get_current_employee)):
+    _check_template(data.template, data.begins_from)
     return {"example": await peek_example(data.template, data.begins_from)}
+
+
+@router.get("/numbering/preview")
+async def preview_numbering_get(template: str, begins_from: Optional[int] = None,
+                                current: Employee = Depends(get_current_employee)):
+    _check_template(template, begins_from)
+    return {"example": await peek_example(template, begins_from)}
 
 
 # ── Legal entities ───────────────────────────────────────────────────────────
