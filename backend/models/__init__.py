@@ -1753,6 +1753,9 @@ class Warehouse(Base):
     # ── allowed actions (Build 89) ───────────────────────────────────────────
     allowed_actions: Mapped[Optional[dict]] = mapped_column(
         JSON, default=lambda: ["post", "writeoff", "transfer", "sell", "stocktake"])
+    # ii144c: where stock received without a bin lands (Settings → Bins, "Default")
+    default_bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id", ondelete="SET NULL",
+                                                                             use_alter=True, name="fk_warehouses_default_bin"))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)  # soft-delete → restorable
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -1972,7 +1975,30 @@ class SerializedItem(Base):
     status: Mapped[str] = mapped_column(String(20), default="in_stock")  # in_stock|allocated_to_order|sold|written_off|converted_to_asset
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     converted_asset_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("devices.id"))  # Build 76
+    # ii144c: the unit passport — who supplied it and until when they cover it
+    supplier_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("suppliers.id", ondelete="SET NULL"))
+    supplier_warranty_until: Mapped[Optional[date]] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class SerialEvent(Base):
+    """ii144c — one line of a serialized unit's history (the unit passport): received, moved, used on
+    a job, returned, sold, written off, counted… Written by services/serial_log.py where the unit's
+    status or place changes; `ref_type`/`ref_id` point at the document that did it."""
+    __tablename__ = "serial_events"
+    __table_args__ = (Index("ix_serial_events_item_created", "item_id", "created_at"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    item_id: Mapped[str] = mapped_column(String, ForeignKey("serialized_items.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(20))   # received|moved|used|returned|sold|written_off|restored|converted|counted
+    ref_type: Mapped[Optional[str]] = mapped_column(String(30))
+    ref_id: Mapped[Optional[str]] = mapped_column(String)
+    label: Mapped[Optional[str]] = mapped_column(String(200))
+    location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"))
+    bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id", ondelete="SET NULL"))
+    created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    item: Mapped["SerializedItem"] = relationship()   # many-to-one only: orders the insert after a new unit
 
 
 class AssetProductConversion(Base):
@@ -2199,6 +2225,10 @@ class Stocktake(Base):
     status: Mapped[str] = mapped_column(String(20), default="in_progress")  # in_progress|posted
     note: Mapped[Optional[str]] = mapped_column(Text)
     kind: Mapped[str] = mapped_column(String(12), default="full")  # Build 91: full|partial
+    # ii144c: count one category; blind = the counter never sees book quantities; by_bin = a line per bin
+    category_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("categories.id", ondelete="SET NULL"))
+    blind: Mapped[bool] = mapped_column(Boolean, default=False)
+    by_bin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     posted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -2218,6 +2248,19 @@ class StocktakeLine(Base):
     is_unknown: Mapped[bool] = mapped_column(Boolean, default=False)   # found on the shelf, not in the system
     serial_mismatch: Mapped[bool] = mapped_column(Boolean, default=False)
     note: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class StocktakeSerial(Base):
+    """ii144c — a serial counted in a stocktake, so the same unit scanned (or imported) twice
+    counts once. `serial_key` is the normalised form serial_intake compares."""
+    __tablename__ = "stocktake_serials"
+    __table_args__ = (Index("uq_stocktake_serials_key", "stocktake_id", "serial_key", unique=True),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    stocktake_id: Mapped[str] = mapped_column(String, ForeignKey("stocktakes.id", ondelete="CASCADE"))
+    line_id: Mapped[str] = mapped_column(String, ForeignKey("stocktake_lines.id", ondelete="CASCADE"))
+    serial_key: Mapped[str] = mapped_column(String(120))
+    serialized_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("serialized_items.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 class ClientReturn(Base):
     """Goods coming back from a client (separate from the money refund)."""
@@ -3057,7 +3100,7 @@ all_models = [
     Invoice, InvoiceLine, Payment, CashShift, Expense, Account, CashFlowItem, Transaction,
     Task, NotificationTemplate, CustomField, AuditLog, EventFeedItem,
     WorkOrderType, StatusTransition, AssetMovement, StockReservation, StorageBin,
-    CommissionRule, EmployeeBalanceLedger, PayrollRun, StockItemBatch, SerializedItem, NotificationLog, Lead, PriceType, Sale, SaleLine, Stocktake, StocktakeLine, ClientReturn, ClientReturnLine, Refund, StockTransfer, StockTransferLine, Bundle, BundleComponent, Appointment, ChatThread, ChatMessage,
+    CommissionRule, EmployeeBalanceLedger, PayrollRun, StockItemBatch, SerializedItem, SerialEvent, NotificationLog, Lead, PriceType, Sale, SaleLine, Stocktake, StocktakeLine, StocktakeSerial, ClientReturn, ClientReturnLine, Refund, StockTransfer, StockTransferLine, Bundle, BundleComponent, Appointment, ChatThread, ChatMessage,
     Feedback, FeedbackSettings, DocumentTemplate, GeneratedDocument, Resource,
     TimeEntry, TimeEntryAudit, WebhookEndpoint, WebhookDelivery,
     ApiKey, PaymentIntent, QboConnection, IntegrationMapping, IntegrationSyncLog,

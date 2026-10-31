@@ -12,6 +12,10 @@ import CategoryPicker from "../../components/CategoryPicker";
 import CatalogPicker, { CatalogItem } from "../../components/CatalogPicker";
 import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../../lib/formLayout";
 import ServiceForm, { serviceBody } from "./ServiceForm";
+import MoveStockDialog from "../../components/MoveStockDialog";
+import LabelPrintDialog from "../../components/LabelPrintDialog";
+import SerialPassport from "../../components/SerialPassport";
+import { rowLabel } from "../../lib/stockBins";
 
 export type DrawerKind = "product" | "service" | "asset" | "bundle";
 type Props = { kind: DrawerKind; id?: string | null; initial?: any; onClose: () => void; onSaved?: () => void };
@@ -20,12 +24,13 @@ const BREADCRUMB: Record<DrawerKind, string> = { product: "Inventory › Stock",
 const lbl = "block font-semibold text-ink-secondary mb-1";
 const field = "glass-input w-full px-3 py-2 rounded-lg text-ink-primary text-xs";
 
-type ProdTab = "details" | "stock" | "movements" | "purchasing" | "batches";
+type ProdTab = "details" | "stock" | "units" | "movements" | "purchasing" | "batches";
 type Movement = { type: string; qty: number; at?: string; ref_type?: string; ref_id?: string; location?: string; unit_cost?: number };
 type POItem = { id: string; po_number?: string; status?: string; qty_ordered?: number; qty_received?: number; expected_at?: string };
 type Reservation = { id: string; part_id?: string; qty: number; order_id?: string; expires_at?: string };
-type StockRow = { location: string; available: number; reserved: number; value: number };
-type StockResp = { total_available: number; total_reserved: number; total_value: number; unit_cost: number; items: StockRow[] };
+type StockRow = { location: string; location_id?: string; bin_id?: string | null; bin?: string | null; available: number; reserved: number; value: number | null };
+type Unit = { id: string; serial_number: string; status: string; status_label: string; bin?: string | null; supplier_warranty_until?: string | null; received_at?: string | null };
+type StockResp = { total_available: number; total_reserved: number; total_value: number | null; unit_cost: number | null; items: StockRow[] };
 type Batch = { id: string; document?: string | null; supplier?: string | null; location?: string | null; warehouse?: string | null; unit_cost?: number; qty_received?: number; qty_remaining?: number; amount?: number; expiry_date?: string | null; received_at?: string | null; in_stock?: boolean };
 type LocLite = { id: string; name: string };
 const fmtDate = (s?: string) => (s ? new Date(s).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "—");
@@ -56,6 +61,11 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
   const [resv, setResv] = useState<Reservation[] | null>(null);
   const [stock, setStock] = useState<StockResp | null>(null);
   const [batches, setBatches] = useState<Batch[] | null>(null);
+  const [units, setUnits] = useState<Unit[] | null>(null);           // ii144c: serialized units + passport
+  const [unitSel, setUnitSel] = useState<Set<string>>(new Set());
+  const [passport, setPassport] = useState<string | null>(null);
+  const [unitLabels, setUnitLabels] = useState(false);
+  const [moveRow, setMoveRow] = useState<StockRow | null>(null);
   // Manual stock adjust (receive / write-off / correction) — backend: POST /inventory/parts/:id/adjust
   const [locs, setLocs] = useState<LocLite[]>([]);
   const [adjOpen, setAdjOpen] = useState(false);
@@ -110,7 +120,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
   }
 
   useEffect(() => {
-    setPtab("details"); setMoves(null); setPos(null); setResv(null); setStock(null); setBatches(null); setMvFilter("all"); setAdjOpen(false);
+    setPtab("details"); setMoves(null); setPos(null); setResv(null); setStock(null); setBatches(null); setUnits(null); setUnitSel(new Set()); setMvFilter("all"); setAdjOpen(false);
     if (kind === "product" && id) api.get<{ product: Product }>(`/catalog/products/${id}`).then((r) => setP(r.product)).catch(() => {});
     else if (initial) setP(initial);
   }, [kind, id]);
@@ -127,13 +137,15 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
       api.get<StockResp>(`/inventory/parts/${id}/stock`).then(setStock).catch(() => setStock({ total_available: 0, total_reserved: 0, total_value: 0, unit_cost: 0, items: [] }));
     if (ptab === "movements" && moves === null)
       api.get<Movement[]>(`/inventory/parts/${id}/movements`).then((r) => setMoves(Array.isArray(r) ? r : [])).catch(() => setMoves([]));
+    if (ptab === "units" && units === null)
+      api.get<{ items: Unit[] }>(`/serials?part_id=${id}&limit=500`).then((r) => setUnits(r.items || [])).catch(() => setUnits([]));
     if (ptab === "batches" && batches === null)
       api.get<{ items: Batch[] }>(`/inventory/parts/${id}/batches`).then((r) => setBatches(r.items || [])).catch(() => setBatches([]));
     if (ptab === "purchasing" && pos === null) {
       api.get<{ items: POItem[] }>(`/inventory/parts/${id}/purchase-orders`).then((r) => setPos(r.items || [])).catch(() => setPos([]));
       api.get<{ items: Reservation[] }>(`/inventory/reservations`).then((r) => setResv((r.items || []).filter((x) => x.part_id === id))).catch(() => setResv([]));
     }
-  }, [ptab, kind, id, moves, pos, stock, batches]);
+  }, [ptab, kind, id, moves, pos, stock, batches, units]);
 
   async function submitAdjust() {
     if (!adjLoc || !adjQty) { flash("Pick a location and quantity"); return; }
@@ -209,7 +221,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
 
         {kind === "product" && editing && (
           <nav className="px-6 border-b border-slate-200 flex gap-6 text-xs font-semibold bg-slate-50/70">
-            {([["details", "Details"], ["stock", "Stock"], ["batches", "Batches"], ["movements", "Movements"], ["purchasing", "Purchasing"]] as [ProdTab, string][]).map(([t, label]) => (
+            {([["details", "Details"], ["stock", "Stock"], ...(p.serialized ? [["units", "Units"]] : []), ["batches", "Batches"], ["movements", "Movements"], ["purchasing", "Purchasing"]] as [ProdTab, string][]).map(([t, label]) => (
               <button key={t} onClick={() => setPtab(t)} className={`py-3 border-b-2 transition-colors ${ptab === t ? "text-primary border-primary font-bold" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{label}</button>
             ))}
           </nav>
@@ -346,7 +358,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
 
           {kind === "product" && ptab === "stock" && (<>
             <div className="flex items-center justify-between mb-3">
-              <span className="text-[11px] font-bold text-ink-tertiary">Stock by location</span>
+              <span className="text-[11px] font-bold text-ink-tertiary">Stock by location and bin</span>
               <button type="button" onClick={() => setAdjOpen((o) => !o)} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-50 text-primary border border-blue-100 text-[11px] font-bold hover:bg-blue-100 transition-colors"><M n={adjOpen ? "close" : "tune"} c="text-sm" />{adjOpen ? "Cancel" : "Adjust stock"}</button>
             </div>
             {adjOpen && (
@@ -369,22 +381,51 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
               : stock.items.length === 0
                 ? <p className="text-ink-tertiary">No stock at any location yet.</p>
                 : <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
-                    <div className="grid grid-cols-[1fr_auto_auto_auto] gap-3 px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold text-ink-tertiary"><span>Location</span><span className="text-right">Reserved</span><span className="text-right">In stock</span><span className="text-right">Value</span></div>
+                    <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-3 px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold text-ink-tertiary"><span>Location · bin</span><span className="text-right">Reserved</span><span className="text-right">In stock</span><span className="text-right">Value</span><span className="w-12" /></div>
                     <div className="divide-y divide-slate-100">
                       {stock.items.map((s, i) => (
-                        <div key={i} className="grid grid-cols-[1fr_auto_auto_auto] gap-3 px-4 py-2.5 items-center">
-                          <span className="font-semibold text-ink-primary truncate">{s.location}</span>
+                        <div key={i} className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-3 px-4 py-2.5 items-center">
+                          <span className="font-semibold text-ink-primary truncate">{s.bin ? <>{s.location} · <span className="text-primary">{s.bin}</span></> : <>{s.location}<span className="ml-1.5 text-[11px] font-normal text-ink-tertiary">no bin</span></>}</span>
                           <span className="text-right tabular-nums text-ink-secondary">{s.reserved}</span>
                           <span className="text-right tabular-nums font-bold text-ink-primary">{s.available}</span>
-                          <span className="text-right tabular-nums text-ink-secondary">{money(s.value ?? 0)}</span>
+                          <span className="text-right tabular-nums text-ink-secondary">{s.value == null ? "—" : money(s.value)}</span>
+                          <span className="w-12 text-right">{s.available > 0 && s.location_id && can("can_manage_inventory") && <button type="button" onClick={() => setMoveRow(s)} className="text-[11px] font-bold text-primary hover:underline">Move</button>}</span>
                         </div>
                       ))}
                     </div>
-                    <div className="grid grid-cols-[1fr_auto_auto_auto] gap-3 px-4 py-2.5 bg-slate-50 border-t border-slate-200 text-xs font-bold">
+                    <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-3 px-4 py-2.5 bg-slate-50 border-t border-slate-200 text-xs font-bold">
                       <span className="text-ink-tertiary text-[11px] self-center">Total</span>
                       <span className="text-right tabular-nums">{stock.total_reserved ?? 0}</span>
                       <span className="text-right tabular-nums">{stock.total_available}</span>
-                      <span className="text-right tabular-nums text-emerald-600">{money(stock.total_value ?? 0)}</span>
+                      <span className="text-right tabular-nums text-emerald-600">{stock.total_value == null ? "—" : money(stock.total_value)}</span>
+                      <span className="w-12" />
+                    </div>
+                  </div>}
+          </>)}
+
+          {kind === "product" && ptab === "units" && (<>
+            <div className="flex items-center gap-2 mb-3">
+              <button type="button" onClick={() => setUnitLabels(true)} disabled={unitSel.size === 0} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-50 text-primary border border-blue-100 text-[11px] font-bold hover:bg-blue-100 disabled:opacity-50"><M n="print" c="text-sm" />Print serial labels{unitSel.size ? ` (${unitSel.size})` : ""}</button>
+              <span className="flex-1" />
+              <span className="text-[11px] text-ink-tertiary">{(units || []).filter((u) => u.status === "in_stock").length} in stock · {(units || []).length} in all</span>
+            </div>
+            {units === null
+              ? <p className="text-ink-tertiary">Loading units…</p>
+              : units.length === 0
+                ? <p className="text-ink-tertiary">No units yet. Each unit appears here with its serial or IMEI when it's received.</p>
+                : <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
+                    <div className="grid grid-cols-[auto_1fr_auto_auto] gap-3 px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold text-ink-tertiary">
+                      <input type="checkbox" aria-label="Select all units" checked={units.every((u) => unitSel.has(u.id))} onChange={(e) => setUnitSel(e.target.checked ? new Set(units.map((u) => u.id)) : new Set())} />
+                      <span>Serial / IMEI</span><span>Status</span><span className="text-right">Bin</span></div>
+                    <div className="divide-y divide-slate-100">
+                      {units.map((u) => (
+                        <div key={u.id} className="grid grid-cols-[auto_1fr_auto_auto] gap-3 px-4 py-2.5 items-center text-xs">
+                          <input type="checkbox" aria-label={`Select ${u.serial_number}`} checked={unitSel.has(u.id)} onChange={() => { const n = new Set(unitSel); n.has(u.id) ? n.delete(u.id) : n.add(u.id); setUnitSel(n); }} />
+                          <button type="button" onClick={() => setPassport(u.id)} className="text-left font-mono font-semibold text-primary hover:underline truncate">{u.serial_number}</button>
+                          <span className={u.status === "in_stock" ? "text-emerald-700 font-semibold" : "text-ink-secondary"}>{u.status_label}</span>
+                          <span className="text-right text-ink-tertiary">{u.bin || "—"}</span>
+                        </div>
+                      ))}
                     </div>
                   </div>}
           </>)}
@@ -558,6 +599,13 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
         </div>
         {toast && <div className="absolute bottom-20 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2 rounded-xl shadow-clay-drawer z-20">{toast}</div>}
       </div>
+      {moveRow && id && moveRow.location_id && <MoveStockDialog partId={id} partName={p.name || "product"} locationId={moveRow.location_id} fromBinId={moveRow.bin_id || null}
+        fromLabel={moveRow.bin ? rowLabel(moveRow) : `${moveRow.location} (no bin)`} max={moveRow.available}
+        onClose={() => setMoveRow(null)} onMoved={() => { setMoveRow(null); setStock(null); setMoves(null); setUnits(null); flash("Stock moved"); }} />}
+      {unitLabels && <LabelPrintDialog title="Print serial labels" count={unitSel.size} noun={["unit", "units"]} prefer="Serial label" typeChoice="required"
+        render={(tid, copies, kind) => api.post<any>("/documents/render-serial-labels", { template_id: tid, serial_ids: [...unitSel], copies, barcode_type: kind || "code128" })}
+        onClose={() => setUnitLabels(false)} />}
+      {passport && <SerialPassport unitId={passport} onClose={() => { setPassport(null); setUnits(null); }} />}
     </div>
   );
 }

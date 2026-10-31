@@ -5,7 +5,7 @@ two exact rows and the location total never changes. Bin names are unique per wa
 bin codes per shop (database indexes back both checks)."""
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Annotated, Optional
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
@@ -16,13 +16,50 @@ from backend.services.auth import get_current_employee, require_perm, Employee
 router = APIRouter(prefix="/api/bins", tags=["bins"])
 
 
-def _ser(b: StorageBin) -> dict:
+def _ser(b: StorageBin, defaults: Optional[set] = None) -> dict:
     return {
         "id": b.id, "location_id": b.location_id, "warehouse_id": b.warehouse_id, "name": b.name,
         "zone": b.zone, "shelf": b.shelf, "bin_number": b.bin_number, "barcode": b.barcode,
         "barcode_type": b.barcode_type or "code128",
         "max_weight_capacity": b.max_weight_capacity, "active": b.active,
+        "is_default": b.id in (defaults or set()),
     }
+
+
+async def _default_bin_ids(db, org_id: str) -> set:
+    """ii144c — every warehouse's default bin in this shop."""
+    from backend.models import Warehouse
+    return set((await db.execute(select(Warehouse.default_bin_id).where(
+        Warehouse.org_id == org_id, Warehouse.default_bin_id.is_not(None)))).scalars().all())
+
+
+async def _set_default(db, org_id: str, b: StorageBin, on: Optional[bool]) -> None:
+    """Make `b` its warehouse's default bin (on=True), or stop it being the default (on=False)."""
+    from backend.models import Warehouse
+    if on is None or not b.warehouse_id:
+        return
+    w = (await db.execute(select(Warehouse).where(
+        Warehouse.id == b.warehouse_id, Warehouse.org_id == org_id))).scalar_one_or_none()
+    if w is None:
+        return
+    if on:
+        w.default_bin_id = b.id
+    elif w.default_bin_id == b.id:
+        w.default_bin_id = None
+
+
+async def find_by_code(db, org_id: str, code: str, *, names: bool = True) -> Optional[StorageBin]:
+    """ii144c — the bin a scanned label (or a typed bin name) means, in this shop: its code exactly
+    first, then (names=True) a bin name, case-insensitive, when only one bin has that name."""
+    code = (code or "").strip()
+    if not code:
+        return None
+    base = select(StorageBin).where(StorageBin.org_id == org_id, StorageBin.active == True)  # noqa: E712
+    b = (await db.execute(base.where(StorageBin.barcode.in_({code, code.upper()})))).scalars().first()
+    if b or not names:
+        return b
+    named = (await db.execute(base.where(func.lower(StorageBin.name) == code.lower()).limit(2))).scalars().all()
+    return named[0] if len(named) == 1 else None
 
 
 @router.get("")
@@ -38,12 +75,32 @@ async def list_bins(
     if warehouse_id:
         q = q.where(StorageBin.warehouse_id == warehouse_id)
     rows = (await db.execute(q.order_by(StorageBin.name))).scalars().all()
+    defaults = await _default_bin_ids(db, current.org_id)
     # on-hand per bin, one query
     qty = dict((await db.execute(select(StockLevel.bin_id, func.coalesce(func.sum(StockLevel.qty_available), 0))
                                  .join(Part, Part.id == StockLevel.part_id)
                                  .where(StockLevel.bin_id.in_([b.id for b in rows]), Part.org_id == current.org_id)
                                  .group_by(StockLevel.bin_id))).all()) if rows else {}
-    return {"items": [{**_ser(b), "qty_on_hand": qty.get(b.id, 0)} for b in rows]}
+    return {"items": [{**_ser(b, defaults), "qty_on_hand": qty.get(b.id, 0)} for b in rows]}
+
+
+@router.get("/{bin_id}/contents")
+async def bin_contents(
+    bin_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """ii144c — what one bin holds: each product with its quantity (the bin's own stock rows)."""
+    b = (await db.execute(select(StorageBin).where(
+        StorageBin.id == bin_id, StorageBin.org_id == current.org_id))).scalar_one_or_none()
+    if not b:
+        raise HTTPException(404, "Bin not found")
+    rows = (await db.execute(select(StockLevel, Part).join(Part, Part.id == StockLevel.part_id).where(
+        StockLevel.bin_id == b.id, Part.org_id == current.org_id,
+        (StockLevel.qty_available != 0) | (StockLevel.qty_reserved != 0)).order_by(Part.name))).all()
+    return {"bin": _ser(b, await _default_bin_ids(db, current.org_id)),
+            "items": [{"part_id": p.id, "name": p.name, "sku": p.sku, "qty": float(sl.qty_available or 0),
+                       "reserved": float(sl.qty_reserved or 0)} for sl, p in rows]}
 
 
 class BinIn(BaseModel):
@@ -56,6 +113,7 @@ class BinIn(BaseModel):
     shelf: Optional[str] = Field(None, max_length=40)
     bin_number: Optional[str] = Field(None, max_length=40)
     max_weight_capacity: float = 0.0
+    is_default: Optional[bool] = None                       # ii144c: the warehouse's default bin
 
 
 async def _warehouse_for(db, org_id: str, location_id: str, warehouse_id: Optional[str]) -> str:
@@ -91,6 +149,12 @@ async def _check_code(db, org_id: str, code: str, exclude_id: Optional[str] = No
     other = (await db.execute(q)).scalars().first()
     if other:
         raise HTTPException(409, f"The bin code {code} is already used by bin '{other.name}'")
+    # ii144c: a bin label scans anywhere, so it can't also be one of the shop's product codes
+    from backend.services import product_codes
+    prod = (await db.execute(select(Part.name).where(
+        Part.org_id == org_id, Part.active == True, product_codes.matches_code(org_id, code)))).scalars().first()  # noqa: E712
+    if prod:
+        raise HTTPException(409, f"The bin code {code} is already a code of the product '{prod}'")
 
 
 async def next_bin_code(db, org_id: str) -> str:
@@ -149,9 +213,11 @@ async def create_bin(
                    barcode=code, barcode_type=data.barcode_type or None, zone=data.zone, shelf=data.shelf, bin_number=data.bin_number,
                    max_weight_capacity=data.max_weight_capacity)
     db.add(b)
+    await db.flush()
+    await _set_default(db, current.org_id, b, data.is_default)
     await _commit(db)
     await db.refresh(b)
-    return _ser(b)
+    return _ser(b, await _default_bin_ids(db, current.org_id))
 
 
 @router.put("/{bin_id}")
@@ -184,8 +250,9 @@ async def update_bin(
     b.shelf = data.shelf
     b.bin_number = data.bin_number
     b.max_weight_capacity = data.max_weight_capacity
+    await _set_default(db, current.org_id, b, data.is_default)
     await _commit(db)
-    return _ser(b)
+    return _ser(b, await _default_bin_ids(db, current.org_id))
 
 
 @router.delete("/{bin_id}")
@@ -204,15 +271,18 @@ async def delete_bin(
     if qty > 0:
         raise HTTPException(409, f"Bin still holds {qty:g} units — move them out first")
     b.active = False
+    await _set_default(db, current.org_id, b, False)
     await db.commit()
     return {"ok": True}
 
 
 class TransferIn(BaseModel):
     part_id: str
-    source_bin_id: str
+    source_bin_id: Optional[str] = None      # ii144c: None = the location's unbinned stock (put away)
     destination_bin_id: str
     qty: float
+    location_id: Optional[str] = None        # needed only when there's no source bin
+    serial_numbers: Optional[list[Annotated[str, Field(max_length=120)]]] = Field(None, max_length=500)  # which units move (default: oldest)
 
 
 @router.post("/transfer")
@@ -221,58 +291,78 @@ async def transfer_stock_between_bins(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_inventory")),
 ):
-    """Move `qty` of a product from one bin to another, atomically.
+    """Move `qty` of a product from one bin to another, atomically — or (no source bin) put
+    unbinned stock away into a bin.
 
     The source is drawn with a guarded conditional UPDATE (only fires while the bin still holds
     >= qty), so the source bin can never go negative (no ghost stock). The destination is the
     exact (product, location, bin) row — created when missing, never a second row.
     """
+    from backend.models import SerializedItem
+    from backend.services import serial_log
+    from backend.services.serial_intake import matches as _sn_matches
     if data.qty <= 0:
         raise HTTPException(400, "Quantity must be positive")
     if data.source_bin_id == data.destination_bin_id:
         raise HTTPException(400, "Source and destination bins are the same")
+    if data.serial_numbers and len(set(data.serial_numbers)) != data.qty:
+        raise HTTPException(422, "Name one serial for each unit you move")
 
     # Both bins and the product must exist and belong to this org.
+    wanted = [x for x in (data.source_bin_id, data.destination_bin_id) if x]
     bins = (await db.execute(select(StorageBin).where(
         StorageBin.org_id == current.org_id, StorageBin.active == True,  # noqa: E712
-        StorageBin.id.in_([data.source_bin_id, data.destination_bin_id])))).scalars().all()
+        StorageBin.id.in_(wanted)))).scalars().all()
     bmap = {b.id: b for b in bins}
-    src = bmap.get(data.source_bin_id)
+    src = bmap.get(data.source_bin_id) if data.source_bin_id else None
     dst = bmap.get(data.destination_bin_id)
-    if not src or not dst:
+    if not dst or (data.source_bin_id and not src):
         raise HTTPException(404, "Source or destination bin not found")
-    if src.location_id != dst.location_id:
+    loc_id = src.location_id if src else (data.location_id or dst.location_id)
+    if dst.location_id != loc_id:
         raise HTTPException(409, "Both bins must be at the same location — use a stock transfer between locations")
     part = (await db.execute(select(Part.id).where(
         Part.id == data.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
     if not part:
         raise HTTPException(404, "Product not found")
 
-    src_row = await stock_rows.row_for(db, data.part_id, src.location_id, src.id)
+    if src:
+        src_rows = [r for r in [await stock_rows.row_for(db, data.part_id, loc_id, src.id)] if r]
+    else:
+        src_rows = [r for r in await stock_rows.rows(db, data.part_id, loc_id) if r.bin_id is None]
+    src_name = src.name if src else "unbinned stock"
+    # A serialized unit sits in a bin too: the named units, else as many as were moved, oldest first.
+    uq = select(SerializedItem).where(
+        SerializedItem.org_id == current.org_id, SerializedItem.part_id == data.part_id,
+        SerializedItem.location_id == loc_id, SerializedItem.status == "in_stock",
+        SerializedItem.bin_id == src.id if src else SerializedItem.bin_id.is_(None))
+    if data.serial_numbers:
+        from sqlalchemy import or_
+        uq = uq.where(or_(*[_sn_matches(SerializedItem.serial_number, sn) for sn in data.serial_numbers]))
+    units = (await db.execute(uq.order_by(SerializedItem.created_at).limit(int(data.qty))
+                              .with_for_update())).scalars().all()
+    if data.serial_numbers and len(units) != len(set(data.serial_numbers)):
+        raise HTTPException(409, f"Not every serial you named is in stock in {src_name}")
     try:
-        await stock_rows.draw(db, data.part_id, src.location_id, data.qty, bin_id=src.id,
-                              only=[src_row] if src_row else [])
+        await stock_rows.draw(db, data.part_id, loc_id, data.qty, bin_id=src.id if src else None, only=src_rows)
     except stock_rows.NotEnoughStock as e:
-        raise HTTPException(409, f"Source bin '{src.name}' has only {e.have:g}, cannot move {data.qty:g}")
-    await stock_rows.add(db, data.part_id, dst.location_id, data.qty, bin_id=dst.id)
+        raise HTTPException(409, f"{'Source bin ' + repr(src.name) if src else 'Unbinned stock'} has only "
+                                 f"{e.have:g}, cannot move {data.qty:g}")
+    await stock_rows.add(db, data.part_id, loc_id, data.qty, bin_id=dst.id)
 
     # Two ledger rows (out of source, into destination) for a full audit trail.
-    db.add(StockMovement(part_id=data.part_id, location_id=src.location_id, bin_id=src.id,
+    db.add(StockMovement(part_id=data.part_id, location_id=loc_id, bin_id=src.id if src else None,
                          movement_type="transfer", qty=-data.qty, ref_type="bin_transfer",
                          ref_id=dst.id, created_by_id=current.id))
-    db.add(StockMovement(part_id=data.part_id, location_id=dst.location_id, bin_id=dst.id,
+    db.add(StockMovement(part_id=data.part_id, location_id=loc_id, bin_id=dst.id,
                          movement_type="transfer", qty=data.qty, ref_type="bin_transfer",
-                         ref_id=src.id, created_by_id=current.id))
-    # A serialized unit sits in a bin too: move as many units as were moved, oldest first.
-    from backend.models import SerializedItem
-    units = (await db.execute(select(SerializedItem).where(
-        SerializedItem.org_id == current.org_id, SerializedItem.part_id == data.part_id,
-        SerializedItem.bin_id == src.id, SerializedItem.status == "in_stock")
-        .order_by(SerializedItem.created_at).limit(int(data.qty)))).scalars().all()
+                         ref_id=src.id if src else None, created_by_id=current.id))
     for u in units:
         u.bin_id = dst.id
+        serial_log.record(db, u, "moved", ref_type="bin_transfer", label=f"{src_name} → {dst.name}",
+                          actor_id=current.id)
     await db.commit()
-    return {"ok": True, "moved": data.qty, "from": src.name, "to": dst.name}
+    return {"ok": True, "moved": data.qty, "from": src_name, "to": dst.name}
 
 
 # ── Serialized inventory & cost layers (Mandate 2) ──
@@ -312,10 +402,14 @@ async def create_batch(
     db.add(batch)
     await db.flush()
     created_serials = 0
+    from backend.models import _uuid
+    from backend.services import serial_log
     for sn in serials:
-        db.add(SerializedItem(org_id=current.org_id, part_id=data.part_id, serial_number=sn,
+        unit = SerializedItem(id=_uuid(), org_id=current.org_id, part_id=data.part_id, serial_number=sn,
                               bin_id=data.bin_id, location_id=data.location_id, batch_id=batch.id,
-                              unit_cost=_Dec(str(data.unit_cost)), status="in_stock"))
+                              unit_cost=_Dec(str(data.unit_cost)), status="in_stock")
+        db.add(unit)
+        serial_log.record(db, unit, "received", ref_type="batch", ref_id=batch.id, actor_id=current.id)
         created_serials += 1
     await db.commit()
     return {"batch_id": batch.id, "serials_created": created_serials}
@@ -352,6 +446,10 @@ async def allocate_serial(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    from backend.models import Order
+    if not (await db.execute(select(Order.id).where(
+            Order.id == data.order_id, Order.org_id == current.org_id))).scalar_one_or_none():
+        raise HTTPException(404, "Order not found")
     item = await allocate_serialized_item(
         db, org_id=current.org_id, part_id=data.part_id, order_id=data.order_id,
         bin_id=data.bin_id, serial_number=data.serial_number)
@@ -377,8 +475,10 @@ async def part_stock_detail(
     bin_names = {}
     for b in (await db.execute(select(StorageBin).where(StorageBin.org_id == current.org_id))).scalars().all():
         bin_names[b.id] = b.name
+    from backend.services.redact import can_see_costs
+    show = await can_see_costs(db, current)    # ii144c: cost only for staff who may see purchase prices
     return {
-        "batches": [{"id": b.id, "unit_cost": float(b.unit_cost or 0),
+        "batches": [{"id": b.id, "unit_cost": float(b.unit_cost or 0) if show else None,
                      "qty_received": float(b.qty_received or 0),
                      "qty_remaining": float(b.qty_remaining or 0),
                      "bin": bin_names.get(b.bin_id),
@@ -386,5 +486,5 @@ async def part_stock_detail(
                     for b in batches],
         "serials": [{"id": s.id, "serial_number": s.serial_number, "status": s.status,
                      "bin": bin_names.get(s.bin_id),
-                     "unit_cost": float(s.unit_cost or 0)} for s in serials],
+                     "unit_cost": float(s.unit_cost or 0) if show else None} for s in serials],
     }

@@ -26,6 +26,7 @@ import { escapeHtml } from "../../lib/safeHtml";
 import JobCardFields from "../../components/JobCardFields";
 import ReaderCharge from "../../components/ReaderCharge";
 import CardPaymentsList from "../../components/CardPaymentsList";
+import { binChoices, byLocation, needsBinChoice } from "../../lib/stockBins";
 
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
 type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean; order_item_id?: string | null };
@@ -451,7 +452,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
           {tab === "services" && (
             <div className="space-y-4">
-              <ServicesTab orderId={order.id} deviceId={d.device?.id} lines={d.lines} total={d.total} onFlash={flash} onChanged={reload}
+              <ServicesTab orderId={order.id} locationId={(d as any).location_id} deviceId={d.device?.id} lines={d.lines} total={d.total} onFlash={flash} onChanged={reload}
                 labor={labor} onClockIn={(lineId) => startTimer(lineId)} isEstimate={!!(order as any).is_estimate} emps={emps}
                 locked={isClosed && !can("can_edit_closed_ticket")} />
             </div>
@@ -946,7 +947,7 @@ function CustomLineForm({ orderId, forItem, onFlash, onClose, onAdded }: { order
 }
 
 /* ---- Services tab ---- */
-function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labor, onClockIn, isEstimate, emps, locked }: { orderId: string; deviceId?: string; lines?: Line[]; total?: number; onFlash: (m: string) => void; onChanged?: () => void; labor?: any; onClockIn?: (lineId: string) => void; isEstimate?: boolean; emps?: { id: string; name: string }[]; locked?: boolean }) {
+function ServicesTab({ orderId, locationId, deviceId, lines, total, onFlash, onChanged, labor, onClockIn, isEstimate, emps, locked }: { orderId: string; locationId?: string; deviceId?: string; lines?: Line[]; total?: number; onFlash: (m: string) => void; onChanged?: () => void; labor?: any; onClockIn?: (lineId: string) => void; isEstimate?: boolean; emps?: { id: string; name: string }[]; locked?: boolean }) {
   const { can } = useMe();
   const seePrices = can("can_view_item_prices");   // off: the API leaves line prices out
   const _secHM = (s: number) => { const h = Math.floor((s || 0) / 3600), m = Math.floor(((s || 0) % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m`; };
@@ -977,11 +978,12 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
   const [disc, setDisc] = useState(0);
   const [adding, setAdding] = useState(false);
   const [custom, setCustom] = useState(false);     // 3: a line that isn't in the catalog (yet)
-  const [stock, setStock] = useState<{ total_available: number; items: { location: string; available: number }[] } | null>(null);
+  const [stock, setStock] = useState<{ total_available: number; items: { location: string; location_id?: string; bin_id?: string | null; bin?: string | null; available: number }[] } | null>(null);
+  const [takeBin, setTakeBin] = useState("");    // ii144c: which bin the product comes from ("" = unbinned first, then the fullest bin)
   // When a product is picked, show where it's in stock — the point-of-need answer
   // to "we're out here, is it at another branch?" (products only; services carry no stock).
   useEffect(() => {
-    setStock(null);
+    setStock(null); setTakeBin("");
     if (pick && pick.kind === "product" && pick.ref_id)
       api.get<any>(`/inventory/parts/${pick.ref_id}/stock`).then(setStock).catch(() => {});
   }, [pick]);
@@ -995,6 +997,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
         ref_id: pick.ref_id, qty, unit_price: pick.price || 0,
         discount: disc, discount_type: "pct",
         ...(tagging && forItem ? { order_item_id: forItem } : {}),
+        ...(pick.kind === "product" && takeBin ? { bin_id: takeBin } : {}),
       });
       onFlash(r?.margin_warning ? `Added — ${r.margin_warning}` : "Line added");
       setPick(null); setQty(1); setDisc(0);
@@ -1144,11 +1147,17 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                   <option value="">Whole job</option>{jobItems.map((it) => <option key={it.id} value={it.id}>{itemName(it)}</option>)}
                 </select></div>
             )}
+            {stock && !isEstimate && needsBinChoice(stock.items, locationId) && (
+              <div className="min-w-[150px]"><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Take from</label>
+                <select value={takeBin} onChange={(e) => setTakeBin(e.target.value)} aria-label="Which bin to take it from" className="glass-input w-full px-2 py-2 rounded-lg text-xs font-semibold text-ink-primary">
+                  <option value="">Any (unbinned stock first)</option>{binChoices(stock.items, locationId).map((b) => <option key={b.bin_id} value={b.bin_id}>{b.label}</option>)}
+                </select></div>
+            )}
             <button onClick={addLine} disabled={adding} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50">{adding ? "Adding…" : "Add"}</button>
             {stock && (
               <div className="w-full text-[11px] pt-0.5">
                 {stock.total_available > 0 ? (
-                  <span className="text-ink-secondary">In stock: <b className="text-emerald-600">{stock.total_available}</b> · {stock.items.filter((i) => i.available > 0).map((i) => `${i.location} ${i.available}`).join(" · ") || "—"}</span>
+                  <span className="text-ink-secondary">In stock: <b className="text-emerald-600">{stock.total_available}</b> · {byLocation(stock.items).filter((i) => i.available > 0).map((i) => `${i.location} ${i.available}`).join(" · ") || "—"}</span>
                 ) : (
                   <span className="text-rose-600 font-semibold">Out of stock at every warehouse — you may need to order or transfer it.</span>
                 )}

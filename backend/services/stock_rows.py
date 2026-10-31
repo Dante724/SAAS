@@ -189,6 +189,16 @@ async def check_bin(db, org_id: str, location_id: str, bin_id: str):
     return b
 
 
+async def default_bin(db, org_id: str, location_id: str) -> Optional[str]:
+    """ii144c — the bin stock received without one lands in: the default bin of the location's
+    product warehouse, while that bin is still in use. None when no default is set."""
+    from backend.models import StorageBin, Warehouse
+    return (await db.execute(select(StorageBin.id).join(Warehouse, Warehouse.default_bin_id == StorageBin.id).where(
+        Warehouse.org_id == org_id, Warehouse.location_id == location_id, Warehouse.kind == "product",
+        Warehouse.deleted_at.is_(None), StorageBin.active == True,  # noqa: E712
+        StorageBin.location_id == location_id).order_by(Warehouse.is_default.desc()))).scalars().first()
+
+
 async def _bump(db, row: StockLevel, attr: str, delta: float) -> None:
     from backend.services.money import add_to_column
     await add_to_column(db, row, attr, delta, round_to=None)

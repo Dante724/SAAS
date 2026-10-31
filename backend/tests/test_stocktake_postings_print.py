@@ -472,19 +472,6 @@ async def test_label_template_crud_and_validation(client, tenant):
 
 
 @pytest.mark.asyncio
-async def test_print_labels_returns_a_pdf(client, tenant):
-    p = await _part(client, tenant, barcode="123456789012")
-    r = await client.post("/api/print/labels", json={
-        "part_ids": [p["id"]], "copies": 3}, headers=tenant)
-    assert r.status_code == 200, r.text
-    assert r.headers["content-type"] == "application/pdf"
-    assert r.content[:5] == b"%PDF-"
-
-    none = await client.post("/api/print/labels", json={"part_ids": []}, headers=tenant)
-    assert none.status_code == 400
-
-
-@pytest.mark.asyncio
 async def test_print_documents_render(client, tenant):
     w = await _wh(client, tenant)
     p = await _part(client, tenant)

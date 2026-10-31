@@ -19,6 +19,7 @@ async def apply_receipt_line(
     created_by_id: str | None = None, ref_type: str = "posting", ref_id: str | None = None,
     bin_id: str | None = None, serials: list[str] | None = None,
     create_batch: bool = True, set_last_cost: bool = False, expiry_date=None, lot: str | None = None,
+    supplier_id: str | None = None,
 ) -> float:
     """Post `qty` of `part` into `location_id` at `unit_cost`. Returns the unit cost used.
 
@@ -29,10 +30,14 @@ async def apply_receipt_line(
     - `set_last_cost` also refreshes `part.cost_price` (postings do; PO-receive leaves it).
     - `expiry_date` dates the cost layer for FEFO (expiry-tracked products).
     - Serials are expected already checked by `serial_intake.validate_intake`.
+    - ii144c: no bin given → the location warehouse's default bin, when one is set. Each unit records
+      its supplier and supplier-warranty end date (the product's supplier warranty from today).
     """
     from backend.services import stock_rows
     if bin_id:
         await stock_rows.check_bin(db, org_id, location_id, bin_id)
+    else:
+        bin_id = await stock_rows.default_bin(db, org_id, location_id)
 
     # Global moving-average: weight existing on-hand (across ALL locations) against the
     # incoming qty at this receipt's unit cost. Only move the average when a real cost is
@@ -63,11 +68,20 @@ async def apply_receipt_line(
                                lot_number=(lot or "").strip()[:40] or None)
         db.add(batch)
         await db.flush()
+        from datetime import date, timedelta
+
+        from backend.models import _uuid
+        from backend.services import serial_log
+        until = (date.today() + timedelta(days=int(part.supplier_warranty_days))
+                 if part.supplier_warranty_days else None)
         for sn in (serials or [])[:int(qty)]:
-            db.add(SerializedItem(org_id=org_id, part_id=part.id, serial_number=sn, bin_id=bin_id,
+            unit = SerializedItem(id=_uuid(), org_id=org_id, part_id=part.id, serial_number=sn, bin_id=bin_id,
                                   location_id=location_id, batch_id=batch.id,
-                                  po_id=ref_id if ref_type == "po" else None,
-                                  unit_cost=Decimal(str(unit_cost)), status="in_stock"))
+                                  po_id=ref_id if ref_type == "po" else None, supplier_id=supplier_id,
+                                  supplier_warranty_until=until,
+                                  unit_cost=Decimal(str(unit_cost)), status="in_stock")
+            db.add(unit)
+            serial_log.record(db, unit, "received", ref_type=ref_type, ref_id=ref_id, actor_id=created_by_id)
     return unit_cost
 
 

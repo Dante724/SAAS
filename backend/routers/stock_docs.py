@@ -34,6 +34,7 @@ from backend.models import (
     WriteOff,
     WriteOffLine,
 )
+from backend.services import serial_log
 from backend.services import warehouses as wh
 from backend.services import stock_rows
 from backend.services.auth import get_current_employee, require_perm
@@ -243,9 +244,12 @@ async def create_return(
         await _take_stock(db, ln.part_id, w, ln.qty, doc="return", bin_id=getattr(ln, "bin_id", None))
         if ln.serialized_item_id:
             unit = (await db.execute(select(SerializedItem).where(
-                SerializedItem.id == ln.serialized_item_id))).scalar_one_or_none()
+                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
+                SerializedItem.part_id == ln.part_id))).scalar_one_or_none()
             if unit:
                 unit.status = "written_off"
+                serial_log.record(db, unit, "written_off", ref_type="purchase_return", ref_id=doc.id,
+                                  label="Returned to the supplier", actor_id=current.id)
         line_total = cost * Decimal(str(ln.qty))
         total += line_total
         db.add(PurchaseReturnLine(
@@ -305,9 +309,12 @@ async def delete_return(
         await _give_stock(db, ln.part_id, w, ln.qty, w.location_id if w else None, bin_id=getattr(ln, "bin_id", None))
         if ln.serialized_item_id:
             unit = (await db.execute(select(SerializedItem).where(
-                SerializedItem.id == ln.serialized_item_id))).scalar_one_or_none()
+                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
+                SerializedItem.part_id == ln.part_id))).scalar_one_or_none()
             if unit:
                 unit.status = "in_stock"
+                serial_log.record(db, unit, "restored", ref_type="purchase_return", ref_id=doc.id,
+                                  label="Supplier return deleted", actor_id=current.id)
         db.add(StockMovement(
             part_id=ln.part_id, location_id=w.location_id if w else None,
             warehouse_id=doc.warehouse_id, movement_type="return_reverted",
@@ -410,9 +417,12 @@ async def create_write_off(
         await _take_stock(db, ln.part_id, w, ln.qty, doc="write off", bin_id=getattr(ln, "bin_id", None))
         if ln.serialized_item_id:
             unit = (await db.execute(select(SerializedItem).where(
-                SerializedItem.id == ln.serialized_item_id))).scalar_one_or_none()
+                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
+                SerializedItem.part_id == ln.part_id))).scalar_one_or_none()
             if unit:
                 unit.status = "written_off"
+                serial_log.record(db, unit, "written_off", ref_type="write_off", ref_id=doc.id,
+                                  label=data.reason or "Written off", actor_id=current.id)
         total += cost * Decimal(str(ln.qty))
         db.add(WriteOffLine(
             write_off_id=doc.id, part_id=ln.part_id, qty=ln.qty, unit_cost=cost,
@@ -511,9 +521,12 @@ async def delete_write_off(
         await _give_stock(db, ln.part_id, w, ln.qty, w.location_id if w else None, bin_id=getattr(ln, "bin_id", None))
         if ln.serialized_item_id:
             unit = (await db.execute(select(SerializedItem).where(
-                SerializedItem.id == ln.serialized_item_id))).scalar_one_or_none()
+                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
+                SerializedItem.part_id == ln.part_id))).scalar_one_or_none()
             if unit:
                 unit.status = "in_stock"
+                serial_log.record(db, unit, "restored", ref_type="write_off", ref_id=doc.id,
+                                  label="Write-off reverted", actor_id=current.id)
         db.add(StockMovement(
             part_id=ln.part_id, location_id=w.location_id if w else None,
             warehouse_id=doc.warehouse_id, movement_type="writeoff_reverted",

@@ -92,6 +92,8 @@ class LineIn(BaseModel):
     catalog_kind: Optional[str] = None     # service|product (when save_to_catalog)
     catalog_sku: Optional[str] = Field(None, max_length=100)      # 3: product saved to the catalog
     catalog_barcode: Optional[str] = Field(None, max_length=100)
+    bin_id: Optional[str] = None           # ii144c: take this product from this bin first
+    serial_number: Optional[str] = Field(None, max_length=120)   # ii144c: use this exact unit
 
     # Security phase 3: negative quantities/prices/discounts and >100% discounts used to
     # create phantom stock and zero/negative totals that slipped past every guard.
@@ -288,6 +290,7 @@ def _serialize_order_scalars(o: Order) -> dict:
     return {
         "id": o.id,
         "order_number": o.order_number,
+        "location_id": o.location_id,       # ii144c: which location's bins a product line can come from
         "status": o.status,
         "cancel_reason": getattr(o, "cancel_reason", None),
         "priority": o.priority,
@@ -808,7 +811,7 @@ async def create_order(
             parts_total += total
             # Estimates never deduct stock (Orderry: estimate = order w/o stock impact)
             if li.kind == "product" and li.ref_id and not data.is_estimate:
-                stock_writeoffs.append((li.ref_id, li.qty, ol))
+                stock_writeoffs.append((li.ref_id, li.qty, ol, li.bin_id))
         else:  # fee and any other line types count toward labour-side total
             labour_total += total
 
@@ -957,7 +960,9 @@ async def create_order(
     from backend.services import reservations as _rsv
     _allow_override = _can_override_reservation(perms, current)
     from backend.services import stock_rows
-    for part_id, qty, line_obj in stock_writeoffs:
+    for part_id, qty, line_obj, line_bin in stock_writeoffs:
+        if line_bin:      # ii144c: the bin the product is taken from — this shop's, at this location
+            await stock_rows.check_bin(db, current.org_id, data.location_id, line_bin)
         sl = await stock_rows.rows(db, part_id, data.location_id, lock=True)
         # 144at — reservation-aware: a new WO can take only FREE stock (+ override for others' holds).
         g = await _rsv.guard_and_draw(
@@ -975,14 +980,17 @@ async def create_order(
                 "Not enough free stock and you don't have permission to add products "
                 "without deduction. Reduce the quantity or receive more stock."
             )
-        if sl and deducted > 0:     # ii144a: drawn across the location's bins
-            await stock_rows.draw(db, part_id, data.location_id, deducted, allow_short=True)
+        taken = []
+        if sl and deducted > 0:     # ii144a: drawn across the location's bins (ii144c: the chosen one first)
+            taken = await stock_rows.draw(db, part_id, data.location_id, deducted, bin_id=line_bin, allow_short=True)
         line_obj.pending_stock = shortfall
         if deducted > 0:
-            db.add(StockMovement(
-                part_id=part_id, location_id=data.location_id,
-                movement_type="use", qty=-deducted, ref_type="order", ref_id=order.id,
-            ))
+            for t_bin, t_qty in (taken or [(None, deducted)]):    # one movement per bin it came from
+                db.add(StockMovement(
+                    part_id=part_id, location_id=data.location_id, bin_id=t_bin,
+                    movement_type="use", qty=-t_qty, ref_type="order", ref_id=order.id,
+                    created_by_id=current.id,
+                ))
             from backend.services import inventory_alerts as _alerts  # 144bo: low-stock alert
             await _alerts.maybe_low_stock_by_id(db, current.org_id, part_id)
             await log_system_event(db, current.org_id, "order", order.id,
@@ -3577,7 +3585,8 @@ async def add_line(
                          discount=existing.discount or 0, discount_type=existing.discount_type or "pct",
                          tax_rate=existing.tax_rate or 0, tax_mode=existing.tax_mode or "imposed")
             existing.total = _calc_line(tmp)
-            await _maybe_deduct(db, order, existing, data.qty, perms, current)
+            await _maybe_deduct(db, order, existing, data.qty, perms, current,
+                                bin_id=data.bin_id, serial_number=data.serial_number)
             await _recalc_order(db, order)
             await db.commit()
             return {"ok": True, "line_id": existing.id, "merged": True}
@@ -3609,7 +3618,8 @@ async def add_line(
     await db.flush()
     # deduct stock for products (estimates never deduct)
     if data.kind == "product" and data.ref_id and not order.is_estimate:
-        await _maybe_deduct(db, order, line, data.qty, perms, current)
+        await _maybe_deduct(db, order, line, data.qty, perms, current,
+                            bin_id=data.bin_id, serial_number=data.serial_number)
     _prev_total = float(order.total or 0)
     await _recalc_order(db, order)
     from backend.routers.feed import log_system_event
@@ -3631,23 +3641,47 @@ async def _reverse_fulfillment(db, order, part_id, qty):
     # Return stock to the location it was actually deducted from (recorded on the "use"
     # movement), not order.location_id — those differ after a work order is transferred to
     # another location, and returning to the new location would corrupt per-location on-hand.
-    dloc = (await db.execute(select(StockMovement.location_id).where(
-        StockMovement.ref_id == order.id, StockMovement.part_id == part_id,
-        StockMovement.movement_type == "use").order_by(StockMovement.created_at.desc()).limit(1))).scalar_one_or_none()
-    loc_id = dloc or order.location_id
+    # ii144c: what the job still holds per (location, bin) — its "use" rows minus what it gave back —
+    # so each bin gets back what was taken from it (latest-taken first), while the bin is in use.
+    from backend.models import StorageBin
     from backend.services import stock_rows
-    await stock_rows.add(db, part_id, loc_id, qty)
-    db.add(StockMovement(part_id=part_id, location_id=loc_id,
-                         movement_type="return", qty=qty, ref_type="order", ref_id=order.id))
+    held: dict = {}
+    for m_loc, m_bin, m_qty in (await db.execute(select(
+            StockMovement.location_id, StockMovement.bin_id, StockMovement.qty).where(
+            StockMovement.ref_id == order.id, StockMovement.ref_type == "order", StockMovement.part_id == part_id,
+            StockMovement.movement_type.in_(("use", "return"))).order_by(StockMovement.created_at))).all():
+        held[(m_loc, m_bin)] = held.pop((m_loc, m_bin), 0) - (m_qty or 0)   # latest-touched last
+    plan, left = [], qty
+    for (m_loc, m_bin), h in reversed(list(held.items())):
+        if left <= 1e-9:
+            break
+        take = min(max(h, 0), left)
+        if take > 1e-9:
+            plan.append((m_loc or order.location_id, m_bin, take))
+            left -= take
+    if left > 1e-9:
+        loc0 = plan[0][0] if plan else order.location_id
+        plan.append((loc0, None, left))
+    live = set((await db.execute(select(StorageBin.id).where(
+        StorageBin.id.in_([b for _l, b, _q in plan if b]), StorageBin.org_id == order.org_id,
+        StorageBin.active == True))).scalars().all()) if any(b for _l, b, _q in plan) else set()
+    for loc_id, back_bin, q in plan:
+        back_bin = back_bin if back_bin in live else None
+        await stock_rows.add(db, part_id, loc_id, q, bin_id=back_bin)
+        db.add(StockMovement(part_id=part_id, location_id=loc_id, bin_id=back_bin,
+                             movement_type="return", qty=q, ref_type="order", ref_id=order.id))
     from backend.models import SerializedItem, StockItemBatch
     # Release serialized units (newest allocated first)
     serials = (await db.execute(select(SerializedItem).where(
         SerializedItem.org_id == order.org_id, SerializedItem.part_id == part_id,
         SerializedItem.order_id == order.id, SerializedItem.status == "allocated_to_order")
         .order_by(SerializedItem.created_at.desc()).limit(int(qty)))).scalars().all()
+    from backend.services import serial_log
     for s in serials:
         s.status = "in_stock"
         s.order_id = None
+        serial_log.record(db, s, "returned", ref_type="order", ref_id=order.id,
+                          label=f"Taken off {order.order_number}")
     # Restore cost layers (approximate without a per-line consumption journal:
     # newest layer first, never exceeding what that layer originally received)
     from decimal import Decimal as _D
@@ -3695,11 +3729,28 @@ async def _resolve_variant_part(db, org_id, configured, device):
     return (with_stock or fits)[0]
 
 
-async def _maybe_deduct(db, order, line, qty, perms, current):
+async def _maybe_deduct(db, order, line, qty, perms, current, *, bin_id=None, serial_number=None):
     """Deduct qty of a product line from stock; mark true shortfall as pending.
     144at — reservation-aware: a job may take only FREE stock + its own reservation. Units
     reserved for a *different* job are blocked (409) unless the actor can override, in which case
-    they're drawn from those holds FIFO and audited."""
+    they're drawn from those holds FIFO and audited.
+    ii144c — `bin_id` is the bin to take from first (the job's choice when a product sits in several
+    bins); `serial_number` is the exact unit used. Each bin drawn gets its own "use" movement."""
+    from backend.services import stock_rows
+    if bin_id:
+        await stock_rows.check_bin(db, order.org_id, order.location_id, bin_id)
+    if serial_number:     # the named unit must be in stock here before anything moves
+        from backend.models import SerializedItem
+        from backend.services.serial_intake import matches as _sn_matches
+        named = (await db.execute(select(SerializedItem).where(
+                SerializedItem.org_id == order.org_id, SerializedItem.part_id == line.ref_id,
+                SerializedItem.location_id == order.location_id, SerializedItem.status == "in_stock",
+                _sn_matches(SerializedItem.serial_number, serial_number)))).scalars().first()
+        if not named:
+            raise HTTPException(409, f"Serial {serial_number} isn't in stock here for this product")
+        if bin_id and named.bin_id != bin_id:
+            raise HTTPException(409, f"Serial {serial_number} isn't in that bin")
+        bin_id = named.bin_id      # the unit's own bin is where its stock comes from
     from backend.services import reservations as _rsv
     allow_override = _can_override_reservation(perms, current)
     g = await _rsv.guard_and_draw(
@@ -3711,15 +3762,17 @@ async def _maybe_deduct(db, order, line, qty, perms, current):
                                  f"A manager with override permission must approve using them.")
     deducted = g["take"]
     shortfall = g["pending"]
-    from backend.services import stock_rows
     sl = await stock_rows.rows(db, line.ref_id, order.location_id)
     if shortfall > 0 and perms.get("can_add_without_stock") is False:
         raise HTTPException(403, "Not enough free stock and you can't add without deduction.")
     if sl and deducted > 0:
-        await stock_rows.draw(db, line.ref_id, order.location_id, deducted, allow_short=True)
+        taken = await stock_rows.draw(db, line.ref_id, order.location_id, deducted, bin_id=bin_id,
+                                      allow_short=True)
         if True:
-            db.add(StockMovement(part_id=line.ref_id, location_id=order.location_id,
-                                 movement_type="use", qty=-deducted, ref_type="order", ref_id=order.id))
+            for t_bin, t_qty in taken:
+                db.add(StockMovement(part_id=line.ref_id, location_id=order.location_id, bin_id=t_bin,
+                                     movement_type="use", qty=-t_qty, ref_type="order", ref_id=order.id,
+                                     created_by_id=current.id))
             from backend.services import inventory_alerts as _alerts  # 144bo: low-stock alert
             await _alerts.maybe_low_stock_by_id(db, order.org_id, line.ref_id)
             # ── FIFO cost layers: if this part has batches, consume them oldest-first
@@ -3741,15 +3794,34 @@ async def _maybe_deduct(db, order, line, qty, perms, current):
                 except HTTPException:
                     pass  # batches short — warehouse qty already handled the deduction
             # ── Serialized units: allocate in-stock serials onto this order. ──
+            # ii144c: the named unit first, then units from the bins the stock came from.
             n_serial = int(deducted)
             if n_serial > 0:
+                from backend.services import serial_log
                 from backend.services.serialized import allocate_serialized_item
-                for _ in range(n_serial):
+                picks = [(t_bin, None) for t_bin, t_qty in taken for _ in range(int(t_qty))]
+                if serial_number:      # the named unit stands in for one unit of its own bin
+                    i = next((k for k, (b, _s) in enumerate(picks) if b == bin_id), 0)
+                    picks = [(bin_id, serial_number)] + picks[:i] + picks[i + 1:]
+                used = []
+                for p_bin, p_sn in picks[:n_serial]:
                     try:
-                        await allocate_serialized_item(
-                            db, org_id=order.org_id, part_id=line.ref_id, order_id=order.id)
+                        used.append(await allocate_serialized_item(
+                            db, org_id=order.org_id, part_id=line.ref_id, order_id=order.id,
+                            bin_id=p_bin, serial_number=p_sn, location_id=order.location_id,
+                            unbinned=p_bin is None and not p_sn))
                     except HTTPException:
-                        break  # not a serialized part (or none left) — fine
+                        if p_sn:
+                            raise HTTPException(409, f"Serial {p_sn} isn't in stock for this product")
+                        try:      # nothing left in that bin: any unit in stock
+                            used.append(await allocate_serialized_item(
+                                db, org_id=order.org_id, part_id=line.ref_id, order_id=order.id,
+                                location_id=order.location_id))
+                        except HTTPException:
+                            break  # not a serialized part (or none left) — fine
+                for u in used:
+                    serial_log.record(db, u, "used", ref_type="order", ref_id=order.id,
+                                      label=f"Used on {order.order_number}", actor_id=current.id)
     line.pending_stock = (line.pending_stock or 0) + shortfall
 
 

@@ -8,6 +8,7 @@ import { confirmDialog } from "../../lib/dialog";
 import SerialEntry from "../../components/SerialEntry";
 import PasteImport, { ImportedLine } from "./PasteImport";
 import { useMe } from "../../context/Me";
+import BinScanField, { ScannedBin } from "../../components/BinScanField";
 
 /** PO detail + the missing Receive action. Receiving posts to the ONE real path
  * (`/inventory/po/{id}/receive`) that lands stock, moving-average cost, FIFO layers,
@@ -126,12 +127,19 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
   const prodName = (id: string) => pool.find((p) => p.id === id)?.name || id;
 
   // barcode receiving: scan a code → match a PO line by the product's sku/barcode/code → +1 to receive
-  function onScan(code: string) {
+  async function onScan(code: string) {
     const c = code.trim().toLowerCase();
     if (!c || !po) return;
     const p: any = pool.find((x: any) => [x.sku, x.barcode, x.code].some((v: any) => (v || "").toLowerCase() === c));
     const line = p && po.lines.find((l) => l.part_id === p.id);
-    if (!line) { flash(`No PO line matches "${code}"`); setScan(""); return; }
+    if (!line) {
+      // ii144c: a bin label says where this delivery is being put away
+      const hit = await api.post<any>("/scan/resolve", { code: code.trim() }).catch(() => null);
+      if (hit?.type === "bin" && (!(po as any).location_id || hit.location_id === (po as any).location_id)) {
+        setRecvBin({ id: hit.id, name: hit.label }); flash(`Putting away into bin ${hit.label}`); setScan(""); return;
+      }
+      flash(`No PO line matches "${code}"`); setScan(""); return;
+    }
     if (line.serialized) { flash(`${prodName(line.part_id)} is tracked by serial — scan each unit's serial in the box under it`); setScan(""); return; }
     const remain = Math.max((line.qty_ordered || 0) - (line.qty_received || 0), 0);
     const cur = recv[line.id] ?? 0;
@@ -150,6 +158,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
   const canReceive = (st === "ordered" || st === "partial") && outstanding > 0;
 
   const [shipFreight, setShipFreight] = useState("");
+  const [recvBin, setRecvBin] = useState<ScannedBin | null>(null);   // ii144c: put this delivery away into a bin
   async function receive(all = false) {
     if (!po) return;
     const remainOf = (l: Line) => Math.max((l.qty_ordered || 0) - (l.qty_received || 0), 0);
@@ -166,7 +175,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
     if (source.length === 0) { flash("Nothing to receive — set a quantity"); return; }
     setBusy(true);
     try {
-      const body: any = { lines: source };
+      const body: any = { lines: source, ...(recvBin ? { bin_id: recvBin.id } : {}) };
       const sf = Number(shipFreight);
       if (sf > 0) { body.shipment_freight = sf; body.shipment_freight_to_cost = true; }  // 144ar
       const r = await api.post<any>(`/inventory/po/${po.id}/receive`, body);
@@ -431,6 +440,12 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                 <M n="barcode_scanner" c="text-base text-primary" />
                 <input value={scan} onChange={(e) => setScan(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") onScan(scan); }}
                   placeholder="Scan or type a barcode / SKU to add 1 to receive" className="glass-input rounded-lg px-3 py-1.5 text-xs flex-1 font-mono" />
+              </div>
+            )}
+            {canReceive && (
+              <div className="rounded-xl border border-slate-200 px-3 py-2">
+                <div className="text-[11px] font-semibold text-ink-tertiary mb-1">Put away into a bin (optional — otherwise the location's default bin)</div>
+                <BinScanField label="Into" current={recvBin} locationId={(po as any)?.location_id} onBin={setRecvBin} onClear={() => setRecvBin(null)} />
               </div>
             )}
 
