@@ -111,3 +111,73 @@ async def test_declined_estimate_cannot_be_accepted_later(client, tenant):
     assert r.status_code == 409, r.text
     o = await K.order(client, tenant, oid)
     assert o["is_estimate"] is True and await K.stock(client, tenant, pid) == 10
+
+
+# ── 2 + 3 + 12. approved recommendations ───────────────────────────────────────────────────────
+async def _wo_with_product_rec(client, h, stock=10, qty=2, cost=10):
+    loc = await K.loc(client, h)
+    pid = await K.part(client, h, loc, "Battery", 50, cost, qty=stock)
+    oid, _ = await K.job(client, h, loc)
+    r = await client.post(f"/api/orders/{oid}/recommendations", headers=h, json={
+        "title": "Battery", "kind": "product", "ref_id": pid, "qty": qty, "unit_price": 50})
+    assert r.status_code == 201, r.text
+    await client.post(f"/api/orders/{oid}/recommendations/publish-all", headers=h, json={})
+    return oid, pid, r.json()["id"]
+
+
+@pytest.mark.asyncio
+async def test_approved_product_rec_takes_stock_and_cost_and_delete_returns_it(client, tenant):
+    oid, pid, rid = await _wo_with_product_rec(client, tenant)
+    tok = (await K.order(client, tenant, oid))["public_token"]
+    r = await client.post(f"/api/public/track/{tok}/recommendations/decide", json={"approve_ids": [rid]})
+    assert r.status_code == 200 and r.json()["approved"] == 1, r.text
+    assert await K.stock(client, tenant, pid) == 8                  # the part left the shelf
+    ln = [x for x in await K.lines(client, tenant, oid) if x["kind"] == "product"][0]
+    assert ln["cost_price"] == 10                                    # profit sees the real cost
+    r = await client.delete(f"/api/orders/{oid}/lines/{ln['id']}", headers=tenant)
+    assert r.status_code == 200, r.text
+    assert await K.stock(client, tenant, pid) == 10                 # back to where it was, no phantom
+
+
+@pytest.mark.asyncio
+async def test_staff_approve_for_customer_takes_stock(client, tenant):
+    oid, pid, rid = await _wo_with_product_rec(client, tenant)
+    r = await client.post(f"/api/orders/{oid}/recommendations/{rid}/approve-for-customer",
+                          headers=tenant, json={"how": "phone"})
+    assert r.status_code == 200, r.text
+    assert await K.stock(client, tenant, pid) == 8
+
+
+@pytest.mark.asyncio
+async def test_double_decide_from_stale_copies_adds_once_and_total_matches_lines(client, tenant, db):
+    from backend.routers.public import RecDecideIn, _decide_recommendations
+    oid, pid, rid = await _wo_with_product_rec(client, tenant)
+    await K.add_line(client, tenant, oid, line_type="labour", kind="service", description="Fit", unit_price=30, qty=1)
+    stale = (await db.execute(select(Order).where(Order.id == oid))).scalar_one()
+    from backend.models import Recommendation
+    (await db.execute(select(Recommendation).where(Recommendation.id == rid))).scalar_one()   # A read it as "sent"
+    async with _other(db)() as b:
+        o = (await b.execute(select(Order).where(Order.id == oid))).scalar_one()
+        assert (await _decide_recommendations(b, o, RecDecideIn(approve_ids=[rid])))["approved"] == 1
+        await b.commit()
+    res = await _decide_recommendations(db, stale, RecDecideIn(approve_ids=[rid]))
+    await db.commit()
+    assert res["approved"] == 0 and res["skipped"] == [rid]
+    o = await K.order(client, tenant, oid)
+    assert [x["description"] for x in o["lines"]].count("Battery") == 1
+    assert o["total"] == pytest.approx(sum(x["total"] for x in o["lines"]))
+    assert await K.stock(client, tenant, pid) == 8
+
+
+@pytest.mark.asyncio
+async def test_customer_cannot_add_recommendations_to_a_closed_job(client, tenant):
+    oid, pid, rid = await _wo_with_product_rec(client, tenant)
+    sts = (await client.get("/api/statuses?is_estimate=false", headers=tenant)).json()
+    sts = sts if isinstance(sts, list) else sts.get("items", [])
+    closed = next(s["key"] for s in sts if s.get("status_group") == "closed")
+    r = await client.patch(f"/api/orders/{oid}/status", headers=tenant, json={"status": closed, "force": True})
+    assert r.status_code == 200, r.text
+    tok = (await K.order(client, tenant, oid))["public_token"]
+    r = await client.post(f"/api/public/track/{tok}/recommendations/decide", json={"approve_ids": [rid]})
+    assert r.status_code == 409, r.text
+    assert await K.stock(client, tenant, pid) == 10

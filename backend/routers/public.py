@@ -19,7 +19,7 @@ from backend.db.database import get_db
 from backend.services.public_names import display_name as _public_name
 from backend.models import (
     Order, Client, Device, Organisation, Location,
-    OrderStatusLog, EventFeedItem, DocumentSignature,
+    OrderStatus, OrderStatusLog, EventFeedItem, DocumentSignature,
     Feedback, FeedbackSettings,
 )
 from backend.services.dates import now_utc, shop_today
@@ -965,6 +965,11 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
     seam; the rows are locked so a double tap can't add the same work twice."""
     if not await _recommend_enabled(db, order.org_id):
         raise HTTPException(403, "Recommendations are turned off for this shop")
+    from backend.routers.orders import _is_closed
+    st = (await db.execute(select(OrderStatus).where(
+        OrderStatus.org_id == order.org_id, OrderStatus.key == order.status))).scalars().first()
+    if (st and st.locks_edits) or await _is_closed(db, order.org_id, order):
+        raise HTTPException(409, "This job is closed. Contact the shop to add more work.")
     from datetime import timedelta as _td
 
     from backend.models import Recommendation as _R
@@ -981,7 +986,7 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
         _R.order_id == order.id, _R.org_id == order.org_id, _R.id.in_(ids))
         .with_for_update())).scalars().all()}
     approved = later_n = 0
-    added = 0.0
+    new_lines: list[str] = []
     skipped: list[str] = []
     for rid in approve:
         r = rows.get(rid)
@@ -990,10 +995,13 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
             skipped.append(rid)
             continue
         line = await approve_recommendation(db, r)
+        if line is None:                 # a parallel tap approved it first
+            skipped.append(rid)
+            continue
         r.decline_reason = None
         r.remind_after = None
         r.decided_by_name = name
-        added += float(line.total or 0)
+        new_lines.append(line.id)
         approved += 1
     remind_on = await shop_today(db, order.org_id) + _td(days=REMIND_AFTER_DAYS) if later else None
     for rid in later:
@@ -1012,12 +1020,8 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
         order.rec_unread = (order.rec_unread or 0) + decided
         # Add the chosen work to the job's total (a job priced at check-in may have no lines
         # yet, so recomputing from lines would wipe its quoted price).
-        prev_total = float(order.total or 0)
-        order.total = q2(prev_total + added)
-        if added:
-            # A draft invoice for the job follows the new total; a sent one keeps its own.
-            from backend.services.invoice_money import sync_order_invoices
-            await sync_order_invoices(db, order, prev_total)
+        from backend.routers.recommendations import add_approved_to_total
+        await add_approved_to_total(db, order, new_lines)
         parts = []
         if approved:
             parts.append(f"added {approved} recommended item{'s' if approved != 1 else ''}")
