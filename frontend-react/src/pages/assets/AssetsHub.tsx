@@ -6,6 +6,8 @@ import { useDebounced, useServerPage } from "../../hooks/useServerPage";
 import AssetDrawer from "../orders/AssetDrawer";
 import { useTerminology, assetNoun } from "../../lib/useTerminology";
 import Pager from "../../components/Pager";
+import ImportDrawer from "../../components/ImportDrawer";
+import { useMe } from "../../context/Me";
 
 type Asset = { id: string; asset_type?: string; asset_label?: string; template_key?: string; brand?: string; model?: string; serial?: string; imei?: string; owner_type?: string; owner_name?: string; condition?: string; order_count?: number };
 
@@ -14,6 +16,8 @@ export default function AssetsHub() {
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const { can } = useMe();
   const [q, setQ] = useState("");
   const PAGE_SIZE = 50;
 
@@ -37,7 +41,10 @@ export default function AssetsHub() {
     <Shell title={term.assets}>
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 flex flex-wrap items-center justify-between gap-3">
-          <button onClick={() => setCreating(true)} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="add" c="text-sm font-bold" />New {term.asset.toLowerCase()}</button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setCreating(true)} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="add" c="text-sm font-bold" />New {term.asset.toLowerCase()}</button>
+            {can("can_view_asset_info") && <button onClick={() => setImporting(true)} className="px-4 py-2 rounded-xl bg-white border border-slate-200 text-ink-secondary text-xs font-semibold hover:bg-slate-50 flex items-center gap-1.5"><M n="upload" c="text-sm" />Import</button>}
+          </div>
           <div className="relative w-72"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" /><input value={q} onChange={(e) => setQ(e.target.value)} className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg font-medium" placeholder={`Search ${term.assets.toLowerCase()}…`} /></div>
         </div>
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
@@ -67,6 +74,7 @@ export default function AssetsHub() {
       </div>
       {open && <AssetDrawer assetId={open} onClose={() => setOpen(null)} onSaved={reload} />}
       {creating && <AssetDrawer onClose={() => setCreating(false)} onSaved={reload} />}
+      {importing && <ImportDrawer kind="assets" onClose={() => setImporting(false)} onDone={reload} />}
     </Shell>
   );
 }
