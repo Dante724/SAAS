@@ -15,7 +15,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -197,7 +197,7 @@ async def change_status(
             # un-reserve back to availability at source
             for l in lines:
                 sl = await _level(db, l.part_id, t.from_location_id)
-                sl.qty_reserved = max((sl.qty_reserved or 0) - l.qty, 0)
+                await _release_reserved(db, sl, l.qty)
                 await _atomic_add(db, sl, "qty_available", l.qty, round_to=None)   # atomic
         elif prev in ("in_transit", "received"):
             back = data.return_location_id
@@ -233,7 +233,7 @@ async def change_status(
         # leave the source: reservation lifts; goods now ride on the transfer itself
         for l in lines:
             sl = await _level(db, l.part_id, t.from_location_id)
-            sl.qty_reserved = max((sl.qty_reserved or 0) - l.qty, 0)
+            await _release_reserved(db, sl, l.qty)
             db.add(StockMovement(part_id=l.part_id, location_id=t.from_location_id,
                                  movement_type="transfer_out", qty=-l.qty,
                                  ref_type="transfer", ref_id=t.id))
@@ -361,6 +361,20 @@ async def scan_transfer_line(
     await db.commit()
     await db.refresh(ln)
     return {"ok": True, "part_id": part.id, "part_name": part.name, "qty": ln.qty}
+
+
+async def _release_reserved(db, sl, qty):
+    """qty_reserved -= qty (not below 0) in one UPDATE. Read-then-write here wiped a reservation
+    another transfer made on the same stock row in the meantime."""
+    from sqlalchemy import case, inspect
+    if inspect(sl).pending:
+        sl.qty_reserved = max((sl.qty_reserved or 0) - qty, 0)
+        return
+    cur = func.coalesce(StockLevel.qty_reserved, 0)
+    await db.execute(sa_update(StockLevel).where(StockLevel.id == sl.id)
+                     .values(qty_reserved=case((cur > qty, cur - qty), else_=0))
+                     .execution_options(synchronize_session=False))
+    await db.refresh(sl, attribute_names=["qty_reserved"])
 
 
 async def _atomic_add(db, obj, attr, delta, *, round_to=None):

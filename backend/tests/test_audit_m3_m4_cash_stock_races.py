@@ -272,3 +272,28 @@ async def test_return_paid_after_the_check_is_not_deleted(client, tenant, db, mo
     res = await client.delete(f"/api/stock-docs/returns/{r['id']}", headers=tenant)
     assert res.status_code == 409, res.text
     assert await _on_hand(db, p["id"], loc) == 8
+
+
+@pytest.mark.asyncio
+async def test_shipping_one_transfer_keeps_anothers_reservation(client, tenant, db, monkeypatch):
+    """Shipping transfer A released its reservation with a read-then-write of qty_reserved; a
+    reservation for transfer B landing in between was wiped. (Shows on Postgres, where the two
+    transfers don't block each other; SQLite serialises the writes.)"""
+    from backend.routers import transfers
+    p, loc = await _part(client, tenant, qty=10, name="Frame")
+    loc_b = (await client.post("/api/staff/locations", headers=tenant, json={"name": "Branch D"})).json()["id"]
+    mk = lambda q: client.post("/api/transfers", headers=tenant, json={  # noqa: E731
+        "from_location_id": loc, "to_location_id": loc_b, "lines": [{"part_id": p["id"], "qty": q}]})
+    a, b = (await mk(3)).json(), (await mk(2)).json()
+    assert (await client.patch(f"/api/transfers/{a['id']}/status", json={"status": "ready"},
+                               headers=tenant)).status_code == 200
+
+    _slow(monkeypatch, transfers, "_level")      # A reads the stock row, then pauses
+    ship, reserve = await asyncio.gather(
+        client.patch(f"/api/transfers/{a['id']}/status", json={"status": "in_transit"}, headers=tenant),
+        client.patch(f"/api/transfers/{b['id']}/status", json={"status": "ready"}, headers=tenant))
+    assert ship.status_code == 200 and reserve.status_code == 200, (ship.text, reserve.text)
+    db.expire_all()
+    sl = (await db.execute(select(StockLevel).where(
+        StockLevel.part_id == p["id"], StockLevel.location_id == loc))).scalars().first()
+    assert sl.qty_reserved == 2 and sl.qty_available == 5
