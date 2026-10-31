@@ -1,5 +1,6 @@
 import SkeletonRows from "../../components/SkeletonRows";
 import PageSummary, { type SummaryStat } from "../../components/PageSummary";
+import { downloadSheet } from "../../lib/downloadSheet";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
@@ -19,20 +20,8 @@ import { cachedPref, loadPref, savePref } from "../../lib/userPref";
 
 const REPORT_PAGE = 50;
 
-// Build a spreadsheet (xlsx/csv) from an array-of-arrays and trigger a download.
-// The writer is lazy-loaded so it never enters the main bundle. Shared by the report
-// export and the custom-report export.
-async function exportAoa(aoa: (string | number)[][], fmt: "xlsx" | "csv", name: string) {
-  const { toCsv, toXlsx } = await import("../../lib/sheet");
-  const blob = fmt === "csv"
-    ? new Blob(["\ufeff" + toCsv(aoa)], { type: "text/csv;charset=utf-8" })   // BOM: Excel reads UTF-8
-    : new Blob([toXlsx(aoa) as BlobPart], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = `${name}.${fmt}`;
-  document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(url);
-}
+// Shared by the report export and the custom-report export.
+const exportAoa = downloadSheet;
 
 type Catalog = { tabs: { name: string; reports: { key: string; title: string }[] }[] };
 type RunResult = { key: string; title: string; columns: { key: string; label: string; align?: string }[] | string[]; rows: any[]; row_count: number };

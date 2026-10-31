@@ -62,6 +62,13 @@ async def post_transaction(db, org_id, account_id, txn_type, amount, *,
     base-currency account. Manual entries and transfers (which carry fx_rate) are native already;
     corrections pass native_amount=True because their delta is typed against the account itself.
     """
+    # Scope the account to the org so a client-supplied account_id can't corrupt another
+    # tenant's balance. An unknown or other shop's account is refused before anything is written
+    # (it used to record a transaction against an account nobody here could see).
+    acc = (await db.execute(select(Account).where(
+        Account.id == account_id, Account.org_id == org_id))).scalar_one_or_none() if account_id else None
+    if acc is None:
+        raise HTTPException(404, "Account not found")
     txn = Transaction(
         org_id=org_id, account_id=account_id, txn_type=txn_type, amount=amount,
         cash_flow_item_id=cash_flow_item_id, comment=comment, ref_type=ref_type,
@@ -70,10 +77,6 @@ async def post_transaction(db, org_id, account_id, txn_type, amount, *,
         is_retroactive=is_retroactive, actual_date=actual_date or now_utc(),
     )
     db.add(txn)
-    # Scope the account to the org so a client-supplied account_id can't corrupt another
-    # tenant's balance (the transaction row is org-stamped, but the balance mutation wasn't scoped).
-    acc = (await db.execute(select(Account).where(
-        Account.id == account_id, Account.org_id == org_id))).scalar_one_or_none()
     if acc and acc.currency_code and ref_type not in (None, "manual") and fx_rate is None \
             and not native_amount:
         base = await _org_base_code(db, org_id)

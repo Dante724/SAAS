@@ -300,11 +300,7 @@ class Settings(BaseSettings):
         import logging
         import os
         _log = logging.getLogger(__name__)
-        # Rate limits (login lockouts included) count in-process without Redis, so N workers
-        # or instances allow N times the limit.
-        if not self.REDIS_URL and int(os.environ.get("WEB_CONCURRENCY", "1") or 1) > 1:
-            _log.warning("REDIS_URL is not set but WEB_CONCURRENCY > 1: every worker keeps its own "
-                         "rate-limit counters. Set REDIS_URL so limits are shared.")
+        # (several workers without REDIS_URL is refused by _shared_rate_limits below)
         if self.MEDIA_BACKEND == "local" and self.MEDIA_LOCAL_DIR.startswith("/tmp"):
             _log.warning("MEDIA_BACKEND=local with MEDIA_LOCAL_DIR under /tmp: uploaded photos and "
                          "files are lost when the container restarts. Use MEDIA_BACKEND=s3 or a volume.")
@@ -320,6 +316,16 @@ class Settings(BaseSettings):
                 "configured; /api/chats/webhook/meta will refuse every post (signatures fail "
                 "closed). Set META_APP_SECRET to receive Meta messages."
             )
+
+    @model_validator(mode="after")
+    def _shared_rate_limits(self) -> "Settings":
+        """Deployed with several workers, limits (sign-in lockouts included) must be counted in
+        Redis: in-process counters let N workers allow N times every limit."""
+        import os
+        if self.is_deployed and not self.REDIS_URL and int(os.environ.get("WEB_CONCURRENCY", "1") or 1) > 1:
+            raise ValueError("REDIS_URL must be set when WEB_CONCURRENCY > 1 in production/staging, so "
+                             "rate limits are shared by every worker. Set REDIS_URL or run one worker.")
+        return self
 
 
 settings = Settings()

@@ -182,3 +182,31 @@ async def autocomplete_replied_chats() -> None:
         done = await autocomplete_replied(db)
         if done:
             log.info("chat-autocomplete-sweep: completed %d replied chat(s)", done)
+
+
+@job_runner.every(24 * 3600, "retention-purge")
+async def purge_old_records() -> None:
+    """Delete notifications, call records, messages and audit entries older than each shop's
+    retention setting (none by default), and expired customer-portal links."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.services.retention import purge_all
+
+    async with AsyncSessionLocal() as db:
+        done = {k: n for k, n in (await purge_all(db)).items() if n}
+        if done:
+            log.info("retention-purge: deleted %s", done)
+
+
+@job_runner.every(24 * 3600, "passcode-encrypt-sweep")
+async def encrypt_plain_passcodes() -> None:
+    """Passcode-like custom fields saved before TOKEN_ENCRYPTION_KEY was set are encrypted
+    here rather than waiting for someone to edit the record. Without a key it does nothing."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.db.secret_json import encrypt_plain_rows
+
+    async with AsyncSessionLocal() as db:
+        conn = await db.connection()
+        done = await conn.run_sync(encrypt_plain_rows)
+        await db.commit()
+        if done:
+            log.info("passcode-encrypt-sweep: encrypted %d record(s)", done)

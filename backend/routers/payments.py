@@ -74,8 +74,9 @@ async def create_checkout(
     await assert_perm(db, current, "can_create_payment_links")
     if data.amount <= 0:
         raise HTTPException(400, "Amount must be positive")
-    if data.order_id and not data.currency:
-        # A checkout for an order asks at most for what's still owed on it.
+    if data.order_id:
+        # A checkout for an order asks at most for what's still owed on it, whatever currency
+        # the request names (create_intent refuses one that isn't the shop's own).
         from backend.models import Order
         from backend.services.order_money import balance_due
         order = (await db.execute(select(Order).where(

@@ -166,7 +166,8 @@ async def gdpr_erase(
         if hasattr(cl, f):
             setattr(cl, f, None)
     cl.custom_data = {}
-    cl.portal_token = None      # the old portal link must stop showing their history
+    from backend.services import portal_links
+    await portal_links.revoke_all(db, cl.id)   # old portal links must stop showing their history
     await _erase_related(db, current.org_id, client_id)
     scrubbed = 0
     for d in (await db.execute(select(Device).where(Device.client_id == client_id))).scalars().all():
@@ -337,3 +338,42 @@ async def export_org(
         "orders": [{"id": o.id, "order_number": o.order_number, "client_id": o.client_id,
                     "status": o.status, "total": o.total} for o in orders],
     }
+
+
+# ── Data retention ───────────────────────────────────────────────────────────
+class RetentionIn(BaseModel):
+    days: dict[str, Optional[int]] = {}     # {kind: days}; null or missing = keep for good
+
+
+def _retention_out(org) -> dict:
+    from backend.services import retention
+    kept = retention.clean(org.retention_days)
+    return {"kinds": [{"key": k, "label": label, "days": kept.get(k)} for k, label in retention.KINDS.items()],
+            "min_days": retention.MIN_DAYS, "max_days": retention.MAX_DAYS}
+
+
+@router.get("/retention")
+async def get_retention(
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_manage_settings")),
+):
+    """How long this shop keeps old records of each kind (none set = keep for good)."""
+    org = await db.get(Organisation, current.org_id)
+    return _retention_out(org)
+
+
+@router.put("/retention")
+async def set_retention(
+    data: RetentionIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_manage_settings")),
+):
+    from backend.services import retention
+    org = await db.get(Organisation, current.org_id)
+    before = retention.clean(org.retention_days)
+    org.retention_days = retention.clean(data.days) or None
+    await audit_record(db, org_id=current.org_id, actor_id=current.id, action="settings.retention",
+                       entity_type="organisation", entity_id=org.id,
+                       diff={"before": before, "after": org.retention_days or {}})
+    await db.commit()
+    return _retention_out(org)

@@ -3,6 +3,7 @@ import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
 import { api } from "../../api/client";
+import { downloadSheet } from "../../lib/downloadSheet";
 import { isoDate } from "../../lib/localDate";
 import { money } from "../orders/types";
 import ClientDrawer from "../orders/ClientDrawer";
@@ -121,11 +122,8 @@ export default function ClientsHub() {
   function bulkExport() {
     const chosen = [...sel].map((id) => cp.seen.get(id)).filter(Boolean) as Client[];
     const head = ["Name", "Phone", "Email", "Tier", "Balance", "Orders"];
-    const esc = (v: any) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const body = chosen.map((c) => [c.name, c.phone, c.email, c.loyalty_tier || "Standard", c.balance ?? 0, c.order_count ?? 0].map(esc).join(","));
-    const blob = new Blob([[head.join(","), ...body].join("\n")], { type: "text/csv" });
-    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
-    a.download = `contacts-${isoDate()}.csv`; a.click();
+    const body = chosen.map((c) => [c.name ?? "", c.phone ?? "", c.email ?? "", c.loyalty_tier || "Standard", c.balance ?? 0, c.order_count ?? 0]);
+    downloadSheet([head, ...body], "csv", `contacts-${isoDate()}`);
   }
 
   return (

@@ -139,13 +139,13 @@ async def test_new_variables_render_in_a_rule_send(client, tenant, db):
     await nr.evaluate(db, org_id=org_id, order_id=oid, event="created")
     log = (await db.execute(select(NotificationLog).where(NotificationLog.order_id == oid,
                                                           NotificationLog.template_id == tpl.id))).scalars().first()
-    c = (await db.execute(select(Client).where(Client.id == cid))).scalar_one()
-    await db.refresh(c)
-    assert c.portal_token, "the portal link is issued on first use"
     assert log.body.startswith("Hi Sam Rivera (+15550100). Born 14 March, age ")
     assert "Due $150.00 of $150.00." in log.body
     assert "Booked Fri 30 Oct, 10:00." in log.body
-    assert f"/portal/{c.portal_token}" in log.body
+    # a link went out (one link row, only its hash kept); the history copy hides the live token
+    from backend.models import ClientPortalLink
+    assert "/portal/…" in log.body
+    assert len((await db.execute(select(ClientPortalLink).where(ClientPortalLink.client_id == cid))).all()) == 1
     assert "{" not in log.body
 
 
@@ -425,8 +425,8 @@ async def test_sample_preview_does_not_mint_a_portal_link(client, tenant, db):
         "channel": "email", "subject": "x", "body": "Hi. Portal: {portal_link}. Bye", "sample": True},
         headers=tenant)).json()
     assert r["body"] == "Hi. Bye"
-    c = (await db.execute(select(Client).where(Client.id == cid))).scalar_one()
-    assert c.portal_token is None
+    from backend.models import ClientPortalLink
+    assert (await db.execute(select(ClientPortalLink).where(ClientPortalLink.client_id == cid))).first() is None
 
 
 async def test_legacy_fire_notifications_uses_the_real_shop_name(client, tenant, db):

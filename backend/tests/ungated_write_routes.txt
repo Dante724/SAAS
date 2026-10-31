@@ -119,7 +119,6 @@ PUT /api/clients/{client_id} [staff]
 POST /api/clients/{client_id}/communication [staff]
 POST /api/clients/{client_id}/communication/suggest [staff]
 POST /api/clients/{client_id}/devices [staff]
-POST /api/clients/{client_id}/portal-link [staff]
 # comms
 POST /api/comms/calls/{call_id}/ai [staff]
 # documents

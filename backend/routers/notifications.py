@@ -406,6 +406,8 @@ async def send_test(
         what = "email address" if data.channel == "email" else "mobile number"
         raise HTTPException(400, f"Add a {what} to your profile to get a sample")
     subject, body = data.subject, data.body
+    from backend.services.message_vars import is_html
+    html = is_html(data.body)          # decided by what was typed, before any values go in
     if data.sample:
         # "Send me a sample": render against the newest job so the owner sees a real message.
         from sqlalchemy.orm import selectinload
@@ -429,7 +431,7 @@ async def send_test(
             subject = f"[Sample] {subject}"
     _creds = await notif_creds(db, current.org_id, data.channel)
     res = await _adapter_for(data.channel, _creds).send(
-        recipient=recipient, subject=subject, body=body)
+        recipient=recipient, subject=subject, body=body, html=html)
     return {"status": res.get("status"), "recipient": recipient, "error": res.get("error"), "body": body}
 
 

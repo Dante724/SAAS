@@ -14,7 +14,7 @@ from backend.models import Employee, Location, Organisation, Role
 from backend.services import tokens as _tok
 from backend.services.audit import record as _audit
 from backend.services.currency import symbol_for as _symbol_for  # sign-up sends a code; we store its symbol
-from backend.services.auth import (create_access_token, get_current_employee, hash_password,
+from backend.services.auth import (ACCOUNT_OFF, create_access_token, get_current_employee, hash_password,
                                    is_old_default_password, norm_email, verify_password)
 from backend.services.notifications import send_direct_email
 from backend.services.ratelimit import client_ip as _ip
@@ -22,6 +22,16 @@ from backend.services.ratelimit import aenforce as _rate
 from backend.services.dates import now_utc, platform_today
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+# Emails sent after the reply, so how long a request takes doesn't show whether the address has
+# an account. Kept referenced until done (a bare create_task can be garbage-collected mid-send).
+_BACKGROUND: set = set()
+
+
+def _later(coro) -> None:
+    t = asyncio.get_running_loop().create_task(coro)
+    _BACKGROUND.add(t)
+    t.add_done_callback(_BACKGROUND.discard)
 
 
 def _link(path: str) -> str:
@@ -186,7 +196,16 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
         raise HTTPException(400, "Choose a different password")
     existing = await db.execute(select(Employee).where(func.lower(Employee.email) == data.email))
     if existing.scalar_one_or_none():
-        raise HTTPException(400, "Email already registered")
+        # Don't confirm that the address has an account: pay the same hashing cost as a real
+        # sign-up and tell the address's owner instead (they may simply have forgotten).
+        await asyncio.to_thread(hash_password, data.password)
+        _later(send_direct_email(
+            data.email, "Your Tekly account",
+            "Someone tried to create a new Tekly account with this email address. You already have "
+            f"one: sign in at {_link('/login')} or reset your password at {_link('/reset-password')}.\n\n"
+            "If it wasn't you, you can ignore this email."))
+        raise HTTPException(400, "We couldn't create an account with these details. If you already "
+                                 "have one, sign in or reset your password.")
 
     import secrets as _sec
     org = Organisation(name=data.org_name, webhook_secret=_sec.token_urlsafe(24),
@@ -314,7 +333,7 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
         raise HTTPException(status_code=401, detail="Incorrect email or password")
     if not employee.active:
         await _login_failed(db, employee, "disabled")
-        raise HTTPException(status_code=403, detail="Account disabled")
+        raise HTTPException(status_code=403, detail=ACCOUNT_OFF)
     # H1: an account still on the old default password (flagged by migration dp144q1, or simply
     # signing in with it) gets no session: the password is public, so whoever typed it may not be
     # the owner. A reset link goes to the account's own email instead.
@@ -335,7 +354,7 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
     _today = platform_today()   # platform-set dates: UTC, not the tenant-controlled timezone
     if _org:
         if _org.sub_status == "suspended":
-            raise HTTPException(status_code=403, detail="This account is suspended. Please contact support.")
+            raise HTTPException(status_code=403, detail=ACCOUNT_OFF)
         if _org.sub_end and _org.sub_end < _today:
             raise HTTPException(status_code=403, detail="Your subscription has ended. Please contact support to renew.")
     # Build 144ce: per-employee access window (set from the /admin portal).
@@ -519,14 +538,15 @@ async def password_forgot(data: ForgotRequest, request: Request, db: AsyncSessio
     if emp and emp.active:
         await _audit(db, org_id=emp.org_id, actor_id=emp.id, action="auth.password_reset_requested",
                      entity_type="employee", entity_id=emp.id)
-        await _email_reset_link(db, emp)
+        await _email_reset_link(db, emp, after_reply=True)
     return {"ok": True, "message": "If that email is registered, a reset link is on its way."}
 
 
-async def _email_reset_link(db, emp, *, quiet_limit: bool = False) -> None:
+async def _email_reset_link(db, emp, *, quiet_limit: bool = False, after_reply: bool = False) -> None:
     """Issue a fresh one-hour reset token and email it. With quiet_limit (the sign-in path),
     at most a few emails per hour per account are sent and going over is silent, so repeated
-    sign-in attempts can't be used to flood someone's inbox."""
+    sign-in attempts can't be used to flood someone's inbox. after_reply sends once the response
+    is out, so forgot-password takes as long for unknown addresses as for real ones."""
     if quiet_limit:
         try:
             await _rate("reset_mail", emp.id, limit=3, window_sec=3600)
@@ -536,10 +556,14 @@ async def _email_reset_link(db, emp, *, quiet_limit: bool = False) -> None:
     raw = await _tok.issue(db, employee_id=emp.id, kind="reset")
     await db.commit()
     url = _link(f"/reset-password?token={raw}")
-    await send_direct_email(
+    mail = send_direct_email(
         emp.email, "Reset your Tekly password",
         f"Someone asked to reset your password. If it was you, open this link:\n\n{url}\n\n"
         f"It expires in 1 hour and can be used once. If it wasn't you, ignore this email.")
+    if after_reply:
+        _later(mail)
+    else:
+        await mail
 
 
 @router.post("/password/reset")

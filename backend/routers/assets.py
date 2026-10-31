@@ -19,6 +19,7 @@ from backend.services import asset_catalog as _cat
 from backend.services import identifiers as _ids
 from backend.services import industry as _ind
 from backend.core import paging as _paging
+from backend.core.likes import contains as _contains
 from backend.services.auth import get_current_employee, has_perm, require_perm
 from backend.services.dates import shop_today
 
@@ -121,13 +122,9 @@ async def list_assets(
         q = q.where(Device.asset_type == asset_type)
     if search:
         q = q.where(or_(
-            Device.serial.ilike(f"%{search}%"),
-            Device.imei.ilike(f"%{search}%"),
-            Device.brand.ilike(f"%{search}%"),
-            Device.model.ilike(f"%{search}%"),
-            Device.asset_type.ilike(f"%{search}%"),
+            *(_contains(c, search) for c in (Device.serial, Device.imei, Device.brand, Device.model, Device.asset_type)),
             Device.client_id.in_(select(Client.id).where(Client.org_id == current.org_id,
-                                                         Client.name.ilike(f"%{search}%"))),
+                                                         _contains(Client.name, search))),
         ))
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
     devices = (await db.execute(q.options(defer(Device.image_data))
