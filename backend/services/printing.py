@@ -1,25 +1,21 @@
 """Build 95 — printing.
 
-Everything the shop physically hands over or sticks on a shelf: product labels and
-price tags (with real scannable barcodes), and the stock documents — posting, write-off,
-transfer, and the stocktake settlement act.
+The stock documents the shop hands over — write-off, transfer, return, purchase order and
+the stocktake settlement act. (ii144c: labels and price tags print from label templates as HTML —
+routers/documents.py.)
 
 Barcodes are generated with reportlab's own Code128/QR, so there's no extra dependency
 and no image round-trip: the barcode is drawn as vectors and stays crisp at any printer
 resolution, which matters because a fuzzy barcode is a barcode that doesn't scan.
 """
 import io
-from datetime import datetime
 from xml.sax.saxutils import escape as _x
 from typing import Optional
 
-from reportlab.graphics.barcode import code128
-from reportlab.graphics.shapes import Drawing
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.pdfgen import canvas as pdfcanvas
 from reportlab.platypus import (
     Paragraph,
     SimpleDocTemplate,
@@ -27,113 +23,10 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+from backend.services.dates import now_utc
 
+# Fields a label template may show (validated by routers/printing.py templates).
 FIELDS = ["name", "sku", "mpn", "price", "barcode", "category", "brand"]
-
-
-# ── labels & price tags ──────────────────────────────────────────────────────
-def render_labels(items: list[dict], *, width_mm: float = 50, height_mm: float = 30,
-                  fields: Optional[list[str]] = None, barcode_type: str = "code128",
-                  copies: int = 1, org_name: str = "") -> bytes:
-    """Lay labels out on A4, as many per sheet as the size allows.
-
-    Each label is its own little canvas; anything that doesn't fit is simply not drawn
-    rather than overflowing into its neighbour — a label that bleeds into the next one
-    ruins the whole sheet.
-    """
-    fields = fields or ["name", "sku", "price", "barcode"]
-    buf = io.BytesIO()
-    c = pdfcanvas.Canvas(buf, pagesize=A4)
-    page_w, page_h = A4
-
-    lw, lh = width_mm * mm, height_mm * mm
-    margin = 8 * mm
-    cols = max(1, int((page_w - 2 * margin) // lw))
-    rows = max(1, int((page_h - 2 * margin) // lh))
-    per_page = cols * rows
-
-    flat = []
-    for it in items:
-        flat.extend([it] * max(1, copies))
-
-    for i, it in enumerate(flat):
-        slot = i % per_page
-        if i and slot == 0:
-            c.showPage()
-        col = slot % cols
-        row = slot // cols
-        x = margin + col * lw
-        y = page_h - margin - (row + 1) * lh
-
-        c.setStrokeColor(colors.HexColor("#DDDDDD"))
-        c.rect(x, y, lw, lh, stroke=1, fill=0)
-
-        cur = y + lh - 5 * mm
-        pad = 3 * mm
-
-        if "name" in fields:
-            c.setFont("Helvetica-Bold", 8)
-            name = (it.get("name") or "")[:28]
-            c.drawString(x + pad, cur, name)
-            cur -= 4 * mm
-        if "brand" in fields and it.get("brand"):
-            c.setFont("Helvetica", 6)
-            c.drawString(x + pad, cur, str(it["brand"])[:30])
-            cur -= 3 * mm
-        if "sku" in fields and it.get("sku"):
-            c.setFont("Helvetica", 6)
-            c.drawString(x + pad, cur, f"SKU {it['sku']}")
-            cur -= 3.5 * mm
-        if "mpn" in fields and it.get("mpn"):
-            c.setFont("Helvetica", 6)
-            c.drawString(x + pad, cur, f"MPN {it['mpn']}")
-            cur -= 3.5 * mm
-        if "price" in fields and it.get("price") is not None:
-            c.setFont("Helvetica-Bold", 11)
-            c.drawString(x + pad, cur, f"{it['price']}")
-            cur -= 5 * mm
-
-        code = it.get("barcode")
-        kind = it.get("barcode_kind") or barcode_type
-        if "barcode" in fields and code:
-            avail = cur - y - 2 * mm       # what's left below the text
-            if avail > 6 * mm:
-                if kind in ("ean13", "upca"):
-                    # the caller has already validated/normalised the GTIN
-                    from reportlab.graphics import renderPDF
-                    from reportlab.graphics.barcode import eanbc
-                    bh = min(avail, 9 * mm)
-                    w = (eanbc.Ean13BarcodeWidget(code[:12]) if kind == "ean13"
-                         else eanbc.UPCA(code[:11]))
-                    w.barHeight = bh
-                    bx0, by0, bx1, by1 = w.getBounds()
-                    scale = min(1.0, (lw - 2 * pad) / max(1, bx1 - bx0))
-                    d = Drawing((bx1 - bx0) * scale, (by1 - by0) * scale)
-                    w.x, w.y = -bx0, -by0
-                    d.add(w)
-                    d.scale(scale, scale)
-                    renderPDF.draw(d, c, x + pad, y + 2 * mm)
-                elif kind == "qr":
-                    from reportlab.graphics import renderPDF
-                    from reportlab.graphics.barcode import qr
-                    size = min(avail, lh * 0.4)
-                    d = Drawing(size, size)
-                    d.add(qr.QrCodeWidget(str(code), barWidth=size, barHeight=size))
-                    renderPDF.draw(d, c, x + pad, y + 2 * mm)
-                else:
-                    bh = min(avail, 9 * mm)
-                    bar = code128.Code128(str(code), barHeight=bh, barWidth=0.42 * mm / 1.2,
-                                          humanReadable=True)
-                    max_w = lw - 2 * pad
-                    if bar.width > max_w:      # shrink until it fits the label
-                        bar = code128.Code128(str(code), barHeight=bh,
-                                              barWidth=(0.42 * mm / 1.2) * (max_w / bar.width),
-                                              humanReadable=True)
-                    bar.drawOn(c, x + pad, y + 2 * mm)
-
-    c.showPage()
-    c.save()
-    return buf.getvalue()
 
 
 # ── stock documents ──────────────────────────────────────────────────────────
@@ -238,7 +131,7 @@ def render_document(*, title: str, org_name: str, number: Optional[str],
     story.append(sig)
     story.append(Spacer(1, 6))
     story.append(Paragraph(
-        f"Generated {datetime.utcnow():%Y-%m-%d %H:%M} UTC", ss["Small"]))
+        f"Generated {now_utc():%Y-%m-%d %H:%M} UTC", ss["Small"]))
 
     doc.build(story)
     return buf.getvalue()

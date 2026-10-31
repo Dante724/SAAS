@@ -4,26 +4,36 @@ import { useSearchParams } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
 import ScanStockPanel from "../../components/ScanStockPanel";
 import { api, openAuthedDoc } from "../../api/client";
+import { downloadSheet } from "../../lib/downloadSheet";
 import { isoDate } from "../../lib/localDate";
+import { missingBarcodesMessage } from "../../lib/barcodes";
 import { Product, Supplier, PO, Service, Bundle, Asset, currencySymbol, money } from "./types";
-import { analyzePaste, gridToRows, mergeRemap, loadRememberedMap, saveRememberedMap, FIELD_LABELS, FIELD_ORDER } from "./pasteMap";
+import { analyzePaste, gridToRows, mergeRemap, loadRememberedMap, saveRememberedMap, fileToGrid, mapByHeader, splitSerials, FIELD_LABELS, FIELD_ORDER } from "./pasteMap";
 import type { PasteField, PostRow } from "./pasteMap";
 import InventoryDrawer, { DrawerKind } from "./InventoryDrawer";
 import PODrawer from "./PODrawer";
 import NewPODrawer from "./NewPODrawer";
 import PurchasingCockpit from "./PurchasingCockpit";
+import BinsPanel from "./BinsPanel";
+import BinScanField, { ScannedBin } from "../../components/BinScanField";
+import StocktakeDrawer from "./StocktakeDrawer";
 import AssetDrawer from "../orders/AssetDrawer";
 import { useTerminology, assetNoun } from "../../lib/useTerminology";
 import { assetStatusTone } from "./statusTone";
 import { cachedPref, loadPref, savePref } from "../../lib/userPref";
 import Pager from "../../components/Pager";
-import { useServerPage } from "../../hooks/useServerPage";
+import SerialEntry from "../../components/SerialEntry";
+import DateField from "../../components/DateField";
+import AssetStateTabs, { AssetCounts, useAssetState } from "../../components/AssetStateTabs";
+import { useDebounced, useServerPage } from "../../hooks/useServerPage";
 import { useMe } from "../../context/Me";
 import { alertDialog, confirmDialog, promptDialog } from "../../lib/dialog";
 import { printHtmlInFrame } from "../../lib/safeHtml";
 import { inputCls } from "../invoices/billing";
 import { productGlyph } from "../sales/SalesPOS";
 import { RowMenu } from "../company/CompanyHub";
+import { loadFailed } from "../../lib/notice";
+import { clickableRow } from "../../lib/clickable";
 
 type Tab = "stock" | "devices" | "services" | "bundles" | "purchase-orders"
   | "postings" | "reservations" | "conversions" | "transfers" | "stock-takes" | "write-offs" | "returns" | "bins";
@@ -84,7 +94,12 @@ export default function InventoryHub() {
   const [tab, setTab] = useState<Tab>("stock");
   const [products, setProducts] = useState<Product[] | null>(null);
   // Devices tab pages on the server (the API serves at most 200 rows per request).
-  const ap = useServerPage<Asset>("/assets", {}, { pageSize: 50, enabled: tab === "devices" });
+  const [aq, setAq] = useState("");
+  const daq = useDebounced(aq.trim());
+  const [aState, setAState] = useAssetState();                      // 19: active / written off, remembered
+  const [aOwner, setAOwner] = useState<"" | "company" | "client">("");
+  const ap = useServerPage<Asset, { counts?: AssetCounts }>("/assets", { search: daq || undefined, state: aState, owner_type: aOwner || undefined },
+    { pageSize: 50, enabled: tab === "devices" });
   const assets = ap.rows;
   const [services, setServices] = useState<Service[] | null>(null);
   const [bundles, setBundles] = useState<Bundle[] | null>(null);
@@ -207,7 +222,7 @@ export default function InventoryHub() {
     setSecPage(1);   // leaving a tab resets the shared (PO/audit) pager to page 1
     if (tab === "services" && !services) loadServices();
     if (tab === "bundles" && !bundles) api.get<{ items: Bundle[] }>("/bundles").then((r) => setBundles(r.items || [])).catch(() => setBundles([]));
-    if (tab === "purchase-orders" && !pos) { api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(() => setPos([])); api.get<{ items: Supplier[] }>("/suppliers").then((r) => setSuppliers(r.items || [])).catch(() => {}); }
+    if (tab === "purchase-orders" && !pos) { api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(() => setPos([])); api.get<{ items: Supplier[] }>("/suppliers").then((r) => setSuppliers(r.items || [])).catch(loadFailed("suppliers")); }
     if (AUDIT[tab] && auditRows[tab] === undefined) {
       const url = AUDIT_URL[tab];
       if (url) api.get<any>(url).then((r) => setAuditRows((s) => ({ ...s, [tab]: r.items || r || [] }))).catch(() => setAuditRows((s) => ({ ...s, [tab]: [] })));
@@ -238,7 +253,9 @@ export default function InventoryHub() {
     reservations: [["Part", (r) => av(r, ["part_name", "part", "product_name"])], ["Qty", (r) => av(r, ["qty", "quantity"])], ["Order", (r) => av(r, ["order_number", "order_id"])], ["Status", (r) => av(r, ["status", "state"])]],
     conversions: [["Date", (r) => dt(r, ["created_at", "date"])], ["From", (r) => av(r, ["from_name", "source_name", "source", "from"])], ["To", (r) => av(r, ["to_name", "target_name", "target", "to"])], ["Direction", (r) => av(r, ["direction", "type", "kind"])]],
     transfers: [["Date", (r) => dt(r, ["created_at", "date"])], ["From", (r) => av(r, ["from_location_name", "from_location", "source"])], ["To", (r) => av(r, ["to_location_name", "to_location", "dest"])], ["Items", (r) => av(r, ["item_count", "lines_count"], String((r?.lines || r?.items || []).length || 0))], ["Status", (r) => av(r, ["status", "state"])]],
-    "stock-takes": [["Date", (r) => dt(r, ["created_at", "date", "started_at"])], ["Location", (r) => av(r, ["location_name", "warehouse_name", "warehouse"])], ["Status", (r) => av(r, ["status", "state"])], ["Counted", (r) => `${r?.counted ?? 0} / ${r?.lines ?? 0}`]],
+    "stock-takes": [["Date", (r) => dt(r, ["created_at", "date", "started_at"])], ["Location", (r) => av(r, ["location_name", "warehouse_name", "warehouse"])],
+      ["Covers", (r) => [r?.bin_code ? `Bin ${r.bin_code}` : r?.by_bin ? "Bin by bin" : "Whole location", r?.category_name, r?.blind ? "blind" : null].filter(Boolean).join(" · ")],
+      ["Status", (r) => (r?.status === "posted" ? "Posted" : r?.status === "in_progress" ? "Draft" : av(r, ["status", "state"]))], ["Counted", (r) => `${r?.counted ?? 0} / ${r?.lines ?? 0}`]],
     "write-offs": [["Date", (r) => dt(r, ["created_at", "date"])], ["Part", (r) => av(r, ["part_name", "part", "product_name"])], ["Qty", (r) => av(r, ["qty", "quantity"])], ["Reason", (r) => av(r, ["reason", "note"])]],
     returns: [["Date", (r) => dt(r, ["created_at", "date"])], ["Order", (r) => av(r, ["order_number", "order_id"])], ["Client", (r) => av(r, ["client_name", "client"])], ["Amount", (r) => money(r?.amount ?? r?.refund_total ?? r?.total)], ["Status", (r) => av(r, ["status", "state"])]],
   };
@@ -263,6 +280,23 @@ export default function InventoryHub() {
     catch (e: any) { await alertDialog(e.message || "Bulk action failed"); }
     finally { setPBusy(false); }
   }
+  // ii144a — give products without a barcode one (shop-made EAN-13 codes; existing ones untouched).
+  async function pAddBarcodes(onlySelected: boolean) {
+    const n = onlySelected ? psel.size : 0;
+    const q = onlySelected
+      ? `Add a barcode to the ${n} selected product${n === 1 ? "" : "s"} that don't have one yet?`
+      : "Add a barcode to every product that doesn't have one yet?";
+    if (!(await confirmDialog(`${q} Products that already have a barcode keep it.`, { confirmLabel: "Add barcodes" }))) return;
+    setPBusy(true);
+    try {
+      const r = await api.post<{ generated: number; more?: boolean }>("/catalog/products/barcodes/generate-missing",
+        onlySelected ? { ids: [...psel] } : {});
+      if (onlySelected) pClear();
+      loadProducts();
+      await alertDialog(missingBarcodesMessage(r, n), "Barcodes");
+    } catch (e: any) { await alertDialog(e.message || "Couldn't add barcodes"); }
+    finally { setPBusy(false); }
+  }
   async function pDelete() {
     if (!(await confirmDialog(`Archive ${psel.size} product(s)? History is kept; they leave active stock.`, { danger: true, confirmLabel: "Delete" }))) return;
     pBulk("delete");
@@ -275,11 +309,8 @@ export default function InventoryHub() {
   function pExport() {
     const chosen = (products || []).filter((p) => psel.has(p.id));
     const head = ["Name", "SKU", "MPN", "Barcode", "Unit", "Cost", "Sell", "In stock"];
-    const esc = (x: any) => `"${String(x ?? "").replace(/"/g, '""')}"`;
-    const body = chosen.map((p) => [p.name, p.sku || p.code, p.mpn, p.barcode, p.uom || "pcs", p.avg_cost ?? p.cost_price ?? 0, p.sell_price ?? 0, p.qty_available ?? 0].map(esc).join(","));
-    const blob = new Blob([[head.join(","), ...body].join("\n")], { type: "text/csv" });
-    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
-    a.download = `products-${isoDate()}.csv`; a.click();
+    const body = chosen.map((p) => [p.name ?? "", p.sku || p.code || "", p.mpn ?? "", p.barcode ?? "", p.uom || "pcs", p.avg_cost ?? p.cost_price ?? 0, p.sell_price ?? 0, p.qty_available ?? 0]);
+    downloadSheet([head, ...body], "csv", `products-${isoDate()}`);
   }
 
   const newBtn = (label: string, kind: DrawerKind) => (
@@ -294,7 +325,7 @@ export default function InventoryHub() {
   const matchesSearch = (p: any) => {
     if (!pq.trim()) return true;
     const q = pq.toLowerCase();
-    return `${p.name} ${p.sku || ""} ${p.code || ""} ${p.barcode || ""} ${p.mpn || ""}`.toLowerCase().includes(q);
+    return `${p.name} ${p.sku || ""} ${p.code || ""} ${p.barcode || ""} ${(p.extra_barcodes || []).join(" ")} ${p.mpn || ""}`.toLowerCase().includes(q);
   };
   const searchMatches = (products || []).filter(matchesSearch);
   const shownProducts = searchMatches.filter((p) => {
@@ -351,7 +382,7 @@ export default function InventoryHub() {
                     {inOverflow ? tabLabel(overflowTabs.find((t) => t.id === tab)!) : "More"}<M n="expand_more" c="text-sm" />
                   </button>
                   {navMore && (<>
-                    <div className="fixed inset-0 z-30" onClick={() => setNavMore(false)} />
+                    <div className="fixed inset-0 z-30" aria-hidden="true" onClick={() => setNavMore(false)} />
                     <div className="absolute left-0 mt-1 w-52 bg-white rounded-xl border border-slate-200 shadow-drawer z-40 py-1.5 text-xs">
                       {overflowTabs.map((t) => (
                         <button key={t.id} onClick={() => { setTab(t.id); setNavMore(false); }} className={`w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-slate-50 ${tab === t.id ? "text-primary font-bold" : "text-ink-secondary"}`}>
@@ -394,12 +425,13 @@ export default function InventoryHub() {
               <button onClick={() => setStockMenu((o) => !o)} aria-expanded={stockMenu} className={ghostBtn}><span>Actions</span><M n="expand_more" c="text-sm" /></button>
               {stockMenu && (
                 <>
-                  <div className="fixed inset-0 z-30" onClick={() => setStockMenu(false)} />
+                  <div className="fixed inset-0 z-30" aria-hidden="true" onClick={() => setStockMenu(false)} />
                   <div className="absolute right-0 mt-1 w-56 bg-white rounded-xl border border-slate-200 shadow-drawer z-40 py-1.5 text-xs">
                     <button onClick={() => { setStockMenu(false); setToOrderOpen(true); }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-ink-secondary"><M n="assignment_late" c="text-sm" />Parts to order (jobs)</button>
                     <button onClick={() => { setStockMenu(false); setReorderOpen(true); }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-ink-secondary"><M n="sync_alt" c="text-sm" />Reorder list</button>
                     <button onClick={() => { setStockMenu(false); setPostingOpen(true); }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-ink-secondary"><M n="add" c="text-sm" />New posting</button>
                     <button onClick={() => { setStockMenu(false); if (products?.length) { setPsel(new Set(products.map((p) => p.id))); } }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-ink-secondary"><M n="filter_list" c="text-sm" />Bulk edit filtered</button>
+                    <button onClick={() => { setStockMenu(false); pAddBarcodes(false); }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-ink-secondary"><M n="barcode" c="text-sm" />Add missing barcodes</button>
                     <button onClick={() => { setStockMenu(false); setAction({ kind: "write-off" }); }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-ink-secondary"><M n="delete_sweep" c="text-sm" />New write-off</button>
                   </div>
                 </>
@@ -427,6 +459,7 @@ export default function InventoryHub() {
               <div className="flex-1" />
               <button onClick={() => openLabelDlg("product")} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="print" c="text-sm" />Print labels</button>
               <button onClick={pExport} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="download" c="text-sm" />Export CSV</button>
+              <button onClick={() => pAddBarcodes(true)} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="barcode" c="text-sm" />Add missing barcodes</button>
               <button onClick={pMarkup} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="percent" c="text-sm" />Adjust price</button>
               <button onClick={() => setBulkAdj(true)} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="tune" c="text-sm" />Adjust qty</button>
               <button onClick={() => setAction({ kind: "write-off" })} disabled={pBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="delete_sweep" c="text-sm" />Write off</button>
@@ -490,7 +523,7 @@ export default function InventoryHub() {
                 {pageProducts.map((p) => {
                   const pill = stockPill(p); const m = marginOf(p);
                   return (
-                    <tr key={p.id} onClick={() => setDrawer({ kind: "product", id: p.id })} className={`hover:bg-slate-50 transition-colors cursor-pointer group ${psel.has(p.id) ? "bg-primary/5" : ""}`}>
+                    <tr key={p.id} {...clickableRow(() => setDrawer({ kind: "product", id: p.id }))} className={`hover:bg-slate-50 transition-colors cursor-pointer group ${psel.has(p.id) ? "bg-primary/5" : ""}`}>
                       <td className="py-3.5 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label="Select row" checked={psel.has(p.id)} onChange={() => pToggle(p.id)} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
                       <td className="py-3.5 px-3"><div className="flex items-center gap-3">
                         {p.image_data ? <img src={p.image_data} alt="" className="w-8 h-8 rounded-lg object-cover border border-slate-200 flex-shrink-0" /> : <span data-testid="product-glyph" className="w-8 h-8 rounded-lg bg-slate-100 text-ink-tertiary flex items-center justify-center flex-shrink-0"><M n={productGlyph(p.name, p.brand)} c="text-sm" /></span>}
@@ -523,8 +556,11 @@ export default function InventoryHub() {
         {tab === "devices" && (<>
           <div className="flex items-center gap-3 mb-5 flex-wrap">
             <button onClick={() => setAssetCreate(true)} className={primaryBtn}><M n="add" c="text-sm" />Add {term.asset}</button>
-            <div className="flex items-center gap-1.5"><Chip label="Ownership: All" active /><Chip label="Company-owned" /><Chip label="Client-owned" /></div>
-            {searchBar("Search serial, IMEI, client…")}
+            <AssetStateTabs value={aState} onChange={setAState} counts={ap.extra?.counts} />
+            <select value={aOwner} onChange={(e) => setAOwner(e.target.value as "" | "company" | "client")} aria-label="Ownership" className={`${inputCls} w-auto h-8 py-0 text-xs font-semibold`}>
+              <option value="">Ownership: all</option><option value="company">Company-owned</option><option value="client">Client-owned</option>
+            </select>
+            {searchBar("Search serial, IMEI, plate, client…", aq, setAq)}
           </div>
           {asel.size > 0 && (
             <div className="bg-primary/5 rounded-xl border border-primary/30 px-4 py-2.5 mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold">
@@ -542,9 +578,9 @@ export default function InventoryHub() {
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-xs">
                 {!assets && <SkeletonRows cols={6} />}
-                {assets?.length === 0 && <tr><td colSpan={6} className="py-6 px-5 text-ink-tertiary">No {term.assets.toLowerCase()} registered.</td></tr>}
+                {assets?.length === 0 && <tr><td colSpan={6} className="py-6 px-5 text-ink-tertiary">{daq ? `Nothing matches “${daq}”.` : aState === "written_off" ? `No written-off ${term.assets.toLowerCase()}.` : `No ${term.assets.toLowerCase()} registered.`}</td></tr>}
                 {pageAssets.map((a) => (
-                  <tr key={a.id} className="hover:bg-blue-50/30 transition-colors cursor-pointer" onClick={() => setAssetOpen(a.id)}>
+                  <tr key={a.id} className="hover:bg-blue-50/30 transition-colors cursor-pointer" {...clickableRow(() => setAssetOpen(a.id))}>
                     <td className="py-3.5 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label="Select row" checked={asel.has(a.id)} onChange={() => aToggle(a.id)} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
                     <td className="py-3.5 px-3"><div className="font-bold text-ink-primary">{[a.brand, a.model].filter(Boolean).join(" ") || a.asset_type || assetNoun(a, term)}</div><span className="text-[11px] text-ink-tertiary font-normal block">{a.asset_type && a.asset_type !== "Device" ? a.asset_type : assetNoun(a, term)}</span></td>
                     <td className="py-3.5 px-3 font-mono text-[11px] text-ink-secondary">{a.imei || a.serial || "—"}</td>
@@ -614,7 +650,7 @@ export default function InventoryHub() {
                   {auditRows[tab] == null && <SkeletonRows cols={8} />}
                   {auditRows[tab]?.length === 0 && <tr><td colSpan={8} className="py-12 px-4"><AuditEmpty tab={tab} title={AUDIT[tab].title} sub={AUDIT[tab].sub} onStart={AUDIT_START[tab]} /></td></tr>}
                   {pageAudit.map((row: any, i: number) => (
-                    <tr key={row?.id || i} onClick={tab === "stock-takes" && row?.id ? () => setStk({ id: row.id }) : undefined} className={`hover:bg-blue-50/30 ${tab === "stock-takes" ? "cursor-pointer" : ""}`}>
+                    <tr key={row?.id || i} {...clickableRow(tab === "stock-takes" && row?.id ? () => setStk({ id: row.id }) : undefined)} className={`hover:bg-blue-50/30 ${tab === "stock-takes" ? "cursor-pointer" : ""}`}>
                       {(AUDIT_COLS[tab] || []).map(([h, fn], j) => <td key={h} className={`py-2.5 px-4 ${j === 0 ? "font-bold text-ink-primary" : ""}`}>{fn(row)}</td>)}
                     </tr>
                   ))}
@@ -629,7 +665,7 @@ export default function InventoryHub() {
       </div>
 
       {labelDlg && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-primary/40 backdrop-blur-[2px]" onClick={() => setLabelDlg(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-primary/40 backdrop-blur-[2px]" role="presentation" onClick={() => setLabelDlg(false)}>
           <div className="bg-white rounded-2xl shadow-drawer w-[380px] max-w-full p-5" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-3"><h3 className="font-bold text-ink-primary">Print labels</h3><button aria-label="Close" onClick={() => setLabelDlg(false)} className="w-7 h-7 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
             <p className="text-xs text-ink-tertiary mb-3">{labelSelCount} {labelMode === "asset" ? "asset" : "product"}{labelSelCount === 1 ? "" : "s"} selected. Each prints at the template's exact label size.</p>
@@ -648,8 +684,8 @@ export default function InventoryHub() {
           </div>
         </div>
       )}
-      {newPo && <NewPODrawer products={products || []} onClose={() => setNewPo(false)} onCreated={() => { setNewPo(false); api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(() => {}); }} />}
-      {poOpen && <PODrawer poId={poOpen} onClose={() => setPoOpen(null)} onChanged={() => { api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(() => {}); loadProducts(); }} />}
+      {newPo && <NewPODrawer products={products || []} onClose={() => setNewPo(false)} onCreated={() => { setNewPo(false); api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(loadFailed("purchase orders")); }} />}
+      {poOpen && <PODrawer poId={poOpen} onClose={() => setPoOpen(null)} onChanged={() => { api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(loadFailed("purchase orders")); loadProducts(); }} />}
       {drawer && <InventoryDrawer kind={drawer.kind} id={drawer.id} initial={drawer.initial} onClose={() => setDrawer(null)} onSaved={() => { if (drawer.kind === "product") loadProducts(); if (drawer.kind === "service") loadServices(); }} />}
       {assetOpen && <AssetDrawer assetId={assetOpen} onClose={() => { setAssetOpen(null); ap.reload(); }} />}
       {assetCreate && <AssetDrawer onClose={() => setAssetCreate(false)} onSaved={() => ap.reload()} />}
@@ -667,146 +703,6 @@ export default function InventoryHub() {
       {toOrderOpen && <PartsToOrderModal onClose={() => setToOrderOpen(false)} onCreated={() => { setToOrderOpen(false); setPos(null); setTab("purchase-orders"); }} />}
       {scanStock && <ScanStockPanel onClose={() => setScanStock(false)} onPosted={loadProducts} />}
     </Shell>
-  );
-}
-
-/* ── Stock take run-flow: New count → scan-to-count + manual edit → post variance ─ */
-type StLine = { id: string; part_id: string; part_name: string; system_qty: number; counted_qty: number | null; variance: number | null };
-function StocktakeDrawer({ id, products, onClose, onDone }:
-  { id?: string; products: Product[]; onClose: () => void; onDone: () => void }) {
-  const [stId, setStId] = useState<string | undefined>(id);
-  const [status, setStatus] = useState<string>("open");
-  const [lines, setLines] = useState<StLine[] | null>(null);
-  const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
-  const [locId, setLocId] = useState(""); const [kind, setKind] = useState<"full" | "partial">("full");
-  const [scan, setScan] = useState(""); const [scanQty, setScanQty] = useState(1); const [regUnknown, setRegUnknown] = useState(false);
-  const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null); const [flash, setFlash] = useState<string | null>(null);
-  const scanRef = useRef<HTMLInputElement>(null);
-
-  async function load(theId: string) {
-    const r = await api.get<any>(`/stocktake/${theId}`);
-    setStatus(r.status || "open"); setLines(r.lines || []);
-  }
-  useEffect(() => {
-    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(() => {});
-    if (id) load(id).catch(() => setErr("Could not load stock take"));
-  }, []); // eslint-disable-line
-
-  async function start() {
-    if (!locId) { setErr("Pick a location."); return; }
-    setBusy(true); setErr(null);
-    try {
-      const r = await api.post<any>("/stocktake", { location_id: locId, kind });
-      setStId(r.id); await load(r.id);
-    } catch (e: any) { setErr(e.message || "Could not start count"); }
-    finally { setBusy(false); }
-  }
-
-  async function doScan() {
-    const code = scan.trim(); if (!code || !stId) return;
-    setErr(null);
-    try {
-      const r = await api.post<any>(`/stocktake/${stId}/scan`, { code, qty: scanQty, register_unknown: regUnknown });
-      setFlash(`${r.part_name}: counted ${r.counted_qty}${r.is_unknown ? " (new)" : ""}`);
-      setScan(""); scanRef.current?.focus();
-      await load(stId);
-    } catch (e: any) {
-      setErr(e.message || "Scan failed");
-      if (/register/i.test(e.message || "")) setRegUnknown(true);
-    }
-  }
-
-  async function setCount(line: StLine, v: number) {
-    if (!stId) return;
-    setLines((ls) => ls!.map((l) => l.id === line.id ? { ...l, counted_qty: v, variance: Math.round((v - l.system_qty) * 1000) / 1000 } : l));
-    try { await api.patch(`/stocktake/${stId}/lines/${line.id}`, { counted_qty: v }); } catch { /* reload on failure */ await load(stId); }
-  }
-
-  async function post() {
-    if (!stId) return;
-    const counted = (lines || []).filter((l) => l.counted_qty != null);
-    const varLines = counted.filter((l) => (l.variance || 0) !== 0);
-    if (!(await confirmDialog(`Post this count? ${varLines.length} line(s) with a variance will adjust stock. ${(lines!.length - counted.length)} uncounted line(s) are left untouched.`))) return;
-    setBusy(true); setErr(null);
-    try { await api.post(`/stocktake/${stId}/post`, {}); onDone(); }
-    catch (e: any) { setErr(e.message || "Could not post"); setBusy(false); }
-  }
-
-  const posted = status === "posted";
-  const totVar = (lines || []).reduce((s, l) => s + (l.variance || 0), 0);
-  const nameFor = (l: StLine) => l.part_name || products.find((p) => p.id === l.part_id)?.name || "—";
-
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative w-[600px] max-w-full bg-white h-full shadow-drawer flex flex-col">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
-          <h2 className="font-bold text-ink-primary flex items-center gap-2"><M n="fact_check" c="text-base text-primary" />{stId ? (posted ? "Stock take (posted)" : "Count in progress") : "New stock take"}</h2>
-          <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
-          {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
-
-          {!stId ? (
-            <>
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Location</label>
-                <select value={locId} onChange={(e) => setLocId(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2">{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Count type</label>
-                <div className="flex gap-2">
-                  <button onClick={() => setKind("full")} className={`flex-1 rounded-lg border px-3 py-2 text-xs font-semibold text-left ${kind === "full" ? "border-primary bg-primary/5 text-primary" : "border-slate-200 text-ink-secondary"}`}>Full count<span className="block font-normal text-ink-tertiary mt-0.5">Seeds every part on hand at this location.</span></button>
-                  <button onClick={() => setKind("partial")} className={`flex-1 rounded-lg border px-3 py-2 text-xs font-semibold text-left ${kind === "partial" ? "border-primary bg-primary/5 text-primary" : "border-slate-200 text-ink-secondary"}`}>Partial count<span className="block font-normal text-ink-tertiary mt-0.5">Starts empty — only parts you scan or add are counted.</span></button>
-                </div></div>
-            </>
-          ) : (
-            <>
-              {!posted && (
-                <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 space-y-2">
-                  <label className="block text-[11px] font-semibold text-ink-tertiary ">Scan or type a code</label>
-                  <div className="flex items-center gap-2">
-                    <input ref={scanRef} autoFocus value={scan} onChange={(e) => setScan(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doScan(); }} placeholder="Barcode / SKU / serial" className="flex-1 bg-white border border-slate-200 rounded-lg text-sm px-3 py-2" />
-                    <input type="number" min={1} value={scanQty} onChange={(e) => setScanQty(Math.max(1, +e.target.value || 1))} className="w-16 bg-white border border-slate-200 rounded-lg text-sm px-2 py-2 text-right" title="Quantity per scan" />
-                    <button onClick={doScan} className="px-3 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container flex items-center gap-1"><M n="qr_code_scanner" c="text-sm" />Count</button>
-                  </div>
-                  <label className="flex items-center gap-2 text-xs text-ink-secondary"><input type="checkbox" checked={regUnknown} onChange={(e) => setRegUnknown(e.target.checked)} />Register unknown codes as new products</label>
-                  {flash && <div className="text-xs text-emerald-700 font-semibold">{flash}</div>}
-                </div>
-              )}
-              <div className="flex items-center justify-between text-xs text-ink-tertiary">
-                <span>{lines?.length ?? 0} line(s) · {(lines || []).filter((l) => l.counted_qty != null).length} counted</span>
-                <span>Net variance: <b className={totVar === 0 ? "text-ink-secondary" : totVar < 0 ? "text-rose-600" : "text-emerald-600"}>{totVar > 0 ? "+" : ""}{totVar}</b></span>
-              </div>
-              <div className="rounded-xl border border-slate-200 overflow-hidden">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50/60 text-[11px] font-bold text-ink-tertiary "><tr>
-                    <th className="py-2 px-3">Part</th><th className="py-2 px-3 text-right">System</th><th className="py-2 px-3 text-right w-24">Counted</th><th className="py-2 px-3 text-right">Variance</th>
-                  </tr></thead>
-                  <tbody className="divide-y divide-slate-100 text-ink-secondary">
-                    {lines == null && <SkeletonRows cols={4} />}
-                    {lines?.length === 0 && <tr><td colSpan={4} className="py-5 px-3 text-ink-tertiary">No lines yet — scan a part to count it.</td></tr>}
-                    {lines?.map((l) => (
-                      <tr key={l.id}>
-                        <td className="py-2 px-3 font-semibold text-ink-primary">{nameFor(l)}</td>
-                        <td className="py-2 px-3 text-right tabular-nums">{l.system_qty}</td>
-                        <td className="py-2 px-3 text-right">
-                          {posted ? <span className="tabular-nums">{l.counted_qty ?? "—"}</span> :
-                            <input type="number" value={l.counted_qty ?? ""} onChange={(e) => setCount(l, e.target.value === "" ? 0 : Number(e.target.value))} className="w-20 bg-white border border-slate-200 rounded-lg text-xs px-2 py-1 text-right" />}
-                        </td>
-                        <td className={`py-2 px-3 text-right tabular-nums font-bold ${(l.variance || 0) === 0 ? "text-ink-tertiary" : (l.variance || 0) < 0 ? "text-rose-600" : "text-emerald-600"}`}>{l.counted_qty == null ? "—" : `${(l.variance || 0) > 0 ? "+" : ""}${l.variance || 0}`}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-        </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">{posted ? "Close" : "Cancel"}</button>
-          {!stId && <button onClick={start} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Starting…" : "Start count"}</button>}
-          {stId && !posted && <button onClick={post} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Posting…" : "Post variance"}</button>}
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -851,7 +747,7 @@ function ActionModal({ kind, products, preselected, onClose, onDone }:
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[520px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary">{title}</h2>
@@ -917,7 +813,7 @@ function ConversionModal({ onClose, onDone }: { onClose: () => void; onDone: () 
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
     api.get<any>("/assets?limit=200").then((r) => setAssets(r.items || [])).catch(() => setAssets([]));
-    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(() => {});
+    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(loadFailed("locations"));
   }, []);
   // prefill name from the picked asset (never the serial → sku, per backend note)
   useEffect(() => {
@@ -940,7 +836,7 @@ function ConversionModal({ onClose, onDone }: { onClose: () => void; onDone: () 
   const lbl = "block text-[11px] font-semibold text-ink-tertiary   mb-1";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[520px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200"><h2 className="font-bold text-ink-primary">Convert asset → product</h2><button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
@@ -996,7 +892,7 @@ function ReorderModal({ onClose, onCreated }: { onClose: () => void; onCreated?:
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[560px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200"><h2 className="font-bold text-ink-primary">Reorder</h2><button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
         <div className="px-5 pt-3 flex gap-1.5">
@@ -1055,21 +951,43 @@ function ReorderModal({ onClose, onCreated }: { onClose: () => void; onCreated?:
 }
 
 /* ── New posting — bulk stock inflow → POST /inventory/postings ── */
-type ReviewRow = PostRow & { match_status: "matched" | "unsure" | "new"; part_id: string | null; part_name?: string | null; sku?: string | null; candidates?: { id: string; name: string; sku?: string }[]; chosen: string };
+type PType = "standard" | "serialized" | "expiry";
+type ReviewRow = Omit<PostRow, "serials"> & {
+  match_status: "matched" | "unsure" | "new"; part_id: string | null; part_name?: string | null; sku?: string | null;
+  candidates?: { id: string; name: string; sku?: string; serialized?: boolean; expiry_tracking?: boolean }[]; chosen: string;
+  serialized?: boolean; expiry_tracking?: boolean; ptype: PType;          // 16a: type for a new product
+  serials: string[]; serialState?: { blocked: number; checking: boolean }; expiry_date?: string;
+};
+// Is this review row serial-tracked, given what the user picked? (a match keeps its own type)
+const rowSerialized = (r: ReviewRow) => !r.chosen || r.chosen === "__new__" ? r.ptype === "serialized"
+  : r.chosen === r.part_id ? !!r.serialized : !!r.candidates?.find((c) => c.id === r.chosen)?.serialized;
+const rowExpiry = (r: ReviewRow) => !r.chosen || r.chosen === "__new__" ? r.ptype === "expiry"
+  : r.chosen === r.part_id ? !!r.expiry_tracking : !!r.candidates?.find((c) => c.id === r.chosen)?.expiry_tracking;
+const unitsOf = (r: ReviewRow) => Math.ceil(Number(r.qty) || 0);
 function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () => void; onDone: () => void }) {
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [suppliers, setSuppliers] = useState<{ id: string; name: string }[]>([]);
   const [locId, setLocId] = useState(""); const [supplierId, setSupplierId] = useState(""); const [note, setNote] = useState("");
+  const [putBin, setPutBin] = useState<ScannedBin | null>(null);    // ii144c: put the delivery away into a bin
   const blank = (): PostRow => ({ code: "", mpn: "", name: "", qty: 1, purchase_price: 0, markup_pct: 0 });
   const [rows, setRows] = useState<PostRow[]>([blank()]);
   const [review, setReview] = useState<ReviewRow[] | null>(null);
+  const [kept, setKept] = useState<Record<string, { serials: string[]; ptype: PType; expiry_date?: string }>>({});
+  const rowKey = (r: { code?: string | null; mpn?: string | null; name?: string | null }) => [r.code || "", r.mpn || "", r.name || ""].join("|").toLowerCase();
+  const backToEdit = () => {
+    if (review) setKept(Object.fromEntries(review.map((r) => [rowKey(r), { serials: r.serials, ptype: r.ptype, expiry_date: r.expiry_date }])));
+    setReview(null);
+  };
   const [pasteOpen, setPasteOpen] = useState(false); const [pasteText, setPasteText] = useState("");
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null); const [info, setInfo] = useState<string | null>(null);
   const [mapCols, setMapCols] = useState<PasteField[] | null>(null); const [dataGrid, setDataGrid] = useState<string[][] | null>(null);
+  const [fileHeaders, setFileHeaders] = useState<string[] | null>(null);   // set when rows came from an uploaded sheet
+  const [genSerials, setGenSerials] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const sheetRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(() => {});
-    api.get<any>("/suppliers").then((r) => setSuppliers(r.items || [])).catch(() => {});
+    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(loadFailed("locations"));
+    api.get<any>("/suppliers").then((r) => setSuppliers(r.items || [])).catch(loadFailed("suppliers"));
   }, []);
   const fld = "bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2";
   const lbl2 = "block text-[11px] font-bold text-ink-tertiary  mb-1";
@@ -1080,17 +998,35 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
     const parsed = gridToRows(grid, map);
     if (!parsed.length) { setErr("Couldn't read any rows from that paste."); return; }
     setErr(null);
-    setRows(parsed); setDataGrid(grid); setMapCols(map); setPasteOpen(false); setPasteText("");
+    setRows(parsed); setDataGrid(grid); setMapCols(map); setFileHeaders(null); setPasteOpen(false); setPasteText("");
     setInfo(hadHeader ? "Detected a header row and mapped columns automatically — check the mapping below." : "Mapped columns automatically — check the mapping below if a column looks wrong.");
   }
-  const clearMap = () => { setMapCols(null); setDataGrid(null); };
+  const clearMap = () => { setMapCols(null); setDataGrid(null); setFileHeaders(null); };
+  const supQ = () => (supplierId ? `&supplier_id=${encodeURIComponent(supplierId)}` : "");
   function remap(col: number, field: PasteField) {
     if (!mapCols || !dataGrid) return;
     // a field can only map to one column: clear it elsewhere first
     const next = mapCols.map((f, c) => (field !== "ignore" && f === field && c !== col ? "ignore" : f)) as PasteField[];
     next[col] = field;
     // mergeRemap keeps any cell the user hand-edited while the mapping bar is open
-    setMapCols(next); setRows(mergeRemap(dataGrid, mapCols, next, rows)); saveRememberedMap(next);
+    setMapCols(next); setRows(mergeRemap(dataGrid, mapCols, next, rows));
+    // a sheet's mapping is remembered per supplier on the server; a paste's in this browser
+    if (fileHeaders) api.put(`/imports/posting/mapping${supplierId ? `?supplier_id=${encodeURIComponent(supplierId)}` : ""}`, { mapping: mapByHeader(fileHeaders, next) }).catch(() => { /* silent: remembering the column mapping is only a convenience */ });
+    else saveRememberedMap(next);
+  }
+  async function onSheet(e: any) {
+    const f = e.target.files?.[0]; if (!f) return;
+    setBusy(true); setErr(null); setInfo(null);
+    try {
+      const fd = new FormData(); fd.append("file", f);
+      const r = await api.postForm<any>(`/imports/parse?kind=posting${supQ()}`, fd);
+      const { grid, map } = fileToGrid(r.headers || [], r.rows || [], r.suggested || {});
+      const parsed = gridToRows(grid, map);
+      if (!parsed.length) { setErr("Couldn't find any product rows in that file — check the column mapping."); }
+      setRows(parsed.length ? parsed : [blank()]); setDataGrid(grid); setMapCols(map); setFileHeaders(r.headers || []);
+      setInfo(`Read ${parsed.length} line${parsed.length === 1 ? "" : "s"} from ${r.file_name || "the file"}. Check the column mapping below — it's remembered${supplierId ? " for this supplier" : ""}.`);
+    } catch (e: any) { setErr(e.message || "Could not read file"); }
+    finally { setBusy(false); if (sheetRef.current) sheetRef.current.value = ""; }
   }
   async function onFile(e: any) {
     const f = e.target.files?.[0]; if (!f) return;
@@ -1109,19 +1045,34 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
     if (!clean.length) { setErr("Add at least one row (code, MPN or name + qty)."); return; }
     setBusy(true); setErr(null);
     try {
-      const r = await api.post<any>("/inventory/postings/preview", { rows: clean.map((x) => ({ code: x.code || null, mpn: x.mpn || null, name: x.name || null, qty: Number(x.qty), purchase_price: Number(x.purchase_price) || null, markup_pct: x.markup_pct ? Number(x.markup_pct) : null })) });
-      setReview((r.rows || []).map((rr: any) => ({ ...rr, chosen: rr.match_status === "matched" ? rr.part_id : (rr.candidates?.[0]?.id || "__new__") })));
+      const r = await api.post<any>("/inventory/postings/preview", { rows: clean.map((x) => ({ code: x.code || null, mpn: x.mpn || null, name: x.name || null, qty: Number(x.qty), purchase_price: Number(x.purchase_price) || null, markup_pct: x.markup_pct ? Number(x.markup_pct) : null, product_type: x.product_type || null, ...(splitSerials(x.serials).length ? { serials: splitSerials(x.serials) } : {}) })) });
+      // Back → edit → review again keeps what was scanned and chosen for the same row.
+      setReview((r.rows || []).map((rr: any) => {
+        const k = kept[rowKey(rr)];
+        return { ...rr, ptype: (k?.ptype || rr.product_type || "standard") as PType, serials: k?.serials?.length ? k.serials : (rr.serials || []),
+          expiry_date: k?.expiry_date, chosen: rr.match_status === "matched" ? rr.part_id : (rr.candidates?.[0]?.id || "__new__") };
+      }));
     } catch (e: any) { setErr(e.message || "Could not match rows"); } finally { setBusy(false); }
   }
+  const extras = (r: ReviewRow) => ({
+    ...(rowSerialized(r) ? { serials: r.serials } : {}),
+    ...(rowExpiry(r) && r.expiry_date ? { expiry_date: r.expiry_date } : {}),
+  });
+  const setReviewRow = (i: number, patch: Partial<ReviewRow>) => setReview((rv) => rv && rv.map((x, j) => j === i ? { ...x, ...patch } : x));
+  // 16b: serial-tracked rows need one good serial per unit before stock can move.
+  const needSerials = (review || []).filter((r) => rowSerialized(r) && (r.serials.length !== unitsOf(r) || unitsOf(r) !== Number(r.qty)));
+  const badSerials = (review || []).filter((r) => rowSerialized(r) && (r.serialState?.blocked || r.serialState?.checking));
   async function doCommit() {
     if (!review) return;
+    if (needSerials.length && !genSerials) { setErr(`${needSerials.length} row${needSerials.length === 1 ? " still needs" : "s still need"} a serial for each unit.`); return; }
+    if (badSerials.length) { setErr("Fix the serials marked in red first."); return; }
     setBusy(true); setErr(null);
     try {
       const body = {
-        location_id: locId, supplier_id: supplierId || null, note: note || null,
+        location_id: locId, supplier_id: supplierId || null, note: note || null, bin_id: putBin?.id || null, generate_serials: genSerials,
         rows: review.map((r) => r.chosen && r.chosen !== "__new__"
-          ? { part_id: r.chosen, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null }
-          : { new_name: (r.name || r.code || r.mpn || "").trim(), new_sku: r.code || null, new_mpn: r.mpn || null, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null }),
+          ? { part_id: r.chosen, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null, ...extras(r) }
+          : { new_name: (r.name || r.code || r.mpn || "").trim(), new_sku: r.code || null, new_mpn: r.mpn || null, new_type: r.ptype, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null, ...extras(r) }),
       };
       await api.post("/inventory/postings/commit", body);
       onDone();
@@ -1132,7 +1083,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[680px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary">{review ? "Review & confirm posting" : "New posting — bulk stock inflow"}</h2>
@@ -1142,15 +1093,19 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
           {info && <div className="rounded-lg bg-blue-50 border border-blue-200 text-primary text-xs px-3 py-2">{info}</div>}
           <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl2}>Warehouse</label><select value={locId} onChange={(e) => setLocId(e.target.value)} className={`${fld} w-full`}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+            <div><label className={lbl2}>Warehouse</label><select value={locId} onChange={(e) => { setLocId(e.target.value); setPutBin(null); }} className={`${fld} w-full`}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
             <div><label className={lbl2}>Supplier (optional)</label><select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className={`${fld} w-full`}><option value="">—</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
           </div>
+          <div><label className={lbl2}>Put away into a bin (optional — otherwise the default bin)</label>
+            <BinScanField label="Into" current={putBin} locationId={locId} onBin={setPutBin} onClear={() => setPutBin(null)} /></div>
 
           {!review ? (<>
             <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={onFile} />
+            <input ref={sheetRef} type="file" accept=".xlsx,.csv,text/csv" className="hidden" onChange={onSheet} />
             <div className="flex items-center justify-between flex-wrap gap-2">
-              <label className={lbl2} style={{ marginBottom: 0 }}>Rows — Code/SKU · MPN · Name · Qty · Cost · Markup%</label>
-              <div className="flex gap-2">
+              <label className={lbl2} style={{ marginBottom: 0 }}>Rows — Code/SKU · MPN · Name · Qty · Cost · Markup% · Serials</label>
+              <div className="flex gap-2 flex-wrap">
+                <button onClick={() => sheetRef.current?.click()} disabled={busy} className="text-primary text-xs font-semibold flex items-center gap-1 disabled:opacity-50"><M n="upload" c="text-sm" />Excel / CSV file</button>
                 <button onClick={() => fileRef.current?.click()} disabled={busy} className="text-primary text-xs font-semibold flex items-center gap-1 disabled:opacity-50"><M n="document_scanner" c="text-sm" />Scan invoice / photo</button>
                 <button onClick={() => setPasteOpen((o) => !o)} className="text-primary text-xs font-semibold flex items-center gap-1"><M n="content_paste" c="text-sm" />Paste from Excel</button>
                 <button onClick={() => { setRows([...rows, blank()]); clearMap(); }} className="text-primary text-xs font-semibold">+ Add row</button>
@@ -1176,13 +1131,13 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
                     </div>
                   ))}
                 </div>
-                <p className="text-[11px] text-ink-tertiary mt-1.5">Remembered for next time.</p>
+                <p className="text-[11px] text-ink-tertiary mt-1.5">{fileHeaders && supplierId ? "Remembered for this supplier." : "Remembered for next time."}</p>
               </div>
             )}
             <div className="space-y-1.5">
               <div className="flex items-center gap-1.5 text-[11px] font-bold text-ink-tertiary px-1"><span className="w-24">Code/SKU</span><span className="w-24">MPN</span><span className="flex-1">Name</span><span className="w-12 text-right">Qty</span><span className="w-16 text-right">Cost</span><span className="w-12 text-right">Mk%</span><span className="w-8" /></div>
               {rows.map((r, i) => (
-                <div key={i} className="flex items-center gap-1.5">
+                <div key={i} className="flex items-center gap-1.5 flex-wrap">
                   <input value={r.code} onChange={(e) => setRow(i, "code", e.target.value)} placeholder="SKU" aria-label="Code or SKU" className={`${fld} w-24 min-w-0`} />
                   <input value={r.mpn} onChange={(e) => setRow(i, "mpn", e.target.value)} placeholder="MPN" aria-label="MPN" className={`${fld} w-24 min-w-0`} />
                   <input value={r.name} onChange={(e) => setRow(i, "name", e.target.value)} placeholder="Product name (if new)" className={`${fld} flex-1`} />
@@ -1190,39 +1145,76 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
                   <input type="number" min={0} value={r.purchase_price} onChange={(e) => setRow(i, "purchase_price", Number(e.target.value))} className={`${fld} w-16 text-right`} />
                   <input type="number" min={0} value={r.markup_pct} onChange={(e) => setRow(i, "markup_pct", Number(e.target.value))} className={`${fld} w-12 text-right`} />
                   <button aria-label="Delete" onClick={() => { setRows(rows.filter((_, j) => j !== i)); clearMap(); }} className="w-8 h-8 rounded-lg hover:bg-rose-50 text-ink-tertiary hover:text-rose-600 flex items-center justify-center"><M n="delete" c="text-sm" /></button>
+                  {r.serials !== undefined && <input value={r.serials} onChange={(e) => setRow(i, "serials", e.target.value)} placeholder="Serials, comma-separated" aria-label="Serial numbers" className={`${fld} basis-full text-xs font-mono`} />}
                 </div>
               ))}
             </div>
             <div><label className={lbl2}>Note / reference</label><textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className={`${fld} w-full`} /></div>
           </>) : (<>
             <p className="text-xs text-ink-secondary">Confirm each row before stock moves. {newCount > 0 && <b className="text-primary">{newCount} new product{newCount === 1 ? "" : "s"} will be created.</b>}</p>
+            {needSerials.length > 0 && !genSerials && (
+              <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2 flex items-center gap-1.5">
+                <M n="barcode_scanner" c="text-sm" />{needSerials.length} row{needSerials.length === 1 ? " still needs" : "s still need"} a serial for each unit. Scan them below.
+              </div>
+            )}
+            <label className="flex items-center gap-2 text-xs text-ink-secondary"><input type="checkbox" checked={genSerials} onChange={(e) => setGenSerials(e.target.checked)} />Generate the missing serial numbers for me</label>
             <div className="space-y-1.5">
-              {review.map((r, i) => (
-                <div key={i} className="flex items-center gap-2 border border-slate-100 rounded-lg px-2.5 py-2">
-                  <span className={`text-[11px] font-bold  px-1.5 py-0.5 rounded ${stBadge(r.chosen && r.chosen !== "__new__" ? "matched" : "new")}`}>{r.chosen && r.chosen !== "__new__" ? "match" : "new"}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-semibold text-ink-primary truncate">{r.part_name || r.name || r.code || r.mpn || "—"}</div>
-                    {(r.candidates && r.candidates.length > 0) ? (
-                      <select value={r.chosen} onChange={(e) => setReview(review.map((x, j) => j === i ? { ...x, chosen: e.target.value } : x))} className="mt-1 bg-white border border-slate-200 rounded text-[11px] px-1.5 py-1 w-full">
-                        {r.candidates.map((c) => <option key={c.id} value={c.id}>{c.name}{c.sku ? ` (${c.sku})` : ""}</option>)}
-                        <option value="__new__">+ Create new: {r.name || r.code}</option>
+              {review.map((r, i) => {
+                const ser = rowSerialized(r), exp = rowExpiry(r), isNew = !r.chosen || r.chosen === "__new__";
+                const units = unitsOf(r), missing = ser ? Math.max(0, units - r.serials.length) : 0;
+                return (
+                <div key={i} className="border border-slate-100 rounded-lg px-2.5 py-2 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[11px] font-bold  px-1.5 py-0.5 rounded ${stBadge(isNew ? "new" : "matched")}`}>{isNew ? "new" : "match"}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-semibold text-ink-primary truncate">{r.part_name || r.name || r.code || r.mpn || "—"}</div>
+                      {(r.candidates && r.candidates.length > 0) ? (
+                        <select value={r.chosen} onChange={(e) => setReviewRow(i, { chosen: e.target.value })} className="mt-1 bg-white border border-slate-200 rounded text-[11px] px-1.5 py-1 w-full">
+                          {r.candidates.map((c) => <option key={c.id} value={c.id}>{c.name}{c.sku ? ` (${c.sku})` : ""}</option>)}
+                          <option value="__new__">+ Create new: {r.name || r.code}</option>
+                        </select>
+                      ) : (
+                        <div className="text-[11px] text-ink-tertiary">{r.part_id ? `SKU ${r.sku || "—"}` : `New product${r.code ? ` · SKU ${r.code}` : ""}${r.mpn ? ` · MPN ${r.mpn}` : ""}`}</div>
+                      )}
+                    </div>
+                    {isNew ? (
+                      <select value={r.ptype} onChange={(e) => setReviewRow(i, { ptype: e.target.value as PType })} aria-label="Product type" className="bg-white border border-slate-200 rounded text-[11px] px-1.5 py-1">
+                        <option value="standard">Standard</option><option value="serialized">Serial-tracked</option><option value="expiry">Expiry-tracked</option>
                       </select>
-                    ) : (
-                      <div className="text-[11px] text-ink-tertiary">{r.part_id ? `SKU ${r.sku || "—"}` : `New product${r.code ? ` · SKU ${r.code}` : ""}${r.mpn ? ` · MPN ${r.mpn}` : ""}`}</div>
-                    )}
+                    ) : (ser || exp) && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-ink-secondary">{ser ? "Serial-tracked" : "Expiry-tracked"}</span>}
+                    <span className="text-[11px] text-ink-tertiary">×{r.qty}</span>
+                    <span className="text-[11px] tabular-nums text-ink-secondary w-14 text-right">{money(r.purchase_price || 0)}</span>
                   </div>
-                  <span className="text-[11px] text-ink-tertiary">×{r.qty}</span>
-                  <span className="text-[11px] tabular-nums text-ink-secondary w-14 text-right">{money(r.purchase_price || 0)}</span>
+                  {ser && (
+                    <div className="ml-1 pl-2 border-l-2 border-primary/20 space-y-1">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-semibold text-ink-secondary">Serials / IMEIs</span>
+                        {missing > 0 ? <span className="text-amber-700 font-semibold">Needs {missing} more</span>
+                          : units !== Number(r.qty) ? <span className="text-rose-700 font-semibold">Quantity must be a whole number</span>
+                          : <span className="text-emerald-700 font-semibold flex items-center gap-0.5"><M n="check" c="text-[13px]" />All units entered</span>}
+                      </div>
+                      <SerialEntry value={r.serials} target={units} partId={isNew ? null : r.chosen}
+                        others={review.flatMap((x, j) => j !== i && rowSerialized(x) ? x.serials : [])}
+                        onChange={(v) => setReviewRow(i, { serials: v })}
+                        onState={(st) => setReviewRow(i, { serialState: { blocked: st.blocked, checking: st.checking } })} />
+                    </div>
+                  )}
+                  {exp && (
+                    <div className="ml-1 pl-2 border-l-2 border-primary/20 flex items-center gap-2 text-[11px] text-ink-secondary">
+                      <span className="whitespace-nowrap">Use by (optional)</span>
+                      <div className="w-44"><DateField value={r.expiry_date || ""} onChange={(v) => setReviewRow(i, { expiry_date: v })} /></div>
+                    </div>
+                  )}
                 </div>
-              ))}
+              ); })}
             </div>
           </>)}
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex justify-between gap-2">
-          <button onClick={review ? () => setReview(null) : onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">{review ? "Back" : "Cancel"}</button>
+          <button onClick={review ? backToEdit : onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">{review ? "Back" : "Cancel"}</button>
           {!review
             ? <button onClick={doPreview} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Matching…" : "Review & match →"}</button>
-            : <button onClick={doCommit} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Posting…" : "Post stock"}</button>}
+            : <button onClick={doCommit} disabled={busy || (needSerials.length > 0 && !genSerials) || badSerials.length > 0} title={needSerials.length && !genSerials ? "Enter a serial for each unit first" : undefined} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Posting…" : "Post stock"}</button>}
         </div>
       </div>
     </div>
@@ -1237,7 +1229,7 @@ function BulkAdjustModal({ items, onClose, onDone }: { items: Product[]; onClose
   const [vals, setVals] = useState<Record<string, number>>({});
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(loadFailed("locations")); }, []);
   const fld = "bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2";
   const lbl2 = "block text-[11px] font-bold text-ink-tertiary  mb-1";
   async function save() {
@@ -1250,7 +1242,7 @@ function BulkAdjustModal({ items, onClose, onDone }: { items: Product[]; onClose
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[520px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200"><h2 className="font-bold text-ink-primary">Adjust quantity — {items.length} item{items.length === 1 ? "" : "s"}</h2><button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
@@ -1291,7 +1283,7 @@ function PartsToOrderModal({ onClose, onCreated }: { onClose: () => void; onCrea
   const [busy, setBusy] = useState(""); const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
     api.get<any>("/inventory/to-order").then((r) => { setRows(r.items || []); setSummary(r.summary || null); }).catch(() => setRows([]));
-    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(() => {});
+    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(loadFailed("locations"));
   }, []);
   // group by supplier
   const groups: Record<string, { name: string; sid: string | null; rows: ToOrderRow[] }> = {};
@@ -1308,7 +1300,7 @@ function PartsToOrderModal({ onClose, onCreated }: { onClose: () => void; onCrea
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[620px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <div><h2 className="font-bold text-ink-primary">Parts to order</h2><p className="text-[11px] text-ink-tertiary">What open jobs need, minus stock on hand and already on order.</p></div>
@@ -1356,55 +1348,3 @@ function PartsToOrderModal({ onClose, onCreated }: { onClose: () => void; onCrea
   );
 }
 
-/* ── Bins panel (revealed by Settings → Inventory → enable_bins) → /api/bins ── */
-function BinsPanel() {
-  const [bins, setBins] = useState<any[] | null>(null);
-  const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
-  const [nf, setNf] = useState({ location_id: "", name: "", zone: "", shelf: "" });
-  const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
-  const load = () => api.get<any>("/bins").then((r) => setBins(r.items || [])).catch(() => setBins([]));
-  useEffect(() => { load(); api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); setNf((s) => ({ ...s, location_id: it[0]?.id || "" })); }).catch(() => {}); }, []);
-  async function add() {
-    if (!nf.name.trim() || !nf.location_id) { setErr("Pick a warehouse and name the bin."); return; }
-    setBusy(true); setErr(null);
-    try { await api.post("/bins", { location_id: nf.location_id, name: nf.name.trim(), zone: nf.zone || null, shelf: nf.shelf || null }); setNf({ ...nf, name: "", zone: "", shelf: "" }); load(); }
-    catch (e: any) { setErr(e.message || "Could not add bin"); } finally { setBusy(false); }
-  }
-  async function del(id: string) { if (!(await confirmDialog("Delete this bin?", { danger: true, confirmLabel: "Delete" }))) return; try { await api.del(`/bins/${id}`); load(); } catch (e: any) { setErr(e.message || "In use — move its stock first"); } }
-  const locName = (id: string) => locations.find((l) => l.id === id)?.name || "—";
-  const fld = "bg-white border border-slate-200 rounded-lg text-sm px-3 py-2";
-  return (
-    <div className="max-w-3xl space-y-4">
-      <div><h3 className="text-sm font-bold text-ink-primary">Storage bins</h3><p className="text-xs text-ink-tertiary">Give every product an address inside a warehouse — shelf / bin. Enabled in Settings → Inventory &amp; warehouses.</p></div>
-      {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
-      <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
-        <table className="w-full text-xs">
-          <thead className="bg-slate-50/70 text-ink-tertiary text-[11px] font-bold"><tr><th className="text-left py-2.5 px-4">Bin</th><th className="text-left py-2.5 px-4">Warehouse</th><th className="text-left py-2.5 px-4">Zone / shelf</th><th className="py-2.5 px-4"></th></tr></thead>
-          <tbody className="divide-y divide-slate-100">
-            {bins == null && <SkeletonRows cols={4} />}
-            {bins?.length === 0 && <tr><td colSpan={4} className="py-6 text-center text-ink-tertiary">No bins yet — add one below.</td></tr>}
-            {bins?.map((b) => (
-              <tr key={b.id}>
-                <td className="py-2.5 px-4 font-bold text-ink-primary">{b.name}</td>
-                <td className="py-2.5 px-4 text-ink-secondary">{locName(b.location_id)}</td>
-                <td className="py-2.5 px-4 text-ink-tertiary">{[b.zone, b.shelf, b.bin_number].filter(Boolean).join(" / ") || "—"}</td>
-                <td className="py-2.5 px-4 text-right"><button onClick={() => del(b.id)} className="text-rose-600 font-semibold">Delete</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div className="p-3 border-t border-slate-100 flex items-end gap-2 flex-wrap">
-          <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Warehouse</label><select value={nf.location_id} onChange={(e) => setNf({ ...nf, location_id: e.target.value })} className={fld}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
-          <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Bin name</label><input value={nf.name} onChange={(e) => setNf({ ...nf, name: e.target.value })} placeholder="A-01" className={fld} /></div>
-          <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Zone</label><input value={nf.zone} onChange={(e) => setNf({ ...nf, zone: e.target.value })} className={`${fld} w-24`} /></div>
-          <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Shelf</label><input value={nf.shelf} onChange={(e) => setNf({ ...nf, shelf: e.target.value })} className={`${fld} w-24`} /></div>
-          <button onClick={add} disabled={busy} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">+ Add bin</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Chip({ label, active }: { label: string; active?: boolean }) {
-  return <button className={`h-8 px-3 text-xs font-semibold rounded-lg flex items-center gap-1.5 border ${active ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary hover:bg-slate-50 border-slate-200"}`}>{label}<M n="expand_more" c="text-xs" /></button>;
-}

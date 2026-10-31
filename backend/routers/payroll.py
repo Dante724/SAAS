@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
-from backend.services.dates import parse_date
+from backend.services.dates import now_utc, parse_date, shop_today
 from backend.models import (
     CommissionRule,
     Employee,
@@ -57,6 +57,15 @@ def _ser_rule(r: CommissionRule) -> dict:
         "cancel_if_deleted": r.cancel_if_deleted, "rule_level": r.rule_level,
         "product_id": r.product_id, "service_id": getattr(r, "service_id", None),
     }
+
+
+
+async def _shop_days(db, org_id: str, ps, pe) -> tuple:
+    """Ledger entries made on the shop's days ps..pe (created_at is naive UTC, periods are shop days)."""
+    from backend.services.dates import day_end_utc, day_start_utc, shop_tzname
+    tz = await shop_tzname(db, org_id)
+    return (EmployeeBalanceLedger.created_at >= day_start_utc(ps, tz),
+            EmployeeBalanceLedger.created_at < day_end_utc(pe, tz))
 
 
 @router.get("/rules")
@@ -230,14 +239,14 @@ async def my_earnings(
     from backend.services import scoping
     # Both rights: the older "see your own pay" switch still turns it off for a role.
     await assert_perm(db, current, "can_view_own_compensation")
-    today = date.today()
+    today = await shop_today(db, current.org_id)
     ps = parse_date(date_from, "from") if date_from else today.replace(day=1)
     pe = parse_date(date_to, "to") if date_to else _month_bounds(today.strftime("%Y-%m"))[1]
     if pe < ps:
         raise HTTPException(400, "from must be on or before to")
     if (pe - ps).days > 366:
         raise HTTPException(400, "Pick a period of a year or less")
-    cutoff = scoping.payroll_cutoff(await scoping.role_for(db, current))
+    cutoff = scoping.payroll_cutoff(await scoping.role_for(db, current), today)
     asked_from = ps
     if cutoff and ps < cutoff:
         ps = cutoff
@@ -309,7 +318,7 @@ async def create_payroll_run(
     await assert_not_self(db, current, data.employee_id, "accrue your own pay")
     ps = parse_date(data.period_start, "period_start")
     pe = parse_date(data.period_end, "period_end")
-    today = date.today()
+    today = await shop_today(db, current.org_id)
     if not data.draft and (pe.year, pe.month) >= (today.year, today.month):
         raise HTTPException(400, "Can't accrue payroll for the current or a future month; save as draft instead")
     if not data.draft:
@@ -324,8 +333,7 @@ async def create_payroll_run(
         EmployeeBalanceLedger.org_id == current.org_id,
         EmployeeBalanceLedger.employee_id == data.employee_id,
         EmployeeBalanceLedger.entry_type.in_(["commission", "clawback"]),
-        func.date(EmployeeBalanceLedger.created_at) >= ps,
-        func.date(EmployeeBalanceLedger.created_at) <= pe))).scalar() or 0
+        *await _shop_days(db, current.org_id, ps, pe)))).scalar() or 0
     # sum hourly wages whose approved timesheet period overlaps this run's window.
     # The timesheet approval posts a ledger row with ref_type='timesheet' and
     # ref_id='{employee}:{from}:{to}', so wages are attributed to the period worked
@@ -359,7 +367,7 @@ async def create_payroll_run(
         base_salary=base, commissions_total=_money(commissions), hourly_total=_money(hourly),
         bonuses_total=bonus, penalties_total=penalty, gross_total=gross,
         status="draft" if data.draft else "accrued",
-        accrued_at=None if data.draft else datetime.utcnow())
+        accrued_at=None if data.draft else now_utc())
     db.add(run)
     await db.flush()
     if not data.draft:
@@ -412,7 +420,7 @@ async def create_payroll_runs_bulk(
     await assert_perm(db, current, "can_accrue_payroll")
     ps = parse_date(data.period_start, "period_start")
     pe = parse_date(data.period_end, "period_end")
-    today = date.today()
+    today = await shop_today(db, current.org_id)
     if not data.draft and (pe.year, pe.month) >= (today.year, today.month):
         raise HTTPException(400, "Can't accrue payroll for the current or a future month; save as draft instead")
 
@@ -479,8 +487,7 @@ async def _accrue_one(db: AsyncSession, org_id: str, employee_id: str, ps, pe,
         EmployeeBalanceLedger.org_id == org_id,
         EmployeeBalanceLedger.employee_id == employee_id,
         EmployeeBalanceLedger.entry_type.in_(["commission", "clawback"]),
-        func.date(EmployeeBalanceLedger.created_at) >= ps,
-        func.date(EmployeeBalanceLedger.created_at) <= pe))).scalar() or 0
+        *await _shop_days(db, org_id, ps, pe)))).scalar() or 0
 
     hourly_rows = (await db.execute(select(EmployeeBalanceLedger).where(
         EmployeeBalanceLedger.org_id == org_id,
@@ -507,7 +514,7 @@ async def _accrue_one(db: AsyncSession, org_id: str, employee_id: str, ps, pe,
         base_salary=base, commissions_total=_money(commissions), hourly_total=_money(hourly),
         bonuses_total=bon, penalties_total=pen, gross_total=gross,
         status="draft" if draft else "accrued",
-        accrued_at=None if draft else datetime.utcnow())
+        accrued_at=None if draft else now_utc())
     db.add(run)
     await db.flush()
     if not draft:
@@ -547,13 +554,11 @@ async def _manual_adjust_totals(db, org_id, employee_id, ps, pe):
     bonus = (await db.execute(select(func.coalesce(func.sum(EmployeeBalanceLedger.amount), 0)).where(
         EmployeeBalanceLedger.org_id == org_id, EmployeeBalanceLedger.employee_id == employee_id,
         EmployeeBalanceLedger.entry_type == "bonus", EmployeeBalanceLedger.ref_type == "manual",
-        func.date(EmployeeBalanceLedger.created_at) >= ps,
-        func.date(EmployeeBalanceLedger.created_at) <= pe))).scalar() or 0
+        *await _shop_days(db, org_id, ps, pe)))).scalar() or 0
     penalty = (await db.execute(select(func.coalesce(func.sum(EmployeeBalanceLedger.amount), 0)).where(
         EmployeeBalanceLedger.org_id == org_id, EmployeeBalanceLedger.employee_id == employee_id,
         EmployeeBalanceLedger.entry_type == "penalty", EmployeeBalanceLedger.ref_type == "manual",
-        func.date(EmployeeBalanceLedger.created_at) >= ps,
-        func.date(EmployeeBalanceLedger.created_at) <= pe))).scalar() or 0
+        *await _shop_days(db, org_id, ps, pe)))).scalar() or 0
     return _money(bonus), _money(abs(penalty))
 
 
@@ -622,19 +627,30 @@ async def payroll_calculation(
     # a voided run doesn't hide the live one for the same month
     run_by_emp = {r.employee_id: r for r in sorted(runs, key=lambda r: r.status != "void")}
     roles = await _role_names(db, current.org_id)
+    # One grouped query for every employee's month sums (was four queries per employee).
+    sums: dict = {}
+    if emps:
+        for emp_id, kind, ref_type, amount in (await db.execute(
+                select(EmployeeBalanceLedger.employee_id, EmployeeBalanceLedger.entry_type,
+                       EmployeeBalanceLedger.ref_type, func.sum(EmployeeBalanceLedger.amount))
+                .where(EmployeeBalanceLedger.org_id == current.org_id,
+                       EmployeeBalanceLedger.employee_id.in_([e.id for e in emps]),
+                       EmployeeBalanceLedger.entry_type.in_(
+                           ["commission", "clawback", "hourly_wage", "bonus", "penalty"]),
+                       *await _shop_days(db, current.org_id, ps, pe))
+                .group_by(EmployeeBalanceLedger.employee_id, EmployeeBalanceLedger.entry_type,
+                          EmployeeBalanceLedger.ref_type))).all():
+            if kind in ("bonus", "penalty") and ref_type != "manual":
+                continue        # only the ad-hoc ones entered on this page (_manual_adjust_totals)
+            key = "commission" if kind == "clawback" else kind
+            per = sums.setdefault(emp_id, {})
+            per[key] = per.get(key, 0) + (amount or 0)
     items = []
     for e in emps:
-        commissions = (await db.execute(select(func.coalesce(func.sum(EmployeeBalanceLedger.amount), 0)).where(
-            EmployeeBalanceLedger.org_id == current.org_id, EmployeeBalanceLedger.employee_id == e.id,
-            EmployeeBalanceLedger.entry_type.in_(["commission", "clawback"]),
-            func.date(EmployeeBalanceLedger.created_at) >= ps,
-            func.date(EmployeeBalanceLedger.created_at) <= pe))).scalar() or 0
-        hourly = (await db.execute(select(func.coalesce(func.sum(EmployeeBalanceLedger.amount), 0)).where(
-            EmployeeBalanceLedger.org_id == current.org_id, EmployeeBalanceLedger.employee_id == e.id,
-            EmployeeBalanceLedger.entry_type == "hourly_wage",
-            func.date(EmployeeBalanceLedger.created_at) >= ps,
-            func.date(EmployeeBalanceLedger.created_at) <= pe))).scalar() or 0
-        bonuses, penalties = await _manual_adjust_totals(db, current.org_id, e.id, ps, pe)
+        per = sums.get(e.id, {})
+        commissions = per.get("commission", 0)
+        hourly = per.get("hourly_wage", 0)
+        bonuses, penalties = _money(per.get("bonus", 0)), _money(abs(per.get("penalty", 0)))
         base = _money(e.wage_value) if e.wage_type == "fixed" else _money(0)
         run = run_by_emp.get(e.id)
         total = base + _money(commissions) + _money(hourly) + bonuses - penalties
@@ -723,7 +739,7 @@ async def add_adjustment(
     amt = _money(data.amount)
     signed = amt if data.kind == "bonus" else -amt
     # date the entry inside the chosen month so it lands in that period's calculation
-    when = datetime.utcnow()
+    when = now_utc()
     if data.month:
         try:
             ps, pe = _month_bounds(data.month)
@@ -787,8 +803,7 @@ async def calculation_detail(
     rows = (await db.execute(select(EmployeeBalanceLedger).where(
         EmployeeBalanceLedger.org_id == current.org_id,
         EmployeeBalanceLedger.employee_id == employee_id,
-        func.date(EmployeeBalanceLedger.created_at) >= ps,
-        func.date(EmployeeBalanceLedger.created_at) <= pe)
+        *await _shop_days(db, current.org_id, ps, pe))
         .order_by(EmployeeBalanceLedger.created_at))).scalars().all()
 
     def _row(e):
@@ -834,7 +849,7 @@ async def accrue_calculation(
         ps, pe = _month_bounds(data.month)
     except (ValueError, IndexError):
         raise HTTPException(400, "month must be YYYY-MM")
-    today = date.today()
+    today = await shop_today(db, current.org_id)
     if (pe.year, pe.month) >= (today.year, today.month):
         raise HTTPException(400, "Can't accrue payroll for the current or a future month")
     emp = (await db.execute(select(Employee).where(
@@ -853,8 +868,7 @@ async def accrue_calculation(
     commissions = (await db.execute(select(func.coalesce(func.sum(EmployeeBalanceLedger.amount), 0)).where(
         EmployeeBalanceLedger.org_id == current.org_id, EmployeeBalanceLedger.employee_id == data.employee_id,
         EmployeeBalanceLedger.entry_type.in_(["commission", "clawback"]),
-        func.date(EmployeeBalanceLedger.created_at) >= ps,
-        func.date(EmployeeBalanceLedger.created_at) <= pe))).scalar() or 0
+        *await _shop_days(db, current.org_id, ps, pe)))).scalar() or 0
     hourly = await _hourly_for_period(db, current.org_id, data.employee_id, ps, pe)
     bonuses, penalties = await _manual_adjust_totals(db, current.org_id, data.employee_id, ps, pe)
     base = _money(emp.wage_value) if emp.wage_type == "fixed" else _money(0)
@@ -864,7 +878,7 @@ async def accrue_calculation(
         org_id=current.org_id, employee_id=data.employee_id, period_start=ps, period_end=pe,
         base_salary=base, commissions_total=_money(commissions), hourly_total=hourly,
         bonuses_total=bonuses, penalties_total=penalties, gross_total=gross,
-        status="accrued", accrued_at=datetime.utcnow())
+        status="accrued", accrued_at=now_utc())
     db.add(run)
     await db.flush()
     if base:
@@ -1046,7 +1060,7 @@ async def mark_run_paid(
         await db.flush()
         txn_id = txn.id
     run.status = "paid"
-    run.paid_at = datetime.utcnow()
+    run.paid_at = now_utc()
     run.account_id = acct.id
     run.cash_txn_id = txn_id
     await _audit(db, current, "payroll.run_pay", "payroll_run", run.id,
@@ -1104,7 +1118,7 @@ async def void_run(
             t.voided_by_id = current.id
     was = run.status
     run.status = "void"
-    run.voided_at = datetime.utcnow()
+    run.voided_at = now_utc()
     run.voided_by_id = current.id
     run.void_reason = reason[:300]
     await _audit(db, current, "payroll.run_void", "payroll_run", run.id,

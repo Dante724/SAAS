@@ -4,7 +4,6 @@ Additional (non-base) currencies with an exchange rate against the base
 currency and a permanent rate-history trail. Rate convention:
 ``1 <code> = rate <base>``.
 """
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,6 +20,7 @@ from backend.models import (
     Organisation,
 )
 from backend.services.auth import require_perm
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/finance/currencies", tags=["currencies"])
 
@@ -114,7 +114,7 @@ async def edit_currency(currency_id: str, data: CurrencyPatch, db: AsyncSession 
         new_rate = _validate_rate(data.rate)
         if new_rate != round(c.rate, 6):   # only history a real change
             c.rate = new_rate
-            c.updated_at = datetime.utcnow()
+            c.updated_at = now_utc()
             db.add(CurrencyRateHistory(currency_id=c.id, org_id=current.org_id,
                                        rate=new_rate, changed_by=current.id))
     await db.commit()

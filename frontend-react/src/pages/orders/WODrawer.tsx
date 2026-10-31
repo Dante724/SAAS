@@ -5,7 +5,10 @@ import { humanize } from "../../lib/humanize";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import ConversationPanel from "./ConversationPanel";
+import { ChannelPicker, DeliveryNote, useThread, type SendChannel, type ThreadSent } from "./ConversationPanel";
+import SignaturePad from "../../components/SignaturePad";
+import SendMenu, { type SendWay } from "../../components/SendMenu";
+import { deliveryText, deliveryTone, flashDelivery, type Delivery, type Flash, type Tone } from "../../lib/delivery";
 import PhotoAnnotator from "./PhotoAnnotator";
 import TagChips from "../../components/TagChips";
 import { M } from "../../components/Shell";
@@ -27,7 +30,13 @@ import JobCardFields from "../../components/JobCardFields";
 import ReaderCharge from "../../components/ReaderCharge";
 import CardPaymentsList from "../../components/CardPaymentsList";
 import KitGroupHeader from "./KitGroupHeader";
+import EstimateTerms, { startRevision } from "./EstimateTerms";
+import JobTasks from "./JobTasks";
+import { sendInvoice } from "../invoices/billing";
 import { groupKitLines } from "../../lib/kitGroups";
+import { binChoices, byLocation, needsBinChoice } from "../../lib/stockBins";
+import { loadFailed, saveFailed } from "../../lib/notice";
+import { clickable } from "../../lib/clickable";
 
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
 type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean; order_item_id?: string | null;
@@ -38,7 +47,8 @@ type Detail = Order & {
   manager?: { id?: string; name?: string } | null;
   assigned_to?: { id?: string; name?: string } | null;
   client?: { id?: string; name?: string; phone?: string; email?: string; balance?: number; watch_out?: string | null } | null;
-  device?: { id?: string; brand?: string; model?: string; serial?: string; imei?: string; asset_type?: string; color?: string; watch_out?: string | null } | null;
+  device?: { id?: string; brand?: string; model?: string; serial?: string; imei?: string; asset_type?: string; color?: string; watch_out?: string | null; has_passcode?: boolean } | null;
+  signature?: string | null; is_estimate?: boolean;
   intake_photos?: { id: string; url: string; marked_id?: string; marked_url?: string }[];
   lines?: Line[];
 };
@@ -60,13 +70,15 @@ const fmtDur = (min?: number | null) => {
 
 export default function WODrawer({ order, onClose, onChanged }: { order: Order; onClose: () => void; onChanged?: () => void }) {
   const { can, me } = useMe();
+  const nav = useNavigate();
   const [tab, setTab] = useState<Tab>("general");
   const [sub, setSub] = useState<null | "client" | "asset">(null);
   const [d, setD] = useState<Detail>(order as Detail);
   const [statuses, setStatuses] = useState<FullStatus[]>([]);
   const [emps, setEmps] = useState<Emp[]>([]);
   const [timing, setTiming] = useState<Timing | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ m: string; tone?: Tone } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [labor, setLabor] = useState<any>(null);   // 144v: who's timing this WO, per person + line
   const loadLabor = () => api.get<any>(`/orders/${order.id}/labor`).then(setLabor).catch(() => setLabor(null));
   useEffect(() => { loadLabor(); /* eslint-disable-next-line */ }, [order.id]);
@@ -75,22 +87,28 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   const canBuy = can("can_manage_inventory");
   const [partsOpen, setPartsOpen] = useState(false);   // ADR-144po: the ⋯ → Parts & purchase orders panel
   const [menuOpen, setMenuOpen] = useState(false);
-  const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
+  // A warning (e.g. "saved, but not sent: set up text messages") stays up longer than a plain "Saved".
+  const flash: Flash = (m, tone) => {
+    setToast({ m, tone });
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), tone ? 6000 : 2200);
+  };
 
-  const reload = () => api.get<Detail>(`/orders/${order.id}`).then(setD).catch(() => {});
+  const reload = () => api.get<Detail>(`/orders/${order.id}`).then(setD).catch(loadFailed("the job"));
   useEffect(() => { reload(); }, [order.id]);
   // 144bl Comeback Shield: flag a device that's back soon after a prior visit (gated by role).
   const [comeback, setComeback] = useState<{ is_comeback?: boolean; count?: number; days_since?: number | null; prior_order_number?: string } | null>(null);
   useEffect(() => { if (can("can_view_comeback_alerts")) api.get<any>(`/orders/${order.id}/comeback`).then(setComeback).catch(() => setComeback(null)); /* eslint-disable-next-line */ }, [order.id]);
   const [incomingPo, setIncomingPo] = useState<{ po_number?: string; status?: string; expected_at?: string | null; parts: { part: string; outstanding: number }[] }[]>([]);
-  const loadIncomingPo = () => api.get<any>(`/orders/${order.id}/incoming-po`).then((r) => setIncomingPo(r.items || [])).catch(() => {});
+  const loadIncomingPo = () => api.get<any>(`/orders/${order.id}/incoming-po`).then((r) => setIncomingPo(r.items || [])).catch(loadFailed("incoming parts orders"));
   useEffect(() => { loadIncomingPo(); /* eslint-disable-next-line */ }, [order.id]);
+  const isEst = !!d.is_estimate;
   useEffect(() => {
-    const rt = (order as any).is_estimate ? "estimate" : "work_order";
-    api.get<any>(`/statuses?record_type=${rt}`).then((r) => setStatuses(r.items || r || [])).catch(() => {});
-  }, [order.id]);
+    const rt = isEst ? "estimate" : "work_order";
+    api.get<any>(`/statuses?record_type=${rt}`).then((r) => setStatuses(r.items || r || [])).catch(loadFailed("statuses"));
+  }, [order.id, isEst]);
   useEffect(() => { api.get<Timing>(`/orders/${order.id}/timing`).then(setTiming).catch(() => setTiming(null)); }, [order.id, d.status]);
-  useEffect(() => { api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(loadFailed("the staff list")); }, []);
 
   async function changeStatus(key: string) {
     let reason: string | null = null;
@@ -115,6 +133,70 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
       catch { flash("Couldn't copy. Use Open to see the link."); }
     } catch (e: any) { flash(`Failed: ${e.message}`); }
   }
+  // I6 — send the estimate (tracking link, plus the PDF by email). The server says whether it
+  // really went out; we show that sentence, never a blanket "sent".
+  const [estBusy, setEstBusy] = useState<"" | "send" | "convert" | "revise">("");
+  async function sendEstimate(way?: SendWay) {
+    setEstBusy("send");
+    try {
+      const r = await api.post<{ ok: boolean; delivery?: Delivery }>(`/orders/${order.id}/send-estimate`, { channel: way || "auto" });
+      flashDelivery(flash, r?.delivery, "Estimate saved on the job");
+      setThreadKey((k) => k + 1);
+    } catch (e: any) { flash(e.message || "Couldn't send the estimate", "warn"); }
+    finally { setEstBusy(""); }
+  }
+  // E1/E4 — an approved estimate becomes the work order (parts come out of stock).
+  async function convertEstimate() {
+    if (!(await confirmDialog("Turn this estimate into a work order? Parts will be taken from stock.", { title: "Convert to work order", confirmLabel: "Convert" }))) return;
+    setEstBusy("convert");
+    try {
+      const r = await api.post<{ ok: boolean; order_id?: string }>(`/orders/${order.id}/convert`, {});
+      flash("Now a work order");
+      onChanged?.();
+      if (r?.order_id && r.order_id !== order.id) { onClose(); nav(`/orders?open=${r.order_id}`); }
+      else await reload();
+    } catch (e: any) { flash(e.message || "Couldn't convert the estimate", "warn"); }
+    finally { setEstBusy(""); }
+  }
+  // E5 — a new version of the estimate: the old one goes to the history, the customer can answer again.
+  async function newRevision() {
+    setEstBusy("revise");
+    try {
+      const n = await startRevision(order.id);
+      if (n != null) { flash(`Revision ${n} started. Change the estimate, then send it.`); await reload(); onChanged?.(); }
+    } catch (e: any) { flash(e.message || "Couldn't start a new revision", "warn"); }
+    finally { setEstBusy(""); }
+  }
+  // J6 — the job's type and priority are real pickers now.
+  const [types, setTypes] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => { api.get<any>("/forms/types").then((r) => setTypes(r.items || [])).catch(loadFailed("job types")); }, []);
+  async function changeType(typeId: string) {
+    if (!typeId || typeId === (d as any).type_id) return;
+    try {
+      const r = await api.patch<{ status: string; remapped_to?: string | null }>(`/orders/${order.id}/type`, { type_id: typeId });
+      flash(r.remapped_to ? "Job type changed, and the status moved to its starting status" : "Job type changed");
+      await reload(); onChanged?.();
+    } catch (e: any) { flash(e.message || "Couldn't change the job type", "warn"); }
+  }
+  async function changePriority(p: number) {
+    const prev = d.priority;
+    setD({ ...d, priority: p });
+    try { await api.patch(`/orders/${order.id}/priority`, { priority: p }); flash("Priority updated"); onChanged?.(); }
+    catch (e: any) { setD((x) => ({ ...x, priority: prev })); flash(e.message || "Couldn't change the priority", "warn"); }
+  }
+  // J1 — customer signs on the shop's screen (e.g. at pick-up).
+  const [sigOpen, setSigOpen] = useState(false);
+  const [sigBusy, setSigBusy] = useState(false);
+  async function saveSignature(signature: string, note: string) {
+    setSigBusy(true);
+    try {
+      await api.post(`/orders/${order.id}/signature`, { signature, note: note || undefined });
+      setSigOpen(false); flash("Signature saved"); await reload(); onChanged?.();
+    } catch (e: any) { flash(e.message || "Couldn't save the signature", "warn"); }
+    finally { setSigBusy(false); }
+  }
+  // G3 — both customer message boxes read one thread; bump this so the other box reloads.
+  const [threadKey, setThreadKey] = useState(0);
   async function markDone() {
     try { await api.post(`/orders/${order.id}/complete`, {}); onChanged?.(); onClose(); }
     catch (e: any) { flash(`Cannot close: ${e.message}`); }
@@ -188,7 +270,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   async function printItemised() {
     try {
       const t = await api.get<any>("/documents/templates");
-      const want = (order as any).is_estimate ? "estimate" : "work_order";
+      const want = isEst ? "estimate" : "work_order";
       const tpls = (t?.items || []).filter((x: any) => x.doc_type === want);
       const tpl = tpls.find((x: any) => x.is_default) || tpls[0];
       if (!tpl) { flash("Add a work order template first (Settings → Documents)"); return; }
@@ -219,7 +301,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 40 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[840px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 
@@ -229,7 +311,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             <span className="tabular-nums text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-100 text-ink-secondary whitespace-nowrap">{woNum}</span>
             <h3 className="text-base font-semibold text-ink-primary tracking-tight">{hasDevice ? devTitle : (c.name || "Work order")}</h3>
             <StatusControl statuses={statuses} currentKey={d.status} elapsedMin={timing?.elapsed_min}
-              isEstimate={!!(order as any).is_estimate} onChange={changeStatus} />
+              isEstimate={isEst} onChange={changeStatus} />
             {urgent && (
               <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200 flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />{(d.priority ?? 0) >= 2 ? "Urgent" : "High priority"}
@@ -238,7 +320,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
           </div>
           <div className="flex items-center gap-1.5 ml-auto">
             {/* 144au — job timer as a header pill: always reachable on every tab (Jobber pattern) */}
-            {!(order as any).is_estimate && (timerRunning ? (
+            {!isEst && (timerRunning ? (
               <button onClick={stopAllTimers} title="Stop the job timer"
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -260,7 +342,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               <button aria-label="More actions" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)}
                 className="p-1.5 rounded-lg text-ink-secondary hover:text-ink-primary hover:bg-slate-100 border border-slate-200/80 transition-colors" title="More actions"><M n="more_horiz" c="text-base" /></button>
               {menuOpen && (<>
-                <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(false)} />
+                <div className="fixed inset-0 z-30" aria-hidden="true" onClick={() => setMenuOpen(false)} />
                 <div role="menu" className="absolute right-0 top-full mt-1 z-40 w-64 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5">
                   <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); setPartsOpen(true); }}
                     className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-50">
@@ -270,7 +352,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                       <span className="block text-[11px] text-ink-tertiary">{incomingPo.length ? `${incomingPo.length} on order` : "Order or hold parts for this job"}</span>
                     </span>
                   </button>
-                  <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); navigator.clipboard?.writeText(`${window.location.origin}/orders?open=${order.id}`).then(() => flash("Link copied")).catch(() => {}); }}
+                  <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); navigator.clipboard?.writeText(`${window.location.origin}/orders?open=${order.id}`).then(() => flash("Link copied")).catch(saveFailed("copy the link")); }}
                     className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-50">
                     <M n="link" c="text-base text-ink-tertiary" /><span className="text-sm text-ink-primary">Copy link to this job</span>
                   </button>
@@ -280,7 +362,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100 transition-colors" title="Close"><M n="close" c="text-lg" /></button>
           </div>
         </header>
-        {partsOpen && <PartsPOPanel orderId={order.id} lines={(d.lines || []) as any[]} canBuy={canBuy} isEstimate={!!(order as any).is_estimate}
+        {partsOpen && <PartsPOPanel orderId={order.id} lines={(d.lines || []) as any[]} canBuy={canBuy} isEstimate={isEst}
           onClose={() => setPartsOpen(false)} onChanged={() => { loadIncomingPo(); reload(); }} />}
 
         <div className="px-6 py-2 border-b border-slate-200/70 bg-white/95 flex-shrink-0">
@@ -313,6 +395,25 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             )}
           </div>
         )}
+
+        {/* I6/E1 — an estimate's own actions: send it to the customer, or turn it into the job */}
+        {isEst && (
+          <div className="px-4 sm:px-6 py-2.5 border-b border-slate-200/70 bg-white flex-shrink-0 flex flex-wrap items-center gap-2">
+            <SendMenu label="Send estimate" busy={estBusy === "send"} onSend={sendEstimate} />
+            <button type="button" onClick={convertEstimate} disabled={!!estBusy}
+              className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 flex items-center gap-1.5 disabled:opacity-60">
+              <M n="build" c="text-xs" />{estBusy === "convert" ? "Converting…" : "Convert to work order"}
+            </button>
+            <button type="button" onClick={newRevision} disabled={!!estBusy}
+              className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 flex items-center gap-1.5 disabled:opacity-60">
+              <M n="edit_note" c="text-xs" />{estBusy === "revise" ? "Starting…" : "New revision"}
+            </button>
+            <span className="ml-auto text-[11px] text-ink-tertiary">{(d as any).estimate_approved_at ? "The customer approved this estimate."
+              : (d as any).estimate_decline_reason ? "The customer declined this estimate."
+              : "The customer can approve it from their tracking link."}</span>
+          </div>
+        )}
+        {isEst && <EstimateTerms orderId={order.id} d={d as any} onChanged={() => { reload(); onChanged?.(); }} onFlash={flash} />}
 
         {/* Tabs */}
         <nav className="px-4 sm:px-6 border-b border-slate-200/80 flex space-x-6 text-xs font-medium bg-white flex-shrink-0 overflow-x-auto whitespace-nowrap">
@@ -354,7 +455,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
               {/* Client + Device cards */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div onClick={() => c.id && setSub("client")} className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-clay-sm hover:border-primary/40 hover:shadow-clay-card transition-all cursor-pointer group">
+                <div {...clickable(() => c.id && setSub("client"))} className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-clay-sm hover:border-primary/40 hover:shadow-clay-card transition-all cursor-pointer group">
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-2.5">
                       <Avatar name={c.name} size={40} />
@@ -372,7 +473,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                   </div>
                 </div>
                 {hasDevice ? (
-                <div onClick={() => setSub("asset")} className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-clay-sm hover:border-primary/40 hover:shadow-clay-card transition-all cursor-pointer group">
+                <div {...clickable(() => setSub("asset"))} className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-clay-sm hover:border-primary/40 hover:shadow-clay-card transition-all cursor-pointer group">
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-2.5">
                       <div className="w-10 h-10 rounded-xl bg-slate-100 text-ink-secondary flex items-center justify-center"><M n={deviceIcon(d.device)} c="text-xl" /></div>
@@ -389,6 +490,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                   <div className="mt-3 pt-2.5 border-t border-slate-100 text-xs text-ink-tertiary flex items-center justify-between">
                     {dev.serial && <span>Serial <span className="font-mono text-ink-secondary">{dev.serial}</span></span>}{dev.imei && <span>IMEI <span className="font-mono text-ink-secondary">{dev.imei}</span></span>}
                   </div>)}
+                  <DevicePasscode assetId={String(dev.id)} hasPasscode={!!dev.has_passcode} onFlash={flash}
+                    onChanged={(has) => setD((p) => (p.device ? { ...p, device: { ...p.device, has_passcode: has } } : p))} />
                 </div>
                 ) : (
                 <div className="bg-slate-50/60 rounded-xl border border-dashed border-slate-200 p-4 flex items-center justify-between">
@@ -407,8 +510,16 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-clay-sm space-y-4">
                 <h4 className="text-sm font-semibold text-ink-primary">Job details</h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <Ro label="Job type"><Sel value={d.is_estimate ? "Estimate" : "Hardware Repair"} opts={["Hardware Repair", "Diagnostics", "Warranty", "Maintenance", "Estimate"]} /></Ro>
-                  <Ro label="Priority"><Sel value={(d.priority ?? 0) >= 2 ? "Urgent, same day" : urgent ? "High" : "Normal"} opts={["Normal", "High", "Urgent, same day"]} red={urgent} /></Ro>
+                  <Ro label="Job type">
+                    {types.length ? (
+                      <Pick label="Job type" value={(d as any).type_id || ""} onChange={changeType}
+                        opts={[...((d as any).type_id ? [] : [{ value: "", label: "No job type" }]), ...types.map((t) => ({ value: t.id, label: t.name }))]} />
+                    ) : <Sel value={(d as any).type_name || (d.is_estimate ? "Estimate" : "No job types set up")} />}
+                  </Ro>
+                  <Ro label="Priority">
+                    <Pick label="Priority" value={String(Math.min(d.priority ?? 0, 2))} onChange={(v) => changePriority(Number(v))} red={urgent}
+                      opts={[{ value: "0", label: "Normal" }, { value: "1", label: "High" }, { value: "2", label: "Urgent, same day" }]} />
+                  </Ro>
                   <Ro label="Manager"><SelEmp label="Manager" value={d.manager?.id || ""} emps={emps.filter((e) => e.in_managers !== false || e.id === d.manager?.id)} onChange={(id) => reassign("manager_id", id)} /></Ro>
                   <Ro label="Technician"><SelEmp label="Technician" value={d.assigned_to?.id || ""} emps={emps.filter((e) => e.in_assignees !== false || e.id === d.assigned_to?.id)} onChange={(id) => reassign("assigned_to_id", id)} /></Ro>
                   <Ro label="Time on this job">
@@ -453,7 +564,20 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
               <JobItems orderId={order.id} onFlash={flash} onChanged={reload} />
 
+              <JobTasks orderId={order.id} emps={emps} onFlash={flash} />
+
               <IntakePhotos orderId={order.id} photos={d.intake_photos} onChanged={reload} onFlash={flash} />
+
+              {/* J1 — the customer's signature on this job, if they've signed */}
+              {d.signature && (
+                <div className="bg-white rounded-xl border border-slate-200/90 p-3.5 flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2"><M n="draw" c="text-base text-primary" /><h5 className="text-xs font-bold text-ink-primary">Customer signature</h5></div>
+                    <img src={d.signature} alt="Customer signature" style={{ background: "#fff" }} className="mt-2 h-16 max-w-[260px] object-contain rounded-lg border border-slate-200" />
+                  </div>
+                  <button onClick={() => setSigOpen(true)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Sign again</button>
+                </div>
+              )}
 
               {/* Barcode */}
               <div className="bg-white rounded-2xl border border-slate-200/90 p-3.5 flex items-center justify-between shadow-clay-sm">
@@ -468,17 +592,18 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
           {tab === "services" && (
             <div className="space-y-4">
-              <ServicesTab orderId={order.id} deviceId={d.device?.id} lines={d.lines} total={d.total} onFlash={flash} onChanged={reload}
-                labor={labor} onClockIn={(lineId) => startTimer(lineId)} isEstimate={!!(order as any).is_estimate} emps={emps}
+              <ServicesTab orderId={order.id} locationId={(d as any).location_id} deviceId={d.device?.id} lines={d.lines} total={d.total} onFlash={flash} onChanged={reload}
+                labor={labor} onClockIn={(lineId) => startTimer(lineId)} isEstimate={isEst} emps={emps}
                 locked={isClosed && !can("can_edit_closed_ticket")} />
             </div>
           )}
           {tab === "checklists" && <ChecklistsTab orderId={order.id} typeId={(d as any).type_id} />}
           {tab === "invoices" && <InvoicesTab orderId={order.id} total={d.total} deposit={(d as any).deposit_amount} currencyCode={(d as any).currency_code} fxRate={(d as any).fx_rate} currencySymbol={(d as any).currency_symbol} onCurrencyChange={(code, rate, symbol) => setD({ ...d, currency_code: code, fx_rate: rate, currency_symbol: symbol } as any)} onFlash={flash} />}
-          {tab === "activity" && (<>
-            <ConversationPanel orderId={order.id} />
-            <ActivityTab orderId={order.id} clientName={c.name} clientPhone={c.phone} onFlash={flash} />
-          </>)}
+          {/* G3 — one customer conversation: ActivityTab shows the shared thread and its message box */}
+          {tab === "activity" && (
+            <ActivityTab orderId={order.id} clientName={c.name} clientPhone={c.phone} onFlash={flash}
+              threadKey={threadKey} onSent={() => setThreadKey((k) => k + 1)} />
+          )}
         </div>
 
         {/* Footer */}
@@ -490,6 +615,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               {(d as any).public_token && <a href={`/track/${(d as any).public_token}`} target="_blank" rel="noopener noreferrer" className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-0.5 hover:underline">Open<M n="open_in_new" c="text-xs" /></a>}
             </span>
             <button onClick={printWO} className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-1 border border-slate-200 rounded-lg px-2 py-1 bg-white"><M n="print" c="text-xs" />Print WO</button>
+            <button onClick={() => setSigOpen(true)} className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-1 border border-slate-200 rounded-lg px-2 py-1 bg-white"><M n="draw" c="text-xs" />{d.signature ? "Signed · sign again" : "Customer signature"}</button>
             {hasKit && can("can_print_itemised_copy") && <button onClick={printItemised} className="text-xs text-ink-secondary hover:text-ink-primary font-semibold flex items-center gap-1 border border-slate-200 rounded-lg px-2 py-1 bg-white"><M n="receipt_long" c="text-xs" />Print itemised copy</button>}
             <button onClick={del} className="text-xs text-rose-600 hover:text-rose-700 font-semibold flex items-center gap-1 hover:bg-rose-50 rounded-lg px-2 py-1 transition-colors"><M n="delete" c="text-xs" />Delete</button>
           </div>
@@ -499,11 +625,65 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
           </div>
         </footer>
 
-        {toast && <div className="absolute bottom-20 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2 rounded-xl shadow-clay-drawer z-20">{toast}</div>}
+        {toast && <div role="status" className={`absolute bottom-20 left-1/2 -translate-x-1/2 max-w-[90%] text-xs font-semibold px-4 py-2 rounded-xl shadow-clay-drawer z-20 ${toast.tone === "warn" ? "bg-amber-50 text-amber-900 border border-amber-300 flex items-start gap-1.5" : "bg-ink-primary text-white"}`}>{toast.tone === "warn" && <M n="info" c="text-sm" />}{toast.m}</div>}
+        {sigOpen && <SignaturePad busy={sigBusy} onSave={saveSignature} onClose={() => setSigOpen(false)}
+          hint={d.signature ? "This replaces the signature already on the job." : "Ask the customer to sign in the box."} />}
       </div>
 
       {sub === "client" && c.id && <ClientDrawer woNum={woNum} clientId={String(c.id)} onClose={() => setSub(null)} onOpenAsset={() => setSub("asset")} />}
       {sub === "asset" && dev.id && <AssetDrawer woNum={woNum} assetId={String(dev.id)} onClose={() => setSub(null)} />}
+    </div>
+  );
+}
+
+/* ---- J3 device passcode — hidden until someone allowed asks to see it (each look is logged) ---- */
+export function DevicePasscode({ assetId, hasPasscode, onFlash, onChanged }: {
+  assetId: string; hasPasscode: boolean; onFlash: Flash; onChanged: (has: boolean) => void;
+}) {
+  const [shown, setShown] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setShown(null); setEditing(false); }, [assetId]);
+  async function reveal() {
+    setBusy(true);
+    try { const r = await api.get<{ passcode: string | null }>(`/assets/${assetId}/passcode`); setShown(r?.passcode ?? ""); }
+    catch (e: any) { onFlash(e.message || "Couldn't show the passcode", "warn"); }
+    finally { setBusy(false); }
+  }
+  async function save(passcode: string | null) {
+    setBusy(true);
+    try {
+      const r = await api.put<{ ok: boolean; has_passcode: boolean }>(`/assets/${assetId}/passcode`, { passcode });
+      onChanged(!!r?.has_passcode); setEditing(false); setVal(""); setShown(null);
+      onFlash(passcode ? "Passcode saved" : "Passcode removed");
+    } catch (e: any) { onFlash(e.message || "Couldn't save the passcode", "warn"); }
+    finally { setBusy(false); }
+  }
+  const link = "text-[11px] font-semibold text-primary hover:underline disabled:opacity-50";
+  return (
+    <div onClick={(e) => e.stopPropagation()} className="mt-2.5 pt-2.5 border-t border-slate-100 text-xs text-ink-tertiary cursor-default">
+      {editing ? (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button type="button" disabled={busy || !val.trim()} onClick={() => save(val.trim())} className="px-2.5 py-1 rounded-lg bg-primary text-white text-[11px] font-bold disabled:opacity-50">Save</button>
+          <input type="password" autoComplete="off" autoFocus value={val} onChange={(e) => setVal(e.target.value)} aria-label="Device passcode"
+            onKeyDown={(e) => { if (e.key === "Enter" && val.trim()) save(val.trim()); if (e.key === "Escape") setEditing(false); }}
+            placeholder="New passcode" className="glass-input flex-1 min-w-[120px] py-1 px-2 text-xs font-mono rounded-lg" />
+          {hasPasscode && <button type="button" disabled={busy} onClick={() => save(null)} className="text-[11px] font-semibold text-rose-600 hover:underline">Remove</button>}
+          <button type="button" onClick={() => { setEditing(false); setVal(""); }} className="text-[11px] font-semibold text-ink-tertiary hover:text-ink-primary">Cancel</button>
+        </div>
+      ) : hasPasscode ? (
+        <div className="flex items-center gap-2">
+          <M n="lock" c="text-sm" />
+          <span>Passcode <span className="font-mono text-ink-secondary">{shown !== null ? (shown || "(empty)") : "••••"}</span></span>
+          {shown === null
+            ? <button type="button" disabled={busy} onClick={reveal} className={link}>Show</button>
+            : <button type="button" onClick={() => setShown(null)} className={link}>Hide</button>}
+          <button type="button" onClick={() => setEditing(true)} className="ml-auto text-[11px] font-semibold text-ink-tertiary hover:text-ink-primary">Change</button>
+        </div>
+      ) : (
+        <button type="button" onClick={() => setEditing(true)} className="flex items-center gap-1 text-[11px] font-semibold text-ink-tertiary hover:text-primary"><M n="lock" c="text-sm" />Add device passcode</button>
+      )}
     </div>
   );
 }
@@ -691,8 +871,19 @@ function ItemComplaint({ value, readOnly, onSave }: { value: string; readOnly: b
 function Ro({ label, children }: { label: string; children: React.ReactNode }) {
   return <div><label className="block text-xs font-medium text-ink-secondary mb-1.5">{label}</label>{children}</div>;
 }
-// Read-only display of a work-order attribute. (These were <select>s with no onChange — they
-// never persisted — so they're rendered as static fields to avoid implying they're editable.)
+// J6 — a work-order attribute picker that saves on change.
+function Pick({ value, opts, onChange, label, red }: { value: string; opts: { value: string; label: string }[]; onChange: (v: string) => void; label: string; red?: boolean }) {
+  return (
+    <div className="relative">
+      <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={label}
+        className={`glass-input w-full py-2 px-3 pr-8 text-xs rounded-xl appearance-none ${red ? "font-semibold text-rose-700" : "font-medium text-ink-primary"}`}>
+        {opts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+      <M n="expand_more" c="absolute right-2.5 top-2.5 text-ink-tertiary pointer-events-none text-sm" />
+    </div>
+  );
+}
+// Read-only display of a work-order attribute.
 function Sel({ value, red }: { value: string; opts?: string[]; red?: boolean }) {
   return (
     <div className={`w-full py-2 px-3 text-xs rounded-xl border flex items-center gap-2 ${red ? "font-semibold text-rose-700 bg-rose-50/60 border-rose-200" : "font-medium text-ink-primary bg-slate-50 border-slate-200"}`}>{red && <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />}{value}</div>
@@ -900,8 +1091,73 @@ function IntakePhotos({ orderId, photos, onChanged, onFlash }: {
   );
 }
 
+/* ---- Custom line (3): not in the catalog — optionally saved to it as a product or service ---- */
+function CustomLineForm({ orderId, forItem, kitId, onFlash, onClose, onAdded }: { orderId: string; forItem: string; kitId?: string; onFlash: (m: string) => void; onClose: () => void; onAdded: () => void }) {
+  const { can } = useMe();
+  const canProduct = can("can_add_custom_product"), canService = can("can_add_custom_service");
+  const [type, setType] = useState<"product" | "service">(canProduct ? "product" : "service");
+  const [name, setName] = useState(""); const [qty, setQty] = useState(1);
+  const [price, setPrice] = useState(""); const [cost, setCost] = useState("");
+  const [save, setSave] = useState(false); const [sku, setSku] = useState(""); const [barcode, setBarcode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const canSave = type === "product" ? can("can_create_products") : can("can_edit_labors");
+  const canCost = can("can_set_cost_price");
+  async function submit() {
+    if (!name.trim()) { onFlash("Give the item a name"); return; }
+    setBusy(true);
+    try {
+      const r = await api.post<any>(`/orders/${orderId}/lines`, {
+        description: name.trim(), kind: "custom", line_type: type === "product" ? "part" : "labour",
+        qty, unit_price: Number(price) || 0, ...(canCost ? { cost_price: Number(cost) || 0 } : {}),
+        ...(forItem ? { order_item_id: forItem } : {}),
+        // only catalog items can go inside a kit, so a one-off line stays an extra
+        ...(kitId && save && canSave ? { bundle_group_id: kitId } : {}),
+        ...(save && canSave ? { save_to_catalog: true, catalog_kind: type,
+          ...(type === "product" ? { catalog_sku: sku.trim() || null, catalog_barcode: barcode.trim() || null } : {}) } : {}),
+      });
+      onFlash(save && canSave ? `Added and saved to the catalog${r?.margin_warning ? ` — ${r.margin_warning}` : ""}` : (r?.margin_warning ? `Added — ${r.margin_warning}` : "Line added"));
+      onAdded();
+    } catch (e: any) { onFlash(e.message || "Could not add line"); setBusy(false); }
+  }
+  const lbl = "block text-[11px] font-semibold text-ink-tertiary mb-1";
+  const inp = "glass-input w-full px-2 py-2 rounded-lg text-xs";
+  return (
+    <div className="space-y-2.5">
+      <div className="flex items-center justify-between">
+        <div role="radiogroup" aria-label="Item type" className="inline-flex p-0.5 rounded-lg bg-slate-100 border border-slate-200">
+          {canProduct && <button type="button" role="radio" aria-checked={type === "product"} onClick={() => setType("product")} className={`px-2.5 py-1 rounded-md text-xs font-semibold ${type === "product" ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary"}`}>Product</button>}
+          {canService && <button type="button" role="radio" aria-checked={type === "service"} onClick={() => setType("service")} className={`px-2.5 py-1 rounded-md text-xs font-semibold ${type === "service" ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary"}`}>Service</button>}
+        </div>
+        <button type="button" aria-label="Close custom item" onClick={onClose} className="text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-sm" /></button>
+      </div>
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="flex-1 min-w-[180px]"><label className={lbl}>Name</label><input autoFocus aria-label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder={type === "product" ? "e.g. Ribbon cable 30 cm" : "e.g. Water damage clean"} className={inp} /></div>
+        <div className="w-16"><label className={lbl}>Qty</label><input type="number" min={1} aria-label="Qty" value={qty} onChange={(e) => setQty(Math.max(1, Number(e.target.value) || 1))} className={inp} /></div>
+        <div className="w-24"><label className={lbl}>Price</label><input type="number" min={0} aria-label="Price" value={price} onChange={(e) => setPrice(e.target.value)} className={`${inp} text-right`} /></div>
+        {canCost && <div className="w-24"><label className={lbl}>Cost</label><input type="number" min={0} aria-label="Cost" value={cost} onChange={(e) => setCost(e.target.value)} className={`${inp} text-right`} /></div>}
+      </div>
+      {canSave && (
+        <label className="flex items-center gap-2 text-xs text-ink-secondary cursor-pointer">
+          <input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} />
+          Save to catalog so it can be picked next time
+        </label>
+      )}
+      {save && canSave && type === "product" && (
+        <div className="flex flex-wrap gap-2">
+          <div className="w-40"><label className={lbl}>SKU (optional)</label><input aria-label="SKU" value={sku} onChange={(e) => setSku(e.target.value)} className={`${inp} font-mono`} /></div>
+          <div className="w-44"><label className={lbl}>Barcode (optional)</label><input aria-label="Barcode" value={barcode} onChange={(e) => setBarcode(e.target.value)} className={`${inp} font-mono`} /></div>
+        </div>
+      )}
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onClose} className="px-3 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Cancel</button>
+        <button type="button" onClick={submit} disabled={busy || !name.trim()} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50">{busy ? "Adding…" : save && canSave ? "Add and save" : "Add"}</button>
+      </div>
+    </div>
+  );
+}
+
 /* ---- Services tab ---- */
-function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labor, onClockIn, isEstimate, emps, locked }: { orderId: string; deviceId?: string; lines?: Line[]; total?: number; onFlash: (m: string) => void; onChanged?: () => void; labor?: any; onClockIn?: (lineId: string) => void; isEstimate?: boolean; emps?: { id: string; name: string }[]; locked?: boolean }) {
+function ServicesTab({ orderId, locationId, deviceId, lines, total, onFlash, onChanged, labor, onClockIn, isEstimate, emps, locked }: { orderId: string; locationId?: string; deviceId?: string; lines?: Line[]; total?: number; onFlash: (m: string) => void; onChanged?: () => void; labor?: any; onClockIn?: (lineId: string) => void; isEstimate?: boolean; emps?: { id: string; name: string }[]; locked?: boolean }) {
   const { can } = useMe();
   const seePrices = can("can_view_item_prices");   // off: the API leaves line prices out
   const _secHM = (s: number) => { const h = Math.floor((s || 0) / 3600), m = Math.floor(((s || 0) % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m`; };
@@ -924,21 +1180,23 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
   const [jobItems, setJobItems] = useState<JobItem[]>([]);
   const [itemsOn, setItemsOn] = useState(false);
   const [forItem, setForItem] = useState("");
-  useEffect(() => { api.get<any>(`/orders/${orderId}/items`).then((r) => { setItemsOn(!!r.enabled); setJobItems(r.items || []); }).catch(() => {}); }, [orderId, lines]);
+  useEffect(() => { api.get<any>(`/orders/${orderId}/items`).then((r) => { setItemsOn(!!r.enabled); setJobItems(r.items || []); }).catch(loadFailed("job items")); }, [orderId, lines]);
   const tagging = itemsOn && jobItems.length > 1;
   const [filter, setFilter] = useState("All");
   const [pick, setPick] = useState<CatalogItem | null>(null);
   const [qty, setQty] = useState(1);
   const [disc, setDisc] = useState(0);
   const [adding, setAdding] = useState(false);
+  const [custom, setCustom] = useState(false);     // 3: a line that isn't in the catalog (yet)
   const [intoKit, setIntoKit] = useState<{ id: string; name: string } | null>(null);   // add the pick inside this kit
-  const [stock, setStock] = useState<{ total_available: number; items: { location: string; available: number }[] } | null>(null);
+  const [stock, setStock] = useState<{ total_available: number; items: { location: string; location_id?: string; bin_id?: string | null; bin?: string | null; available: number }[] } | null>(null);
+  const [takeBin, setTakeBin] = useState("");    // ii144c: which bin the product comes from ("" = unbinned first, then the fullest bin)
   // When a product is picked, show where it's in stock — the point-of-need answer
   // to "we're out here, is it at another branch?" (products only; services carry no stock).
   useEffect(() => {
-    setStock(null);
+    setStock(null); setTakeBin("");
     if (pick && pick.kind === "product" && pick.ref_id)
-      api.get<any>(`/inventory/parts/${pick.ref_id}/stock`).then(setStock).catch(() => {});
+      api.get<any>(`/inventory/parts/${pick.ref_id}/stock`).then(setStock).catch(loadFailed("stock levels"));
   }, [pick]);
   async function addLine() {
     if (!pick) return;
@@ -951,6 +1209,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
         discount: disc, discount_type: "pct",
         ...(tagging && forItem ? { order_item_id: forItem } : {}),
         ...(intoKit && pick.kind !== "bundle" ? { bundle_group_id: intoKit.id } : {}),
+        ...(pick.kind === "product" && takeBin ? { bin_id: takeBin } : {}),
       });
       onFlash(r?.margin_warning ? `Added — ${r.margin_warning}` : intoKit ? `Added to ${intoKit.name}` : "Line added");
       setPick(null); setQty(1); setDisc(0); setIntoKit(null);
@@ -1100,11 +1359,17 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                   <option value="">Whole job</option>{jobItems.map((it) => <option key={it.id} value={it.id}>{itemName(it)}</option>)}
                 </select></div>
             )}
+            {stock && !isEstimate && needsBinChoice(stock.items, locationId) && (
+              <div className="min-w-[150px]"><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Take from</label>
+                <select value={takeBin} onChange={(e) => setTakeBin(e.target.value)} aria-label="Which bin to take it from" className="glass-input w-full px-2 py-2 rounded-lg text-xs font-semibold text-ink-primary">
+                  <option value="">Any (unbinned stock first)</option>{binChoices(stock.items, locationId).map((b) => <option key={b.bin_id} value={b.bin_id}>{b.label}</option>)}
+                </select></div>
+            )}
             <button onClick={addLine} disabled={adding} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50">{adding ? "Adding…" : "Add"}</button>
             {stock && (
               <div className="w-full text-[11px] pt-0.5">
                 {stock.total_available > 0 ? (
-                  <span className="text-ink-secondary">In stock: <b className="text-emerald-600">{stock.total_available}</b> · {stock.items.filter((i) => i.available > 0).map((i) => `${i.location} ${i.available}`).join(" · ") || "—"}</span>
+                  <span className="text-ink-secondary">In stock: <b className="text-emerald-600">{stock.total_available}</b> · {byLocation(stock.items).filter((i) => i.available > 0).map((i) => `${i.location} ${i.available}`).join(" · ") || "—"}</span>
                 ) : (
                   <span className="text-rose-600 font-semibold">Out of stock at every warehouse — you may need to order or transfer it.</span>
                 )}
@@ -1113,8 +1378,15 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
           </div>
         ) : locked ? (
           <p className="text-xs text-ink-tertiary">This job is closed. Your role can't change a closed job.</p>
+        ) : custom ? (
+          <CustomLineForm orderId={orderId} forItem={tagging ? forItem : ""} kitId={intoKit?.id} onFlash={onFlash} onClose={() => setCustom(false)} onAdded={() => { setCustom(false); setIntoKit(null); onChanged?.(); }} />
         ) : (
-          <CatalogPicker deviceId={deviceId} onPick={(i) => { setPick(i); setDisc(0); setQty(1); }} placeholder="Search catalog — service, product, or job kit…" />
+          <div className="flex items-center gap-2">
+            <div className="flex-1 min-w-0"><CatalogPicker deviceId={deviceId} onPick={(i) => { setPick(i); setDisc(0); setQty(1); }} placeholder="Search catalog — service, product, or job kit…" /></div>
+            {(can("can_add_custom_product") || can("can_add_custom_service")) && (
+              <button type="button" onClick={() => setCustom(true)} className="px-3 py-2 rounded-lg border border-dashed border-primary/40 text-primary text-xs font-bold hover:bg-blue-50 flex items-center gap-1 whitespace-nowrap"><M n="add" c="text-sm" />Custom item</button>
+            )}
+          </div>
         )}
       </div>
 
@@ -1302,7 +1574,7 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
 
 /* ---- Invoices tab ---- */
 type PayCtx = { order_total: number; already_paid: number; prepaid: number; remaining: number; accounts_by_method: Record<string, { id: string; name: string }[]> };
-export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash }: { orderId: string; total?: number; deposit?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: (m: string) => void }) {
+export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash }: { orderId: string; total?: number; deposit?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: Flash }) {
   const { base, opts: curOpts, multi: multiCurrency } = useCurrencies();
   const { can } = useMe();
   const changeCurrency = async (code: string) => {
@@ -1321,6 +1593,13 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
   const [amount, setAmount] = useState(""); const [account, setAccount] = useState(""); const [method, setMethod] = useState("cash");
   const load = () => api.get<any>(`/cash/orders/${orderId}/invoices`).then(setData).catch(() => setData({ invoices: [], payments: [] }));
   useEffect(() => { load(); }, [orderId]);
+  // I6 — email or text the invoice to the customer; show what really happened.
+  const [sendingInv, setSendingInv] = useState<string | null>(null);
+  async function sendInv(id: string, way?: SendWay) {
+    setSendingInv(id);
+    try { const r = await sendInvoice(id, way); onFlash(r.text, r.tone); load(); } catch (e: any) { onFlash(e.message || "Couldn't send the invoice", "warn"); }
+    finally { setSendingInv(null); }
+  }
   // Rewards & credits — redeem loyalty points / coupon / gift card against this order.
   const [rwPts, setRwPts] = useState(""); const [rwCoupon, setRwCoupon] = useState(""); const [rwGift, setRwGift] = useState(""); const [rwBusy, setRwBusy] = useState(false);
   async function redeem(kind: "loyalty" | "coupon" | "gift") {
@@ -1353,7 +1632,7 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
       onFlash(regen ? "New link minted (old one revoked)" : "Payment link ready");
     } catch (e: any) { onFlash(`Cannot create link: ${e.message}`); }
   };
-  const copyLink = () => { if (link) { navigator.clipboard?.writeText(link.url).catch(() => {}); onFlash("Link copied"); } };
+  const copyLink = () => { if (link) { navigator.clipboard?.writeText(link.url).then(() => onFlash("Link copied")).catch(saveFailed("copy the link")); } };
   const revokeLink = async () => {
     if (!link) return;
     try { await api.post(`/payments/intents/${link.intent_id}/revoke`, {}); setLink(null); onFlash("Link revoked"); }
@@ -1460,12 +1739,13 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
           <div className="p-3.5 border-b border-slate-100 flex items-center justify-between"><h5 className="text-xs font-bold text-ink-primary">Invoices</h5><span className="text-[11px] text-ink-tertiary">{data.invoices.length} billing records</span></div>
           <table className="w-full text-xs text-left">
-            <thead className="bg-slate-50 text-[11px] text-ink-tertiary font-bold"><tr><th className="py-2.5 px-4">Invoice #</th><th className="py-2.5 px-4">Status</th><th className="py-2.5 px-4 text-right">Amount</th></tr></thead>
+            <thead className="bg-slate-50 text-[11px] text-ink-tertiary font-bold"><tr><th className="py-2.5 px-4">Invoice #</th><th className="py-2.5 px-4">Status</th><th className="py-2.5 px-4 text-right">Amount</th><th className="py-2.5 px-4"><span className="sr-only">Send</span></th></tr></thead>
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
               {data.invoices.map((i) => (
                 <tr key={i.id} className="hover:bg-slate-50/50"><td className="py-2.5 px-4 font-mono font-bold text-primary">{i.invoice_number}</td>
                   <td className="py-2.5 px-4"><span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${/(paid|settled)/i.test(i.status) ? "bg-emerald-100 text-emerald-800" : "bg-blue-100 text-blue-800"}`}>{humanize(i.status)}</span></td>
-                  <td className="py-2.5 px-4 text-right tabular-nums font-bold text-ink-primary">{money(i.total)}</td></tr>
+                  <td className="py-2.5 px-4 text-right tabular-nums font-bold text-ink-primary">{money(i.total)}</td>
+                  <td className="py-2 px-4 text-right">{!/(cancel|void)/i.test(i.status || "") && <SendMenu small primary={false} label="Send invoice" busy={sendingInv === i.id} onSend={(w) => sendInv(i.id, w)} />}</td></tr>
               ))}
             </tbody>
           </table>
@@ -1498,7 +1778,7 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
       {/* Portaled to <body>: inside the drawer the header (z-20) painted over the scrim as a white strip. */}
       {modal && ctx && createPortal(
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-ink-primary/40" onClick={() => setModal(null)} />
+          <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={() => setModal(null)} />
           <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-md p-5 space-y-4">
             <div className="flex items-center justify-between"><h4 className="text-sm font-bold text-ink-primary">{modal === "prepay" ? "Take prepayment" : "Take payment"}</h4><button aria-label="Close" onClick={() => setModal(null)} className="text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-lg" /></button></div>
             <div className="text-xs text-ink-secondary">Remaining balance: <b className="tabular-nums">{money(ctx.remaining)}</b></div>
@@ -1527,9 +1807,113 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
 }
 
 /* ---- Activity tab ---- */
-function ActivityTab({ orderId, clientPhone, onFlash }: { orderId: string; clientName?: string; clientPhone?: string; onFlash: (m: string) => void }) {
+type FeedItem = { id: string; item_type: string; body?: string | null; media_data?: string | null; media_url?: string | null; media_name?: string | null; media_mime?: string | null;
+  visibility?: string | null; author_name?: string | null; created_at?: string };
+type Vis = "private" | "client";
+const FEED_FILTER: Record<string, (i: FeedItem) => boolean> = {
+  "Status changes": (i) => i.item_type === "system" || i.item_type === "status",
+  "Messages": (i) => i.item_type === "client_message",
+  "Notes": (i) => i.item_type === "comment",
+  "Files": (i) => ["photo", "file", "signature"].includes(i.item_type),
+};
+
+/** J2 — who can see a note or file: only the team, or the customer too (on their tracking page). */
+export function VisibilitySwitch({ value, onChange }: { value: Vis; onChange: (v: Vis) => void }) {
+  const opts: [Vis, string, string][] = [["private", "Only staff", "lock"], ["client", "Customer can see", "visibility"]];
+  return (
+    <div role="radiogroup" aria-label="Who can see this" className="inline-flex gap-0.5 rounded-lg bg-slate-100 p-0.5 shrink-0">
+      {opts.map(([k, l, icon]) => (
+        <button key={k} type="button" role="radio" aria-checked={value === k} onClick={() => onChange(k)}
+          className={`px-2 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1 ${value === k ? (k === "client" ? "bg-white text-amber-800 shadow-sm" : "bg-white text-ink-primary shadow-sm") : "text-ink-tertiary hover:text-ink-primary"}`}>
+          <M n={icon} c="text-[13px]" />{l}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** J2 — the job's notes & files: add a note or attach a photo/file, choosing who can see it. */
+export function JobNotes({ orderId, filter, onFlash }: { orderId: string; filter: string; onFlash: Flash }) {
+  const [items, setItems] = useState<FeedItem[] | null>(null);
+  const [text, setText] = useState("");
+  const [vis, setVis] = useState<Vis>("private");
+  const [busy, setBusy] = useState(false);
+  const load = () => api.get<{ items: FeedItem[] }>(`/feed/order/${orderId}`).then((r) => setItems(r.items || [])).catch(() => setItems([]));
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [orderId]);
+  async function addNote() {
+    const body = text.trim(); if (!body || busy) return;
+    setBusy(true);
+    try { await api.post(`/feed/order/${orderId}`, { item_type: "comment", body, visibility: vis }); setText(""); onFlash(vis === "client" ? "Note added. The customer can see it." : "Note added for staff only"); load(); }
+    catch (e: any) { onFlash(e.message || "Couldn't add the note", "warn"); }
+    finally { setBusy(false); }
+  }
+  async function attach(files: FileList | null) {
+    if (!files?.length) return;
+    setBusy(true);
+    try {
+      for (const f of Array.from(files)) {
+        const data = await readAsDataUrl(f);
+        await api.post(`/feed/order/${orderId}`, { item_type: f.type.startsWith("image/") ? "photo" : "file", media_data: data, media_name: f.name, media_mime: f.type || undefined, body: text.trim() || undefined, visibility: vis });
+      }
+      setText(""); onFlash(files.length === 1 ? "File added" : `${files.length} files added`); load();
+    } catch (e: any) { onFlash(e.message || "Upload failed (the file may be too large)", "warn"); }
+    finally { setBusy(false); }
+  }
+  const pick = FEED_FILTER[filter];
+  const shown = (items || []).filter((i) => (pick ? pick(i) : true));
+  const icon = (t: string) => t === "photo" ? "image" : t === "file" ? "attach_file" : t === "signature" ? "draw" : t === "client_message" ? "forum" : t === "comment" ? "sticky_note_2" : "bolt";
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm space-y-3">
+      <div className="flex items-center gap-2"><M n="sticky_note_2" c="text-primary text-base" /><h5 className="text-xs font-bold text-ink-primary">Notes &amp; files</h5></div>
+      <div className="space-y-2">
+        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} aria-label="Add a note" placeholder="Add a note, e.g. ordered the screen, back Thursday"
+          className="glass-input w-full py-2 px-3 text-xs rounded-xl resize-none" />
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={addNote} disabled={busy || !text.trim()} className="px-3.5 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-40">Add note</button>
+          <label className={`px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex items-center gap-1 cursor-pointer ${busy ? "opacity-50 pointer-events-none" : ""}`}>
+            <input type="file" multiple className="hidden" aria-label="Attach photo or file" onChange={(e) => { attach(e.target.files); e.currentTarget.value = ""; }} />
+            <M n="attach_file" c="text-sm" />Attach photo or file
+          </label>
+          <span className="ml-auto"><VisibilitySwitch value={vis} onChange={setVis} /></span>
+        </div>
+        {vis === "client" && <p className="text-[11px] text-amber-700">The customer will see this on their tracking page.</p>}
+      </div>
+      {!items && <div className="text-[11px] text-ink-tertiary">Loading…</div>}
+      {items && shown.length === 0 && <div className="text-[11px] text-ink-tertiary">{items.length ? "Nothing of this kind yet." : "No notes or files yet."}</div>}
+      {shown.length > 0 && (
+        <ol className="space-y-2.5">
+          {shown.map((i) => {
+            const isImg = i.item_type === "photo" || i.item_type === "signature" || (i.media_mime || "").startsWith("image/");
+            return (
+              <li key={i.id} className="flex gap-2.5">
+                <span className="mt-0.5 w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 bg-slate-100 text-ink-tertiary"><M n={icon(i.item_type)} c="text-[13px]" /></span>
+                <div className="min-w-0 flex-1">
+                  {i.body && <p className="text-xs text-ink-primary whitespace-pre-line break-words">{i.body}</p>}
+                  {isImg && (i.media_url || i.media_data) && (i.media_url
+                    ? <AuthedImage src={i.media_url} alt={i.media_name || "attachment"} className="mt-1 h-20 max-w-[200px] object-cover rounded-lg border border-slate-200" />
+                    : <img src={i.media_data!} alt={i.media_name || "attachment"} className="mt-1 h-20 max-w-[200px] object-cover rounded-lg border border-slate-200" />)}
+                  {!isImg && i.media_name && <p className="text-xs text-ink-secondary flex items-center gap-1"><M n="description" c="text-sm" />{i.media_name}</p>}
+                  <p className="text-[11px] text-ink-tertiary flex flex-wrap items-center gap-1.5">
+                    <span>{i.item_type === "system" ? "Automatic" : i.author_name || "Staff"} · {i.created_at ? new Date(i.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}</span>
+                    {i.visibility === "client" && <span className="px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-200 font-semibold flex items-center gap-0.5"><M n="visibility" c="text-[11px]" />Customer can see</span>}
+                  </p>
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+function ActivityTab({ orderId, clientPhone, onFlash, threadKey, onSent }: { orderId: string; clientName?: string; clientPhone?: string; onFlash: Flash; threadKey?: number; onSent?: () => void }) {
   const [msg, setMsg] = useState("");
-  const [sent, setSent] = useState<string[]>([]);
+  const [channel, setChannel] = useState<SendChannel>("auto");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ text: string; tone?: "warn" | "error" } | null>(null);
+  // G3 — the same customer thread the conversation box above shows.
+  const { msgs, load: loadThread } = useThread(orderId, threadKey);
   const [f, setF] = useState("All");
   const [aiSum, setAiSum] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
@@ -1538,16 +1922,30 @@ function ActivityTab({ orderId, clientPhone, onFlash }: { orderId: string; clien
     try { const r = await api.post<any>(`/ai/orders/${orderId}/summary`, {}); setAiSum(r.summary || r.text || "No summary."); }
     catch (e: any) { onFlash(e.message || "AI summary failed"); } finally { setAiBusy(false); }
   }
-  const send = async () => {
-    const body = msg.trim(); if (!body) return;
-    try { await api.post(`/orders/${orderId}/customer-reply`, { body }); setSent((s) => [...s, body]); setMsg(""); onFlash("Message sent to client"); }
-    catch (e: any) { onFlash(`Failed: ${e.message}`); }
-  };
   // 144jc — real notification delivery log for this order
   const [logs, setLogs] = useState<any[]>([]);
-  useEffect(() => { api.get<any>(`/notifications/log?order_id=${orderId}`).then((r) => setLogs(r.items || [])).catch(() => setLogs([])); }, [orderId]);
+  const loadLogs = () => api.get<any>(`/notifications/log?order_id=${orderId}`).then((r) => setLogs(r.items || [])).catch(() => setLogs([]));
+  useEffect(() => { loadLogs(); /* eslint-disable-next-line */ }, [orderId, threadKey]);
+  const send = async () => {
+    const body = msg.trim(); if (!body || busy) return;
+    setBusy(true);
+    try {
+      const r = await api.post<ThreadSent>(`/orders/${orderId}/customer-reply`, { body, channel });
+      setMsg("");
+      const text = deliveryText(r?.delivery, "Saved on the job.");
+      const tone = deliveryTone(r?.delivery);
+      setNote({ text, tone }); onFlash(text, tone);
+      await loadThread(); onSent?.();
+    } catch (e: any) {
+      const text = e?.message || "Couldn't send that message";
+      setNote({ text, tone: "error" }); onFlash(text, "warn");
+    } finally { setBusy(false); }
+  };
   const statusStyle = (s: string) => s === "sent" ? "bg-emerald-500" : s === "failed" ? "bg-rose-500" : s === "scheduled" ? "bg-amber-500" : "bg-slate-400";
   const fmtWhen = (iso?: string) => { if (!iso) return ""; try { return new Date(iso).toLocaleString(); } catch { return iso; } };
+  const fmtShort = (iso?: string) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
+  const showLogs = f === "All" || f === "Messages";
+  const showThread = f === "All" || f === "Messages";
   return (
     <div className="space-y-5">
       <div className="bg-indigo-50 rounded-2xl border border-indigo-100 p-3.5 shadow-sm">
@@ -1559,10 +1957,12 @@ function ActivityTab({ orderId, clientPhone, onFlash }: { orderId: string; clien
       </div>
       <div className="flex flex-wrap items-center gap-1.5 text-xs">
         {["All", "Status changes", "Payments", "Messages", "Notes", "Files"].map((c) => (
-          <button key={c} onClick={() => setF(c)} className={`px-2.5 py-1 rounded-full text-[11px] ${f === c ? "bg-primary text-white font-semibold" : "bg-white border border-slate-200 text-ink-secondary hover:bg-slate-50"}`}>{c}</button>
+          <button key={c} onClick={() => setF(c)} aria-pressed={f === c} className={`px-2.5 py-1 rounded-full text-[11px] ${f === c ? "bg-primary text-white font-semibold" : "bg-white border border-slate-200 text-ink-secondary hover:bg-slate-50"}`}>{c}</button>
         ))}
       </div>
-      <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm space-y-4">
+      {f !== "Payments" && <JobNotes orderId={orderId} filter={f} onFlash={onFlash} />}
+      {f === "Payments" && <p className="text-[11px] text-ink-tertiary">Payments for this job are on the Invoices &amp; payments tab.</p>}
+      {showLogs && <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm space-y-4">
         <h5 className="text-xs font-bold text-ink-primary">Notifications &amp; delivery</h5>
         {logs.length === 0 ? (
           <div className="text-[11px] text-ink-tertiary">No notifications sent for this order yet.</div>
@@ -1584,24 +1984,32 @@ function ActivityTab({ orderId, clientPhone, onFlash }: { orderId: string; clien
             ))}
           </div>
         )}
-      </div>
-      <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm space-y-3">
+      </div>}
+      {showThread && <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-sm space-y-3">
         <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-          <div className="flex items-center gap-2"><M n="chat" c="text-primary text-base" /><h5 className="text-xs font-bold text-ink-primary">Customer text and WhatsApp thread</h5></div>
-          <span className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> {clientPhone || "Not connected"}</span>
+          <div className="flex items-center gap-2"><M n="chat" c="text-primary text-base" /><h5 className="text-xs font-bold text-ink-primary">Messages with the customer</h5></div>
+          <span className="text-[11px] text-ink-tertiary font-semibold flex items-center gap-1"><M n="call" c="text-[13px]" />{clientPhone || "No phone number"}</span>
         </div>
-        {sent.length > 0 && (
+        {msgs && msgs.length > 0 && (
           <div className="space-y-3 p-2 bg-slate-50/70 rounded-xl max-h-48 overflow-y-auto">
-            {sent.map((m, i) => (
-              <div key={i} className="flex flex-col items-end max-w-[80%] ml-auto"><div className="bg-primary text-white p-2.5 rounded-2xl rounded-tr-none shadow-2xs text-xs">{m}</div><span className="text-[11px] text-slate-400 mr-1 mt-0.5 tabular-nums">You · now</span></div>
-            ))}
+            {msgs.map((m) => {
+              const staff = m.from === "staff";
+              return (
+                <div key={m.id} className={`flex flex-col max-w-[80%] ${staff ? "items-end ml-auto" : "items-start"}`}>
+                  <div className={`p-2.5 rounded-2xl shadow-2xs text-xs whitespace-pre-wrap break-words ${staff ? "bg-primary text-white rounded-tr-none" : "bg-white border border-slate-200 text-ink-primary rounded-tl-none"}`}>{m.body}</div>
+                  <span className="text-[11px] text-slate-400 mx-1 mt-0.5 tabular-nums">{m.who || (staff ? "Staff" : "Customer")} · {fmtShort(m.at)}</span>
+                </div>
+              );
+            })}
           </div>
         )}
         <div className="flex items-center gap-2 pt-1">
-          <input value={msg} onChange={(e) => setMsg(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} className="glass-input flex-1 py-2 px-3 text-xs rounded-xl" placeholder="Send an SMS update or WhatsApp note..." />
-          <button onClick={send} className="px-3.5 py-2 rounded-xl bg-primary text-white text-xs font-bold hover:brightness-110 flex items-center gap-1"><span>Send</span><M n="send" c="text-xs" /></button>
+          <ChannelPicker id={`act-ch-${orderId}`} value={channel} onChange={setChannel} />
+          <input value={msg} onChange={(e) => setMsg(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} aria-label="Message to the customer" className="glass-input flex-1 py-2 px-3 text-xs rounded-xl" placeholder="Send the customer an update…" />
+          <button onClick={send} disabled={busy || !msg.trim()} className="px-3.5 py-2 rounded-xl bg-primary text-white text-xs font-bold hover:brightness-110 flex items-center gap-1 disabled:opacity-40"><span>{busy ? "Sending…" : "Send"}</span><M n="send" c="text-xs" /></button>
         </div>
-      </div>
+        <DeliveryNote note={note} />
+      </div>}
     </div>
   );
 }

@@ -14,6 +14,8 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy import func, select
 
+from backend.services.dates import now_utc
+
 
 async def _register(client):
     email = f"vd-{uuid.uuid4().hex[:8]}@t.dev"
@@ -64,7 +66,7 @@ async def _stocked_part(client, H, db, org, loc):
         sl = StockLevel(part_id=pid, location_id=loc)
         db.add(sl)
     sl.qty_available, sl.qty_reserved = 10, 2
-    now = datetime.utcnow()
+    now = now_utc()
     old = StockItemBatch(org_id=org, part_id=pid, location_id=loc, unit_cost=10, qty_received=3,
                          qty_remaining=3, received_at=now - timedelta(days=2))
     new = StockItemBatch(org_id=org, part_id=pid, location_id=loc, unit_cost=20, qty_received=7,

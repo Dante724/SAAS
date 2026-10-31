@@ -24,7 +24,7 @@ async def test_notifications_prefer_connected_gmail(monkeypatch, db, client, ten
 
     sent = []
 
-    async def fake_send(conn, *, recipient, subject, body):
+    async def fake_send(conn, *, recipient, subject, body, html=False):
         sent.append({"to": recipient, "subject": subject})
         return {"status": "sent", "error": None}
 

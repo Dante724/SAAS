@@ -41,6 +41,7 @@ POST /api/public/lookup [public]
 POST /api/public/portal/{token}/order/{order_id}/message [public]
 POST /api/public/portal/{token}/order/{order_id}/recommendations/decide [public]
 POST /api/public/portal/{token}/order/{order_id}/respond [public]
+POST /api/public/track/{token}/deposit [public]
 POST /api/public/track/{token}/feedback [public]
 POST /api/public/track/{token}/message [public]
 POST /api/public/track/{token}/new-request [public]
@@ -115,7 +116,6 @@ PUT /api/clients/{client_id} [staff]
 POST /api/clients/{client_id}/communication [staff]
 POST /api/clients/{client_id}/communication/suggest [staff]
 POST /api/clients/{client_id}/devices [staff]
-POST /api/clients/{client_id}/portal-link [staff]
 # comms
 POST /api/comms/calls/{call_id}/ai [staff]
 # documents
@@ -123,8 +123,10 @@ POST /api/documents/ai-generate [staff]
 POST /api/documents/preview [staff]
 POST /api/documents/print-view [staff]
 POST /api/documents/render-asset-labels [staff]
+POST /api/documents/render-bin-labels [staff]
 POST /api/documents/render-client-labels [staff]
 POST /api/documents/render-labels [staff]
+POST /api/documents/render-serial-labels [staff]
 # ecommerce
 POST /api/ecommerce/integrations/{integration_id}/sync-order [staff]
 # feed
@@ -155,7 +157,6 @@ PATCH /api/orders/{order_id}/checklist/{item_id} [staff]
 PATCH /api/orders/{order_id}/code [staff]
 POST /api/orders/{order_id}/comments [staff]
 POST /api/orders/{order_id}/complete [staff]
-POST /api/orders/{order_id}/convert [staff]
 PATCH /api/orders/{order_id}/currency [staff]
 PATCH /api/orders/{order_id}/custom-data [staff]
 PATCH /api/orders/{order_id}/deposit [staff]
@@ -175,15 +176,13 @@ POST /api/orders/{order_id}/public-link/rotate [staff]
 POST /api/orders/{order_id}/recommendations/seen [staff]
 PATCH /api/orders/{order_id}/schedule [staff]
 POST /api/orders/{order_id}/signature [staff]
+PATCH /api/orders/{order_id}/priority [staff]
 PATCH /api/orders/{order_id}/status [staff]
-POST /api/orders/{order_id}/thread [staff]
 PATCH /api/orders/{order_id}/type [staff]
 # prefs
 PUT /api/prefs/{pref_key} [staff]
 # pricing
 POST /api/pricing/margin-check [staff]
-# print
-POST /api/print/labels [staff]
 # push
 POST /api/push/subscribe [staff]
 POST /api/push/unsubscribe [staff]
@@ -191,7 +190,8 @@ POST /api/push/unsubscribe [staff]
 POST /api/reports/insights/cards [staff]
 PATCH /api/reports/insights/cards/reorder [staff]
 DELETE /api/reports/insights/cards/{cid} [staff]
-# scan
+# scan — read-only: read a scanned code and look it up in the caller's shop, nothing is written
+POST /api/scan/parse [staff]
 POST /api/scan/resolve [staff]
 # settings
 POST /api/settings/numbering/preview [staff]
@@ -233,3 +233,8 @@ POST /api/directories/by-key/{key}/items [staff]
 ## Staff — intake lookup: POST only to carry the typed/scanned value in a body; it reads and
 ## writes nothing (tidy + checksum + "seen before" within the shop).
 POST /api/assets/identify [staff]
+POST /api/imports/parse [staff]  # import centre: the list's own permission is checked in the handler (importer.assert_access)
+POST /api/imports/{kind}/preview [staff]  # import centre: per-list permission checked in importer.run (any of Kind.access)
+POST /api/imports/{kind}/commit [staff]  # import centre: per-list permission checked in importer.run; per-row create/edit perms too
+PUT /api/imports/{kind}/mapping [staff]  # import centre: per-list permission checked in the handler (importer.assert_access)
+POST /api/imports/batches/{batch_id}/undo [staff]  # import centre: list permission + actor or can_manage_settings checked in the handler

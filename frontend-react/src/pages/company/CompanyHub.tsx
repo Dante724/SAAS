@@ -11,6 +11,8 @@ import CategoryManager from "../../components/CategoryManager";
 import Pager from "../../components/Pager";
 import { useServerPage } from "../../hooks/useServerPage";
 import { inputCls } from "../invoices/billing";
+import { clickable, clickableRow } from "../../lib/clickable";
+import ImportDrawer from "../../components/ImportDrawer";
 
 const CO_PAGE = 50;
 
@@ -46,7 +48,7 @@ export function RowMenu({ items, label = "More actions" }: { items: RowMenuItem[
       </button>
       {at && createPortal(
         <div onClick={(e) => e.stopPropagation()}>
-          <div className="fixed inset-0 z-40" onClick={() => setAt(null)} />
+          <div className="fixed inset-0 z-40" aria-hidden="true" onClick={() => setAt(null)} />
           <div role="menu" style={{ top: at.top, bottom: at.bottom, right: at.right }} className="fixed z-50 w-48 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 text-left">
             {items.map((it) => (
               <button key={it.label} role="menuitem" type="button" onClick={() => { setAt(null); it.onClick(); }}
@@ -343,6 +345,8 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
     const walk = (ns: any[], d: number) => (ns || []).forEach((n) => { flat.push({ id: n.id, name: n.name, depth: d }); if (n.children?.length) walk(n.children, d + 1); });
     api.get<any>("/catalog/categories?entity_type=service").then((r) => { walk(r.tree || [], 0); setCats(flat); }).catch(() => setCats([]));
   };
+  const { can } = useMe();
+  const [importing, setImporting] = useState(false);
   const [err, setErr] = useState(false);
   const load = () => { setErr(false); api.get<{ items: Service[] }>("/catalog/services").then((r) => setItems(r.items || [])).catch(() => { setItems([]); setErr(true); }); };
   useEffect(() => { load(); loadCats(); }, [refresh]); // eslint-disable-line
@@ -355,8 +359,10 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
   return (
     <div className="space-y-4">
       {cat && <CategoryManager entity="service" onClose={() => setCat(false)} onChanged={() => { load(); loadCats(); }} />}
+      {importing && <ImportDrawer kind="services" onClose={() => setImporting(false)} onDone={() => { load(); loadCats(); }} />}
       <div className="flex items-center gap-3 flex-wrap">
         <button onClick={() => onOpen()} className={primaryBtn}><M n="add" c="text-sm" />New service</button>
+        {can("can_edit_labors") && <button onClick={() => setImporting(true)} className={ghostBtn}><M n="upload" c="text-sm" />Import</button>}
         <button onClick={() => setCat(true)} className={ghostBtn}><M n="inventory" c="text-sm" />Categories</button>
         <select aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
           <option value="">Category: All</option>
@@ -383,7 +389,7 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
                     <button onClick={() => onOpen()} className={`${primaryBtn} mx-auto mt-3`}><M n="add" c="text-sm" />New service</button></>}
             </td></tr>}
             {pageRows.map((s) => (
-              <tr key={s.id} className="hover:bg-slate-50 cursor-pointer" onClick={() => onOpen(s)}>
+              <tr key={s.id} className="hover:bg-slate-50 cursor-pointer" {...clickableRow(() => onOpen(s))}>
                 <td className="py-3 px-5">
                   <span className="font-semibold text-ink-primary">{s.name}</span>
                   {s.bookable === false && <span title="Clients can't pick this service when they book online" className="block text-[11px] text-ink-tertiary mt-0.5">Not bookable online</span>}
@@ -419,6 +425,8 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
     const walk = (ns: any[], d: number) => (ns || []).forEach((n) => { flat.push({ id: n.id, name: n.name, depth: d }); if (n.children?.length) walk(n.children, d + 1); });
     api.get<any>("/catalog/categories?entity_type=product").then((r) => { walk(r.tree || [], 0); setCats(flat); }).catch(() => setCats([]));
   };
+  const { can } = useMe();
+  const [importing, setImporting] = useState(false);
   const [err, setErr] = useState(false);
   const load = () => { setErr(false); api.get<{ items: Product[] }>("/catalog/products").then((r) => setItems(r.items || [])).catch(() => { setItems([]); setErr(true); }); };
   useEffect(() => { load(); loadCats(); }, [refresh]); // eslint-disable-line
@@ -433,8 +441,10 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
   return (
     <div className="space-y-4">
       {cat && <CategoryManager entity="product" onClose={() => setCat(false)} onChanged={loadCats} />}
+      {importing && <ImportDrawer kind="products" onClose={() => setImporting(false)} onDone={() => { load(); loadCats(); }} />}
       <div className="flex items-center gap-3 flex-wrap">
         <button onClick={() => onOpen()} className={primaryBtn}><M n="add" c="text-sm" />New product</button>
+        {(can("can_create_products") || can("can_edit_products") || can("can_manage_inventory")) && <button onClick={() => setImporting(true)} className={ghostBtn}><M n="upload" c="text-sm" />Import</button>}
         <button onClick={() => setCat(true)} className={ghostBtn}><M n="inventory" c="text-sm" />Categories</button>
         <select aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
           <option value="">Category: All</option>
@@ -461,7 +471,7 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
                     <button onClick={() => onOpen()} className={`${primaryBtn} mx-auto mt-3`}><M n="add" c="text-sm" />New product</button></>}
             </td></tr>}
             {pageRows.map((p) => (
-              <tr key={p.id} className="hover:bg-slate-50 cursor-pointer" onClick={() => onOpen(p)}>
+              <tr key={p.id} className="hover:bg-slate-50 cursor-pointer" {...clickableRow(() => onOpen(p))}>
                 <td className="py-3 px-5 font-semibold text-ink-primary">{p.name}</td>
                 <td className="py-3 px-3 text-ink-secondary">{p.category_id ? (catName[p.category_id] || "—") : <span className="text-ink-tertiary">Uncategorized</span>}</td>
                 <td className="py-3 px-3 text-ink-secondary font-mono">{p.sku || p.code || "—"}</td>
@@ -502,7 +512,7 @@ export function Bundles({ onOpen, refresh }: { onOpen: (b?: Bundle) => void; ref
         {!items && <p className="text-xs text-ink-tertiary">Loading job kits…</p>}
         {items?.length === 0 && <p className="text-xs text-ink-tertiary">No job kits configured yet.</p>}
         {items?.map((bd) => (
-          <div key={bd.id} onClick={() => onOpen(bd)} className="border border-slate-200/80 rounded-xl p-4 bg-white flex items-center justify-between shadow-clay-sm hover:border-primary/40 cursor-pointer transition-all">
+          <div key={bd.id} {...clickable(() => onOpen(bd))} className="border border-slate-200/80 rounded-xl p-4 bg-white flex items-center justify-between shadow-clay-sm hover:border-primary/40 cursor-pointer transition-all">
             <div><div className="font-bold text-ink-primary text-sm flex items-center gap-1.5">{bd.name}{bd.broken && <span className="text-[11px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">Needs fixing</span>}</div><div className="text-[11px] text-ink-tertiary">{(bd.components || []).length} components{bd.broken ? " · an item no longer exists" : ""}</div></div>
             <div className="text-right">
               <span className="tabular-nums font-bold text-ink-primary text-sm">{money(bd.price)}</span>

@@ -6,6 +6,7 @@ make every balance derivable. Loyalty earning happens automatically in the
 payment reconciliation hook.
 """
 import secrets
+from decimal import Decimal
 from datetime import datetime
 from typing import Optional
 
@@ -28,7 +29,8 @@ from backend.models import (
     Organisation,
 )
 from backend.services.auth import get_current_employee, require_perm, record_scope
-from backend.services.money import q2
+from backend.services.money import d2, dec, q2
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api", tags=["engage"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -43,9 +45,13 @@ def _tier(points: float) -> str:
     return "standard"
 
 
-async def _order_or_404(db, org_id, order_id) -> Order:
-    o = (await db.execute(select(Order).where(
-        Order.id == order_id, Order.org_id == org_id))).scalar_one_or_none()
+async def _order_or_404(db, org_id, order_id, *, lock: bool = False) -> Order:
+    q = select(Order).where(Order.id == order_id, Order.org_id == org_id)
+    if lock:
+        # Discounts are capped at what's still owed; two redemptions at once both read the same
+        # balance and over-discounted the job (audit 2026-10-29, H5). Serialise them per order.
+        q = q.with_for_update()
+    o = (await db.execute(q)).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
     return o
@@ -98,11 +104,11 @@ async def issue_giftcard(
             break
     if not code:
         raise HTTPException(500, "Could not allocate a unique gift-card code")
-    g = GiftCard(org_id=current.org_id, code=code, initial_value=q2(data.value),
-                 balance=q2(data.value), client_id=data.client_id, expires_at=data.expires_at)
+    g = GiftCard(org_id=current.org_id, code=code, initial_value=d2(data.value),
+                 balance=d2(data.value), client_id=data.client_id, expires_at=data.expires_at)
     db.add(g)
     await db.flush()
-    db.add(GiftCardLedger(org_id=current.org_id, gift_card_id=g.id, amount=q2(data.value),
+    db.add(GiftCardLedger(org_id=current.org_id, gift_card_id=g.id, amount=d2(data.value),
                           ref_type="manual", note="Issued"))
     await db.commit()
     await db.refresh(g)
@@ -144,19 +150,21 @@ async def redeem_giftcard(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_set_discount")),
 ):
-    order = await _order_or_404(db, current.org_id, order_id)
+    order = await _order_or_404(db, current.org_id, order_id, lock=True)
     g = (await db.execute(select(GiftCard).where(
         GiftCard.org_id == current.org_id, GiftCard.code == data.code.strip().upper()))).scalar_one_or_none()
     if not g or not g.active:
         raise HTTPException(404, "Gift card not found or inactive")
-    if g.expires_at and g.expires_at < datetime.utcnow():
+    if g.expires_at and g.expires_at < now_utc():
         raise HTTPException(400, "Gift card has expired")
     from backend.services.order_money import balance_due
     order_balance = await balance_due(db, order)
-    amount = q2(data.amount if data.amount is not None else min(g.balance, max(order_balance, 0)))
+    # Decimal from here on: a float compared with the Decimal balance is exact binary vs exact
+    # decimal, so 30.01 > Decimal("30.01") is True and paying off the card would be refused.
+    amount = d2(data.amount if data.amount is not None else min(g.balance, max(dec(order_balance), 0)))
     if amount <= 0:
         raise HTTPException(400, "Nothing to redeem")
-    if amount > order_balance + 0.005:
+    if amount > dec(order_balance) + Decimal("0.005"):
         # an uncapped redemption drove the order total negative, which refund_overpayment then
         # paid out in cash — turning gift-card balance into money
         raise HTTPException(400, f"Amount exceeds the order balance ({order_balance:.2f})")
@@ -166,14 +174,15 @@ async def redeem_giftcard(
     new_balance = q2(g.balance - amount)
     res = await db.execute(sa_update(GiftCard)
         .where(GiftCard.id == g.id, GiftCard.balance >= amount)
-        .values(balance=GiftCard.balance - amount))
+        .values(balance=GiftCard.balance - amount)
+        .execution_options(synchronize_session=False))   # don't re-evaluate on g (may hold a float)
     if res.rowcount == 0:
         raise HTTPException(409, "Gift card balance changed — please retry")
     db.add(GiftCardLedger(org_id=current.org_id, gift_card_id=g.id, amount=-amount,
                           ref_type="order", ref_id=order.id, note=f"Redeemed on {order.order_number}"))
     await _add_discount_line(db, order, f"Gift card {g.code}", amount)
     await db.commit()
-    return {"ok": True, "redeemed": amount, "card_balance": new_balance}
+    return {"ok": True, "redeemed": float(amount), "card_balance": new_balance}
 
 
 # ── Coupons / promotions ─────────────────────────────────────────────────────
@@ -296,10 +305,10 @@ async def apply_coupon(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_set_discount")),
 ):
-    order = await _order_or_404(db, current.org_id, order_id)
+    order = await _order_or_404(db, current.org_id, order_id, lock=True)
     c = (await db.execute(select(Coupon).where(
         Coupon.org_id == current.org_id, Coupon.code == data.code.strip().upper()))).scalar_one_or_none()
-    now = datetime.utcnow()
+    now = now_utc()
     if not c or not c.active:
         raise HTTPException(404, "Coupon not found or inactive")
     # 144bi: a client-issued coupon can only be redeemed on that client's order.
@@ -375,7 +384,7 @@ async def redeem_loyalty(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_set_discount")),
 ):
-    order = await _order_or_404(db, current.org_id, order_id)
+    order = await _order_or_404(db, current.org_id, order_id, lock=True)
     if not order.client_id:
         raise HTTPException(400, "Order has no client to redeem points for")
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one()

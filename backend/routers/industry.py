@@ -14,7 +14,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -247,7 +247,7 @@ async def create_brand(
     # app-level dedupe (nullable group makes the DB UNIQUE NULL-distinct)
     dup = (await db.execute(select(AssetBrand).where(
         AssetBrand.org_id == current.org_id, AssetBrand.template_key == tk,
-        AssetBrand.name.ilike(name),
+        func.lower(AssetBrand.name) == name.lower(),
         (AssetBrand.asset_group_id == data.asset_group_id) if data.asset_group_id
         else AssetBrand.asset_group_id.is_(None)))).scalar_one_or_none()
     if dup:
@@ -352,7 +352,7 @@ async def create_model(
     await _group(db, current.org_id, data.asset_group_id)
     dup = (await db.execute(select(AssetModel).where(
         AssetModel.org_id == current.org_id, AssetModel.template_key == tk,
-        AssetModel.brand_id == data.brand_id, AssetModel.name.ilike(name)))).scalar_one_or_none()
+        AssetModel.brand_id == data.brand_id, func.lower(AssetModel.name) == name.lower()))).scalar_one_or_none()
     if dup:
         raise HTTPException(409, "That model already exists for this brand")
     m = AssetModel(org_id=current.org_id, template_key=tk, brand_id=data.brand_id,
@@ -466,7 +466,7 @@ async def import_directory_csv(
         if not brand:
             brand = (await db.execute(select(AssetBrand).where(
                 AssetBrand.org_id == current.org_id, AssetBrand.template_key == tk,
-                AssetBrand.name.ilike(bname),
+                func.lower(AssetBrand.name) == bname.lower(),
                 (AssetBrand.asset_group_id == gid) if gid else AssetBrand.asset_group_id.is_(None)
             ))).scalar_one_or_none()
             if not brand:
@@ -479,7 +479,7 @@ async def import_directory_csv(
         if mname:
             exists = (await db.execute(select(AssetModel).where(
                 AssetModel.org_id == current.org_id, AssetModel.template_key == tk,
-                AssetModel.brand_id == brand.id, AssetModel.name.ilike(mname)))).scalar_one_or_none()
+                AssetModel.brand_id == brand.id, func.lower(AssetModel.name) == mname.lower()))).scalar_one_or_none()
             if not exists:
                 db.add(AssetModel(org_id=current.org_id, template_key=tk, brand_id=brand.id,
                                   asset_group_id=gid, name=mname))

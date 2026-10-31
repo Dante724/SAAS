@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
+import { clickable } from "../../lib/clickable";
 
 /* Settings › Pricing and Settings › Inventory & warehouses. Same endpoints as before
    (/pricing/types, /pricing/defaults, /staff/inventory-settings, /settings/warehouses);
@@ -111,7 +112,7 @@ export function PricingPage({ types, currency, onAdd, onEdit, onDelete, tiers }:
             {list.map((t) => {
               const mk = Number(t.markup_pct ?? t.percent ?? t.value) || 0;
               return (
-                <div key={t.id} onClick={() => onEdit(t)} className="group relative rounded-xl border border-slate-200 p-3.5 cursor-pointer hover:border-slate-300 hover:bg-slate-50/60">
+                <div key={t.id} {...clickable(() => onEdit(t))} className="group relative rounded-xl border border-slate-200 p-3.5 cursor-pointer hover:border-slate-300 hover:bg-slate-50/60">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-ink-primary truncate">{t.name}</span>
                     {t.is_default && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-primary/10 text-primary">Default</span>}
@@ -217,9 +218,10 @@ export function InventoryPage({ warehouses, currency, onAdd, onEdit, onDelete }:
   async function save() {
     setBusy(true); setMsg(null);
     const body = { enable_bins: !!c.enable_bins, enable_reservations: !!c.enable_reservations, reservation_max_days: Number(c.reservation_max_days) || 0,
-      unique_identifier: c.unique_identifier || "sku", default_product_type: c.default_product_type || "default",
+      unique_identifier: c.unique_identifier || "name", default_product_type: c.default_product_type || "default",
       product_serial_template: c.product_serial_template || null, default_vehicle_type: c.default_vehicle_type || "Car",
       asset_serial_template: c.asset_serial_template || null, po_approval_threshold: Number(c.po_approval_threshold) || 0,
+      sku_template: c.sku_template || null, bin_template: c.bin_template || null, barcode_prefix: c.barcode_prefix || "20",
       po_to_job: c.po_to_job === "manual" ? "manual" : "auto" };
     try { await api.put("/staff/inventory-settings", body); setOrig(JSON.stringify(c)); setMsg("Saved"); setTimeout(() => setMsg(null), 1800); }
     catch (e: any) { setMsg(e?.message || "Couldn't save"); } finally { setBusy(false); }
@@ -234,7 +236,7 @@ export function InventoryPage({ warehouses, currency, onAdd, onEdit, onDelete }:
   const list = warehouses || [];
   const parts = list.filter((w) => w.kind !== "asset"); const items = list.filter((w) => w.kind === "asset");
   const Place = ({ w }: { w: any }) => (
-    <div onClick={() => onEdit(w)} className={`group flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer hover:bg-slate-50 ${w.active === false ? "opacity-50" : ""}`}>
+    <div {...clickable(() => onEdit(w))} className={`group flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer hover:bg-slate-50 ${w.active === false ? "opacity-50" : ""}`}>
       <span className={`w-9 h-9 rounded-xl grid place-items-center flex-shrink-0 ${w.kind === "asset" ? "bg-violet-50 text-violet-700" : "bg-amber-50 text-amber-700"}`}><M n={w.kind === "asset" ? "devices" : "inventory_2"} c="text-lg" /></span>
       <span className="min-w-0"><span className="block text-sm text-ink-primary truncate">{w.name}</span>
         <span className="block text-[11px] text-ink-tertiary">{w.scope === "company" ? "Shared by all locations" : "One location"}{w.active === false ? " · Not in use" : ""}</span></span>
@@ -299,15 +301,25 @@ export function InventoryPage({ warehouses, currency, onAdd, onEdit, onDelete }:
           </div>
         </Card>
 
-        <Card icon="qr_code_2" title="Product codes" hint="How products are identified and how new serial numbers are made.">
+        <Card icon="qr_code_2" title="Product codes" hint="How products are identified and how new codes are made. Codes you already have are never changed.">
           <div className="space-y-4">
             <div>
               <div className="text-xs font-medium text-ink-secondary mb-1.5">Each product is unique by</div>
-              <Seg value={c.unique_identifier || "sku"} set={(v) => set("unique_identifier", v)} opts={[["name", "Name"], ["sku", "SKU"], ["barcode", "Barcode"], ["code", "Code"]]} />
+              <Seg value={c.unique_identifier || "name"} set={(v) => set("unique_identifier", v)} opts={[["name", "Name"], ["sku", "SKU"], ["barcode", "Barcode"], ["code", "Code"]]} />
+              <p className="text-[11px] text-ink-tertiary mt-1.5">Two products can't share it, and imports use it to find the product to update. SKUs and barcodes are always unique.</p>
             </div>
             <div className="grid sm:grid-cols-2 gap-3">
               <Field label="New products start as"><input value={c.default_product_type || "default"} onChange={(e) => set("default_product_type", e.target.value)} className={inp} /></Field>
-              <Field label="Serial number pattern" hint="{C:5} = a 5-digit counter"><input value={c.product_serial_template || ""} onChange={(e) => set("product_serial_template", e.target.value)} placeholder="0-{C:19}" className={`${inp} font-mono`} /></Field>
+              <Field label="SKU pattern" hint="Fills the SKU of new products left blank. {CAT} = first letters of the category. Empty = off.">
+                <input value={c.sku_template || ""} onChange={(e) => set("sku_template", e.target.value)} placeholder="{CAT}-{C:5}" maxLength={40} className={`${inp} font-mono`} /></Field>
+              <Field label="Serial number pattern" hint="For units that arrive without a serial. {C:6} = a 6-digit counter.">
+                <input value={c.product_serial_template || ""} onChange={(e) => set("product_serial_template", e.target.value)} placeholder="SN{C:6}" maxLength={40} className={`${inp} font-mono`} /></Field>
+              <Field label="Bin code pattern" hint="The code printed on a new shelf or bin label.">
+                <input value={c.bin_template || ""} onChange={(e) => set("bin_template", e.target.value)} placeholder="BIN-{C:4}" maxLength={40} className={`${inp} font-mono`} /></Field>
+              <Field label="New barcodes start with" hint="20–29 is set aside for a shop's own barcodes, so they never match a manufacturer's.">
+                <select value={c.barcode_prefix || "20"} onChange={(e) => set("barcode_prefix", e.target.value)} aria-label="Barcode prefix" className={inp}>
+                  {Array.from({ length: 10 }, (_, i) => String(20 + i)).map((v) => <option key={v} value={v}>{v}</option>)}
+                </select></Field>
             </div>
           </div>
         </Card>
@@ -315,7 +327,8 @@ export function InventoryPage({ warehouses, currency, onAdd, onEdit, onDelete }:
         <Card icon="devices" title="Customers' items" hint="Defaults when an item is checked in without these details.">
           <div className="grid sm:grid-cols-2 gap-3">
             <Field label="Default item type"><input value={c.default_vehicle_type || "Car"} onChange={(e) => set("default_vehicle_type", e.target.value)} className={inp} /></Field>
-            <Field label="Serial number pattern"><input value={c.asset_serial_template || ""} onChange={(e) => set("asset_serial_template", e.target.value)} placeholder="9-{C:4}" className={`${inp} font-mono`} /></Field>
+            <Field label="Serial number pattern" hint="For items checked in without a serial. {T} = first letters of the item type.">
+              <input value={c.asset_serial_template || ""} onChange={(e) => set("asset_serial_template", e.target.value)} placeholder="{T}-{C:6}" maxLength={40} className={`${inp} font-mono`} /></Field>
           </div>
         </Card>
 

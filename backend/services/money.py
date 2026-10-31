@@ -22,8 +22,8 @@ _TT = Decimal("0.0001")
 
 
 def d2(x) -> Decimal:
-    """Quantize to 2dp as an exact Decimal, round-half-up. Accepts float/int/str/Decimal."""
-    return Decimal(str(x)).quantize(_CENT, rounding=ROUND_HALF_UP)
+    """Quantize to 2dp as an exact Decimal, round-half-up. Accepts float/int/str/Decimal/None (0)."""
+    return dec(x).quantize(_CENT, rounding=ROUND_HALF_UP)
 
 
 def q2(x) -> float:
@@ -52,10 +52,49 @@ def q4(x) -> float:
 
 def msum(values) -> float:
     """Exact sum of money values (each coerced through Decimal), quantized to 2dp."""
+    return float(dsum(values))
+
+
+# ── Decimal end-to-end (audit R4) ────────────────────────────────────────────
+# Columns mapped with plain Numeric(12, 2) (no asdecimal=False) read back as Decimal. Decimal and
+# float don't mix (Decimal + float raises TypeError; Decimal("0.1") == 0.1 is False), so code that
+# touches those columns lifts every operand with dec() and quantizes once with d2(). JSON output is
+# unchanged: FastAPI encodes Decimal as a number (10.5, not "10.50"), and the engine's JSON-column
+# serializer below does the same.
+def dec(x) -> Decimal:
+    """Exact Decimal of a money operand — Decimal, float, int, str or None (0). No rounding."""
+    if isinstance(x, Decimal):
+        return x
+    return Decimal(str(x or 0))
+
+
+def dsum(values) -> Decimal:
+    """Exact sum of money values as a Decimal quantized to 2dp (round-half-up)."""
     total = Decimal("0")
     for v in values:
-        total += Decimal(str(v or 0))
-    return float(total.quantize(_CENT, rounding=ROUND_HALF_UP))
+        total += dec(v)
+    return total.quantize(_CENT, rounding=ROUND_HALF_UP)
+
+
+def round_to_step(x, step) -> float:
+    """Cash rounding: nearest multiple of `step` (e.g. 0.05), half-up, as a 2dp float.
+    round(x / 0.05) was banker's rounding on a float quotient (10.025 -> 10.00, not 10.05)."""
+    s = dec(step)
+    return float(d2((dec(x) / s).quantize(Decimal(1), rounding=ROUND_HALF_UP) * s))
+
+
+def json_default(o):
+    """json.dumps(default=…) hook: Decimal money is written as a number, as floats were."""
+    if isinstance(o, Decimal):
+        if not o.is_finite():
+            return None   # NaN/Infinity aren't JSON numbers
+        return int(o) if o.as_tuple().exponent >= 0 else float(o)   # same rule as FastAPI
+    raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+
+
+def json_dumps(obj) -> str:
+    import json
+    return json.dumps(obj, default=json_default)
 
 
 def demo() -> None:
@@ -97,3 +136,26 @@ async def add_to_column(db, obj, attr: str, delta, *, round_to=q2) -> float:
                      .execution_options(synchronize_session=False))
     await db.refresh(obj, attribute_names=[attr])
     return getattr(obj, attr)
+
+
+async def claim_status(db, obj, expected, new, *, attr: str = "status", where=(), **values) -> bool:
+    """Move `obj.<attr>` from `expected` to `new` only if nobody else already has.
+
+    Read-check-write lets two identical requests (a double-clicked delete, a retried cancel) both
+    see the old status and both apply their side effects. A conditional
+    `UPDATE … WHERE id = :id AND status = :expected` takes the row lock (Postgres) or the write
+    lock (SQLite); the loser re-reads the changed row and updates nothing. Call it BEFORE the
+    side effects and refuse when it returns False. `expected` may be a tuple of statuses; `where`
+    adds conditions that must still hold (e.g. "not paid"); extra keyword values are written in
+    the same statement."""
+    from sqlalchemy import update
+    model = type(obj)
+    col = getattr(model, attr)
+    cond = col.in_(expected) if isinstance(expected, (tuple, list, set)) else col == expected
+    res = await db.execute(update(model).where(model.id == obj.id, cond, *where)
+                           .values({attr: new, **values})
+                           .execution_options(synchronize_session=False))
+    if res.rowcount != 1:
+        return False
+    await db.refresh(obj, attribute_names=[attr, *values])
+    return True

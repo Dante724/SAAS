@@ -1,5 +1,5 @@
 export type Product = {
-  id: string; name?: string; code?: string; sku?: string; mpn?: string | null; barcode?: string; barcode_type?: string; brand?: string;
+  id: string; name?: string; code?: string; sku?: string; mpn?: string | null; barcode?: string; barcode_type?: string; extra_barcodes?: string[]; brand?: string;
   category_id?: string | null; description?: string; uom?: string;
   cost_price?: number; avg_cost?: number; sell_price?: number; min_stock?: number;
   serialized?: boolean; expiry_tracking?: boolean; weight?: number; dimensions?: string;

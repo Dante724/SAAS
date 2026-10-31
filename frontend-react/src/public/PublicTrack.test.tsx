@@ -75,3 +75,49 @@ describe("PublicTrack details", () => {
     expect(screen.queryByText("Scheduled for")).toBeNull();
   });
 });
+
+// E5 — estimate extras on the customer's page.
+describe("PublicTrack estimate extras", () => {
+  const EST = { ...BASE, is_estimate: true, awaiting_approval: true, can_choose_lines: true, total: 80,
+    lines: [{ id: "l1", label: "Screen", qty: 1, amount: 50 }, { id: "l2", label: "Case", qty: 1, amount: 30 }] };
+  function stub(doc: object) {
+    const calls: { url: string; body: any }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
+      return reply(url.endsWith("/respond") ? { ok: true } : doc);
+    }));
+    window.history.pushState({}, "", "/track/tok");
+    render(<PublicTrack />);
+    return calls;
+  }
+
+  it("lets the customer leave a line out and sends which", async () => {
+    const { fireEvent } = await import("@testing-library/react");
+    const calls = stub(EST);
+    fireEvent.click(await screen.findByLabelText("Include Case"));
+    expect(screen.getAllByText("$50").length).toBeGreaterThan(0);     // the total follows the ticks
+    fireEvent.click(screen.getAllByText("Decline")[0]);
+    fireEvent.change(screen.getByLabelText("Can you tell us why? (optional)"), { target: { value: "Too much" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Decline" }).at(-1)!);
+    await vi.waitFor(() => expect(calls.some((c) => c.url.endsWith("/respond"))).toBe(true));
+    const sent = calls.find((c) => c.url.endsWith("/respond"))!.body;
+    expect(sent.decision).toBe("decline");
+    expect(sent.reason).toBe("Too much");
+    expect(sent.skip_line_ids).toEqual([]);      // leaving lines out only applies to an approval
+  });
+
+  it("says when the estimate expired and offers no approval", async () => {
+    stub({ ...EST, awaiting_approval: false, can_choose_lines: false, expired: true, valid_until: "2026-10-01" });
+    expect(await screen.findByText(/This estimate expired on/)).toBeInTheDocument();
+    expect(screen.queryByText("Review and sign")).toBeNull();
+  });
+
+  it("shows the deposit due at approval, and a pay button once approved", async () => {
+    stub({ ...EST, deposit: { amount: 20, paid: 0, due: 20, can_pay: false } });
+    expect((await screen.findAllByText(/A deposit of \$20 is due when you approve/)).length).toBeGreaterThan(0);
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+    stub({ ...BASE, is_estimate: false, deposit: { amount: 20, paid: 0, due: 20, can_pay: true } });
+    expect((await screen.findAllByText(/Pay deposit/)).length).toBeGreaterThan(0);
+  });
+});

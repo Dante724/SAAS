@@ -13,13 +13,24 @@ from backend.models import Employee, Location, Organisation, Role
 from backend.services import tokens as _tok
 from backend.services.audit import record as _audit
 from backend.services.currency import symbol_for as _symbol_for  # sign-up sends a code; we store its symbol
-from backend.services.auth import (create_access_token, get_current_employee, hash_password,
+from backend.services.auth import (ACCOUNT_OFF, create_access_token, get_current_employee, hash_password,
                                    is_old_default_password, norm_email, verify_password)
 from backend.services.notifications import send_direct_email
 from backend.services.ratelimit import client_ip as _ip
 from backend.services.ratelimit import aenforce as _rate
+from backend.services.dates import now_utc, platform_today
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+# Emails sent after the reply, so how long a request takes doesn't show whether the address has
+# an account. Kept referenced until done (a bare create_task can be garbage-collected mid-send).
+_BACKGROUND: set = set()
+
+
+def _later(coro) -> None:
+    t = asyncio.get_running_loop().create_task(coro)
+    _BACKGROUND.add(t)
+    t.add_done_callback(_BACKGROUND.discard)
 
 
 def _link(path: str) -> str:
@@ -184,12 +195,20 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
         raise HTTPException(400, "Choose a different password")
     existing = await db.execute(select(Employee).where(func.lower(Employee.email) == data.email))
     if existing.scalar_one_or_none():
-        raise HTTPException(400, "Email already registered")
+        # Don't confirm that the address has an account: pay the same hashing cost as a real
+        # sign-up and tell the address's owner instead (they may simply have forgotten).
+        await asyncio.to_thread(hash_password, data.password)
+        _later(send_direct_email(
+            data.email, "Your Tekly account",
+            "Someone tried to create a new Tekly account with this email address. You already have "
+            f"one: sign in at {_link('/login')} or reset your password at {_link('/reset-password')}.\n\n"
+            "If it wasn't you, you can ignore this email."))
+        raise HTTPException(400, "We couldn't create an account with these details. If you already "
+                                 "have one, sign in or reset your password.")
 
     import secrets as _sec
-    from datetime import date as _date
     org = Organisation(name=data.org_name, webhook_secret=_sec.token_urlsafe(24),
-                       sub_status="trial", sub_start=_date.today())   # build 144ce
+                       sub_status="trial")   # build 144ce
     # Build 144cg — apply onboarding choices with region-based defaults.
     if data.region:
         org.region = data.region
@@ -219,6 +238,7 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
     if data.industry_template:
         from backend.services import industry as _ind
         org.industry_template = _ind.normalize_template_key(data.industry_template)
+    org.sub_start = platform_today()   # subscription dates are platform (UTC) days
     db.add(org)
     await db.flush()
 
@@ -311,7 +331,7 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
         raise HTTPException(status_code=401, detail="Incorrect email or password")
     if not employee.active:
         await _login_failed(db, employee, "disabled")
-        raise HTTPException(status_code=403, detail="Account disabled")
+        raise HTTPException(status_code=403, detail=ACCOUNT_OFF)
     # H1: an account still on the old default password (flagged by migration dp144q1, or simply
     # signing in with it) gets no session: the password is public, so whoever typed it may not be
     # the owner. A reset link goes to the account's own email instead.
@@ -327,16 +347,15 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
 
     # Build 144ce: account-level lifecycle gate. A suspended org or one past its
     # term end date can't sign in — the platform admin controls these dates.
-    from datetime import date as _date
     _org = (await db.execute(select(Organisation).where(
         Organisation.id == employee.org_id))).scalar_one_or_none()
+    _today = platform_today()   # platform-set dates: UTC, not the tenant-controlled timezone
     if _org:
         if _org.sub_status == "suspended":
-            raise HTTPException(status_code=403, detail="This account is suspended. Please contact support.")
-        if _org.sub_end and _org.sub_end < _date.today():
+            raise HTTPException(status_code=403, detail=ACCOUNT_OFF)
+        if _org.sub_end and _org.sub_end < _today:
             raise HTTPException(status_code=403, detail="Your subscription has ended. Please contact support to renew.")
     # Build 144ce: per-employee access window (set from the /admin portal).
-    _today = _date.today()
     if (employee.access_start and employee.access_start > _today) or \
        (employee.access_end and employee.access_end < _today):
         raise HTTPException(status_code=403, detail="Your access is outside its allowed dates.")
@@ -346,10 +365,22 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
         from backend.services.mfa import consume_recovery_code
         from backend.services.mfa import verify_step as _mfa_step
         code = (getattr(form, "client_secret", None) or "").strip()  # OAuth2 form carries it
-        step = _mfa_step(employee.mfa_secret, code) if code else None
+        from backend.services.crypto import decrypt as _decrypt
+        step = _mfa_step(_decrypt(employee.mfa_secret), code) if code else None
         # Each TOTP code works once: refuse a step at or before the last one accepted.
         if step is not None and employee.mfa_last_step is not None and step <= employee.mfa_last_step:
             step = None
+        if step is not None:
+            # Record the step with a conditional UPDATE: two sign-ins racing with the same
+            # intercepted code can't both pass the check above.
+            from sqlalchemy import or_ as _or
+            from sqlalchemy import update as _update
+            res = await db.execute(_update(Employee).where(
+                Employee.id == employee.id,
+                _or(Employee.mfa_last_step.is_(None), Employee.mfa_last_step < step),
+            ).values(mfa_last_step=step).execution_options(synchronize_session=False))
+            if res.rowcount != 1:
+                step = None
         ok = step is not None
         if ok:
             employee.mfa_last_step = step
@@ -476,14 +507,15 @@ async def password_forgot(data: ForgotRequest, request: Request, db: AsyncSessio
     if emp and emp.active:
         await _audit(db, org_id=emp.org_id, actor_id=emp.id, action="auth.password_reset_requested",
                      entity_type="employee", entity_id=emp.id)
-        await _email_reset_link(db, emp)
+        await _email_reset_link(db, emp, after_reply=True)
     return {"ok": True, "message": "If that email is registered, a reset link is on its way."}
 
 
-async def _email_reset_link(db, emp, *, quiet_limit: bool = False) -> None:
+async def _email_reset_link(db, emp, *, quiet_limit: bool = False, after_reply: bool = False) -> None:
     """Issue a fresh one-hour reset token and email it. With quiet_limit (the sign-in path),
     at most a few emails per hour per account are sent and going over is silent, so repeated
-    sign-in attempts can't be used to flood someone's inbox."""
+    sign-in attempts can't be used to flood someone's inbox. after_reply sends once the response
+    is out, so forgot-password takes as long for unknown addresses as for real ones."""
     if quiet_limit:
         try:
             await _rate("reset_mail", emp.id, limit=3, window_sec=3600)
@@ -493,10 +525,14 @@ async def _email_reset_link(db, emp, *, quiet_limit: bool = False) -> None:
     raw = await _tok.issue(db, employee_id=emp.id, kind="reset")
     await db.commit()
     url = _link(f"/reset-password?token={raw}")
-    await send_direct_email(
+    mail = send_direct_email(
         emp.email, "Reset your Tekly password",
         f"Someone asked to reset your password. If it was you, open this link:\n\n{url}\n\n"
         f"It expires in 1 hour and can be used once. If it wasn't you, ignore this email.")
+    if after_reply:
+        _later(mail)
+    else:
+        await mail
 
 
 @router.post("/password/reset")
@@ -569,8 +605,7 @@ async def invite_preview(data: InvitePreview, request: Request, db: AsyncSession
     from backend.models import Invite, Organisation
     inv = (await db.execute(select(Invite).where(
         Invite.token_hash == _invite_by_token(data.token)))).scalar_one_or_none()
-    from datetime import datetime as _dt
-    if not inv or inv.accepted_at is not None or inv.expires_at < _dt.utcnow():
+    if not inv or inv.accepted_at is not None or inv.expires_at < now_utc():
         return {"valid": False}
     org = (await db.execute(select(Organisation).where(Organisation.id == inv.org_id))).scalar_one_or_none()
     return {"valid": True, "email": inv.email, "name": inv.name,
@@ -582,7 +617,6 @@ async def invite_accept(data: InviteAccept, request: Request, db: AsyncSession =
     """Redeem an invite: create the Employee with the chosen password and return a
     session token so they land straight in the app (email already proven verified)."""
     await _rate("invite", _ip(request), limit=30, window_sec=900)
-    from datetime import datetime as _dt
 
     from backend.models import Invite
     if is_old_default_password(data.password):
@@ -591,7 +625,7 @@ async def invite_accept(data: InviteAccept, request: Request, db: AsyncSession =
         raise HTTPException(400, "Password must be at least 8 characters")
     inv = (await db.execute(select(Invite).where(
         Invite.token_hash == _invite_by_token(data.token)))).scalar_one_or_none()
-    if not inv or inv.accepted_at is not None or inv.expires_at < _dt.utcnow():
+    if not inv or inv.accepted_at is not None or inv.expires_at < now_utc():
         raise HTTPException(400, "This invitation is invalid or has expired")
     # Guard against a race where the email got an account after the invite was sent. Emails are
     # unique across all shops, so an account anywhere blocks it (this used to 500 on the insert).
@@ -605,7 +639,7 @@ async def invite_accept(data: InviteAccept, request: Request, db: AsyncSession =
         email=norm_email(inv.email), password_hash=await asyncio.to_thread(hash_password, data.password),
         email_verified=True)
     db.add(emp)
-    inv.accepted_at = _dt.utcnow()
+    inv.accepted_at = now_utc()
     await db.commit()
     role = (await db.execute(select(Role).where(Role.id == emp.role_id))).scalar_one_or_none()
     token = create_access_token({"sub": emp.id, "org_id": emp.org_id, "tv": 0})

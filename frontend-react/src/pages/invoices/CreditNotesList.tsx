@@ -9,6 +9,7 @@ import { humanize } from "../../lib/humanize";
 import { useMe } from "../../context/Me";
 import CreditNoteDrawer, { type CreditNote } from "./CreditNoteDrawer";
 import { StatusPill, btnPrimary, cash, fmtDate, inputCls } from "./billing";
+import { clickableRow } from "../../lib/clickable";
 
 /* Credit notes list (Invoices page tab). Server-paged, filter by status, search by number,
    client or invoice. */
@@ -66,7 +67,7 @@ export default function CreditNotesList() {
             {p.err && <tr><td colSpan={7} className="py-6 px-4 text-rose-600">{p.err}</td></tr>}
             {rows?.length === 0 && <tr><td colSpan={7} className="py-6 px-4 text-ink-tertiary">{status || search ? "No credit notes match." : "No credit notes yet. Create one from an invoice, or here for a client's goodwill credit."}</td></tr>}
             {rows?.map((c) => (
-              <tr key={c.id} onClick={() => setOpen(c.id)} className="hover:bg-slate-50/80 cursor-pointer">
+              <tr key={c.id} {...clickableRow(() => setOpen(c.id))} className="hover:bg-slate-50/80 cursor-pointer">
                 <td className="py-2.5 px-4 font-mono font-semibold text-primary">{c.number || <span className="font-sans font-semibold text-ink-tertiary">Draft</span>}</td>
                 <td className="py-2.5 px-4 font-semibold text-ink-primary">{c.client_name || "—"}</td>
                 <td className="py-2.5 px-4 font-mono text-ink-tertiary">{c.invoice_number || <span className="font-sans">Standalone</span>}</td>

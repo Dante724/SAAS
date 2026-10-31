@@ -8,7 +8,7 @@ through Twilio's REST Calls API, and Twilio's signed webhooks land on
 automation is configured here too. Aircall/Zadarma are accepted as config
 values for older setups. WS-C adds an Aircall adapter behind the AIRCALL_ENABLED server switch
 (services/aircall.py): a per-shop webhook token, and the signed webhook below."""
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -20,6 +20,7 @@ from backend.db.database import get_db
 from backend.models import AutomationSetting, Call, Client, Employee, Organisation, Tag, TelephonyConfig
 from backend.services import aircall, call_contacts, org_creds, ratelimit, twilio_voice
 from backend.services.auth import get_current_employee, has_perm, require_perm
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/telephony", tags=["telephony"])
 
@@ -444,7 +445,7 @@ async def incoming_calls(since_seconds: int = 120, mine_only: bool = False,
                          current: Employee = Depends(get_current_employee)):
     """Recent inbound calls still ringing — powers the incoming-call card. With
     mine_only, restricts to calls dialed to the current employee's extension."""
-    since = datetime.utcnow() - timedelta(seconds=max(since_seconds, 1))
+    since = now_utc() - timedelta(seconds=max(since_seconds, 1))
     q = select(Call).where(
         Call.org_id == current.org_id, Call.direction == "inbound",
         Call.status.in_(("ringing", "in_progress")),
@@ -452,13 +453,12 @@ async def incoming_calls(since_seconds: int = 120, mine_only: bool = False,
     rows = (await db.execute(q)).scalars().all()
     if mine_only and current.extension:
         rows = [c for c in rows if (c.to_number or "").endswith(current.extension)]
+    from backend.services.batching import names_by_id
+    client_names = await names_by_id(db, Client.id, Client.name, [c.client_id for c in rows],
+                                     org_col=Client.org_id, org_id=current.org_id)
     out = []
     for c in rows:
-        name = None
-        if c.client_id:
-            cl = (await db.execute(select(Client).where(Client.id == c.client_id))).scalar_one_or_none()
-            name = cl.name if cl else None
         out.append({"id": c.id, "from": c.from_number, "to": c.to_number,
-                    "client_id": c.client_id, "client_name": name,
+                    "client_id": c.client_id, "client_name": client_names.get(c.client_id),
                     "created_at": c.created_at.isoformat() if c.created_at else None})
     return {"items": out, "total": len(out)}

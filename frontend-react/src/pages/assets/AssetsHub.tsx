@@ -6,20 +6,27 @@ import { useDebounced, useServerPage } from "../../hooks/useServerPage";
 import AssetDrawer from "../orders/AssetDrawer";
 import { useTerminology, assetNoun } from "../../lib/useTerminology";
 import Pager from "../../components/Pager";
+import AssetStateTabs, { AssetCounts, useAssetState } from "../../components/AssetStateTabs";
+import { clickableRow } from "../../lib/clickable";
+import ImportDrawer from "../../components/ImportDrawer";
+import { useMe } from "../../context/Me";
 
-type Asset = { id: string; asset_type?: string; asset_label?: string; template_key?: string; brand?: string; model?: string; serial?: string; imei?: string; owner_type?: string; owner_name?: string; condition?: string; order_count?: number };
+type Asset = { id: string; asset_status?: string; asset_type?: string; asset_label?: string; template_key?: string; brand?: string; model?: string; serial?: string; imei?: string; owner_type?: string; owner_name?: string; condition?: string; order_count?: number };
 
 export default function AssetsHub() {
   const term = useTerminology();
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const { can } = useMe();
   const [q, setQ] = useState("");
   const PAGE_SIZE = 50;
 
   // Searched and paged on the server (the API serves at most 200 rows per request).
   const dq = useDebounced(q.trim());
-  const sp_ = useServerPage<Asset>("/assets", { search: dq || undefined }, { pageSize: PAGE_SIZE });
+  const [state, setState] = useAssetState();
+  const sp_ = useServerPage<Asset, { counts?: AssetCounts }>("/assets", { search: dq || undefined, state }, { pageSize: PAGE_SIZE });
   const rows = sp_.rows;
   useEffect(() => { setErr(sp_.err); }, [sp_.err]);
   const reload = () => sp_.reload();
@@ -37,8 +44,14 @@ export default function AssetsHub() {
     <Shell title={term.assets}>
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 flex flex-wrap items-center justify-between gap-3">
-          <button onClick={() => setCreating(true)} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="add" c="text-sm font-bold" />New {term.asset.toLowerCase()}</button>
-          <div className="relative w-72"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" /><input value={q} onChange={(e) => setQ(e.target.value)} className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg font-medium" placeholder={`Search ${term.assets.toLowerCase()}…`} /></div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setCreating(true)} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="add" c="text-sm font-bold" />New {term.asset.toLowerCase()}</button>
+            {can("can_view_asset_info") && <button onClick={() => setImporting(true)} className="px-4 py-2 rounded-xl bg-white border border-slate-200 text-ink-secondary text-xs font-semibold hover:bg-slate-50 flex items-center gap-1.5"><M n="upload" c="text-sm" />Import</button>}
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <AssetStateTabs value={state} onChange={setState} counts={sp_.extra?.counts} />
+            <div className="relative w-72"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" /><input value={q} onChange={(e) => setQ(e.target.value)} aria-label={`Search ${term.assets.toLowerCase()}`} className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg font-medium" placeholder="Search by name, serial, IMEI or plate…" /></div>
+          </div>
         </div>
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
           <table className="w-full text-left border-collapse text-xs">
@@ -49,10 +62,11 @@ export default function AssetsHub() {
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
               {err && <tr><td colSpan={7} className="py-6 px-4 text-status-overdue-ink">Error: {err}</td></tr>}
               {!rows && !err && <SkeletonRows cols={7} />}
+              {rows && rows.length === 0 && !err && <tr><td colSpan={7} className="py-6 px-4 text-ink-tertiary">{dq ? `Nothing matches “${dq}”.` : state === "written_off" ? `No written-off ${term.assets.toLowerCase()}.` : `No ${term.assets.toLowerCase()} yet.`}</td></tr>}
               {pageRows.map((a) => (
-                <tr key={a.id} className="hover:bg-blue-50/40 cursor-pointer transition-colors group" onClick={() => setOpen(a.id)}>
+                <tr key={a.id} className="hover:bg-blue-50/40 cursor-pointer transition-colors group" {...clickableRow(() => setOpen(a.id))}>
                   <td className="py-3 px-4 text-ink-tertiary">{a.asset_type && a.asset_type !== "Device" ? a.asset_type : assetNoun(a, term)}</td>
-                  <td className="py-3 px-4 font-bold text-ink-primary">{[a.brand, a.model].filter(Boolean).join(" ") || "—"}</td>
+                  <td className="py-3 px-4 font-bold text-ink-primary">{[a.brand, a.model].filter(Boolean).join(" ") || "—"}{a.asset_status === "written_off" && <span className="ml-2 px-1.5 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-ink-tertiary border border-slate-200">Written off</span>}</td>
                   <td className="py-3 px-4 font-mono text-[11px]">{a.imei || a.serial || "—"}</td>
                   <td className="py-3 px-4"><span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-blue-100 text-blue-800 border border-blue-200">{a.owner_type === "company" ? "Company" : a.owner_name || "Client"}</span></td>
                   <td className="py-3 px-4">{a.condition || "—"}</td>
@@ -67,6 +81,7 @@ export default function AssetsHub() {
       </div>
       {open && <AssetDrawer assetId={open} onClose={() => setOpen(null)} onSaved={reload} />}
       {creating && <AssetDrawer onClose={() => setCreating(false)} onSaved={reload} />}
+      {importing && <ImportDrawer kind="assets" onClose={() => setImporting(false)} onDone={reload} />}
     </Shell>
   );
 }

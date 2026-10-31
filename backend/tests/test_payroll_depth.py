@@ -205,7 +205,9 @@ async def test_coefficient_upsert_not_duplicated(client, tenant):
 @pytest.mark.asyncio
 async def test_current_month_accrual_rejected_draft_allowed(client, tenant):
     me = (await client.get("/api/auth/me", headers=tenant)).json()
-    today = date.today()
+    from backend.models import Organisation
+    from backend.services.dates import today_in
+    today = today_in(Organisation.__table__.c.timezone.default.arg)   # the shop's day, not the server's
     ps, pe = today.replace(day=1).isoformat(), today.isoformat()
     r = await client.post("/api/payroll/run", json={
         "employee_id": me["id"], "period_start": ps, "period_end": pe, "base_salary": 1000}, headers=tenant)
@@ -244,7 +246,9 @@ async def test_calculation_preview(client, tenant, db):
     o = await _order(client, tenant, assigned_to_id=me["id"])
     await _labour(client, tenant, o["id"], 100, me["id"])
     await client.patch(f"/api/orders/{o['id']}/status", json={"status": key}, headers=tenant)
-    month = date.today().strftime("%Y-%m")
+    from backend.models import Organisation
+    from backend.services.dates import today_in
+    month = today_in(Organisation.__table__.c.timezone.default.arg).strftime("%Y-%m")   # the shop's month
     calc = (await client.get(f"/api/payroll/calculation?month={month}", headers=tenant)).json()
     mine = [x for x in calc["items"] if x["employee_id"] == me["id"]]
     assert mine and mine[0]["commissions_total"] == pytest.approx(10.0)

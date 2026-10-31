@@ -6,13 +6,14 @@ after every job, Tekly can auto-draft one the moment a work order closes
 display mode. Combined with the existing order payment-link + gateway webhook,
 a shop can go from "close job" to "client paid" with no document-building step.
 """
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import Invoice, Order, Organisation
 from backend.services.money import d2
+from backend.services.dates import now_utc
 
 VOID_STATUSES = ("cancelled", "canceled", "void", "voided")
 DISPLAY_MODES = ("detailed", "simplified", "one_line")
@@ -26,7 +27,8 @@ def balance_due(inv: "Invoice") -> float:
 
 def settle_status(inv: "Invoice") -> None:
     """Set paid / partial from what's covered (payments + credit notes). An invoice whose payments
-    and credits were all reversed goes back to draft; a cancelled invoice is never touched."""
+    and credits were all reversed goes back to issued if it was sent, else draft; a cancelled
+    invoice is never touched."""
     if (inv.status or "") in VOID_STATUSES:
         return
     total = d2(inv.total or 0)
@@ -36,7 +38,7 @@ def settle_status(inv: "Invoice") -> None:
     elif covered > 0:
         inv.status = "partial"
     elif inv.status in ("paid", "partial"):
-        inv.status = "draft"
+        inv.status = "issued" if getattr(inv, "sent_at", None) else "draft"
 
 
 async def invoice_orders(db: AsyncSession, inv: "Invoice") -> list["Order"]:
@@ -46,7 +48,9 @@ async def invoice_orders(db: AsyncSession, inv: "Invoice") -> list["Order"]:
     from backend.models import InvoiceOrder, Order
     links = (await db.execute(select(InvoiceOrder).where(
         InvoiceOrder.invoice_id == inv.id).order_by(InvoiceOrder.sort_order))).scalars().all()
-    oids = [l.order_id for l in links] or ([inv.order_id] if inv.order_id else [])
+    oids = [l.order_id for l in links]
+    if inv.order_id and inv.order_id not in oids:     # older invoices had no link for their primary job
+        oids.insert(0, inv.order_id)
     if not oids:
         return []
     rows = (await db.execute(select(Order).where(Order.id.in_(oids)))).scalars().all()
@@ -189,37 +193,17 @@ async def auto_draft_on_close(db: AsyncSession, order: Order) -> Invoice | None:
         Organisation.id == order.org_id))).scalar_one_or_none()
     if not org or not getattr(org, "auto_draft_invoice_on_close", False):
         return None
-    # already invoiced? don't duplicate.
-    existing = (await db.execute(select(Invoice).where(
-        Invoice.order_id == order.id, Invoice.org_id == order.org_id))).scalars().first()
+    # already invoiced (on its own or a shared invoice)? don't duplicate. A cancelled one doesn't count.
+    from backend.services.invoice_money import invoices_for_order
+    existing = next(iter(await invoices_for_order(db, order.id)), None)
     if existing:
         return await _draft_remainder(db, org, order) or existing
 
-    from backend.services.numbering import next_number
-    subtotal = float(getattr(order, "subtotal", 0) or 0) or float(order.total or 0)
+    from backend.services.invoice_money import new_invoice
     due_days = getattr(org, "default_due_days", None) or 30
-    inv = Invoice(
-        invoice_number=await next_number(db, order.org_id, "invoice"),   # shared, locked sequence
-        org_id=order.org_id,
-        order_id=order.id,
-        client_id=order.client_id,
-        display_mode=getattr(org, "default_invoice_display", "detailed"),
-        auto_drafted=True,
-        status="draft",
-        subtotal=subtotal,
-        discount=0.0,
-        tax=float(order.tax or 0),
-        total=float(order.total or subtotal),
-        amount_paid=0.0,
-        issued_at=datetime.utcnow(),
-        due_at=datetime.utcnow() + timedelta(days=due_days),
-    )
-    db.add(inv)
-    await db.flush()
-    from backend.models import InvoiceOrder
-    db.add(InvoiceOrder(invoice_id=inv.id, order_id=order.id, sort_order=0))
-    await db.flush()
-    return inv
+    return await new_invoice(db, org_id=order.org_id, orders=[order],
+                             display_mode=getattr(org, "default_invoice_display", "detailed"),
+                             auto_drafted=True, due_at=now_utc() + timedelta(days=due_days))
 
 
 async def _draft_remainder(db: AsyncSession, org, order: Order):
@@ -230,9 +214,11 @@ async def _draft_remainder(db: AsyncSession, org, order: Order):
     billed = await ma.invoiced_line_ids(db, order.org_id, order.id)
     if not billed:
         return None
+    from backend.models import InvoiceOrder
     partial = select(InvoiceLine.invoice_id).where(InvoiceLine.order_line_id.isnot(None))
+    linked = select(InvoiceOrder.invoice_id).where(InvoiceOrder.order_id == order.id)
     whole = (await db.execute(select(Invoice.id).where(
-        Invoice.org_id == order.org_id, Invoice.order_id == order.id,
+        Invoice.org_id == order.org_id, (Invoice.order_id == order.id) | Invoice.id.in_(linked),
         Invoice.status.notin_(ma.VOID_INVOICE), Invoice.id.notin_(partial)))).scalars().first()
     if whole:
         return None

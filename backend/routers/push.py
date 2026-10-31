@@ -1,5 +1,4 @@
 """Web Push subscription management for technician devices."""
-from datetime import datetime
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -10,6 +9,7 @@ from backend.config import settings
 from backend.db.database import get_db
 from backend.models import Employee, PushSubscription
 from backend.services.auth import get_current_employee
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/push", tags=["push"])
 
@@ -46,7 +46,7 @@ async def subscribe(
         existing.p256dh = data.keys.p256dh
         existing.auth = data.keys.auth
         existing.user_agent = data.user_agent
-        existing.last_used_at = datetime.utcnow()
+        existing.last_used_at = now_utc()
         await db.commit()
         return {"ok": True, "id": existing.id, "updated": True}
     sub = PushSubscription(

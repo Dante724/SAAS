@@ -14,6 +14,7 @@ from backend.db.database import get_db
 from backend.models import Employee, Part, Service
 from backend.services.auth import get_current_employee, has_perm, require_perm
 from backend.core import paging as _paging
+from backend.core.likes import contains as _contains
 from backend.services.redact import can_see_costs
 
 router = APIRouter(prefix="/api/catalog", tags=["catalog"])
@@ -122,7 +123,7 @@ async def list_services(
     limit = _paging.clamp(limit)
     q = select(Service).where(Service.org_id == current.org_id, Service.active == True)  # noqa: E712
     if search:
-        q = q.where(Service.name.ilike(f"%{search}%"))
+        q = q.where(_contains(Service.name, search))
     if category:
         q = q.where(Service.category == category)
     if category_id:
@@ -322,7 +323,7 @@ async def catalog_search(
     if type in ("all", "service"):
         sq = select(Service).where(Service.org_id == current.org_id, Service.active == True)  # noqa: E712
         if q:
-            sq = sq.where(or_(Service.name.ilike(f"%{q}%"), Service.barcode == q))
+            sq = sq.where(or_(_contains(Service.name, q), Service.barcode == q))
         services = (await db.execute(sq.order_by(Service.name).limit(max(1, min(limit, 200))))).scalars().all()
         for s in services:
             out.append({
@@ -334,8 +335,9 @@ async def catalog_search(
     if type in ("all", "product"):
         pq = select(Part).where(Part.org_id == current.org_id, Part.active == True).options(selectinload(Part.stock_levels))  # noqa: E712
         if q:
-            pq = pq.where(or_(Part.name.ilike(f"%{q}%"), Part.sku.ilike(f"%{q}%"), Part.barcode == q,
-                              Part.mpn.ilike(f"%{q}%")))
+            from backend.services import product_codes
+            pq = pq.where(or_(_contains(Part.name, q), _contains(Part.sku, q), Part.barcode == q,
+                              _contains(Part.mpn, q), Part.id.in_(product_codes.barcode_part_ids(current.org_id, q))))
         parts = (await db.execute(pq.order_by(Part.name).limit(max(1, min(limit, 200))))).scalars().all()
         for p in parts:
             avail = sum(sl.qty_available for sl in p.stock_levels)
@@ -355,20 +357,25 @@ async def catalog_search(
         from backend.models import Bundle, BundleComponent
         bq = select(Bundle).where(Bundle.org_id == current.org_id, Bundle.active == True)  # noqa: E712
         if q:
-            bq = bq.where(Bundle.name.ilike(f"%{q}%"))
-        for b in (await db.execute(bq.order_by(Bundle.name).limit(5))).scalars().all():
-            comps = (await db.execute(select(BundleComponent).where(
-                BundleComponent.bundle_id == b.id))).scalars().all()
+            bq = bq.where(_contains(Bundle.name, q))
+        from backend.services.batching import names_by_id, rows_by
+        bundles = (await db.execute(bq.order_by(Bundle.name).limit(5))).scalars().all()
+        comps_by = await rows_by(db, BundleComponent, BundleComponent.bundle_id, [b.id for b in bundles])
+        all_comps = [c for cs in comps_by.values() for c in cs]
+        part_price = await names_by_id(db, Part.id, Part.sell_price,
+                                       [c.ref_id for c in all_comps if c.ref_type == "product"],
+                                       org_col=Part.org_id, org_id=current.org_id)
+        svc_price = await names_by_id(db, Service.id, Service.price,
+                                      [c.ref_id for c in all_comps if c.ref_type != "product"],
+                                      org_col=Service.org_id, org_id=current.org_id)
+        for b in bundles:
+            comps = comps_by.get(b.id, [])
             price = b.price
             if b.price_mode == "sum":
                 total = 0.0
                 for c in comps:
-                    if c.ref_type == "product":
-                        it = (await db.execute(select(Part).where(Part.id == c.ref_id))).scalar_one_or_none()
-                        total += (it.sell_price if it else 0) * c.qty
-                    else:
-                        it = (await db.execute(select(Service).where(Service.id == c.ref_id))).scalar_one_or_none()
-                        total += (it.price if it else 0) * c.qty
+                    prices = part_price if c.ref_type == "product" else svc_price
+                    total += (prices.get(c.ref_id) or 0) * c.qty
                 price = q2(total)
             out.append({"kind": "bundle", "ref_id": b.id, "name": b.name,
                         "category": "Job Kit", "price": price, "cost_price": 0,

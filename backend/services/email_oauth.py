@@ -7,7 +7,7 @@ sandbox; unit-tested against a stubbed transport.
 """
 import base64
 import re
-from datetime import datetime, timedelta
+from datetime import timedelta
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -18,6 +18,7 @@ import httpx
 from backend.config import settings
 from backend.services.crypto import decrypt as _dec
 from backend.services.crypto import encrypt as _enc
+from backend.services.dates import now_utc
 
 GMAIL_AUTH = "https://accounts.google.com/o/oauth2/v2/auth"
 GMAIL_TOKEN = "https://oauth2.googleapis.com/token"
@@ -113,19 +114,20 @@ async def _refresh(provider: str, conn) -> None:
         conn.access_token = _enc(tok["access_token"])
     if tok.get("refresh_token"):
         conn.refresh_token = _enc(tok["refresh_token"])
-    conn.token_expires_at = datetime.utcnow() + timedelta(seconds=int(tok.get("expires_in", 3600)))
+    conn.token_expires_at = now_utc() + timedelta(seconds=int(tok.get("expires_in", 3600)))
 
 
 async def send_via_connection(conn, *, recipient: str, subject: Optional[str], body: str,
-                              attachment: Optional[tuple] = None) -> dict:
+                              attachment: Optional[tuple] = None, html: bool = False) -> dict:
     """Send one message using a connected account. Returns the standard
     {status, error} contract. Guarded: no tokens → 'failed', never raises.
 
     ``attachment`` is an optional (filename, bytes, mimetype) tuple — used to send
-    documents like the invoice PDF (build 144dw)."""
+    documents like the invoice PDF (build 144dw). ``html`` sends the body as HTML (only for bodies
+    filled from an HTML template, whose values were escaped)."""
     if not conn or not conn.connected or not conn.access_token:
         return {"status": "failed", "error": "Email account not connected"}
-    if conn.token_expires_at and conn.token_expires_at <= datetime.utcnow():
+    if conn.token_expires_at and conn.token_expires_at <= now_utc():
         try:
             await _refresh(conn.provider, conn)
         except Exception as exc:
@@ -136,15 +138,16 @@ async def send_via_connection(conn, *, recipient: str, subject: Optional[str], b
             if attachment:
                 fname, fdata, fmime = attachment
                 msg = MIMEMultipart()
-                msg.attach(MIMEText(body))
+                msg.attach(MIMEText(body, "html" if html else "plain"))
                 sub = fmime.split("/", 1)[1] if "/" in fmime else "octet-stream"
                 part = MIMEApplication(fdata, _subtype=sub)
                 part.add_header("Content-Disposition", "attachment", filename=fname)
                 msg.attach(part)
             else:
-                msg = MIMEText(body)
+                msg = MIMEText(body, "html" if html else "plain")
+            from backend.services.notifications import one_line
             msg["To"] = recipient
-            msg["Subject"] = subject or ""
+            msg["Subject"] = one_line(subject)
             if conn.email_address:
                 msg["From"] = f"{conn.sender_name} <{conn.email_address}>" if conn.sender_name else conn.email_address
             raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
@@ -153,8 +156,8 @@ async def send_via_connection(conn, *, recipient: str, subject: Optional[str], b
                                  headers={"Authorization": f"Bearer {access}"})
         else:  # outlook / graph
             message = {
-                "subject": subject or "",
-                "body": {"contentType": "Text", "content": body},
+                "subject": (subject or "").replace("\r", " ").replace("\n", " "),
+                "body": {"contentType": "HTML" if html else "Text", "content": body},
                 "toRecipients": [{"emailAddress": {"address": recipient}}]}
             if attachment:
                 fname, fdata, fmime = attachment
@@ -180,7 +183,7 @@ async def list_recent(conn, max_results: int = 12) -> list[dict]:
     """
     if not conn or not conn.connected or not conn.access_token or conn.provider != "gmail":
         return []
-    if conn.token_expires_at and conn.token_expires_at <= datetime.utcnow():
+    if conn.token_expires_at and conn.token_expires_at <= now_utc():
         try:
             await _refresh(conn.provider, conn)
         except Exception:

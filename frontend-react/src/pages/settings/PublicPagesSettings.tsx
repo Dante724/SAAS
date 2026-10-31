@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
+import { loadFailed } from "../../lib/notice";
 
 /* Settings › Public pages — the three pages customers see (booking, job tracking, estimate
    approval), one brand colour for all of them, and a live phone preview. Same
@@ -28,8 +29,8 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
   const load = () => api.get<any>("/staff/public-pages").then((c) => { setCfg(c); setSlug(c.slug || ""); }).catch(() => setCfg({}));
   useEffect(() => {
     load();
-    api.get<any>("/statuses?record_type=estimate").then((r) => setEst(r.items || [])).catch(() => {});
-    api.get<any>("/statuses?record_type=work_order").then((r) => setWo(r.items || [])).catch(() => {});
+    api.get<any>("/statuses?record_type=estimate").then((r) => setEst(r.items || [])).catch(loadFailed("statuses"));
+    api.get<any>("/statuses?record_type=work_order").then((r) => setWo(r.items || [])).catch(loadFailed("statuses"));
   }, []);
   if (!cfg) return <div className="max-w-3xl text-xs text-ink-tertiary">Loading…</div>;
 
@@ -102,6 +103,7 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
         {cfg[on] && (
           <div className="space-y-4">
             <Sw k={sig} label="Ask for a signature" hint="They sign with a finger or mouse before approving." onFocus="estimate" />
+            {prefix === "oe" && <Sw k="oe_estimate_line_choice" label="Let them leave lines out" hint="They can untick lines they don't want before approving. You see what they left out on the job." onFocus="estimate" />}
             <div>
               <span className="block text-xs font-medium text-ink-secondary mb-1.5">Only while the {noun} is in</span>
               {StatusPicker({ value: cfg[sts] || "", list, onChange: (v) => save({ [sts]: v }) })}

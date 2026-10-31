@@ -29,27 +29,37 @@ def pg_connect_args(cfg) -> dict:
     return {"server_settings": server_settings} if server_settings else {}
 
 
-# SQLite needs check_same_thread=False; Postgres/asyncpg must NOT receive it.
-_connect_args = {"check_same_thread": False} if settings.is_sqlite else {}
-_engine_kwargs = dict(echo=False, connect_args=_connect_args)
-if not settings.is_sqlite:
-    if settings.ENVIRONMENT.lower() == "test":
-        # Test suite on Postgres: pytest-asyncio gives every test a fresh event loop and asyncpg
-        # connections are bound to the loop that opened them, so a pool would hand a later test a
-        # connection from a dead loop ("attached to a different loop"). NullPool opens/closes per
-        # checkout. Test-only — dev/staging/production keep the pooled settings below.
-        from sqlalchemy.pool import NullPool
+def engine_kwargs(cfg) -> dict:
+    """create_async_engine options for this config."""
+    # SQLite needs check_same_thread=False; Postgres/asyncpg must NOT receive it.
+    connect_args = {"check_same_thread": False} if cfg.is_sqlite else {}
+    # Deployed, a failed statement's error (and so every log line and Sentry event built from it)
+    # leaves out the bound values: customer emails, phones and password hashes. Dev keeps them.
+    kw = dict(echo=False, connect_args=connect_args, hide_parameters=cfg.is_deployed)
+    if not cfg.is_sqlite:
+        if cfg.ENVIRONMENT.lower() == "test":
+            # Test suite on Postgres: pytest-asyncio gives every test a fresh event loop and asyncpg
+            # connections are bound to the loop that opened them, so a pool would hand a later test a
+            # connection from a dead loop ("attached to a different loop"). NullPool opens/closes per
+            # checkout. Test-only — dev/staging/production keep the pooled settings below.
+            from sqlalchemy.pool import NullPool
 
-        _engine_kwargs["poolclass"] = NullPool
-    else:
-        # Bounded pool per worker; a request that can't get a connection within the timeout fails
-        # fast instead of queueing forever behind a stuck query. All tunable from settings.
-        _engine_kwargs.update(pool_size=settings.DB_POOL_SIZE, max_overflow=settings.DB_MAX_OVERFLOW,
-                              pool_timeout=settings.DB_POOL_TIMEOUT_S, pool_pre_ping=True,
-                              pool_recycle=settings.DB_POOL_RECYCLE_S)
-    _connect_args.update(pg_connect_args(settings))
+            kw["poolclass"] = NullPool
+        else:
+            # Bounded pool per worker; a request that can't get a connection within the timeout fails
+            # fast instead of queueing forever behind a stuck query. All tunable from settings.
+            kw.update(pool_size=cfg.DB_POOL_SIZE, max_overflow=cfg.DB_MAX_OVERFLOW,
+                      pool_timeout=cfg.DB_POOL_TIMEOUT_S, pool_pre_ping=True,
+                      pool_recycle=cfg.DB_POOL_RECYCLE_S)
+        connect_args.update(pg_connect_args(cfg))
+    return kw
 
-engine = create_async_engine(settings.DATABASE_URL, **_engine_kwargs)
+
+# JSON columns (audit details, snapshots, webhook payloads) may now hold Decimal money read from
+# Numeric columns: write it as a number, the way floats always were.
+from backend.services.money import json_dumps as _json_dumps  # noqa: E402
+
+engine = create_async_engine(settings.DATABASE_URL, json_serializer=_json_dumps, **engine_kwargs(settings))
 
 # Enforce foreign keys on SQLite (dev) so it matches Postgres (prod), which always enforces them —
 # otherwise a bad delete/orphan passes silently in dev and only fails in production.

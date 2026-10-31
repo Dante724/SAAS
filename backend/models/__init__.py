@@ -5,6 +5,7 @@ Tekly — all database models.
 import secrets
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
@@ -25,13 +26,15 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from backend.db.database import Base
+from backend.db.secret_json import SecretFieldsJSON   # passcode-like custom fields, encrypted
+from backend.services.dates import now_utc
 
 
 def _uuid() -> str:
     return str(uuid.uuid4())
 
 def _now() -> datetime:
-    return datetime.utcnow()
+    return now_utc()
 
 # ─────────────────────────────────────────────
 # ORGANISATION & LOCATIONS
@@ -68,6 +71,10 @@ class Organisation(Base):
     inv_reservation_max_days: Mapped[Optional[int]] = mapped_column(Integer)
     inv_product_serial_template: Mapped[Optional[str]] = mapped_column(String(40))
     inv_asset_serial_template: Mapped[Optional[str]] = mapped_column(String(40))
+    # ii144a: code generator (Settings > Inventory > Product codes). Empty = built-in default.
+    inv_sku_template: Mapped[Optional[str]] = mapped_column(String(40))      # empty = SKUs stay as typed
+    inv_bin_template: Mapped[Optional[str]] = mapped_column(String(40))      # default BIN-{C:4}
+    inv_barcode_prefix: Mapped[Optional[str]] = mapped_column(String(2))     # GS1 in-store 20–29, default 20
     inv_default_product_type: Mapped[Optional[str]] = mapped_column(String(30))
     inv_default_vehicle_type: Mapped[Optional[str]] = mapped_column(String(30))
     company_details: Mapped[Optional[str]] = mapped_column(Text)  # registration / tax ID
@@ -83,12 +90,15 @@ class Organisation(Base):
     industry_template: Mapped[str] = mapped_column(String(30), default="generic")  # renames the asset entity app-wide (Orderry-style)
     # Build 144al: customizable purchase-order charge types (labels the buyer can add to a PO)
     po_charge_types: Mapped[Optional[list]] = mapped_column(JSON)  # e.g. ["Shipping","In-transit","Customs"]
+    # How many days to keep old records, by kind ({"notifications", "calls", "messages", "audit"});
+    # a missing kind or null keeps them for good (services/retention.py).
+    retention_days: Mapped[Optional[dict]] = mapped_column(JSON)
     # Build 144ah — POs whose total exceeds this need a manager (role with can_manage_settings)
     # to send. 0/None disables the gate.
-    po_approval_threshold: Mapped[Optional[float]] = mapped_column(Float)
+    po_approval_threshold: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
     payment_provider: Mapped[str] = mapped_column(String(20), default="auto")  # auto|stripe|square|sumup|simulated
     loyalty_earn_rate: Mapped[float] = mapped_column(Float, default=0.0)   # points per 1.00 paid; 0 = program off
-    loyalty_point_value: Mapped[float] = mapped_column(Float, default=0.0)  # currency value of 1 point at redemption
+    loyalty_point_value: Mapped[float] = mapped_column(Numeric(12, 4, asdecimal=False), default=0.0)  # currency value of 1 point at redemption
     price_type_tickets_id: Mapped[Optional[str]] = mapped_column(String)   # default price list per doc type
     price_type_sales_id: Mapped[Optional[str]] = mapped_column(String)
     price_type_invoices_id: Mapped[Optional[str]] = mapped_column(String)
@@ -159,6 +169,7 @@ class Organisation(Base):
     oe_show_zero_price_services: Mapped[bool] = mapped_column(Boolean, default=True)
     # 144bb — public-page feature switches (estimate approval, customer messaging)
     oe_allow_approval: Mapped[bool] = mapped_column(Boolean, default=True)
+    oe_estimate_line_choice: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))  # E5: customer may untick estimate lines
     oe_allow_messages: Mapped[bool] = mapped_column(Boolean, default=True)
     oe_msg_days_after_close: Mapped[int] = mapped_column(Integer, default=14)  # customer messages stay open N days after closing
     oe_allow_recommend: Mapped[bool] = mapped_column(Boolean, default=True)  # 144bd: customer approves recommended services
@@ -272,9 +283,9 @@ class Employee(Base):
     pin_hash: Mapped[Optional[str]] = mapped_column(String(255))
     phone: Mapped[Optional[str]] = mapped_column(String(50))
     wage_type: Mapped[str] = mapped_column(String(20), default="fixed")  # fixed|hourly|commission
-    wage_value: Mapped[float] = mapped_column(Float, default=0.0)
-    hourly_cost_rate: Mapped[float] = mapped_column(Float, default=0.0)   # labor cost per hour (time clock)
-    billable_rate: Mapped[float] = mapped_column(Float, default=0.0)      # charge-out rate per hour
+    wage_value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    hourly_cost_rate: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)   # labor cost per hour (time clock)
+    billable_rate: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)      # charge-out rate per hour
     commission_labour: Mapped[float] = mapped_column(Float, default=0.0)
     commission_parts: Mapped[float] = mapped_column(Float, default=0.0)
     weekly_hours: Mapped[Optional[float]] = mapped_column(Float)   # build 144: expected working hours/week
@@ -295,7 +306,7 @@ class Employee(Base):
     token_version: Mapped[int] = mapped_column(Integer, default=0)
     must_reset_password: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))  # H1: still on the old default password
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    mfa_secret: Mapped[Optional[str]] = mapped_column(String(64))          # base32 TOTP secret
+    mfa_secret: Mapped[Optional[str]] = mapped_column(String(255))         # base32 TOTP secret, encrypted (services/crypto)
     mfa_recovery_codes: Mapped[Optional[str]] = mapped_column(Text)        # JSON list of hashed single-use codes
     mfa_last_step: Mapped[Optional[int]] = mapped_column(Integer)          # last accepted TOTP time step (replay guard)  # bump to revoke all issued tokens (lost-device logout)
     # Build 144cb: email verification. Existing users default unverified; verification
@@ -329,11 +340,11 @@ class WageRecord(Base):
     employee_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"))
     period_start: Mapped[date] = mapped_column(Date)
     period_end: Mapped[date] = mapped_column(Date)
-    base_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    commission_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    bonus: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    deductions: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    net_payable: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    base_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    commission_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    bonus: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    deductions: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    net_payable: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
 
 # ─────────────────────────────────────────────
 # CLIENTS & DEVICES
@@ -379,20 +390,32 @@ class Client(Base):
     currency_code: Mapped[Optional[str]] = mapped_column(String(8))
     notes: Mapped[Optional[str]] = mapped_column(Text)
     watch_out: Mapped[Optional[str]] = mapped_column(Text)   # Build 144ag — prominent per-contact warning shown on their work orders
-    portal_token: Mapped[Optional[str]] = mapped_column(String(64), unique=True, index=True)  # customer-portal magic link
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     # Discount matrix (Orderry "Managing contact discounts") — orders & invoices.
     # mode: none | percent | price_type. Sales-page discounts arrive with the Sales module.
     disc_services_mode: Mapped[str] = mapped_column(String(12), default="none")
-    disc_services_value: Mapped[float] = mapped_column(Float, default=0.0)
+    disc_services_value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     disc_services_price_type_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("price_types.id"))
     disc_materials_mode: Mapped[str] = mapped_column(String(12), default="none")
-    disc_materials_value: Mapped[float] = mapped_column(Float, default=0.0)
+    disc_materials_value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     disc_materials_price_type_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("price_types.id"))
     devices: Mapped[list["Device"]] = relationship(back_populates="client")
     orders: Mapped[list["Order"]] = relationship(back_populates="client")
     invoices: Mapped[list["Invoice"]] = relationship(back_populates="client", foreign_keys="Invoice.client_id")
-    custom_data: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)  # values for org custom client fields
+    custom_data: Mapped[Optional[dict]] = mapped_column(SecretFieldsJSON, default=dict)  # values for org custom client fields
+
+class ClientPortalLink(Base):
+    """A customer-portal magic link (/portal/{token}). Only the SHA-256 of the token is stored,
+    and every link expires. A client can hold several (each message mints one); issuing a link
+    from the client page replaces them all."""
+    __tablename__ = "client_portal_links"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    client_id: Mapped[str] = mapped_column(String, ForeignKey("clients.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
 
 class Device(Base):
     __tablename__ = "devices"
@@ -428,7 +451,7 @@ class Device(Base):
     template_key: Mapped[Optional[str]] = mapped_column(String(30), index=True)  # industry template this asset was created under (null = legacy)
     asset_group_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("asset_groups.id"))  # per-template group
     is_generated_serial: Mapped[bool] = mapped_column(Boolean, default=False)
-    custom_data: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)  # values for org custom asset fields
+    custom_data: Mapped[Optional[dict]] = mapped_column(SecretFieldsJSON, default=dict)  # values for org custom asset fields
     color: Mapped[Optional[str]] = mapped_column(String(50))
     condition: Mapped[Optional[str]] = mapped_column(String(50))
     watch_out: Mapped[Optional[str]] = mapped_column(Text)   # Build 144ag — prominent per-asset warning (e.g. "battery swollen") shown on its work orders
@@ -528,6 +551,11 @@ class Order(Base):
     converted_from_id: Mapped[Optional[str]] = mapped_column(String)   # set on the order created from an estimate
     signature: Mapped[Optional[str]] = mapped_column(Text)
     estimate_approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime)  # Build 75: public estimate approval
+    # E5 — estimate extras. After valid_until the customer can't approve online. revision counts the
+    # versions sent (history in estimate_revisions); a new one re-opens the customer's decision.
+    estimate_valid_until: Mapped[Optional[date]] = mapped_column(Date)
+    estimate_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    estimate_decline_reason: Mapped[Optional[str]] = mapped_column(Text)   # what the customer wrote when declining
     signature_blob_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("media_blobs.id"))             # client e-signature on accept
     priority: Mapped[int] = mapped_column(Integer, default=0)  # 0=normal 1=urgent 2=VIP
     complaint: Mapped[Optional[str]] = mapped_column(Text)
@@ -559,7 +587,7 @@ class Order(Base):
     resource_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("resources.id"))  # Phase G
     type_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("work_order_types.id"), index=True)
     template_key: Mapped[Optional[str]] = mapped_column(String(30), index=True)  # industry template at creation (null = legacy); historical records keep their own
-    custom_data: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
+    custom_data: Mapped[Optional[dict]] = mapped_column(SecretFieldsJSON, default=dict)
     intake_photos: Mapped[Optional[list]] = mapped_column(JSON, default=list)   # Build 144ak: media blob ids documenting device condition at check-in
     # 144dg — {original_blob_id: marked_blob_id}: a marked-up copy of an intake photo. The ORIGINAL
     # (in intake_photos) is never mutated, so the untouched check-in shot survives for disputes.
@@ -649,7 +677,7 @@ class OrderItem(Base):
     outcome: Mapped[str] = mapped_column(String(20), default="open")
     collected_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc)
 
 # 144df — the legacy JSON JobKit model was retired; the Bundle engine (relabelled "Job Kit" in the UI)
 # is now the single job-kit concept. Its table is dropped by migration jk144df01.
@@ -724,7 +752,7 @@ class Appointment(Base):
     duration_min: Mapped[int] = mapped_column(Integer, default=60)
     status: Mapped[str] = mapped_column(String(20), default="booked")  # booked|done|canceled|no_show
     note: Mapped[Optional[str]] = mapped_column(Text)
-    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))  # Build 85: appointment → work order
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)  # Build 85: appointment → work order
     client_phone: Mapped[Optional[str]] = mapped_column(String(40))                   # Build 85: public appointments
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     # Build 144bz: DB-level guard against the concurrent-create race — two clients
@@ -748,7 +776,7 @@ class ChatThread(Base):
     contact_name: Mapped[Optional[str]] = mapped_column(String(200))
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"))
     lead_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("leads.id"))
-    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))  # Build 81: chat → work order
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)  # Build 81: chat → work order
     last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     # C3: inbox status (new|reply_needed|replied|completed), set by message direction; replied
@@ -783,7 +811,11 @@ class Part(Base):
                       # also the per-org index for MPN scans, which match on lower(mpn))
                       Index("uq_parts_org_mpn_active", "org_id", text("lower(mpn)"), unique=True,
                             sqlite_where=text("active = 1 AND mpn IS NOT NULL"),
-                            postgresql_where=text("active AND mpn IS NOT NULL")))
+                            postgresql_where=text("active AND mpn IS NOT NULL")),
+                      # ii144a: one active product per SKU per shop, case-insensitive
+                      Index("uq_parts_org_sku_active", "org_id", text("lower(sku)"), unique=True,
+                            sqlite_where=text("active = 1 AND sku IS NOT NULL AND sku <> ''"),
+                            postgresql_where=text("active AND sku IS NOT NULL AND sku <> ''")))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     sku: Mapped[Optional[str]] = mapped_column(String(100))
@@ -933,6 +965,11 @@ class PlatformAdmin(Base):
     name: Mapped[str] = mapped_column(String(200))
     password_hash: Mapped[str] = mapped_column(String(255))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Audit M6: 2-step sign-in and revocable tokens for the super-admin.
+    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))  # bump = sign out everywhere
+    mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    mfa_secret: Mapped[Optional[str]] = mapped_column(String(255))     # TOTP secret, encrypted (services/crypto)
+    mfa_last_step: Mapped[Optional[int]] = mapped_column(Integer)      # last accepted TOTP step (replay guard)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
@@ -967,9 +1004,38 @@ class Tax(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
+class ProductBarcode(Base):
+    """ii144a — every barcode a product answers to. A product can have several (a supplier's EAN, a
+    repackaged unit's UPC, the shop's own label). `is_main` mirrors `parts.barcode` and is kept in sync
+    by services/product_codes.py on every flush; `active` mirrors the product's, so an archived product
+    releases its codes. Unique per shop among active rows — another shop's codes never clash."""
+    __tablename__ = "product_barcodes"
+    # ii144b: unique on the match key, so one GTIN typed as UPC-A on one product and EAN-13 on another clashes
+    __table_args__ = (Index("uq_product_barcodes_org_key", "org_id", "match_key", unique=True,
+                            sqlite_where=text("active = 1"), postgresql_where=text("active")),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id", ondelete="CASCADE"), index=True)
+    barcode: Mapped[str] = mapped_column(String(100))
+    barcode_type: Mapped[Optional[str]] = mapped_column(String(12))    # services/barcode_types.TYPES
+    match_key: Mapped[str] = mapped_column(String(100))                # scan_codes.match_key: GTIN-14 for GTINs
+    is_main: Mapped[bool] = mapped_column(Boolean, default=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    part: Mapped["Part"] = relationship()     # many-to-one only: orders the insert after a new product
+
+
 class StockLevel(Base):
+    """On-hand for one product in one place. ii144a: a row is keyed (product, location, bin) — one row
+    per bin, plus one unbinned row per (location, warehouse tag). Read and write it only through
+    services/stock_rows.py, which sums and draws across a location's rows."""
     __tablename__ = "stock_levels"
-    __table_args__ = (Index("ix_stock_levels_part_location", "part_id", "location_id"),)   # phase 4 perf: hot lookup path
+    __table_args__ = (Index("ix_stock_levels_part_location", "part_id", "location_id"),   # phase 4 perf: hot lookup path
+                      Index("uq_stock_levels_part_bin", "part_id", "bin_id", unique=True,
+                            sqlite_where=text("bin_id IS NOT NULL"), postgresql_where=text("bin_id IS NOT NULL")),
+                      Index("uq_stock_levels_part_loc_unbinned", "part_id", "location_id",
+                            text("coalesce(warehouse_id, '')"), unique=True,
+                            sqlite_where=text("bin_id IS NULL"), postgresql_where=text("bin_id IS NULL")))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
@@ -1101,7 +1167,7 @@ class POLine(Base):
     __tablename__ = "po_lines"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     po_id: Mapped[str] = mapped_column(String, ForeignKey("purchase_orders.id"), index=True)
-    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
+    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     qty_ordered: Mapped[float] = mapped_column(Float, default=1.0)
     qty_received: Mapped[float] = mapped_column(Float, default=0.0)
     unit_cost: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
@@ -1140,6 +1206,9 @@ class Invoice(Base):
     legal_entity_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("legal_entities.id"))
     issued_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     due_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # When it was first sent to the customer. A sent invoice is locked: it keeps the job lines it
+    # billed instead of following later job changes (services/invoice_money).
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     # 144if — e-invoicing (in-house UBL 2.1). status: none|issued|cleared|rejected|cancelled.
     einvoice_status: Mapped[str] = mapped_column(String(12), default="none")
     einvoice_number: Mapped[Optional[str]] = mapped_column(String(60))   # fiscal / clearance ref
@@ -1178,6 +1247,30 @@ class DocumentSignature(Base):
     signer_ip: Mapped[Optional[str]] = mapped_column(String(64))
     user_agent: Mapped[Optional[str]] = mapped_column(String(300))
     signed_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")  # E5: estimate version decided
+
+
+class EstimateRevision(Base):
+    """E5 — one earlier version of an estimate, kept when staff send a new one or the customer
+    approves only some of its lines. The estimate itself always holds the latest version (what the
+    customer sees); these rows are the history. ``lines`` is a snapshot: description, qty, unit
+    price and total of each line, so later catalog or line edits never rewrite it."""
+    __tablename__ = "estimate_revisions"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"), index=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    lines: Mapped[Optional[list]] = mapped_column(JSON, default=list)
+    total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    valid_until: Mapped[Optional[date]] = mapped_column(Date)
+    deposit_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    decision: Mapped[Optional[str]] = mapped_column(String(20))       # approved | declined | None (not answered)
+    decline_reason: Mapped[Optional[str]] = mapped_column(Text)
+    skipped: Mapped[Optional[list]] = mapped_column(JSON, default=list)   # lines the customer left out
+    note: Mapped[Optional[str]] = mapped_column(String(500))
+    created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    created_by_name: Mapped[Optional[str]] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
 class InvoiceOrder(Base):
@@ -1215,9 +1308,9 @@ class CashShift(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
     opened_by_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"))
-    opening_float: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    closing_float: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
-    expected_cash: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
+    opening_float: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    closing_float: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
+    expected_cash: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
     opened_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     # 144bc — optional denomination breakdowns {"100": 2, "20": 5, ...} captured on open/close.
@@ -1235,7 +1328,7 @@ class CashDrawerMovement(Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     shift_id: Mapped[str] = mapped_column(String, ForeignKey("cash_shifts.id"), index=True)
     direction: Mapped[str] = mapped_column(String(4))        # in | out
-    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False))
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     note: Mapped[str] = mapped_column(String(300))
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -1251,9 +1344,9 @@ class ProcessorPayout(Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     provider: Mapped[str] = mapped_column(String(20), default="manual")   # stripe|square|sumup|manual
     payout_date: Mapped[date] = mapped_column(Date, default=date.today)
-    gross_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    fee_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    net_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    gross_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    fee_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    net_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
     reference: Mapped[Optional[str]] = mapped_column(String(120))
     note: Mapped[Optional[str]] = mapped_column(String(300))
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
@@ -1267,7 +1360,7 @@ class Expense(Base):
     category: Mapped[Optional[str]] = mapped_column(String(100))
     recorded_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     description: Mapped[str] = mapped_column(String(500))
-    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False))
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     receipt_url: Mapped[Optional[str]] = mapped_column(String(500))
     expense_date: Mapped[date] = mapped_column(Date, default=date.today)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -1396,7 +1489,7 @@ class Task(Base):
     assigned_to_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     assignee_ids: Mapped[Optional[list]] = mapped_column(JSON, default=list)  # 144ex: multiple technicians (primary owner stays assigned_to_id)
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
-    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)   # Build 86
     lead_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("leads.id"), index=True)       # Build 86
     location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"))           # Build 86
@@ -1680,7 +1773,7 @@ class AssetMovement(Base):
     asset_id: Mapped[str] = mapped_column(String, ForeignKey("devices.id"))
     from_zone: Mapped[Optional[str]] = mapped_column(String(60))
     to_zone: Mapped[Optional[str]] = mapped_column(String(60))
-    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     status_key: Mapped[Optional[str]] = mapped_column(String(50))
     # Build 120 lifecycle-log fields
     event_type: Mapped[Optional[str]] = mapped_column(String(24))  # zone|transfer|writeoff|owner|create
@@ -1694,10 +1787,10 @@ class StockReservation(Base):
     __tablename__ = "stock_reservations"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
-    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
+    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
     warehouse_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("warehouses.id"), index=True)  # Build 84
-    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     qty: Mapped[float] = mapped_column(Float, default=0.0)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     released: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -1737,6 +1830,9 @@ class Warehouse(Base):
     # ── allowed actions (Build 89) ───────────────────────────────────────────
     allowed_actions: Mapped[Optional[dict]] = mapped_column(
         JSON, default=lambda: ["post", "writeoff", "transfer", "sell", "stocktake"])
+    # ii144c: where stock received without a bin lands (Settings → Bins, "Default")
+    default_bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id", ondelete="SET NULL",
+                                                                             use_alter=True, name="fk_warehouses_default_bin"))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)  # soft-delete → restorable
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -1759,6 +1855,13 @@ class StorageBin(Base):
     A warehouse divides into zones/shelves, and each bin is the smallest pick unit
     (e.g. A1, B2, C18H036). Bins carry a barcode for scan-based posting/stocktake."""
     __tablename__ = "storage_bins"
+    # ii144a: bin name unique per warehouse (case-insensitive), bin code unique per shop — active bins only
+    __table_args__ = (Index("uq_storage_bins_name", "location_id", text("coalesce(warehouse_id, '')"),
+                            text("lower(name)"), unique=True,
+                            sqlite_where=text("active = 1"), postgresql_where=text("active")),
+                      Index("uq_storage_bins_barcode", "org_id", "barcode", unique=True,
+                            sqlite_where=text("active = 1 AND barcode IS NOT NULL"),
+                            postgresql_where=text("active AND barcode IS NOT NULL")))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))  # the warehouse
@@ -1767,8 +1870,8 @@ class StorageBin(Base):
     zone: Mapped[Optional[str]] = mapped_column(String(40))      # section / area
     shelf: Mapped[Optional[str]] = mapped_column(String(40))     # stand / shelf / row
     bin_number: Mapped[Optional[str]] = mapped_column(String(40))
-    barcode: Mapped[Optional[str]] = mapped_column(String(60), index=True,
-                                                   default=lambda: _uuid().replace("-", "")[:12].upper())
+    barcode: Mapped[Optional[str]] = mapped_column(String(60), index=True)   # ii144a: from the bin template (routers/bins.py)
+    barcode_type: Mapped[Optional[str]] = mapped_column(String(12))   # ii144b: how the bin label prints it (default Code 128)
     max_weight_capacity: Mapped[float] = mapped_column(Float, default=0.0)  # kg, 0 = unlimited
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -1916,12 +2019,13 @@ class StockItemBatch(Base):
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
     warehouse_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("warehouses.id"), index=True)  # Build 84
-    bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"))
+    bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"), index=True)
     po_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("purchase_orders.id"))
     unit_cost: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)  # this layer's cost
     qty_received: Mapped[Numeric] = mapped_column(Numeric(14, 3), default=0)
     qty_remaining: Mapped[Numeric] = mapped_column(Numeric(14, 3), default=0)  # consumed FIFO/LIFO
     expiry_date: Mapped[Optional[date]] = mapped_column(Date, index=True)  # FEFO when set
+    lot_number: Mapped[Optional[str]] = mapped_column(String(40))          # ii144b: GS1 (10) batch/lot from the label
     received_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 
@@ -1929,6 +2033,12 @@ class SerializedItem(Base):
     """A unique serialized unit of a product, tracked individually through its
     lifecycle, with a hard link to the batch cost layer it came in on."""
     __tablename__ = "serialized_items"
+    # ii144a: a serial is in stock (or reserved on a job) at most once per shop — the same normalised
+    # form serial_intake compares (upper-case, no spaces). Sold / written-off history may repeat.
+    __table_args__ = (Index("uq_serialized_items_live_serial", "org_id",
+                            text("upper(replace(serial_number, ' ', ''))"), unique=True,
+                            sqlite_where=text("status IN ('in_stock', 'allocated_to_order')"),
+                            postgresql_where=text("status IN ('in_stock', 'allocated_to_order')")),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
@@ -1942,7 +2052,30 @@ class SerializedItem(Base):
     status: Mapped[str] = mapped_column(String(20), default="in_stock")  # in_stock|allocated_to_order|sold|written_off|converted_to_asset
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     converted_asset_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("devices.id"))  # Build 76
+    # ii144c: the unit passport — who supplied it and until when they cover it
+    supplier_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("suppliers.id", ondelete="SET NULL"))
+    supplier_warranty_until: Mapped[Optional[date]] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class SerialEvent(Base):
+    """ii144c — one line of a serialized unit's history (the unit passport): received, moved, used on
+    a job, returned, sold, written off, counted… Written by services/serial_log.py where the unit's
+    status or place changes; `ref_type`/`ref_id` point at the document that did it."""
+    __tablename__ = "serial_events"
+    __table_args__ = (Index("ix_serial_events_item_created", "item_id", "created_at"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    item_id: Mapped[str] = mapped_column(String, ForeignKey("serialized_items.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(20))   # received|moved|used|returned|sold|written_off|restored|converted|counted
+    ref_type: Mapped[Optional[str]] = mapped_column(String(30))
+    ref_id: Mapped[Optional[str]] = mapped_column(String)
+    label: Mapped[Optional[str]] = mapped_column(String(200))
+    location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"))
+    bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id", ondelete="SET NULL"))
+    created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    item: Mapped["SerializedItem"] = relationship()   # many-to-one only: orders the insert after a new unit
 
 
 class AssetProductConversion(Base):
@@ -1990,6 +2123,9 @@ class NotificationLog(Base):
     recipient: Mapped[Optional[str]] = mapped_column(String(200))  # phone or email actually targeted
     subject: Mapped[Optional[str]] = mapped_column(String(300))
     body: Mapped[str] = mapped_column(Text, default="")  # rendered message
+    # Whether the body is HTML, fixed from the template when the message is rendered (a later
+    # edit to the template mustn't change how an already-filled message is sent).
+    is_html: Mapped[Optional[bool]] = mapped_column(Boolean)
     status: Mapped[str] = mapped_column(String(20), default="queued")  # queued|scheduled|sent|failed|skipped
     rule_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("notification_rules.id", ondelete="SET NULL"))  # Build 80; SET NULL so deleting a rule that already fired keeps its log history
     send_at: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)  # due time for delayed/reminder sends
@@ -2017,8 +2153,8 @@ class TimeEntry(Base):
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     duration_sec: Mapped[int] = mapped_column(Integer, default=0)
     billable: Mapped[bool] = mapped_column(Boolean, default=True)
-    cost_rate: Mapped[float] = mapped_column(Float, default=0.0)      # per hour, snapshot
-    billable_rate: Mapped[float] = mapped_column(Float, default=0.0)  # per hour, snapshot
+    cost_rate: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)      # per hour, snapshot
+    billable_rate: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # per hour, snapshot
     note: Mapped[Optional[str]] = mapped_column(Text)
     gps_lat: Mapped[Optional[float]] = mapped_column(Float)  # capture at clock-in if permission granted
     gps_lng: Mapped[Optional[float]] = mapped_column(Float)
@@ -2069,12 +2205,16 @@ class WebhookDelivery(Base):
     endpoint_id: Mapped[str] = mapped_column(String, ForeignKey("webhook_endpoints.id"), index=True)
     event: Mapped[str] = mapped_column(String(60))
     payload: Mapped[str] = mapped_column(Text, default="{}")
-    status: Mapped[str] = mapped_column(String(12), default="pending")  # pending|sent|failed
+    status: Mapped[str] = mapped_column(String(12), default="pending")  # pending|sending|sent|failed|abandoned
     response_code: Mapped[Optional[int]] = mapped_column(Integer)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
     delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # Audit R3: when the current send started (a stale one was interrupted and is retried), and
+    # the earliest time the retry sweep may try a failed delivery again (backoff).
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
 class Lead(Base):
@@ -2106,7 +2246,7 @@ class Lead(Base):
     device_brand: Mapped[Optional[str]] = mapped_column(String(100))
     device_model: Mapped[Optional[str]] = mapped_column(String(100))
     serial: Mapped[Optional[str]] = mapped_column(String(100))        # serial number or IMEI
-    custom_data: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
+    custom_data: Mapped[Optional[dict]] = mapped_column(SecretFieldsJSON, default=dict)
     call_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # missed calls merged in
     last_call_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(64))
@@ -2192,10 +2332,14 @@ class Stocktake(Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
     warehouse_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("warehouses.id"), index=True)  # Build 84
-    bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"))
+    bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"), index=True)
     status: Mapped[str] = mapped_column(String(20), default="in_progress")  # in_progress|posted
     note: Mapped[Optional[str]] = mapped_column(Text)
     kind: Mapped[str] = mapped_column(String(12), default="full")  # Build 91: full|partial
+    # ii144c: count one category; blind = the counter never sees book quantities; by_bin = a line per bin
+    category_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("categories.id", ondelete="SET NULL"))
+    blind: Mapped[bool] = mapped_column(Boolean, default=False)
+    by_bin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     posted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -2205,20 +2349,35 @@ class StocktakeLine(Base):
     __tablename__ = "stocktake_lines"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     stocktake_id: Mapped[str] = mapped_column(String, ForeignKey("stocktakes.id"), index=True)
-    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
+    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     system_qty: Mapped[float] = mapped_column(Float, default=0.0)
     counted_qty: Mapped[Optional[float]] = mapped_column(Float)
     variance: Mapped[float] = mapped_column(Float, default=0.0)
     # ── Build 91 ─────────────────────────────────────────────────────────────
-    bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"))
+    bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"), index=True)
     serialized_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("serialized_items.id"))
     is_unknown: Mapped[bool] = mapped_column(Boolean, default=False)   # found on the shelf, not in the system
     serial_mismatch: Mapped[bool] = mapped_column(Boolean, default=False)
     note: Mapped[Optional[str]] = mapped_column(Text)
 
+
+class StocktakeSerial(Base):
+    """ii144c — a serial counted in a stocktake, so the same unit scanned (or imported) twice
+    counts once. `serial_key` is the normalised form serial_intake compares."""
+    __tablename__ = "stocktake_serials"
+    __table_args__ = (Index("uq_stocktake_serials_key", "stocktake_id", "serial_key", unique=True),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    stocktake_id: Mapped[str] = mapped_column(String, ForeignKey("stocktakes.id", ondelete="CASCADE"))
+    line_id: Mapped[str] = mapped_column(String, ForeignKey("stocktake_lines.id", ondelete="CASCADE"))
+    serial_key: Mapped[str] = mapped_column(String(120))
+    serialized_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("serialized_items.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
 class ClientReturn(Base):
     """Goods coming back from a client (separate from the money refund)."""
     __tablename__ = "client_returns"
+    # Lists page newest-first inside one shop (audit 29 Oct 2026).
+    __table_args__ = (Index("ix_client_returns_org_id_created_at", "org_id", "created_at"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
@@ -2233,7 +2392,7 @@ class ClientReturnLine(Base):
     __tablename__ = "client_return_lines"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     return_id: Mapped[str] = mapped_column(String, ForeignKey("client_returns.id"), index=True)
-    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
+    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     qty: Mapped[float] = mapped_column(Float, default=1.0)
     restock: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -2241,9 +2400,11 @@ class ClientReturnLine(Base):
 class Refund(Base):
     """Money going back to a client (separate from the goods return)."""
     __tablename__ = "refunds"
+    # Lists page newest-first inside one shop (audit 29 Oct 2026).
+    __table_args__ = (Index("ix_refunds_org_id_created_at", "org_id", "created_at"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
-    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     return_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("client_returns.id"))
     account_id: Mapped[str] = mapped_column(String, ForeignKey("accounts.id"))
     amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
@@ -2282,7 +2443,7 @@ class StockTransferLine(Base):
     __tablename__ = "stock_transfer_lines"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     transfer_id: Mapped[str] = mapped_column(String, ForeignKey("stock_transfers.id"), index=True)
-    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
+    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     qty: Mapped[float] = mapped_column(Float, default=1.0)
 
 
@@ -2355,7 +2516,7 @@ class GeneratedDocument(Base):
     __tablename__ = "generated_documents"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
-    order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"))
+    order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"), index=True)
     template_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("document_templates.id"))
     name: Mapped[str] = mapped_column(String(200), default="Document")
     rendered_html: Mapped[str] = mapped_column(Text, default="")
@@ -2642,8 +2803,8 @@ class GiftCard(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     code: Mapped[str] = mapped_column(String(40), index=True)          # e.g. GC-8F3K2P
-    initial_value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    balance: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    initial_value: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    balance: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -2656,7 +2817,7 @@ class GiftCardLedger(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     gift_card_id: Mapped[str] = mapped_column(String, ForeignKey("gift_cards.id"), index=True)
-    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False))                        # + load / − redeem
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))                        # + load / − redeem
     ref_type: Mapped[Optional[str]] = mapped_column(String(20))         # order|sale|manual
     ref_id: Mapped[Optional[str]] = mapped_column(String)
     note: Mapped[Optional[str]] = mapped_column(String(200))
@@ -2672,7 +2833,7 @@ class Coupon(Base):
     code: Mapped[str] = mapped_column(String(40), index=True)
     name: Mapped[str] = mapped_column(String(120), default="")
     kind: Mapped[str] = mapped_column(String(10), default="pct")        # pct|fixed
-    value: Mapped[float] = mapped_column(Float, default=0.0)
+    value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     min_total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     starts_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -3051,11 +3212,11 @@ all_models = [
     Organisation, Location, Role, Employee, Shift, WageRecord,
     Client, Device, OrderStatus, Order, OrderLine, OrderItem, OrderStatusLog, OrderComment,
     LegalEntity, NumberSequence,
-    Part, StockLevel, StockMovement, Supplier, PurchaseOrder, POLine, Service, SavedFilter, Tax,
+    Part, ProductBarcode, StockLevel, StockMovement, Supplier, PurchaseOrder, POLine, Service, SavedFilter, Tax,
     Invoice, InvoiceLine, Payment, CashShift, Expense, Account, CashFlowItem, Transaction,
     Task, NotificationTemplate, CustomField, AuditLog, EventFeedItem,
     WorkOrderType, StatusTransition, AssetMovement, StockReservation, StorageBin,
-    CommissionRule, EmployeeBalanceLedger, PayrollRun, StockItemBatch, SerializedItem, NotificationLog, Lead, LeadType, PriceType, Sale, SaleLine, Stocktake, StocktakeLine, ClientReturn, ClientReturnLine, Refund, StockTransfer, StockTransferLine, Bundle, BundleComponent, Appointment, ChatThread, ChatMessage,
+    CommissionRule, EmployeeBalanceLedger, PayrollRun, StockItemBatch, SerializedItem, SerialEvent, NotificationLog, Lead, LeadType, PriceType, Sale, SaleLine, Stocktake, StocktakeLine, StocktakeSerial, ClientReturn, ClientReturnLine, Refund, StockTransfer, StockTransferLine, Bundle, BundleComponent, Appointment, ChatThread, ChatMessage,
     Feedback, FeedbackSettings, DocumentTemplate, GeneratedDocument, Resource,
     TimeEntry, TimeEntryAudit, WebhookEndpoint, WebhookDelivery,
     ApiKey, PaymentIntent, QboConnection, IntegrationMapping, IntegrationSyncLog,
@@ -3104,7 +3265,7 @@ class PurchaseReturnLine(Base):
     __tablename__ = "purchase_return_lines"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     return_id: Mapped[str] = mapped_column(String, ForeignKey("purchase_returns.id"), index=True)
-    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
+    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     serialized_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("serialized_items.id"))
     qty: Mapped[float] = mapped_column(Float, default=1)
     unit_cost: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
@@ -3119,6 +3280,8 @@ class WriteOff(Base):
     stock**, with per-line comments that can be private (internal) or public.
     """
     __tablename__ = "write_offs"
+    # Lists page newest-first inside one shop (audit 29 Oct 2026).
+    __table_args__ = (Index("ix_write_offs_org_id_created_at", "org_id", "created_at"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     number: Mapped[Optional[str]] = mapped_column(String(40))
@@ -3136,9 +3299,9 @@ class WriteOffLine(Base):
     __tablename__ = "write_off_lines"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     write_off_id: Mapped[str] = mapped_column(String, ForeignKey("write_offs.id"), index=True)
-    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
+    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     serialized_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("serialized_items.id"))
-    bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"))
+    bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"), index=True)
     qty: Mapped[float] = mapped_column(Float, default=1)
     unit_cost: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
     comment: Mapped[Optional[str]] = mapped_column(Text)          # internal by default
@@ -3154,6 +3317,8 @@ class Posting(Base):
     and the settlement (supplier balance vs cash) is recorded rather than implied.
     """
     __tablename__ = "postings"
+    # Lists page newest-first inside one shop (audit 29 Oct 2026).
+    __table_args__ = (Index("ix_postings_org_id_created_at", "org_id", "created_at"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     number: Mapped[Optional[str]] = mapped_column(String(40))
@@ -3174,7 +3339,7 @@ class PostingLine(Base):
     __tablename__ = "posting_lines"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     posting_id: Mapped[str] = mapped_column(String, ForeignKey("postings.id"), index=True)
-    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
+    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     qty: Mapped[float] = mapped_column(Float, default=1)
     unit_cost: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
     markup_pct: Mapped[Optional[float]] = mapped_column(Float)
@@ -3240,7 +3405,7 @@ class InboxThread(Base):
     status: Mapped[str] = mapped_column(String(12), default="open")  # open|snoozed|closed
     unread: Mapped[bool] = mapped_column(Boolean, default=True)
     last_message_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
-    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))  # if converted
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)  # if converted
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
@@ -3303,7 +3468,7 @@ class EcommerceOrderMap(Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     integration_id: Mapped[str] = mapped_column(String, ForeignKey("ecommerce_integrations.id"), index=True)
     external_order_id: Mapped[str] = mapped_column(String(160), index=True)
-    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     external_status: Mapped[Optional[str]] = mapped_column(String(40))
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
@@ -3520,3 +3685,39 @@ class PaymentWebhookEvent(Base):
     event_id: Mapped[str] = mapped_column(String(255))
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class ImportBatch(Base):
+    """One committed spreadsheet import (Products, Services, Clients, Assets, Suppliers): who,
+    which file, the counts, and what the undo needs — ids created, field values before an update,
+    stock posted. `undone_at` is set once it has been rolled back."""
+    __tablename__ = "import_batches"
+    __table_args__ = (Index("ix_import_batches_org_kind", "org_id", "kind", "created_at"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
+    kind: Mapped[str] = mapped_column(String(20))
+    file_name: Mapped[Optional[str]] = mapped_column(String(255))
+    actor_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id", ondelete="SET NULL"))
+    created_count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0)
+    undo: Mapped[Optional[dict]] = mapped_column(JSON)
+    undone_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class ImportMapping(Base):
+    """A remembered column mapping {sheet header: field} per list, and per supplier for
+    postings / purchase orders (supplier_id NULL = the list's own default)."""
+    __tablename__ = "import_mappings"
+    __table_args__ = (Index("ix_import_mappings_org_kind", "org_id", "kind", "supplier_id"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
+    kind: Mapped[str] = mapped_column(String(20))
+    supplier_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("suppliers.id", ondelete="CASCADE"))
+    mapping: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+# ii144a: registers the before-flush hook that mirrors parts.barcode into product_barcodes.
+from backend.services import product_codes as _product_codes  # noqa: E402,F401

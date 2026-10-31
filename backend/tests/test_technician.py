@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy import select
 
+from backend.services.dates import now_utc
+
 
 async def _me(client, tenant):
     return (await client.get("/api/auth/me", headers=tenant)).json()
@@ -26,7 +28,7 @@ async def test_dashboard_shape_and_buckets(client, tenant, db):
         assert r.status_code in (200, 201), r.text
         ids.append(r.json()["id"])
 
-    now = datetime.utcnow()
+    now = now_utc()
     today_noon = datetime(now.year, now.month, now.day, 12)
     async def setfields(oid, **kw):
         o = (await db.execute(select(Order).where(Order.id == oid))).scalar_one()

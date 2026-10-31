@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { M } from "./Shell";
 import { api } from "../api/client";
 import { confirmDialog, promptDialog } from "../lib/dialog";
+import { loadFailed, saveFailed } from "../lib/notice";
+import { clickable } from "../lib/clickable";
 
 // "Customize this form": the form's fields as the staff will see them, in order. Drag a card (or use
 // the arrows) to move it, click it to edit, "+ Add a field" to add one exactly where it belongs —
@@ -42,7 +44,7 @@ export default function FormCustomizer({ form, typeId, title }: { form: FormKey;
   const load = () => api.get<{ items: Item[]; suggestions: Sugg[] }>(`/forms/layout?${q}`)
     .then((r) => { setItems(r.items || []); setSugg(r.suggestions || []); }).catch(() => setItems([]));
   useEffect(() => { setItems(null); setSel(null); setAddAt(null); load(); /* eslint-disable-next-line */ }, [form, typeId]);
-  useEffect(() => { api.get<any>("/directories").then((r) => setDirs(r.items || [])).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/directories").then((r) => setDirs(r.items || [])).catch(loadFailed("lists")); }, []);
 
   async function persist(next: Item[]) {
     setItems(next); setState("saving");
@@ -90,7 +92,7 @@ export default function FormCustomizer({ form, typeId, title }: { form: FormKey;
     if (!it.field) return;
     const what = it.kind === "header" ? "section heading" : "field";
     if (!(await confirmDialog(`Delete the “${it.label}” ${what}? Answers already saved on past records stay there.`, { danger: true, confirmLabel: "Delete" }))) return;
-    await api.del(`/forms/fields/${it.field.id}`).catch(() => {});
+    try { await api.del(`/forms/fields/${it.field.id}`); } catch (e) { saveFailed("delete the field")(e); return; }
     const next = (items || []).filter((x) => x.ref !== it.ref); setSel(null); persist(next);
   }
 
@@ -154,7 +156,7 @@ export default function FormCustomizer({ form, typeId, title }: { form: FormKey;
               <div draggable onDragStart={() => { dragFrom.current = idx; }} onDragEnd={() => { dragFrom.current = null; setDragOver(null); }}
                 onDragOver={(e) => { e.preventDefault(); setDragOver(idx); }} onDragLeave={() => setDragOver((d) => (d === idx ? null : d))}
                 onDrop={(e) => { e.preventDefault(); const f = dragFrom.current; setDragOver(null); if (f !== null) move(f, idx); }}
-                onClick={() => { setSel(it.ref); setAddAt(null); }}
+                {...clickable(() => { setSel(it.ref); setAddAt(null); })}
                 className={`group rounded-xl border bg-white transition-colors cursor-pointer ${sel === it.ref ? "border-primary ring-2 ring-primary/15" : "border-slate-200 hover:border-slate-300"} ${dragOver === idx ? "border-t-4 border-t-primary" : ""}`}>
                 {it.kind === "header" ? (
                   <div className="flex items-center gap-2 px-3 py-2">

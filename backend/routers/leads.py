@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.likes import contains as _contains
 from backend.db.database import get_db
 from backend.models import AutomationSetting, Employee, Lead, LeadType
 from backend.services import leads as svc
@@ -56,9 +57,8 @@ async def list_leads(
     elif open_only:
         cond.append(Lead.status.in_(svc.OPEN))
     if q and q.strip():
-        like = f"%{q.strip()}%"
-        cond.append(or_(Lead.name.ilike(like), Lead.phone.ilike(like), Lead.email.ilike(like),
-                        Lead.serial.ilike(like), Lead.inquiry.ilike(like)))
+        t = q.strip()
+        cond.append(or_(*(_contains(c, t) for c in (Lead.name, Lead.phone, Lead.email, Lead.serial, Lead.inquiry))))
     total = (await db.execute(select(func.count()).select_from(Lead).where(*cond))).scalar() or 0
     rows = (await db.execute(select(Lead).where(*cond).order_by(Lead.created_at.desc())
                              .limit(page_size).offset((page - 1) * page_size))).scalars().all()

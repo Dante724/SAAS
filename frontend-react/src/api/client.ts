@@ -136,7 +136,20 @@ export function isInlineSafeType(type: string): boolean {
 
 function downloadName(disposition: string | null): string {
   const m = /filename\*=UTF-8''([^;]+)/i.exec(disposition || "");
-  try { return m ? decodeURIComponent(m[1]) : "download"; } catch { return "download"; }
+  try { if (m) return decodeURIComponent(m[1]); } catch { return "download"; }
+  return /filename="([^"]+)"/i.exec(disposition || "")?.[1] || "download";
+}
+
+// Fetch a file with the session and save it (templates, exports) — never opened inline.
+export async function downloadAuthed(path: string): Promise<void> {
+  const res = await fetch(BASE + path, { credentials: "include", headers: { ...authHeader() } });
+  if (!res.ok) throw new ApiError(res.status, (await res.text().catch(() => "")) || res.statusText);
+  const url = URL.createObjectURL(new Blob([await res.blob()], { type: "application/octet-stream" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = downloadName(res.headers.get("content-disposition"));
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 // Multipart upload (no JSON Content-Type → browser sets the boundary). Reuses the session.

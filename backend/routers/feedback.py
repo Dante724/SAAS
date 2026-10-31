@@ -6,7 +6,6 @@ public token page. Settings define the system + per-band answer messages.
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
@@ -14,6 +13,7 @@ from backend.services.dates import parse_date
 from backend.models import Feedback, FeedbackSettings, Order
 from backend.services.auth import get_current_employee, Employee, require_perm
 from backend.services.money import q2
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
 
@@ -68,7 +68,11 @@ async def save_settings(
     s.clarify_question = data.clarify_question
     s.bands = data.bands
     s.active = data.active
-    s.google_review_url = (data.google_review_url or "").strip() or None
+    url = (data.google_review_url or "").strip() or None
+    if url and not url.lower().startswith(("https://", "http://")):
+        # shown as a button on the customer's public page: never a javascript: link
+        raise HTTPException(422, "Enter a web address starting with https://")
+    s.google_review_url = url
     await db.commit()
     return {"ok": True}
 
@@ -80,7 +84,9 @@ async def list_feedback(
 ):
     rows = (await db.execute(select(Feedback).where(Feedback.org_id == current.org_id)
         .order_by(Feedback.created_at.desc()).limit(200))).scalars().all()
-    orders = {o.id: o.order_number for o in (await db.execute(select(Order).where(Order.org_id == current.org_id))).scalars().all()}
+    from backend.services.batching import names_by_id
+    orders = await names_by_id(db, Order.id, Order.order_number, [f.order_id for f in rows],
+                               org_col=Order.org_id, org_id=current.org_id)
     submitted = [f for f in rows if f.submitted_at]
     # NPS calc (if any nps responses)
     nps_resp = [f for f in submitted if f.system == "nps" and f.rating is not None]
@@ -152,7 +158,7 @@ async def submit_feedback(token: str, data: SubmitIn, db: AsyncSession = Depends
         raise HTTPException(409, "Feedback already submitted")
     fb.rating = data.rating
     fb.comment = data.comment
-    fb.submitted_at = datetime.utcnow()
+    fb.submitted_at = now_utc()
     s = (await db.execute(select(FeedbackSettings).where(FeedbackSettings.org_id == fb.org_id))).scalar_one_or_none()
     from backend.routers.feed import log_system_event
     await log_system_event(db, fb.org_id, "order", fb.order_id,

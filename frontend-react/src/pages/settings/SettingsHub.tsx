@@ -1,32 +1,44 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
-import TemplateEditorDrawer from "./TemplateEditorDrawer";
-import DirectoriesManager from "./DirectoriesManager";
-import FormCustomizer, { type FormKey } from "../../components/FormCustomizer";
+import type { FormKey } from "../../components/FormCustomizer";
 import { resetTerminology } from "../../lib/useTerminology";
 import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
 import { useMe } from "../../context/Me";
 import { NAV, CATS, SEC_CAT, searchSections, type SectionId } from "./settingsRegistry";
 import { SetupChecklist } from "./SetupChecklist";
-import { StatusList, StatusEditor } from "./StatusesSettings";
-import GeneralSettings from "./GeneralSettings";
-import CustomerMessages from "./NotificationsPage";
-import PublicPagesSettings from "./PublicPagesSettings";
-import { PricingPage, InventoryPage } from "./PricingInventory";
-import FinanceNumbering from "./FinanceNumbering";
-import InvoiceSettings from "./InvoiceSettings";
-import DocumentTemplatesPage from "./DocumentTemplatesPage";
-import LocationsPage from "./LocationsPage";
-import { TeamPage, RoleEditor, Avatar } from "./TeamSettings";
-import { ChecklistList, ChecklistEditor } from "./ChecklistSettings";
-import CardReadersCard from "./CardReadersCard";
+import { Avatar } from "../orders/look";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
-import TelephonySettings from "./TelephonySettings";
-import ApiKeysCard from "./ApiKeysCard";
+import RetentionCard from "./RetentionCard";
+import { loadFailed } from "../../lib/notice";
+import { clickable, clickableRow } from "../../lib/clickable";
+
+// Each settings page is its own chunk, fetched when its section opens (the hub was one ~470 kB file).
+const TemplateEditorDrawer = lazy(() => import("./TemplateEditorDrawer"));
+const DirectoriesManager = lazy(() => import("./DirectoriesManager"));
+const FormCustomizer = lazy(() => import("../../components/FormCustomizer"));
+const StatusList = lazy(() => import("./StatusesSettings").then((m) => ({ default: m.StatusList })));
+const StatusEditor = lazy(() => import("./StatusesSettings").then((m) => ({ default: m.StatusEditor })));
+const GeneralSettings = lazy(() => import("./GeneralSettings"));
+const CustomerMessages = lazy(() => import("./NotificationsPage"));
+const PublicPagesSettings = lazy(() => import("./PublicPagesSettings"));
+const PricingPage = lazy(() => import("./PricingInventory").then((m) => ({ default: m.PricingPage })));
+const InventoryPage = lazy(() => import("./PricingInventory").then((m) => ({ default: m.InventoryPage })));
+const FinanceNumbering = lazy(() => import("./FinanceNumbering"));
+const InvoiceSettings = lazy(() => import("./InvoiceSettings"));
+const DocumentTemplatesPage = lazy(() => import("./DocumentTemplatesPage"));
+const LocationsPage = lazy(() => import("./LocationsPage"));
+const TeamPage = lazy(() => import("./TeamSettings").then((m) => ({ default: m.TeamPage })));
+const RoleEditor = lazy(() => import("./TeamSettings").then((m) => ({ default: m.RoleEditor })));
+const ChecklistList = lazy(() => import("./ChecklistSettings").then((m) => ({ default: m.ChecklistList })));
+const ChecklistEditor = lazy(() => import("./ChecklistSettings").then((m) => ({ default: m.ChecklistEditor })));
+const CardReadersCard = lazy(() => import("./CardReadersCard"));
+const TelephonySettings = lazy(() => import("./TelephonySettings"));
+const ApiKeysCard = lazy(() => import("./ApiKeysCard"));
+const sectionLoading = <div className="text-xs text-ink-tertiary py-6">Loading…</div>;
 
 
 // Full section set = the registry sections + a few that have no nav entry of their own.
@@ -121,6 +133,7 @@ export default function SettingsHub() {
   }
   const [lists, setLists] = useState<Record<string, any[] | null>>({});
   const [roles, setRoles] = useState<any[] | null>(null);
+  const { me: hubMe } = useMe();
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
 
@@ -129,7 +142,7 @@ export default function SettingsHub() {
   useEffect(() => {
     if (sec === "statuses" || sec === "team") {
       const rt = sec === "statuses" ? statusRT : "work_order";
-      api.get<any>(`/statuses?record_type=${rt}`).then((r) => setStatuses(r.items || r || [])).catch(() => {});
+      api.get<any>(`/statuses?record_type=${rt}`).then((r) => setStatuses(r.items || r || [])).catch(loadFailed("statuses"));
     }
   }, [sec, statusRT]);
 
@@ -151,8 +164,8 @@ export default function SettingsHub() {
   const [empEdit, setEmpEdit] = useState<any | "new" | null>(null);
   const [payrollEdit, setPayrollEdit] = useState<any | "new" | null>(null);
   const [statusEdit, setStatusEdit] = useState<any | "new" | null>(null);
-  const reloadTeam = () => api.get<any>("/staff/employees").then((r) => { const d = r?.items ?? r; setLists((s) => ({ ...s, team: Array.isArray(d) ? d : [] })); }).catch(() => {});
-  const reloadPayrollRules = () => api.get<any>("/payroll/rules").then((r) => { const d = r?.items ?? r; setLists((s) => ({ ...s, "payroll-rules": Array.isArray(d) ? d : [] })); }).catch(() => {});
+  const reloadTeam = () => api.get<any>("/staff/employees").then((r) => { const d = r?.items ?? r; setLists((s) => ({ ...s, team: Array.isArray(d) ? d : [] })); }).catch(loadFailed("the staff list"));
+  const reloadPayrollRules = () => api.get<any>("/payroll/rules").then((r) => { const d = r?.items ?? r; setLists((s) => ({ ...s, "payroll-rules": Array.isArray(d) ? d : [] })); }).catch(loadFailed("payroll rules"));
   const [formFieldsFor, setFormFieldsFor] = useState<any | null>(null);
   const [checklistEdit, setChecklistEdit] = useState<any | null | undefined>(undefined);  // undefined=closed, null=new, obj=edit
   const reloadRbac = () => api.get<any>("/settings/rbac/roles").then((r) => setRbacRoles(r.items || r || [])).catch(() => setRbacRoles([]));
@@ -194,7 +207,7 @@ export default function SettingsHub() {
   }, [sec]);
 
   // ── Inline editors for config entities (create / edit / delete) ──
-  type Field = { k: string; label: string; type: "text" | "number" | "select" | "color" | "checkbox" | "textarea" | "date"; opts?: string[]; def?: any; req?: boolean; vars?: boolean; counter?: boolean };
+  type Field = { k: string; label: string; type: "text" | "number" | "select" | "color" | "checkbox" | "textarea" | "date"; opts?: string[]; options?: { value: string; label: string }[]; def?: any; req?: boolean; vars?: boolean; counter?: boolean };
   const EDITORS: Record<string, { create: string; upd?: (id: string) => string; updMethod?: "put" | "patch"; del?: (id: string) => string; fields: Field[]; reload: () => void }> = {
     automation: { create: "/automations", upd: (id) => `/automations/${id}`, del: (id) => `/automations/${id}`, reload: () => reloadSec("automation"), fields: [
       { k: "name", label: "Rule name", type: "text", req: true }, { k: "event", label: "Event", type: "select", opts: ["status_change", "order_created", "order_closed", "payment_received", "appointment_created"], def: "status_change" },
@@ -211,9 +224,15 @@ export default function SettingsHub() {
       { k: "trigger_event", label: "Trigger event", type: "select", opts: ["status_change", "created", "closed", "reminder"], def: "status_change" }, { k: "trigger_status", label: "When status (key)", type: "text" },
       { k: "subject", label: "Subject (email)", type: "text" }, { k: "body_template", label: "Message body", type: "textarea", req: true, vars: true, counter: true }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
     invites: { create: "/staff/invites", del: (id) => `/staff/invites/${id}`, reload: () => reloadInvites(), fields: [
-      { k: "email", label: "Email", type: "text", req: true }, { k: "name", label: "Name", type: "text" } ] },
+      { k: "email", label: "Email", type: "text", req: true }, { k: "name", label: "Name", type: "text" },
+      // Only the owner can give unlimited access ("no role"); everyone else picks a role.
+      { k: "role_id", label: "Role", type: "select", req: !hubMe?.is_owner,
+        options: [...(hubMe?.is_owner ? [{ value: "", label: "No role (full access)" }] : [{ value: "", label: "Choose a role…" }]),
+          ...(rbacRoles || []).map((r: any) => ({ value: r.id, label: r.name }))] } ] },
     forms: { create: "/forms/types", upd: (id) => `/forms/types/${id}`, del: (id) => `/forms/types/${id}`, reload: () => reloadSec("forms"), fields: [
-      { k: "name", label: "Form name", type: "text", req: true }, { k: "color", label: "Colour", type: "color", def: "#4f8ef7" }, { k: "initial_status", label: "Initial status (key)", type: "text", def: "new" }, { k: "is_default", label: "Default", type: "checkbox" } ] },
+      { k: "name", label: "Form name", type: "text", req: true }, { k: "color", label: "Colour", type: "color", def: "#4f8ef7" }, { k: "initial_status", label: "Initial status (key)", type: "text", def: "new" }, { k: "is_default", label: "Default", type: "checkbox" },
+      { k: "requires_signature", label: "Customer must sign before the job can be closed", type: "checkbox" },
+      { k: "requires_checklist", label: "All required checklist items must be done before the job can be closed", type: "checkbox" } ] },
     warehouses: { create: "/settings/warehouses", upd: (id) => `/settings/warehouses/${id}`, del: (id) => `/settings/warehouses/${id}`, reload: () => reloadSec("warehouses"), fields: [
       { k: "name", label: "Name", type: "text", req: true }, { k: "kind", label: "Kind", type: "select", opts: ["product", "asset"], def: "product" },
       { k: "scope", label: "Scope", type: "select", opts: ["location", "company"], def: "location" }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
@@ -315,6 +334,7 @@ export default function SettingsHub() {
         {/* pb-80: scroll room below the last card so dropdowns near the bottom
             (e.g. the Public-pages status pickers) have space to open downward. */}
         <div className="flex-1 min-w-0 overflow-y-auto p-6 pb-80">
+          <Suspense fallback={sectionLoading}>
           {/* Narrow screens hide the section list; the Overview's category cards are the menu. */}
           {sec !== "overview" && (
             <button onClick={() => setSec("overview")} className="md:hidden mb-3 -ml-1 flex items-center gap-1.5 px-1 py-2 text-xs font-semibold text-primary"><M n="arrow_back" c="text-sm" />All settings</button>
@@ -360,6 +380,7 @@ export default function SettingsHub() {
             <GeneralSettings co={co} setCo={setCo} saved={coSaved} onSave={saveCompany} rebuilding={rebuilding} onRebuild={rebuildBalances}
               opts={{ countries: COUNTRY_META, timezones: TIMEZONES, currencies: CURRENCIES, docLangs: DOC_LANGS, industries: INDUSTRIES }} />
           )}
+          {sec === "general" && co && <div className="max-w-4xl mt-5"><RetentionCard Card={SectionCard} /></div>}
 
           {sec === "statuses" && (
             <StatusList statuses={statuses} recordType={statusRT} onRecordType={(rt) => { setStatusRT(rt); setStatuses([]); }}
@@ -416,7 +437,7 @@ export default function SettingsHub() {
 
           {sec === "forms" && (
             <FormsDesigner types={lists.forms || []} onAddType={() => setEditing({ sec: "forms", row: null })}
-              onDeleteType={(r) => delRow("forms", r)} onAdvanced={(t) => setFormFieldsFor(t)} />
+              onDeleteType={(r) => delRow("forms", r)} onAdvanced={(t) => setFormFieldsFor(t)} onChanged={() => reloadSec("forms")} />
           )}
 
           {sec === "pricing" && (
@@ -451,8 +472,10 @@ export default function SettingsHub() {
               <WebhooksCard />
             </div>
           )}
+          </Suspense>
         </div>
       </div>
+      <Suspense fallback={null}>
       {editing && editing.sec === "templates" ? (
         <TemplateEditorDrawer
           initial={editing.row}
@@ -494,6 +517,7 @@ export default function SettingsHub() {
       {checklistEdit !== undefined && (
         <ChecklistEditor tpl={checklistEdit} onClose={() => setChecklistEdit(undefined)} onSaved={() => { setChecklistEdit(undefined); reloadSec("checklists"); }} />
       )}
+      </Suspense>
       {toast && <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-clay-drawer z-[70]">{toast}</div>}
     </Shell>
   );
@@ -751,7 +775,7 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[440px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <div>
@@ -854,7 +878,7 @@ function RichTextEditor({ value, onChange, registerInsert }: {
   const savedRange = useRef<Range | null>(null);
   const [logo, setLogo] = useState<string>("");
   const [code, setCode] = useState<string | null>(null);  // HTML source view (null = off)
-  useEffect(() => { api.get<any>("/staff/company").then((c) => setLogo(c.logo_data || "")).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/staff/company").then((c) => setLogo(c.logo_data || "")).catch(loadFailed("company details")); }, []);
   useEffect(() => { if (ref.current) ref.current.innerHTML = notifHydrate(value || ""); }, []);  // init once
   const emit = () => onChange(ref.current ? notifSerialize(ref.current) : "");
   const focus = () => ref.current?.focus();
@@ -901,7 +925,7 @@ function RichTextEditor({ value, onChange, registerInsert }: {
         <TB cmd="insertHorizontalRule" icon="horizontal_rule" title="Divider" />
         <span className="w-px h-5 bg-slate-200 mx-1" />
         <button aria-label="Insert link" type="button" className={btn} title="Insert link" onMouseDown={async (e) => { e.preventDefault(); saveSel(); const u = await promptDialog("Link URL"); if (u) exec("createLink", u); }}><M n="link" c="text-[18px]" /></button>
-        <button aria-label="Insert image" type="button" className={btn} title="Insert image" onMouseDown={async (e) => { e.preventDefault(); saveSel(); const u = await promptDialog("Image URL"); if (u) insertHtml(`<img src="${u}" style="max-width:100%" />`); }}><M n="image" c="text-[18px]" /></button>
+        <button aria-label="Insert image" type="button" className={btn} title="Insert image" onMouseDown={async (e) => { e.preventDefault(); saveSel(); const u = await promptDialog("Image URL"); if (u) insertHtml(`<img src="${escapeHtml(u)}" alt="" style="max-width:100%" />`); }}><M n="image" c="text-[18px]" /></button>
         <button aria-label="Insert table" type="button" className={btn} title="Insert table" onMouseDown={(e) => { e.preventDefault(); saveSel(); insertHtml(notifTableHTML()); }}><M n="table" c="text-[18px]" /></button>
         {logo && <button type="button" className="h-8 px-2 rounded hover:bg-slate-200/70 text-xs font-semibold text-primary flex items-center gap-1" title="Insert company logo" onMouseDown={(e) => { e.preventDefault(); saveSel(); insertHtml(`<img src="${logo}" alt="logo" style="max-height:64px" />`); }}><M n="image" c="text-[16px]" /> Logo</button>}
         <button aria-label="Edit HTML source" type="button" title="Edit HTML source" onClick={toggleCode} className={"w-8 h-8 rounded flex items-center justify-center ml-auto " + (code !== null ? "bg-primary/10 text-primary" : "hover:bg-slate-200/70 text-ink-secondary")}><M n="code" c="text-[18px]" /></button>
@@ -968,7 +992,7 @@ function NotifTemplateDrawer({ tpl, module, onClose, onSaved }: {
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[720px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary">{tpl?.id ? "Edit template" : "New template"}</h2>
@@ -1068,14 +1092,15 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
   const [keyProv, setKeyProv] = useState<string | null>(null);
   if (!data) return <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-6 text-xs text-ink-tertiary">Loading integrations…</div>;
   const creds = data.creds || {};
-  const srcOf = (p: string) => creds[p]?.source as ("org" | "env" | "none" | undefined);
+  const srcOf = (p: string) => creds[p]?.source as ("org" | "env" | "none" | "unreadable" | undefined);
   const keyBadge = (p: string): { text: string; tone: "on" | "off" | "neutral" } => {
     const s = srcOf(p);
     if (s === "org") return { text: "Your keys", tone: "on" };
     if (s === "env") return { text: "Shared default", tone: "neutral" };
+    if (s === "unreadable") return { text: "Enter keys again", tone: "off" };
     return { text: "Not set", tone: "off" };
   };
-  const keyAction = (p: string) => ({ label: srcOf(p) === "org" ? "Edit keys" : "Add keys", onClick: () => setKeyProv(p) });
+  const keyAction = (p: string) => ({ label: srcOf(p) === "org" ? "Edit keys" : srcOf(p) === "unreadable" ? "Re-enter keys" : "Add keys", onClick: () => setKeyProv(p) });
   const emailOn = (data.email?.accounts?.length || 0) > 0;
   const payGw = data.pay?.gateway; const payLive = !!data.pay?.live;
   const payAvail = Object.entries(data.pay?.available || {}).filter(([, v]) => v).map(([k]) => k);
@@ -1220,7 +1245,7 @@ function CredDrawer({ provider, status, onClose, onSaved }: {
           {err && <div className="text-xs text-rose-600">{err}</div>}
         </div>
         <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-between">
-          {status?.source === "org"
+          {status?.source === "org" || status?.source === "unreadable"
             ? <button onClick={clearKeys} disabled={busy} className="text-[12px] font-semibold text-rose-600 hover:underline">Remove keys</button>
             : <span />}
           <div className="flex gap-2">
@@ -1322,7 +1347,7 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
   const fld = "w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[540px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="px-5 pt-5 pb-3">
@@ -1364,7 +1389,7 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div><label className={lblc}>Role</label>
-                <select value={f.role_id || ""} onChange={(e) => set("role_id", e.target.value)} className={`${fld} appearance-none`}><option value="">— No role —</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
+                <select value={f.role_id || ""} onChange={(e) => set("role_id", e.target.value)} className={`${fld} appearance-none`}><option value="">{me?.is_owner ? "— No role (full access) —" : "Choose a role…"}</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
               <div><label className={lblc}>Home location</label>
                 <select value={f.location_id || ""} onChange={(e) => set("location_id", e.target.value)} className={`${fld} appearance-none`}><option value="">All locations</option>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
             </div>
@@ -1454,7 +1479,7 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
   const isPct = f.calc_type === "percent";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[520px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
@@ -1537,7 +1562,7 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
   const [busy, setBusy] = useState(false);
   const [statuses, setStatuses] = useState<any[]>([]);
   const load = () => api.get<{ items: any[] }>(`/forms/types/${type.id}/fields`).then((r) => setFields(r.items || [])).catch(() => setFields([]));
-  useEffect(() => { load(); api.get<any>("/statuses").then((r) => setStatuses(r.items || [])).catch(() => {}); }, []);
+  useEffect(() => { load(); api.get<any>("/statuses").then((r) => setStatuses(r.items || [])).catch(loadFailed("statuses")); }, []);
   async function add() {
     if (!nf.field_label.trim()) return; setBusy(true);
     try {
@@ -1554,7 +1579,7 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
   async function del(id: string) { try { await api.del(`/forms/fields/${id}`); load(); onChanged(); } catch { /* ignore */ } }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[480px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <div><h2 className="font-bold text-ink-primary">Custom fields</h2><p className="text-[11px] text-ink-tertiary">{type.name || type.label}</p></div>
@@ -1644,7 +1669,7 @@ function SecTable({ rows, cols, onRowClick, onDelete }: { rows: any[] | null | u
       </tr></thead>
       <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
         {rows.map((r, i) => (
-          <tr key={r?.id || i} className={`hover:bg-blue-50/30 ${onRowClick ? "cursor-pointer" : ""}`} onClick={onRowClick ? () => onRowClick(r) : undefined}>
+          <tr key={r?.id || i} className={`hover:bg-blue-50/30 ${onRowClick ? "cursor-pointer" : ""}`} {...clickableRow(onRowClick ? () => onRowClick(r) : undefined)}>
             {cols.map(([h, fn], j) => <td key={h} className={`py-2.5 px-4 ${j === 0 ? "font-bold text-ink-primary" : ""}`}>{fn(r)}</td>)}
             {(onRowClick || onDelete) && (
               <td className="py-2.5 px-4 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
@@ -1765,7 +1790,7 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className={`relative ${hasVars ? "w-[720px]" : "w-[440px]"} max-w-full bg-white h-full shadow-drawer flex flex-col`}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary">{title}</h2>
@@ -1779,7 +1804,9 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
               {f.type === "checkbox" ? (
                 <button type="button" onClick={() => setV({ ...v, [f.k]: !v[f.k] })} className={`w-10 h-6 rounded-full transition-colors ${v[f.k] ? "bg-primary" : "bg-slate-300"} relative`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${v[f.k] ? "left-[18px]" : "left-0.5"}`} /></button>
               ) : f.type === "select" ? (
-                <select value={v[f.k]} onChange={set(f.k)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary capitalize">{f.opts.map((o: string) => <option key={o} value={o}>{o.replace(/_/g, " ")}</option>)}</select>
+                f.options
+                  ? <select value={v[f.k] ?? ""} onChange={set(f.k)} aria-label={f.label} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary">{f.options.map((o: { value: string; label: string }) => <option key={o.value} value={o.value}>{o.label}</option>)}</select>
+                  : <select value={v[f.k]} onChange={set(f.k)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary capitalize">{f.opts.map((o: string) => <option key={o} value={o}>{o.replace(/_/g, " ")}</option>)}</select>
               ) : f.type === "color" ? (
                 <input type="color" value={v[f.k]} onChange={set(f.k)} className="h-9 w-16 rounded border border-slate-200" />
               ) : f.type === "textarea" ? (
@@ -1894,7 +1921,7 @@ function StatusMultiSelect({ value, list, onChange, single, placeholder }: {
               style={{ background: smsTintBg(s?.color), border: `0.5px solid ${smsTintBorder(s?.color)}`, color: s?.color || SMS_DEFAULT_COLOR }}>
               <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: s?.color || SMS_DEFAULT_COLOR }} />
               {s?.name || key}
-              <span onClick={(e) => { e.stopPropagation(); pick(key); }} className="w-4 h-4 grid place-items-center rounded-full hover:bg-black/5 cursor-pointer"><M n="close" c="text-[12px]" /></span>
+              <span {...clickable((e) => { e.stopPropagation(); pick(key); })} aria-label={`Remove ${s?.name || key}`} className="w-4 h-4 grid place-items-center rounded-full hover:bg-black/5 cursor-pointer"><M n="close" c="text-[12px]" /></span>
             </span>
           );
         })}
@@ -2092,7 +2119,7 @@ function AssetCatalog() {
     api.get<any>(`/settings/industry-template`).then((r) => {
       const t = r?.current || "general"; setTk(t);
       loadGroups(t); loadBrands(t); loadModels(t); loadRules(t);
-    }).catch(() => {});
+    }).catch(loadFailed("the industry template"));
   }, []);
 
   const gName = (id?: string | null) => groups.find((g) => g.id === id)?.label || "—";
@@ -2287,8 +2314,49 @@ function TierManager({ types }: { types: any[] }) {
 // ── Forms & fields: pick a form, customize it in place ─────────────────────
 // One pill per work-order type plus the Client / Device / Product forms; the selected form opens
 // in FormCustomizer (drag to reorder, click to edit, add a field where it belongs).
-function FormsDesigner({ types, onAddType, onDeleteType, onAdvanced }: {
-  types: any[]; onAddType: () => void; onDeleteType: (t: any) => void; onAdvanced: (t: any) => void;
+// J1: what a job of this type needs before it can be closed. The type is saved whole (the
+// server's PUT replaces every field), so send its current values with the one switch changed.
+function CloseRules({ type, onChanged }: { type: any; onChanged?: () => void }) {
+  const [v, setV] = useState({ requires_signature: !!type.requires_signature, requires_checklist: !!type.requires_checklist });
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { setV({ requires_signature: !!type.requires_signature, requires_checklist: !!type.requires_checklist }); }, [type.id, type.requires_signature, type.requires_checklist]);
+  async function flip(k: "requires_signature" | "requires_checklist") {
+    const next = { ...v, [k]: !v[k] };
+    setV(next); setBusy(true); setErr(null);
+    try {
+      await api.put(`/forms/types/${type.id}`, {
+        name: type.name, color: type.color || "#4f8ef7", initial_status: type.initial_status || "new",
+        default_asset_type: type.default_asset_type || "Device", is_default: !!type.is_default,
+        sched_default_duration: type.sched_default_duration ?? 60, sched_required: !!type.sched_required,
+        ...next,
+      });
+      onChanged?.();
+    } catch (e: any) { setV(v); setErr(e?.message || "Could not save"); }
+    finally { setBusy(false); }
+  }
+  const rows: ["requires_signature" | "requires_checklist", string][] = [
+    ["requires_signature", "Customer must sign before the job can be closed"],
+    ["requires_checklist", "All required checklist items must be done before the job can be closed"],
+  ];
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-2">
+      <div className="text-xs font-semibold text-ink-primary">Before a {type.name} job can be closed</div>
+      {rows.map(([k, label]) => (
+        <label key={k} className="flex items-center gap-2.5 text-xs text-ink-secondary cursor-pointer">
+          <button type="button" role="switch" aria-checked={v[k]} aria-label={label} disabled={busy} onClick={() => flip(k)}
+            className={`w-9 h-5 rounded-full transition-colors relative shrink-0 disabled:opacity-60 ${v[k] ? "bg-primary" : "bg-slate-300"}`}>
+            <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${v[k] ? "left-[18px]" : "left-0.5"}`} />
+          </button>
+          <span>{label}</span>
+        </label>
+      ))}
+      {err && <p role="alert" className="text-[11px] text-rose-600">{err}</p>}
+    </div>
+  );
+}
+
+function FormsDesigner({ types, onAddType, onDeleteType, onAdvanced, onChanged }: {
+  types: any[]; onAddType: () => void; onDeleteType: (t: any) => void; onAdvanced: (t: any) => void; onChanged?: () => void;
 }) {
   const want = new URLSearchParams(window.location.search).get("form");
   const [pick, setPick] = useState<string>(() => want || "");
@@ -2312,6 +2380,7 @@ function FormsDesigner({ types, onAddType, onDeleteType, onAdvanced }: {
           {!cur.type.is_default && <button onClick={() => onDeleteType(cur.type)} className="font-semibold text-rose-600 hover:underline">Delete this type</button>}
         </div>
       )}
+      {cur?.type && <CloseRules type={cur.type} onChanged={onChanged} />}
       {cur && <FormCustomizer key={cur.id} form={cur.form} typeId={cur.typeId} title={cur.label} />}
     </div>
   );

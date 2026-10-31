@@ -14,12 +14,14 @@ RUN npm run build
 
 # ── 2. Python runtime ────────────────────────────────────────────────────────
 FROM python:3.11-slim-bookworm AS runtime
+# One worker by default: rate limits are per process unless REDIS_URL is set, and the app refuses
+# to boot with more workers and no Redis (backend/config.py). Set REDIS_URL, then raise it.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     ENVIRONMENT=production \
     LOG_JSON=true \
-    WEB_CONCURRENCY=2 \
+    WEB_CONCURRENCY=1 \
     FORWARDED_ALLOW_IPS=127.0.0.1
 WORKDIR /app
 

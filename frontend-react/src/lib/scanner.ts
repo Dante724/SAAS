@@ -69,6 +69,6 @@ export function scanBeep(ok: boolean) {
     osc.connect(gain).connect(ctx.destination);
     osc.start();
     osc.stop(ctx.currentTime + (ok ? 0.08 : 0.25));
-    osc.onended = () => { ctx.close().catch(() => {}); };
+    osc.onended = () => { ctx.close().catch(() => { /* silent: closing the beep's audio context */ }); };
   } catch { /* no audio: the visual flash still shows */ }
 }

@@ -18,6 +18,7 @@ from backend.models import (
 )
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.money import q2
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/reports/insights", tags=["insights"])
 
@@ -158,7 +159,7 @@ async def data(kind: str = "diagram", subject: str = "closed_orders", metric: st
         raise HTTPException(400, "Unknown subject")
     if metric not in SUBJECTS[subject]["metrics"]:
         metric = SUBJECTS[subject]["metrics"][0]
-    now = datetime.utcnow()
+    now = now_utc()
     start = _range_start(period, now)
     records = await _records(db, current.org_id, subject, start, location_id)
 

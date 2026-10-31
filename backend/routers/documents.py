@@ -12,9 +12,8 @@ import html as _html_mod
 import re
 import json
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
-from datetime import datetime
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -30,6 +29,8 @@ from backend.services.codes import (
     barcode_svg, code128_svg, label_barcode, qr_svg, unprintable_message, validate_barcode_options,
 )
 from backend.config import settings
+from backend.services.dates import now_utc
+from backend.services.money import d2
 
 
 class _Html(str):
@@ -276,6 +277,17 @@ DEFAULT_ESTIMATE_HTML = """<style>
 <p>Discount applies to invoices paid on or before the due date.</p>
 <p><strong>PAYMENT TERMS:</strong> Payment due within 14 days of invoice.</p>"""
 
+# ii144c — shelf labels for bins and stickers for serialized units (render-bin-labels / render-serial-labels)
+DEFAULT_BIN_LABEL_HTML = """<div style="text-align:center;padding:2mm">
+<div style="font-size:16pt;font-weight:bold">{Bin Name}</div>
+<div style="font-size:8pt">{Warehouse Name} {Bin Zone} {Bin Shelf}</div>
+<div>{Barcode}</div>
+</div>"""
+DEFAULT_SERIAL_LABEL_HTML = """<div style="text-align:center;padding:2mm">
+<div style="font-size:9pt;font-weight:bold">{Product Name}</div>
+<div>{Barcode}</div>
+</div>"""
+
 DEFAULT_PRICETAG_HTML = """<style>
   body {margin: 2em;}
   tr, td {height: 2em;}
@@ -331,6 +343,10 @@ async def _ensure_defaults(db: AsyncSession, org_id: str):
         db.add(DocumentTemplate(org_id=org_id, name="Price tag", doc_type="label",
                                 body_html=DEFAULT_PRICETAG_HTML, page_size="label"))
         added = True
+    for name, body in (("Bin label", DEFAULT_BIN_LABEL_HTML), ("Serial label", DEFAULT_SERIAL_LABEL_HTML)):
+        if name.lower() not in existing:      # ii144c
+            db.add(DocumentTemplate(org_id=org_id, name=name, doc_type="label", body_html=body, page_size="label"))
+            added = True
     if added:
         await db.commit()
 
@@ -497,9 +513,9 @@ def _spell_int(n: int) -> str:
 
 
 def _spell_money(amount) -> str:
-    amount = float(amount or 0)
+    amount = d2(amount)
     whole = int(amount)
-    cents = int(round((amount - whole) * 100))
+    cents = int((amount - whole) * 100)
     words = _spell_int(whole).capitalize()
     if cents:
         words += f" and {cents:02d}/100"
@@ -542,7 +558,7 @@ def _line_numbers(line: OrderLine) -> dict:
             "base": base, "base_no_disc": gross_no_disc, "tax": tax, "amount": amount}
 
 
-def _row_vars(i: int, line: OrderLine, part, tech) -> dict:
+def _row_vars(i: int, line: OrderLine, part, tech, serials: str = "", bins: str = "") -> dict:
     n = _line_numbers(line)
     return {
         "{Row Number}": i,
@@ -553,11 +569,11 @@ def _row_vars(i: int, line: OrderLine, part, tech) -> dict:
         "{Product SKU}": (getattr(part, "sku", None) if part else "") or "",
         "{Product MPN}": (getattr(part, "mpn", None) if part else "") or "",
         "{Product Barcode}": (getattr(part, "barcode", None) if part else "") or "",
-        "{Product Serial Number}": "",
+        "{Product Serial Number}": serials,          # ii144c: the units this job used
         "{Product Description}": (getattr(part, "category", None) if part else "") or (line.description or ""),
         "{Product Comment}": "",
         "{Product Color}": "",
-        "{Product Bin Location}": "",
+        "{Product Bin Location}": bins,              # ii144c: the bin(s) it was taken from
         "{Product Warehouse}": "",
         "{Product Default Supplier Name}": (getattr(part, "brand", None) if part else "") or "",
         "{Product Client Warranty}": (f"{part.warranty_days} days" if part and getattr(part, "warranty_days", None) else ""),
@@ -624,6 +640,30 @@ async def _status_name(db, org_id, order: Order) -> str:
     return name or (order.status or "").replace("_", " ").capitalize()
 
 
+async def _order_units_and_bins(db, org_id: str, order_id: str, part_ids: list) -> tuple[dict, dict]:
+    """ii144c — per product on the job: its serial numbers ("A, B") and the bins its stock was taken
+    from (net of anything given back), for {Product Serial Number} / {Product Bin Location}."""
+    if not part_ids:
+        return {}, {}
+    from backend.models import SerializedItem, StockMovement, StorageBin
+    serials: dict = {}
+    for pid, sn in (await db.execute(select(SerializedItem.part_id, SerializedItem.serial_number).where(
+            SerializedItem.org_id == org_id, SerializedItem.order_id == order_id,
+            SerializedItem.part_id.in_(part_ids)).order_by(SerializedItem.serial_number))).all():
+        serials.setdefault(pid, []).append(sn)
+    net: dict = {}
+    for pid, bin_name, qty in (await db.execute(
+            select(StockMovement.part_id, StorageBin.name, StockMovement.qty)
+            .join(StorageBin, StorageBin.id == StockMovement.bin_id).where(
+                StockMovement.ref_type == "order", StockMovement.ref_id == order_id,
+                StockMovement.movement_type.in_(("use", "return")), StockMovement.part_id.in_(part_ids),
+                StorageBin.org_id == org_id).order_by(StockMovement.created_at))).all():
+        d = net.setdefault(pid, {})
+        d[bin_name] = d.get(bin_name, 0) - (qty or 0)
+    bins = {pid: ", ".join(b for b, q in d.items() if q > 1e-9) for pid, d in net.items()}
+    return {pid: ", ".join(v) for pid, v in serials.items()}, bins
+
+
 async def _resolve(db, org_id, order: Order, current=None, *, itemised: bool = False):
     """Return (doc_map, rows) — document-level variables and per-line row maps.
 
@@ -677,6 +717,9 @@ async def _resolve(db, org_id, order: Order, current=None, *, itemised: bool = F
         for e in (await db.execute(select(Employee).where(Employee.id.in_(list(tech_ids))))).scalars().all():
             line_techs[e.id] = e
 
+    # ii144c: the serial units on this job and the bins its stock came from, per product
+    line_serials, line_bins = await _order_units_and_bins(db, org_id, order.id, part_ids)
+
     # per-line row maps + running totals
     rows, prod_rows, serv_rows = [], [], []
     subtotal = tax_total = total = total_qty = total_disc = base_no_disc_total = 0.0
@@ -692,7 +735,7 @@ async def _resolve(db, org_id, order: Order, current=None, *, itemised: bool = F
             if names:
                 lt = _types.SimpleNamespace(name=" + ".join(names),
                                             phone=getattr(lt, "phone", ""), position=getattr(lt, "position", ""))
-        rows.append(_row_vars(i, l, p, lt))
+        rows.append(_row_vars(i, l, p, lt, line_serials.get(l.ref_id, ""), line_bins.get(l.ref_id, "")))
         n = _line_numbers(l)
         subtotal += n["base"]; tax_total += n["tax"]; total += n["amount"]
         total_qty += n["qty"]; total_disc += n["disc"]; base_no_disc_total += n["base_no_disc"]
@@ -948,8 +991,8 @@ async def _resolve(db, org_id, order: Order, current=None, *, itemised: bool = F
         "{FX Rate}": (f"1 {_disp_code} = {(1.0 / _fx):,.4f} {_base_code}" if _is_foreign else ""),
         "{FX Note}": (f"Amounts shown in {_disp_code}. {_fmt_date(order.created_at)} rate: 1 {_disp_code} = {(1.0 / _fx):,.4f} {_base_code}." if _is_foreign else ""),
         # Date
-        "{Today Date}": _fmt_date(datetime.utcnow()),
-        "{Current Date}": _fmt_date(datetime.utcnow()),
+        "{Today Date}": _fmt_date(now_utc()),
+        "{Current Date}": _fmt_date(now_utc()),
         # Links — client-facing URLs (Orderry parity). Base is the org's public URL;
         # falls back to a relative path when PUBLIC_BASE_URL isn't configured.
         "{Tracking URL}": _track_url(order),
@@ -1016,7 +1059,7 @@ async def _resolve(db, org_id, order: Order, current=None, *, itemised: bool = F
         "{Total Amount Without Taxes}": _money(subtotal),
         "{Total Discount Pct}": _disc_pct,
         # Date — exact names
-        "{Today Datetime}": _fmt_dt(datetime.utcnow()),
+        "{Today Datetime}": _fmt_dt(now_utc()),
         "{Order Closed Date}": doc["{Order Done Date}"],
         "{Order Due Date Time}": (_fmt_dt(order.due_at) if order.due_at else "—"),
         # Links — exact names + QR variants
@@ -1381,8 +1424,8 @@ async def _resolve_invoice(db, org_id, inv: Invoice, *, itemised: bool = False):
         "{Invoice Subtotal}": m(inv.subtotal), "{Invoice Tax}": m(inv.tax), "{Invoice Total}": m(inv.total),
         "{Invoice Paid}": m(paid), "{Invoice Balance Due}": m(bal), "{Invoice Credited}": m(inv.credited),
         "{Invoice Table}": _table_block(hdr, table_rows), "{Invoice Payment URL}": pay_url,
-        "{Today Date}": _fmt_date(datetime.utcnow()), "{Current Date}": _fmt_date(datetime.utcnow()),
-        "{Today Datetime}": (datetime.utcnow()).strftime("%Y-%m-%d %H:%M"),
+        "{Today Date}": _fmt_date(now_utc()), "{Current Date}": _fmt_date(now_utc()),
+        "{Today Datetime}": (now_utc()).strftime("%Y-%m-%d %H:%M"),
         "{Currency}": (org.currency_code if org else "") or "",
     }
     # 144ho — Orderry-exact aliases + company/client parity on the shared catalog
@@ -1463,16 +1506,19 @@ async def _resolve_part(org, part: Part, price, tpl=None) -> dict:
         "{Product Price Without Taxes}": _money(price),
         "{Currency}": cur,
         "{Company Name}": org.name if org else "Tekly",
-        "{Today Date}": _fmt_date(datetime.utcnow()),
-        "{Current Date}": _fmt_date(datetime.utcnow()),
+        "{Today Date}": _fmt_date(now_utc()),
+        "{Current Date}": _fmt_date(now_utc()),
         "{Barcode}": _Html(bc_html),
         "{QR Code}": _Html(qr_svg(code_val)),
     }
 
 
+MAX_LABELS = 2000      # one sheet; bigger runs print in batches
+
+
 class LabelRenderIn(BaseModel):
     template_id: str
-    part_ids: list[str] = []
+    part_ids: list[str] = Field(default_factory=list, max_length=500)
     copies: int = 1
 
 
@@ -1497,6 +1543,8 @@ async def render_labels(
     if not parts:
         raise HTTPException(404, "No matching products")
     copies = max(1, min(int(data.copies or 1), 500))
+    if len(parts) * copies > MAX_LABELS:
+        raise HTTPException(422, f"At most {MAX_LABELS} labels per sheet — print in batches")
 
     tiles, bad = [], []
     for p in parts:
@@ -1509,6 +1557,8 @@ async def render_labels(
         tiles.extend([f"<div class='lbl'>{body}</div>"] * copies)
     if bad:
         raise HTTPException(422, unprintable_message(bad))
+    if len(tiles) > MAX_LABELS:
+        raise HTTPException(422, f"At most {MAX_LABELS} labels per sheet — print in batches")
 
     return {"html": _labels_html(tpl, tiles), "name": tpl.name, "count": len(tiles)}
 
@@ -1550,14 +1600,14 @@ async def _resolve_asset(db, org, asset: Device) -> dict:
         "{Asset Description}": g(asset, "asset_type"), "{Asset Address}": g(client, "address"),
         "{Client Name}": g(client, "name"), "{Client Phone}": g(client, "phone"),
         "{Company Name}": org.name if org else "Tekly",
-        "{Today Date}": _fmt_date(datetime.utcnow()), "{Current Date}": _fmt_date(datetime.utcnow()),
+        "{Today Date}": _fmt_date(now_utc()), "{Current Date}": _fmt_date(now_utc()),
         "{Barcode}": _Html(code128_svg(code_val)), "{QR Code}": _Html(qr_svg(code_val)),
     }
 
 
 class AssetLabelIn(BaseModel):
     template_id: str
-    asset_ids: list[str] = []
+    asset_ids: list[str] = Field(default_factory=list, max_length=500)
     copies: int = 1
 
 
@@ -1589,6 +1639,122 @@ async def render_asset_labels(
     return {"html": _labels_html(tpl, tiles), "name": tpl.name, "count": len(tiles)}
 
 
+class BinLabelIn(BaseModel):
+    template_id: str
+    bin_ids: list[str] = Field(default_factory=list, max_length=500)
+    copies: int = 1
+    barcode_type: Optional[str] = None      # one type for the whole sheet (default: each bin's own)
+
+
+async def _label_template(db, org_id: str, template_id: str):
+    tpl = (await db.execute(select(DocumentTemplate).where(
+        DocumentTemplate.id == template_id, DocumentTemplate.org_id == org_id))).scalar_one_or_none()
+    if not tpl:
+        raise HTTPException(404, "Template not found")
+    return tpl
+
+
+@router.post("/render-bin-labels")
+async def render_bin_labels(
+    data: BinLabelIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """ii144c — shelf labels for bins: a label template rendered once per bin×copy, the bin's code
+    drawn in the bin's barcode type (or one type for the whole sheet). {Bin Name}, {Bin Code},
+    {Bin Zone}, {Bin Shelf}, {Bin Number}, {Warehouse Name}, {Barcode}, {QR Code}."""
+    from backend.models import StorageBin, Warehouse
+    from backend.services import barcode_types
+    tpl = await _label_template(db, current.org_id, data.template_id)
+    if not data.bin_ids:
+        raise HTTPException(422, "Pick at least one bin")
+    if data.barcode_type and data.barcode_type not in barcode_types.TYPES:
+        raise HTTPException(422, "Unknown barcode type")
+    bins = (await db.execute(select(StorageBin).where(
+        StorageBin.id.in_(data.bin_ids), StorageBin.org_id == current.org_id,
+        StorageBin.active == True))).scalars().all()  # noqa: E712
+    if not bins:
+        raise HTTPException(404, "No matching bins")
+    order = {b: i for i, b in enumerate(data.bin_ids)}
+    bins = sorted(bins, key=lambda b: order.get(b.id, 0))
+    wh_ids = {b.warehouse_id for b in bins if b.warehouse_id}
+    whs = dict((await db.execute(select(Warehouse.id, Warehouse.name).where(
+        Warehouse.id.in_(wh_ids), Warehouse.org_id == current.org_id))).all()) if wh_ids else {}
+    org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
+    copies = max(1, min(int(data.copies or 1), 500))
+    if len(bins) * copies > MAX_LABELS:
+        raise HTTPException(422, f"At most {MAX_LABELS} labels per sheet — print in batches")
+    tiles, bad = [], []
+    for b in bins:
+        code = b.barcode or b.name
+        kind = data.barcode_type or b.barcode_type or "code128"
+        try:
+            value = barcode_types.normalize(kind, code)
+            bc = barcode_svg(value, kind)
+        except ValueError as e:
+            bad.append(f"{b.name} ({e})")
+            continue
+        varmap = {
+            "{Bin Name}": b.name, "{Bin Code}": value, "{Bin Zone}": b.zone or "", "{Bin Shelf}": b.shelf or "",
+            "{Bin Number}": b.bin_number or "", "{Warehouse Name}": whs.get(b.warehouse_id, ""),
+            "{Company Name}": org.name if org else "Tekly",
+            "{Today Date}": _fmt_date(now_utc()), "{Current Date}": _fmt_date(now_utc()),
+            "{Barcode}": _Html(bc), "{QR Code}": _Html(qr_svg(value)),
+        }
+        tiles.extend([f"<div class='lbl'>{_render(tpl.body_html, varmap, [])}</div>"] * copies)
+    if bad:
+        more = f" and {len(bad) - 5} more" if len(bad) > 5 else ""
+        raise HTTPException(422, "These bins can't be printed with this barcode type: " + "; ".join(bad[:5]) + more)
+    return {"html": _labels_html(tpl, tiles), "name": tpl.name, "count": len(tiles)}
+
+
+class SerialLabelIn(BaseModel):
+    template_id: str
+    serial_ids: list[str] = Field(default_factory=list, max_length=500)
+    copies: int = 1
+    barcode_type: str = "code128"
+
+
+@router.post("/render-serial-labels")
+async def render_serial_labels(
+    data: SerialLabelIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """ii144c — a label per serialized unit (serial / IMEI stickers). The product's label variables
+    plus {Serial Number} (also {Product Serial Number} and {IMEI}); {Barcode} encodes the serial."""
+    from backend.routers.serials import units_for_labels
+    from backend.services import barcode_types
+    tpl = await _label_template(db, current.org_id, data.template_id)
+    if not data.serial_ids:
+        raise HTTPException(422, "Pick at least one unit")
+    if data.barcode_type not in barcode_types.TYPES:
+        raise HTTPException(422, "Unknown barcode type")
+    rows = await units_for_labels(db, current.org_id, data.serial_ids)
+    if not rows:
+        raise HTTPException(404, "No matching units")
+    org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
+    copies = max(1, min(int(data.copies or 1), 50))
+    if len(rows) * copies > MAX_LABELS:
+        raise HTTPException(422, f"At most {MAX_LABELS} labels per sheet — print in batches")
+    tiles, bad = [], []
+    for unit, part in rows:
+        try:
+            value = barcode_types.normalize(data.barcode_type, unit.serial_number)
+            bc = barcode_svg(value, data.barcode_type)
+        except ValueError as e:
+            bad.append(f"{unit.serial_number} ({e})")
+            continue
+        varmap = {**(await _resolve_part(org, part, part.sell_price)),
+                  "{Serial Number}": unit.serial_number, "{Product Serial Number}": unit.serial_number,
+                  "{IMEI}": unit.serial_number, "{Barcode}": _Html(bc), "{QR Code}": _Html(qr_svg(value))}
+        tiles.extend([f"<div class='lbl'>{_render(tpl.body_html, varmap, [])}</div>"] * copies)
+    if bad:
+        more = f" and {len(bad) - 5} more" if len(bad) > 5 else ""
+        raise HTTPException(422, "These serials can't be printed with this barcode type: " + "; ".join(bad[:5]) + more)
+    return {"html": _labels_html(tpl, tiles), "name": tpl.name, "count": len(tiles)}
+
+
 async def _resolve_client(db, org, client: Client) -> dict:
     """144ie — variable map for a CLIENT record (contact card / loyalty tag / mailing label)."""
     code_val = (client.phone or client.id or "0")
@@ -1602,7 +1768,7 @@ async def _resolve_client(db, org, client: Client) -> dict:
         "{Client Tax ID}": g(client, "tax_id"), "{Client Registration No}": g(client, "reg_no"),
         "{Client Tax Identification Number}": g(client, "tax_id"),
         "{Company Name}": org.name if org else "Tekly",
-        "{Today Date}": _fmt_date(datetime.utcnow()), "{Current Date}": _fmt_date(datetime.utcnow()),
+        "{Today Date}": _fmt_date(now_utc()), "{Current Date}": _fmt_date(now_utc()),
         "{Barcode}": _Html(code128_svg(code_val)), "{QR Code}": _Html(qr_svg(code_val)),
     }
 
@@ -1754,7 +1920,7 @@ async def _resolve_credit_note(db, org_id, cn):
         "{Credit Note Subtotal}": _money(cn.subtotal), "{Credit Note Tax}": _money(cn.tax_total),
         "{Credit Note Total}": _money(cn.total), "{Credit Note Total Spelled Out}": _spell_money(cn.total or 0),
         "{Credit Note Table}": _table_block(hdr, table_rows),
-        "{Today Date}": _fmt_date(datetime.utcnow()), "{Current Date}": _fmt_date(datetime.utcnow()),
+        "{Today Date}": _fmt_date(now_utc()), "{Current Date}": _fmt_date(now_utc()),
         "{Currency}": (org.currency_code if org else "") or "",
     }
     return doc, rows

@@ -12,10 +12,11 @@ from backend.models import (
 from backend.services.auth import hash_password
 from scripts.demo_credentials import DEMO_FILE, demo_passwords
 import uuid
-from datetime import datetime, timedelta
+from datetime import timedelta
+from backend.services.dates import now_utc
 
 def uid(): return str(uuid.uuid4())
-def now(): return datetime.utcnow()
+def now(): return now_utc()
 
 async def seed_demo_data():
     async with AsyncSessionLocal() as db:
@@ -406,12 +407,12 @@ async def seed_demo_data():
                      phone="+91 98100 11223", source="whatsapp",
                      inquiry="MacBook Air not charging, asking for diagnostic cost",
                      status="new", manager_id=admin.id,
-                     sla_due_at=datetime.utcnow() + _tdl(minutes=45)))
+                     sla_due_at=now_utc() + _tdl(minutes=45)))
         db.add(_Lead(id=uid(), org_id=org.id, location_id=loc.id, name="Sneha Kulkarni",
                      phone="+91 98220 44556", source="instagram",
                      inquiry="Quote for iPad screen replacement",
                      status="in_progress", manager_id=admin.id,
-                     sla_due_at=datetime.utcnow() - _tdl(minutes=20)))
+                     sla_due_at=now_utc() - _tdl(minutes=20)))
         await db.commit()
 
         # Pricing foundation: price types (markups over cost) + a demo client discount

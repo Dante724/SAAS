@@ -9,7 +9,7 @@ credentials the connection is unavailable and sync attempts are logged 'skipped'
 import hashlib
 import hmac
 import secrets
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -23,6 +23,7 @@ from backend.models import (
 from backend.services.crypto import decrypt as _dec
 from backend.services.crypto import encrypt as _enc
 from backend.services.money import q2
+from backend.services.dates import now_utc
 
 AUTH_BASE = "https://appcenter.intuit.com/connect/oauth2"
 TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
@@ -91,7 +92,7 @@ async def complete_connect(db: AsyncSession, code: str, realm_id: str, state: st
     conn.realm_id = realm_id
     conn.access_token = _enc(tok.get("access_token"))
     conn.refresh_token = _enc(tok.get("refresh_token"))
-    conn.token_expires_at = datetime.utcnow() + timedelta(seconds=int(tok.get("expires_in", 3600)))
+    conn.token_expires_at = now_utc() + timedelta(seconds=int(tok.get("expires_in", 3600)))
     conn.connected = True
     conn.state_nonce = None
     await db.commit()
@@ -138,13 +139,13 @@ async def _refresh(db: AsyncSession, conn: QboConnection) -> None:
         conn.access_token = _enc(tok["access_token"])
     if tok.get("refresh_token"):
         conn.refresh_token = _enc(tok["refresh_token"])
-    conn.token_expires_at = datetime.utcnow() + timedelta(seconds=int(tok.get("expires_in", 3600)))
+    conn.token_expires_at = now_utc() + timedelta(seconds=int(tok.get("expires_in", 3600)))
     await db.commit()
 
 
 async def _ensure_fresh(db: AsyncSession, conn: QboConnection) -> None:
     """Refresh proactively if the access token is expired/near-expiry (60s skew)."""
-    if conn.token_expires_at and conn.token_expires_at <= datetime.utcnow() + timedelta(seconds=60):
+    if conn.token_expires_at and conn.token_expires_at <= now_utc() + timedelta(seconds=60):
         await _refresh(db, conn)
 
 
@@ -220,7 +221,7 @@ async def _remote_id(db, org_id, entity_type, local_id) -> Optional[str]:
 
 
 async def _build_payload(db, org_id, entity_type, local_id) -> Optional[dict]:
-    from backend.models import OrderLine, Part
+    from backend.models import Part
 
     if entity_type == "contact":
         c = (await db.execute(select(Client).where(Client.id == local_id, Client.org_id == org_id))).scalar_one_or_none()
@@ -245,27 +246,38 @@ async def _build_payload(db, org_id, entity_type, local_id) -> Optional[dict]:
         cust = await _remote_id(db, org_id, "contact", i.client_id)
         if cust:
             payload["CustomerRef"] = {"value": cust}
-        # build lines from the order, referencing mapped QBO items where possible
-        lines = []
-        tax_total = 0.0
-        if i.order_id:
-            ols = (await db.execute(select(OrderLine).where(OrderLine.order_id == i.order_id))).scalars().all()
-            for ln in ols:
-                amt = float(ln.total or 0)
-                detail = {"Qty": float(ln.qty or 1), "UnitPrice": float(ln.unit_price or 0)}
-                if (ln.line_type or "") == "part" and ln.ref_id:
-                    item_ref = await _remote_id(db, org_id, "item", ln.ref_id)
-                    if item_ref:
-                        detail["ItemRef"] = {"value": item_ref}
-                lines.append({"Amount": amt, "Description": ln.description or None,
-                              "DetailType": "SalesItemLineDetail", "SalesItemLineDetail": detail})
-                tax_total += float(ln.total or 0) * float(ln.tax_rate or 0) / 100.0
-        if not lines:   # fall back to a single summary line
-            lines = [{"Amount": i.total, "DetailType": "SalesItemLineDetail",
-                      "SalesItemLineDetail": {"Qty": 1, "UnitPrice": i.total}}]
+        # J6 — the lines this invoice really bills (a sub-invoice's chosen lines, every job of a
+        # multi-job invoice, its own free lines), referencing mapped QBO items where possible.
+        # Line amounts are before tax (QuickBooks wants Amount = Qty × UnitPrice); the tax is sent
+        # once, as the invoice's own tax when it has one, else the lines' tax.
+        sales = []
+        line_tax = 0.0
+        for row, ln in await _invoice_rows(db, i):
+            net, tax = _net_and_tax(row, ln)
+            qty = float(row.qty or 1) or 1.0
+            detail = {"Qty": qty, "UnitPrice": q2(net / qty)}
+            if ln is not None and (ln.line_type or "") == "part" and ln.ref_id:
+                item_ref = await _remote_id(db, org_id, "item", ln.ref_id)
+                if item_ref:
+                    detail["ItemRef"] = {"value": item_ref}
+            sales.append({"Amount": q2(net), "Description": row.description or None,
+                          "DetailType": "SalesItemLineDetail", "SalesItemLineDetail": detail})
+            line_tax += tax
+        tax_total = q2(float(i.tax or 0)) if float(i.tax or 0) > 0 else q2(line_tax)
+        discount = q2(float(i.discount or 0))
+        if not sales or abs(sum(ln["Amount"] for ln in sales) - discount + tax_total - float(i.total or 0)) > 0.02:
+            # The lines can't add up to what this invoice billed (a sent invoice whose job changed
+            # since, a typed-in subtotal, rounding): send one honest summary line instead.
+            net = q2(float(i.total or 0) - tax_total + discount)
+            sales = [{"Amount": net, "Description": f"Invoice {i.invoice_number}",
+                      "DetailType": "SalesItemLineDetail", "SalesItemLineDetail": {"Qty": 1, "UnitPrice": net}}]
+        lines = sales
+        if discount > 0:
+            lines = sales + [{"Amount": discount, "Description": "Discount", "DetailType": "DiscountLineDetail",
+                              "DiscountLineDetail": {"PercentBased": False}}]
         payload["Line"] = lines
         if tax_total > 0:
-            payload["TxnTaxDetail"] = {"TotalTax": q2(tax_total)}
+            payload["TxnTaxDetail"] = {"TotalTax": tax_total}
         return payload
 
     if entity_type == "payment":
@@ -279,6 +291,50 @@ async def _build_payload(db, org_id, entity_type, local_id) -> Optional[dict]:
             payload["CustomerRef"] = {"value": cust}
         return payload
     return None
+
+
+def _net_and_tax(row, ln) -> tuple[float, float]:
+    """A billed row's amount before tax, and its tax. Job lines carry their own discount and tax
+    (added on top, or included in the price); free invoice lines have neither."""
+    if ln is None:
+        return float(row.total or 0), 0.0
+    after = float(row.qty or 0) * float(row.unit_price or 0)
+    d = float(ln.discount or 0)
+    after -= after * d / 100 if (ln.discount_type or "pct") == "pct" else d
+    rate = float(ln.tax_rate or 0) / 100
+    if not rate:
+        return after, 0.0
+    if (ln.tax_mode or "imposed") == "included":
+        net = after / (1 + rate)
+        return net, after - net
+    return after, after * rate
+
+
+async def _invoice_rows(db: AsyncSession, inv: Invoice) -> list[tuple]:
+    """(row, job line or None) for everything the invoice bills: for each job, the lines it lists
+    (frozen copies on a sent invoice) or the whole job when it lists none of that job's lines; then
+    the invoice's own free lines. Rows carry description, qty, unit_price and total."""
+    from types import SimpleNamespace
+
+    from backend.models import InvoiceLine, OrderLine
+    from backend.services.invoicing import invoice_orders
+    listed = (await db.execute(select(InvoiceLine).where(InvoiceLine.invoice_id == inv.id)
+                               .order_by(InvoiceLine.sort_order))).scalars().all()
+    by_line = {r.order_line_id: r for r in listed if r.order_line_id}
+    out: list[tuple] = []
+    for o in await invoice_orders(db, inv):
+        ols = (await db.execute(select(OrderLine).where(OrderLine.order_id == o.id)
+                                .order_by(OrderLine.id))).scalars().all()
+        mine = [ln for ln in ols if ln.id in by_line]
+        if mine:
+            mine.sort(key=lambda ln: by_line[ln.id].sort_order or 0)
+            out += [(by_line[ln.id], ln) for ln in mine]
+        else:
+            out += [(ln, ln) for ln in ols]
+        if not ols and float(o.total or 0):     # a job priced without lines bills its total
+            out.append((SimpleNamespace(description=o.order_number, qty=1, unit_price=o.total, total=o.total), None))
+    out += [(r, None) for r in listed if not r.order_line_id]
+    return out
 
 
 async def _payment_in_org(db: AsyncSession, org_id: str, p: Payment) -> bool:

@@ -4,7 +4,6 @@ Product warehouses hold shop inventory; asset warehouses hold the items being
 serviced. Which asset label the UI shows ("Devices", "Vehicles", "Tools"…) comes
 from the org's industry template, so the same entity reads correctly per business.
 """
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,6 +15,7 @@ from backend.db.database import get_db
 from backend.models import Employee, Organisation, Warehouse, WarehouseAccess
 from backend.services import warehouses as wh
 from backend.services.auth import get_current_employee, require_perm
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/settings/warehouses", tags=["settings"])
 
@@ -138,7 +138,7 @@ async def delete_warehouse(
         raise HTTPException(
             409, f"This warehouse still holds {bal:g} item(s). Transfer or write them "
                  f"off first — deleting would lose the stock.")
-    w.deleted_at = datetime.utcnow()
+    w.deleted_at = now_utc()
     w.active = False
     await db.commit()
     return {"ok": True, "restorable": True}

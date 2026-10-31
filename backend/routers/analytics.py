@@ -2,7 +2,7 @@
 
 Read-only aggregations over existing orders/lines/devices — no new tables.
 """
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -21,13 +21,14 @@ from backend.models import (
 )
 from backend.services.auth import record_scope, require_perm
 from backend.services.money import q2
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 
 def _window(days: int):
-    end = datetime.utcnow()
+    end = now_utc()
     return end - timedelta(days=days), end
 
 

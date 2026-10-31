@@ -14,7 +14,9 @@ import { money } from "../orders/types";
 import InvoiceDrawer from "./InvoiceDrawer";
 import CreditNotesList from "./CreditNotesList";
 import { Avatar } from "../orders/look";
-import { DISPLAY_MODES, Drawer, ErrorNote, MoreMenu, StatusPill, btnGhost, btnPrimary, daysLate, fmtDate, inputCls, labelCls, lateText, type MenuItem } from "./billing";
+import { DISPLAY_MODES, Drawer, ErrorNote, MoreMenu, StatusPill, btnGhost, btnPrimary, daysLate, fmtDate, inputCls, isVoid, labelCls, lateText, sendInvoice, type MenuItem } from "./billing";
+import { loadFailed } from "../../lib/notice";
+import { clickableRow } from "../../lib/clickable";
 
 // Invoices are day-to-day front-desk work (issue, take payment, resend), so they get their own
 // page next to Sales instead of a tab inside Finance — which also kept staff who only need
@@ -55,6 +57,11 @@ export default function InvoicesHub() {
     try { await api.patch(`/finance/invoices/${id}/einvoice`, { status: "cleared" }); reloadInvoices(); }
     catch { await alertDialog("Could not update status"); }
   }
+  // I6 — send from the list; the answer says plainly if it didn't reach the customer.
+  async function sendFromList(i: Invoice, way: "email" | "sms") {
+    try { const r = await sendInvoice(i.id, way); await alertDialog(r.text, r.tone ? "Not sent" : "Invoice sent"); reloadInvoices(); }
+    catch (e: any) { await alertDialog(e.message || "Couldn't send the invoice"); }
+  }
   // Extra row actions live in "⋮"; the row itself opens the invoice.
   // On phones the e-invoice column isn't there, so its actions join the menu.
   const rowActions = (i: Invoice, phone = false): MenuItem[] => [
@@ -63,6 +70,8 @@ export default function InvoicesHub() {
       { label: "Download e-invoice XML", icon: "download", onClick: () => { openAuthedDoc(`/finance/invoices/${i.id}/einvoice.xml`).catch(() => alertDialog("Could not open e-invoice")); }, hidden: !i.einvoice_status || i.einvoice_status === "none" },
       { label: "Mark e-invoice cleared", icon: "check", onClick: () => { markEinvoiceCleared(i.id); }, hidden: i.einvoice_status !== "issued" },
     ] : []),
+    { label: "Send by email", icon: "mail", onClick: () => { sendFromList(i, "email"); }, hidden: isVoid(i.status) },
+    { label: "Send by text", icon: "sms", onClick: () => { sendFromList(i, "sms"); }, hidden: isVoid(i.status) },
     { label: "Print / PDF", icon: "print", onClick: () => { openAuthedDoc(`/print/invoices/${i.id}`).catch(() => alertDialog("Could not open invoice PDF")); } },
     { label: "Delete invoice", icon: "delete", danger: true, onClick: () => { deleteInvoice(i); },
       hidden: !can("can_delete_invoices") || ["cancelled", "canceled"].includes(i.status || "") || !!(i.amount_paid || 0) || !!(i.credited || 0) },
@@ -142,7 +151,7 @@ export default function InvoicesHub() {
                   const late = daysLate(i);
                   const owed = (i.balance_due || 0) > 0;
                   return (
-                    <tr key={i.id} onClick={() => setOpenInv(i.id)} className={`hover:bg-slate-50/80 cursor-pointer ${invSel.has(i.id) ? "bg-primary/5" : ""}`}>
+                    <tr key={i.id} {...clickableRow(() => setOpenInv(i.id))} className={`hover:bg-slate-50/80 cursor-pointer ${invSel.has(i.id) ? "bg-primary/5" : ""}`}>
                       <td className="py-2.5 pl-4 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label="Select row" checked={invSel.has(i.id)} onChange={() => setInvSel((s) => { const n = new Set(s); n.has(i.id) ? n.delete(i.id) : n.add(i.id); return n; })} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
                       <td className="py-2.5 px-4 font-mono font-semibold text-primary whitespace-nowrap"><button onClick={(e) => { e.stopPropagation(); setOpenInv(i.id); }} className="hover:underline">{i.invoice_number}</button></td>
                       <td className="py-2.5 px-4">{i.client_name
@@ -196,23 +205,23 @@ function NewInvoiceDrawer({ onClose, onCreated }: { onClose: () => void; onCreat
   const [comment, setComment] = useState("");
   const [due, setDue] = useState("");
   const [lines, setLines] = useState<{ kind: string; description: string; qty: number; unit_price: number }[]>([{ kind: "custom", description: "", qty: 1, unit_price: 0 }]);
-  const [discount, setDiscount] = useState(0); const [tax, setTax] = useState(0); // percentages, per backend InvoiceIn
+  const [discount, setDiscount] = useState(0); const [tax, setTax] = useState(0); // percentages; the invoice stores the amounts
   const [mode, setMode] = useState("detailed");   // starts at the shop's default (Settings › Finance)
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { api.get<{ items: any[] }>("/clients?limit=200").then((r) => setClients(r.items || [])).catch(() => {}); }, []);
-  useEffect(() => { api.get<any>("/staff/company").then((c) => { if (c?.default_invoice_display) setMode(c.default_invoice_display); }).catch(() => {}); }, []);
+  useEffect(() => { api.get<{ items: any[] }>("/clients?limit=200").then((r) => setClients(r.items || [])).catch(loadFailed("clients")); }, []);
+  useEffect(() => { api.get<any>("/staff/company").then((c) => { if (c?.default_invoice_display) setMode(c.default_invoice_display); }).catch(() => { /* silent: defaults to the standard layout */ }); }, []);
   const setLine = (i: number, k: string, v: any) => setLines(lines.map((l, j) => j === i ? { ...l, [k]: v } : l));
   const subtotal = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unit_price) || 0), 0);
   const discountAmt = +(subtotal * (Number(discount) || 0) / 100).toFixed(2);
   const taxAmt = +((subtotal - discountAmt) * (Number(tax) || 0) / 100).toFixed(2);
-  const total = +(subtotal - discountAmt + taxAmt).toFixed(2); // matches backend: sub*(1-d/100)*(1+t/100)
+  const total = +(subtotal - discountAmt + taxAmt).toFixed(2); // matches backend: subtotal − discount + tax
   async function save() {
     const clean = lines.filter((l) => l.description.trim() && l.qty > 0);
     if (!clean.length) { setErr("Add at least one line."); return; }
     setBusy(true); setErr(null);
     try {
       await api.post("/finance/invoices", { client_id: clientId || null, comment, due_at: due || null, display_mode: mode,
-        discount: Number(discount) || 0, tax: Number(tax) || 0,
+        discount_pct: Number(discount) || 0, tax_pct: Number(tax) || 0,
         lines: clean.map((l) => ({ kind: l.kind || "custom", description: l.description.trim(), qty: Number(l.qty), unit_price: Number(l.unit_price) })) });
       onCreated();
     } catch (e: any) { setErr(e.message || "Could not create invoice"); setBusy(false); }

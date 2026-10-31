@@ -16,7 +16,6 @@ Point / accountant / customer.
 The XML assembly (`render_ubl`) is a pure function over a plain dict so it can be
 unit-tested without a database.
 """
-from datetime import datetime
 from xml.sax.saxutils import escape
 
 from sqlalchemy import select
@@ -25,10 +24,11 @@ from backend.models import Client, Invoice, LegalEntity, Organisation
 from backend.services import regions
 from backend.services.invoicing import display_lines
 from backend.services.money import q2
+from backend.services.dates import now_utc
 
 
 def _d(dt) -> str:
-    return (dt or datetime.utcnow()).strftime("%Y-%m-%d")
+    return (dt or now_utc()).strftime("%Y-%m-%d")
 
 
 def _money(n) -> str:

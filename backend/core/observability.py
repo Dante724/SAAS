@@ -74,6 +74,7 @@ _SECURITY_HEADERS = {
         "connect-src 'self'; "
         "frame-ancestors 'self'; "
         "base-uri 'self'; "
+        "form-action 'self'; "
         "object-src 'none'"
     ),
 }

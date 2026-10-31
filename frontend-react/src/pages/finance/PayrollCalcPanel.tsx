@@ -9,6 +9,7 @@ import { money } from "../orders/types";
 import EarningsBreakdown, { type BreakdownRule } from "./EarningsBreakdown";
 import { Avatar } from "../orders/look";
 import { btnGhost } from "../invoices/billing";
+import { clickableRow } from "../../lib/clickable";
 
 /* Finance › Payroll calculation: the month's live pay per person, narrowed by location, role
    and employee. A row opens to the commissions behind it (rule → job → line item) plus the
@@ -150,7 +151,7 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
               const acc = p.accrual_status ? ACCRUAL[p.accrual_status] : null;
               return (
                 <Fragment key={p.employee_id}>
-                  <tr className={`hover:bg-blue-50/30 cursor-pointer ${isOpen ? "bg-blue-50/40" : ""}`} onClick={() => toggle(p.employee_id)}>
+                  <tr className={`hover:bg-blue-50/30 cursor-pointer ${isOpen ? "bg-blue-50/40" : ""}`} {...clickableRow(() => toggle(p.employee_id))}>
                     <td className="py-2 pl-3 pr-1"><button type="button" aria-expanded={isOpen} aria-label={`${isOpen ? "Hide" : "Show"} breakdown for ${p.name || "employee"}`} onClick={(e) => { e.stopPropagation(); toggle(p.employee_id); }} className="w-7 h-7 rounded-md grid place-items-center text-ink-tertiary hover:bg-slate-100"><M n={isOpen ? "expand_more" : "chevron_right"} c="text-sm" /></button></td>
                     <td className="py-2 px-3"><span className="flex items-center gap-2.5 min-w-0"><Avatar name={p.name} size={26} /><span className="font-semibold text-ink-primary truncate">{p.name || "—"}</span>{acc && <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${acc[1]}`}>{acc[0]}</span>}</span></td>
                     <td className="py-2.5 px-3">{p.position || "—"}</td>

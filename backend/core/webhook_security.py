@@ -52,8 +52,8 @@ async def verify_org_webhook(db: AsyncSession, org_id: str, request: Request) ->
 def unsigned_webhooks_allowed() -> bool:
     """Only local development and the test suite may accept unsigned provider events.
     Staging and production always fail closed, and so does a server where ENVIRONMENT was
-    never set (it defaults to "development", so a deploy that forgot it used to accept forged
-    webhooks; M4/M5)."""
+    never set (that now means production; it used to default to "development", so a deploy that
+    forgot it accepted forged webhooks)."""
     return ("ENVIRONMENT" in settings.model_fields_set
             and (settings.ENVIRONMENT or "").lower() in ("development", "test"))
 
@@ -63,7 +63,10 @@ async def provider_secrets(db: AsyncSession, org_id: str, provider: str, field: 
     """Signing secrets that may have signed an event for this org: the shop's own
     (Settings → Integrations) first, then the operator-wide env value."""
     from backend.services import org_creds
-    own = (await org_creds.effective(db, org_id, provider, read_only=True)).get(field)   # verify only
+    try:
+        own = (await org_creds.effective(db, org_id, provider, read_only=True)).get(field)   # verify only
+    except org_creds.CredentialsUnreadable:
+        own = None   # the shop's secret can't be read: only the operator's may verify (or none)
     return [s for s in dict.fromkeys([own, global_secret]) if s]
 
 

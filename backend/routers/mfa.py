@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import Employee
+from backend.services import crypto
 from backend.services.audit import record as audit_record
 from backend.services.auth import get_current_employee, verify_password
 from backend.services.ratelimit import aenforce
@@ -34,7 +35,7 @@ async def mfa_enroll(
     if current.mfa_enabled:
         raise HTTPException(400, "MFA already enabled")
     secret = new_secret()
-    current.mfa_secret = secret
+    current.mfa_secret = crypto.encrypt(secret)   # audit M8: never stored readable
     await db.commit()
     return {"secret": secret,
             "otpauth_uri": provisioning_uri(secret, account=current.email)}
@@ -55,7 +56,7 @@ async def mfa_activate(
     await aenforce("mfa_activate", current.id, 10, 900)   # a 6-digit code can't be guessed in bulk
     if not current.mfa_secret:
         raise HTTPException(400, "Start enrollment first")
-    if not verify(current.mfa_secret, data.code):
+    if not verify(crypto.decrypt(current.mfa_secret), data.code):
         raise HTTPException(400, "Invalid code")
     plain, hashed = await asyncio.to_thread(make_recovery_codes)
     current.mfa_enabled = True

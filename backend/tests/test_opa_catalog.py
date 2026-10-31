@@ -371,7 +371,7 @@ async def test_code_svg_renders_ean_and_rejects_bad(client):
     r = await client.get("/api/catalog/code.svg?type=upca&data=036000291452", headers=H)
     assert r.status_code == 200
     assert (await client.get("/api/catalog/code.svg?type=ean13&data=123", headers=H)).status_code == 400
-    assert (await client.get("/api/catalog/code.svg?type=pdf417&data=1", headers=H)).status_code == 400
+    assert (await client.get("/api/catalog/code.svg?type=aztec&data=1", headers=H)).status_code == 400
 
 
 async def test_document_label_template_encodes_chosen_field(client):
@@ -408,7 +408,7 @@ async def test_document_template_barcode_options_validated_and_gated(client):
         "name": "T", "doc_type": "label", "barcode_field": "colour"}, headers=H)
     assert r.status_code == 422
     r = await client.post("/api/documents/templates", json={
-        "name": "T", "doc_type": "label", "barcode_types": {"mpn": "pdf417"}}, headers=H)
+        "name": "T", "doc_type": "label", "barcode_types": {"mpn": "aztec"}}, headers=H)
     assert r.status_code == 422
     _, T = await _teammate(client, H, "can_manage_settings")
     r = await client.post("/api/documents/templates", json={
@@ -424,34 +424,22 @@ async def test_document_template_barcode_options_validated_and_gated(client):
 
 async def test_print_label_template_barcode_field(client):
     H, _, _ = await _register(client)
-    good = await _product(client, H, name="Good", mpn="400638133393", sku="S1")
-    bad = await _product(client, H, name="Bad", mpn="xx", sku="S2")
     r = await client.post("/api/print/templates", json={
         "name": "MPN", "barcode_field": "mpn", "barcode_types": {"mpn": "ean13"},
         "fields": ["name", "mpn", "barcode"]}, headers=H)
     assert r.status_code == 201, r.text
     tpl = r.json()
     assert tpl["barcode_field"] == "mpn" and tpl["barcode_types"] == {"mpn": "ean13"}
-    r = await client.post("/api/print/labels", json={"part_ids": [good["id"]], "template_id": tpl["id"]},
-                          headers=H)
-    assert r.status_code == 200 and r.content[:4] == b"%PDF"
-    r = await client.post("/api/print/labels", json={"part_ids": [good["id"], bad["id"]],
-                                                     "template_id": tpl["id"]}, headers=H)
-    assert r.status_code == 422 and "Bad" in r.json()["detail"]
-    # UPC-A and QR still render
+    # ii144c: the PDF sheet that rendered these is retired (labels print from label templates as HTML)
     for kind in ("upca", "qr", "code128"):
-        await client.put(f"/api/print/templates/{tpl['id']}", json={
+        r = await client.put(f"/api/print/templates/{tpl['id']}", json={
             "name": "MPN", "barcode_types": {"mpn": kind}}, headers=H)
-        mpn = "03600029145" if kind == "upca" else "400638133393"
-        p = await _product(client, H, name=f"P-{kind}", mpn=mpn + ("" if kind == "upca" else kind))
-        r = await client.post("/api/print/labels", json={"part_ids": [p["id"]], "template_id": tpl["id"]},
-                              headers=H)
         assert r.status_code == 200, (kind, r.text)
     # a partial PUT kept the field
     t2 = [t for t in (await client.get("/api/print/templates", headers=H)).json()["items"] if t["id"] == tpl["id"]][0]
     assert t2["barcode_field"] == "mpn"
     # validation, permission, tenant
-    assert (await client.post("/api/print/templates", json={"name": "X", "barcode_type": "pdf417"},
+    assert (await client.post("/api/print/templates", json={"name": "X", "barcode_type": "aztec"},
                               headers=H)).status_code == 422
     _, T = await _teammate(client, H, "can_manage_settings")
     assert (await client.post("/api/print/templates", json={"name": "X"}, headers=T)).status_code == 403
@@ -522,9 +510,6 @@ async def test_print_template_without_field_keeps_sku_fallback(client):
     H, _, _ = await _register(client)
     tpl = (await client.post("/api/print/templates", json={"name": "Legacy"}, headers=H)).json()
     assert tpl["barcode_field"] is None
-    p = await _product(client, H, sku="ONLY-SKU")
-    r = await client.post("/api/print/labels", json={"part_ids": [p["id"]], "template_id": tpl["id"]}, headers=H)
-    assert r.status_code == 200 and r.content[:4] == b"%PDF"
 
 
 async def test_label_preview_uses_chosen_barcode_source(client):
@@ -604,5 +589,5 @@ async def test_preview_keeps_asset_labels_and_validates_options(client):
         "body_html": "<p>{Asset Model}</p>", "doc_type": "label"}, headers=H)
     assert r.json()["sample"] != "Some part"
     r = await client.post("/api/documents/preview", json={
-        "body_html": "<p>{Barcode}</p>", "doc_type": "label", "barcode_types": {"mpn": "ean8"}}, headers=H)
+        "body_html": "<p>{Barcode}</p>", "doc_type": "label", "barcode_types": {"mpn": "aztec"}}, headers=H)
     assert r.status_code == 422

@@ -10,7 +10,6 @@ unchanged for the mobile PWA; the completion gate in orders.change_status reads
 OrderChecklistItem.required/done for both the flat and the v2 items.
 """
 import json
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -30,6 +29,7 @@ from backend.models import (
     OrderChecklistItem,
 )
 from backend.services.auth import get_current_employee, require_perm, record_scope
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api", tags=["checklists"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -395,7 +395,7 @@ def _recompute(cl: OrderChecklist, items: list[OrderChecklistItem]):
     req = [c for c in items if c.required]
     complete = all(c.done for c in req) if req else all(c.done for c in items)
     cl.status = "completed" if (items and complete) else "in_progress"
-    cl.completed_at = datetime.utcnow() if cl.status == "completed" else None
+    cl.completed_at = now_utc() if cl.status == "completed" else None
     # result: failed if any affects_result check-result item is 'fail'
     failed = any(c.field_kind == "check_result" and c.affects_result and
                  (_loads(c.value, None) == "fail") for c in items)
@@ -426,14 +426,15 @@ async def list_order_checklists(
     cls = (await db.execute(select(OrderChecklist).where(
         OrderChecklist.order_id == order_id, OrderChecklist.org_id == current.org_id)
         .order_by(OrderChecklist.created_at))).scalars().all()
-    names = {}
+    from backend.services.batching import names_by_id, rows_by
+    items_by = await rows_by(db, OrderChecklistItem, OrderChecklistItem.checklist_id,
+                             [cl.id for cl in cls], OrderChecklistItem.sort_order)
+    names = await names_by_id(db, Employee.id, Employee.name, [cl.author_id for cl in cls],
+                              org_col=Employee.org_id, org_id=current.org_id)
     out = []
     for cl in cls:
-        items = await _cl_items(db, cl.id)
+        items = items_by.get(cl.id, [])
         aid = cl.author_id
-        if aid and aid not in names:
-            e = (await db.execute(select(Employee).where(Employee.id == aid))).scalar_one_or_none()
-            names[aid] = e.name if e else None
         out.append({"id": cl.id, "title": cl.title, "author": names.get(aid),
                     "created_at": cl.created_at.isoformat() if cl.created_at else None,
                     "completed_at": cl.completed_at.isoformat() if cl.completed_at else None,
@@ -573,7 +574,7 @@ async def fill_item(
     has_file = bool(_loads(c.file_ids, []))
     c.done = has_value or (c.field_kind == "file" and has_file)
     c.done_by_id = current.id if c.done else None
-    c.done_at = datetime.utcnow() if c.done else None
+    c.done_at = now_utc() if c.done else None
     await db.flush()
     # 144go — smart upsell: a Fail / threshold breach auto-drafts a recommendation.
     await _sync_checklist_upsell(db, order_id, current.org_id, c, current)
@@ -737,7 +738,7 @@ async def toggle_item(
         raise HTTPException(404, "Checklist item not found")
     c.done = data.done
     c.done_by_id = current.id if data.done else None
-    c.done_at = datetime.utcnow() if data.done else None
+    c.done_at = now_utc() if data.done else None
     await db.commit()
     items = await _items(db, order_id)
     return {"item": _ser_item(c), "summary": _flat_summary(items)}

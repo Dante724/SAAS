@@ -92,6 +92,7 @@
     <div class="muted" style="font-size:13px;margin-bottom:6px">Platform administration portal</div>
     <div class="field"><label>Email</label><input id="l-email" type="email" placeholder="ops@yourco.com"></div>
     <div class="field"><label>Password</label><input id="l-pass" type="password" placeholder="••••••••" onkeydown="if(event.key==='Enter')Admin.login()"></div>
+    <div class="field hide" id="l-code-wrap"><label>Code from your authenticator app</label><input id="l-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" onkeydown="if(event.key==='Enter')Admin.login()"></div>
     <button class="btn primary" style="width:100%;margin-top:6px" onclick="Admin.login()">Sign in</button>
     <div class="muted" style="font-size:11.5px;margin-top:14px">Separate from tenant logins. Set via PLATFORM_ADMIN_EMAIL / PLATFORM_ADMIN_PASSWORD.</div>
   </div>
@@ -103,6 +104,7 @@
     <div class="brand"><span class="dot"></span> Tekly <span class="muted" style="font-weight:600">Operator</span></div>
     <div style="display:flex;gap:10px;align-items:center">
       <button class="btn sm" onclick="Admin.openCoupons()">Coupons</button>
+      <button class="btn sm" onclick="Admin.openTwoStep()">2-step sign-in</button>
       <span class="muted" id="who"></span>
       <button class="btn sm" onclick="Admin.logout()">Sign out</button>
     </div>
@@ -134,7 +136,11 @@ async function api(path, opts={}){
   if(tok()) h['Authorization'] = 'Bearer '+tok();
   const r = await fetch(API+path, Object.assign({}, opts, {headers:h}));
   const txt = await r.text(); let j={}; try{ j = txt?JSON.parse(txt):{}; }catch(e){ j={detail:txt}; }
-  if(!r.ok) throw new Error(j.detail || ('Error '+r.status));
+  if(!r.ok){
+    const err = new Error(j.detail || ('Error '+r.status));
+    err.status = r.status; err.mfa = r.headers.get('X-MFA-Required') === '1';
+    throw err;
+  }
   return j;
 }
 function toast(m){ const t=document.getElementById('toast'); t.innerHTML=`<div class="toast">${esc(m)}</div>`; setTimeout(()=>t.innerHTML='',2600); }
@@ -151,8 +157,11 @@ const Admin = {
 
   async boot(){
     if(!tok()){ this.showLogin(); return; }
-    try{ const me = await api('/api/admin/me'); document.getElementById('who').textContent = me.name; this.showConsole(); await this.load(); }
-    catch(e){ this.showLogin(); }
+    let me;
+    try{ me = await api('/api/admin/me'); }
+    catch(e){ this.showLogin(); return; }
+    document.getElementById('who').textContent = me.name; this.showConsole();
+    await this.afterSignIn(me.mfa_enabled);
   },
   showLogin(){ document.getElementById('login').classList.remove('hide'); document.getElementById('console').classList.add('hide'); },
   showConsole(){ document.getElementById('login').classList.add('hide'); document.getElementById('console').classList.remove('hide'); },
@@ -160,13 +169,26 @@ const Admin = {
   async login(){
     const email=document.getElementById('l-email').value.trim();
     const password=document.getElementById('l-pass').value;
+    const code=(document.getElementById('l-code').value||'').trim();
     if(!email||!password) return toast('Enter email and password');
     try{
-      const r = await api('/api/admin/login',{method:'POST',body:JSON.stringify({email,password})});
+      const r = await api('/api/admin/login',{method:'POST',body:JSON.stringify({email,password,code:code||null})});
       localStorage.setItem(TKEY, r.access_token);
+      document.getElementById('l-code').value='';
       document.getElementById('who').textContent = r.name || '';
-      this.showConsole(); await this.load();
-    }catch(e){ toast(e.message); }
+      this.showConsole(); await this.afterSignIn(r.mfa_enabled);
+    }catch(e){
+      if(e.mfa){ document.getElementById('l-code-wrap').classList.remove('hide'); document.getElementById('l-code').focus(); }
+      toast(e.message);
+    }
+  },
+  async afterSignIn(mfaOn){
+    try{ await this.load(); }
+    catch(e){
+      if(e.status===403){ toast(e.message); this.openTwoStep(); return; }
+      toast(e.message);
+    }
+    if(!mfaOn) toast('Turn on 2-step sign-in to protect this account');
   },
   logout(){ localStorage.removeItem(TKEY); this.showLogin(); },
 
@@ -315,6 +337,72 @@ const Admin = {
           </div>
         </div>
       </div>`;
+  },
+  async openTwoStep(){
+    let me; try{ me = await api('/api/admin/me'); }catch(e){ return toast(e.message); }
+    const body = me.mfa_enabled ? `
+          <div class="grp"><h3>2-step sign-in is on</h3>
+            <div class="muted" style="font-size:12.5px;margin-bottom:10px">To turn it off, enter your password and a current code.</div>
+            <div class="two">
+              <div><label class="muted" style="font-size:11px">Password</label><input id="m-pass" type="password"></div>
+              <div><label class="muted" style="font-size:11px">Code</label><input id="m-code" inputmode="numeric" autocomplete="one-time-code"></div>
+            </div>
+            <button class="btn" style="margin-top:12px" onclick="Admin.disableTwoStep()">Turn off 2-step sign-in</button>
+          </div>` : `
+          <div class="grp"><h3>Turn on 2-step sign-in</h3>
+            <div class="muted" style="font-size:12.5px;margin-bottom:10px">Each sign-in will also ask for a code from an authenticator app.</div>
+            <button class="btn primary" onclick="Admin.startTwoStep()">Get a setup key</button>
+            <div id="m-setup"></div>
+          </div>`;
+    document.getElementById('drawerHost').innerHTML = `
+      <div class="scrim" onclick="Admin.closeDrawer()"></div>
+      <div class="drawer">
+        <div class="dh"><div style="font-weight:800;font-size:16px">2-step sign-in</div><button class="x" onclick="Admin.closeDrawer()">×</button></div>
+        <div class="db">${body}
+          <div class="grp"><h3>Sessions</h3>
+            <button class="btn" onclick="Admin.logoutEverywhere()">Sign out on every device</button>
+          </div>
+        </div>
+      </div>`;
+  },
+  async startTwoStep(){
+    try{
+      const r = await api('/api/admin/mfa/setup',{method:'POST'});
+      document.getElementById('m-setup').innerHTML = `
+        <div style="margin-top:12px;font-size:12.5px">In your authenticator app, add an account with this key:</div>
+        <div style="font-family:monospace;font-weight:700;margin:6px 0;word-break:break-all">${esc(r.secret)}</div>
+        <div class="muted" style="font-size:11.5px;word-break:break-all">or open: <a href="${esc(r.otpauth_uri)}">${esc(r.otpauth_uri)}</a></div>
+        <label class="muted" style="font-size:11px;display:block;margin-top:12px">Then enter the code it shows</label>
+        <input id="m-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456">
+        <button class="btn primary" style="margin-top:12px" onclick="Admin.enableTwoStep()">Turn on</button>`;
+    }catch(e){
+      // live servers: 2-step is turned on from the server, the message says how
+      if(e.status===403){ document.getElementById('m-setup').innerHTML = `<div style="margin-top:12px;font-size:12.5px">${esc(e.message)}</div>`; return; }
+      toast(e.message);
+    }
+  },
+  async enableTwoStep(){
+    const code=(document.getElementById('m-code').value||'').trim();
+    if(!code) return toast('Enter the code from your app');
+    try{
+      const r = await api('/api/admin/mfa/enable',{method:'POST',body:JSON.stringify({code})});
+      localStorage.setItem(TKEY, r.access_token);
+      toast('2-step sign-in is on. Other devices were signed out.');
+      this.closeDrawer(); await this.load();
+    }catch(e){ toast(e.message); }
+  },
+  async disableTwoStep(){
+    const password=document.getElementById('m-pass').value;
+    const code=(document.getElementById('m-code').value||'').trim();
+    if(!password||!code) return toast('Enter your password and a code');
+    try{
+      await api('/api/admin/mfa/disable',{method:'POST',body:JSON.stringify({password,code})});
+      toast('2-step sign-in is off. Sign in again.'); this.closeDrawer(); this.logout();
+    }catch(e){ toast(e.message); }
+  },
+  async logoutEverywhere(){
+    try{ await api('/api/admin/logout',{method:'POST'}); }catch(e){ return toast(e.message); }
+    this.closeDrawer(); this.logout();
   },
   async createCoupon(){
     const body = {
