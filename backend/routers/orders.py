@@ -3849,6 +3849,7 @@ async def add_line(
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _lock_for_lines(db, order)
     await _guard_editable(db, order, current)
     if (data.discount or 0) > 0:
         await assert_perm(db, current, "can_set_discount")
@@ -4010,7 +4011,8 @@ async def add_line(
         # A kit's lines are never merged into: an extra must stay a line of its own.
         existing = (await db.execute(select(OrderLine).where(
             OrderLine.order_id == order_id, OrderLine.ref_id == data.ref_id, OrderLine.kind == "product",
-            OrderLine.bundle_group_id.is_(None)).limit(1))).scalars().first()
+            OrderLine.bundle_group_id.is_(None)).limit(1)
+            .execution_options(populate_existing=True))).scalars().first()
         if existing and not kit_group:
             existing.qty += data.qty
             existing.total = q2(existing.qty * existing.unit_price *
@@ -4273,6 +4275,16 @@ async def _maybe_deduct(db, order, line, qty, perms, current, *, bin_id=None, se
     line.pending_stock = (line.pending_stock or 0) + shortfall
 
 
+async def _lock_for_lines(db, order) -> None:
+    """Every change to a job's lines (add, edit, remove, merge) takes the job's lock first and
+    re-reads it, so two people on one job queue up: neither loses the other's edit, stock moves
+    for what is saved now (not a stale qty), a line removed twice returns its stock once, and the
+    order total is recomputed from every line. Lines are read after this with populate_existing."""
+    from backend.services.invoicing import lock_order
+    await lock_order(db, order.id)
+    await db.refresh(order)
+
+
 def _line_as_in(line) -> "LineIn":
     return LineIn(line_type=line.line_type, description=line.description or "", qty=line.qty,
                   unit_price=line.unit_price or 0, cost_price=line.cost_price or 0,
@@ -4473,8 +4485,10 @@ async def update_line(
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _lock_for_lines(db, order)
     await _guard_editable(db, order, current)
-    line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id))).scalar_one_or_none()
+    line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id)
+                             .execution_options(populate_existing=True))).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
     payload = data.model_dump(exclude_unset=True)
@@ -4575,8 +4589,10 @@ async def delete_line(
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _lock_for_lines(db, order)
     await _guard_editable(db, order, current)
-    line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id))).scalar_one_or_none()
+    line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id)
+                             .execution_options(populate_existing=True))).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
     if line.bundle_group_id:
