@@ -49,7 +49,11 @@ if not settings.is_sqlite:
                               pool_recycle=settings.DB_POOL_RECYCLE_S)
     _connect_args.update(pg_connect_args(settings))
 
-engine = create_async_engine(settings.DATABASE_URL, **_engine_kwargs)
+# JSON columns (audit details, snapshots, webhook payloads) may now hold Decimal money read from
+# Numeric columns: write it as a number, the way floats always were.
+from backend.services.money import json_dumps as _json_dumps  # noqa: E402
+
+engine = create_async_engine(settings.DATABASE_URL, json_serializer=_json_dumps, **_engine_kwargs)
 
 # Enforce foreign keys on SQLite (dev) so it matches Postgres (prod), which always enforces them —
 # otherwise a bad delete/orphan passes silently in dev and only fails in production.

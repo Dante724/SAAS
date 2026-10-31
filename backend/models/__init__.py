@@ -5,6 +5,7 @@ Tekly — all database models.
 import secrets
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
@@ -330,11 +331,11 @@ class WageRecord(Base):
     employee_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"))
     period_start: Mapped[date] = mapped_column(Date)
     period_end: Mapped[date] = mapped_column(Date)
-    base_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    commission_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    bonus: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    deductions: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    net_payable: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    base_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0.0)
+    commission_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0.0)
+    bonus: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0.0)
+    deductions: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0.0)
+    net_payable: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0.0)
 
 # ─────────────────────────────────────────────
 # CLIENTS & DEVICES
@@ -1216,9 +1217,9 @@ class CashShift(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
     opened_by_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"))
-    opening_float: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    closing_float: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
-    expected_cash: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
+    opening_float: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0.0)
+    closing_float: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
+    expected_cash: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
     opened_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     # 144bc — optional denomination breakdowns {"100": 2, "20": 5, ...} captured on open/close.
@@ -1236,7 +1237,7 @@ class CashDrawerMovement(Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     shift_id: Mapped[str] = mapped_column(String, ForeignKey("cash_shifts.id"), index=True)
     direction: Mapped[str] = mapped_column(String(4))        # in | out
-    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False))
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     note: Mapped[str] = mapped_column(String(300))
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -1252,9 +1253,9 @@ class ProcessorPayout(Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     provider: Mapped[str] = mapped_column(String(20), default="manual")   # stripe|square|sumup|manual
     payout_date: Mapped[date] = mapped_column(Date, default=date.today)
-    gross_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    fee_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    net_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    gross_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0.0)
+    fee_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0.0)
+    net_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0.0)
     reference: Mapped[Optional[str]] = mapped_column(String(120))
     note: Mapped[Optional[str]] = mapped_column(String(300))
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
@@ -1268,7 +1269,7 @@ class Expense(Base):
     category: Mapped[Optional[str]] = mapped_column(String(100))
     recorded_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     description: Mapped[str] = mapped_column(String(500))
-    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False))
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     receipt_url: Mapped[Optional[str]] = mapped_column(String(500))
     expense_date: Mapped[date] = mapped_column(Date, default=date.today)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -2643,8 +2644,8 @@ class GiftCard(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     code: Mapped[str] = mapped_column(String(40), index=True)          # e.g. GC-8F3K2P
-    initial_value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    balance: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    initial_value: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0.0)
+    balance: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0.0)
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -2657,7 +2658,7 @@ class GiftCardLedger(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     gift_card_id: Mapped[str] = mapped_column(String, ForeignKey("gift_cards.id"), index=True)
-    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False))                        # + load / − redeem
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))                        # + load / − redeem
     ref_type: Mapped[Optional[str]] = mapped_column(String(20))         # order|sale|manual
     ref_id: Mapped[Optional[str]] = mapped_column(String)
     note: Mapped[Optional[str]] = mapped_column(String(200))

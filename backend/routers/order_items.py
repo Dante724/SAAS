@@ -24,6 +24,7 @@ from backend.models import Device, Employee, Order, OrderItem, OrderLine, OrderS
 from backend.services import multi_asset as ma
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.dates import now_utc
+from backend.services.money import msum, q2
 
 router = APIRouter(prefix="/api/orders", tags=["order-items"])
 
@@ -68,9 +69,9 @@ async def _list(db: AsyncSession, order: Order):
              "complaint": i.complaint, "outcome": i.outcome or "open",
              "collected_at": i.collected_at.isoformat() if i.collected_at else None,
              "is_primary": bool(i.asset_id and i.asset_id == order.device_id), "sort_order": i.sort_order,
-             "line_count": totals.get(i.id, (0, 0.0))[0], "total": round(totals.get(i.id, (0, 0.0))[1], 2),
+             "line_count": totals.get(i.id, (0, 0.0))[0], "total": q2(totals.get(i.id, (0, 0.0))[1]),
              "unbilled_lines": unbilled.get(i.id, (0, 0.0))[0],
-             "unbilled_total": round(unbilled.get(i.id, (0, 0.0))[1], 2)}
+             "unbilled_total": q2(unbilled.get(i.id, (0, 0.0))[1])}
             for i in items]
 
 
@@ -81,7 +82,7 @@ async def _job_unbilled(db: AsyncSession, order: Order) -> float:
     if not rows:
         return 0.0
     billed = await ma.invoiced_line_ids(db, order.org_id, order.id)
-    return round(sum(float(t or 0) for i, t in rows if i not in billed), 2)
+    return msum(t for i, t in rows if i not in billed)
 
 
 @router.get("/{order_id}/items")

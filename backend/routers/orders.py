@@ -3310,16 +3310,16 @@ async def _log_amount_change(db, org_id, order, prev_total):
 async def _recalc_order(db, order):
     """Recompute an order's labour/parts/total from its lines."""
     lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == order.id))).scalars().all()
-    labour = sum(l.total for l in lines if l.line_type == "labour")
-    parts = sum(l.total for l in lines if l.line_type == "part")
-    fees = sum(l.total for l in lines if l.line_type == "fee")
-    order.labour_total = labour + fees
+    labour = msum(l.total for l in lines if l.line_type == "labour")
+    parts = msum(l.total for l in lines if l.line_type == "part")
+    fees = msum(l.total for l in lines if l.line_type == "fee")
+    order.labour_total = msum([labour, fees])
     order.parts_total = parts
-    total = labour + parts + fees
+    total = msum([labour, parts, fees])
     # Item 3: optional whole-document rounding (nearest 0.05). Off by default.
     _org = (await db.execute(select(Organisation).where(Organisation.id == order.org_id))).scalar_one_or_none()
     if _org and getattr(_org, "rounding_enabled", False):
-        total = q2(round(total / 0.05) * 0.05)
+        total = round_to_step(total, 0.05)
     order.total = total
 
 
@@ -4129,7 +4129,7 @@ async def delete_line(
 from sqlalchemy import or_ as _or
 
 from backend.models import SavedFilter
-from backend.services.money import q2, q4
+from backend.services.money import msum, q2, q4, round_to_step
 
 
 class SavedFilterIn(BaseModel):

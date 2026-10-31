@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.services.industry import normalize_template_key
 from backend.services.dates import now_utc
+from backend.services.money import q2
 
 ELIGIBLE = frozenset({"tools", "small_engine", "mobile_phone", "computer"})
 OUTCOMES = ("open", "fixed", "cant_fix", "declined")
@@ -144,13 +145,13 @@ def group_rows(lines: list[dict]) -> list[dict]:
         g = l.get("item") or None
         if not started or g != cur:
             if started and cur:
-                out.append({"row": "subtotal", "item": cur, "total": round(acc, 2)})
+                out.append({"row": "subtotal", "item": cur, "total": q2(acc)})
             out.append({"row": "group", "item": g or WHOLE_JOB})
             started, cur, acc = True, g, 0.0
         out.append(dict(l, row="line"))
         acc += float(l.get("total") or 0)
     if cur:
-        out.append({"row": "subtotal", "item": cur, "total": round(acc, 2)})
+        out.append({"row": "subtotal", "item": cur, "total": q2(acc)})
     return out
 
 

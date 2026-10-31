@@ -22,8 +22,8 @@ _TT = Decimal("0.0001")
 
 
 def d2(x) -> Decimal:
-    """Quantize to 2dp as an exact Decimal, round-half-up. Accepts float/int/str/Decimal."""
-    return Decimal(str(x)).quantize(_CENT, rounding=ROUND_HALF_UP)
+    """Quantize to 2dp as an exact Decimal, round-half-up. Accepts float/int/str/Decimal/None (0)."""
+    return dec(x).quantize(_CENT, rounding=ROUND_HALF_UP)
 
 
 def q2(x) -> float:
@@ -52,10 +52,47 @@ def q4(x) -> float:
 
 def msum(values) -> float:
     """Exact sum of money values (each coerced through Decimal), quantized to 2dp."""
+    return float(dsum(values))
+
+
+# ── Decimal end-to-end (audit R4) ────────────────────────────────────────────
+# Columns mapped with plain Numeric(12, 2) (no asdecimal=False) read back as Decimal. Decimal and
+# float don't mix (Decimal + float raises TypeError; Decimal("0.1") == 0.1 is False), so code that
+# touches those columns lifts every operand with dec() and quantizes once with d2(). JSON output is
+# unchanged: FastAPI encodes Decimal as a number (10.5, not "10.50"), and the engine's JSON-column
+# serializer below does the same.
+def dec(x) -> Decimal:
+    """Exact Decimal of a money operand — Decimal, float, int, str or None (0). No rounding."""
+    if isinstance(x, Decimal):
+        return x
+    return Decimal(str(x or 0))
+
+
+def dsum(values) -> Decimal:
+    """Exact sum of money values as a Decimal quantized to 2dp (round-half-up)."""
     total = Decimal("0")
     for v in values:
-        total += Decimal(str(v or 0))
-    return float(total.quantize(_CENT, rounding=ROUND_HALF_UP))
+        total += dec(v)
+    return total.quantize(_CENT, rounding=ROUND_HALF_UP)
+
+
+def round_to_step(x, step) -> float:
+    """Cash rounding: nearest multiple of `step` (e.g. 0.05), half-up, as a 2dp float.
+    round(x / 0.05) was banker's rounding on a float quotient (10.025 -> 10.00, not 10.05)."""
+    s = dec(step)
+    return float(d2((dec(x) / s).quantize(Decimal(1), rounding=ROUND_HALF_UP) * s))
+
+
+def json_default(o):
+    """json.dumps(default=…) hook: Decimal money is written as a number, as floats were."""
+    if isinstance(o, Decimal):
+        return int(o) if o.as_tuple().exponent >= 0 else float(o)   # same rule as FastAPI
+    raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+
+
+def json_dumps(obj) -> str:
+    import json
+    return json.dumps(obj, default=json_default)
 
 
 def demo() -> None:

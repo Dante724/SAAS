@@ -30,6 +30,7 @@ from backend.services.codes import (
 )
 from backend.config import settings
 from backend.services.dates import now_utc
+from backend.services.money import d2
 
 
 class _Html(str):
@@ -497,9 +498,9 @@ def _spell_int(n: int) -> str:
 
 
 def _spell_money(amount) -> str:
-    amount = float(amount or 0)
+    amount = d2(amount)
     whole = int(amount)
-    cents = int(round((amount - whole) * 100))
+    cents = int((amount - whole) * 100)
     words = _spell_int(whole).capitalize()
     if cents:
         words += f" and {cents:02d}/100"

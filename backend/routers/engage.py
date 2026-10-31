@@ -28,7 +28,7 @@ from backend.models import (
     Organisation,
 )
 from backend.services.auth import get_current_employee, require_perm, record_scope
-from backend.services.money import q2
+from backend.services.money import d2, dec, q2
 from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api", tags=["engage"],
@@ -164,10 +164,10 @@ async def redeem_giftcard(
     if amount > g.balance:
         raise HTTPException(400, f"Amount exceeds card balance ({g.balance:.2f})")
     # 144bc — guarded atomic decrement: a concurrent redemption can't drive the balance negative.
-    new_balance = q2(g.balance - amount)
+    new_balance = q2(dec(g.balance) - dec(amount))   # card balance reads back as Decimal
     res = await db.execute(sa_update(GiftCard)
         .where(GiftCard.id == g.id, GiftCard.balance >= amount)
-        .values(balance=GiftCard.balance - amount))
+        .values(balance=GiftCard.balance - d2(amount)))   # Decimal: the session evaluates this on g
     if res.rowcount == 0:
         raise HTTPException(409, "Gift card balance changed — please retry")
     db.add(GiftCardLedger(org_id=current.org_id, gift_card_id=g.id, amount=-amount,

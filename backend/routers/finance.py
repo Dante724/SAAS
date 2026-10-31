@@ -9,7 +9,7 @@ from backend.db.database import get_db
 from backend.models import Invoice, Payment, CashShift, CashDrawerMovement, Expense, Order, Employee, Location
 from backend.services.auth import assert_perm, get_current_employee, require_perm, record_scope
 from backend.core import paging as _paging
-from backend.services.money import q2, q4, msum  # noqa: F401 — money quantizers used module-wide
+from backend.services.money import d2, dec, msum, q2, q4  # noqa: F401 — money quantizers used module-wide
 from backend.core.spreadsheet import safe_row
 from backend.services.invoicing import DISPLAY_MODES, balance_due as _balance_due, settle_status
 from backend.services.dates import now_utc, shop_today
@@ -752,7 +752,9 @@ async def _expected_cash(db, shift: CashShift) -> dict:
     manual_cash = (await db.execute(select(func.coalesce(func.sum(Transaction.amount), 0.0)).where(
         Transaction.shift_id == shift.id, Transaction.status == "active",
         Transaction.txn_type.in_(("income", "expense"))))).scalar() or 0.0
-    expected = q2((shift.opening_float or 0.0) + cash_in - abs(cash_refunds) + pay_in - pay_out + manual_cash)
+    # Decimal throughout: opening_float and the drawer movements read back as Decimal (audit R4).
+    expected = d2(dec(shift.opening_float) + dec(cash_in) - abs(dec(cash_refunds))
+                  + dec(pay_in) - dec(pay_out) + dec(manual_cash))
     return {"opening_float": q2(shift.opening_float or 0.0), "cash_in": q2(cash_in),
             "cash_refunds": q2(abs(cash_refunds)), "pay_in": q2(pay_in), "pay_out": q2(pay_out),
             "manual_cash": q2(manual_cash), "expected_cash": expected}
@@ -1003,7 +1005,7 @@ async def close_shift(
     shift.closed_at = now_utc()
     await db.commit()
 
-    discrepancy = q2(counted - shift.expected_cash)
+    discrepancy = q2(dec(counted) - dec(shift.expected_cash))
     # 144bb blind count: only a finance-permitted user is shown expected + discrepancy.
     show_expected = True
     if current.role_id:
@@ -1090,7 +1092,7 @@ async def finance_summary(
         "total_revenue": q2(total_revenue),
         "total_outstanding": q2(total_outstanding),
         "total_expenses": q2(total_expenses),
-        "gross_profit": q2(total_revenue - total_expenses),
+        "gross_profit": q2(dec(total_revenue) - dec(total_expenses)),
         "invoice_count": invoice_count,
     }
 

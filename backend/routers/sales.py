@@ -22,7 +22,7 @@ from backend.models import (
 )
 from backend.services.auth import assert_perm, get_current_employee, require_perm
 from backend.services.numbering import next_number
-from backend.services.money import add_to_column, q2, q4
+from backend.services.money import add_to_column, d2, q2, q4
 from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
 from backend.services.dates import now_utc
 
@@ -133,7 +133,7 @@ async def _pos_redemptions(db, org_id, sale, client_id, gross, data):
             # concurrent redemption drained the card between the read above and this write.
             res = await db.execute(sa_update(GiftCard)
                 .where(GiftCard.id == g.id, GiftCard.balance >= amt)
-                .values(balance=GiftCard.balance - amt))
+                .values(balance=GiftCard.balance - d2(amt)))   # Decimal column: no float operand
             if res.rowcount == 0:
                 raise HTTPException(409, "Gift card balance changed — please retry")
             db.add(GiftCardLedger(org_id=org_id, gift_card_id=g.id, amount=-amt,
@@ -294,7 +294,7 @@ async def delete_sale(
         back = q2(-(g.amount or 0))
         if back > 0:
             await db.execute(sa_update(GiftCard).where(GiftCard.id == g.gift_card_id)
-                             .values(balance=GiftCard.balance + back))
+                             .values(balance=GiftCard.balance + d2(back)))
             db.add(GiftCardLedger(org_id=current.org_id, gift_card_id=g.gift_card_id, amount=back,
                                   ref_type="sale_void", ref_id=sale.id, note=f"Sale {sale.sale_number} deleted"))
     for pts in (await db.execute(select(LoyaltyLedger).where(
