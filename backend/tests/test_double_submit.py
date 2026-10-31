@@ -60,12 +60,12 @@ async def test_convert_twice_from_stale_copies_converts_once(client, tenant, db)
 
 
 @pytest.mark.asyncio
-async def test_convert_endpoint_on_already_converted_is_rejected(client, tenant):
+async def test_second_convert_click_returns_the_work_order(client, tenant):
     oid, pid, _ = await _estimate_with_part(client, tenant)
     assert (await client.post(f"/api/orders/{oid}/convert", headers=tenant)).status_code == 200
     r = await client.post(f"/api/orders/{oid}/convert", headers=tenant)
-    assert r.status_code in (400, 409), r.text
-    assert await K.stock(client, tenant, pid) == 8
+    assert r.status_code == 200 and r.json()["order_id"] == oid, r.text      # the screen just opens it
+    assert await K.stock(client, tenant, pid) == 8                           # nothing deducted again
 
 
 @pytest.mark.asyncio
@@ -386,3 +386,76 @@ async def test_same_product_merged_at_once_counts_both(client, tenant, db):
     ln = next(x for x in await K.lines(client, tenant, oid) if x["id"] == lid)
     assert ln["qty"] == 4
     assert await K.stock(client, tenant, pid) == 6 and stale is not None
+
+
+# ── 9. one job, one bill ───────────────────────────────────────────────────────────────────────
+async def _create_invoice(client, h, oid, cid):
+    return await client.post("/api/finance/invoices", headers=h, json={"order_id": oid, "client_id": cid})
+
+
+@pytest.mark.asyncio
+async def test_second_create_invoice_click_returns_the_same_invoice(client, tenant, db):
+    from backend.models import Invoice
+    cid, oid = await _priced_job(client, tenant)
+    first = await _create_invoice(client, tenant, oid, cid)
+    assert first.status_code == 201, first.text
+    again = await _create_invoice(client, tenant, oid, cid)
+    assert again.status_code == 200 and again.json()["id"] == first.json()["id"], again.text
+    n = (await db.execute(select(func.count()).select_from(Invoice).where(Invoice.order_id == oid))).scalar_one()
+    assert n == 1
+
+
+@pytest.mark.asyncio
+async def test_work_added_after_a_draft_invoice_reaches_it(client, tenant):
+    oid, pid, rid = await _wo_with_product_rec(client, tenant)
+    cid = None                                                            # the job's own client
+    await client.post(f"/api/orders/{oid}/lines", headers=tenant, json={
+        "line_type": "labour", "description": "Fix", "qty": 1, "unit_price": 100})
+    iid = (await _create_invoice(client, tenant, oid, cid)).json()["id"]
+    tok = (await K.order(client, tenant, oid))["public_token"]
+    assert (await client.post(f"/api/public/track/{tok}/recommendations/decide", json={"approve_ids": [rid]})).status_code == 200
+    inv = (await client.get(f"/api/finance/invoices/{iid}", headers=tenant)).json()
+    assert inv["total"] == pytest.approx((await K.order(client, tenant, oid))["total"])     # 100 + 2 × 50
+
+
+@pytest.mark.asyncio
+async def test_work_added_after_a_sent_invoice_goes_on_a_new_one(client, tenant, db):
+    from backend.models import Invoice
+    from backend.services.invoice_money import mark_sent
+    cid, oid = await _priced_job(client, tenant)
+    iid = (await _create_invoice(client, tenant, oid, cid)).json()["id"]
+    inv = (await db.execute(select(Invoice).where(Invoice.id == iid))).scalar_one()
+    await mark_sent(db, inv)
+    await db.commit()
+    await client.post(f"/api/orders/{oid}/lines", headers=tenant, json={
+        "line_type": "labour", "description": "Extra", "qty": 1, "unit_price": 40})
+    r = await _create_invoice(client, tenant, oid, cid)
+    assert r.status_code == 201 and r.json()["id"] != iid, r.text
+    assert r.json()["total"] == pytest.approx(40)                           # only what's new
+    again = await _create_invoice(client, tenant, oid, cid)
+    assert again.status_code == 200 and again.json()["id"] == r.json()["id"]
+
+
+@pytest.mark.asyncio
+async def test_sub_invoice_cannot_bill_a_line_twice_and_bills_the_rest(client, tenant):
+    cid, oid = await _priced_job(client, tenant)
+    await client.post(f"/api/orders/{oid}/lines", headers=tenant, json={
+        "line_type": "labour", "description": "Second", "qty": 1, "unit_price": 30})
+    first, second = [x["id"] for x in await K.lines(client, tenant, oid)]
+    assert (await client.post(f"/api/cash/orders/{oid}/invoices", headers=tenant, json={"line_ids": [first]})).status_code == 201
+    r = await client.post(f"/api/cash/orders/{oid}/invoices", headers=tenant, json={"line_ids": [first]})
+    assert r.status_code == 409, r.text
+    rest = await client.post(f"/api/cash/orders/{oid}/invoices", headers=tenant, json={"line_ids": []})
+    assert rest.status_code == 201 and rest.json()["total"] == pytest.approx(30), rest.text
+
+
+@pytest.mark.asyncio
+async def test_cancelled_invoice_does_not_block_a_new_one(client, tenant, db):
+    from backend.models import Invoice
+    cid, oid = await _priced_job(client, tenant)
+    iid = await K.invoice(client, tenant, oid, cid)
+    inv = (await db.execute(select(Invoice).where(Invoice.id == iid))).scalar_one()
+    inv.status = "cancelled"
+    await db.commit()
+    r = await _create_invoice(client, tenant, oid, cid)
+    assert r.status_code == 201 and r.json()["id"] != iid, r.text

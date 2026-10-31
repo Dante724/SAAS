@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
@@ -368,10 +368,11 @@ async def update_invoice(
 @router.post("/invoices", status_code=201)
 async def create_invoice(
     data: InvoiceIn,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_invoices")),
 ):
-    from backend.models import Order
+    from backend.models import Order, OrderLine
 
     # 144ed — the order list: explicit order_ids, with the legacy single order_id
     # folded in first and de-duped while preserving order.
@@ -410,11 +411,34 @@ async def create_invoice(
             raise HTTPException(404, "Client not found")
     by_id = {o.id: o for o in (await db.execute(select(Order).where(Order.id.in_(order_ids)))).scalars().all()} \
         if order_ids else {}
+    # A job is billed once. A second click on "Create invoice" gets the job's invoice back (200)
+    # while that invoice still follows the job; once it has been sent or paid it froze the lines it
+    # bills, and a new invoice bills only the lines added since.
+    from backend.services.invoice_money import billed_on, lock_order
+    rest: list = []
+    for oid in order_ids:
+        await lock_order(db, oid)
+    if len(order_ids) == 1 and not data.lines and not data.subtotal:
+        whole, billed = await billed_on(db, order_ids[0])
+        if whole or billed:
+            rest = [] if whole else [l for l in (await db.execute(select(OrderLine).where(
+                OrderLine.order_id == order_ids[0]).order_by(OrderLine.id))).scalars().all() if l.id not in billed]
+            if not rest:
+                inv = whole or max(set(billed.values()), key=lambda i: (i.created_at, i.invoice_number))
+                response.status_code = 200
+                return {"id": inv.id, "invoice_number": inv.invoice_number, "total": inv.total, "existing": True}
+    else:
+        for oid in order_ids:
+            whole, billed = await billed_on(db, oid)
+            if whole or billed:
+                inv = whole or next(iter(billed.values()))
+                raise HTTPException(409, f"{by_id[oid].order_number} is already billed on invoice "
+                                         f"{inv.invoice_number}. Open that invoice instead.")
     # One way to make an invoice (services/invoice_money): links every job, subtotal from what it
     # bills (an explicit subtotal still wins), discount/tax stored as amounts, deposits applied.
     from backend.services.invoice_money import new_invoice
     inv = await new_invoice(
-        db, org_id=current.org_id, orders=[by_id[o] for o in order_ids],
+        db, org_id=current.org_id, orders=[by_id[o] for o in order_ids], lines=rest,
         client_id=data.client_id, free_lines=[l.model_dump() for l in (data.lines or [])],
         subtotal=data.subtotal or None, discount_pct=discount_pct or 0, tax_pct=tax_pct or 0,
         display_mode=mode if mode in DISPLAY_MODES else "detailed",
@@ -449,6 +473,11 @@ async def attach_order(
     exists = (await db.execute(select(InvoiceOrder).where(
         InvoiceOrder.invoice_id == invoice_id, InvoiceOrder.order_id == order_id))).scalar_one_or_none()
     if not exists and inv.order_id != order_id:
+        await invoice_money.lock_order(db, order_id)
+        whole, billed = await invoice_money.billed_on(db, order_id, exclude_invoice_id=invoice_id)
+        if whole or billed:
+            other = whole or next(iter(billed.values()))
+            raise HTTPException(409, f"{order.order_number} is already billed on invoice {other.invoice_number}.")
         await invoice_money.attach_order(db, inv, order)   # adds its total, applies its deposits
         await db.commit()
     inv = (await db.execute(select(Invoice).where(Invoice.id == invoice_id)

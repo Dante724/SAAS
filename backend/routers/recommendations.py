@@ -438,8 +438,8 @@ async def add_approved_to_total(db: AsyncSession, order: Order, new_line_ids: li
     before = sum(float(t or 0) for i, t in lines if i not in new_line_ids)
     prev_total = float(order.total or 0)
     if abs(prev_total - before) < 0.005:
-        await _recalc_order(db, order)
+        await _recalc_order(db, order)                   # also brings draft invoices along
     else:
         order.total = q2(prev_total + added)
-    from backend.services.invoice_money import sync_order_invoices
-    await sync_order_invoices(db, order, prev_total)    # a draft invoice follows the job
+        from backend.services.invoice_money import sync_order_invoices
+        await sync_order_invoices(db, order, prev_total)    # a draft invoice follows the job

@@ -1811,13 +1811,15 @@ async def convert_estimate_endpoint(
     if not est:
         raise HTTPException(404, "Estimate not found")
     await _guard_order_access(db, current, est)
+    # A second click (or the customer accepting at the same moment) gets the work order back
+    # instead of an error: the screen just opens it. Nothing converts twice.
     if not est.is_estimate:
-        raise HTTPException(400, "This is already a work order")
+        return {"ok": True, "order_id": est.id, "already_converted": True}
     if est.converted_order_id:
-        raise HTTPException(400, "Already converted")
+        return {"ok": True, "order_id": est.converted_order_id, "already_converted": True}
     new_id = await _convert_estimate(db, current, est)
     if new_id is None:
-        raise HTTPException(409, "This estimate was already converted to a work order")
+        return {"ok": True, "order_id": est.id, "already_converted": True}
     return {"ok": True, "order_id": new_id}
 
 
@@ -4280,7 +4282,7 @@ async def _lock_for_lines(db, order) -> None:
     re-reads it, so two people on one job queue up: neither loses the other's edit, stock moves
     for what is saved now (not a stale qty), a line removed twice returns its stock once, and the
     order total is recomputed from every line. Lines are read after this with populate_existing."""
-    from backend.services.invoicing import lock_order
+    from backend.services.invoice_money import lock_order
     await lock_order(db, order.id)
     await db.refresh(order)
 

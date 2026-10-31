@@ -19,13 +19,6 @@ VOID_STATUSES = ("cancelled", "canceled", "void", "voided")
 DISPLAY_MODES = ("detailed", "simplified", "one_line")
 
 
-async def lock_order(db: AsyncSession, order_id: str) -> None:
-    """Row lock on the order (Postgres) / write lock (SQLite) via a no-op UPDATE, held to commit."""
-    from sqlalchemy import update
-    await db.execute(update(Order).where(Order.id == order_id).values(total=Order.total)
-                     .execution_options(synchronize_session=False))
-
-
 def balance_due(inv: "Invoice") -> float:
     """What the client still owes on an invoice: total − paid − issued credit notes, never below 0."""
     owed = d2(inv.total or 0) - d2(inv.amount_paid or 0) - d2(getattr(inv, "credited", 0) or 0)
