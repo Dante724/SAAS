@@ -2,6 +2,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import {
   Check, X, Paperclip, Receipt, Download, MapPin, Clock, Phone, Star, ThumbsUp, ThumbsDown, ExternalLink,
 } from "lucide-react";
+import { safeFileHref, safeHttpHref } from "../lib/safeFileHref";
 
 // ── Public customer page: order tracking + estimate + e-sign ──────────────
 // A real part of the React app (Liquid Clay tokens, flat styling) — NOT the
@@ -502,8 +503,8 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
                           <img src={e.u.media_data} alt="" className="h-32 w-auto max-w-[220px] object-cover" />
                         </button>
                       )}
-                      {e.u.type === "file" && e.u.media_data && (
-                        <a href={e.u.media_data} download={e.u.media_name || "file"} className="mt-1 inline-flex items-center gap-1.5 text-[15px] font-semibold" style={{ color: accent }}><Paperclip size={15} /> {e.u.media_name || "Download file"}</a>
+                      {e.u.type === "file" && safeFileHref(e.u.media_data) && (
+                        <a href={safeFileHref(e.u.media_data)} download={e.u.media_name || "file"} className="mt-1 inline-flex items-center gap-1.5 text-[15px] font-semibold" style={{ color: accent }}><Paperclip size={15} /> {e.u.media_name || "Download file"}</a>
                       )}
                     </>)}
                     <div className="mt-0.5 text-[13px] text-ink-tertiary">{fmtDate(e.at)}</div>
@@ -575,8 +576,8 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
               {fbResult ? (
                 <div>
                   <div className="flex items-center gap-2 text-[15px] font-semibold text-ink-primary"><Check size={16} className="text-emerald-600" /> {fbResult.message}</div>
-                  {fbResult.google_review_url && (
-                    <a href={fbResult.google_review_url} target="_blank" rel="noopener" className={`${btn} mt-3`} style={{ background: accent, color: onAccent }}>
+                  {safeHttpHref(fbResult.google_review_url) && (
+                    <a href={safeHttpHref(fbResult.google_review_url)} target="_blank" rel="noopener" className={`${btn} mt-3`} style={{ background: accent, color: onAccent }}>
                       <ExternalLink size={15} /> Leave a public review
                     </a>
                   )}

@@ -43,9 +43,13 @@ def _tier(points: float) -> str:
     return "standard"
 
 
-async def _order_or_404(db, org_id, order_id) -> Order:
-    o = (await db.execute(select(Order).where(
-        Order.id == order_id, Order.org_id == org_id))).scalar_one_or_none()
+async def _order_or_404(db, org_id, order_id, *, lock: bool = False) -> Order:
+    q = select(Order).where(Order.id == order_id, Order.org_id == org_id)
+    if lock:
+        # Discounts are capped at what's still owed; two redemptions at once both read the same
+        # balance and over-discounted the job (audit 2026-10-29, H5). Serialise them per order.
+        q = q.with_for_update()
+    o = (await db.execute(q)).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
     return o
@@ -144,7 +148,7 @@ async def redeem_giftcard(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_set_discount")),
 ):
-    order = await _order_or_404(db, current.org_id, order_id)
+    order = await _order_or_404(db, current.org_id, order_id, lock=True)
     g = (await db.execute(select(GiftCard).where(
         GiftCard.org_id == current.org_id, GiftCard.code == data.code.strip().upper()))).scalar_one_or_none()
     if not g or not g.active:
@@ -296,7 +300,7 @@ async def apply_coupon(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_set_discount")),
 ):
-    order = await _order_or_404(db, current.org_id, order_id)
+    order = await _order_or_404(db, current.org_id, order_id, lock=True)
     c = (await db.execute(select(Coupon).where(
         Coupon.org_id == current.org_id, Coupon.code == data.code.strip().upper()))).scalar_one_or_none()
     now = datetime.utcnow()
@@ -375,7 +379,7 @@ async def redeem_loyalty(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_set_discount")),
 ):
-    order = await _order_or_404(db, current.org_id, order_id)
+    order = await _order_or_404(db, current.org_id, order_id, lock=True)
     if not order.client_id:
         raise HTTPException(400, "Order has no client to redeem points for")
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one()

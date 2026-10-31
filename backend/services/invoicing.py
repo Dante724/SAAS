@@ -344,7 +344,8 @@ async def auto_draft_on_close(db: AsyncSession, order: Order) -> Invoice | None:
         subtotal=subtotal,
         discount=0.0,
         tax=float(order.tax or 0),
-        total=float(order.total or subtotal),
+        # a job floored to 0 (discounts cover everything) invoices 0, not the line subtotal
+        total=float(order.total if order.total is not None else subtotal),
         amount_paid=0.0,
         issued_at=datetime.utcnow(),
         due_at=datetime.utcnow() + timedelta(days=due_days),

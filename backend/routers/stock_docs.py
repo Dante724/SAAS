@@ -243,7 +243,8 @@ async def create_return(
         await _take_stock(db, ln.part_id, w, ln.qty, doc="return", bin_id=getattr(ln, "bin_id", None))
         if ln.serialized_item_id:
             unit = (await db.execute(select(SerializedItem).where(
-                SerializedItem.id == ln.serialized_item_id))).scalar_one_or_none()
+                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
+                SerializedItem.part_id == ln.part_id))).scalar_one_or_none()
             if unit:
                 unit.status = "written_off"
         line_total = cost * Decimal(str(ln.qty))
@@ -305,7 +306,8 @@ async def delete_return(
         await _give_stock(db, ln.part_id, w, ln.qty, w.location_id if w else None, bin_id=getattr(ln, "bin_id", None))
         if ln.serialized_item_id:
             unit = (await db.execute(select(SerializedItem).where(
-                SerializedItem.id == ln.serialized_item_id))).scalar_one_or_none()
+                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
+                SerializedItem.part_id == ln.part_id))).scalar_one_or_none()
             if unit:
                 unit.status = "in_stock"
         db.add(StockMovement(
@@ -410,7 +412,8 @@ async def create_write_off(
         await _take_stock(db, ln.part_id, w, ln.qty, doc="write off", bin_id=getattr(ln, "bin_id", None))
         if ln.serialized_item_id:
             unit = (await db.execute(select(SerializedItem).where(
-                SerializedItem.id == ln.serialized_item_id))).scalar_one_or_none()
+                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
+                SerializedItem.part_id == ln.part_id))).scalar_one_or_none()
             if unit:
                 unit.status = "written_off"
         total += cost * Decimal(str(ln.qty))
@@ -511,7 +514,8 @@ async def delete_write_off(
         await _give_stock(db, ln.part_id, w, ln.qty, w.location_id if w else None, bin_id=getattr(ln, "bin_id", None))
         if ln.serialized_item_id:
             unit = (await db.execute(select(SerializedItem).where(
-                SerializedItem.id == ln.serialized_item_id))).scalar_one_or_none()
+                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
+                SerializedItem.part_id == ln.part_id))).scalar_one_or_none()
             if unit:
                 unit.status = "in_stock"
         db.add(StockMovement(

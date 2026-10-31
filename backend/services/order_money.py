@@ -90,7 +90,8 @@ async def balance_due(db: AsyncSession, order: Order) -> float:
 
 async def overpaid(db: AsyncSession, order: Order) -> float:
     """Amount received beyond the order total (refundable as overpayment)."""
-    return q2(max(0.0, await net_paid(db, order.id) - float(order.total or 0)))
+    # A negative total (older data, before the floor in _recalc_order) never counts as money owed back.
+    return q2(max(0.0, await net_paid(db, order.id) - max(float(order.total or 0), 0.0)))
 
 
 async def apply_deposits(db: AsyncSession, inv: Invoice, order: Order) -> float:

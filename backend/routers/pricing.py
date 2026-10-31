@@ -190,10 +190,10 @@ async def resolve_price_for(db: AsyncSession, org_id: str, *, kind: str,
     if override:
         return override.price
     if kind == "product":
-        item = (await db.execute(select(Part).where(Part.id == ref_id))).scalar_one_or_none()
+        item = (await db.execute(select(Part).where(Part.id == ref_id, Part.org_id == org_id))).scalar_one_or_none()
         basis = (item.avg_cost or item.cost_price or 0) if item else 0
     else:
-        item = (await db.execute(select(Service).where(Service.id == ref_id))).scalar_one_or_none()
+        item = (await db.execute(select(Service).where(Service.id == ref_id, Service.org_id == org_id))).scalar_one_or_none()
         basis = (item.cost_price or 0) if item else 0
     price = computed_price(basis, await _effective_markup(db, pt, qty))
     return price if price > 0 else None

@@ -174,6 +174,9 @@ async def _authenticate(creds: Optional[HTTPAuthorizationCredentials], db: Async
     from backend.services.auth import assert_org_active
     assert_org_active((await db.execute(select(Organisation).where(
         Organisation.id == row.org_id))).scalar_one_or_none())
+    # Same flush-time shop guard as signed-in staff (db/tenancy.py): an API write can't touch
+    # or point at another shop's rows.
+    db.sync_session.info["tenant_org"] = row.org_id
     return row, ApiPrincipal(org_id=row.org_id, key_id=row.id, scopes=parse_scopes(row.scopes))
 
 
