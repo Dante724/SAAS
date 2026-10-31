@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 import { adminApi, fmtDate, SEGMENTS, type Me, type Shop } from "./api";
 import { loadFailed } from "../lib/notice";
 
-type Action = "discount" | "trial" | "plan" | "suspend" | "unsuspend" | "assign" | null;
+type Action = "discount" | "trial" | "plan" | "billing" | "suspend" | "unsuspend" | "assign" | null;
+const STATUSES: [string, string][] = [["trial", "Trial"], ["active", "Paying"], ["past_due", "Payment failed (grace)"],
+  ["unpaid", "Unpaid (read-only)"], ["trial_lost", "Trial ended"], ["churned", "Cancelled"]];
 const input = "w-full px-3 py-2 rounded-lg border border-slate-300 text-sm";
 const btn = "px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold hover:bg-slate-50";
 
@@ -51,7 +53,14 @@ export default function ShopPanel({ id, me, onClose }: { id: string; me: Me; onC
       </div>
 
       <div className="px-6 py-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm border-b border-slate-100">
-        <Fact label="Trial or term ends">{fmtDate(s.sub_end)}</Fact>
+        <Fact label="Trial ends">{fmtDate(s.trial_ends_at)}</Fact>
+        <Fact label="Hard stop (blocks sign-in)">{fmtDate(s.sub_end)}</Fact>
+        <Fact label="Billing">{s.billing_mode === "custom"
+          ? `Custom price, managed by Tekly${s.billing_period_end ? ` · term ends ${fmtDate(s.billing_period_end)}` : ""}`
+          : `Stripe, ${s.billing_period === "year" ? "yearly" : "monthly"}`}</Fact>
+        {has("billing_note") && s.billing_note && <Fact label="Agreed price (internal)">{s.billing_note}</Fact>}
+        {has("price_locked_until") && s.price_locked_until && <Fact label="Founding price locked until">{fmtDate(s.price_locked_until)}</Fact>}
+        {has("stripe_customer_id") && s.stripe_customer_id && <Fact label="Stripe customer">{s.stripe_customer_id}</Fact>}
         <Fact label="Looked after by">{s.assigned_to || "Nobody yet"}</Fact>
         <Fact label="Staff">{s.employees}</Fact>
         <Fact label="Last contacted">{fmtDate(s.last_contacted_at)}</Fact>
@@ -67,6 +76,7 @@ export default function ShopPanel({ id, me, onClose }: { id: string; me: Me; onC
         {can("give_discount") && <button className={btn} onClick={() => setAction("discount")}>Discount</button>}
         {can("extend_trial") && <button className={btn} onClick={() => setAction("trial")}>Extend trial</button>}
         {(can("change_plan") || can("request_plan_change")) && <button className={btn} onClick={() => setAction("plan")}>Change plan</button>}
+        {can("change_plan") && <button className={btn} onClick={() => setAction("billing")}>Billing terms</button>}
         {can("assign_shops") && <button className={btn} onClick={() => setAction("assign")}>Hand over</button>}
         {can("suspend") && (s.sub_status === "suspended"
           ? <button className={btn} onClick={() => setAction("unsuspend")}>Unsuspend</button>
@@ -76,6 +86,7 @@ export default function ShopPanel({ id, me, onClose }: { id: string; me: Me; onC
       {action && (
         <ActionForm action={action} shop={s} me={me} admins={admins} onCancel={() => setAction(null)}
           onSubmit={(body) => {
+            if (action === "billing") { done(adminApi.patch(`/tenants/${id}`, body), "Billing terms saved"); return; }
             const map: Record<string, [string, string]> = {
               discount: [`/tenants/${id}/discount`, "Discount saved"], trial: [`/tenants/${id}/extend-trial`, "Trial extended"],
               plan: [`/tenants/${id}/plan`, "Plan changed"], suspend: [`/tenants/${id}/suspend`, "Shop suspended"],
@@ -130,7 +141,13 @@ function ActionForm({ action, shop, me, admins, onCancel, onSubmit }: {
   action: Exclude<Action, null>; shop: Shop; me: Me; admins: { id: string; name: string }[];
   onCancel: () => void; onSubmit: (body: Record<string, unknown>) => void;
 }) {
-  const [v, setV] = useState<Record<string, string>>({ plan: shop.plan || "shop", status: "", admin_id: "" });
+  const [v, setV] = useState<Record<string, string>>({
+    plan: shop.plan || "shop", status: "", admin_id: "",
+    sub_status: shop.sub_status && shop.sub_status !== "suspended" ? shop.sub_status : "trial",
+    trial_ends_at: shop.trial_ends_at || "", billing_mode: shop.billing_mode || "stripe",
+    billing_period_end: shop.billing_period_end || "", billing_note: shop.billing_note || "",
+    price_locked_until: shop.price_locked_until || "",
+  });
   const set = (k: string) => (e: { target: { value: string } }) => setV((p) => ({ ...p, [k]: e.target.value }));
   const lim = me.limits || {};
   function submit(e: FormEvent) {
@@ -139,6 +156,15 @@ function ActionForm({ action, shop, me, admins, onCancel, onSubmit }: {
     if (action === "discount") onSubmit({ pct: Number(v.pct), until: v.until || null, reason });
     if (action === "trial") onSubmit({ days: Number(v.days), reason });
     if (action === "plan") onSubmit({ plan: v.plan, reason });
+    if (action === "billing") {
+      const body: Record<string, unknown> = {
+        trial_ends_at: v.trial_ends_at || null, billing_mode: v.billing_mode,
+        billing_period_end: v.billing_period_end || null, price_locked_until: v.price_locked_until || null, reason,
+      };
+      if (shop.sub_status !== "suspended") body.sub_status = v.sub_status;   // suspending has its own action
+      if (shop.billing_note !== undefined) body.billing_note = v.billing_note || null;   // only if this role sees it
+      onSubmit(body);
+    }
     if (action === "suspend") onSubmit({ reason, message: v.message || null });
     if (action === "unsuspend") onSubmit({ reason, status: v.status || null });
     if (action === "assign") onSubmit({ admin_id: v.admin_id || me.id, reason });
@@ -159,9 +185,31 @@ function ActionForm({ action, shop, me, admins, onCancel, onSubmit }: {
       {action === "plan" && (
         <label className="text-xs font-semibold block">New plan
           <select value={v.plan} onChange={set("plan")} className={`${input} mt-1`}>
-            {["trial", "solo", "shop", "pro"].map((p) => <option key={p} value={p}>{p[0].toUpperCase() + p.slice(1)}</option>)}
+            {["solo", "shop", "pro"].map((p) => <option key={p} value={p}>{p[0].toUpperCase() + p.slice(1)}</option>)}
           </select></label>
       )}
+      {action === "billing" && (<>
+        <div className="grid grid-cols-2 gap-3">
+          {shop.sub_status !== "suspended" && (
+            <label className="text-xs font-semibold">Status
+              <select value={v.sub_status} onChange={set("sub_status")} className={`${input} mt-1`}>
+                {STATUSES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </select></label>
+          )}
+          <label className="text-xs font-semibold">Trial ends<input type="date" value={v.trial_ends_at} onChange={set("trial_ends_at")} className={`${input} mt-1`} /></label>
+          <label className="text-xs font-semibold">Billing mode
+            <select value={v.billing_mode} onChange={set("billing_mode")} className={`${input} mt-1`}>
+              <option value="stripe">Stripe (self-serve)</option><option value="custom">Custom price (managed by Tekly)</option>
+            </select></label>
+          <label className="text-xs font-semibold">Custom term ends<input type="date" value={v.billing_period_end} onChange={set("billing_period_end")} className={`${input} mt-1`} /></label>
+          <label className="text-xs font-semibold">Founding price locked until<input type="date" value={v.price_locked_until} onChange={set("price_locked_until")} className={`${input} mt-1`} /></label>
+        </div>
+        {shop.billing_note !== undefined && (
+          <label className="text-xs font-semibold block">Agreed price (custom shops, internal)
+            <input value={v.billing_note} onChange={set("billing_note")} maxLength={500} placeholder="e.g. ₹2,500 a month, invoiced quarterly" className={`${input} mt-1`} /></label>
+        )}
+        <p className="text-xs text-ink-tertiary">Custom shops never see Stripe Checkout: set Status to Paying, and past the term end the shop becomes read-only.</p>
+      </>)}
       {action === "suspend" && (
         <label className="text-xs font-semibold block">Message the shop sees (optional)
           <input value={v.message || ""} onChange={set("message")} maxLength={500} placeholder="Payment overdue. Call Tekly on 080 1234 5678." className={`${input} mt-1`} /></label>
@@ -177,9 +225,9 @@ function ActionForm({ action, shop, me, admins, onCancel, onSubmit }: {
           </select></label>
       )}
       <label className="text-xs font-semibold block">Reason<input required minLength={3} value={v.reason || ""} onChange={set("reason")} placeholder="Why, for the history" className={`${input} mt-1`} /></label>
-      <div className="flex gap-2 justify-end">
-        <button type="button" onClick={onCancel} className={btn}>Cancel</button>
+      <div className="flex gap-2">
         <button className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold">Save</button>
+        <button type="button" onClick={onCancel} className={btn}>Cancel</button>
       </div>
     </form>
   );

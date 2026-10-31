@@ -49,6 +49,12 @@ jobs:
             echo "PUBLIC_BASE_URL=http://localhost:8000"
             echo "SMTP_HOST=smtp.invalid"
             echo "SMTP_FROM=ci@tekly.invalid"
+            # Subscription billing is required in production; placeholder test-mode values (never called in CI).
+            echo "STRIPE_BILLING_SECRET_KEY=sk_test_ci_placeholder"
+            echo "STRIPE_BILLING_WEBHOOK_SECRET=whsec_ci_placeholder"
+            for p in SOLO SHOP PRO SHOP_SEAT; do for t in MONTH YEAR; do
+              echo "STRIPE_BILLING_PRICE_${p}_${t}=price_ci_${p}_${t}"
+            done; done
           } > ci.env
       - name: Migrate
         run: docker run --rm --network host --env-file ci.env repairos:ci alembic -c backend/alembic.ini upgrade head

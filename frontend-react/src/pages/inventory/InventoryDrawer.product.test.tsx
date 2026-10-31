@@ -8,6 +8,7 @@ vi.mock("../../components/Shell", () => ({ M: ({ n }: { n: string }) => <i data-
 const perms = vi.hoisted(() => ({ deny: new Set<string>() }));
 vi.mock("../../context/Me", () => ({
   useMe: () => ({ me: null, loading: false, can: (c?: string) => !c || !perms.deny.has(c), fmt: (n: number) => `${n}`, refresh: async () => {} }),
+  hasFeature: () => true,   // plan gates (services/billing.py): every feature on
 }));
 
 import InventoryDrawer, { productPhoto, dataUrlBytes } from "./InventoryDrawer";

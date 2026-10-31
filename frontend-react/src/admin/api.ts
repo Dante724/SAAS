@@ -52,6 +52,10 @@ export type Shop = {
   discount_pct?: number; discount_until?: string | null; discount_reason?: string | null;
   company_email?: string | null; company_phone?: string | null; owner_name?: string | null; owner_email?: string | null;
   suspend_message?: string | null;
+  // Subscription billing (services/billing.py). The note, price lock and Stripe id are billing-group fields.
+  trial_ends_at?: string | null; billing_period?: string | null; billing_mode?: string;
+  billing_period_end?: string | null; billing_note?: string | null; price_locked_until?: string | null;
+  stripe_customer_id?: string | null;
   employees_detail?: { id: string; name: string; email: string; active: boolean; access_start: string | null; access_end: string | null }[];
   notes?: { id: string; kind: string; body: string; by: string | null; at: string }[];
   history?: { action: string; by: string | null; at: string; reason: string | null }[];

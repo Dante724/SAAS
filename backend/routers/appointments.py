@@ -291,6 +291,9 @@ async def appointment_to_order(
     from backend.services.numbering import next_number
     is_estimate = record == "estimate"
     rec_type = "estimate" if is_estimate else "work_order"
+    if not is_estimate:
+        from backend.services.billing import assert_can_add_job
+        await assert_can_add_job(db, current.org_id)
 
     b = (await db.execute(select(Appointment).where(
         Appointment.id == bid, Appointment.org_id == current.org_id))).scalar_one_or_none()

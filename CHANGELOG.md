@@ -1,5 +1,43 @@
 # Changelog
 
+## bl144s1 — Subscription billing: one global price list, plans enforced (launch audit C13)
+
+- **Plans (USD, yearly = 10 × monthly; same numbers as the website, `website/site.config.js`):**
+  Solo $29 (2 active team members, 1 location, 150 new jobs a month); Shop $69 for the first
+  location + $49 each extra, 4 team members shared across its locations; Pro $129 for the first
+  location + $79 each extra, 8 team members shared across its locations. On Shop and Pro each extra
+  team member is $6 a month (a second, per-seat subscription item kept in sync as people are added
+  or removed; the app confirms before adding a paid seat). Shop and Pro are Stripe graduated tiered
+  prices with quantity = active locations. Stock transfers between locations stay Pro. Every plan: work orders, estimates,
+  invoices, POS, customer portal and booking, the Tekly Go phone app, one-tap messaging. Shop adds
+  inventory, labels and scanning, the time clock, reports and automatic customer notifications. Pro
+  adds purchase orders, payroll and commissions, multiple locations and transfers, AI estimate
+  drafting and parts recognition, QuickBooks/Xero, SSO and API keys. Old `starter` maps to `shop`.
+- **One gate:** `services/billing.enforce_request` (inside `get_current_employee`) checks every
+  staff route against a route→feature table (403 + `X-Plan-Required: shop|pro`); a few reads that
+  core screens need stay open. API keys (`enforce_api_key`), the notification rules engine,
+  automations and QuickBooks auto-sync check the plan too. Limits are enforced where team members,
+  locations and jobs are created (estimates aren't capped; customer-accepted estimates still convert).
+- **Trial:** 14 days, every Pro feature, no card. In the last week the app suggests the plan that
+  fits the shop's team and locations. **Read-only, never deleted** after the trial, a cancellation
+  or `unpaid`; a failed renewal (`past_due`) keeps full access for 14 days.
+- **Stripe Billing on Tekly's own account:** Checkout with Stripe Tax and tax-ID collection (local
+  currency via Adaptive Pricing, a Dashboard setting), prorated in-place plan change, Customer
+  Portal, and a signed, idempotent webhook (`billing_events` keyed by event id; older events can't
+  undo newer ones). Pro's quantity follows active locations.
+- **Custom pricing** (India now, large deals later): `organisations.billing_mode = custom`, set
+  with the plan, term end and agreed-price note in the /admin portal. These shops never reach
+  Stripe; the Billing page says the plan is managed by Tekly; past the term end they're read-only.
+- **Founding-customer price lock:** `price_locked_until`. Tekly never re-prices an existing
+  subscription (quantity syncs send quantity only; old price ids still map via metadata).
+- **Config:** six `STRIPE_BILLING_PRICE_{SOLO,SHOP,PRO}_{MONTH,YEAR}`, two
+  `STRIPE_BILLING_PRICE_SHOP_SEAT_{MONTH,YEAR}` (the $6 extra-member price, used by Shop and Pro), plus key, webhook secret and
+  `PUBLIC_BASE_URL`; production refuses to boot without them, staging refuses a live key.
+- **App:** Settings › Billing & plan; trial / failed-payment / read-only notice; the logo badge
+  shows the plan; nav, tabs and buttons for features the plan lacks are hidden (React app and the
+  technician app's clock).
+- Stripe signature check accepts any of several `v1` signatures (secret roll-over).
+
 ## Audit 29 Oct 2026 — Medium fixes M3–M11 and reliability R1–R3
 
 Findings in `docs/audits/2026-10-29-full-codebase-audit.md`. Migrations `aud6m01` → `aud8m01` →

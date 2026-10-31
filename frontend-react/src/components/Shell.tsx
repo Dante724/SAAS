@@ -7,7 +7,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { api, getLocationScope, setLocationScope } from "../api/client";
 import { alertDialog } from "../lib/dialog";
 import { t, getLang, setLang, applyDir } from "../i18n";
-import { useMe, NAV_PERM } from "../context/Me";
+import { useMe, NAV_PERM, NAV_FEATURE, hasFeature, type Billing } from "../context/Me";
 import {
   Wrench, Mail, MessageSquare, MessageCircle, Calendar, CalendarRange, Users, User,
   UserPlus, ShoppingCart, Package, Boxes, Landmark, Wallet, BarChart3, Settings as SettingsIcon,
@@ -152,6 +152,40 @@ const NAV_GROUPS: { name: string; items: NavItem[] }[] = [
 ];
 const NAV: NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 
+// Subscription notice under the top bar: read-only, a failed payment, or the last week of the trial.
+export function billingNotice(b?: Billing | null): { tone: "bad" | "warn" | "info"; text: string; cta: string } | null {
+  if (!b) return null;
+  if (b.read_only) return { tone: "bad", text: `${b.read_only_reason || ""} Your shop is read-only: you can view and export everything.`.trim(), cta: "Choose a plan" };
+  if (b.status === "past_due") return { tone: "warn", text: "Your last Tekly payment didn't go through.", cta: "Update card" };
+  if (b.status === "trial" && b.trial_days_left != null && b.trial_days_left <= 7) {
+    const n = b.trial_days_left;
+    const fit = b.suggested_plan ? ` ${PLAN_LABEL[b.suggested_plan]} fits your shop.` : "";
+    return { tone: n <= 3 ? "warn" : "info", text: `${n} ${n === 1 ? "day" : "days"} left in your free trial.${fit}`, cta: "Choose a plan" };
+  }
+  return null;
+}
+
+const PLAN_LABEL = { solo: "Solo", shop: "Shop", pro: "Pro" } as const;
+
+// Next to the logo: the plan the shop is on (TRIAL while trialling). Nothing until /me loads.
+export function planBadge(b?: Billing | null): string | null {
+  if (!b) return null;
+  if (b.status === "trial" && !b.read_only) return "TRIAL";
+  return (PLAN_LABEL[b.plan] || "Solo").toUpperCase();
+}
+
+function BillingBanner({ billing }: { billing?: Billing | null }) {
+  const n = billingNotice(billing);
+  if (!n) return null;
+  const cls = { bad: "bg-rose-50 border-rose-200 text-rose-800 hover:bg-rose-100", warn: "bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100",
+    info: "bg-indigo-50 border-indigo-200 text-indigo-800 hover:bg-indigo-100" }[n.tone];
+  return (
+    <a href="/settings?section=billing" className={`w-full text-left border-b text-xs font-semibold px-6 py-2 flex items-center gap-2 ${cls}`}>
+      <M n={n.tone === "bad" ? "lock" : "credit_card"} c="text-sm" />{n.text} <span className="underline">{n.cta}</span>
+    </a>
+  );
+}
+
 export default function Shell({ title, children }: { title: string; children: ReactNode }) {
   const { can, me, refresh } = useMe();
   const initials = ((me?.name || "").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("") || "?").toUpperCase();
@@ -217,7 +251,7 @@ export default function Shell({ title, children }: { title: string; children: Re
   const renderNav = (collapsed: boolean, onNavigate?: () => void) => (
     <>
       {NAV_GROUPS.map((group) => {
-        const visible = group.items.filter((it) => can(NAV_PERM[it.to]));
+        const visible = group.items.filter((it) => can(NAV_PERM[it.to]) && (!NAV_FEATURE[it.to] || hasFeature(me, NAV_FEATURE[it.to])));
         if (visible.length === 0) return null;
         return (
           <div key={group.name || "home"} className="pb-1">
@@ -261,7 +295,7 @@ export default function Shell({ title, children }: { title: string; children: Re
       <TeklyMark size={32} />
       {!collapsed && (
         <div>
-          <div className="font-bold text-[17px] leading-none tracking-[-0.05em] text-ink-primary flex items-center gap-1.5" aria-label="Tekly">tekly <span className="text-[10px] tracking-normal px-1 py-px rounded bg-blue-100 text-primary font-bold">PRO</span></div>
+          <div className="font-bold text-[17px] leading-none tracking-[-0.05em] text-ink-primary flex items-center gap-1.5" aria-label="Tekly">tekly {planBadge(me?.billing) && <span className="text-[10px] tracking-normal px-1 py-px rounded bg-blue-100 text-primary font-bold">{planBadge(me?.billing)}</span>}</div>
           {me?.org_name && <p className="max-w-[140px] truncate text-[11px] text-ink-tertiary font-medium" title={me.org_name}>{me.org_name}</p>}
         </div>
       )}
@@ -314,8 +348,8 @@ export default function Shell({ title, children }: { title: string; children: Re
             </div>
             <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
               <div className="hidden min-[900px]:block"><LocationSwitcher /></div>
-              <ScanBox />
-              {(me?.clock_attendance_enabled || me?.clock_wo_enabled) && <TimeClockChip me={me} />}
+              {hasFeature(me, "labels") && <ScanBox />}
+              {(me?.clock_attendance_enabled || me?.clock_wo_enabled) && hasFeature(me, "time_clock") && <TimeClockChip me={me} />}
               <button onClick={() => setNotifOpen((o) => !o)} aria-label="Notifications" className="w-8 h-8 rounded-full border border-slate-200 bg-white flex items-center justify-center text-ink-secondary hover:text-ink-primary shadow-xs relative"><M n="notifications" c="text-sm" />{unread > 0 && <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-primary text-white text-[11px] font-bold flex items-center justify-center border-2 border-white">{unread > 9 ? "9+" : unread}</span>}</button>
               <div className="relative">
                 <button onClick={() => setAvatarOpen((o) => !o)} aria-label={t("Account menu")} className="w-8 h-8 rounded-full bg-primary text-white font-semibold text-xs flex items-center justify-center shadow-xs hover:brightness-110 relative">{initials}{me?.mfa_required && !me?.mfa_enabled && <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-amber-400 border-2 border-white" />}</button>
@@ -358,6 +392,7 @@ export default function Shell({ title, children }: { title: string; children: Re
               <M n="lock" c="text-sm" />Your organization requires two-factor authentication. <span className="underline">Set it up now</span> to keep access.
             </button>
           )}
+          <BillingBanner billing={me?.billing} />
           {children}
         </main>
       </div>
@@ -496,14 +531,14 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
 /* ── ⌘K command palette: jump to modules + live order/client search ───────── */
 function CommandPalette({ onClose }: { onClose: () => void }) {
   const nav = useNavigate();
-  const { can } = useMe();
+  const { can, me } = useMe();
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<{ label: string; sub: string; to: string; icon: string }[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { inputRef.current?.focus(); }, []);
 
   // Respect permissions like the sidebar — don't offer jumps to modules the user can't see.
-  const commands = NAV.filter((n) => can(NAV_PERM[n.to])).map((n) => ({ label: n.l, sub: "Go to " + n.l, to: n.to, icon: n.i }));
+  const commands = NAV.filter((n) => can(NAV_PERM[n.to]) && (!NAV_FEATURE[n.to] || hasFeature(me, NAV_FEATURE[n.to]))).map((n) => ({ label: n.l, sub: "Go to " + n.l, to: n.to, icon: n.i }));
   const filteredCmds = commands.filter((c) => !q || c.label.toLowerCase().includes(q.toLowerCase()));
 
   useEffect(() => {

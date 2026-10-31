@@ -20,7 +20,7 @@ import CatalogPicker from "../../components/CatalogPicker";
 import { useCurrencies, type CurItem } from "../../hooks/useCurrencies";
 import { useTerminology } from "../../lib/useTerminology";
 import { identifierFields } from "../../lib/assetIdentifiers";
-import { useMe } from "../../context/Me";
+import { useMe, hasFeature } from "../../context/Me";
 import IdentifyHint, { type IdMatch } from "../../components/IdentifyHint";
 import NameSuggestInput from "../../components/NameSuggestInput";
 import { loadFailed } from "../../lib/notice";
@@ -41,7 +41,8 @@ const TYPES: { t: string; dot: string }[] = [
 
 export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillClient, onClose, onCreated }: { isEstimate?: boolean; prefillClient?: ClientLite | null; onClose: () => void; onCreated: () => void }) {
   const term = useTerminology();
-  const { can } = useMe();
+  const { can, me } = useMe();
+  const aiDraft = hasFeature(me, "ai_estimates");   // Pro plan
   const canCustomize = can("can_manage_settings");
   const estimate = !!initEstimate;   // set by the button that opened it: New order or New estimate
   const [step, setStep] = useState<1 | 2>(1);
@@ -476,14 +477,14 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
               </div>
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-xs font-medium text-ink-secondary">Line items</span>
-                <button type="button" onClick={async () => {
+                {aiDraft && <button type="button" onClick={async () => {
                   if (!issueText()) { await alertDialog("Fill in what the customer reported first."); return; }
                   try {
                     const r = await api.post<any>("/ai/estimate/draft", { complaint: issueText(), device: [brand, model].filter(Boolean).join(" ") });
                     const add = (r.lines || []).map((l: any) => ({ id: Math.random().toString(36).slice(2), description: l.description, kind: "service", price: l.unit_price || 0 }));
                     if (add.length) setLines((ls) => [...ls, ...add]);
                   } catch (e: any) { await alertDialog(e.message || "Couldn't draft lines from the complaint. Add them from the search instead."); }
-                }} className="h-8 rounded-lg px-2.5 text-xs font-semibold text-primary hover:bg-primary/5 flex items-center gap-1"><M n="auto_awesome" c="text-sm" />Draft from the complaint</button>
+                }} className="h-8 rounded-lg px-2.5 text-xs font-semibold text-primary hover:bg-primary/5 flex items-center gap-1"><M n="auto_awesome" c="text-sm" />Draft from the complaint</button>}
               </div>
               <JobSuggestions complaint={issueText()} deviceId={deviceId}
                 onAdd={(i) => setLines((ls) => [...ls, { id: Math.random().toString(36).slice(2), description: i.description, kind: i.kind, price: i.price }])} />

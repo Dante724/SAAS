@@ -56,7 +56,8 @@ ALL_PERMS = [c for group in PERMISSIONS.values() for c, _ in group]
 
 # field group -> the keys it covers in shop responses
 FIELD_GROUPS = {
-    "billing": ["discount_pct", "discount_until", "discount_reason"],
+    "billing": ["discount_pct", "discount_until", "discount_reason",
+                "billing_note", "price_locked_until", "stripe_customer_id"],
     "owner_contact": ["company_email", "company_phone", "owner_name", "owner_email"],
     "staff": ["employees_detail"],
     "notes": ["notes", "admin_notes"],
@@ -65,7 +66,8 @@ FIELD_GROUPS = {
 }
 LEVELS = ("hidden", "own", "shown")
 STAGES = {"trial": ["trial"], "paying": ["active"], "lost": ["trial_lost", "churned"], "suspended": ["suspended"]}
-PLANS = ("trial", "solo", "shop", "pro")
+# The subscription plans (services/billing.py); a trial is a status (sub_status), not a plan.
+PLANS = ("solo", "shop", "pro")
 
 
 def _all(level="shown"):

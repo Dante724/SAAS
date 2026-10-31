@@ -199,6 +199,8 @@ async def sync_order(
         EcommerceIntegration.org_id == current.org_id))).scalar_one_or_none()
     if not integ:
         raise HTTPException(404, "Integration not found")
+    from backend.services.billing import assert_can_add_job
+    await assert_can_add_job(db, current.org_id)
 
     existing = (await db.execute(select(EcommerceOrderMap).where(
         EcommerceOrderMap.integration_id == integration_id,

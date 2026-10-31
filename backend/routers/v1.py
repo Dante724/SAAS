@@ -588,6 +588,8 @@ async def create_order(data: OrderIn, db: AsyncSession = Depends(get_db), princi
         from backend.routers.orders import unique_order_code, unique_public_token
         from backend.services import currency as _cur
         org = principal.org_id
+        from backend.services.billing import assert_can_add_job
+        await assert_can_add_job(db, org)   # Solo: new jobs a month (a replayed key returns the first reply)
         await _must_exist(db, Location, org, data.location_id, "Location")
         await _must_exist(db, Client, org, data.client_id, "Contact")
         await _must_exist(db, Employee, org, data.assigned_to_id, "Employee")

@@ -49,5 +49,10 @@ def test_docs_hidden_in_production(monkeypatch):
     s = Settings(ENVIRONMENT="production", SECRET_KEY="x" * 40, CORS_ORIGINS="https://app.example.com",
                  TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode(),
                  DATABASE_URL="postgresql+asyncpg://u@db/tekly", PUBLIC_BASE_URL="https://app.example.com",
-                 SMTP_HOST="smtp.example.com", SMTP_FROM="no-reply@example.com")
+                 SMTP_HOST="smtp.example.com", SMTP_FROM="no-reply@example.com",
+                 STRIPE_BILLING_SECRET_KEY="sk_test_x", STRIPE_BILLING_WEBHOOK_SECRET="whsec_x",
+                 STRIPE_BILLING_PRICE_SOLO_MONTH="price_om", STRIPE_BILLING_PRICE_SOLO_YEAR="price_oy",
+                 STRIPE_BILLING_PRICE_SHOP_MONTH="price_sm", STRIPE_BILLING_PRICE_SHOP_YEAR="price_sy",
+                 STRIPE_BILLING_PRICE_PRO_MONTH="price_pm", STRIPE_BILLING_PRICE_PRO_YEAR="price_py",
+                 STRIPE_BILLING_PRICE_SHOP_SEAT_MONTH="price_seat_m", STRIPE_BILLING_PRICE_SHOP_SEAT_YEAR="price_seat_y")
     assert s.is_production is True

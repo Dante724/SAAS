@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime as _datetime
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -10,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
 from backend.db.database import get_db
-from backend.models import Employee, Location, Organisation, Role
+from backend.models import TRIAL_DAYS, Employee, Location, Organisation, Role
 from backend.services import shop_setup as _shop_setup
 from backend.services import tokens as _tok
 from backend.services.audit import record as _audit
@@ -73,6 +74,7 @@ class RegisterRequest(BaseModel):
     document_language: Optional[str] = None
     company_phone: Optional[str] = None
     employee_count: Optional[str] = None
+    plan: Optional[str] = None            # solo | shop | pro, from the pricing page (default pro)
 
 
 # Build 144cl — seed a sensible default tax so a new shop isn't starting blank.
@@ -214,7 +216,11 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
 
     import secrets as _sec
     org = Organisation(name=data.org_name, webhook_secret=_sec.token_urlsafe(24),
-                       sub_status="trial")   # build 144ce
+                       sub_status="trial",   # build 144ce
+                       # Subscription billing: the plan picked on the pricing page (Pro by default);
+                       # every Pro feature is open for the trial (services/billing.py).
+                       trial_ends_at=platform_today() + timedelta(days=TRIAL_DAYS),
+                       plan=data.plan if data.plan in ("solo", "shop", "pro") else "pro")
     # Launch B4/B6: the sign-up Country picker decides currency, timezone and tax. What the form
     # sends explicitly still wins; the country fills in the rest.
     cdef = _shop_setup.country_defaults(data.country)
@@ -772,6 +778,13 @@ async def invite_accept(data: InviteAccept, request: Request, db: AsyncSession =
             func.lower(Employee.email) == norm_email(inv.email)))).scalar_one_or_none():
         raise HTTPException(409, "An account with this email already exists. Sign in with it, "
                                  "or ask for an invite to a different email address.")
+    # The invite was sent earlier; the shop's plan decides now (unauthenticated route, so the
+    # staff-request gate in get_current_employee doesn't cover it).
+    from backend.services import billing as _billing
+    _org = (await db.execute(select(Organisation).where(Organisation.id == inv.org_id))).scalar_one_or_none()
+    if _org is not None and _billing.state(_org).read_only:
+        raise HTTPException(402, "This shop's Tekly plan has lapsed. Ask the owner to renew, then accept again.")
+    await _billing.assert_can_add(db, inv.org_id, "team_members")
     emp = Employee(
         org_id=inv.org_id, location_id=inv.location_id, role_id=inv.role_id,
         name=(data.name or inv.name or inv.email.split("@")[0]),
@@ -783,8 +796,10 @@ async def invite_accept(data: InviteAccept, request: Request, db: AsyncSession =
     role = (await db.execute(select(Role).where(Role.id == emp.role_id))).scalar_one_or_none()
     from backend.services.sessions import issue_session
     token = await issue_session(db, emp, request, via="invite")
-    return TokenResponse(access_token=token, employee_id=emp.id, org_id=emp.org_id,
-                         name=emp.name, role=role.name if role else "staff")
+    out = TokenResponse(access_token=token, employee_id=emp.id, org_id=emp.org_id,
+                        name=emp.name, role=role.name if role else "staff")
+    await _billing.sync_seats(db, inv.org_id)   # Shop and Pro bill members beyond the included ones as seats
+    return out
 
 
 @router.get("/me")
@@ -841,4 +856,12 @@ async def me(current: Employee = Depends(get_current_employee),
         # build 144x: org master switches — effective clock = org ON *and* employee tracks it
         "clock_wo_enabled": (org.clock_wo_enabled if org and org.clock_wo_enabled is not None else True),
         "clock_attendance_enabled": (org.clock_attendance_enabled if org and org.clock_attendance_enabled is not None else True),
+        # Subscription: plan, trial, read-only state and the Pro features unlocked, so the app
+        # hides what the plan lacks (the server enforces the same in services/billing.py).
+        "billing": await _billing_summary(db, org),
     }
+
+
+async def _billing_summary(db, org):
+    from backend.services.billing import summary_with_usage
+    return await summary_with_usage(db, org)

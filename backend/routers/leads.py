@@ -242,4 +242,7 @@ async def convert_lead(
     from backend.services.auth import assert_perm
     await assert_perm(db, current, "can_create_estimates" if is_estimate else "can_create_tickets")
     lead = await _get(db, current, lead_id)
+    if not is_estimate and not lead.converted_order_id:
+        from backend.services.billing import assert_can_add_job
+        await assert_can_add_job(db, current.org_id)   # Solo: new jobs a month
     return await svc.convert_lead(db, current.org_id, lead, actor=current, is_estimate=is_estimate)

@@ -102,6 +102,23 @@ class Settings(BaseSettings):
     STRIPE_SUCCESS_URL: str = ""
     STRIPE_CANCEL_URL: str = ""
 
+    # -- Tekly subscription billing: Tekly's OWN Stripe account, which bills shops for Tekly.
+    # Separate from STRIPE_SECRET_KEY above and from each shop's own keys (org_creds), which
+    # take payments from the shop's customers. Required in production; test-mode keys only on
+    # staging. One USD price list worldwide (yearly = 10 x monthly); Shop and Pro are graduated tiered
+    # prices per location. See .env.example for what to create in Stripe.
+    STRIPE_BILLING_SECRET_KEY: str = ""
+    STRIPE_BILLING_WEBHOOK_SECRET: str = ""
+    STRIPE_BILLING_PRICE_SOLO_MONTH: str = ""
+    STRIPE_BILLING_PRICE_SOLO_YEAR: str = ""
+    STRIPE_BILLING_PRICE_SHOP_MONTH: str = ""
+    STRIPE_BILLING_PRICE_SHOP_YEAR: str = ""
+    STRIPE_BILLING_PRICE_PRO_MONTH: str = ""
+    STRIPE_BILLING_PRICE_PRO_YEAR: str = ""
+    # Extra team members on Shop (beyond 4) and Pro (beyond 8): one $6 per-seat price for both.
+    STRIPE_BILLING_PRICE_SHOP_SEAT_MONTH: str = ""
+    STRIPE_BILLING_PRICE_SHOP_SEAT_YEAR: str = ""
+
     # -- Square (absent -> not selectable; per-org provider chooses at runtime) --
     SQUARE_ACCESS_TOKEN: str = ""
     SQUARE_LOCATION_ID: str = ""
@@ -205,6 +222,19 @@ class Settings(BaseSettings):
         return self.DATABASE_URL.startswith("sqlite")
 
     @property
+    def billing_prices(self) -> dict[tuple[str, str], str]:
+        """(plan, period) -> Stripe price id, for the prices that are set."""
+        raw = {(plan, period): getattr(self, f"STRIPE_BILLING_PRICE_{plan.upper()}_{period.upper()}")
+               for plan in ("solo", "shop", "pro") for period in ("month", "year")}
+        return {k: v.strip() for k, v in raw.items() if v and v.strip()}
+
+    @property
+    def billing_seat_prices(self) -> dict[str, str]:
+        """period -> Stripe price id for extra team members (Shop and Pro), for the ones that are set."""
+        raw = {"month": self.STRIPE_BILLING_PRICE_SHOP_SEAT_MONTH, "year": self.STRIPE_BILLING_PRICE_SHOP_SEAT_YEAR}
+        return {k: v.strip() for k, v in raw.items() if v and v.strip()}
+
+    @property
     def cors_origin_list(self) -> list[str]:
         if self.CORS_ORIGINS.strip() == "*":
             return ["*"]
@@ -290,6 +320,7 @@ class Settings(BaseSettings):
                 "STRIPE_WEBHOOK_SECRET must be set in production when Stripe is "
                 "configured (STRIPE_SECRET_KEY present), to verify webhook signatures."
             )
+        self._check_billing()
         if self.SQUARE_ACCESS_TOKEN and not self.SQUARE_WEBHOOK_SIGNATURE_KEY:
             raise ValueError(
                 "SQUARE_WEBHOOK_SIGNATURE_KEY must be set in production when Square is "
@@ -331,6 +362,28 @@ class Settings(BaseSettings):
             raise ValueError("REDIS_URL must be set when WEB_CONCURRENCY > 1 in production/staging, so "
                              "rate limits are shared by every worker. Set REDIS_URL or run one worker.")
         return self
+
+
+    def _check_billing(self) -> None:
+        """Subscription billing must be complete wherever it's switched on, and switched on in
+        production: without it trials end with no way to pay, and every shop goes read-only."""
+        key = self.STRIPE_BILLING_SECRET_KEY.strip()
+        if not key:
+            if self.is_production:
+                raise ValueError(
+                    "STRIPE_BILLING_SECRET_KEY must be set in production: shops can't subscribe "
+                    "to Tekly without it. See .env.example (Tekly subscription billing).")
+            return
+        missing = [n for n in ("STRIPE_BILLING_WEBHOOK_SECRET", "PUBLIC_BASE_URL",
+                               *(f"STRIPE_BILLING_PRICE_{p}_{t}" for p in ("SOLO", "SHOP", "PRO", "SHOP_SEAT")
+                                 for t in ("MONTH", "YEAR")))
+                   if not str(getattr(self, n) or "").strip()]
+        if missing:
+            raise ValueError("Subscription billing is configured (STRIPE_BILLING_SECRET_KEY) but "
+                             f"these are not set: {', '.join(missing)}")
+        if not self.is_production and "_live_" in key:
+            raise ValueError("STRIPE_BILLING_SECRET_KEY is a live key outside production; "
+                             "staging must use a Stripe test-mode key (sk_test_…).")
 
 
 settings = Settings()

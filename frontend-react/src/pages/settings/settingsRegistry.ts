@@ -6,13 +6,14 @@
 import { FEATURES } from "../../lib/features";
 
 export type SectionId =
-  | "general" | "team" | "locations" | "statuses" | "checklists" | "forms"
+  | "general" | "billing" | "team" | "locations" | "statuses" | "checklists" | "forms"
   | "industry" | "pricing" | "finance" | "warehouses" | "directories"
   | "templates" | "feedback" | "public" | "notifications" | "integrations"
   | "ecommerce" | "sso" | "approvals" | "memberships";
 
 const ALL_NAV: { id: SectionId; label: string; icon: string }[] = [
   { id: "general", label: "General", icon: "tune" },
+  { id: "billing", label: "Billing & plan", icon: "credit_card" },
   { id: "team", label: "Team & roles", icon: "group" },
   { id: "locations", label: "Locations", icon: "storefront" },
   { id: "statuses", label: "Statuses", icon: "flag" },
@@ -47,7 +48,7 @@ export const CATS: { id: string; label: string; icon: string }[] = [
 ];
 
 export const SEC_CAT: Record<SectionId, string> = {
-  general: "workspace", team: "workspace", locations: "workspace", sso: "workspace",
+  general: "workspace", billing: "workspace", team: "workspace", locations: "workspace", sso: "workspace",
   statuses: "workorders", checklists: "workorders", forms: "workorders", industry: "workorders", approvals: "workorders",
   pricing: "money", finance: "money", memberships: "money",
   warehouses: "inventory",
@@ -58,6 +59,7 @@ export const SEC_CAT: Record<SectionId, string> = {
 // keywords power search (so "invoice number", "reminder", "add tech" all land)
 export const SEC_KW: Record<SectionId, string> = {
   general: "name timezone currency language region industry logo profile sense tekly sense suggestions smart margin learning",
+  billing: "billing plan subscription trial upgrade solo shop pro seats team members invoice card payment tekly",
   team: "staff employee invite role permission rbac mobile access payroll add tech person",
   locations: "branch address hours location shop",
   sso: "sso saml oauth login security 2fa session single sign on",
@@ -77,6 +79,12 @@ export const SEC_KW: Record<SectionId, string> = {
   directories: "directory document export knowledge base files",
   integrations: "integration connect api webhook stripe quickbooks email",
   ecommerce: "ecommerce shop product sync online store shopify",
+};
+
+// Sections that only exist on a plan feature (hidden from nav and search otherwise; the server
+// refuses the API anyway). Values are ProFeature codes from context/Me.
+export const SEC_FEATURE: Partial<Record<SectionId, "sso" | "inventory" | "notification_rules">> = {
+  sso: "sso", warehouses: "inventory", notifications: "notification_rules",
 };
 
 // Setup guide: each step is checked against real data (SetupChecklist loadSetupState), with a

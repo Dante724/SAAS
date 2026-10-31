@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
+import { useMe, hasFeature } from "../../context/Me";
 import Pager from "../../components/Pager";
 import JobPicker from "../../components/JobPicker";
 import { loadFailed } from "../../lib/notice";
@@ -17,6 +18,7 @@ const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString([], { m
 const STATUS_LABEL: Record<string, string> = { todo: "To do", in_progress: "In progress", done: "Done" };
 
 export default function TasksHub() {
+  const clockOk = hasFeature(useMe().me, "time_clock");   // task timer: Shop plan
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [statuses, setStatuses] = useState<string[]>([]);
   const [filter, setFilter] = useState("all");
@@ -127,7 +129,7 @@ export default function TasksHub() {
                 {["todo", "in_progress", "done"].map((s) => (
                   <button key={s} onClick={() => patch(sel.id, { status: s }, `Marked ${STATUS_LABEL[s]}`)} className={`px-3 py-1.5 rounded-lg text-[11px] font-bold ${(sel.completed_at ? "done" : sel.status) === s ? "bg-primary text-white shadow-clay-sm" : "bg-slate-100 text-ink-secondary hover:bg-slate-200"}`}>{STATUS_LABEL[s]}</button>
                 ))}
-                <button onClick={() => startTimer(sel.id)} className="ml-auto px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold flex items-center gap-1 hover:bg-emerald-100"><M n="play_arrow" c="text-sm" />Start timer</button>
+                {clockOk && <button onClick={() => startTimer(sel.id)} className="ml-auto px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold flex items-center gap-1 hover:bg-emerald-100"><M n="play_arrow" c="text-sm" />Start timer</button>}
               </div>
               {sel.description && <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200 text-xs leading-relaxed text-ink-primary">{sel.description}</div>}
               <div>

@@ -158,7 +158,8 @@ def key_lookup_clause(token_hash: str, now: datetime):
     )
 
 
-async def _authenticate(creds: Optional[HTTPAuthorizationCredentials], db: AsyncSession) -> tuple[ApiKey, ApiPrincipal]:
+async def _authenticate(creds: Optional[HTTPAuthorizationCredentials], db: AsyncSession,
+                        method: str = "GET") -> tuple[ApiKey, ApiPrincipal]:
     if creds is None or not creds.credentials:
         raise HTTPException(401, "Missing API key (Authorization: Bearer rok_...)",
                             headers={"WWW-Authenticate": "Bearer"})
@@ -181,8 +182,11 @@ async def _authenticate(creds: Optional[HTTPAuthorizationCredentials], db: Async
     # A suspended or lapsed shop's integrations stop with it (keys used to keep working).
     from backend.models import Organisation
     from backend.services.auth import assert_org_active
-    assert_org_active((await db.execute(select(Organisation).where(
-        Organisation.id == row.org_id))).scalar_one_or_none())
+    from backend.services.billing import enforce_api_key
+    org = (await db.execute(select(Organisation).where(
+        Organisation.id == row.org_id))).scalar_one_or_none()
+    assert_org_active(org)
+    enforce_api_key(org, method)   # API access is Pro; a read-only shop's keys can only read
     # Same flush-time shop guard as signed-in staff (db/tenancy.py): an API write can't touch
     # or point at another shop's rows.
     db.sync_session.info["tenant_org"] = row.org_id
@@ -229,7 +233,7 @@ def require_scope(scope: Optional[str], resource: Optional[str] = None):
         creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
         db: AsyncSession = Depends(get_db),
     ) -> ApiPrincipal:
-        row, principal = await _authenticate(creds, db)
+        row, principal = await _authenticate(creds, db, request.method)
         await _enforce_key_limit(row, request)
         if scope is not None:
             principal.require(scope, resource)

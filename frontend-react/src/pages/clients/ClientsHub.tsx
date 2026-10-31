@@ -1,4 +1,5 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import { useMe, hasFeature } from "../../context/Me";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
@@ -16,7 +17,6 @@ import Pager from "../../components/Pager";
 import { useDebounced, useServerPage } from "../../hooks/useServerPage";
 import { confirmDialog } from "../../lib/dialog";
 import TagFilterChip from "./TagFilterChip";
-import { useMe } from "../../context/Me";
 import { Avatar } from "../orders/look";
 import { MoreMenu, btnDanger, btnGhost, btnPrimary } from "../invoices/billing";
 import MembershipsView from "../memberships/MembershipsView";
@@ -39,7 +39,8 @@ export function TierPill({ tier }: { tier?: string | null }) {
 
 export default function ClientsHub() {
   const term = useTerminology();
-  const { can } = useMe();
+  const { can, me } = useMe();
+  const tabs: Tab[] = hasFeature(me, "inventory") ? ["clients", "memberships", "suppliers"] : ["clients", "memberships"];   // suppliers: Shop plan
   const [tab, setTab] = useState<Tab>(() => (new URLSearchParams(window.location.search).get("tab") === "memberships" ? "memberships" : "clients"));
   const [importing, setImporting] = useState<"clients" | "suppliers" | null>(null);
   const [suppliers, setSuppliers] = useState<Supplier[] | null>(null);
@@ -132,7 +133,7 @@ export default function ClientsHub() {
       {importing && <ImportDrawer kind={importing} onClose={() => setImporting(null)} onDone={() => { if (importing === "clients") loadClients(); else loadSuppliers(); }} />}
       <div className="flex-1 overflow-y-auto">
         <div className="px-6 pt-4 flex items-center gap-1 border-b border-slate-200/70">
-          {(["clients", "memberships", "suppliers"] as Tab[]).map((t) => (
+          {tabs.map((t) => (
             <button key={t} onClick={() => { setTab(t); clearSel(); }}
               className={`px-3 py-2 text-sm font-semibold rounded-t-lg -mb-px border-b-2 capitalize ${tab === t ? "text-primary border-primary" : "text-ink-tertiary border-transparent hover:text-ink-primary"}`}>
               {t}

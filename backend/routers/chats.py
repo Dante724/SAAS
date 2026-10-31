@@ -450,6 +450,9 @@ async def thread_to_order(
         raise HTTPException(404, "Thread not found")
     if t.order_id:
         raise HTTPException(409, "This chat already has a work order")
+    if not is_estimate:
+        from backend.services.billing import assert_can_add_job
+        await assert_can_add_job(db, current.org_id)
 
     # reuse the linked client, else create one from the chat contact
     client_id = t.client_id

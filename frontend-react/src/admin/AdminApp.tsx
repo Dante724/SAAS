@@ -8,6 +8,12 @@ import { clickableRow } from "../lib/clickable";
 type View = "today" | "shops" | "codes" | "team" | "log";
 const card = "bg-white rounded-xl border border-slate-200";
 
+/** When a trial stops: the billing trial clock or a hand-set term end, whichever comes first from today. */
+function endsOn(s: Shop): string | null {
+  const today = new Date().toISOString().slice(0, 10);
+  return [s.trial_ends_at, s.sub_end].filter((d): d is string => !!d && d >= today).sort()[0] || null;
+}
+
 export default function AdminApp() {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const load = useCallback(() => adminApi.get<Me>("/me").then(setMe).catch(() => setMe(null)), []);
@@ -74,7 +80,7 @@ function TodayView({ me, onOpenShop }: { me: Me; onOpenShop: (id: string) => voi
       const [s, r] = await Promise.all([adminApi.get<any>("/stats"), adminApi.get<{ items: Req[] }>("/approvals")]);
       setStats(s); setReqs(r.items);
       const t = await adminApi.get<{ items: Shop[] }>("/tenants?ending_days=7&limit=50").catch(() => ({ items: [] as Shop[] }));
-      setEnding([...t.items].sort((a, b) => (a.sub_end || "").localeCompare(b.sub_end || "")).slice(0, 10));
+      setEnding([...t.items].sort((a, b) => (endsOn(a) || "").localeCompare(endsOn(b) || "")).slice(0, 10));
     } catch (e: any) { setErr(e.message); }
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -114,7 +120,7 @@ function TodayView({ me, onOpenShop }: { me: Me; onOpenShop: (id: string) => voi
         {ending.map((s) => (
           <button key={s.id} onClick={() => onOpenShop(s.id)} className="w-full text-left px-4 py-3 border-b border-slate-100 last:border-0 flex gap-3 text-sm hover:bg-slate-50">
             <span className="font-semibold">{s.name}</span><span className="text-ink-tertiary">{s.country || ""}</span>
-            <span className="ml-auto text-amber-700">Ends {fmtDate(s.sub_end)}</span>
+            <span className="ml-auto text-amber-700">Ends {fmtDate(endsOn(s))}</span>
           </button>
         ))}
       </section>

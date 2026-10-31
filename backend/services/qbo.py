@@ -205,6 +205,11 @@ async def autosync(db: AsyncSession, org_id: str, items: list[tuple]) -> None:
         conn = await get_connection(db, org_id)
         if not is_configured() or not conn or not conn.connected:
             return
+        from backend.models import Organisation
+        from backend.services.billing import has_feature
+        org = await db.get(Organisation, org_id)
+        if org is None or not has_feature(org, "accounting_sync"):   # a Pro feature
+            return
         for entity_type, local_id in items:
             if local_id:
                 await sync_entity(db, org_id, entity_type, local_id)

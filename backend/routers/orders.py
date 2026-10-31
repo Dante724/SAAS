@@ -898,6 +898,9 @@ async def create_order(
     # Estimates have their own permission (it used to be listed but never checked).
     if data.is_estimate:
         await assert_perm(db, current, "can_create_estimates")
+    else:
+        from backend.services.billing import assert_can_add_job
+        await assert_can_add_job(db, current.org_id)   # Solo: new jobs a month
     await _assert_listed(db, current.org_id, data.manager_id, "display_in_managers", "Managers")
     await _assert_listed(db, current.org_id, data.assigned_to_id, "display_in_assignees", "Assignee")
     # A retried create (double tap, phone timeout) with the same Idempotency-Key returns the
@@ -1971,6 +1974,8 @@ async def convert_estimate_endpoint(
         raise HTTPException(400, "This is already a work order")
     if est.converted_order_id:
         raise HTTPException(400, "Already converted")
+    from backend.services.billing import assert_can_add_job
+    await assert_can_add_job(db, current.org_id)
     new_id = await _convert_estimate(db, current, est)
     return {"ok": True, "order_id": new_id}
 
@@ -2976,6 +2981,9 @@ async def duplicate_order(
     if not src:
         raise HTTPException(404, "Order not found")
     await assert_perm(db, current, "can_create_estimates" if src.is_estimate else "can_create_tickets")
+    if not src.is_estimate:
+        from backend.services.billing import assert_can_add_job
+        await assert_can_add_job(db, current.org_id)
 
     number = await next_number(db, current.org_id, "order")
     if src.is_estimate:

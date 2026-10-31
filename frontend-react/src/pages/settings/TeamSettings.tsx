@@ -34,12 +34,12 @@ export { Avatar };
 
 type Tab = "people" | "roles" | "pay" | "signin";
 
-export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEditPerson, onNewPerson, onInvite, onEditRole, onNewRole, onEditRule, onNewRule, onChanged, onFlash }: {
+export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEditPerson, onNewPerson, onInvite, onEditRole, onNewRole, onEditRule, onNewRule, onChanged, onFlash, showPay = true }: {
   team: any[] | null | undefined; roles: any[] | null; invites: any[] | null; rules: any[] | null | undefined; catalog: Record<string, any[]> | null;
   payLabel: (r: any) => { event: string; amount: string };
   onEditPerson: (e: any) => void; onNewPerson: () => void; onInvite: () => void;
   onEditRole: (r: any) => void; onNewRole: () => void; onEditRule: (r: any) => void; onNewRule: () => void;
-  onChanged: () => void; onFlash: (m: string) => void;
+  onChanged: () => void; onFlash: (m: string) => void; showPay?: boolean;
 }) {
   const [tab, setTab] = useState<Tab>("people");
   const [q, setQ] = useState("");
@@ -58,7 +58,9 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
     try { await api.del(`/staff/invites/${i.id}`); onFlash("Invite cancelled"); onChanged(); } catch (e: any) { onFlash(e?.message || "Couldn't cancel"); }
   }
 
-  const tabs: [Tab, string, number | undefined][] = [["people", "People", people.length], ["roles", "Roles", roles?.length], ["pay", "Commissions", rules?.length], ["signin", "Sign-in", undefined]];
+  // Commissions are part of payroll, a Pro feature.
+  const tabs: [Tab, string, number | undefined][] = [["people", "People", people.length], ["roles", "Roles", roles?.length],
+    ...(showPay ? [["pay", "Commissions", rules?.length] as [Tab, string, number | undefined]] : []), ["signin", "Sign-in", undefined]];
   const primary = tab === "people" ? { label: "Invite someone", icon: "person_add", on: onInvite }
     : tab === "roles" ? { label: "New role", icon: "add", on: onNewRole } : { label: "New rule", icon: "add", on: onNewRule };
 

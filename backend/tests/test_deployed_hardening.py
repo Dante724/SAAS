@@ -15,7 +15,11 @@ from backend.services import crypto, org_creds
 
 STRONG = dict(SECRET_KEY="s" * 48, CORS_ORIGINS="https://app.example.com",
               DATABASE_URL="postgresql+asyncpg://u@db/tekly", PUBLIC_BASE_URL="https://app.example.com",
-              SMTP_HOST="smtp.example.com", SMTP_FROM="no-reply@example.com")
+              SMTP_HOST="smtp.example.com", SMTP_FROM="no-reply@example.com",
+              # Subscription billing is required in production (services/billing.py).
+              STRIPE_BILLING_SECRET_KEY="sk_test_x", STRIPE_BILLING_WEBHOOK_SECRET="whsec_x",
+              **{f"STRIPE_BILLING_PRICE_{p}_{t}": f"price_{p}_{t}".lower()
+                 for p in ("SOLO", "SHOP", "PRO", "SHOP_SEAT") for t in ("MONTH", "YEAR")})
 
 
 @pytest.mark.parametrize("env", ["production", "staging"])

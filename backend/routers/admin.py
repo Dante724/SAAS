@@ -91,11 +91,11 @@ def _parse_date(s):
 
 def _segment(org: Organisation) -> str:
     st = org.sub_status or "trial"
-    if st == "active":
+    if st in ("active", "past_due"):
         return "paid"
-    if st == "churned":
+    if st in ("churned", "unpaid"):
         return "lost_paid"
-    if st == "trial_lost":
+    if st == "trial_lost" or (st not in ("suspended",) and org.trial_ends_at and org.trial_ends_at <= date.today()):
         return "lost_trial"
     if st == "suspended":
         return "suspended"
@@ -107,12 +107,15 @@ def _segment(org: Organisation) -> str:
 def _segment_filter(q, segment: str):
     new_since = date.today() - timedelta(days=NEW_TRIAL_DAYS)
     # Anything that isn't a known non-trial stage counts as a trial, as in _segment().
-    trial = or_(Organisation.sub_status.is_(None),
-                Organisation.sub_status.notin_(("active", "churned", "trial_lost", "suspended")))
+    on_trial = or_(Organisation.sub_status.is_(None), Organisation.sub_status.notin_(
+        ("active", "past_due", "churned", "unpaid", "trial_lost", "suspended")))
+    # A trial whose clock ran out without paying counts as a lost trial, as in _segment().
+    trial_over = Organisation.trial_ends_at.is_not(None) & (Organisation.trial_ends_at <= date.today())
+    trial = on_trial & ~trial_over
     by = {
-        "paid": Organisation.sub_status == "active",
-        "lost_paid": Organisation.sub_status == "churned",
-        "lost_trial": Organisation.sub_status == "trial_lost",
+        "paid": Organisation.sub_status.in_(("active", "past_due")),
+        "lost_paid": Organisation.sub_status.in_(("churned", "unpaid")),
+        "lost_trial": (Organisation.sub_status == "trial_lost") | (on_trial & trial_over),
         "suspended": Organisation.sub_status == "suspended",
         "new": trial & (Organisation.sub_start >= new_since),
         "trial": trial & or_(Organisation.sub_start.is_(None), Organisation.sub_start < new_since),
@@ -268,6 +271,11 @@ def _shop_row(org: Organisation, *, employees: int, owner, names: dict) -> dict:
         "company_email": org.company_email, "company_phone": org.company_phone,
         "owner_name": owner[0] if owner else None, "owner_email": owner[1] if owner else None,
         "suspend_message": org.suspend_message,
+        # Subscription billing (services/billing.py): trial clock, Stripe or custom pricing.
+        "trial_ends_at": _iso(org.trial_ends_at), "billing_period": org.billing_period,
+        "billing_mode": org.billing_mode or "stripe", "billing_period_end": _iso(org.billing_period_end),
+        "billing_note": org.billing_note, "price_locked_until": _iso(org.price_locked_until),
+        "stripe_customer_id": org.stripe_customer_id,
     }
 
 
@@ -299,7 +307,10 @@ async def list_tenants(segment: Optional[str] = None, q: Optional[str] = Query(N
         query = query.where(Organisation.assigned_admin_id == ctx.admin.id)
     if ending_days is not None:   # trials whose end date falls in the next N days
         today = date.today()
-        query = query.where(Organisation.sub_end >= today, Organisation.sub_end <= today + timedelta(days=ending_days),
+        until = today + timedelta(days=ending_days)
+        # The billing trial clock (trial_ends_at) or a hand-set term end (sub_end).
+        query = query.where(or_(and_(Organisation.sub_end >= today, Organisation.sub_end <= until),
+                                and_(Organisation.trial_ends_at >= today, Organisation.trial_ends_at <= until)),
                             or_(Organisation.sub_status.is_(None),
                                 Organisation.sub_status.notin_(("active", "churned", "trial_lost", "suspended"))))
     if q and q.strip():
@@ -364,18 +375,36 @@ class PatchTenant(BaseModel):
     sub_start: Optional[str] = None
     sub_end: Optional[str] = None
     sub_status: Optional[str] = None
+    trial_ends_at: Optional[str] = None
+    billing_mode: Optional[str] = None          # stripe | custom
+    billing_period_end: Optional[str] = None    # a custom shop's term end
+    billing_note: Optional[str] = Field(None, max_length=500)   # the agreed custom price (internal)
+    price_locked_until: Optional[str] = None    # founding-customer price lock
     reason: str = Field(min_length=3, max_length=500)
+
+
+_BILLING_KEYS = ("trial_ends_at", "billing_mode", "billing_period_end", "billing_note", "price_locked_until")
+
+
+def _sub_snapshot(org: Organisation) -> dict:
+    return {"sub_start": _iso(org.sub_start), "sub_end": _iso(org.sub_end), "sub_status": org.sub_status,
+            "trial_ends_at": _iso(org.trial_ends_at), "billing_mode": org.billing_mode or "stripe",
+            "billing_period_end": _iso(org.billing_period_end), "billing_note": org.billing_note,
+            "price_locked_until": _iso(org.price_locked_until)}
 
 
 @private.patch("/tenants/{org_id}")
 async def patch_tenant(org_id: str, data: PatchTenant, ctx: AdminCtx = Depends(require_admin_perm("change_plan")),
                        db: AsyncSession = Depends(get_db)):
-    """Subscription dates and stage (owner-level). Suspending has its own action."""
+    """Subscription dates, stage and billing terms (owner-level). Suspending has its own action."""
     org = await get_shop(db, ctx, org_id)
     p = data.model_dump(exclude_unset=True)
-    before = {"sub_start": _iso(org.sub_start), "sub_end": _iso(org.sub_end), "sub_status": org.sub_status}
+    if any(k in p for k in _BILLING_KEYS) and not can_see(ctx, org, "billing"):
+        await admin_log.refuse(db, admin=ctx.admin, action="edit_subscription", org_id=org_id, ip=ctx.ip,
+                               detail="You can't see this shop's billing, so ask its account owner")
+    before = _sub_snapshot(org)
     if "sub_status" in p:
-        if p["sub_status"] not in {"trial", "active", "trial_lost", "churned"}:
+        if p["sub_status"] not in {"trial", "active", "past_due", "unpaid", "trial_lost", "churned"}:
             raise HTTPException(422, "Use suspend or unsuspend for that")
         if org.sub_status == "suspended":
             raise HTTPException(409, "This shop is suspended. Unsuspend it first.")
@@ -384,7 +413,21 @@ async def patch_tenant(org_id: str, data: PatchTenant, ctx: AdminCtx = Depends(r
         org.sub_start = _parse_date(p["sub_start"])
     if "sub_end" in p:
         org.sub_end = _parse_date(p["sub_end"])
-    after = {"sub_start": _iso(org.sub_start), "sub_end": _iso(org.sub_end), "sub_status": org.sub_status}
+    if "trial_ends_at" in p:   # extend (or end) a trial by hand
+        org.trial_ends_at = _parse_date(p["trial_ends_at"])
+    if "billing_mode" in p:
+        if p["billing_mode"] not in ("stripe", "custom"):
+            raise HTTPException(422, "billing_mode must be stripe or custom")
+        if p["billing_mode"] == "custom" and org.stripe_subscription_id and org.sub_status in ("active", "past_due"):
+            raise HTTPException(409, "This shop pays through Stripe. Cancel that subscription first.")
+        org.billing_mode = p["billing_mode"]
+    if "billing_period_end" in p:
+        org.billing_period_end = _parse_date(p["billing_period_end"])
+    if "billing_note" in p:
+        org.billing_note = (p["billing_note"] or "").strip() or None
+    if "price_locked_until" in p:
+        org.price_locked_until = _parse_date(p["price_locked_until"])
+    after = _sub_snapshot(org)
     if org.sub_end and org.sub_end < date.today():
         await _boot_staff(db, org.id)
     await admin_log.write(db, admin=ctx.admin, action="edit_subscription", org_id=org.id, before=before, after=after,
@@ -419,10 +462,15 @@ async def _apply(db, org: Organisation, action: str, payload: dict) -> tuple[dic
         org.discount_reason = payload.get("reason")
         return before, {"pct": payload["pct"], "until": payload.get("until"), "reason": org.discount_reason}
     if action == "extend_trial":
-        before = {"sub_end": _iso(org.sub_end)}
-        base = max(org.sub_end or date.today(), date.today())
-        org.sub_end = base + timedelta(days=int(payload["days"]))
-        return before, {"sub_end": _iso(org.sub_end), "days": payload["days"]}
+        # The trial clock services/billing reads is trial_ends_at; a hand-set term end (sub_end,
+        # which blocks sign-in) moves with it so it doesn't cut the longer trial short.
+        days = timedelta(days=int(payload["days"]))
+        before = {"sub_end": _iso(org.sub_end), "trial_ends_at": _iso(org.trial_ends_at)}
+        org.trial_ends_at = max(org.trial_ends_at or date.today(), date.today()) + days
+        if org.sub_end is not None:
+            org.sub_end = max(org.sub_end, date.today()) + days
+        return before, {"sub_end": _iso(org.sub_end), "trial_ends_at": _iso(org.trial_ends_at),
+                        "days": payload["days"]}
     if action == "plan_change":
         before = {"plan": org.plan}
         org.plan = payload["plan"]
@@ -501,7 +549,7 @@ async def extend_trial(org_id: str, data: TrialIn, ctx: AdminCtx = Depends(requi
     await admin_log.write(db, admin=ctx.admin, action="extend_trial", org_id=org.id, before=before, after=after,
                           reason=data.reason, ip=ctx.ip)
     await db.commit()
-    return {"status": "applied", "sub_end": after["sub_end"]}
+    return {"status": "applied", "sub_end": after["sub_end"], "trial_ends_at": after["trial_ends_at"]}
 
 
 class PlanIn(BaseModel):
