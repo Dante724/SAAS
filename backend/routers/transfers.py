@@ -15,7 +15,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -170,6 +170,16 @@ async def change_status(
     if t.status in ("completed", "canceled"):
         raise HTTPException(409, f"Transfer is {t.status} — no further changes")
     new = data.status
+    if new != "canceled" and (new not in ORDERED or ORDERED.index(new) != ORDERED.index(t.status) + 1):
+        raise HTTPException(400, f"Invalid move {t.status} -> {new}")
+    # Claim the move before any stock moves: the same click sent twice (or two people) must not
+    # credit the destination or debit the source twice. Only the request whose status still
+    # matches wins; the other gets a 409.
+    won = await db.execute(update(StockTransfer).where(
+        StockTransfer.id == t.id, StockTransfer.status == t.status)
+        .values(status=new).execution_options(synchronize_session=False))
+    if won.rowcount != 1:
+        raise HTTPException(409, "This transfer was changed by someone else. Refresh and try again.")
     lines = await _lines(db, tid)
 
     if new == "canceled":

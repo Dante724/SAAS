@@ -1002,6 +1002,12 @@ async def post_stocktake(
         raise HTTPException(404, "Stocktake not found")
     if st.status == "posted":
         raise HTTPException(409, "Stocktake is already posted")
+    # Claim the post first: a second click sent while the first is in flight applies nothing.
+    won = await db.execute(sa_update(Stocktake).where(
+        Stocktake.id == st.id, Stocktake.status != "posted")
+        .values(status="posted").execution_options(synchronize_session=False))
+    if won.rowcount != 1:
+        raise HTTPException(409, "Stocktake is already posted")
     lines = (await db.execute(select(StocktakeLine).where(
         StocktakeLine.stocktake_id == st_id,
         StocktakeLine.counted_qty.is_not(None)))).scalars().all()

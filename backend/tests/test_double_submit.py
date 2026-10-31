@@ -155,14 +155,14 @@ async def test_double_decide_from_stale_copies_adds_once_and_total_matches_lines
     await K.add_line(client, tenant, oid, line_type="labour", kind="service", description="Fit", unit_price=30, qty=1)
     stale = (await db.execute(select(Order).where(Order.id == oid))).scalar_one()
     from backend.models import Recommendation
-    (await db.execute(select(Recommendation).where(Recommendation.id == rid))).scalar_one()   # A read it as "sent"
+    stale_rec = (await db.execute(select(Recommendation).where(Recommendation.id == rid))).scalar_one()   # A: "sent"
     async with _other(db)() as b:
         o = (await b.execute(select(Order).where(Order.id == oid))).scalar_one()
         assert (await _decide_recommendations(b, o, RecDecideIn(approve_ids=[rid])))["approved"] == 1
         await b.commit()
     res = await _decide_recommendations(db, stale, RecDecideIn(approve_ids=[rid]))
     await db.commit()
-    assert res["approved"] == 0 and res["skipped"] == [rid]
+    assert res["approved"] == 0 and res["skipped"] == [rid] and stale_rec is not None
     o = await K.order(client, tenant, oid)
     assert [x["description"] for x in o["lines"]].count("Battery") == 1
     assert o["total"] == pytest.approx(sum(x["total"] for x in o["lines"]))
@@ -241,13 +241,13 @@ async def test_parked_sale_paid_from_stale_copy_posts_once(client, tenant, db):
     assert s.status_code == 201, s.text
     s = s.json()
     assert s["paid"] is False
-    (await db.execute(select(Sale).where(Sale.id == s["id"]))).scalar_one()   # A: still unpaid
+    stale = (await db.execute(select(Sale).where(Sale.id == s["id"]))).scalar_one()   # A: still unpaid
     me = (await db.execute(select(Employee))).scalars().first()
     r = await client.post(f"/api/sales/{s['id']}/pay", headers=tenant, json={"account_id": till})
     assert r.status_code == 200, r.text
     with pytest.raises(HTTPException) as e:
         await _pay_sale(s["id"], SalePayIn(account_id=till), db, me)
-    assert e.value.status_code == 409
+    assert e.value.status_code == 409 and stale is not None
     await db.rollback()
     assert await _balance(client, tenant, till) == 45
     h = {**tenant, "Idempotency-Key": "sale-pay-1"}                     # a retried tap gets the answer
@@ -257,3 +257,57 @@ async def test_parked_sale_paid_from_stale_copy_posts_once(client, tenant, db):
         r = await client.post(f"/api/sales/{s2['id']}/pay", headers=h, json={"account_id": till})
         assert r.status_code == 200, r.text
     assert await _balance(client, tenant, till) == 55
+
+
+# ── 5 + 6. transfers and stocktakes move once ──────────────────────────────────────────────────
+async def _me_emp(db):
+    from backend.models import Employee
+    return (await db.execute(select(Employee))).scalars().first()
+
+
+@pytest.mark.asyncio
+async def test_transfer_completed_twice_credits_destination_once(client, tenant, db):
+    from backend.models import Location, StockTransfer
+    from backend.routers.transfers import StatusIn, change_status
+    from backend.tests.test_stocktake_postings_print import _loc, _me, _part, _stock
+    me = await _me(client, tenant)
+    loc = await _loc(client, tenant)
+    dest = Location(org_id=me["org_id"], name="Branch B")
+    db.add(dest)
+    await db.commit()
+    p = await _part(client, tenant, sku="TR-2", barcode="TR-2")
+    await _stock(client, tenant, p["id"], 10)
+    tid = (await client.post("/api/transfers", headers=tenant, json={
+        "from_location_id": loc, "to_location_id": dest.id, "lines": [{"part_id": p["id"], "qty": 4}]})).json()["id"]
+    for st in ("ready", "in_transit", "received"):
+        assert (await client.patch(f"/api/transfers/{tid}/status", json={"status": st}, headers=tenant)).status_code == 200
+    stale = (await db.execute(select(StockTransfer).where(StockTransfer.id == tid))).scalar_one()   # A: "received"
+    emp = await _me_emp(db)
+    r = await client.patch(f"/api/transfers/{tid}/status", json={"status": "completed"}, headers=tenant)
+    assert r.status_code == 200, r.text
+    with pytest.raises(HTTPException) as e:
+        await change_status(tid, StatusIn(status="completed"), db, emp)
+    assert e.value.status_code == 409 and stale is not None
+    await db.rollback()
+    ins = (await db.execute(select(func.coalesce(func.sum(StockMovement.qty), 0)).where(
+        StockMovement.ref_id == tid, StockMovement.movement_type == "transfer_in"))).scalar_one()
+    assert float(ins) == 4
+
+
+@pytest.mark.asyncio
+async def test_stocktake_posted_twice_applies_once(client, tenant, db):
+    from backend.models import Stocktake
+    from backend.routers.sales import post_stocktake
+    from backend.tests.test_stocktake_postings_print import _wh
+    w = await _wh(client, tenant)
+    st = (await client.post("/api/stocktake", json={"warehouse_id": w["id"], "kind": "partial"}, headers=tenant)).json()
+    r = (await client.post(f"/api/stocktake/{st['id']}/scan", json={
+        "code": "FOUND-77", "qty": 4, "register_unknown": True}, headers=tenant)).json()
+    stale = (await db.execute(select(Stocktake).where(Stocktake.id == st["id"]))).scalar_one()   # A: still a draft
+    emp = await _me_emp(db)
+    assert (await client.post(f"/api/stocktake/{st['id']}/post", headers=tenant)).status_code == 200
+    with pytest.raises(HTTPException) as e:
+        await post_stocktake(st["id"], db, emp)
+    assert e.value.status_code == 409 and stale is not None
+    await db.rollback()
+    assert await K.stock(client, tenant, r["part_id"]) == 4
