@@ -167,6 +167,7 @@ class Organisation(Base):
     oe_show_zero_price_services: Mapped[bool] = mapped_column(Boolean, default=True)
     # 144bb — public-page feature switches (estimate approval, customer messaging)
     oe_allow_approval: Mapped[bool] = mapped_column(Boolean, default=True)
+    oe_estimate_line_choice: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))  # E5: customer may untick estimate lines
     oe_allow_messages: Mapped[bool] = mapped_column(Boolean, default=True)
     oe_msg_days_after_close: Mapped[int] = mapped_column(Integer, default=14)  # customer messages stay open N days after closing
     oe_allow_recommend: Mapped[bool] = mapped_column(Boolean, default=True)  # 144bd: customer approves recommended services
@@ -548,6 +549,11 @@ class Order(Base):
     converted_from_id: Mapped[Optional[str]] = mapped_column(String)   # set on the order created from an estimate
     signature: Mapped[Optional[str]] = mapped_column(Text)
     estimate_approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime)  # Build 75: public estimate approval
+    # E5 — estimate extras. After valid_until the customer can't approve online. revision counts the
+    # versions sent (history in estimate_revisions); a new one re-opens the customer's decision.
+    estimate_valid_until: Mapped[Optional[date]] = mapped_column(Date)
+    estimate_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    estimate_decline_reason: Mapped[Optional[str]] = mapped_column(Text)   # what the customer wrote when declining
     signature_blob_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("media_blobs.id"))             # client e-signature on accept
     priority: Mapped[int] = mapped_column(Integer, default=0)  # 0=normal 1=urgent 2=VIP
     complaint: Mapped[Optional[str]] = mapped_column(Text)
@@ -1239,6 +1245,30 @@ class DocumentSignature(Base):
     signer_ip: Mapped[Optional[str]] = mapped_column(String(64))
     user_agent: Mapped[Optional[str]] = mapped_column(String(300))
     signed_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")  # E5: estimate version decided
+
+
+class EstimateRevision(Base):
+    """E5 — one earlier version of an estimate, kept when staff send a new one or the customer
+    approves only some of its lines. The estimate itself always holds the latest version (what the
+    customer sees); these rows are the history. ``lines`` is a snapshot: description, qty, unit
+    price and total of each line, so later catalog or line edits never rewrite it."""
+    __tablename__ = "estimate_revisions"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"), index=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    lines: Mapped[Optional[list]] = mapped_column(JSON, default=list)
+    total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    valid_until: Mapped[Optional[date]] = mapped_column(Date)
+    deposit_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    decision: Mapped[Optional[str]] = mapped_column(String(20))       # approved | declined | None (not answered)
+    decline_reason: Mapped[Optional[str]] = mapped_column(Text)
+    skipped: Mapped[Optional[list]] = mapped_column(JSON, default=list)   # lines the customer left out
+    note: Mapped[Optional[str]] = mapped_column(String(500))
+    created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    created_by_name: Mapped[Optional[str]] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
 class InvoiceOrder(Base):

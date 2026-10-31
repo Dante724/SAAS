@@ -8,7 +8,7 @@ import { safeFileHref, safeHttpHref } from "../lib/safeFileHref";
 // A real part of the React app (Liquid Clay tokens, flat styling) — NOT the
 // legacy vanilla-JS track.html. Served at /track/:token, no auth, no shell.
 
-type Line = { label: string; qty?: number; kind?: string; line_type?: string; amount: number; item?: string | null };
+type Line = { id?: string; total?: number; group?: string | null; label: string; qty?: number; kind?: string; line_type?: string; amount: number; item?: string | null };
 
 // Several items per job: recommendations grouped item by item (job's item order), whole job last.
 function byItem(recs: Rec[]): { item: string | null; recs: Rec[] }[] {
@@ -55,6 +55,9 @@ export type Track = {
   feedback?: Feedback | null;
   // 144dr — only sent when the shop turned on "show the scheduled date" (server-side gate)
   scheduled_for?: string | null; scheduled_to?: string | null;
+  // E5 — estimate terms: valid until, the version, picking lines, the deposit asked at approval
+  valid_until?: string | null; expired?: boolean; revision?: number | null; can_choose_lines?: boolean;
+  deposit?: { amount: number; paid: number; due: number; can_pay: boolean } | null;
 };
 
 const WEEK = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -184,6 +187,8 @@ export default function PublicTrack() {
 // messages, rating. Shared by the track page and the customer portal's job view.
 // `api` takes respond / message / recommendations; `extrasApi` (the job's track link) takes
 // the rating, new request, signed PDF and e-invoice, and those parts hide without it.
+const fmtDay = (iso?: string | null) => (iso ? new Date(iso + "T00:00:00").toLocaleDateString([], { day: "numeric", month: "long", year: "numeric" }) : "");
+
 export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, top }: {
   d: Track; updatedAt: number; api: string; extrasApi: string | null;
   reload: (silent?: boolean) => void;
@@ -191,6 +196,10 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
   top?: React.ReactNode;
 }) {
   const [signOpen, setSignOpen] = useState(false);
+  const [declineOpen, setDeclineOpen] = useState(false);
+  // E5 — lines the customer leaves out (line-by-line approval). Everything starts included.
+  const [skip, setSkip] = useState<Record<string, boolean>>({});
+  const [payBusy, setPayBusy] = useState(false);
   // Nothing is pre-ticked: the customer opts in, item by item.
   const [recSel, setRecSel] = useState<Record<string, boolean>>({});
   const [review, setReview] = useState(false);
@@ -221,17 +230,30 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
     finally { setFbBusy(false); }
   }
 
-  async function respond(decision: string, signature: string | null = null) {
+  async function respond(decision: string, signature: string | null = null, reason?: string) {
+    const skip_line_ids = decision === "accept" && d.can_choose_lines ? Object.keys(skip).filter((k) => skip[k]) : [];
     try {
       const r = await fetch(api + "/respond", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decision, signature }),
+        body: JSON.stringify({ decision, signature, reason: reason || undefined, skip_line_ids }),
       });
-      if (!r.ok) throw new Error();
       const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : "");
       flash(decision === "accept" ? "Estimate approved — thank you!" : "Estimate declined");
-      setTimeout(() => { setRecSel({}); reload(); onResponded?.(decision, j); }, 800);
-    } catch { flash("Could not submit your response"); }
+      setTimeout(() => { setRecSel({}); setSkip({}); reload(); onResponded?.(decision, j); }, 800);
+    } catch (e: any) { flash(e.message || "Could not submit your response"); }
+  }
+
+  // E5 — pay the deposit the shop asked for: opens the shop's payment page.
+  async function payDeposit() {
+    if (!extrasApi) return;
+    setPayBusy(true);
+    try {
+      const r = await fetch(extrasApi + "/deposit", { method: "POST" });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.url) throw new Error(typeof j.detail === "string" ? j.detail : "");
+      window.location.href = j.url;
+    } catch (e: any) { flash(e.message || "Couldn't open the payment page"); setPayBusy(false); }
   }
 
   // The customer's choice: add what they ticked, or save items for later. Nothing they don't
@@ -286,7 +308,19 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
   const laterRecs = recs.filter((x) => x.status === "declined");
   const chosen = openRecs.filter((x) => recSel[x.id]);
   const recSum = chosen.reduce((a, x) => a + x.line_total, 0);
-  const total = docTotal(d);
+  const choosing = !!d.can_choose_lines;
+  // a row's own total includes its tax, so the new total matches what the shop will charge
+  const skippedSum = choosing ? (d.lines || []).filter((l) => l.id && skip[l.id]).reduce((a, l) => a + (l.total ?? l.amount ?? 0), 0) : 0;
+  // a kit is approved or left out as a whole: unticking one of its rows unticks them all
+  const toggleLine = (l: Line) => {
+    if (!l.id) return;
+    const off = !skip[l.id];
+    const ids = l.group ? (d.lines || []).filter((x) => x.group === l.group && x.id).map((x) => x.id!) : [l.id];
+    setSkip((s) => ({ ...s, ...Object.fromEntries(ids.map((i) => [i, off])) }));
+  };
+  const allSkipped = choosing && (d.lines || []).every((l) => l.id && skip[l.id]);
+  const total = docTotal(d) - skippedSum;
+  const dep = d.deposit || null;
   const canChange = !d.stopped && !nearEnd;     // saved items can still be added while the job is open
   const thing = d.device || (isEst ? "estimate" : "repair");
 
@@ -324,6 +358,15 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
             <h1 className="text-[24px] sm:text-[28px] font-semibold leading-tight tracking-[-0.02em] text-ink-primary">{headline}</h1>
             <p className="mt-1.5 text-[15px] text-ink-tertiary">{d.stopped ? `${d.stage_label}. Contact ${d.shop_name || "the shop"} if you have questions.`
               : [isEst ? `Status: ${d.stage_label}` : (headline === d.stage_label ? d.device : d.stage_label), ago].filter(Boolean).join(" · ")}</p>
+            {isEst && (d.valid_until || d.expired || (d.revision || 1) > 1) && (
+              <p className={`mt-2 text-[14px] ${d.expired ? "font-semibold text-rose-600" : "text-ink-secondary"}`}>
+                {d.expired ? `This estimate expired on ${fmtDay(d.valid_until)}. Contact ${d.shop_name || "the shop"} for an up-to-date one.`
+                  : [d.valid_until ? `Valid until ${fmtDay(d.valid_until)}` : null, (d.revision || 1) > 1 ? `Revised (version ${d.revision})` : null].filter(Boolean).join(" · ")}
+              </p>
+            )}
+            {dep && dep.due > 0 && (dep.can_pay || (isEst && d.awaiting_approval)) && (
+              <p className="mt-1 text-[14px] text-ink-secondary">{dep.can_pay ? `Deposit to pay now: ${money(dep.due, sym)}` : `A deposit of ${money(dep.amount, sym)} is due when you approve.`}</p>
+            )}
             {/* phones have no side card; with no line list the paid note sits here */}
             {!(d.lines || []).length && <div className="mt-3 lg:hidden"><PaidNote paid={d.amount_paid} balance={d.balance_due} paidInFull={d.paid_in_full} sym={sym} /></div>}
             {!d.stopped && !isEst && (d.stages || []).length > 0 && (
@@ -456,9 +499,11 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
           {d.lines && d.lines.length > 0 && (
             <section className={sec}>
               <H2>{isEst ? "Your estimate" : "What we're doing"}</H2>
+              {choosing && <p className="-mt-1 mb-3 text-[14px] text-ink-secondary">Untick anything you don't want done. The total updates as you go.</p>}
               <table className="w-full border-collapse text-[15px]">
                 <thead>
                   <tr className="text-[13px] text-ink-tertiary">
+                    {choosing && <th className="w-8 border-b border-slate-200 pb-2 text-left font-normal"><span className="sr-only">Include</span></th>}
                     <th className="border-b border-slate-200 pb-2 text-left font-normal">Description</th>
                     <th className="border-b border-slate-200 pb-2 text-right font-normal">Qty</th>
                     <th className="border-b border-slate-200 pb-2 text-right font-normal">Amount</th>
@@ -467,17 +512,25 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
                 <tbody>
                   {d.lines.map((l, i) => (<Fragment key={i}>
                     {d.lines!.some((x) => x.item) && (i === 0 || (d.lines![i - 1].item || null) !== (l.item || null)) && (
-                      <tr><td colSpan={3} className="pb-1 pt-4 text-[13px] font-semibold text-ink-secondary">{l.item || "Whole job"}</td></tr>
+                      <tr><td colSpan={choosing ? 4 : 3} className="pb-1 pt-4 text-[13px] font-semibold text-ink-secondary">{l.item || "Whole job"}</td></tr>
                     )}
-                    <tr>
-                      <td className="border-b border-slate-100 py-3 align-top text-ink-primary">{l.label}</td>
+                    <tr className={choosing && l.id && skip[l.id] ? "opacity-50" : ""}>
+                      {choosing && (
+                        <td className="border-b border-slate-100 py-3 align-top">
+                          <input type="checkbox" checked={!(l.id && skip[l.id])} aria-label={`Include ${l.label}`}
+                            onChange={() => toggleLine(l)}
+                            className="mt-1 h-4 w-4" style={{ accentColor: accent }} />
+                        </td>
+                      )}
+                      <td className={`border-b border-slate-100 py-3 align-top text-ink-primary ${choosing && l.id && skip[l.id] ? "line-through" : ""}`}>{l.label}</td>
                       <td className="border-b border-slate-100 py-3 text-right align-top tabular-nums text-ink-tertiary">{l.qty != null ? l.qty : 1}</td>
                       <td className="border-b border-slate-100 py-3 text-right align-top tabular-nums text-ink-primary">{money(l.amount, sym)}</td>
                     </tr>
                   </Fragment>))}
                 </tbody>
               </table>
-              <div className="mt-3 flex justify-end gap-10 text-[17px] font-semibold text-ink-primary"><span>Total</span><span className="tabular-nums">{fmtDoc(d)}</span></div>
+              <div className="mt-3 flex justify-end gap-10 text-[17px] font-semibold text-ink-primary"><span>Total</span><span className="tabular-nums">{skippedSum ? money(total, sym) : fmtDoc(d)}</span></div>
+              {allSkipped && <div className="mt-1.5 text-right text-[14px] text-rose-600">Keep at least one item, or decline the estimate.</div>}
               <div className="mt-1.5 flex justify-end"><PaidNote paid={d.amount_paid} balance={d.balance_due} paidInFull={d.paid_in_full} sym={sym} /></div>
             </section>
           )}
@@ -630,10 +683,16 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
             {!recSum && <PaidNote paid={d.amount_paid} balance={d.balance_due} paidInFull={d.paid_in_full} sym={sym} className="mt-2.5" />}
             {d.awaiting_approval && (
               <div className="mt-5 flex flex-col gap-2">
-                <button onClick={() => setSignOpen(true)} className={`${btn} w-full`} style={{ background: accent, color: onAccent }}>Review and sign</button>
-                <button onClick={() => respond("decline")} className={`${btn} w-full border border-slate-300 text-ink-secondary hover:bg-slate-50`}>Decline</button>
+                <button onClick={() => setSignOpen(true)} disabled={allSkipped} className={`${btn} w-full disabled:opacity-40`} style={{ background: accent, color: onAccent }}>Review and sign</button>
+                <button onClick={() => setDeclineOpen(true)} className={`${btn} w-full border border-slate-300 text-ink-secondary hover:bg-slate-50`}>Decline</button>
                 <div className="mt-1 text-[13px] leading-relaxed text-ink-tertiary">Secure e-signature. You'll get a signed PDF copy.</div>
+                {dep && dep.due > 0 && <div className="text-[13px] leading-relaxed text-ink-secondary">A deposit of {money(dep.amount, sym)} is due when you approve.</div>}
               </div>
+            )}
+            {dep && dep.can_pay && extrasApi && (
+              <button onClick={payDeposit} disabled={payBusy} className={`${btn} mt-5 w-full disabled:opacity-60`} style={{ background: accent, color: onAccent }}>
+                {payBusy ? "Opening…" : `Pay deposit ${money(dep.due, sym)}`}
+              </button>
             )}
             {chosen.length > 0 && (
               <button onClick={() => setReview(true)} className={`${btn} mt-5 w-full`} style={{ background: accent, color: onAccent }}>Review my choices</button>
@@ -666,7 +725,7 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
       <div className="py-8 text-center text-[12px] text-ink-tertiary">{d.shop_name} · Sent with Tekly</div>
 
       {/* phone bottom bar: only while there's something to do */}
-      {(chosen.length > 0 || d.awaiting_approval || (nearEnd && d.shop_phone)) && (
+      {(chosen.length > 0 || d.awaiting_approval || (dep?.can_pay && extrasApi) || (nearEnd && d.shop_phone)) && (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 px-4 pt-3 backdrop-blur lg:hidden" style={{ paddingBottom: "max(12px, env(safe-area-inset-bottom))" }}>
           {chosen.length > 0 ? (
             <div className="flex items-center gap-3">
@@ -675,9 +734,14 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
             </div>
           ) : d.awaiting_approval ? (
             <div className="flex items-center gap-3">
-              <div className="min-w-0 flex-1 text-[14px] text-ink-secondary">Total <span className="font-semibold tabular-nums text-ink-primary">{fmtDoc(d)}</span></div>
-              <button onClick={() => respond("decline")} className={`${btn} border border-slate-300 text-ink-secondary`}>Decline</button>
-              <button onClick={() => setSignOpen(true)} className={btn} style={{ background: accent, color: onAccent }}>Review and sign</button>
+              <div className="min-w-0 flex-1 text-[14px] text-ink-secondary">Total <span className="font-semibold tabular-nums text-ink-primary">{skippedSum ? money(total, sym) : fmtDoc(d)}</span></div>
+              <button onClick={() => setSignOpen(true)} disabled={allSkipped} className={`${btn} disabled:opacity-40`} style={{ background: accent, color: onAccent }}>Review and sign</button>
+              <button onClick={() => setDeclineOpen(true)} className={`${btn} border border-slate-300 text-ink-secondary`}>Decline</button>
+            </div>
+          ) : dep && dep.can_pay && extrasApi ? (
+            <div className="flex items-center gap-3">
+              <div className="min-w-0 flex-1 text-[14px] text-ink-secondary">Deposit <span className="font-semibold tabular-nums text-ink-primary">{money(dep.due, sym)}</span></div>
+              <button onClick={payDeposit} disabled={payBusy} className={`${btn} disabled:opacity-60`} style={{ background: accent, color: onAccent }}>{payBusy ? "Opening…" : "Pay deposit"}</button>
             </div>
           ) : (
             <div className="flex gap-2">
@@ -700,6 +764,7 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
         </div>
       )}
       {signOpen && <SignModal accent={accent} onAccent={onAccent} onClose={() => setSignOpen(false)} onDone={(sig) => { setSignOpen(false); respond("accept", sig); }} />}
+      {declineOpen && <DeclineModal accent={accent} onAccent={onAccent} onClose={() => setDeclineOpen(false)} onDone={(reason) => { setDeclineOpen(false); respond("decline", null, reason); }} />}
       {toast && <div className="fixed bottom-24 lg:bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-[10px] bg-ink-primary px-4 py-2.5 text-[14px] font-semibold text-white shadow-lg">{toast}</div>}
     </div>
   );
@@ -745,6 +810,29 @@ function ReviewSheet({ items, sym, total, accent, onAccent, defaultName, onClose
 }
 
 // Signature capture — canvas + pointer events, no libraries.
+// E5 — declining asks why (optional), so the shop can send a better estimate.
+function DeclineModal({ accent, onAccent, onClose, onDone }: { accent: string; onAccent: string; onClose: () => void; onDone: (reason: string) => void }) {
+  const [reason, setReason] = useState("");
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div role="dialog" aria-label="Decline the estimate" className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5">
+        <div className="mb-3 flex items-center justify-between">
+          <span className="text-[17px] font-semibold text-ink-primary">Decline the estimate</span>
+          <button onClick={onClose} aria-label="Close" className="text-ink-tertiary hover:text-ink-primary"><X size={18} /></button>
+        </div>
+        <label className="mb-1.5 block text-[13px] text-ink-secondary" htmlFor="decline-reason">Can you tell us why? (optional)</label>
+        <textarea id="decline-reason" value={reason} onChange={(e) => setReason(e.target.value.slice(0, 1000))} rows={3}
+          placeholder="For example: too expensive, or I'll fix it another way"
+          className="w-full resize-y rounded-[10px] border border-slate-300 bg-white p-3 text-[15px] text-ink-primary outline-none focus:border-slate-400" />
+        <div className="mt-3 flex gap-2">
+          <button onClick={() => onDone(reason.trim())} className="inline-flex h-11 items-center rounded-[10px] px-4 text-[15px] font-semibold" style={{ background: accent, color: onAccent }}>Decline</button>
+          <button onClick={onClose} className="inline-flex h-11 items-center rounded-[10px] border border-slate-300 px-4 text-[15px] font-semibold text-ink-secondary hover:bg-slate-50">Keep it</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SignModal({ accent, onAccent, onClose, onDone }: { accent: string; onAccent: string; onClose: () => void; onDone: (sig: string) => void }) {
   const ref = useRef<HTMLCanvasElement | null>(null);
   const st = useRef({ drawing: false, dirty: false });
