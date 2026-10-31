@@ -86,10 +86,10 @@ class Organisation(Base):
     po_charge_types: Mapped[Optional[list]] = mapped_column(JSON)  # e.g. ["Shipping","In-transit","Customs"]
     # Build 144ah — POs whose total exceeds this need a manager (role with can_manage_settings)
     # to send. 0/None disables the gate.
-    po_approval_threshold: Mapped[Optional[float]] = mapped_column(Float)
+    po_approval_threshold: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
     payment_provider: Mapped[str] = mapped_column(String(20), default="auto")  # auto|stripe|square|sumup|simulated
     loyalty_earn_rate: Mapped[float] = mapped_column(Float, default=0.0)   # points per 1.00 paid; 0 = program off
-    loyalty_point_value: Mapped[float] = mapped_column(Float, default=0.0)  # currency value of 1 point at redemption
+    loyalty_point_value: Mapped[float] = mapped_column(Numeric(12, 4, asdecimal=False), default=0.0)  # currency value of 1 point at redemption
     price_type_tickets_id: Mapped[Optional[str]] = mapped_column(String)   # default price list per doc type
     price_type_sales_id: Mapped[Optional[str]] = mapped_column(String)
     price_type_invoices_id: Mapped[Optional[str]] = mapped_column(String)
@@ -273,9 +273,9 @@ class Employee(Base):
     pin_hash: Mapped[Optional[str]] = mapped_column(String(255))
     phone: Mapped[Optional[str]] = mapped_column(String(50))
     wage_type: Mapped[str] = mapped_column(String(20), default="fixed")  # fixed|hourly|commission
-    wage_value: Mapped[float] = mapped_column(Float, default=0.0)
-    hourly_cost_rate: Mapped[float] = mapped_column(Float, default=0.0)   # labor cost per hour (time clock)
-    billable_rate: Mapped[float] = mapped_column(Float, default=0.0)      # charge-out rate per hour
+    wage_value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    hourly_cost_rate: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)   # labor cost per hour (time clock)
+    billable_rate: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)      # charge-out rate per hour
     commission_labour: Mapped[float] = mapped_column(Float, default=0.0)
     commission_parts: Mapped[float] = mapped_column(Float, default=0.0)
     weekly_hours: Mapped[Optional[float]] = mapped_column(Float)   # build 144: expected working hours/week
@@ -385,10 +385,10 @@ class Client(Base):
     # Discount matrix (Orderry "Managing contact discounts") — orders & invoices.
     # mode: none | percent | price_type. Sales-page discounts arrive with the Sales module.
     disc_services_mode: Mapped[str] = mapped_column(String(12), default="none")
-    disc_services_value: Mapped[float] = mapped_column(Float, default=0.0)
+    disc_services_value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     disc_services_price_type_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("price_types.id"))
     disc_materials_mode: Mapped[str] = mapped_column(String(12), default="none")
-    disc_materials_value: Mapped[float] = mapped_column(Float, default=0.0)
+    disc_materials_value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     disc_materials_price_type_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("price_types.id"))
     devices: Mapped[list["Device"]] = relationship(back_populates="client")
     orders: Mapped[list["Order"]] = relationship(back_populates="client")
@@ -2018,8 +2018,8 @@ class TimeEntry(Base):
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     duration_sec: Mapped[int] = mapped_column(Integer, default=0)
     billable: Mapped[bool] = mapped_column(Boolean, default=True)
-    cost_rate: Mapped[float] = mapped_column(Float, default=0.0)      # per hour, snapshot
-    billable_rate: Mapped[float] = mapped_column(Float, default=0.0)  # per hour, snapshot
+    cost_rate: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)      # per hour, snapshot
+    billable_rate: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # per hour, snapshot
     note: Mapped[Optional[str]] = mapped_column(Text)
     gps_lat: Mapped[Optional[float]] = mapped_column(Float)  # capture at clock-in if permission granted
     gps_lng: Mapped[Optional[float]] = mapped_column(Float)
@@ -2673,7 +2673,7 @@ class Coupon(Base):
     code: Mapped[str] = mapped_column(String(40), index=True)
     name: Mapped[str] = mapped_column(String(120), default="")
     kind: Mapped[str] = mapped_column(String(10), default="pct")        # pct|fixed
-    value: Mapped[float] = mapped_column(Float, default=0.0)
+    value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     min_total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     starts_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
