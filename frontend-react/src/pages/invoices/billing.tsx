@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { M } from "../../components/Shell";
 import { hueText, tint } from "../../lib/tint";
 import { money } from "../orders/types";
+import { api } from "../../api/client";
+import { deliveryText, deliveryTone, type Delivery, type Tone } from "../../lib/delivery";
 
 /* Shared bits for the billing drawers (invoice view, record payment, credit notes). */
 
@@ -24,6 +26,15 @@ export const DISPLAY_MODES: { key: string; label: string; hint: string }[] = [
   { key: "simplified", label: "Simplified", hint: "One line per work order" },
   { key: "one_line", label: "One line", hint: "A single line for the whole invoice" },
 ];
+
+/** I6 — email or text an invoice to the customer. Returns the sentence to show: the server's
+ *  delivery message, so the screen never says "sent" when it wasn't. Throws on an API error. */
+export async function sendInvoice(id: string, channel?: "auto" | "email" | "sms"): Promise<{ text: string; tone?: Tone }> {
+  const r = await api.post<{ ok: boolean; status?: string; error?: string | null; recipient?: string | null; delivery?: Delivery }>(
+    `/finance/invoices/${id}/send`, channel && channel !== "auto" ? { channel } : {});
+  const fallback = r?.ok === false ? (r.error || "The invoice wasn't sent.") : "Invoice sent to the customer.";
+  return { text: deliveryText(r?.delivery, fallback), tone: deliveryTone(r?.delivery) ?? (r?.ok === false ? "warn" : undefined) };
+}
 
 export const isVoid = (s?: string) => ["cancelled", "canceled", "void", "voided"].includes(s || "");
 

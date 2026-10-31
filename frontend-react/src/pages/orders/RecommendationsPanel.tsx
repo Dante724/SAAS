@@ -5,6 +5,7 @@ import { confirmDialog, promptDialog } from "../../lib/dialog";
 import { readAsDataUrl } from "../../lib/files";
 import { Gate, useMe } from "../../context/Me";
 import { money } from "./types";
+import { flashDelivery, type Flash } from "../../lib/delivery";
 
 /* Recommendations on a job: the extra work the technician thinks the customer should do.
    Staff add them here (title, price, why, urgency, photo), send them to the customer's
@@ -47,7 +48,7 @@ async function shrinkPhoto(f: File): Promise<string> {
 }
 
 export default function RecommendationsPanel({ orderId, items, onFlash, onChanged }: {
-  orderId: string; items: Item[]; onFlash: (m: string) => void; onChanged?: () => void;
+  orderId: string; items: Item[]; onFlash: Flash; onChanged?: () => void;
 }) {
   const { can } = useMe();
   const [recs, setRecs] = useState<RecRow[] | null>(null);
@@ -59,9 +60,11 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
   useEffect(() => { load(); }, [orderId]);  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { api.get<any>("/staff/public-pages").then((c) => setEnabled(c?.oe_allow_recommend !== false)).catch(() => {}); }, []);
 
-  async function call(fn: () => Promise<unknown>, ok?: string) {
+  // ok: a fixed sentence, or (for sends) read the server's delivery result, so the screen never
+  // says "sent" when email/text isn't set up or the customer has no contact.
+  async function call(fn: () => Promise<any>, ok?: string | ((r: any) => void)) {
     setBusy(true);
-    try { await fn(); if (ok) onFlash(ok); await load(); onChanged?.(); }
+    try { const r = await fn(); if (typeof ok === "function") ok(r); else if (ok) onFlash(ok); await load(); onChanged?.(); }
     catch (e: any) { onFlash(e?.message || "Couldn't do that"); }
     finally { setBusy(false); }
   }
@@ -93,7 +96,7 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
         <div className="ml-auto flex items-center gap-2">
           {drafts.length > 1 && (
             <Gate perm="can_publish_recommend">
-              <button disabled={busy} onClick={() => call(() => api.post(`/orders/${orderId}/recommendations/publish-all`, {}), `Sent ${drafts.length} to the customer`)}
+              <button disabled={busy} onClick={() => call(() => api.post(`/orders/${orderId}/recommendations/publish-all`, {}), (r) => flashDelivery(onFlash, r?.delivery, `${Array.isArray(r?.published) ? r.published.length : (r?.published ?? drafts.length)} shown on the customer's tracking page`))}
                 className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Send all {drafts.length}</button>
             </Gate>
           )}
@@ -179,7 +182,7 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
                       </select>
                     )}
                     {r.status === "draft" && can("can_publish_recommend") && (
-                      <button disabled={busy} onClick={() => call(() => api.post(`/orders/${orderId}/recommendations/${r.id}/publish`, {}), "Sent to the customer")}
+                      <button disabled={busy} onClick={() => call(() => api.post(`/orders/${orderId}/recommendations/${r.id}/publish`, {}), (res) => flashDelivery(onFlash, res?.delivery, "Shown on the customer's tracking page"))}
                         className="rounded-md bg-primary px-2.5 py-1 text-[11px] font-semibold text-white hover:opacity-90">Send to customer</button>
                     )}
                     {r.status === "sent" && can("can_publish_recommend") && (

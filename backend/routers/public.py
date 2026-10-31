@@ -122,18 +122,30 @@ async def _signature_required(db: AsyncSession, order: "Order") -> bool:
     return bool(getattr(org, "oe_estimate_require_signature" if order.is_estimate else "oe_wo_require_signature", False))
 
 
+async def _already_decided(db: AsyncSession, order: "Order") -> bool:
+    """E2 — the customer has already approved or declined this document (estimate, or work
+    order when work-order approval is on). One decision each; after that, staff take over."""
+    doc_type = "estimate" if order.is_estimate else "work_order"
+    return (await db.execute(select(DocumentSignature.id).where(
+        DocumentSignature.order_id == order.id, DocumentSignature.doc_type == doc_type).limit(1))).first() is not None
+
+
 async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
                            signature: Optional[str], who: str,
                            request: Optional[Request] = None) -> Optional[str]:
-    """Apply a customer's accept/decline to an estimate. Shared by the public
-    track page and the customer portal. Returns the converted work-order id (or None).
-    Records a client-visible feed event (+ optional signature) and moves the
-    estimate to the appropriate status, auto-converting on accept when configured.
+    """Apply a customer's accept/decline to an estimate (or a work order, when the shop lets
+    customers approve those). Shared by the public track page and the customer portal. Returns
+    the converted work-order id (or None).
+
+    Records a client-visible feed event (+ optional signature) and a signed certificate, tells
+    the shop (G1), then moves the document through the normal status change (E3) so status
+    rules, notifications, webhooks and auto-conversion with the new-job steps all run.
     """
     verb = "accepted" if decision == "accept" else "declined"
+    doc = "estimate" if order.is_estimate else "work order"
     db.add(EventFeedItem(
         org_id=order.org_id, entity_type="order", entity_id=order.id,
-        item_type="comment", body=f"Customer {verb} the estimate",
+        item_type="comment", body=f"Customer {verb} the {doc}",
         visibility="client", author_name=who,
     ))
     if signature:
@@ -142,93 +154,90 @@ async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
             org_id=order.org_id, entity_type="order", entity_id=order.id,
             item_type="signature", media_data=signature, media_name="customer_signature.png",
             media_mime="image/png", visibility="client", author_name=who,
-            body=f"Signature on {verb} {'estimate' if order.is_estimate else 'work order'}",
+            body=f"Signature on {verb} {doc}",
         ))
 
     # 144ig — always record a tamper-evident signed-approval certificate (estimate OR work order)
     await _record_signature(db, order, decision, signature, who, request)
-    if decision == "accept" and order.is_estimate:   # WS-C: was registered but never fired
-        from backend.services.webhooks import emit_event
-        await emit_event(db, order.org_id, "estimate.accepted", {"id": order.id, "number": order.order_number})
-
-    from backend.models import OrderStatus, OrderStatusLog
-    converted_id = None
-
-    # 144ii — if the shop configured an explicit "move to status" for this doc type + decision,
-    # honour it (and convert an estimate when that target converts_to_order). Otherwise fall back
-    # to the built-in defaults (estimates only).
-    cfg_key = await _configured_target_key(db, order, decision)
-    if cfg_key:
-        st = (await db.execute(select(OrderStatus).where(
-            OrderStatus.org_id == order.org_id, OrderStatus.key == cfg_key,
-            OrderStatus.active == True))).scalars().first()  # noqa: E712
-        if st:
-            if decision == "accept" and order.is_estimate:
-                order.estimate_approved_at = _dt.utcnow()
-            prev = order.status
-            order.status = st.key
-            db.add(OrderStatusLog(order_id=order.id, from_status=prev, to_status=st.key,
-                                  note=f"{verb.capitalize()} by customer"))
-            await db.flush()
-            if getattr(st, "converts_to_order", False) and order.is_estimate and not order.converted_order_id:
-                from backend.routers.orders import _convert_estimate
-
-                class _Sys:
-                    id = None
-                    org_id = order.org_id
-                converted_id = await _convert_estimate(db, _Sys(), order)
-        return converted_id
-
-    if not order.is_estimate:
-        return converted_id
-    if decision == "accept":
+    if decision == "accept" and order.is_estimate:
         # Build 75: record WHEN the customer approved, so the approval is auditable
         # independently of the status the estimate happens to land in.
         order.estimate_approved_at = _dt.utcnow()
-        # notify the assigned technician of the customer's approval
-        try:
-            if order.assigned_to_id:
-                from backend.services.push import notify
-                await notify(db, org_id=order.org_id, employee_id=order.assigned_to_id,
-                             kind="estimate.approved", title=f"Estimate approved · {order.order_number}",
-                             body="Customer accepted the estimate", deep_link=f"/tech#/order/{order.id}",
-                             commit=False)
-        except Exception:
-            pass
-        # Build 144w: workflow automations for estimate_approved (best-effort).
-        try:
+        from backend.services.webhooks import emit_event   # WS-C: was registered but never fired
+        await emit_event(db, order.org_id, "estimate.accepted", {"id": order.id, "number": order.order_number})
+
+    # G1 — the shop hears about it: owner, the job's manager and its assignee.
+    from backend.services.customer_messages import notify_staff_about_customer
+    approved = decision == "accept"
+    await notify_staff_about_customer(
+        db, order, kind="estimate.approved" if approved else "estimate.declined",
+        title=f"{doc.capitalize()} {'approved' if approved else 'declined'} · {order.order_number}",
+        body=f"{who or 'The customer'} {'approved' if approved else 'declined'} the {doc} online.")
+
+    if approved and order.is_estimate:
+        try:   # Build 144w: workflow automations for estimate_approved (best-effort).
             from backend.services import automation as _auto
             await _auto.run(db, order.org_id, "estimate_approved", order=order)
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
-        target = (await db.execute(select(OrderStatus).where(
-            OrderStatus.org_id == order.org_id, OrderStatus.is_estimate == True,  # noqa: E712
-            OrderStatus.converts_to_order == True, OrderStatus.active == True))).scalars().first()  # noqa: E712
-        if not target:
-            target = (await db.execute(select(OrderStatus).where(
-                OrderStatus.org_id == order.org_id, OrderStatus.is_estimate == True,  # noqa: E712
-                OrderStatus.status_group == "closed", OrderStatus.active == True))).scalars().first()  # noqa: E712
-        if target:
-            prev = order.status
-            order.status = target.key
-            db.add(OrderStatusLog(order_id=order.id, from_status=prev, to_status=target.key, note="Accepted by customer"))
-            await db.flush()
-            if getattr(target, "converts_to_order", False) and not order.converted_order_id:
-                from backend.routers.orders import _convert_estimate
 
-                class _Sys:
-                    id = None
-                    org_id = order.org_id
-                converted_id = await _convert_estimate(db, _Sys(), order)
-    else:  # decline
-        target = (await db.execute(select(OrderStatus).where(
-            OrderStatus.org_id == order.org_id, OrderStatus.is_estimate == True,  # noqa: E712
-            OrderStatus.status_group == "dropped", OrderStatus.active == True))).scalars().first()  # noqa: E712
-        if target:
-            prev = order.status
-            order.status = target.key
-            db.add(OrderStatusLog(order_id=order.id, from_status=prev, to_status=target.key, note="Declined by customer"))
-    return converted_id
+    target = await _decision_target(db, order, decision)
+    if not target or target.key == order.status:
+        return None
+    return await _move_for_customer(db, order, target, f"{verb.capitalize()} by customer", who)
+
+
+async def _decision_target(db: AsyncSession, order: "Order", decision: str):
+    """Where the document goes: the status the shop configured for this decision (144ii), else
+    the built-in default for estimates (accept → the "converts to order" status, or a closed
+    one; decline → a dropped one). Work orders without a configured status stay put."""
+    from backend.models import OrderStatus
+    cfg_key = await _configured_target_key(db, order, decision)
+    if cfg_key:
+        return (await db.execute(select(OrderStatus).where(
+            OrderStatus.org_id == order.org_id, OrderStatus.key == cfg_key,
+            OrderStatus.active == True))).scalars().first()  # noqa: E712
+    if not order.is_estimate:
+        return None
+    est = (OrderStatus.org_id == order.org_id, OrderStatus.is_estimate == True,  # noqa: E712
+           OrderStatus.active == True)  # noqa: E712
+    if decision == "accept":
+        return ((await db.execute(select(OrderStatus).where(
+            *est, OrderStatus.converts_to_order == True))).scalars().first()  # noqa: E712
+            or (await db.execute(select(OrderStatus).where(
+                *est, OrderStatus.status_group == "closed"))).scalars().first())
+    return (await db.execute(select(OrderStatus).where(
+        *est, OrderStatus.status_group == "dropped"))).scalars().first()
+
+
+async def _move_for_customer(db: AsyncSession, order: "Order", target, note: str, who: str) -> Optional[str]:
+    """E3 — run the customer's decision through the same status change staff use. A shop gate
+    meant for staff (e.g. "needs a comment first") must not undo what the customer decided, so
+    when one refuses, the status is set directly and the job says why."""
+    from backend.models import OrderStatusLog
+    from backend.routers.feed import log_system_event
+    from backend.routers.orders import SystemActor, _apply_status_change, _convert_estimate
+    actor = SystemActor(order.org_id, name=who or "Customer")
+    await db.refresh(order, ["lines"])
+    try:
+        res = await _apply_status_change(db, actor, order, target.key, note=note)
+        return res.get("converted_order_id")
+    except HTTPException as exc:
+        if not order.is_estimate:
+            # A work order's gates (payment, checklist, stock, signature) hold even for the customer.
+            await log_system_event(db, order.org_id, "order", order.id,
+                                   f"Customer {note.split(' ')[0].lower()}; status not changed: {exc.detail}")
+            return None
+        prev = order.status
+        order.status = target.key
+        order.status_entered_at = _dt.utcnow()
+        db.add(OrderStatusLog(order_id=order.id, from_status=prev, to_status=target.key, note=note))
+        await log_system_event(db, order.org_id, "order", order.id,
+                               f"Moved to '{target.name}' for the customer without the usual check: {exc.detail}")
+        await db.flush()
+        if getattr(target, "converts_to_order", False) and order.is_estimate and not order.converted_order_id:
+            return await _convert_estimate(db, actor, order)
+        return None
 
 
 @router.get("/track/{token}")
@@ -421,6 +430,10 @@ async def _track_payload(db: AsyncSession, order: "Order") -> dict:
 @router.post("/track/{token}/respond")
 async def respond(token: str, data: AcceptIn, request: Request, db: AsyncSession = Depends(get_db)):
     order = await _load(db, token)
+    # E2 — lock the row so two clicks (or two tabs) can't both decide
+    order = (await db.execute(select(Order).where(Order.id == order.id).with_for_update())).scalar_one()
+    if await _already_decided(db, order):
+        raise HTTPException(409, "You've already responded to this. Contact the shop to change your answer.")
     if not await _can_sign(db, order):
         raise HTTPException(403, "Online approval is not available for this document right now")
     if data.decision not in ("accept", "decline"):
@@ -605,10 +618,12 @@ async def portal_respond(token: str, order_id: str, data: AcceptIn, request: Req
     if data.decision not in ("accept", "decline"):
         raise HTTPException(400, "Invalid decision")
     order = (await db.execute(
-        select(Order).where(Order.id == order_id, Order.client_id == client.id)
+        select(Order).where(Order.id == order_id, Order.client_id == client.id).with_for_update()
     )).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    if await _already_decided(db, order):
+        raise HTTPException(409, "You've already responded to this. Contact the shop to change your answer.")
     if not await _can_sign(db, order):
         raise HTTPException(403, "Online approval is not available for this document right now")
     if data.decision == "accept" and not data.signature and await _signature_required(db, order):
@@ -629,7 +644,7 @@ async def _can_sign(db: AsyncSession, order: "Order") -> bool:
     oe_allow_approval; work orders are opt-in (oe_wo_allow_approval). Each has an
     optional comma-separated status allow-list; empty = any status (Orderry parity)."""
     org = (await db.execute(select(Organisation).where(Organisation.id == order.org_id))).scalar_one_or_none()
-    if not org:
+    if not org or await _already_decided(db, order):
         return False
     if order.is_estimate:
         if not getattr(org, "oe_allow_approval", True):
@@ -640,7 +655,14 @@ async def _can_sign(db: AsyncSession, order: "Order") -> bool:
             return False
         raw = getattr(org, "oe_wo_approval_statuses", "") or ""
     allowed = [s.strip() for s in raw.split(",") if s.strip()]
-    return (not allowed) or (order.status in allowed)
+    if not allowed:
+        # "any status" still means an open one: a closed or dropped job can't be approved again
+        from backend.models import OrderStatus as _OS
+        st = (await db.execute(select(_OS).where(
+            _OS.org_id == order.org_id, _OS.key == order.status,
+            _OS.record_type == ("estimate" if order.is_estimate else "work_order")))).scalars().first()
+        return not (st and (st.is_terminal or st.status_group in ("closed", "dropped")))
+    return order.status in allowed
 
 
 async def _recommend_enabled(db: AsyncSession, org_id: str) -> bool:
@@ -760,7 +782,12 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
         order.rec_unread = (order.rec_unread or 0) + decided
         # Add the chosen work to the job's total (a job priced at check-in may have no lines
         # yet, so recomputing from lines would wipe its quoted price).
-        order.total = q2(float(order.total or 0) + added)
+        prev_total = float(order.total or 0)
+        order.total = q2(prev_total + added)
+        if added:
+            # A draft invoice for the job follows the new total; a sent one keeps its own.
+            from backend.services.invoice_money import sync_order_invoices
+            await sync_order_invoices(db, order, prev_total)
         parts = []
         if approved:
             parts.append(f"added {approved} recommended item{'s' if approved != 1 else ''}")
@@ -803,10 +830,27 @@ async def _post_client_message(db: AsyncSession, order: "Order", body: str, who:
         org_id=order.org_id, entity_type="order", entity_id=order.id,
         item_type="client_message", body=body, author_name=who or "Customer", visibility="client"))
     order.client_msg_unread = (order.client_msg_unread or 0) + 1
+    # G1 — tell the shop, once per burst: no new alert while the last one for this job is unread
+    # and under 10 minutes old, so a chatty (or hostile) page can't flood staff phones.
+    from datetime import timedelta as _td
+
+    from backend.models import StaffNotification
+    from backend.services.customer_messages import notify_staff_about_customer
+    recent = (await db.execute(select(StaffNotification.id).where(
+        StaffNotification.org_id == order.org_id, StaffNotification.kind == "client.message",
+        StaffNotification.deep_link == f"/tech#/order/{order.id}", StaffNotification.read_at.is_(None),
+        StaffNotification.created_at >= _dt.utcnow() - _td(minutes=10)).limit(1))).first()
+    if not recent:
+        name = "".join(ch for ch in (who or "the customer") if ch.isprintable())[:60] or "the customer"
+        await notify_staff_about_customer(db, order, kind="client.message",
+                                          title=f"Message from {name} · {order.order_number}",
+                                          body=body[:300])
 
 
 @router.post("/track/{token}/message")
-async def track_message(token: str, data: MessageIn, db: AsyncSession = Depends(get_db)):
+async def track_message(token: str, data: MessageIn, request: Request, db: AsyncSession = Depends(get_db)):
+    from backend.services.ratelimit import aenforce as _rate, client_ip as _ip
+    await _rate("track_msg", f"{_ip(request)}:{token}", limit=10, window_sec=600)
     order = await _load(db, token)
     who = data.name or (
         (await db.execute(select(Client).where(Client.id == order.client_id))).scalar_one_or_none().name
@@ -896,7 +940,10 @@ async def track_submit_feedback(token: str, data: TrackFeedbackIn, db: AsyncSess
 
 
 @router.post("/portal/{token}/order/{order_id}/message")
-async def portal_message(token: str, order_id: str, data: MessageIn, db: AsyncSession = Depends(get_db)):
+async def portal_message(token: str, order_id: str, data: MessageIn, request: Request,
+                         db: AsyncSession = Depends(get_db)):
+    from backend.services.ratelimit import aenforce as _rate, client_ip as _ip
+    await _rate("track_msg", f"{_ip(request)}:{token}", limit=10, window_sec=600)
     client = await _client_by_portal(db, token)
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.client_id == client.id))).scalar_one_or_none()
     if not order:

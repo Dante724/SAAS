@@ -87,7 +87,7 @@ class LineIn(BaseModel):
     tax_id: Optional[str] = None
     tax_rate: float = 0.0
     tax_mode: str = "imposed"  # included|imposed
-    warranty_days: int = 0
+    warranty_days: Optional[int] = None    # None = take the catalog item's warranty (G2)
     ref_id: Optional[str] = None
     save_to_catalog: bool = False          # build 126: persist a custom line as a catalog item
     catalog_kind: Optional[str] = None     # service|product (when save_to_catalog)
@@ -161,6 +161,7 @@ class OrderIn(BaseModel):
     template_key: Optional[str] = None   # industry template; defaults to the org's active one
     asset_group_id: Optional[str] = None
     asset_custom_data: Optional[dict] = None
+    device_passcode: Optional[str] = None   # J3: the device's unlock code, stored encrypted on the device
     intake_photos: Optional[List[str]] = None   # 144ak: media blob ids documenting condition at check-in
     is_estimate: bool = False
     currency_code: Optional[str] = None   # Build 122: per-document currency override
@@ -340,15 +341,26 @@ def _serialize_order_scalars(o: Order) -> dict:
     }
 
 
+def _asset_custom(cd):
+    from backend.routers.assets import public_custom
+    return public_custom(cd)
+
+
+def _asset_has_passcode(d) -> bool:
+    from backend.routers.assets import has_passcode
+    return has_passcode(d)
+
+
 def _serialize_order(o: Order) -> dict:
     row = _serialize_order_scalars(o)
     row.update({
-        "device": {"id": o.device.id, "brand": o.device.brand, "model": o.device.model, "serial": o.device.serial, "imei": o.device.imei, "vin": o.device.vin, "hin": o.device.hin, "asset_type": o.device.asset_type, "asset_label": _ind.asset_label(getattr(o.device, "template_key", None)), "image_data": getattr(o.device, "image_data", None), "watch_out": getattr(o.device, "watch_out", None), "custom_data": o.device.custom_data or {}} if o.device else None,
+        "signature": o.signature,   # J1: the drawer shows the in-shop signature (detail view only)
+        "device": {"id": o.device.id, "brand": o.device.brand, "model": o.device.model, "serial": o.device.serial, "imei": o.device.imei, "vin": o.device.vin, "hin": o.device.hin, "asset_type": o.device.asset_type, "asset_label": _ind.asset_label(getattr(o.device, "template_key", None)), "image_data": getattr(o.device, "image_data", None), "watch_out": getattr(o.device, "watch_out", None), "custom_data": _asset_custom(o.device.custom_data), "has_passcode": _asset_has_passcode(o.device)} if o.device else None,
         "lines": [{"id": l.id, "line_type": l.line_type, "kind": l.kind, "description": l.description,
                    "qty": l.qty, "unit_price": l.unit_price, "cost_price": l.cost_price,
                    "discount": l.discount, "discount_type": l.discount_type, "discount_paid_by": l.discount_paid_by,
                    "tax_rate": l.tax_rate, "tax_mode": l.tax_mode, "technician_id": l.technician_id,
-                   "work_share": getattr(l, "work_share", 1.0), "booked_hours": getattr(l, "booked_hours", 0) or 0,
+                   "work_share": getattr(l, "work_share", 1.0), "booked_hours": getattr(l, "booked_hours", 0) or 0, "warranty_days": l.warranty_days or 0,
                    "co_technicians": getattr(l, "co_technicians", None) or [],
                    "pending_stock": l.pending_stock or 0, "ref_id": l.ref_id, "total": l.total,
                    "order_item_id": getattr(l, "order_item_id", None),
@@ -450,7 +462,7 @@ def _serialize_order_row(o: Order, has_image: bool) -> dict:
                          "asset_label": _ind.asset_label(getattr(d, "template_key", None)),
                          "image_url": _device_image_url(d.id, has_image),
                          "watch_out": getattr(d, "watch_out", None),
-                         "custom_data": d.custom_data or {}}
+                         "custom_data": _asset_custom(d.custom_data)}
     return row
 
 
@@ -688,20 +700,11 @@ async def bulk_action(
             except (TypeError, ValueError):
                 raise HTTPException(400, "priority must be a number")
         elif data.action == "create_invoice":
-            from backend.models import Invoice
-            # skip if order already has an invoice
-            existing = (await db.execute(
-                select(Invoice.id).where(Invoice.order_id == o.id).limit(1)
-            )).scalar_one_or_none()
-            if existing:
+            from backend.services.invoice_money import invoices_for_order, new_invoice
+            # skip if order already has a live invoice (a cancelled one doesn't count)
+            if await invoices_for_order(db, o.id):
                 continue
-            inv = Invoice(
-                invoice_number=await next_number(db, current.org_id, "invoice"),
-                org_id=current.org_id, order_id=o.id, client_id=o.client_id,
-                status="draft", subtotal=o.total or 0, total=o.total or 0,
-                issued_at=datetime.utcnow(),
-            )
-            db.add(inv)
+            inv = await new_invoice(db, org_id=current.org_id, orders=[o])
             await log_system_event(db, current.org_id, "order", o.id,
                                    f"Invoice {inv.invoice_number} created (bulk)")
         else:
@@ -713,19 +716,16 @@ async def bulk_action(
         # several jobs" case. Orders must share a client; we group by client_id.
         from collections import defaultdict
 
-        from backend.models import Invoice
+        from backend.services.invoice_money import new_invoice
         by_client: dict = defaultdict(list)
         for o in orders:
             if o.client_id:
                 by_client[o.client_id].append(o)
         made = 0
         for client_id, grp in by_client.items():
-            total = sum((o.total or 0) for o in grp)
-            inv = Invoice(
-                invoice_number=await next_number(db, current.org_id, "invoice"),
-                org_id=current.org_id, order_id=grp[0].id, client_id=client_id,
-                status="draft", subtotal=total, total=total, issued_at=datetime.utcnow())
-            db.add(inv)
+            # Links every job (so a payment credits each and the invoice lists all their lines)
+            # and applies their deposits.
+            inv = await new_invoice(db, org_id=current.org_id, orders=grp, client_id=client_id)
             for o in grp:
                 await log_system_event(db, current.org_id, "order", o.id,
                                        f"Added to group invoice {inv.invoice_number}")
@@ -751,6 +751,94 @@ async def _order_side_effect(db: AsyncSession, order: Order, label: str, fn, *re
         await db.rollback()
         for obj in (order, *reload):
             await db.refresh(obj)
+
+
+class SystemActor:
+    """Stands in for an employee when the customer (not staff) causes a change, e.g. approving
+    an estimate online. No id (nobody on staff did it), no role (shop-wide rules apply)."""
+    id = None
+    role_id = None
+    location_id = None
+    active = True
+
+    def __init__(self, org_id: str, name: str = "Customer"):
+        self.org_id = org_id
+        self.name = name
+
+
+async def _new_job_steps(db, current, order, creator_id=None):
+    """What happens once a job exists: checklists for its first status, the order.created
+    webhook, the creator's commission, the assignee's alert, the "created" notification rules
+    and automations. Shared by create_order and estimate conversion (flow check E3), so a job
+    made from an approved estimate gets the same treatment as one typed in at the counter.
+    Each step is best-effort and commits on its own; a failure is logged and rolled back so the
+    steps after it still work (R1). `current` may be a SystemActor (customer approved online)."""
+    reload = (current,) if isinstance(current, Employee) else ()
+
+    async def checklists():
+        # E4 — a new order enters its first status: attach the checklists set to attach on it.
+        from backend.routers.checklists import auto_attach_for_status
+        from backend.routers.feed import log_system_event as _log_ev
+        for _title in await auto_attach_for_status(db, order, order.status, author_id=current.id):
+            await _log_ev(db, current.org_id, "order", order.id, f"Checklist attached: {_title}")
+
+    async def webhook():
+        from backend.services.webhooks import emit_event
+        await emit_event(db, current.org_id, "order.created", {
+            "id": order.id, "order_number": order.order_number,
+            "status": order.status, "total": order.total})
+
+    # Payroll: order_created commissions to the creator (idempotent per job and rule). For a
+    # converted estimate that's whoever wrote the estimate, not whoever converted it.
+    creator_id = creator_id or current.id
+
+    async def commissions():
+        from backend.services.payroll import CommissionEngine
+        await CommissionEngine(db, current.org_id).commissions_for_order_create(order, creator_id)
+
+    async def notify_technician():
+        from backend.services.push import notify
+        await notify(db, org_id=current.org_id, employee_id=order.assigned_to_id,
+                     kind="job.assigned", title=f"New job {order.order_number}",
+                     body=(order.complaint or "")[:140], deep_link=f"/tech#/order/{order.id}")
+
+    created_matched = 0
+
+    async def notification_rules():
+        # Phase 1: fire "order created" notifications (real work orders only).
+        # 144jc: run the rules engine first (client + staff), fall back to the legacy
+        # template dispatch only when no rule matched — same convergence as status change.
+        nonlocal created_matched
+        from backend.services import notification_rules as _nr
+        _cres = await _nr.evaluate(db, org_id=current.org_id, order_id=order.id, event="created")
+        created_matched = (_cres or {}).get("matched", 0)
+        await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
+                                     event="created", actor_id=current.id)
+
+    async def legacy_notifications():
+        from backend.services.notifications import dispatch_order_notifications
+        await dispatch_order_notifications(
+            db, org_id=current.org_id, order_id=order.id, trigger_event="order_created")
+
+    async def automations():
+        # Build 144w: workflow automations for order-created.
+        from backend.services import automation as _auto
+        await _auto.run(db, current.org_id, "order_created", order=order)
+
+    await _order_side_effect(db, order, "checklist attach", checklists, *reload)
+    if not order.is_estimate:
+        await _order_side_effect(db, order, "order.created webhook", webhook, *reload)
+    if creator_id:
+        await _order_side_effect(db, order, "creation commissions", commissions, *reload)
+    # Notify the assigned technician (in-app + push) on a fresh assignment. Not when the customer
+    # approved online: the assignee already got that alert (customer_messages.notify_staff_about_customer).
+    if current.id and order.assigned_to_id and order.assigned_to_id != current.id:
+        await _order_side_effect(db, order, "technician notification", notify_technician, *reload)
+    if not order.is_estimate:
+        await _order_side_effect(db, order, "notification rules", notification_rules, *reload)
+        if created_matched == 0:
+            await _order_side_effect(db, order, "order notifications", legacy_notifications, *reload)
+    await _order_side_effect(db, order, "automations", automations, *reload)
 
 
 @router.post("", status_code=201)
@@ -819,6 +907,8 @@ async def create_order(
             raise HTTPException(409, f"'{li.description}': margin {_mg['margin_pct']}% is below the "
                                      f"{_mg['floor']}% floor. Lower the discount or raise the price.")
         total = _calc_line(li)
+        if li.warranty_days is None:
+            li.warranty_days = await _catalog_warranty(db, current.org_id, li.kind, li.ref_id)
         ol = OrderLine(line_type=li.line_type, description=li.description,
                        qty=li.qty, unit_price=li.unit_price, cost_price=li.cost_price,
                        kind=li.kind, discount=li.discount, discount_type=li.discount_type, discount_paid_by=li.discount_paid_by,
@@ -881,14 +971,25 @@ async def create_order(
             custom_data=data.asset_custom_data or {},
             image_data=data.asset_image,
         )
+        from backend.routers.assets import absorb_custom_passcode
         from backend.services import asset_catalog as _cat
         from backend.services import identifiers as _ids
+        absorb_custom_passcode(new_asset)
         _ids.tidy_device(new_asset)
         new_asset.brand, new_asset.model = await _cat.canonical(
             db, current.org_id, order_template_key, new_asset.brand, new_asset.model)
         db.add(new_asset)
         await db.flush()
         device_id = new_asset.id
+
+    # J3 — the unlock code the customer gives at intake, stored encrypted on the device.
+    if device_id and (data.device_passcode or "").strip():
+        from backend.models import Device as _Dev
+        from backend.routers.assets import store_passcode
+        _dev = (await db.execute(select(_Dev).where(
+            _Dev.id == device_id, _Dev.org_id == current.org_id))).scalar_one_or_none()
+        if _dev:
+            store_passcode(_dev, data.device_passcode)
 
     # Item 1: optionally forbid an asset being on more than one open ticket.
     if device_id and not data.is_estimate:
@@ -1031,66 +1132,8 @@ async def create_order(
         from backend.routers.forms import sync_order_field_upsells
         await sync_order_field_upsells(db, current.org_id, order, current)
 
-    async def checklists():
-        # E4 — a new order enters its first status: attach the checklists set to attach on it.
-        from backend.routers.checklists import auto_attach_for_status
-        from backend.routers.feed import log_system_event as _log_ev
-        for _title in await auto_attach_for_status(db, order, order.status, author_id=current.id):
-            await _log_ev(db, current.org_id, "order", order.id, f"Checklist attached: {_title}")
-
-    async def webhook():
-        from backend.services.webhooks import emit_event
-        await emit_event(db, current.org_id, "order.created", {
-            "id": order.id, "order_number": order.order_number,
-            "status": order.status, "total": order.total})
-
-    async def commissions():
-        # Payroll: order_created commissions to the creator (idempotent).
-        from backend.services.payroll import CommissionEngine
-        await CommissionEngine(db, current.org_id).commissions_for_order_create(order, current.id)
-
-    async def notify_technician():
-        # Notify the assigned technician (in-app + push) on a fresh assignment.
-        from backend.services.push import notify
-        await notify(db, org_id=current.org_id, employee_id=order.assigned_to_id,
-                     kind="job.assigned", title=f"New job {order.order_number}",
-                     body=(order.complaint or "")[:140], deep_link=f"/tech#/order/{order.id}")
-
-    created_matched = 0
-
-    async def notification_rules():
-        # Phase 1: fire "order created" notifications (real work orders only).
-        # 144jc: run the rules engine first (client + staff), fall back to the legacy
-        # template dispatch only when no rule matched — same convergence as status change.
-        nonlocal created_matched
-        from backend.services import notification_rules as _nr
-        _cres = await _nr.evaluate(db, org_id=current.org_id, order_id=order.id, event="created")
-        created_matched = (_cres or {}).get("matched", 0)
-        await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
-                                     event="created", actor_id=current.id)
-
-    async def legacy_notifications():
-        from backend.services.notifications import dispatch_order_notifications
-        await dispatch_order_notifications(
-            db, org_id=current.org_id, order_id=order.id, trigger_event="order_created")
-
-    async def automations():
-        # Build 144w: workflow automations for order-created.
-        from backend.services import automation as _auto
-        await _auto.run(db, current.org_id, "order_created", order=order)
-
     await _order_side_effect(db, order, "upsell drafting", upsells, current)
-    await _order_side_effect(db, order, "checklist attach", checklists, current)
-    if not order.is_estimate:
-        await _order_side_effect(db, order, "order.created webhook", webhook, current)
-    await _order_side_effect(db, order, "creation commissions", commissions, current)
-    if order.assigned_to_id and order.assigned_to_id != current.id:
-        await _order_side_effect(db, order, "technician notification", notify_technician, current)
-    if not order.is_estimate:
-        await _order_side_effect(db, order, "notification rules", notification_rules, current)
-        if created_matched == 0:
-            await _order_side_effect(db, order, "order notifications", legacy_notifications, current)
-    await _order_side_effect(db, order, "automations", automations, current)
+    await _new_job_steps(db, current, order)
 
     result = await db.execute(
         select(Order)
@@ -1395,7 +1438,7 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     # Resolve the target status from the configurable status table, scoped to this
     # record's pipeline. .first() (not scalar_one_or_none) so legacy duplicate keys
     # across record types can never crash the status change.
-    from backend.models import Invoice, OrderStatus
+    from backend.models import OrderStatus
     _rt = "estimate" if order.is_estimate else "work_order"
     target = (await db.execute(
         select(OrderStatus).where(OrderStatus.org_id == current.org_id,
@@ -1490,13 +1533,16 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         if not order.is_estimate:
             try:
                 from backend.services.invoicing import auto_draft_on_close
-                await auto_draft_on_close(db, order)
+                async with db.begin_nested():     # a failure undoes only the half-made invoice
+                    await auto_draft_on_close(db, order)
             except Exception:  # noqa: BLE001
-                pass
-        # Phase E groundwork: activate warranty on close from the longest line warranty
+                import logging
+                logging.getLogger("tekly").exception("auto-draft invoice failed for order %s", order.id)
+        # Phase E groundwork: activate warranty on close from the longest line warranty.
+        # Not for estimates: closing one (approved → converted, or declined) repairs nothing.
         try:
             wdays = max([(getattr(l, "warranty_days", 0) or 0) for l in order.lines] or [0])
-            if wdays:
+            if wdays and not order.is_estimate:
                 from datetime import timedelta as _td
                 # Item 4: warranty start honors org policy (closure date vs order creation date)
                 _org = (await db.execute(select(Organisation).where(
@@ -1533,12 +1579,9 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
 
     # Per-status trigger: auto-create invoice
     if target and target.triggers_invoice:
-        existing_inv = (await db.execute(select(Invoice.id).where(Invoice.order_id == order.id).limit(1))).scalar_one_or_none()
-        if not existing_inv:
-            _inv = Invoice(invoice_number=await next_number(db, current.org_id, "invoice"), org_id=current.org_id,
-                           order_id=order.id, client_id=order.client_id, status="draft",
-                           subtotal=order.total or 0, total=order.total or 0, issued_at=datetime.utcnow())
-            db.add(_inv)
+        from backend.services.invoice_money import invoices_for_order, new_invoice
+        if not await invoices_for_order(db, order.id):
+            _inv = await new_invoice(db, org_id=current.org_id, orders=[order])
             await log_system_event(db, current.org_id, "order", order.id, "Invoice auto-created on status change")
             # Build 144z: mirror the new invoice (and its customer) to QuickBooks if connected.
             try:
@@ -1675,19 +1718,30 @@ async def _convert_estimate(db, current, estimate):
     """Convert an estimate into a work order IN PLACE (Build 144di, Orderry-style):
     the same record flips ``is_estimate`` off, gets a fresh WO number, keeps its
     lines and history, and now deducts stock. Irreversible. Returns the id."""
-    from backend.models import OrderLine, OrderStatus, StockMovement
+    from backend.models import OrderLine, OrderStatus, StockMovement, WorkOrderType
     old_number = estimate.order_number
-    # initial work-order status (org default or "new")
+    # initial work-order status: the job type's own starting status (E3), else the org default, else "new"
     init = "new"
     dflt = (await db.execute(select(OrderStatus).where(
         OrderStatus.org_id == current.org_id, OrderStatus.is_default == True,
         OrderStatus.active == True, OrderStatus.record_type == "work_order"))).scalars().first()  # noqa: E712
     if dflt:
         init = dflt.key
+    if estimate.type_id:
+        _type_start = (await db.execute(select(WorkOrderType.initial_status).where(
+            WorkOrderType.id == estimate.type_id, WorkOrderType.org_id == current.org_id))).scalar_one_or_none()
+        if _type_start and (await db.execute(select(OrderStatus.id).where(
+                OrderStatus.org_id == current.org_id, OrderStatus.key == _type_start,
+                OrderStatus.active == True, OrderStatus.record_type == "work_order"))).first():  # noqa: E712
+            init = _type_start
     # renumber E -> WO and flip type on the SAME record
     estimate.order_number = await next_number(db, current.org_id, "order")
     estimate.is_estimate = False
     estimate.status = init
+    estimate.status_entered_at = datetime.utcnow()
+    # the estimate's own closing status ("Converted") closed it; the new job is open
+    estimate.closed_at = None
+    estimate.warranty_until = None
     # deduct stock now (the estimate never did)
     src_lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == estimate.id))).scalars().all()
     for l in src_lines:
@@ -1709,6 +1763,11 @@ async def _convert_estimate(db, current, estimate):
     await log_system_event(db, current.org_id, "order", estimate.id,
                            f"Converted from estimate {old_number} to work order {estimate.order_number}")
     await db.commit()
+    from backend.models import AuditLog
+    creator = (await db.execute(select(AuditLog.actor_id).where(
+        AuditLog.org_id == current.org_id, AuditLog.action == "order.create",
+        AuditLog.entity_id == estimate.id).limit(1))).scalar_one_or_none()
+    await _new_job_steps(db, current, estimate, creator_id=creator)
     return estimate.id
 
 
@@ -1716,13 +1775,16 @@ async def _convert_estimate(db, current, estimate):
 async def convert_estimate_endpoint(
     order_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_tickets")),
 ):
-    """Manually convert an estimate into a work order."""
+    """Staff convert an estimate into a work order ("Convert to work order"). Creating the
+    job needs the same permission as creating one at the counter, and the record must be
+    within the person's access (E1)."""
     est = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
-        .options(selectinload(Order.lines)))).scalar_one_or_none()
+        .options(selectinload(Order.lines)).with_for_update(of=Order))).scalar_one_or_none()
     if not est:
         raise HTTPException(404, "Estimate not found")
+    await _guard_order_access(db, current, est)
     if not est.is_estimate:
         raise HTTPException(400, "This is already a work order")
     if est.converted_order_id:
@@ -1940,9 +2002,27 @@ async def add_comment(
     return {"ok": True}
 
 
+_SIG_RE = __import__("re").compile(r"^data:image/(png|jpeg);base64,[A-Za-z0-9+/=]+$")
+
+
+def _check_signature(v: Optional[str]) -> Optional[str]:
+    """A signature is a PNG/JPEG data URL of sane size, not any string (the job-type
+    "customer must sign" close gate trusts it)."""
+    if v is None or v == "":
+        return v
+    if len(v) > 2_000_000 or not _SIG_RE.match(v):
+        raise ValueError("signature must be a PNG or JPEG image")
+    return v
+
+
 class SignatureIn(BaseModel):
     signature: str                 # data URL / base64 PNG
     note: Optional[str] = None     # e.g. "Device collected by customer"
+
+    @field_validator("signature")
+    @classmethod
+    def _sig(cls, v):
+        return _check_signature(v)
 
 
 @router.post("/{order_id}/signature")
@@ -2204,6 +2284,11 @@ class CompleteIn(BaseModel):
     status: Optional[str] = None       # terminal status to move to (default: first terminal)
     signature: Optional[str] = None    # optionally capture a signature first
 
+    @field_validator("signature")
+    @classmethod
+    def _sig(cls, v):
+        return _check_signature(v)
+
 
 @router.post("/{order_id}/complete")
 async def complete_order(
@@ -2285,6 +2370,72 @@ async def notify_order_customer(
     except Exception:
         pass   # seam: simulated/absent gateway
     return {"ok": True, "channel": data.channel, "recipient": recipient, "delivery": delivery}
+
+
+class SendDocIn(BaseModel):
+    channel: Optional[str] = None     # auto (default) | email | sms
+
+
+async def _estimate_pdf(db, org_id: str, order) -> bytes:
+    """The estimate as a PDF (lines, totals), for the Send estimate email."""
+    from backend.routers.printing import _org_lang, _org_name
+    from backend.services import printing
+    lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == order.id))).scalars().all()
+    rows = [[l.description or "", f"{float(l.qty or 0):g}", f"{float(l.unit_price or 0):.2f}",
+             f"{float(l.total or 0):.2f}"] for l in lines]
+    client = (await db.execute(select(Client).where(Client.id == order.client_id))).scalar_one_or_none() \
+        if order.client_id else None
+    meta = [("For", client.name if client else None),
+            ("Date", order.created_at.strftime("%Y-%m-%d") if order.created_at else None)]
+    return printing.render_document(
+        title="Estimate", org_name=await _org_name(db, org_id), lang=await _org_lang(db, org_id),
+        number=order.order_number, meta=[m for m in meta if m[1]],
+        headers=["Description", "Qty", "Unit", "Total"], rows=rows,
+        totals=["", "", "Total", f"{float(order.total or 0):.2f}"])
+
+
+@router.post("/{order_id}/send-estimate")
+async def send_estimate(
+    order_id: str,
+    data: SendDocIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_reply_customer")),
+):
+    """I6 — "Send estimate": text or email the customer the link to approve it online. Email
+    also carries the estimate as a PDF. Says honestly whether it went out."""
+    from backend.services.customer_messages import send_to_customer, track_link
+    o = (await db.execute(select(Order).where(
+        Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    if not o:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, o)
+    if not o.is_estimate:
+        raise HTTPException(400, "This is a work order, not an estimate")
+    from backend.routers.public import _already_decided
+    if await _already_decided(db, o):
+        raise HTTPException(409, "The customer already answered this estimate, so the link can't be used again.")
+    if data.channel and data.channel not in ("auto", "email", "sms"):
+        raise HTTPException(422, "channel must be auto, email or sms")
+    if not o.public_token:
+        o.public_token = await unique_public_token(db)
+    client = (await db.execute(select(Client).where(
+        Client.id == o.client_id, Client.org_id == current.org_id))).scalar_one_or_none() if o.client_id else None
+    org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
+    shop = org.name if org else "Your repair shop"
+    body = (f"{shop}: your estimate {o.order_number} for {float(o.total or 0):.2f} is ready. "
+            f"Review and approve it here: {track_link(o)}")
+    from backend.services.customer_messages import pick_channel
+    attachment = None
+    if await pick_channel(db, current.org_id, client, data.channel) == "email":
+        attachment = (f"estimate-{o.order_number}.pdf", await _estimate_pdf(db, current.org_id, o), "application/pdf")
+    delivery = await send_to_customer(db, org_id=current.org_id, client=client, body=body,
+                                      subject=f"Estimate {o.order_number} from {shop}", channel=data.channel,
+                                      order_id=o.id, trigger_event="estimate_sent", attachment=attachment,
+                                      saved=False)
+    from backend.routers.feed import log_system_event
+    await log_system_event(db, current.org_id, "order", o.id, f"Estimate sent to customer: {delivery['message']}")
+    await db.commit()
+    return {"ok": delivery["status"] == "sent", "delivery": delivery}
 
 
 class DuplicateOrderIn(BaseModel):
@@ -3331,7 +3482,8 @@ async def _log_amount_change(db, org_id, order, prev_total):
 
 
 async def _recalc_order(db, order):
-    """Recompute an order's labour/parts/total from its lines."""
+    """Recompute an order's labour/parts/total from its lines, and its unsent invoices with it."""
+    prev_total = float(order.total or 0)
     lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == order.id))).scalars().all()
     labour = sum(l.total for l in lines if l.line_type == "labour")
     parts = sum(l.total for l in lines if l.line_type == "part")
@@ -3351,6 +3503,8 @@ async def _recalc_order(db, order):
     # they paid for were removed made the total negative, which then read as an "overpayment" and
     # could be refunded in cash (audit 2026-10-29, H5).
     order.total = max(total, 0)   # (rounding can't push a 0 below zero; kept for clarity)
+    from backend.services.invoice_money import sync_order_invoices
+    await sync_order_invoices(db, order, prev_total)
 
 
 def _all_codes():
@@ -3472,6 +3626,18 @@ async def _catalog_price(db, org_id, kind, ref_id) -> float:
         return float(row or 0)
     p = (await db.execute(select(Part).where(Part.id == ref_id, Part.org_id == org_id))).scalar_one_or_none()
     return float(((p.repair_price or 0) or p.sell_price or 0) if p else 0)
+
+async def _catalog_warranty(db, org_id, kind, ref_id) -> int:
+    """G2 — a picked product/service carries its catalog warranty onto the job line, so the
+    warranty starts when the job closes. Custom lines have none unless typed in."""
+    if not ref_id or kind not in ("service", "product"):
+        return 0
+    from backend.models import Part, Service as _Svc
+    model = _Svc if kind == "service" else Part
+    row = (await db.execute(select(model.warranty_days).where(
+        model.id == ref_id, model.org_id == org_id))).scalar_one_or_none()
+    return int(row or 0)
+
 
 @router.post("/{order_id}/lines", status_code=201)
 async def add_line(
@@ -3609,6 +3775,7 @@ async def add_line(
             nl = OrderLine(order_id=order_id, line_type=li.line_type, kind=li.kind, ref_id=li.ref_id,
                            description=li.description, qty=li.qty, unit_price=li.unit_price,
                            cost_price=await _catalog_cost(db, current.org_id, kind, eff_ref_id),
+                           warranty_days=await _catalog_warranty(db, current.org_id, kind, eff_ref_id),   # G2
                            technician_id=data.technician_id, order_item_id=data.order_item_id, total=t,
                            bundle_group_id=group_id, bundle_name=bundle.name,
                            bundle_print_mode=kit_print.norm_mode(bundle.print_mode),
@@ -3675,6 +3842,8 @@ async def add_line(
         raise HTTPException(409, f"Margin {_mg['margin_pct']}% is below the {_mg['floor']}% floor. "
                                  f"Lower the discount or raise the price.")
     total = _calc_line(data)
+    if data.warranty_days is None:
+        data.warranty_days = await _catalog_warranty(db, current.org_id, data.kind, data.ref_id)
     line = OrderLine(
         order_id=order_id, line_type=data.line_type, kind=data.kind, ref_id=data.ref_id,
         description=data.description, qty=data.qty, unit_price=data.unit_price,
@@ -4110,6 +4279,9 @@ async def update_line(
     if not line:
         raise HTTPException(404, "Line not found")
     payload = data.model_dump(exclude_unset=True)
+    if payload.keys() & {"qty", "unit_price", "discount", "discount_type", "tax_rate", "tax_mode"}:
+        from backend.services.invoice_money import assert_line_editable
+        await assert_line_editable(db, line.id)   # not under a sent or paid invoice
     if current.role_id and not (await _order_perms(db, current)).get("can_view_purchase_price"):
         payload.pop("cost_price", None)
     if "cost_price" in payload and float(payload["cost_price"] or 0) != float(line.cost_price or 0):
@@ -4217,6 +4389,8 @@ async def delete_line(
             await _reverse_fulfillment(db, order, line.ref_id, deducted)
     _prev_total = float(order.total or 0)
     _kit = line.bundle_group_id
+    from backend.services.invoice_money import release_line
+    await release_line(db, line.id)   # refused on a sent/paid invoice; off any draft that lists it
     await db.delete(line)
     await db.flush()
     if _kit:
@@ -4368,6 +4542,7 @@ async def comeback_check(
 
 class ThreadMsgIn(BaseModel):
     body: str
+    channel: Optional[str] = None   # auto (default) | email | sms
 
 
 @router.get("/{order_id}/thread")
@@ -4392,10 +4567,13 @@ async def order_thread(
             names[e.id] = e.name
     msgs = [{"id": c.id, "from": "staff", "who": names.get(c.author_id, "Staff"),
              "body": c.body, "at": c.created_at.isoformat()} for c in comments]
+    # client_message = the customer's replies; staff_reply = older replies from the activity box
     evs = (await db.execute(select(EventFeedItem).where(
         EventFeedItem.org_id == current.org_id, EventFeedItem.entity_type == "order",
-        EventFeedItem.entity_id == order.id, EventFeedItem.item_type == "client_message"))).scalars().all()
-    msgs += [{"id": e.id, "from": "customer", "who": e.author_name or "Customer",
+        EventFeedItem.entity_id == order.id,
+        EventFeedItem.item_type.in_(["client_message", "staff_reply"])))).scalars().all()
+    msgs += [{"id": e.id, "from": "customer" if e.item_type == "client_message" else "staff",
+              "who": e.author_name or ("Customer" if e.item_type == "client_message" else "Staff"),
               "body": e.body, "at": e.created_at.isoformat()} for e in evs]
     msgs.sort(key=lambda m: m["at"])
     if order.client_msg_unread:
@@ -4409,21 +4587,55 @@ async def order_thread_post(
     order_id: str,
     data: ThreadMsgIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_reply_customer")),
 ):
-    """Staff posts a message the customer sees on their status page (a client-visible comment)."""
-    from backend.models import OrderComment
+    """Staff messages the customer from the job (the conversation box)."""
+    return await post_customer_message(db, current, order_id, data.body, data.channel)
+
+
+async def post_customer_message(db, current, order_id: str, body: str, channel: Optional[str] = None) -> dict:
+    """The one "message the customer" path (flow check G3), used by the job's conversation box
+    (/thread) and the activity reply box (/customer-reply). Saves the message where the
+    customer's page and the job thread both read it (a client-visible comment), sends it by
+    text or email as the customer prefers, and says honestly whether it went out."""
+    from backend.services.customer_messages import send_to_customer
     order = (await db.execute(select(Order).where(
         Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
-    body = (data.body or "").strip()
+    await _guard_order_access(db, current, order)
+    org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
+    if org is not None and getattr(org, "oe_allow_staff_reply", True) is False:
+        raise HTTPException(403, "Replying to customers is turned off for this shop")
+    if channel and channel not in ("auto", "email", "sms"):
+        raise HTTPException(422, "channel must be auto, email or sms")
+    body = (body or "").strip()[:2000]
     if not body:
         raise HTTPException(400, "Message is empty")
-    c = OrderComment(order_id=order.id, author_id=current.id, body=body[:2000], visible_to_client=True)
+    c = OrderComment(order_id=order.id, author_id=current.id, body=body, visible_to_client=True)
     db.add(c)
+    await db.flush()
+    client = (await db.execute(select(Client).where(
+        Client.id == order.client_id, Client.org_id == current.org_id))).scalar_one_or_none() if order.client_id else None
+    shop = org.name if org else "the shop"
+    text = f"{body}\n\n{shop} · {order.order_number}"
+    delivery = await send_to_customer(db, org_id=current.org_id, client=client, body=text,
+                                      subject=f"Message about {order.order_number}", channel=channel,
+                                      order_id=order.id, trigger_event="comment_added")
+    from backend.routers.feed import log_system_event
+    await log_system_event(db, current.org_id, "order", order.id,
+                           f"Message to customer: {delivery['message']}")
     await db.commit()
-    return {"id": c.id, "from": "staff", "who": current.name, "body": c.body, "at": c.created_at.isoformat()}
+    # Internal workflows on "comment added" (assignee / manager), as for any customer-visible comment.
+    try:
+        from backend.services import notification_rules as _nr
+        await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
+                                     event="comment_added", actor_id=current.id)
+    except Exception:  # noqa: BLE001
+        import logging
+        logging.getLogger("tekly").exception("comment_added staff rules failed for order %s", order.id)
+    return {"id": c.id, "from": "staff", "who": current.name, "body": c.body,
+            "at": c.created_at.isoformat(), "delivery": delivery}
 
 
 async def _atomic_add(db, obj, attr, delta, *, round_to=None):

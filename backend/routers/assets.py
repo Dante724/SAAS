@@ -136,7 +136,8 @@ def _ser(d: Device, order_count: int = 0, owner_name: str = None, inline_image: 
         "sale_price": getattr(d, "sale_price", 0.0),
         "converted_to_part_id": getattr(d, "converted_to_part_id", None),
         "order_count": order_count,
-        "custom_data": getattr(d, "custom_data", None) or {},   # 144bv: custom-field columns
+        "custom_data": public_custom(getattr(d, "custom_data", None)),   # 144bv: custom-field columns
+        "has_passcode": has_passcode(d),   # J3: the code itself only via /passcode
         "created_at": d.created_at.isoformat() if d.created_at else None,
     }
 
@@ -248,6 +249,7 @@ async def create_asset(
         asset_status=data.asset_status or ("in_use" if data.owner_type == "client" else "in_stock"),
         purchase_price=data.purchase_price or 0.0, sale_price=data.sale_price or 0.0,
     )
+    absorb_custom_passcode(d)
     _ids.tidy_device(d)
     d.brand, d.model = await _cat.canonical(db, current.org_id, template_key, d.brand, d.model)
     db.add(d)
@@ -340,6 +342,94 @@ async def identify(
             "same_client": bool(data.client_id and d.client_id == data.client_id),
             "jobs": jobs, "last_order": last_out})
     return {"kind": kind, "normalized": norm, "problem": _ids.problem(kind, norm), "matches": matches}
+
+
+def store_passcode(d: Device, passcode: Optional[str]) -> None:
+    """J3 — keep the device's unlock code encrypted at rest (TOKEN_ENCRYPTION_KEY). Blank clears it."""
+    from backend.services import crypto
+    code = (passcode or "").strip()
+    if len(code) > 64:
+        raise HTTPException(422, "Passcode is too long")
+    d.passcode_enc = crypto.encrypt(code) if code else None
+
+
+def absorb_custom_passcode(d: Device) -> None:
+    """The phone template's "Passcode" field used to land in custom_data as plain text. Move it
+    into the encrypted store (J3) so it never sits in clear or rides along in API responses."""
+    cd = dict(d.custom_data or {})
+    if "passcode" not in cd:
+        return
+    code = cd.pop("passcode")
+    if str(code or "").strip():
+        store_passcode(d, str(code))
+    d.custom_data = cd
+
+
+def public_custom(cd: Optional[dict]) -> dict:
+    """custom_data as the API shows it: never a plaintext passcode (older rows may still hold one)."""
+    return {k: v for k, v in (cd or {}).items() if k != "passcode"}
+
+
+def has_passcode(d) -> bool:
+    return bool(getattr(d, "passcode_enc", None) or str((getattr(d, "custom_data", None) or {}).get("passcode") or "").strip())
+
+
+class PasscodeIn(BaseModel):
+    passcode: Optional[str] = None
+
+
+async def _device_for_passcode(db, current, asset_id: str) -> Device:
+    """The device, if this person may see its passcode: anyone whose role sees every job, or a
+    restricted role (own jobs / some locations / hidden statuses) only through a job on this
+    device that they can see. The org-wide asset list would otherwise hand out every code."""
+    from backend.services import scoping
+    d = (await db.execute(select(Device).where(
+        Device.id == asset_id, Device.org_id == current.org_id))).scalar_one_or_none()
+    if not d:
+        raise HTTPException(404, "Asset not found")
+    role = await scoping.role_for(db, current)
+    unrestricted = role is None or (
+        (role.order_scope or "all") == "all" and (role.location_scope or "all") == "all"
+        and not scoping._ids(getattr(role, "hidden_status_keys", None)))
+    if not unrestricted:
+        jobs = (await db.execute(select(Order).where(
+            Order.device_id == d.id, Order.org_id == current.org_id))).scalars().all()
+        if not any([await scoping.can_view_order(db, current, o) for o in jobs]):
+            raise HTTPException(403, "You can only see passcodes for devices on your jobs")
+    return d
+
+
+@router.get("/{asset_id}/passcode")
+async def reveal_passcode(
+    asset_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_view_asset_info")),
+):
+    """J3 — show the device's unlock code to a technician who needs it. Every look is logged."""
+    from backend.services import audit, crypto
+    d = await _device_for_passcode(db, current, asset_id)
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="asset.passcode_viewed",
+                       entity_type="asset", entity_id=d.id)
+    await db.commit()
+    legacy = str((d.custom_data or {}).get("passcode") or "").strip() or None   # pre-J3 plaintext field
+    return {"passcode": crypto.decrypt(d.passcode_enc) if d.passcode_enc else legacy}
+
+
+@router.put("/{asset_id}/passcode")
+async def set_passcode(
+    asset_id: str,
+    data: PasscodeIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_create_tickets")),
+):
+    from backend.services import audit
+    d = await _device_for_passcode(db, current, asset_id)
+    store_passcode(d, data.passcode)
+    d.custom_data = public_custom(d.custom_data)     # a set or a clear also drops any old plaintext copy
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="asset.passcode_set",
+                       entity_type="asset", entity_id=d.id, diff={"cleared": not d.passcode_enc})
+    await db.commit()
+    return {"ok": True, "has_passcode": bool(d.passcode_enc)}
 
 
 @router.get("/{asset_id}")
@@ -454,6 +544,7 @@ async def update_asset(
         payload["client_id"] = None
     for k, v in payload.items():
         setattr(d, k, v)
+    absorb_custom_passcode(d)
     _ids.tidy_device(d)
     if "brand" in payload or "model" in payload:
         d.brand, d.model = await _cat.canonical(db, current.org_id, d.template_key, d.brand, d.model)

@@ -219,7 +219,9 @@ export default function SettingsHub() {
         options: [...(hubMe?.is_owner ? [{ value: "", label: "No role (full access)" }] : [{ value: "", label: "Choose a role…" }]),
           ...(rbacRoles || []).map((r: any) => ({ value: r.id, label: r.name }))] } ] },
     forms: { create: "/forms/types", upd: (id) => `/forms/types/${id}`, del: (id) => `/forms/types/${id}`, reload: () => reloadSec("forms"), fields: [
-      { k: "name", label: "Form name", type: "text", req: true }, { k: "color", label: "Colour", type: "color", def: "#4f8ef7" }, { k: "initial_status", label: "Initial status (key)", type: "text", def: "new" }, { k: "is_default", label: "Default", type: "checkbox" } ] },
+      { k: "name", label: "Form name", type: "text", req: true }, { k: "color", label: "Colour", type: "color", def: "#4f8ef7" }, { k: "initial_status", label: "Initial status (key)", type: "text", def: "new" }, { k: "is_default", label: "Default", type: "checkbox" },
+      { k: "requires_signature", label: "Customer must sign before the job can be closed", type: "checkbox" },
+      { k: "requires_checklist", label: "All required checklist items must be done before the job can be closed", type: "checkbox" } ] },
     warehouses: { create: "/settings/warehouses", upd: (id) => `/settings/warehouses/${id}`, del: (id) => `/settings/warehouses/${id}`, reload: () => reloadSec("warehouses"), fields: [
       { k: "name", label: "Name", type: "text", req: true }, { k: "kind", label: "Kind", type: "select", opts: ["product", "asset"], def: "product" },
       { k: "scope", label: "Scope", type: "select", opts: ["location", "company"], def: "location" }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
@@ -423,7 +425,7 @@ export default function SettingsHub() {
 
           {sec === "forms" && (
             <FormsDesigner types={lists.forms || []} onAddType={() => setEditing({ sec: "forms", row: null })}
-              onDeleteType={(r) => delRow("forms", r)} onAdvanced={(t) => setFormFieldsFor(t)} />
+              onDeleteType={(r) => delRow("forms", r)} onAdvanced={(t) => setFormFieldsFor(t)} onChanged={() => reloadSec("forms")} />
           )}
 
           {sec === "pricing" && (
@@ -2297,8 +2299,49 @@ function TierManager({ types }: { types: any[] }) {
 // ── Forms & fields: pick a form, customize it in place ─────────────────────
 // One pill per work-order type plus the Client / Device / Product forms; the selected form opens
 // in FormCustomizer (drag to reorder, click to edit, add a field where it belongs).
-function FormsDesigner({ types, onAddType, onDeleteType, onAdvanced }: {
-  types: any[]; onAddType: () => void; onDeleteType: (t: any) => void; onAdvanced: (t: any) => void;
+// J1: what a job of this type needs before it can be closed. The type is saved whole (the
+// server's PUT replaces every field), so send its current values with the one switch changed.
+function CloseRules({ type, onChanged }: { type: any; onChanged?: () => void }) {
+  const [v, setV] = useState({ requires_signature: !!type.requires_signature, requires_checklist: !!type.requires_checklist });
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { setV({ requires_signature: !!type.requires_signature, requires_checklist: !!type.requires_checklist }); }, [type.id, type.requires_signature, type.requires_checklist]);
+  async function flip(k: "requires_signature" | "requires_checklist") {
+    const next = { ...v, [k]: !v[k] };
+    setV(next); setBusy(true); setErr(null);
+    try {
+      await api.put(`/forms/types/${type.id}`, {
+        name: type.name, color: type.color || "#4f8ef7", initial_status: type.initial_status || "new",
+        default_asset_type: type.default_asset_type || "Device", is_default: !!type.is_default,
+        sched_default_duration: type.sched_default_duration ?? 60, sched_required: !!type.sched_required,
+        ...next,
+      });
+      onChanged?.();
+    } catch (e: any) { setV(v); setErr(e?.message || "Could not save"); }
+    finally { setBusy(false); }
+  }
+  const rows: ["requires_signature" | "requires_checklist", string][] = [
+    ["requires_signature", "Customer must sign before the job can be closed"],
+    ["requires_checklist", "All required checklist items must be done before the job can be closed"],
+  ];
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-2">
+      <div className="text-xs font-semibold text-ink-primary">Before a {type.name} job can be closed</div>
+      {rows.map(([k, label]) => (
+        <label key={k} className="flex items-center gap-2.5 text-xs text-ink-secondary cursor-pointer">
+          <button type="button" role="switch" aria-checked={v[k]} aria-label={label} disabled={busy} onClick={() => flip(k)}
+            className={`w-9 h-5 rounded-full transition-colors relative shrink-0 disabled:opacity-60 ${v[k] ? "bg-primary" : "bg-slate-300"}`}>
+            <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${v[k] ? "left-[18px]" : "left-0.5"}`} />
+          </button>
+          <span>{label}</span>
+        </label>
+      ))}
+      {err && <p role="alert" className="text-[11px] text-rose-600">{err}</p>}
+    </div>
+  );
+}
+
+function FormsDesigner({ types, onAddType, onDeleteType, onAdvanced, onChanged }: {
+  types: any[]; onAddType: () => void; onDeleteType: (t: any) => void; onAdvanced: (t: any) => void; onChanged?: () => void;
 }) {
   const want = new URLSearchParams(window.location.search).get("form");
   const [pick, setPick] = useState<string>(() => want || "");
@@ -2322,6 +2365,7 @@ function FormsDesigner({ types, onAddType, onDeleteType, onAdvanced }: {
           {!cur.type.is_default && <button onClick={() => onDeleteType(cur.type)} className="font-semibold text-rose-600 hover:underline">Delete this type</button>}
         </div>
       )}
+      {cur?.type && <CloseRules type={cur.type} onChanged={onChanged} />}
       {cur && <FormCustomizer key={cur.id} form={cur.form} typeId={cur.typeId} title={cur.label} />}
     </div>
   );
