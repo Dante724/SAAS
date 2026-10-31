@@ -21,6 +21,7 @@ from backend.services.permissions import (
     TEMPLATES,
     make_explicit,
     new_role_permissions,
+    permission_errors,
     role_allows,
 )
 
@@ -108,9 +109,9 @@ def _apply_scope(r: Role, data: "RoleIn") -> None:
 
 
 def _validate(perms: dict):
-    unknown = set(perms) - ALL_CODES
-    if unknown:
-        raise HTTPException(422, f"Unknown permission codes: {sorted(unknown)}")
+    errors = permission_errors(perms)
+    if errors:
+        raise HTTPException(422, "; ".join(errors))
 
 
 # ── No self-widening ──────────────────────────────────────────────────────────
