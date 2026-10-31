@@ -1,3 +1,4 @@
+import { BARCODE_TYPES } from "../../lib/barcodes";
 // Label templates: which product field {Barcode} encodes, and the barcode type for each field
 // (Orderry parity A4). EAN-13 / UPC-A are checked at print time; a product whose value isn't a
 // valid code is named in the error instead of printing an unscannable label.
@@ -8,12 +9,8 @@ export const BARCODE_FIELDS = [
   { key: "code", label: "Code" },
   { key: "mpn", label: "MPN" },
 ] as const;
-export const BARCODE_TYPES = [
-  { key: "code128", label: "Code 128", hint: "Any letters and digits." },
-  { key: "ean13", label: "EAN-13", hint: "12 or 13 digits; the check digit is added or verified." },
-  { key: "upca", label: "UPC-A", hint: "11 or 12 digits; the check digit is added or verified." },
-  { key: "qr", label: "QR code", hint: "Any text, scans with a phone camera." },
-] as const;
+// ii144b: every type (EAN/UPC/ITF/Code 39/128/GS1-128/QR/Data Matrix/PDF417) — one list for the app.
+export { BARCODE_TYPES } from "../../lib/barcodes";
 export const LABEL_DOC_TYPES = ["label", "price_tag", "product_label"];
 
 export type BarcodeOptions = { barcode_field: string | null; barcode_types: Record<string, string> };

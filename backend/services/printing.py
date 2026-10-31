@@ -1,7 +1,8 @@
 """Build 95 — printing.
 
 The stock documents the shop hands over — write-off, transfer, return, purchase order and
-the stocktake settlement act. (Product labels print as HTML from routers/documents.py.)
+the stocktake settlement act. (ii144c: labels and price tags print from label templates as HTML —
+routers/documents.py.)
 """
 import io
 from xml.sax.saxutils import escape as _x

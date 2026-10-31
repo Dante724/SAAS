@@ -57,3 +57,19 @@ describe("pasteMap file upload + serials", () => {
     expect(gridToRows([["A", "1"]], ["code", "qty"])[0]).not.toHaveProperty("serials");
   });
 });
+
+describe("pasteMap product type (16a)", () => {
+  it("maps a Type header and carries the cell onto the row", () => {
+    expect(headerFieldFor("Product type")).toBe("type");
+    expect(FIELD_ORDER).toContain("type");
+    const { grid, map, hadHeader } = analyzePaste("SKU\tName\tQty\tType\nPX8\tPixel 8\t2\tIMEI\nGLU\tGlue\t5\texpiry");
+    expect(hadHeader).toBe(true);
+    const rows = gridToRows(grid, map);
+    expect(rows[0]).toMatchObject({ code: "PX8", qty: 2, product_type: "IMEI" });
+    expect(rows[1].product_type).toBe("expiry");
+  });
+  it("a sheet without a Type column leaves it unset", () => {
+    const { grid, map } = analyzePaste("SKU\tName\tQty\nA-1\tScreen\t3");
+    expect(gridToRows(grid, map)[0].product_type).toBeUndefined();
+  });
+});

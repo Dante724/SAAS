@@ -43,3 +43,13 @@ async def test_login_stays_responsive_while_hashing(client, tenant):
     assert r.status_code == 401
     assert ticks >= 5
 
+
+@pytest.mark.asyncio
+async def test_label_sheet_size_is_capped(client, tenant):
+    # ii144c: labels print as HTML now (the PDF sheet is retired); the sheet is still capped
+    tpl = (await client.post("/api/documents/templates", json={
+        "name": "Tag", "doc_type": "label", "page_size": "label", "body_html": "{Product Title}"},
+        headers=tenant)).json()["id"]
+    r = await client.post("/api/documents/render-labels", json={
+        "template_id": tpl, "part_ids": ["p"] * 501, "copies": 1}, headers=tenant)
+    assert r.status_code == 422

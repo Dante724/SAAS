@@ -4,12 +4,11 @@ Assets / Asset Warehouse.
 Assets are client devices (or company-owned tools/equipment). Each carries a
 mandatory IMEI/Serial — which can be auto-generated when no real number exists.
 """
-import random
-import string
+import re
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,11 +18,45 @@ from backend.services import asset_catalog as _cat
 from backend.services import identifiers as _ids
 from backend.services import industry as _ind
 from backend.core import paging as _paging
-from backend.core.likes import contains as _contains
 from backend.services.auth import get_current_employee, has_perm, require_perm
 from backend.services.dates import shop_today
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
+
+# Where a vehicle's plate lives in custom_data, depending on the template / form it was made with.
+PLATE_KEYS = ("plate", "number_plate", "plate_registration", "registration")
+ASSET_STATES = ("active", "written_off", "all")
+
+
+def _like(term: str) -> str:
+    """A contains-pattern with LIKE wildcards in the user's text taken literally."""
+    return "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+def _compact(value: str) -> str:
+    """How plates and identifiers are compared: no spaces or dashes, upper case."""
+    return re.sub(r"[\s\-]+", "", value or "").upper()
+
+
+def _plate_col(key: str):
+    return func.upper(func.replace(func.replace(Device.custom_data[key].as_string(), " ", ""), "-", ""))
+
+
+def _search_conds(org_id: str, search: str) -> list:
+    """21 — one box finds an asset by brand / model / owner or any identifier: serial, IMEI,
+    VIN, HIN or licence plate, typed with or without spaces."""
+    t = search.strip()
+    pat, comp = _like(t), _compact(t)
+    conds = [col.ilike(pat, escape="\\") for col in
+             (Device.serial, Device.imei, Device.vin, Device.hin, Device.brand, Device.model, Device.asset_type)]
+    conds.append(Device.client_id.in_(select(Client.id).where(
+        Client.org_id == org_id, Client.name.ilike(pat, escape="\\"))))
+    if comp:
+        cpat = _like(comp)
+        if comp != t:
+            conds += [col.ilike(cpat, escape="\\") for col in (Device.serial, Device.imei, Device.vin, Device.hin)]
+        conds += [_plate_col(k).like(cpat, escape="\\") for k in PLATE_KEYS]
+    return conds
 
 
 class AssetIn(BaseModel):
@@ -55,10 +88,31 @@ async def _hide_cost(db, current, *rows) -> None:
             r.pop("purchase_price", None)
 
 
-def _gen_serial(asset_type: str = "Device") -> str:
-    prefix = (asset_type or "AST")[:3].upper()
-    body = "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
-    return f"{prefix}-{body}"
+async def _gen_serial(db, org_id: str, asset_type: str = "Device", *, peek: bool = False) -> str:
+    """ii144a: the next asset serial from Settings › Inventory's pattern (default {T}-{C:6}, {T} = the
+    first three letters of the asset type), skipping any serial already on one of the shop's assets.
+    `peek` shows the next one without using it up (the form's suggestion)."""
+    from backend.models import NumberSequence, Organisation
+    from backend.services import numbering
+    tpl = (await db.execute(select(Organisation.inv_asset_serial_template).where(
+        Organisation.id == org_id))).scalar_one_or_none()
+    tpl = (tpl or "").strip() or numbering.CODE_DEFAULTS["asset_serial"]
+    tokens = {"T": numbering.code_word(asset_type, "AST")}
+
+    async def taken(codes: set) -> set:
+        return set((await db.execute(select(Device.serial).where(
+            Device.org_id == org_id, Device.serial.in_(codes)))).scalars().all())
+    if peek:
+        nxt = (await db.execute(select(NumberSequence.next_value).where(
+            NumberSequence.org_id == org_id, NumberSequence.doc_type == "asset_serial",
+            NumberSequence.scope_key == "org"))).scalar_one_or_none() or 1
+        cands = [numbering.render(tpl, c, tokens=tokens) for c in range(nxt, nxt + 50)]
+        used = await taken(set(cands))       # one query
+        free = next((c for c in cands if c not in used), None)
+        if free:
+            return free
+        return cands[-1]                     # only a preview; creating the asset still skips taken serials
+    return await numbering.next_code(db, org_id, "asset_serial", tpl, tokens=tokens, taken=taken)
 
 
 def _ser(d: Device, order_count: int = 0, owner_name: str = None, inline_image: bool = True) -> dict:
@@ -92,17 +146,19 @@ def _ser(d: Device, order_count: int = 0, owner_name: str = None, inline_image: 
 @router.get("/generate-serial")
 async def generate_serial(
     asset_type: str = "Device",
+    db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
-    """Return a fresh auto-generated unique serial for an asset."""
-    return {"serial": _gen_serial(asset_type)}
+    """The serial a new asset would get (from the shop's pattern). Nothing is used up."""
+    return {"serial": await _gen_serial(db, current.org_id, asset_type, peek=True)}
 
 
 @router.get("")
 async def list_assets(
     owner_type: Optional[str] = None,
     asset_type: Optional[str] = None,
-    search: Optional[str] = None,
+    search: Optional[str] = Query(None, max_length=200),
+    state: Optional[str] = None,          # 19: active | written_off | all (none = all, as before)
     skip: int = _paging.skip_query(),
     limit: int = _paging.limit_query(200),
     db: AsyncSession = Depends(get_db),
@@ -115,18 +171,26 @@ async def list_assets(
     # and the photo is a URL, not inline base64.
     from sqlalchemy.orm import defer
     limit = _paging.clamp(limit)
-    q = select(Device).where(Device.org_id == current.org_id)
+    if state and state not in ASSET_STATES:
+        raise HTTPException(422, "state must be active, written_off or all")
+    conds = [Device.org_id == current.org_id]
     if owner_type:
-        q = q.where(Device.owner_type == owner_type)
+        conds.append(Device.owner_type == owner_type)
     if asset_type:
-        q = q.where(Device.asset_type == asset_type)
-    if search:
-        q = q.where(or_(
-            *(_contains(c, search) for c in (Device.serial, Device.imei, Device.brand, Device.model, Device.asset_type)),
-            Device.client_id.in_(select(Client.id).where(Client.org_id == current.org_id,
-                                                         _contains(Client.name, search))),
-        ))
-    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
+        conds.append(Device.asset_type == asset_type)
+    if search and search.strip():
+        conds.append(or_(*_search_conds(current.org_id, search)))
+    # 19: counts for the Active / Written off tabs follow every filter except the tab itself.
+    written_off = Device.asset_status == "written_off"
+    n_all = (await db.execute(select(func.count(Device.id)).where(*conds))).scalar() or 0
+    n_wo = (await db.execute(select(func.count(Device.id)).where(*conds, written_off))).scalar() or 0
+    state_counts = {"active": n_all - n_wo, "written_off": n_wo, "all": n_all}
+    q = select(Device).where(*conds)
+    if state == "active":
+        q = q.where(or_(Device.asset_status.is_(None), Device.asset_status != "written_off"))
+    elif state == "written_off":
+        q = q.where(written_off)
+    total = {"active": state_counts["active"], "written_off": n_wo}.get(state, n_all)
     devices = (await db.execute(q.options(defer(Device.image_data))
                                 .order_by(desc(Device.created_at), desc(Device.id))
                                 .offset(skip).limit(limit))).scalars().all()
@@ -146,7 +210,7 @@ async def list_assets(
         row["image_url"] = f"/api/assets/{d.id}/image" if d.id in with_img else None
         out.append(row)
     await _hide_cost(db, current, *out)
-    return {"total": total, "items": out, "skip": skip, "limit": limit}
+    return {"total": total, "items": out, "skip": skip, "limit": limit, "counts": state_counts}
 
 
 @router.post("", status_code=201)
@@ -164,7 +228,7 @@ async def create_asset(
     serial = data.serial
     generated = False
     if not serial and not data.imei and not data.vin and not data.hin:
-        serial = _gen_serial(data.asset_type)
+        serial = await _gen_serial(db, current.org_id, data.asset_type)
         generated = True
     # Stamp the industry template this asset was created under (defaults to the
     # org's active template). Historical assets without one render via a fallback.
@@ -222,7 +286,7 @@ async def suggest_names(
 
 
 class IdentifyIn(BaseModel):
-    value: str
+    value: str = Field(max_length=200)
     kind: Optional[str] = None          # imei|vin|hin|serial — guessed when omitted
     client_id: Optional[str] = None     # the customer at the counter, to tell "theirs" from "someone else's"
 
@@ -243,6 +307,10 @@ async def identify(
     candidates = {k: _ids.normalize(k, data.value) for k in _ids.KINDS}
     cols = {"imei": Device.imei, "vin": Device.vin, "hin": Device.hin, "serial": Device.serial}
     conds = [cols[k] == v for k, v in candidates.items() if v]
+    # 21: a vehicle can be found by its plate too (kept in custom_data)
+    plate = _compact(data.value)
+    if plate:
+        conds += [_plate_col(k) == plate for k in PLATE_KEYS]
     rows = (await db.execute(select(Device).where(
         Device.org_id == current.org_id, or_(*conds)).limit(5))).scalars().all()
     today = await shop_today(db, current.org_id)
@@ -265,8 +333,10 @@ async def identify(
                         "created_at": last.created_at.isoformat() if last.created_at else None,
                         "warranty_until": wu.isoformat() if wu else None,
                         "under_warranty": bool(wu and wu >= today)}
+        matched_on = next((k for k in _ids.KINDS if candidates.get(k) and getattr(d, k) == candidates[k]), "plate")
         matches.append({
-            "id": d.id, "brand": d.brand, "model": d.model, "serial": d.serial, "imei": d.imei,
+            "id": d.id, "matched_on": matched_on,
+            "brand": d.brand, "model": d.model, "serial": d.serial, "imei": d.imei,
             "vin": d.vin, "hin": d.hin, "color": d.color, "watch_out": d.watch_out,
             "client": owner, "owner_type": d.owner_type,
             "same_client": bool(data.client_id and d.client_id == data.client_id),
@@ -603,7 +673,7 @@ async def convert_to_product(
     current: Employee = Depends(require_perm("can_convert_asset_to_product")),
 ):
     """Orderry: turn a non-sellable company asset into a sellable product (stock)."""
-    from backend.models import Location, Part, StockLevel, StockMovement
+    from backend.models import Location, Part, StockMovement
     d = (await db.execute(select(Device).where(
         Device.id == asset_id, Device.org_id == current.org_id))).scalar_one_or_none()
     if not d:
@@ -619,6 +689,8 @@ async def convert_to_product(
         sell_price=data.sale_price or d.sale_price or 0.0,
         cost_price=d.purchase_price or 0.0,
     )
+    from backend.services import product_codes, stock_rows
+    await product_codes.ensure_sku_free(db, current.org_id, part.sku)
     db.add(part)
     await db.flush()
     loc_id = data.location_id or d.location_id
@@ -629,12 +701,7 @@ async def convert_to_product(
             Location.org_id == current.org_id).order_by(Location.id))).scalars().first()
         loc_id = default_loc.id if default_loc else None
     if loc_id:
-        sl = (await db.execute(select(StockLevel).where(
-            StockLevel.part_id == part.id, StockLevel.location_id == loc_id))).scalar_one_or_none()
-        if sl:
-            await _atomic_add(db, sl, "qty_available", 1, round_to=None)   # atomic
-        else:
-            db.add(StockLevel(part_id=part.id, location_id=loc_id, qty_available=1, qty_reserved=0))
+        await stock_rows.add(db, part.id, loc_id, 1)
         # record the stock movement so the product's History shows where the unit came from
         db.add(StockMovement(part_id=part.id, location_id=loc_id, movement_type="receive",
                              qty=1, unit_cost=float(d.purchase_price or 0),

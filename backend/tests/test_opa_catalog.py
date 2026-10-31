@@ -371,7 +371,7 @@ async def test_code_svg_renders_ean_and_rejects_bad(client):
     r = await client.get("/api/catalog/code.svg?type=upca&data=036000291452", headers=H)
     assert r.status_code == 200
     assert (await client.get("/api/catalog/code.svg?type=ean13&data=123", headers=H)).status_code == 400
-    assert (await client.get("/api/catalog/code.svg?type=pdf417&data=1", headers=H)).status_code == 400
+    assert (await client.get("/api/catalog/code.svg?type=aztec&data=1", headers=H)).status_code == 400
 
 
 async def test_document_label_template_encodes_chosen_field(client):
@@ -408,7 +408,7 @@ async def test_document_template_barcode_options_validated_and_gated(client):
         "name": "T", "doc_type": "label", "barcode_field": "colour"}, headers=H)
     assert r.status_code == 422
     r = await client.post("/api/documents/templates", json={
-        "name": "T", "doc_type": "label", "barcode_types": {"mpn": "pdf417"}}, headers=H)
+        "name": "T", "doc_type": "label", "barcode_types": {"mpn": "aztec"}}, headers=H)
     assert r.status_code == 422
     _, T = await _teammate(client, H, "can_manage_settings")
     r = await client.post("/api/documents/templates", json={
@@ -430,16 +430,16 @@ async def test_print_label_template_barcode_field(client):
     assert r.status_code == 201, r.text
     tpl = r.json()
     assert tpl["barcode_field"] == "mpn" and tpl["barcode_types"] == {"mpn": "ean13"}
-    # Rendering (incl. the bad-GTIN 422) is the HTML path now: /api/documents/render-labels, covered by
-    # test_document_label_template_encodes_chosen_field and test_document_orderry_vars. The PDF sheet
-    # (/api/print/labels) was removed in the 29 Oct 2026 audit clean-up.
-    await client.put(f"/api/print/templates/{tpl['id']}", json={
-        "name": "MPN", "barcode_types": {"mpn": "upca"}}, headers=H)
+    # ii144c: the PDF sheet that rendered these is retired (labels print from label templates as HTML)
+    for kind in ("upca", "qr", "code128"):
+        r = await client.put(f"/api/print/templates/{tpl['id']}", json={
+            "name": "MPN", "barcode_types": {"mpn": kind}}, headers=H)
+        assert r.status_code == 200, (kind, r.text)
     # a partial PUT kept the field
     t2 = [t for t in (await client.get("/api/print/templates", headers=H)).json()["items"] if t["id"] == tpl["id"]][0]
     assert t2["barcode_field"] == "mpn"
     # validation, permission, tenant
-    assert (await client.post("/api/print/templates", json={"name": "X", "barcode_type": "pdf417"},
+    assert (await client.post("/api/print/templates", json={"name": "X", "barcode_type": "aztec"},
                               headers=H)).status_code == 422
     _, T = await _teammate(client, H, "can_manage_settings")
     assert (await client.post("/api/print/templates", json={"name": "X"}, headers=T)).status_code == 403
@@ -589,5 +589,5 @@ async def test_preview_keeps_asset_labels_and_validates_options(client):
         "body_html": "<p>{Asset Model}</p>", "doc_type": "label"}, headers=H)
     assert r.json()["sample"] != "Some part"
     r = await client.post("/api/documents/preview", json={
-        "body_html": "<p>{Barcode}</p>", "doc_type": "label", "barcode_types": {"mpn": "ean8"}}, headers=H)
+        "body_html": "<p>{Barcode}</p>", "doc_type": "label", "barcode_types": {"mpn": "aztec"}}, headers=H)
     assert r.status_code == 422

@@ -335,8 +335,9 @@ async def catalog_search(
     if type in ("all", "product"):
         pq = select(Part).where(Part.org_id == current.org_id, Part.active == True).options(selectinload(Part.stock_levels))  # noqa: E712
         if q:
+            from backend.services import product_codes
             pq = pq.where(or_(_contains(Part.name, q), _contains(Part.sku, q), Part.barcode == q,
-                              _contains(Part.mpn, q)))
+                              _contains(Part.mpn, q), Part.id.in_(product_codes.barcode_part_ids(current.org_id, q))))
         parts = (await db.execute(pq.order_by(Part.name).limit(max(1, min(limit, 200))))).scalars().all()
         for p in parts:
             avail = sum(sl.qty_available for sl in p.stock_levels)

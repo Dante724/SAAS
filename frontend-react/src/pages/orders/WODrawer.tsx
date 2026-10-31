@@ -29,6 +29,7 @@ import { escapeHtml, printHtmlInFrame } from "../../lib/safeHtml";
 import JobCardFields from "../../components/JobCardFields";
 import ReaderCharge from "../../components/ReaderCharge";
 import CardPaymentsList from "../../components/CardPaymentsList";
+import { binChoices, byLocation, needsBinChoice } from "../../lib/stockBins";
 import KitGroupHeader from "./KitGroupHeader";
 import EstimateTerms, { startRevision } from "./EstimateTerms";
 import JobTasks from "./JobTasks";
@@ -617,7 +618,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
           {tab === "services" && (
             <div className="space-y-4">
-              <ServicesTab orderId={order.id} deviceId={d.device?.id} lines={d.lines} total={d.total} onFlash={flash} onChanged={reload}
+              <ServicesTab orderId={order.id} locationId={(d as any).location_id} deviceId={d.device?.id} lines={d.lines} total={d.total} onFlash={flash} onChanged={reload}
                 labor={labor} onClockIn={(lineId) => startTimer(lineId)} isEstimate={isEst} emps={emps}
                 locked={isClosed && !can("can_edit_closed_ticket")} />
             </div>
@@ -1134,8 +1135,73 @@ function IntakePhotos({ orderId, photos, onChanged, onFlash }: {
   );
 }
 
+/* ---- Custom line (3): not in the catalog — optionally saved to it as a product or service ---- */
+function CustomLineForm({ orderId, forItem, kitId, onFlash, onClose, onAdded }: { orderId: string; forItem: string; kitId?: string; onFlash: (m: string) => void; onClose: () => void; onAdded: () => void }) {
+  const { can } = useMe();
+  const canProduct = can("can_add_custom_product"), canService = can("can_add_custom_service");
+  const [type, setType] = useState<"product" | "service">(canProduct ? "product" : "service");
+  const [name, setName] = useState(""); const [qty, setQty] = useState(1);
+  const [price, setPrice] = useState(""); const [cost, setCost] = useState("");
+  const [save, setSave] = useState(false); const [sku, setSku] = useState(""); const [barcode, setBarcode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const canSave = type === "product" ? can("can_create_products") : can("can_edit_labors");
+  const canCost = can("can_set_cost_price");
+  async function submit() {
+    if (!name.trim()) { onFlash("Give the item a name"); return; }
+    setBusy(true);
+    try {
+      const r = await api.post<any>(`/orders/${orderId}/lines`, {
+        description: name.trim(), kind: "custom", line_type: type === "product" ? "part" : "labour",
+        qty, unit_price: Number(price) || 0, ...(canCost ? { cost_price: Number(cost) || 0 } : {}),
+        ...(forItem ? { order_item_id: forItem } : {}),
+        // only catalog items can go inside a kit, so a one-off line stays an extra
+        ...(kitId && save && canSave ? { bundle_group_id: kitId } : {}),
+        ...(save && canSave ? { save_to_catalog: true, catalog_kind: type,
+          ...(type === "product" ? { catalog_sku: sku.trim() || null, catalog_barcode: barcode.trim() || null } : {}) } : {}),
+      });
+      onFlash(save && canSave ? `Added and saved to the catalog${r?.margin_warning ? ` — ${r.margin_warning}` : ""}` : (r?.margin_warning ? `Added — ${r.margin_warning}` : "Line added"));
+      onAdded();
+    } catch (e: any) { onFlash(e.message || "Could not add line"); setBusy(false); }
+  }
+  const lbl = "block text-[11px] font-semibold text-ink-tertiary mb-1";
+  const inp = "glass-input w-full px-2 py-2 rounded-lg text-xs";
+  return (
+    <div className="space-y-2.5">
+      <div className="flex items-center justify-between">
+        <div role="radiogroup" aria-label="Item type" className="inline-flex p-0.5 rounded-lg bg-slate-100 border border-slate-200">
+          {canProduct && <button type="button" role="radio" aria-checked={type === "product"} onClick={() => setType("product")} className={`px-2.5 py-1 rounded-md text-xs font-semibold ${type === "product" ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary"}`}>Product</button>}
+          {canService && <button type="button" role="radio" aria-checked={type === "service"} onClick={() => setType("service")} className={`px-2.5 py-1 rounded-md text-xs font-semibold ${type === "service" ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary"}`}>Service</button>}
+        </div>
+        <button type="button" aria-label="Close custom item" onClick={onClose} className="text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-sm" /></button>
+      </div>
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="flex-1 min-w-[180px]"><label className={lbl}>Name</label><input autoFocus aria-label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder={type === "product" ? "e.g. Ribbon cable 30 cm" : "e.g. Water damage clean"} className={inp} /></div>
+        <div className="w-16"><label className={lbl}>Qty</label><input type="number" min={1} aria-label="Qty" value={qty} onChange={(e) => setQty(Math.max(1, Number(e.target.value) || 1))} className={inp} /></div>
+        <div className="w-24"><label className={lbl}>Price</label><input type="number" min={0} aria-label="Price" value={price} onChange={(e) => setPrice(e.target.value)} className={`${inp} text-right`} /></div>
+        {canCost && <div className="w-24"><label className={lbl}>Cost</label><input type="number" min={0} aria-label="Cost" value={cost} onChange={(e) => setCost(e.target.value)} className={`${inp} text-right`} /></div>}
+      </div>
+      {canSave && (
+        <label className="flex items-center gap-2 text-xs text-ink-secondary cursor-pointer">
+          <input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} />
+          Save to catalog so it can be picked next time
+        </label>
+      )}
+      {save && canSave && type === "product" && (
+        <div className="flex flex-wrap gap-2">
+          <div className="w-40"><label className={lbl}>SKU (optional)</label><input aria-label="SKU" value={sku} onChange={(e) => setSku(e.target.value)} className={`${inp} font-mono`} /></div>
+          <div className="w-44"><label className={lbl}>Barcode (optional)</label><input aria-label="Barcode" value={barcode} onChange={(e) => setBarcode(e.target.value)} className={`${inp} font-mono`} /></div>
+        </div>
+      )}
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onClose} className="px-3 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Cancel</button>
+        <button type="button" onClick={submit} disabled={busy || !name.trim()} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50">{busy ? "Adding…" : save && canSave ? "Add and save" : "Add"}</button>
+      </div>
+    </div>
+  );
+}
+
 /* ---- Services tab ---- */
-function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labor, onClockIn, isEstimate, emps, locked }: { orderId: string; deviceId?: string; lines?: Line[]; total?: number; onFlash: (m: string) => void; onChanged?: () => void; labor?: any; onClockIn?: (lineId: string) => void; isEstimate?: boolean; emps?: { id: string; name: string }[]; locked?: boolean }) {
+function ServicesTab({ orderId, locationId, deviceId, lines, total, onFlash, onChanged, labor, onClockIn, isEstimate, emps, locked }: { orderId: string; locationId?: string; deviceId?: string; lines?: Line[]; total?: number; onFlash: (m: string) => void; onChanged?: () => void; labor?: any; onClockIn?: (lineId: string) => void; isEstimate?: boolean; emps?: { id: string; name: string }[]; locked?: boolean }) {
   const { can } = useMe();
   const seePrices = can("can_view_item_prices");   // off: the API leaves line prices out
   const _secHM = (s: number) => { const h = Math.floor((s || 0) / 3600), m = Math.floor(((s || 0) % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m`; };
@@ -1165,12 +1231,14 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
   const [qty, setQty] = useState(1);
   const [disc, setDisc] = useState(0);
   const [adding, setAdding] = useState(false);
+  const [custom, setCustom] = useState(false);     // 3: a line that isn't in the catalog (yet)
   const [intoKit, setIntoKit] = useState<{ id: string; name: string } | null>(null);   // add the pick inside this kit
-  const [stock, setStock] = useState<{ total_available: number; items: { location: string; available: number }[] } | null>(null);
+  const [stock, setStock] = useState<{ total_available: number; items: { location: string; location_id?: string; bin_id?: string | null; bin?: string | null; available: number }[] } | null>(null);
+  const [takeBin, setTakeBin] = useState("");    // ii144c: which bin the product comes from ("" = unbinned first, then the fullest bin)
   // When a product is picked, show where it's in stock — the point-of-need answer
   // to "we're out here, is it at another branch?" (products only; services carry no stock).
   useEffect(() => {
-    setStock(null);
+    setStock(null); setTakeBin("");
     if (pick && pick.kind === "product" && pick.ref_id)
       api.get<any>(`/inventory/parts/${pick.ref_id}/stock`).then(setStock).catch(loadFailed("stock levels"));
   }, [pick]);
@@ -1184,6 +1252,7 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
         ref_id: pick.ref_id, qty, unit_price: pick.price || 0,
         discount: disc, discount_type: "pct",
         ...(tagging && forItem ? { order_item_id: forItem } : {}),
+        ...(pick.kind === "product" && takeBin ? { bin_id: takeBin } : {}),
         ...(intoKit && pick.kind !== "bundle" ? { bundle_group_id: intoKit.id } : {}),
       });
       onFlash(r?.margin_warning ? `Added — ${r.margin_warning}` : intoKit ? `Added to ${intoKit.name}` : "Line added");
@@ -1334,11 +1403,17 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
                   <option value="">Whole job</option>{jobItems.map((it) => <option key={it.id} value={it.id}>{itemName(it)}</option>)}
                 </select></div>
             )}
+            {stock && !isEstimate && needsBinChoice(stock.items, locationId) && (
+              <div className="min-w-[150px]"><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Take from</label>
+                <select value={takeBin} onChange={(e) => setTakeBin(e.target.value)} aria-label="Which bin to take it from" className="glass-input w-full px-2 py-2 rounded-lg text-xs font-semibold text-ink-primary">
+                  <option value="">Any (unbinned stock first)</option>{binChoices(stock.items, locationId).map((b) => <option key={b.bin_id} value={b.bin_id}>{b.label}</option>)}
+                </select></div>
+            )}
             <button onClick={addLine} disabled={adding} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50">{adding ? "Adding…" : "Add"}</button>
             {stock && (
               <div className="w-full text-[11px] pt-0.5">
                 {stock.total_available > 0 ? (
-                  <span className="text-ink-secondary">In stock: <b className="text-emerald-600">{stock.total_available}</b> · {stock.items.filter((i) => i.available > 0).map((i) => `${i.location} ${i.available}`).join(" · ") || "—"}</span>
+                  <span className="text-ink-secondary">In stock: <b className="text-emerald-600">{stock.total_available}</b> · {byLocation(stock.items).filter((i) => i.available > 0).map((i) => `${i.location} ${i.available}`).join(" · ") || "—"}</span>
                 ) : (
                   <span className="text-rose-600 font-semibold">Out of stock at every warehouse — you may need to order or transfer it.</span>
                 )}
@@ -1347,8 +1422,15 @@ function ServicesTab({ orderId, deviceId, lines, total, onFlash, onChanged, labo
           </div>
         ) : locked ? (
           <p className="text-xs text-ink-tertiary">This job is closed. Your role can't change a closed job.</p>
+        ) : custom ? (
+          <CustomLineForm orderId={orderId} forItem={tagging ? forItem : ""} kitId={intoKit?.id} onFlash={onFlash} onClose={() => setCustom(false)} onAdded={() => { setCustom(false); setIntoKit(null); onChanged?.(); }} />
         ) : (
-          <CatalogPicker deviceId={deviceId} onPick={(i) => { setPick(i); setDisc(0); setQty(1); }} placeholder="Search catalog — service, product, or job kit…" />
+          <div className="flex items-center gap-2">
+            <div className="flex-1 min-w-0"><CatalogPicker deviceId={deviceId} onPick={(i) => { setPick(i); setDisc(0); setQty(1); }} placeholder="Search catalog — service, product, or job kit…" /></div>
+            {(can("can_add_custom_product") || can("can_add_custom_service")) && (
+              <button type="button" onClick={() => setCustom(true)} className="px-3 py-2 rounded-lg border border-dashed border-primary/40 text-primary text-xs font-bold hover:bg-blue-50 flex items-center gap-1 whitespace-nowrap"><M n="add" c="text-sm" />Custom item</button>
+            )}
+          </div>
         )}
       </div>
 

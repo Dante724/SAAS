@@ -154,9 +154,11 @@ async def delete_template(
     return {"ok": True}
 
 
-# Product labels print as HTML from /api/documents/labels (documents.render_labels). The old
-# reportlab PDF sheet here, and the print view of the removed stock-docs postings, had no
-# caller and were deleted (audit 29 Oct 2026).
+# Product labels print as HTML from /api/documents (documents.render_labels). The old reportlab
+# PDF sheet here (POST /api/print/labels), and the print view of the removed stock-docs postings,
+# had no caller and were deleted (audit 29 Oct 2026). ii144c: every label — products, bins,
+# serial units, assets, clients — prints from a label DocumentTemplate through the HTML renderer
+# in routers/documents.py (render-labels, render-bin-labels, render-serial-labels, …).
 
 
 # ── print stock documents ────────────────────────────────────────────────────
