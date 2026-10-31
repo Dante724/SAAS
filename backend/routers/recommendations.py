@@ -303,6 +303,8 @@ async def approve_for_customer(
     from backend.services import audit
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="rec.approve_for_customer",
                        entity_type="recommendation", entity_id=r.id, diff={"how": data.how, "name": who})
+    from backend.routers.public import customer_approved_work
+    await customer_approved_work(db, order, f"{who} ({'by phone' if data.how == 'phone' else 'in person'})")
     await db.commit()
     await db.refresh(r)
     return serialize_rec(r)
