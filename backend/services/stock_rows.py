@@ -83,6 +83,22 @@ async def row_for(db, part_id: str, location_id: str, bin_id: Optional[str] = No
     return row
 
 
+# Units counted in whole items: 2.5 of these is a typo, not a quantity (QA fix D). Metres, kilos,
+# litres and hours stay fractional.
+COUNTED_UNITS = {"pcs", "pc", "piece", "pieces", "ea", "each", "unit", "units", "set", "sets"}
+
+
+def check_whole(part, *qtys) -> None:
+    """422 when a product counted in whole items is given a fractional quantity."""
+    if (getattr(part, "uom", None) or "pcs").strip().lower() not in COUNTED_UNITS:
+        return
+    for q in qtys:
+        if q is not None and abs(float(q) - round(float(q))) > _EPS:
+            from fastapi import HTTPException
+            raise HTTPException(422, f"“{part.name}” is counted in whole {part.uom or 'pcs'} — "
+                                     f"{float(q):g} isn't a whole number")
+
+
 async def warehouse_for(db, location_id: str, bin_id: Optional[str] = None) -> Optional[str]:
     """The warehouse stock at this place belongs to: the bin's own warehouse, else the location's
     default product warehouse (provisioned when the location has none yet)."""

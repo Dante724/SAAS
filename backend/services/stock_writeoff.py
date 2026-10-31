@@ -61,6 +61,7 @@ async def write_off(db, *, part: Part, location_id: str, qty: float, created_by_
     qty = float(qty)
     if qty <= _EPS:
         raise HTTPException(422, "Provide a positive quantity to write off")
+    stock_rows.check_whole(part, qty)
     try:
         taken = await stock_rows.draw(db, part.id, location_id, qty, bin_id=bin_id)
     except stock_rows.NotEnoughStock as e:

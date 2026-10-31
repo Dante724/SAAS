@@ -260,6 +260,7 @@ async def adjust_stock(
     part = result.scalar_one_or_none()
     if not part:
         raise HTTPException(404, "Part not found")
+    stock_rows.check_whole(part, data.qty)
     # Build 89: the warehouse must permit this action, and this employee must be
     # allowed to perform it here (per-employee access beats the role-level scope).
     from backend.services import warehouses as _wh
@@ -370,6 +371,7 @@ async def _do_posting(db, org_id, created_by_id, location_id, supplier_id, lines
             Part.id == pid, Part.org_id == org_id))).scalar_one_or_none()
         if not part:
             raise HTTPException(404, f"Part {pid} not found")
+        stock_rows.check_whole(part, qty)
         cost = float(_g(ln, "purchase_price") or 0.0)
         serials = await serial_intake.validate_intake(db, org_id, part, qty, _g(ln, "serials"), seen_serials)
         from backend.services import inventory_alerts as _alerts
@@ -1989,6 +1991,7 @@ async def receive_po(
         part = (await db.execute(select(Part).where(Part.id == pl.part_id))).scalar_one_or_none()
         if not part:
             continue
+        stock_rows.check_whole(part, recv)
         plan.append((pl, recv, part, rline))
 
     # 16b: serial-tracked lines need one valid, unique serial per unit — checked for the whole

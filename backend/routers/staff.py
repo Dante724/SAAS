@@ -734,6 +734,9 @@ async def create_location(
                   receipt_header=data.receipt_header, working_hours=data.working_hours,
                   legal_entity_id=data.legal_entity_id, price_type_id=data.price_type_id)
     db.add(ln)
+    await db.flush()
+    from backend.services.warehouses import provision_default
+    await provision_default(db, ln)      # QA fix D: its stock has a warehouse from day one
     await db.commit()
     await db.refresh(ln)
     return _ser_location(ln)

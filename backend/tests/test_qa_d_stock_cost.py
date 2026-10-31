@@ -374,3 +374,37 @@ async def test_free_po_line_is_received_at_zero(client, tenant, db):
     assert (await _get(client, tenant, pid))["avg_cost"] == pytest.approx(2.0)
     _on_hand, value = await _assert_books(db, pid)
     assert value == pytest.approx(40.0)
+
+
+# ── 6. a new location has its warehouse; whole items take whole quantities ──────
+@pytest.mark.asyncio
+async def test_new_location_gets_its_default_warehouse(client, tenant):
+    r = await client.post("/api/staff/locations", headers=tenant, json={"name": "Annex"})
+    assert r.status_code == 201, r.text
+    loc = r.json()["id"]
+    whs = (await client.get("/api/settings/warehouses", headers=tenant)).json()["items"]
+    mine = [w for w in whs if w.get("location_id") == loc]
+    assert len(mine) == 1 and mine[0]["name"] == "Annex warehouse"
+
+
+@pytest.mark.asyncio
+async def test_fractional_quantity_refused_for_counted_items(client, tenant, db):
+    loc = await _loc(client, tenant)
+    pcs = await _part(client, tenant, "QD-6A")
+    r = await client.post(f"/api/inventory/parts/{pcs}/adjust", headers=tenant, json={
+        "location_id": loc, "qty": 2.5, "movement_type": "receive"})
+    assert r.status_code == 422 and "whole" in r.text
+    r = await client.post("/api/inventory/postings", headers=tenant, json={
+        "location_id": loc, "lines": [{"part_id": pcs, "qty": 2.5, "purchase_price": 1}]})
+    assert r.status_code == 422
+    po_id, line = await _po(client, tenant, pcs, 5, 1)
+    r = await client.post(f"/api/inventory/po/{po_id}/receive", headers=tenant,
+                          json={"lines": [{"po_line_id": line, "qty": 2.5}]})
+    assert r.status_code == 422
+    assert (await _books(db, pcs))[0] == 0
+
+    cable = await _part(client, tenant, "QD-6B", uom="m")
+    r = await client.post(f"/api/inventory/parts/{cable}/adjust", headers=tenant, json={
+        "location_id": loc, "qty": 2.5, "movement_type": "receive", "unit_cost": 1})
+    assert r.status_code == 200, r.text
+    await _assert_books(db, cable)
