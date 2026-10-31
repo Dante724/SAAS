@@ -45,3 +45,31 @@ describe("pasteMap product type (16a)", () => {
     expect(gridToRows(grid, map)[0].product_type).toBeUndefined();
   });
 });
+
+describe("pasteMap file upload + serials", () => {
+  it("uses the server's suggested (remembered per supplier) mapping and drops duplicates", async () => {
+    const { fileToGrid, mapByHeader } = await import("./pasteMap");
+    const { grid, map } = fileToGrid(["Part No", "Desc", "Qty", "Serials", "Desc 2"], [["SCR-1", "Screen", "2", "X1, X2", "x"]],
+      { "Part No": "code", Desc: "name", Qty: "qty", Serials: "serials", "Desc 2": "name" });
+    expect(map).toEqual(["code", "name", "qty", "serials", "ignore"]);
+    expect(gridToRows(grid, map)[0]).toMatchObject({ code: "SCR-1", name: "Screen", qty: 2, serials: "X1, X2" });
+    expect(mapByHeader(["Part No", "Desc", "Qty", "Serials", "Desc 2"], map)).toEqual({ "Part No": "code", Desc: "name", Qty: "qty", Serials: "serials", "Desc 2": "ignore" });
+  });
+
+  it("falls back to header synonyms and splits serials", async () => {
+    const { fileToGrid, splitSerials } = await import("./pasteMap");
+    expect(fileToGrid(["SKU", "IMEI"], [], {}).map).toEqual(["code", "serials"]);
+    expect(splitSerials("A1, A2;A3\nA4 |  ")).toEqual(["A1", "A2", "A3", "A4"]);
+    expect(splitSerials(undefined)).toEqual([]);
+  });
+
+  it("a remembered mapping beats a header guess", async () => {
+    const { fileToGrid } = await import("./pasteMap");
+    expect(fileToGrid(["Cost", "Net"], [], { Net: "cost" }).map).toEqual(["ignore", "cost"]);
+    expect(fileToGrid(["SKU", "Name"], [], { SKU: "ignore" }).map).toEqual(["ignore", "name"]);
+  });
+
+  it("leaves serials off rows when no column maps to it", () => {
+    expect(gridToRows([["A", "1"]], ["code", "qty"])[0]).not.toHaveProperty("serials");
+  });
+});

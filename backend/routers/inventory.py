@@ -1,17 +1,16 @@
+import base64 as _base64
 from datetime import date
 from typing import Optional
 
-import base64 as _base64
-
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from backend.core import paging as _paging
 from backend.db.database import get_db
-from backend.models import Employee, Part, StockLevel, StockMovement
+from backend.models import Employee, Part, SerializedItem, StockLevel, StockMovement
 from backend.services import product_codes, stock_posting, stock_rows
 from backend.services.serial_intake import SerialStr
 from backend.services.auth import get_current_employee, require_perm
@@ -48,6 +47,7 @@ class StockAdjust(BaseModel):
 # qty field (e.g. a 13-digit EAN), not a real count — reject it at the boundary so
 # it never lands in qty_available and blows up the inventory reports.
 import math as _math
+
 MAX_STOCK_QTY = 1_000_000
 
 
@@ -153,7 +153,6 @@ async def scan_resolve(
         matched_on = ("sku" if (part.sku or "").lower() == code.lower() else "code" if part.code == code
                       else "mpn" if (part.mpn or "").lower() == code.lower() else "barcode")
     else:
-        from backend.models import SerializedItem
         from backend.services.serial_intake import matches as _sn_matches
         si = (await db.execute(select(SerializedItem).where(
             SerializedItem.org_id == current.org_id,
@@ -504,6 +503,12 @@ class CommitRow(BaseModel):
     expiry_date: Optional[date] = None   # dates this delivery's batch (expiry-tracked products)
     lot: Optional[str] = Field(None, max_length=40)   # ii144b: batch / lot, e.g. GS1 (10) from the label
     bin_id: Optional[str] = None         # ii144c: put this row away into a bin
+    @field_validator("qty")
+    @classmethod
+    def _qty_cap(cls, v):
+        if v > 100_000:
+            raise ValueError("Quantity looks like a barcode or serial, not a count")
+        return v
 
 
 class PostingCommitIn(BaseModel):
@@ -512,6 +517,53 @@ class PostingCommitIn(BaseModel):
     note: Optional[str] = None
     bin_id: Optional[str] = None         # ii144c: the bin every row without its own goes into (a scanned bin)
     rows: list[CommitRow] = Field(max_length=500)
+    generate_serials: bool = False       # fill missing serials from the shop's serial template
+
+
+async def _check_posting_serials(db, current, rows: list, parts: dict, generate: bool) -> None:
+    """Serials on a posting: one per unit of a serialized product, none already in stock, none
+    twice in the file; missing ones generated on request. Fills each row's `serials` in place."""
+    from backend.models import Organisation
+    from backend.services import importer
+    org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one()
+    ctx = importer.Ctx(db=db, current=current, org=org, options={}, perms={})
+    ctx.data["serials_in_stock"] = set((await db.execute(select(SerializedItem.serial_number).where(
+        SerializedItem.org_id == current.org_id,
+        SerializedItem.status.in_(("in_stock", "allocated_to_order"))))).scalars())
+    ctx.data["serial_n"] = (await db.execute(select(func.count()).select_from(SerializedItem).where(
+        SerializedItem.org_id == current.org_id))).scalar() or 0
+    seen: set = set()
+    todo = []            # (line no, row, typed serials, how many to generate)
+    for i, ln in enumerate(rows, start=1):
+        sns = [s.strip() for s in (ln.get("serials") or []) if s and s.strip()]
+        part = parts[ln["part_id"]]
+        if not part.serialized:
+            if sns:
+                raise HTTPException(422, f"Line {i}: {part.name} isn't serialized — remove the serial numbers")
+            continue
+        if not sns and not generate:
+            continue                  # serials are optional on a posting unless asked for
+        qty = float(ln["qty"] or 0)
+        if not qty.is_integer():
+            raise HTTPException(422, f"Line {i}: serialized stock must be a whole number of units")
+        for sn in sns:
+            if sn in seen:
+                raise HTTPException(422, f"Serial {sn} is listed twice")
+            if sn in ctx.data["serials_in_stock"]:
+                raise HTTPException(409, f"Serial {sn} is already in stock")
+            seen.add(sn)
+            ctx.seen[("serial", sn)] = i
+        if len(sns) > qty:
+            raise HTTPException(422, f"Line {i}: more serial numbers ({len(sns)}) than units ({int(qty)})")
+        if len(sns) < qty and not generate:
+            raise HTTPException(422, f"Line {i}: {int(qty)} units of {part.name} need {int(qty)} serial numbers "
+                                     f"({len(sns)} given)")
+        todo.append((i, ln, sns, int(qty) - len(sns)))
+    # every typed serial is claimed first, so a generated one can never repeat a later line's
+    for i, ln, sns, missing in todo:
+        if missing > 0:
+            sns = sns + importer.generate_serials(ctx, missing, importer.Row(row=i, rec={}))
+        ln["serials"] = sns
 
 
 @router.post("/postings/commit", status_code=201)
@@ -524,6 +576,8 @@ async def commit_posting(
     every row through the same WAC engine as a normal posting — one transaction."""
     if not data.location_id:
         raise HTTPException(422, "Warehouse is required")
+    from backend.services import warehouses as _wh
+    await _wh.guard_action(db, current, "post", location_id=data.location_id)
     if not data.rows:
         raise HTTPException(422, "Add at least one row")
     if any(not r.part_id for r in data.rows):
@@ -546,7 +600,7 @@ async def commit_posting(
                         sku=(r.new_sku or "").strip() or None,
                         mpn=await _checked_mpn(db, current.org_id, r.new_mpn),   # one active product per MPN
                         cost_price=cost, sell_price=sell,
-                        serialized=ptype == "serialized", expiry_tracking=ptype == "expiry")
+                        serialized=ptype == "serialized" or bool(r.serials), expiry_tracking=ptype == "expiry")
             db.add(part)
             await db.flush()
             pid = part.id
@@ -554,6 +608,12 @@ async def commit_posting(
         lines.append({"part_id": pid, "qty": r.qty, "serials": r.serials, "expiry_date": r.expiry_date,
                       "lot": r.lot, "bin_id": r.bin_id or data.bin_id,
                       "purchase_price": r.purchase_price, "markup_pct": r.markup_pct})
+    ids = {ln["part_id"] for ln in lines}
+    parts = {p.id: p for p in (await db.execute(select(Part).where(
+        Part.id.in_(ids), Part.org_id == current.org_id))).scalars()}
+    if len(parts) != len(ids):
+        raise HTTPException(404, "Product not found")
+    await _check_posting_serials(db, current, lines, parts, data.generate_serials)
     posted, total_cost = await _do_posting(
         db, current.org_id, current.id, data.location_id, data.supplier_id, lines)
     from backend.routers.catalog_products import commit_mpn_safe
@@ -741,6 +801,7 @@ async def parts_to_order(
     supplier group into a PO via the existing /inventory/po endpoint."""
     from collections import defaultdict
     from datetime import datetime as _dt
+
     from backend.models import Order, OrderLine, OrderStatus, POLine, Supplier
 
     closed = {"closed", "done", "delivered", "dropped", "cancelled", "completed", "picked_up"}
@@ -1935,8 +1996,7 @@ async def receive_po(
     if received_any:
         fully = all((pl.qty_received or 0) >= pl.qty_ordered for pl in po_lines)
         po.status = "received" if fully else "partial"
-        from backend.services.po_links import notify_po_change
-        from backend.services.po_links import writes_off_automatically
+        from backend.services.po_links import notify_po_change, writes_off_automatically
         arrived = "all parts arrived" if fully else "some parts arrived"
         if not await writes_off_automatically(db, current.org_id):
             arrived += ", ready to write off on the job"

@@ -12,6 +12,7 @@ import Pager from "../../components/Pager";
 import { useServerPage } from "../../hooks/useServerPage";
 import { inputCls } from "../invoices/billing";
 import { clickable, clickableRow } from "../../lib/clickable";
+import ImportDrawer from "../../components/ImportDrawer";
 
 const CO_PAGE = 50;
 
@@ -344,6 +345,8 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
     const walk = (ns: any[], d: number) => (ns || []).forEach((n) => { flat.push({ id: n.id, name: n.name, depth: d }); if (n.children?.length) walk(n.children, d + 1); });
     api.get<any>("/catalog/categories?entity_type=service").then((r) => { walk(r.tree || [], 0); setCats(flat); }).catch(() => setCats([]));
   };
+  const { can } = useMe();
+  const [importing, setImporting] = useState(false);
   const [err, setErr] = useState(false);
   const load = () => { setErr(false); api.get<{ items: Service[] }>("/catalog/services").then((r) => setItems(r.items || [])).catch(() => { setItems([]); setErr(true); }); };
   useEffect(() => { load(); loadCats(); }, [refresh]); // eslint-disable-line
@@ -356,8 +359,10 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
   return (
     <div className="space-y-4">
       {cat && <CategoryManager entity="service" onClose={() => setCat(false)} onChanged={() => { load(); loadCats(); }} />}
+      {importing && <ImportDrawer kind="services" onClose={() => setImporting(false)} onDone={() => { load(); loadCats(); }} />}
       <div className="flex items-center gap-3 flex-wrap">
         <button onClick={() => onOpen()} className={primaryBtn}><M n="add" c="text-sm" />New service</button>
+        {can("can_edit_labors") && <button onClick={() => setImporting(true)} className={ghostBtn}><M n="upload" c="text-sm" />Import</button>}
         <button onClick={() => setCat(true)} className={ghostBtn}><M n="inventory" c="text-sm" />Categories</button>
         <select aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
           <option value="">Category: All</option>
@@ -420,6 +425,8 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
     const walk = (ns: any[], d: number) => (ns || []).forEach((n) => { flat.push({ id: n.id, name: n.name, depth: d }); if (n.children?.length) walk(n.children, d + 1); });
     api.get<any>("/catalog/categories?entity_type=product").then((r) => { walk(r.tree || [], 0); setCats(flat); }).catch(() => setCats([]));
   };
+  const { can } = useMe();
+  const [importing, setImporting] = useState(false);
   const [err, setErr] = useState(false);
   const load = () => { setErr(false); api.get<{ items: Product[] }>("/catalog/products").then((r) => setItems(r.items || [])).catch(() => { setItems([]); setErr(true); }); };
   useEffect(() => { load(); loadCats(); }, [refresh]); // eslint-disable-line
@@ -434,8 +441,10 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
   return (
     <div className="space-y-4">
       {cat && <CategoryManager entity="product" onClose={() => setCat(false)} onChanged={loadCats} />}
+      {importing && <ImportDrawer kind="products" onClose={() => setImporting(false)} onDone={() => { load(); loadCats(); }} />}
       <div className="flex items-center gap-3 flex-wrap">
         <button onClick={() => onOpen()} className={primaryBtn}><M n="add" c="text-sm" />New product</button>
+        {(can("can_create_products") || can("can_edit_products") || can("can_manage_inventory")) && <button onClick={() => setImporting(true)} className={ghostBtn}><M n="upload" c="text-sm" />Import</button>}
         <button onClick={() => setCat(true)} className={ghostBtn}><M n="inventory" c="text-sm" />Categories</button>
         <select aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
           <option value="">Category: All</option>

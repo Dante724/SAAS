@@ -8,7 +8,7 @@ import { downloadSheet } from "../../lib/downloadSheet";
 import { isoDate } from "../../lib/localDate";
 import { missingBarcodesMessage } from "../../lib/barcodes";
 import { Product, Supplier, PO, Service, Bundle, Asset, currencySymbol, money } from "./types";
-import { analyzePaste, gridToRows, mergeRemap, loadRememberedMap, saveRememberedMap, FIELD_LABELS, FIELD_ORDER } from "./pasteMap";
+import { analyzePaste, gridToRows, mergeRemap, loadRememberedMap, saveRememberedMap, fileToGrid, mapByHeader, splitSerials, FIELD_LABELS, FIELD_ORDER } from "./pasteMap";
 import type { PasteField, PostRow } from "./pasteMap";
 import InventoryDrawer, { DrawerKind } from "./InventoryDrawer";
 import PODrawer from "./PODrawer";
@@ -952,7 +952,7 @@ function ReorderModal({ onClose, onCreated }: { onClose: () => void; onCreated?:
 
 /* ── New posting — bulk stock inflow → POST /inventory/postings ── */
 type PType = "standard" | "serialized" | "expiry";
-type ReviewRow = PostRow & {
+type ReviewRow = Omit<PostRow, "serials"> & {
   match_status: "matched" | "unsure" | "new"; part_id: string | null; part_name?: string | null; sku?: string | null;
   candidates?: { id: string; name: string; sku?: string; serialized?: boolean; expiry_tracking?: boolean }[]; chosen: string;
   serialized?: boolean; expiry_tracking?: boolean; ptype: PType;          // 16a: type for a new product
@@ -981,7 +981,10 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
   const [pasteOpen, setPasteOpen] = useState(false); const [pasteText, setPasteText] = useState("");
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null); const [info, setInfo] = useState<string | null>(null);
   const [mapCols, setMapCols] = useState<PasteField[] | null>(null); const [dataGrid, setDataGrid] = useState<string[][] | null>(null);
+  const [fileHeaders, setFileHeaders] = useState<string[] | null>(null);   // set when rows came from an uploaded sheet
+  const [genSerials, setGenSerials] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const sheetRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(loadFailed("locations"));
     api.get<any>("/suppliers").then((r) => setSuppliers(r.items || [])).catch(loadFailed("suppliers"));
@@ -995,17 +998,35 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
     const parsed = gridToRows(grid, map);
     if (!parsed.length) { setErr("Couldn't read any rows from that paste."); return; }
     setErr(null);
-    setRows(parsed); setDataGrid(grid); setMapCols(map); setPasteOpen(false); setPasteText("");
+    setRows(parsed); setDataGrid(grid); setMapCols(map); setFileHeaders(null); setPasteOpen(false); setPasteText("");
     setInfo(hadHeader ? "Detected a header row and mapped columns automatically — check the mapping below." : "Mapped columns automatically — check the mapping below if a column looks wrong.");
   }
-  const clearMap = () => { setMapCols(null); setDataGrid(null); };
+  const clearMap = () => { setMapCols(null); setDataGrid(null); setFileHeaders(null); };
+  const supQ = () => (supplierId ? `&supplier_id=${encodeURIComponent(supplierId)}` : "");
   function remap(col: number, field: PasteField) {
     if (!mapCols || !dataGrid) return;
     // a field can only map to one column: clear it elsewhere first
     const next = mapCols.map((f, c) => (field !== "ignore" && f === field && c !== col ? "ignore" : f)) as PasteField[];
     next[col] = field;
     // mergeRemap keeps any cell the user hand-edited while the mapping bar is open
-    setMapCols(next); setRows(mergeRemap(dataGrid, mapCols, next, rows)); saveRememberedMap(next);
+    setMapCols(next); setRows(mergeRemap(dataGrid, mapCols, next, rows));
+    // a sheet's mapping is remembered per supplier on the server; a paste's in this browser
+    if (fileHeaders) api.put(`/imports/posting/mapping${supplierId ? `?supplier_id=${encodeURIComponent(supplierId)}` : ""}`, { mapping: mapByHeader(fileHeaders, next) }).catch(() => {});
+    else saveRememberedMap(next);
+  }
+  async function onSheet(e: any) {
+    const f = e.target.files?.[0]; if (!f) return;
+    setBusy(true); setErr(null); setInfo(null);
+    try {
+      const fd = new FormData(); fd.append("file", f);
+      const r = await api.postForm<any>(`/imports/parse?kind=posting${supQ()}`, fd);
+      const { grid, map } = fileToGrid(r.headers || [], r.rows || [], r.suggested || {});
+      const parsed = gridToRows(grid, map);
+      if (!parsed.length) { setErr("Couldn't find any product rows in that file — check the column mapping."); }
+      setRows(parsed.length ? parsed : [blank()]); setDataGrid(grid); setMapCols(map); setFileHeaders(r.headers || []);
+      setInfo(`Read ${parsed.length} line${parsed.length === 1 ? "" : "s"} from ${r.file_name || "the file"}. Check the column mapping below — it's remembered${supplierId ? " for this supplier" : ""}.`);
+    } catch (e: any) { setErr(e.message || "Could not read file"); }
+    finally { setBusy(false); if (sheetRef.current) sheetRef.current.value = ""; }
   }
   async function onFile(e: any) {
     const f = e.target.files?.[0]; if (!f) return;
@@ -1024,7 +1045,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
     if (!clean.length) { setErr("Add at least one row (code, MPN or name + qty)."); return; }
     setBusy(true); setErr(null);
     try {
-      const r = await api.post<any>("/inventory/postings/preview", { rows: clean.map((x) => ({ code: x.code || null, mpn: x.mpn || null, name: x.name || null, qty: Number(x.qty), purchase_price: Number(x.purchase_price) || null, markup_pct: x.markup_pct ? Number(x.markup_pct) : null, product_type: x.product_type || null })) });
+      const r = await api.post<any>("/inventory/postings/preview", { rows: clean.map((x) => ({ code: x.code || null, mpn: x.mpn || null, name: x.name || null, qty: Number(x.qty), purchase_price: Number(x.purchase_price) || null, markup_pct: x.markup_pct ? Number(x.markup_pct) : null, product_type: x.product_type || null, ...(splitSerials(x.serials).length ? { serials: splitSerials(x.serials) } : {}) })) });
       // Back → edit → review again keeps what was scanned and chosen for the same row.
       setReview((r.rows || []).map((rr: any) => {
         const k = kept[rowKey(rr)];
@@ -1043,12 +1064,12 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
   const badSerials = (review || []).filter((r) => rowSerialized(r) && (r.serialState?.blocked || r.serialState?.checking));
   async function doCommit() {
     if (!review) return;
-    if (needSerials.length) { setErr(`${needSerials.length} row${needSerials.length === 1 ? " still needs" : "s still need"} a serial for each unit.`); return; }
+    if (needSerials.length && !genSerials) { setErr(`${needSerials.length} row${needSerials.length === 1 ? " still needs" : "s still need"} a serial for each unit.`); return; }
     if (badSerials.length) { setErr("Fix the serials marked in red first."); return; }
     setBusy(true); setErr(null);
     try {
       const body = {
-        location_id: locId, supplier_id: supplierId || null, note: note || null, bin_id: putBin?.id || null,
+        location_id: locId, supplier_id: supplierId || null, note: note || null, bin_id: putBin?.id || null, generate_serials: genSerials,
         rows: review.map((r) => r.chosen && r.chosen !== "__new__"
           ? { part_id: r.chosen, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null, ...extras(r) }
           : { new_name: (r.name || r.code || r.mpn || "").trim(), new_sku: r.code || null, new_mpn: r.mpn || null, new_type: r.ptype, qty: Number(r.qty), purchase_price: Number(r.purchase_price) || null, markup_pct: r.markup_pct ? Number(r.markup_pct) : null, ...extras(r) }),
@@ -1080,9 +1101,11 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
 
           {!review ? (<>
             <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={onFile} />
+            <input ref={sheetRef} type="file" accept=".xlsx,.csv,text/csv" className="hidden" onChange={onSheet} />
             <div className="flex items-center justify-between flex-wrap gap-2">
-              <label className={lbl2} style={{ marginBottom: 0 }}>Rows — Code/SKU · MPN · Name · Qty · Cost · Markup%</label>
-              <div className="flex gap-2">
+              <label className={lbl2} style={{ marginBottom: 0 }}>Rows — Code/SKU · MPN · Name · Qty · Cost · Markup% · Serials</label>
+              <div className="flex gap-2 flex-wrap">
+                <button onClick={() => sheetRef.current?.click()} disabled={busy} className="text-primary text-xs font-semibold flex items-center gap-1 disabled:opacity-50"><M n="upload" c="text-sm" />Excel / CSV file</button>
                 <button onClick={() => fileRef.current?.click()} disabled={busy} className="text-primary text-xs font-semibold flex items-center gap-1 disabled:opacity-50"><M n="document_scanner" c="text-sm" />Scan invoice / photo</button>
                 <button onClick={() => setPasteOpen((o) => !o)} className="text-primary text-xs font-semibold flex items-center gap-1"><M n="content_paste" c="text-sm" />Paste from Excel</button>
                 <button onClick={() => { setRows([...rows, blank()]); clearMap(); }} className="text-primary text-xs font-semibold">+ Add row</button>
@@ -1108,13 +1131,13 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
                     </div>
                   ))}
                 </div>
-                <p className="text-[11px] text-ink-tertiary mt-1.5">Remembered for next time.</p>
+                <p className="text-[11px] text-ink-tertiary mt-1.5">{fileHeaders && supplierId ? "Remembered for this supplier." : "Remembered for next time."}</p>
               </div>
             )}
             <div className="space-y-1.5">
               <div className="flex items-center gap-1.5 text-[11px] font-bold text-ink-tertiary px-1"><span className="w-24">Code/SKU</span><span className="w-24">MPN</span><span className="flex-1">Name</span><span className="w-12 text-right">Qty</span><span className="w-16 text-right">Cost</span><span className="w-12 text-right">Mk%</span><span className="w-8" /></div>
               {rows.map((r, i) => (
-                <div key={i} className="flex items-center gap-1.5">
+                <div key={i} className="flex items-center gap-1.5 flex-wrap">
                   <input value={r.code} onChange={(e) => setRow(i, "code", e.target.value)} placeholder="SKU" aria-label="Code or SKU" className={`${fld} w-24 min-w-0`} />
                   <input value={r.mpn} onChange={(e) => setRow(i, "mpn", e.target.value)} placeholder="MPN" aria-label="MPN" className={`${fld} w-24 min-w-0`} />
                   <input value={r.name} onChange={(e) => setRow(i, "name", e.target.value)} placeholder="Product name (if new)" className={`${fld} flex-1`} />
@@ -1122,17 +1145,19 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
                   <input type="number" min={0} value={r.purchase_price} onChange={(e) => setRow(i, "purchase_price", Number(e.target.value))} className={`${fld} w-16 text-right`} />
                   <input type="number" min={0} value={r.markup_pct} onChange={(e) => setRow(i, "markup_pct", Number(e.target.value))} className={`${fld} w-12 text-right`} />
                   <button aria-label="Delete" onClick={() => { setRows(rows.filter((_, j) => j !== i)); clearMap(); }} className="w-8 h-8 rounded-lg hover:bg-rose-50 text-ink-tertiary hover:text-rose-600 flex items-center justify-center"><M n="delete" c="text-sm" /></button>
+                  {r.serials !== undefined && <input value={r.serials} onChange={(e) => setRow(i, "serials", e.target.value)} placeholder="Serials, comma-separated" aria-label="Serial numbers" className={`${fld} basis-full text-xs font-mono`} />}
                 </div>
               ))}
             </div>
             <div><label className={lbl2}>Note / reference</label><textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className={`${fld} w-full`} /></div>
           </>) : (<>
             <p className="text-xs text-ink-secondary">Confirm each row before stock moves. {newCount > 0 && <b className="text-primary">{newCount} new product{newCount === 1 ? "" : "s"} will be created.</b>}</p>
-            {needSerials.length > 0 && (
+            {needSerials.length > 0 && !genSerials && (
               <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2 flex items-center gap-1.5">
                 <M n="barcode_scanner" c="text-sm" />{needSerials.length} row{needSerials.length === 1 ? " still needs" : "s still need"} a serial for each unit. Scan them below.
               </div>
             )}
+            <label className="flex items-center gap-2 text-xs text-ink-secondary"><input type="checkbox" checked={genSerials} onChange={(e) => setGenSerials(e.target.checked)} />Generate the missing serial numbers for me</label>
             <div className="space-y-1.5">
               {review.map((r, i) => {
                 const ser = rowSerialized(r), exp = rowExpiry(r), isNew = !r.chosen || r.chosen === "__new__";
@@ -1189,7 +1214,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
           <button onClick={review ? backToEdit : onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">{review ? "Back" : "Cancel"}</button>
           {!review
             ? <button onClick={doPreview} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Matching…" : "Review & match →"}</button>
-            : <button onClick={doCommit} disabled={busy || needSerials.length > 0 || badSerials.length > 0} title={needSerials.length ? "Enter a serial for each unit first" : undefined} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Posting…" : "Post stock"}</button>}
+            : <button onClick={doCommit} disabled={busy || (needSerials.length > 0 && !genSerials) || badSerials.length > 0} title={needSerials.length && !genSerials ? "Enter a serial for each unit first" : undefined} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Posting…" : "Post stock"}</button>}
         </div>
       </div>
     </div>
