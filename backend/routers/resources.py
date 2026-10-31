@@ -8,7 +8,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Resource, Employee
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, require_perm
 
 router = APIRouter(prefix="/api/resources", tags=["resources"])
 
@@ -40,7 +40,7 @@ class ResourceIn(BaseModel):
 async def create_resource(
     data: ResourceIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     count = (await db.execute(select(func.count()).select_from(Resource)
         .where(Resource.org_id == current.org_id))).scalar() or 0
@@ -57,7 +57,7 @@ async def update_resource(
     rid: str,
     data: ResourceIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     r = (await db.execute(select(Resource).where(
         Resource.id == rid, Resource.org_id == current.org_id))).scalar_one_or_none()
@@ -75,7 +75,7 @@ async def update_resource(
 async def delete_resource(
     rid: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     r = (await db.execute(select(Resource).where(
         Resource.id == rid, Resource.org_id == current.org_id))).scalar_one_or_none()

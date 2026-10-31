@@ -14,15 +14,27 @@ from backend.config import settings
 _PREFIX = "enc:v1:"
 
 
+def fernet_keys() -> list:
+    """Fernet instances for TOKEN_ENCRYPTION_KEY, which may list several comma-separated keys,
+    newest first: encrypt with the first, decrypt with any (key rotation)."""
+    from cryptography.fernet import Fernet
+    out = []
+    for k in (getattr(settings, "TOKEN_ENCRYPTION_KEY", "") or "").split(","):
+        k = k.strip()
+        if k:
+            try:
+                out.append(Fernet(k.encode()))
+            except Exception:  # noqa: BLE001 — a malformed key is skipped (config check rejects it when deployed)
+                pass
+    return out
+
+
 def _fernet():
-    key = getattr(settings, "TOKEN_ENCRYPTION_KEY", "") or ""
-    if not key:
+    keys = fernet_keys()
+    if not keys:
         return None
-    try:
-        from cryptography.fernet import Fernet
-        return Fernet(key.encode() if isinstance(key, str) else key)
-    except Exception:
-        return None
+    from cryptography.fernet import MultiFernet
+    return MultiFernet(keys)
 
 
 def is_active() -> bool:
@@ -55,3 +67,8 @@ def decrypt(value):
         return f.decrypt(value[len(_PREFIX):].encode()).decode()
     except Exception:
         return value
+
+
+def is_encrypted(value) -> bool:
+    """True for our prefixed ciphertext (whether or not the current key can open it)."""
+    return isinstance(value, str) and value.startswith(_PREFIX)

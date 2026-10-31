@@ -15,7 +15,9 @@ def test_encrypt_roundtrip():
     assert tok and "sk_live_abc" not in tok           # ciphertext, not plaintext
     assert org_creds._decrypt(tok)["secret_key"] == "sk_live_abc"
     assert org_creds._decrypt(None) == {}
-    assert org_creds._decrypt("garbage") == {}         # tamper → empty, never raises
+    # tamper → refused, never "no keys" (audit M10: that fell back to the operator's keys)
+    with pytest.raises(org_creds.CredentialsUnreadable):
+        org_creds._decrypt("garbage")
 
 
 async def test_per_org_isolation(client, tenant, db):

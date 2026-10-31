@@ -34,7 +34,7 @@ async def test_aliases_resolve_to_same_values(client, tenant):
     tpl = (await client.post("/api/documents/templates", json={
         "name": "Alias", "doc_type": "work_order", "body_html": body}, headers=tenant)).json()["id"]
     html = (await client.get(f"/api/documents/render/{oid}/{tpl}", headers=tenant)).text
-    # each Orderry-exact name renders the same value as its RepairOS counterpart
+    # each Orderry-exact name renders the same value as its Tekly counterpart
     import re
     def val(label):
         return re.search(rf"{label} (.*?)\|", html + "|").group(1)

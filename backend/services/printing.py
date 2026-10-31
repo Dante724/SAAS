@@ -1,24 +1,17 @@
 """Build 95 — printing.
 
-Everything the shop physically hands over or sticks on a shelf: product labels and
-price tags (with real scannable barcodes), and the stock documents — posting, write-off,
-transfer, and the stocktake settlement act.
-
-Barcodes are generated with reportlab's own Code128/QR, so there's no extra dependency
-and no image round-trip: the barcode is drawn as vectors and stays crisp at any printer
-resolution, which matters because a fuzzy barcode is a barcode that doesn't scan.
+The stock documents the shop hands over — write-off, transfer, return, purchase order and
+the stocktake settlement act. (ii144c: labels and price tags print from label templates as HTML —
+routers/documents.py.)
 """
 import io
-from datetime import datetime
+from xml.sax.saxutils import escape as _x
 from typing import Optional
 
-from reportlab.graphics.barcode import code128
-from reportlab.graphics.shapes import Drawing
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.pdfgen import canvas as pdfcanvas
 from reportlab.platypus import (
     Paragraph,
     SimpleDocTemplate,
@@ -26,93 +19,10 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+from backend.services.dates import now_utc
 
-FIELDS = ["name", "sku", "price", "barcode", "category", "brand"]
-
-
-# ── labels & price tags ──────────────────────────────────────────────────────
-def render_labels(items: list[dict], *, width_mm: float = 50, height_mm: float = 30,
-                  fields: Optional[list[str]] = None, barcode_type: str = "code128",
-                  copies: int = 1, org_name: str = "") -> bytes:
-    """Lay labels out on A4, as many per sheet as the size allows.
-
-    Each label is its own little canvas; anything that doesn't fit is simply not drawn
-    rather than overflowing into its neighbour — a label that bleeds into the next one
-    ruins the whole sheet.
-    """
-    fields = fields or ["name", "sku", "price", "barcode"]
-    buf = io.BytesIO()
-    c = pdfcanvas.Canvas(buf, pagesize=A4)
-    page_w, page_h = A4
-
-    lw, lh = width_mm * mm, height_mm * mm
-    margin = 8 * mm
-    cols = max(1, int((page_w - 2 * margin) // lw))
-    rows = max(1, int((page_h - 2 * margin) // lh))
-    per_page = cols * rows
-
-    flat = []
-    for it in items:
-        flat.extend([it] * max(1, copies))
-
-    for i, it in enumerate(flat):
-        slot = i % per_page
-        if i and slot == 0:
-            c.showPage()
-        col = slot % cols
-        row = slot // cols
-        x = margin + col * lw
-        y = page_h - margin - (row + 1) * lh
-
-        c.setStrokeColor(colors.HexColor("#DDDDDD"))
-        c.rect(x, y, lw, lh, stroke=1, fill=0)
-
-        cur = y + lh - 5 * mm
-        pad = 3 * mm
-
-        if "name" in fields:
-            c.setFont("Helvetica-Bold", 8)
-            name = (it.get("name") or "")[:28]
-            c.drawString(x + pad, cur, name)
-            cur -= 4 * mm
-        if "brand" in fields and it.get("brand"):
-            c.setFont("Helvetica", 6)
-            c.drawString(x + pad, cur, str(it["brand"])[:30])
-            cur -= 3 * mm
-        if "sku" in fields and it.get("sku"):
-            c.setFont("Helvetica", 6)
-            c.drawString(x + pad, cur, f"SKU {it['sku']}")
-            cur -= 3.5 * mm
-        if "price" in fields and it.get("price") is not None:
-            c.setFont("Helvetica-Bold", 11)
-            c.drawString(x + pad, cur, f"{it['price']}")
-            cur -= 5 * mm
-
-        code = it.get("barcode") or it.get("sku")
-        if "barcode" in fields and code:
-            avail = cur - y - 2 * mm       # what's left below the text
-            if avail > 6 * mm:
-                if barcode_type == "qr":
-                    from reportlab.graphics import renderPDF
-                    from reportlab.graphics.barcode import qr
-                    size = min(avail, lh * 0.4)
-                    d = Drawing(size, size)
-                    d.add(qr.QrCodeWidget(str(code), barWidth=size, barHeight=size))
-                    renderPDF.draw(d, c, x + pad, y + 2 * mm)
-                else:
-                    bh = min(avail, 9 * mm)
-                    bar = code128.Code128(str(code), barHeight=bh, barWidth=0.42 * mm / 1.2,
-                                          humanReadable=True)
-                    max_w = lw - 2 * pad
-                    if bar.width > max_w:      # shrink until it fits the label
-                        bar = code128.Code128(str(code), barHeight=bh,
-                                              barWidth=(0.42 * mm / 1.2) * (max_w / bar.width),
-                                              humanReadable=True)
-                    bar.drawOn(c, x + pad, y + 2 * mm)
-
-    c.showPage()
-    c.save()
-    return buf.getvalue()
+# Fields a label template may show (validated by routers/printing.py templates).
+FIELDS = ["name", "sku", "mpn", "price", "barcode", "category", "brand"]
 
 
 # ── stock documents ──────────────────────────────────────────────────────────
@@ -125,8 +35,9 @@ def _styles():
 
 def _doc_table(headers: list[str], rows: list[list], totals: Optional[list] = None) -> Table:
     data = [headers] + rows
-    if totals:
-        data.append(totals)
+    # totals: one row, or several (subtotal, a line per tax, total); the last one is bold.
+    total_rows = totals if totals and isinstance(totals[0], (list, tuple)) else ([totals] if totals else [])
+    data += [list(r) for r in total_rows]
     t = Table(data, repeatRows=1, hAlign="LEFT")
     style = [
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F1F1F1")),
@@ -138,9 +49,9 @@ def _doc_table(headers: list[str], rows: list[list], totals: Optional[list] = No
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
         ("TOPPADDING", (0, 0), (-1, -1), 5),
     ]
-    if totals:
+    if total_rows:
         style += [("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
-                  ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#FAFAFA"))]
+                  ("BACKGROUND", (0, -len(total_rows)), (-1, -1), colors.HexColor("#FAFAFA"))]
     t.setStyle(TableStyle(style))
     return t
 
@@ -159,6 +70,7 @@ _DOC_PHRASES = {
     "Total":     {"hi": "कुल", "es": "Total", "fr": "Total", "de": "Gesamt", "pt": "Total", "ar": "المجموع", "ru": "Итого", "zh": "总计", "ja": "合計"},
     "Subtotal":  {"hi": "उप-योग", "es": "Subtotal", "fr": "Sous-total", "de": "Zwischensumme", "pt": "Subtotal", "ar": "المجموع الفرعي", "ru": "Подытог", "zh": "小计", "ja": "小計"},
     "Tax":       {"hi": "कर", "es": "Impuesto", "fr": "Taxe", "de": "Steuer", "pt": "Imposto", "ar": "ضريبة", "ru": "Налог", "zh": "税", "ja": "税"},
+    "Credit note": {"hi": "क्रेडिट नोट", "es": "Nota de crédito", "fr": "Avoir", "de": "Gutschrift", "pt": "Nota de crédito", "ar": "إشعار دائن", "ru": "Кредит-нота", "zh": "贷项通知单", "ja": "クレジットノート"},
     "Amount":    {"hi": "राशि", "es": "Importe", "fr": "Montant", "de": "Betrag", "pt": "Valor", "ar": "المبلغ", "ru": "Сумма", "zh": "金额", "ja": "金額"},
 }
 
@@ -173,7 +85,8 @@ def _t(phrase: str, lang: str) -> str:
 def render_document(*, title: str, org_name: str, number: Optional[str],
                     meta: list[tuple], headers: list[str], rows: list[list],
                     totals: Optional[list] = None, footer: Optional[str] = None,
-                    lang: str = "en") -> bytes:
+                    lang: str = "en", header_lines: Optional[list[str]] = None,
+                    tz: Optional[str] = None) -> bytes:
     """One layout for every stock document — they differ only in their columns, so
     giving each its own renderer would just be four ways to drift apart.
 
@@ -188,12 +101,16 @@ def render_document(*, title: str, org_name: str, number: Optional[str],
     ss = _styles()
     story = []
 
-    story.append(Paragraph(org_name or "", ss["Small"]))
-    story.append(Paragraph(f"{title}{f' — {number}' if number else ''}", ss["Title"]))
+    # Paragraph() parses its text as markup (<img src=...>, <link>, <font>...). Everything here
+    # is data — supplier names, notes, references — so escape it to plain text.
+    story.append(Paragraph(_x(org_name or ""), ss["Small"]))
+    for line in header_lines or []:   # the issuer's address / contact lines
+        story.append(Paragraph(_x(str(line)), ss["Small"]))
+    story.append(Paragraph(_x(f"{title}{f' — {number}' if number else ''}"), ss["Title"]))
     story.append(Spacer(1, 4))
 
     if meta:
-        mt = Table([[Paragraph(f"<b>{k}</b>", ss["Small"]), Paragraph(str(v), ss["Small"])]
+        mt = Table([[Paragraph(f"<b>{_x(str(k))}</b>", ss["Small"]), Paragraph(_x(str(v)), ss["Small"])]
                     for k, v in meta if v is not None], hAlign="LEFT", colWidths=[90, 320])
         mt.setStyle(TableStyle([("BOTTOMPADDING", (0, 0), (-1, -1), 2),
                                 ("TOPPADDING", (0, 0), (-1, -1), 2)]))
@@ -204,7 +121,7 @@ def render_document(*, title: str, org_name: str, number: Optional[str],
 
     if footer:
         story.append(Spacer(1, 14))
-        story.append(Paragraph(footer, ss["Small"]))
+        story.append(Paragraph(_x(str(footer)), ss["Small"]))
 
     story.append(Spacer(1, 22))
     sig = Table([["Prepared by ______________________", "Approved by ______________________"]],
@@ -213,8 +130,12 @@ def render_document(*, title: str, org_name: str, number: Optional[str],
                              ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#666666"))]))
     story.append(sig)
     story.append(Spacer(1, 6))
-    story.append(Paragraph(
-        f"Generated {datetime.utcnow():%Y-%m-%d %H:%M} UTC", ss["Small"]))
+    # On the shop's clock when we know it (launch B6), else UTC as before.
+    generated, zone = now_utc(), "UTC"
+    if tz and tz != "UTC":
+        from backend.services.dates import utc_to_wall
+        generated, zone = utc_to_wall(generated, tz), tz
+    story.append(Paragraph(_x(f"Generated {generated:%Y-%m-%d %H:%M} {zone}"), ss["Small"]))
 
     doc.build(story)
     return buf.getvalue()

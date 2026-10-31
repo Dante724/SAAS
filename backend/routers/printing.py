@@ -3,6 +3,7 @@
 Label templates live under Settings; the print endpoints return a PDF stream for the
 products or documents you ask for.
 """
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import (
-    Client,
     Employee,
     EmployeeBalanceLedger,
     Invoice,
@@ -21,9 +21,6 @@ from backend.models import (
     Organisation,
     POLine,
     Part,
-    Posting,
-    PostingLine,
-    PriceTypeItem,
     PurchaseOrder,
     PurchaseReturn,
     PurchaseReturnLine,
@@ -36,8 +33,11 @@ from backend.models import (
     WriteOffLine,
 )
 from backend.services import printing
-from backend.services.auth import get_current_employee, require_perm
-from backend.services.money import q2, q4
+from backend.services.codes import (
+    validate_barcode_options,
+)
+from backend.services.auth import assert_perm, get_current_employee, require_perm
+from backend.services.money import q2
 
 router = APIRouter(prefix="/api/print", tags=["print"])
 
@@ -65,6 +65,8 @@ def _ser_tpl(t: LabelTemplate) -> dict:
             "width_mm": t.width_mm, "height_mm": t.height_mm,
             "price_type_id": t.price_type_id, "is_default": t.is_default,
             "barcode_type": t.barcode_type,
+            "barcode_field": t.barcode_field,   # null = first filled of barcode/sku/code
+            "barcode_types": t.barcode_types if isinstance(t.barcode_types, dict) else {},
             "fields": t.fields if isinstance(t.fields, list) else []}
 
 
@@ -85,15 +87,19 @@ class TemplateIn(BaseModel):
     height_mm: float = 30
     price_type_id: Optional[str] = None
     fields: list[str] = ["name", "sku", "price", "barcode"]
-    barcode_type: str = "code128"       # code128|qr
+    barcode_type: str = "code128"       # code128|ean13|upca|qr — default for any field
+    barcode_field: Optional[str] = None  # opa: barcode|sku|code|mpn (null = first filled)
+    barcode_types: dict[str, str] = {}  # opa: symbology per field
     is_default: bool = False
 
 
 def _validate(data: TemplateIn) -> None:
     if data.kind not in ("label", "price_tag"):
         raise HTTPException(422, "kind must be label|price_tag")
-    if data.barcode_type not in ("code128", "qr"):
-        raise HTTPException(422, "barcode_type must be code128|qr")
+    try:
+        validate_barcode_options(data.barcode_field, data.barcode_types, data.barcode_type)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
     bad = set(data.fields) - set(printing.FIELDS)
     if bad:
         raise HTTPException(422, f"Unknown fields: {sorted(bad)}")
@@ -127,7 +133,7 @@ async def update_template(
         LabelTemplate.org_id == current.org_id))).scalar_one_or_none()
     if not t:
         raise HTTPException(404, "Template not found")
-    for k, v in data.model_dump().items():
+    for k, v in data.model_dump(exclude_unset=True).items():   # A1: partial bodies keep the rest
         setattr(t, k, v)
     await db.commit()
     return _ser_tpl(t)
@@ -148,102 +154,14 @@ async def delete_template(
     return {"ok": True}
 
 
-# ── print labels ─────────────────────────────────────────────────────────────
-class PrintLabelsIn(BaseModel):
-    part_ids: list[str]
-    template_id: Optional[str] = None
-    copies: int = 1
-
-
-@router.post("/labels")
-async def print_labels(
-    data: PrintLabelsIn,
-    db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
-):
-    """A PDF sheet of labels for the given products, using a saved template (or a
-    sensible default if none is set up yet)."""
-    if not data.part_ids:
-        raise HTTPException(400, "Pick at least one product")
-    if data.copies < 1 or data.copies > 100:
-        raise HTTPException(422, "copies must be between 1 and 100")
-
-    tpl = None
-    if data.template_id:
-        tpl = (await db.execute(select(LabelTemplate).where(
-            LabelTemplate.id == data.template_id,
-            LabelTemplate.org_id == current.org_id))).scalar_one_or_none()
-        if not tpl:
-            raise HTTPException(404, "Template not found")
-    else:
-        tpl = (await db.execute(select(LabelTemplate).where(
-            LabelTemplate.org_id == current.org_id,
-            LabelTemplate.is_default == True))).scalars().first()  # noqa: E712
-
-    fields = (tpl.fields if tpl and isinstance(tpl.fields, list)
-              else ["name", "sku", "price", "barcode"])
-    parts = (await db.execute(select(Part).where(
-        Part.id.in_(data.part_ids), Part.org_id == current.org_id))).scalars().all()
-    if not parts:
-        raise HTTPException(404, "No matching products")
-
-    # a price-tag template can price from a specific price list, not just the base price
-    overrides: dict = {}
-    if tpl and tpl.price_type_id:
-        rows = (await db.execute(select(PriceTypeItem).where(
-            PriceTypeItem.org_id == current.org_id,
-            PriceTypeItem.price_type_id == tpl.price_type_id,
-            PriceTypeItem.item_type == "product",
-            PriceTypeItem.item_id.in_([p.id for p in parts])))).scalars().all()
-        overrides = {r.item_id: r.price for r in rows}
-
-    items = [{
-        "name": p.name, "sku": p.sku, "barcode": p.barcode or p.sku,
-        "brand": getattr(p, "brand", None), "category": getattr(p, "category", None),
-        "price": overrides.get(p.id, p.sell_price),
-    } for p in parts]
-
-    pdf = printing.render_labels(
-        items,
-        width_mm=tpl.width_mm if tpl else 50,
-        height_mm=tpl.height_mm if tpl else 30,
-        fields=fields,
-        barcode_type=tpl.barcode_type if tpl else "code128",
-        copies=data.copies,
-        org_name=await _org_name(db, current.org_id))
-    return _pdf(pdf, "labels.pdf")
+# Product labels print as HTML from /api/documents (documents.render_labels). The old reportlab
+# PDF sheet here (POST /api/print/labels), and the print view of the removed stock-docs postings,
+# had no caller and were deleted (audit 29 Oct 2026). ii144c: every label — products, bins,
+# serial units, assets, clients — prints from a label DocumentTemplate through the HTML renderer
+# in routers/documents.py (render-labels, render-bin-labels, render-serial-labels, …).
 
 
 # ── print stock documents ────────────────────────────────────────────────────
-@router.get("/postings/{doc_id}")
-async def print_posting(
-    doc_id: str,
-    db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
-):
-    d = (await db.execute(select(Posting).where(
-        Posting.id == doc_id, Posting.org_id == current.org_id))).scalar_one_or_none()
-    if not d:
-        raise HTTPException(404, "Posting not found")
-    lines = (await db.execute(select(PostingLine, Part.name, Part.sku)
-        .join(Part, PostingLine.part_id == Part.id)
-        .where(PostingLine.posting_id == doc_id))).all()
-
-    rows = [[name, sku or "", f"{ln.qty:g}", f"{float(ln.unit_cost or 0):.2f}",
-             f"{float(ln.total or 0):.2f}"] for ln, name, sku in lines]
-    pdf = printing.render_document(
-        title="Goods received", org_name=await _org_name(db, current.org_id), lang=await _org_lang(db, current.org_id),
-        number=d.number,
-        meta=[("Date", d.created_at.strftime("%Y-%m-%d") if d.created_at else None),
-              ("Reference", d.reference), ("Settlement", d.settlement),
-              ("Status", d.status)],
-        headers=["Product", "SKU", "Qty", "Unit cost", "Total"],
-        rows=rows,
-        totals=["", "", "", "Total", f"{float(d.total or 0):.2f}"],
-        footer=d.note)
-    return _pdf(pdf, f"posting-{d.number or doc_id[:8]}.pdf")
-
-
 @router.get("/purchase-order/{po_id}")
 async def print_purchase_order(
     po_id: str,
@@ -274,7 +192,8 @@ async def print_purchase_order(
             ("Ordered", po.ordered_at.strftime("%Y-%m-%d") if po.ordered_at else None),
             ("Expected", po.expected_at.strftime("%Y-%m-%d") if po.expected_at else None),
             ("Status", po.status)]
-    pdf = printing.render_document(
+    pdf = await asyncio.to_thread(
+        printing.render_document,
         title="Purchase order", org_name=await _org_name(db, current.org_id), lang=await _org_lang(db, current.org_id),
         number=po.po_number,
         meta=[m for m in meta if m[1]],
@@ -288,8 +207,9 @@ async def print_purchase_order(
 @router.get("/invoices/{invoice_id}")
 async def print_invoice(
     invoice_id: str,
+    itemised: bool = False,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_invoices")),
 ):
     """Build 144dv — a printable/PDF invoice whose line items honour the invoice's
     Order-display mode (detailed / simplified / one_line) across every work order it
@@ -299,9 +219,36 @@ async def print_invoice(
         Invoice.id == invoice_id, Invoice.org_id == current.org_id))).scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    if itemised:   # every line as itself, kits included (a customer can always ask for one)
+        await assert_perm(db, current, "can_print_itemised_copy")
+        from backend.services.audit import record as _audit
+        await _audit(db, org_id=current.org_id, actor_id=current.id, action="invoice.itemised_copy",
+                     entity_type="invoice", entity_id=inv.id, diff=None)
+        await db.commit()
     pdf = await build_invoice_pdf(db, inv, org_name=await _org_name(db, current.org_id),
-                                  lang=await _org_lang(db, current.org_id))
-    return _pdf(pdf, f"invoice-{inv.invoice_number or invoice_id[:8]}.pdf")
+                                  lang=await _org_lang(db, current.org_id), itemised=itemised)
+    suffix = "-itemised" if itemised else ""
+    return _pdf(pdf, f"invoice-{inv.invoice_number or invoice_id[:8]}{suffix}.pdf")
+
+
+@router.get("/credit-notes/{cn_id}")
+async def print_credit_note(
+    cn_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_view_credit_notes")),
+):
+    """opb — the credit note as a PDF (same layout as invoices)."""
+    from sqlalchemy.orm import selectinload
+
+    from backend.models import CreditNote
+    from backend.services.credit_notes import build_credit_note_pdf
+    cn = (await db.execute(select(CreditNote).where(CreditNote.id == cn_id, CreditNote.org_id == current.org_id)
+                           .options(selectinload(CreditNote.lines)))).scalar_one_or_none()
+    if not cn:
+        raise HTTPException(404, "Credit note not found")
+    pdf = await build_credit_note_pdf(db, cn, org_name=await _org_name(db, current.org_id),
+                                      lang=await _org_lang(db, current.org_id))
+    return _pdf(pdf, f"credit-note-{cn.number or cn_id[:8]}.pdf")
 
 
 @router.get("/write-offs/{doc_id}")
@@ -322,7 +269,8 @@ async def print_write_off(
              # only comments marked public belong on a document that leaves the building
              (ln.comment or "") if ln.comment_public else ""]
             for ln, name, sku in lines]
-    pdf = printing.render_document(
+    pdf = await asyncio.to_thread(
+        printing.render_document,
         title="Write-off act", org_name=await _org_name(db, current.org_id), lang=await _org_lang(db, current.org_id),
         number=d.number,
         meta=[("Date", d.created_at.strftime("%Y-%m-%d") if d.created_at else None),
@@ -351,7 +299,8 @@ async def print_return(
 
     rows = [[name, sku or "", f"{ln.qty:g}", f"{float(ln.unit_cost or 0):.2f}",
              f"{float(ln.total or 0):.2f}"] for ln, name, sku in lines]
-    pdf = printing.render_document(
+    pdf = await asyncio.to_thread(
+        printing.render_document,
         title="Return to supplier", org_name=await _org_name(db, current.org_id), lang=await _org_lang(db, current.org_id),
         number=d.number,
         meta=[("Date", d.created_at.strftime("%Y-%m-%d") if d.created_at else None),
@@ -381,7 +330,8 @@ async def print_transfer(
     rows = [[name, sku or "", f"{ln.qty:g}",
              "" if ln.qty_received is None else f"{ln.qty_received:g}"]
             for ln, name, sku in lines]
-    pdf = printing.render_document(
+    pdf = await asyncio.to_thread(
+        printing.render_document,
         title="Stock transfer", org_name=await _org_name(db, current.org_id), lang=await _org_lang(db, current.org_id),
         number=t.transfer_number,
         meta=[("Status", t.status),
@@ -422,7 +372,8 @@ async def print_settlement_act(
         rows.append([part.name, part.sku or "", f"{ln.system_qty or 0:g}",
                      f"{ln.counted_qty:g}", f"{v:+g}", f"{value:+.2f}", flags])
 
-    pdf = printing.render_document(
+    pdf = await asyncio.to_thread(
+        printing.render_document,
         title="Stocktake settlement act", org_name=await _org_name(db, current.org_id), lang=await _org_lang(db, current.org_id),
         number=st_id[:8],
         meta=[("Type", st.kind), ("Status", st.status),
@@ -463,10 +414,14 @@ async def print_payroll_statement(
         from backend.models import Role
         role = (await db.execute(select(Role).where(
             Role.id == current.role_id))).scalar_one_or_none()
-        if (role.permissions or {}).get("can_manage_payroll") is False if role else False:
+        from backend.services.permissions import role_allows as _ra
+        if role is None or not _ra(role, "can_manage_payroll"):
             can_manage = False
     if current.id != employee_id and not can_manage:
         raise HTTPException(403, "You can only print your own payroll statement")
+    if current.id != employee_id:
+        from backend.services.payroll_views import assert_payroll_scope
+        await assert_payroll_scope(db, current, employee_id)
 
     q = select(EmployeeBalanceLedger).where(
         EmployeeBalanceLedger.org_id == current.org_id,
@@ -493,7 +448,8 @@ async def print_payroll_statement(
             e.event or "", e.note or "",
             f"{amt:+.2f}", f"{running:.2f}"])
 
-    pdf = printing.render_document(
+    pdf = await asyncio.to_thread(
+        printing.render_document,
         title="Payroll statement", org_name=await _org_name(db, current.org_id), lang=await _org_lang(db, current.org_id),
         number=emp.name,
         meta=[("Employee", emp.name),

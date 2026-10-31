@@ -14,7 +14,7 @@ is what lets predicted ready-time stay off until the data has earned trust.
 """
 from __future__ import annotations
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import timedelta
 from statistics import mean, median
 from typing import Optional
 
@@ -22,9 +22,20 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import Order, OrderStatus, OrderStatusLog
+from backend.services.dates import now_utc
 
 MIN_N = 5            # samples in a bucket before we call a prediction trustworthy
 STALL_FACTOR = 1.0   # stalled when elapsed > p80 * factor (p80 already generous)
+STALL_FLOOR_MIN = 30  # never call a job stalled before it has sat this long in a status
+
+
+def is_stalled(elapsed_min: float, typical_min: float, n: int) -> bool:
+    """Stalled = past the bucket's p80 (x factor), but only once the bucket has MIN_N samples
+    and the job has sat at least STALL_FLOOR_MIN. Launch QA F1: a single sample used to flag
+    every new job ("Running long 0 min vs ~0 min typical")."""
+    if n < MIN_N:
+        return False
+    return elapsed_min > max(typical_min * STALL_FACTOR, STALL_FLOOR_MIN)
 
 
 def _percentile(vals: list[float], p: float) -> float:
@@ -108,8 +119,8 @@ async def get_order_timing(db: AsyncSession, order: Order,
         .order_by(OrderStatus.sort_order))).scalars().all()
     cur = next((s for s in statuses if s.key == order.status), None)
 
-    entered = order.status_entered_at or order.created_at or datetime.utcnow()
-    elapsed_min = max(0.0, (datetime.utcnow() - entered).total_seconds() / 60.0)
+    entered = order.status_entered_at or order.created_at or now_utc()
+    elapsed_min = max(0.0, (now_utc() - entered).total_seconds() / 60.0)
 
     out: dict = {
         "status": order.status,
@@ -127,8 +138,7 @@ async def get_order_timing(db: AsyncSession, order: Order,
         out["typical_min"] = round(b["avg"], 1)
         out["typical_p80_min"] = round(b["p80"], 1)
         out["sample_n"] = b["n"]
-        threshold = b["p80"] * STALL_FACTOR
-        if elapsed_min > threshold and threshold > 0:
+        if is_stalled(elapsed_min, b["p80"], b["n"]):
             out["stalled"] = True
             out["over_by_min"] = round(elapsed_min - b["avg"], 1)
 
@@ -157,6 +167,6 @@ async def get_order_timing(db: AsyncSession, order: Order,
                 if sb["n"] < MIN_N:
                     thin = True
     if have_any:
-        out["predicted_ready_at"] = (datetime.utcnow() + timedelta(minutes=remaining)).isoformat()
+        out["predicted_ready_at"] = (now_utc() + timedelta(minutes=remaining)).isoformat()
         out["confidence"] = "low" if thin else "high"
     return out

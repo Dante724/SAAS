@@ -18,7 +18,7 @@ async def test_order_create_persists_extra_asset_details(client, tenant):
     assert r.status_code in (200, 201), r.text
     dev = r.json()["device"]
     assert dev and dev["id"], "order should auto-create the asset"
-    assert dev["imei"] == "350099001761481" and dev["vin"] == "VIN-KA-1" and dev["hin"] == "HIN-KA-1"
+    assert dev["imei"] == "350099001761481" and dev["vin"] == "VINKA1" and dev["hin"] == "HINKA1"   # stored tidied (services/identifiers.py)
 
     # color + condition aren't on the order's device block — verify on the asset card
     d = (await client.get(f"/api/assets/{dev['id']}", headers=tenant)).json()

@@ -4,10 +4,12 @@ new estimate variant and that the list serializer now carries order_id (so the U
 show "Converted")."""
 from datetime import datetime, timedelta
 
+from backend.services.dates import now_utc
+
 
 async def _make_appointment(client, tenant):
     cid = (await client.post("/api/clients", json={"name": "Appointment Co", "phone": "+15550999"}, headers=tenant)).json()["id"]
-    when = (datetime.utcnow() + timedelta(days=1)).replace(microsecond=0).isoformat()
+    when = (now_utc() + timedelta(days=1)).replace(microsecond=0).isoformat()
     r = await client.post("/api/appointments", json={"client_id": cid, "client_name": "Appointment Co",
                           "scheduled_for": when, "duration_min": 60, "note": "Cracked screen"}, headers=tenant)
     assert r.status_code == 201, r.text

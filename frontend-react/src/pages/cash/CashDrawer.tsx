@@ -7,6 +7,7 @@ import { money } from "../orders/types";
 import { promptDialog, alertDialog } from "../../lib/dialog";
 import DenomCountModal from "./DenomCountModal";
 import ShiftHistoryModal from "./ShiftHistoryModal";
+import { btnGhost, btnPrimary } from "../invoices/billing";
 
 type Movement = { direction: string; amount: number; note: string };
 type Shift = { open: boolean; id?: string; opening_float?: number; opened_by?: string | null;
@@ -69,7 +70,7 @@ export default function CashDrawer({ sym, currencyCode }: { sym?: string; curren
       { title: label, placeholder: "0.00" });
     if (v == null) return;
     const amt = parseFloat(v); if (isNaN(amt) || amt <= 0) return;
-    const note = await promptDialog("Reason (required — this is the pay-out slip):",
+    const note = await promptDialog("Reason (required, it goes on the slip):",
       { title: label, placeholder: direction === "in" ? "e.g. change top-up" : "e.g. bank run / supplier cash" });
     if (!note || !note.trim()) { await alertDialog("A note is required for every pay-in / pay-out."); return; }
     setBusy(true);
@@ -89,8 +90,8 @@ export default function CashDrawer({ sym, currencyCode }: { sym?: string; curren
             <p className="text-xs text-ink-tertiary">Open the drawer to start taking cash and tracking the till.</p></div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setHistory(true)} className="px-2.5 py-2 rounded-lg bg-white border border-slate-200 text-ink-secondary hover:bg-slate-50 text-xs font-bold flex items-center gap-1"><M n="history" c="text-sm" />History</button>
-          <button onClick={() => setCount("open")} disabled={busy || !loc} className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-clay-sm disabled:opacity-50"><M n="lock_open" c="text-sm" />Open drawer</button>
+          <button onClick={() => setCount("open")} disabled={busy || !loc} className={btnPrimary}><M n="lock_open" c="text-sm" />Open drawer</button>
+          <button onClick={() => setHistory(true)} className={btnGhost}><M n="history" c="text-sm" />History</button>
         </div>
         {count === "open" && <DenomCountModal title="Open drawer — count the till" currencyCode={currencyCode} sym={sym} confirmLabel="Open drawer" busy={busy} onConfirm={doOpen} onCancel={() => setCount(null)} />}
         {history && <ShiftHistoryModal sym={sym} onClose={() => setHistory(false)} />}
@@ -106,26 +107,26 @@ export default function CashDrawer({ sym, currencyCode }: { sym?: string; curren
           <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100"><M n="point_of_sale" c="text-xl" /></div>
           <div>
             <h4 className="text-sm font-bold text-ink-primary flex items-center gap-2">Drawer open
-              <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold uppercase">Live</span></h4>
+              <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold ">Live</span></h4>
             <p className="text-xs text-ink-tertiary">Opened with {money(shift.opening_float, sym)}{shift.opened_by ? ` · ${shift.opened_by}` : ""}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setHistory(true)} className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 text-ink-secondary hover:bg-slate-50 text-xs font-bold flex items-center gap-1"><M n="history" c="text-sm" />History</button>
-          <button onClick={() => move("in")} disabled={busy} className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold flex items-center gap-1 hover:bg-emerald-100 disabled:opacity-50"><M n="add" c="text-sm" />Pay in</button>
-          <button onClick={() => move("out")} disabled={busy} className="px-3 py-1.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 text-xs font-bold flex items-center gap-1 hover:bg-rose-100 disabled:opacity-50"><M n="remove" c="text-sm" />Pay out</button>
-          <button onClick={() => setCount("close")} disabled={busy} className="px-3.5 py-1.5 rounded-lg bg-ink-primary text-white text-xs font-bold flex items-center gap-1.5 shadow-clay-sm hover:opacity-90 disabled:opacity-50"><M n="lock" c="text-sm" />Close drawer</button>
+          <button onClick={() => setCount("close")} disabled={busy} className={btnPrimary}><M n="lock" c="text-sm" />Close drawer</button>
+          <button onClick={() => move("in")} disabled={busy} className={btnGhost}><M n="add" c="text-sm text-emerald-600" />Pay in</button>
+          <button onClick={() => move("out")} disabled={busy} className={btnGhost}><M n="remove" c="text-sm text-rose-600" />Pay out</button>
+          <button onClick={() => setHistory(true)} className={btnGhost}><M n="history" c="text-sm" />History</button>
         </div>
       </div>
       {!!(shift.movements || []).length && (
         <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-1">
           {(shift.movements || []).map((m, i) => (
             <div key={i} className="flex items-center justify-between text-xs">
-              <span className="text-ink-secondary truncate">{m.direction === "in" ? "↓ in" : "↑ out"} · {m.note}</span>
-              <span className={`font-mono font-semibold ${m.direction === "in" ? "text-emerald-600" : "text-rose-600"}`}>{m.direction === "in" ? "+" : "−"}{money(m.amount, sym)}</span>
+              <span className="text-ink-secondary truncate">{m.direction === "in" ? "Pay in" : "Pay out"} · {m.note}</span>
+              <span className={`tabular-nums font-semibold ${m.direction === "in" ? "text-emerald-600" : "text-rose-600"}`}>{m.direction === "in" ? "+" : "−"}{money(m.amount, sym)}</span>
             </div>
           ))}
-          <div className="flex items-center justify-between text-[11px] font-bold text-ink-tertiary pt-1"><span>Net pay-in/out</span><span className="font-mono">{net >= 0 ? "+" : "−"}{money(Math.abs(net), sym)}</span></div>
+          <div className="flex items-center justify-between text-[11px] font-bold text-ink-tertiary pt-1"><span>Net pay-in/out</span><span className="tabular-nums">{net >= 0 ? "+" : "−"}{money(Math.abs(net), sym)}</span></div>
         </div>
       )}
       {count === "close" && <DenomCountModal title="Close drawer — count the till" currencyCode={currencyCode} sym={sym} confirmLabel="Close drawer" busy={busy} onConfirm={doClose} onCancel={() => setCount(null)} />}

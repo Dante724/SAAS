@@ -17,10 +17,11 @@ async def _register(client):
 async def test_service_round_trips_appointment_rules(client):
     reg = await _register(client)
     H = {"Authorization": f"Bearer {reg['access_token']}"}
+    me = (await client.get("/api/auth/me", headers=H)).json()
     s = (await client.post("/api/catalog/services", json={
-        "name": "Alignment", "allowed_employee_ids": ["e1", "e2"],
+        "name": "Alignment", "allowed_employee_ids": [me["id"]],
         "required_resource_types": ["Lift", "Bay 2"]}, headers=H)).json()
-    assert s["allowed_employee_ids"] == ["e1", "e2"]
+    assert s["allowed_employee_ids"] == [me["id"]]
     assert s["required_resource_types"] == ["Lift", "Bay 2"]
     # update clears them
     u = (await client.put(f"/api/catalog/services/{s['id']}", json={

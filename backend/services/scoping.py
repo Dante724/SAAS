@@ -101,12 +101,13 @@ def may_use_account(role: Optional[Role], account_id: Optional[str]) -> bool:
     return account_id in allowed
 
 
-def payroll_cutoff(role: Optional[Role]):
-    """Earliest date an employee may see their own compensation, or None for no limit."""
+def payroll_cutoff(role: Optional[Role], today):
+    """Earliest date an employee may see their own compensation, or None for no limit.
+    `today` is the shop's calendar day (services.dates.shop_today)."""
     if not role or not role.payroll_visibility_days:
         return None
-    from datetime import date, timedelta
-    return date.today() - timedelta(days=int(role.payroll_visibility_days))
+    from datetime import timedelta
+    return today - timedelta(days=int(role.payroll_visibility_days))
 
 
 async def can_view_client(db, current: Employee, client: Client) -> bool:
@@ -127,4 +128,30 @@ async def can_view_order(db, current: Employee, order: Order) -> bool:
         allowed = _ids(role.location_ids)
         if allowed and order.location_id not in allowed:
             return False
+    # same per-status VIEW ACL scope_orders applies to lists
+    if order.status in _ids(getattr(role, "hidden_status_keys", None)):
+        return False
     return True
+
+
+async def guard_record_scope(request, db, current: Employee) -> None:
+    """Router-level guard: on any route whose path names an `{order_id}` or `{client_id}`,
+    refuse (403) when the caller's role scope ("own orders/contacts only", allowed
+    locations, hidden statuses) excludes that record. Before this, only a few GETs checked
+    scope, so a restricted technician could assign, edit, message, bill or delete any order
+    or client whose id they knew. Records of another org (or missing) are left to the
+    endpoint, which 404s."""
+    from sqlalchemy import select
+    pp = request.path_params
+    if pp.get("order_id"):
+        order = (await db.execute(select(Order).where(
+            Order.id == pp["order_id"], Order.org_id == current.org_id))).scalar_one_or_none()
+        if order is not None and not await can_view_order(db, current, order):
+            from fastapi import HTTPException
+            raise HTTPException(403, "You can only act on work orders within your access")
+    if pp.get("client_id"):
+        client = (await db.execute(select(Client).where(
+            Client.id == pp["client_id"], Client.org_id == current.org_id))).scalar_one_or_none()
+        if client is not None and not await can_view_client(db, current, client):
+            from fastapi import HTTPException
+            raise HTTPException(403, "You can only act on clients within your access")

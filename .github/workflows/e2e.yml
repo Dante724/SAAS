@@ -1,29 +1,46 @@
 name: E2E (Technician PWA)
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, 'release/**' ]
+  # CI minutes cost money on a private repo, so pull requests are checked only when they are
+  # ready: draft PRs skip every job; marking a PR "Ready for review" runs it once, and each
+  # later push cancels the run it replaces. "Run workflow" on the Actions tab starts one by hand.
   pull_request:
+    types: [ opened, reopened, synchronize, ready_for_review ]
+  workflow_dispatch:
+
+# A new push to a PR/branch cancels that ref's still-running e2e. Runs on main/master each get a
+# unique group (the run id), so they are never cancelled or queued behind one another.
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: the token can read the repo and nothing else.
+permissions:
+  contents: read
 
 jobs:
   e2e:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     env:
+      ENVIRONMENT: development   # unset now means production (audit M5); this job boots on SQLite
       SECRET_KEY: "ci-e2e-secret-key-min-32-chars-long-000"
       E2E_PORT: "8000"
       LH_PORT: "9222"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
           cache: pip
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      - uses: actions/setup-node@v4
+          pip install --require-hashes -r requirements.lock
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "20"
+          node-version: "22"
       - name: Install Playwright + browsers
         working-directory: tests-e2e
         run: |
@@ -32,8 +49,9 @@ jobs:
       - name: Launch app for Lighthouse (fixed debug port)
         run: |
           SEED_DEMO=true python3 -m uvicorn main:app --port 8000 &
-          sleep 5
-          curl -sf http://localhost:8000/api/health
+          # Demo seeding takes longer than a fixed sleep; wait up to 60s for the app to answer.
+          for i in $(seq 1 60); do curl -sf http://localhost:8000/api/health && exit 0; sleep 1; done
+          echo "app did not become healthy in 60s"; exit 1
       - name: Run Playwright e2e (functional)
         working-directory: tests-e2e
         run: npx playwright test pwa.spec.js
@@ -42,7 +60,7 @@ jobs:
         run: |
           # Chromium with a fixed remote-debugging port for playwright-lighthouse.
           npx playwright test lighthouse.spec.js || echo "Lighthouse gate — review report artifact"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: playwright-report

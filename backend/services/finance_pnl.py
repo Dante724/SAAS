@@ -5,8 +5,11 @@ owner: net sales − cost of parts − operating expenses = profit, in the shop'
 currency, org-scoped, for any period.
 
 Method (documented so the number is trustworthy):
-- **Net revenue** = Σ(subtotal − discount) of issued invoices (status ≠ draft/void)
-  by issue date — ex-tax, because collected tax isn't revenue.
+- **Net revenue** = Σ(total − tax) of issued invoices (status ≠ draft/void)
+  by issue date — ex-tax, because collected tax isn't revenue. The total is the one number
+  every invoice path stores the same way; ``discount`` and ``tax`` are amounts (B3: invoices
+  made in the editor once stored them as percents, and summing those as money gave a 96%
+  margin).
 - **Tax collected** = Σ(tax) — shown for context, not part of profit.
 - **COGS (parts)** = Σ(qty × cost_price) over product invoice lines linked to their
   order line (which carries cost); free-form product lines with no linked cost
@@ -22,7 +25,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import Invoice, InvoiceLine, OrderLine, Transaction
-from backend.services.money import q2, q4
+from backend.services.money import q2
+from backend.services.dates import now_utc
 
 _EXCLUDED_INVOICE = ("draft", "void", "cancelled", "canceled")
 
@@ -35,8 +39,8 @@ def _end_of_day(dt: datetime) -> datetime:
 
 async def compute_pnl(db: AsyncSession, org_id: str, date_from: Optional[str],
                       date_to: Optional[str], location_id: Optional[str] = None) -> dict:
-    df = datetime.fromisoformat(date_from) if date_from else datetime.utcnow() - timedelta(days=30)
-    dt = _end_of_day(datetime.fromisoformat(date_to)) if date_to else datetime.utcnow() + timedelta(days=1)
+    df = datetime.fromisoformat(date_from) if date_from else now_utc() - timedelta(days=30)
+    dt = _end_of_day(datetime.fromisoformat(date_to)) if date_to else now_utc() + timedelta(days=1)
 
     inv_date = func.coalesce(Invoice.issued_at, Invoice.created_at)
     inv_conds = [Invoice.org_id == org_id, Invoice.status.notin_(_EXCLUDED_INVOICE),
@@ -44,7 +48,7 @@ async def compute_pnl(db: AsyncSession, org_id: str, date_from: Optional[str],
 
     # revenue (ex-tax), tax, gross sales
     rev_row = (await db.execute(select(
-        func.coalesce(func.sum(Invoice.subtotal - Invoice.discount), 0.0),
+        func.coalesce(func.sum(Invoice.total - Invoice.tax), 0.0),
         func.coalesce(func.sum(Invoice.tax), 0.0),
         func.coalesce(func.sum(Invoice.total), 0.0),
         func.count(),

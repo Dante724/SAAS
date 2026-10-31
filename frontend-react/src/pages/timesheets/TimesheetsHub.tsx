@@ -1,5 +1,7 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import PageSummary from "../../components/PageSummary";
 import { useEffect, useState } from "react";
+import { useVisibleInterval } from "../../hooks/useVisibleInterval";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
@@ -7,6 +9,8 @@ import { money } from "../orders/types";
 import { confirmDialog } from "../../lib/dialog";
 import { isoDate, isoDateTimeLocal } from "../../lib/localDate";
 import { EmployeeHours } from "../company/CompanyHub";
+import { fmtServerTime } from "../../lib/serverTime";
+import { loadFailed } from "../../lib/notice";
 
 // Timesheets — React port of legacy timesheets.js. Per-employee grid + approve,
 // manual entry add/void/reopen, and a live "who's on the clock" roster.
@@ -16,6 +20,7 @@ type Sheet = { total_hours?: number; straight_hours?: number; overtime_hours?: n
 
 function weekAgo() { const d = new Date(); d.setDate(d.getDate() - 6); return isoDate(d); }
 const today = () => isoDate();
+const STATE_LABEL: Record<string, string> = { logged: "Logged", running: "Running", approved: "Approved" };
 const hm = (min?: number) => { const m = Math.round(min || 0); return `${Math.floor(m / 60)}h ${m % 60}m`; };
 
 export default function TimesheetsHub() {
@@ -33,11 +38,11 @@ export default function TimesheetsHub() {
   const [addSched, setAddSched] = useState(false);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 1800); };
 
-  useEffect(() => { api.get<any>("/staff/employees").then((r) => { const it = r.items || r || []; setEmps(it); if (it[0] && !empId) setEmpId(it[0].id); }).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/staff/employees").then((r) => { const it = r.items || r || []; setEmps(it); if (it[0] && !empId) setEmpId(it[0].id); }).catch(loadFailed("the staff list")); }, []);
   const load = () => { if (empId) api.get<Sheet>(`/timeclock/timesheet?employee_id=${empId}&date_from=${from}&date_to=${to}`).then(setSheet).catch(() => setSheet(null)); };
   const loadRoster = () => api.get<any>("/timeclock/roster").then((r) => setRoster(r.on_shift || [])).catch(() => setRoster([]));
   useEffect(() => { load(); }, [empId, from, to]);
-  useEffect(() => { loadRoster(); const id = setInterval(loadRoster, 30000); return () => clearInterval(id); }, []);
+  useVisibleInterval(loadRoster, 30000);
   const loadSched = () => {
     if (!empId) return;
     api.get<any>(`/schedules?employee_id=${empId}&date_from=${from}&date_to=${to}`).then((r) => setSched(r.items || [])).catch(() => setSched([]));
@@ -50,7 +55,6 @@ export default function TimesheetsHub() {
   async function voidEntry(id: string) { if (!(await confirmDialog("Void this entry?", { danger: true, confirmLabel: "Void" }))) return; try { await api.del(`/timeclock/entries/${id}`); load(); } catch (e: any) { flash(e.message); } }
   async function reopen(id: string) { try { await api.post(`/timeclock/entries/${id}/reopen`, {}); load(); } catch (e: any) { flash(e.message); } }
 
-  const chip = "bg-white rounded-2xl border border-slate-200/90 shadow-clay-card px-4 py-3";
   return (
     <Shell title="Timesheets">
       <div className="px-6 pt-4 flex items-center gap-1 border-b border-slate-200/70">
@@ -65,38 +69,38 @@ export default function TimesheetsHub() {
       <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
         {/* controls */}
         <div className="flex flex-wrap items-end gap-3">
-          <div><label className="block text-[11px] font-bold text-ink-tertiary uppercase mb-1">Employee</label>
-            <select value={empId} onChange={(e) => setEmpId(e.target.value)} className="glass-input rounded-lg px-3 py-2 text-sm font-semibold text-ink-primary">{emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select></div>
-          <div><label className="block text-[11px] font-bold text-ink-tertiary uppercase mb-1">From</label><DateField mode="date" value={from} onChange={setFrom} className="w-40" /></div>
-          <div><label className="block text-[11px] font-bold text-ink-tertiary uppercase mb-1">To</label><DateField mode="date" value={to} onChange={setTo} className="w-40" /></div>
+          <button onClick={approve} className="h-[38px] px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110">Approve range</button>
           <button onClick={() => setAdd(true)} className="h-[38px] px-3.5 rounded-xl bg-white border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50 flex items-center gap-1.5"><M n="add" c="text-sm" />Add entry</button>
-          <button onClick={approve} className="h-[38px] px-4 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 ml-auto">Approve range</button>
+          <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Employee</label>
+            <select value={empId} onChange={(e) => setEmpId(e.target.value)} className="glass-input rounded-lg px-3 py-2 text-sm font-semibold text-ink-primary">{emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select></div>
+          <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">From</label><DateField mode="date" value={from} onChange={setFrom} className="w-40" /></div>
+          <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">To</label><DateField mode="date" value={to} onChange={setTo} className="w-40" /></div>
         </div>
 
         {/* summary */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-          <div className={chip}><div className="text-[10px] font-bold uppercase text-ink-tertiary">Total</div><div className="text-lg font-black text-ink-primary">{sheet?.total_hours ?? 0}h</div></div>
-          <div className={chip}><div className="text-[10px] font-bold uppercase text-ink-tertiary">Straight / OT</div><div className="text-lg font-black text-ink-primary">{sheet?.straight_hours ?? 0} / {sheet?.overtime_hours ?? 0}</div></div>
-          <div className={chip}><div className="text-[10px] font-bold uppercase text-ink-tertiary">Billable</div><div className="text-lg font-black text-ink-primary">{Math.round((sheet?.billable_sec || 0) / 360) / 10}h</div></div>
-          <div className={chip}><div className="text-[10px] font-bold uppercase text-ink-tertiary">Utilization</div><div className="text-lg font-black text-ink-primary">{Math.round((sheet?.utilization || 0) * 100)}%</div></div>
-          <div className={chip}><div className="text-[10px] font-bold uppercase text-ink-tertiary">Labor cost</div><div className="text-lg font-black text-ink-primary">{money(sheet?.labor_cost)}</div></div>
-        </div>
+        <PageSummary stats={[
+          { label: "Hours worked", value: `${sheet?.total_hours ?? 0}h` },
+          { label: "Regular / overtime", value: `${sheet?.straight_hours ?? 0}h / ${sheet?.overtime_hours ?? 0}h` },
+          { label: "Charged to jobs", value: `${Math.round((sheet?.billable_sec || 0) / 360) / 10}h` },
+          { label: "Share charged to jobs", value: `${Math.round((sheet?.utilization || 0) * 100)}%` },
+          { label: "Labor cost", value: money(sheet?.labor_cost) },
+        ]} />
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           {/* entries */}
           <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-            <div className="p-3.5 border-b border-slate-100 flex items-center justify-between"><span className="text-xs font-bold text-ink-primary uppercase tracking-wider">Entries</span><span className="text-[11px] text-ink-tertiary">{sheet?.entry_count ?? 0} · {sheet?.approved_count ?? 0} approved</span></div>
+            <div className="p-3.5 border-b border-slate-100 flex items-center justify-between"><span className="text-xs font-bold text-ink-primary ">Entries</span><span className="text-[11px] text-ink-tertiary">{sheet?.entry_count ?? 0} · {sheet?.approved_count ?? 0} approved</span></div>
             <table className="w-full text-xs">
-              <thead className="bg-slate-50/70 text-ink-tertiary uppercase text-[10px] font-bold"><tr><th className="text-left py-2.5 px-4">Started</th><th className="text-left py-2.5 px-4">For</th><th className="text-right py-2.5 px-4">Duration</th><th className="text-left py-2.5 px-4">State</th><th className="py-2.5 px-4"></th></tr></thead>
+              <thead className="bg-slate-50/70 text-ink-tertiary text-[11px] font-bold"><tr><th className="text-left py-2.5 px-4">Started</th><th className="text-left py-2.5 px-4">For</th><th className="text-right py-2.5 px-4">Duration</th><th className="text-left py-2.5 px-4">State</th><th className="py-2.5 px-4"></th></tr></thead>
               <tbody className="divide-y divide-slate-100">
                 {sheet == null && <SkeletonRows cols={5} />}
                 {sheet?.entries?.length === 0 && <tr><td colSpan={5} className="py-6 text-center text-ink-tertiary">No entries in this range.</td></tr>}
                 {sheet?.entries?.map((e) => (
                   <tr key={e.id}>
-                    <td className="py-2.5 px-4 text-ink-secondary">{e.started_at ? new Date(e.started_at).toLocaleString() : "—"}</td>
-                    <td className="py-2.5 px-4 font-semibold text-ink-primary">{e.order_number || e.category || "—"}{e.billable ? "" : <span className="ml-1 text-[9px] uppercase text-ink-tertiary">non-bill</span>}</td>
-                    <td className="py-2.5 px-4 text-right font-mono">{hm(e.duration_min)}</td>
-                    <td className="py-2.5 px-4"><span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${e.state === "approved" ? "bg-emerald-100 text-emerald-700" : e.state === "running" ? "bg-blue-100 text-primary" : "bg-slate-100 text-ink-secondary"}`}>{e.state || "logged"}</span></td>
+                    <td className="py-2.5 px-4 text-ink-secondary">{fmtServerTime(e.started_at) || "—"}</td>
+                    <td className="py-2.5 px-4 font-semibold text-ink-primary">{e.order_number || e.category || "—"}{e.billable ? "" : <span className="ml-1 text-[11px] text-ink-tertiary">Not billable</span>}</td>
+                    <td className="py-2.5 px-4 text-right tabular-nums">{hm(e.duration_min)}</td>
+                    <td className="py-2.5 px-4"><span className={`text-[11px]  font-bold px-1.5 py-0.5 rounded ${e.state === "approved" ? "bg-emerald-100 text-emerald-700" : e.state === "running" ? "bg-blue-100 text-primary" : "bg-slate-100 text-ink-secondary"}`}>{STATE_LABEL[e.state || "logged"] || e.state}</span></td>
                     <td className="py-2.5 px-4 text-right whitespace-nowrap">{e.state === "approved" ? <button onClick={() => reopen(e.id)} className="text-primary font-semibold">Reopen</button> : <button onClick={() => voidEntry(e.id)} className="text-rose-600 font-semibold">Void</button>}</td>
                   </tr>
                 ))}
@@ -106,13 +110,13 @@ export default function TimesheetsHub() {
 
           {/* roster */}
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden h-fit">
-            <div className="p-3.5 border-b border-slate-100 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500" /><span className="text-xs font-bold text-ink-primary uppercase tracking-wider">On the clock now</span></div>
+            <div className="p-3.5 border-b border-slate-100 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500" /><span className="text-xs font-bold text-ink-primary ">On the clock now</span></div>
             <div className="divide-y divide-slate-100">
               {roster.length === 0 && <div className="p-5 text-xs text-ink-tertiary">Nobody clocked in.</div>}
               {roster.map((r) => (
                 <div key={r.employee_id} className="px-4 py-2.5 flex items-center justify-between text-xs">
                   <div><div className="font-bold text-ink-primary">{r.employee_name}</div><div className="text-[11px] text-ink-tertiary">{r.location_name}</div></div>
-                  <span className="font-mono font-semibold text-emerald-700">{Math.floor((r.elapsed_sec || 0) / 3600)}h {Math.floor(((r.elapsed_sec || 0) % 3600) / 60)}m</span>
+                  <span className="tabular-nums font-semibold text-emerald-700">{Math.floor((r.elapsed_sec || 0) / 3600)}h {Math.floor(((r.elapsed_sec || 0) % 3600) / 60)}m</span>
                 </div>
               ))}
             </div>
@@ -122,14 +126,14 @@ export default function TimesheetsHub() {
         {/* Planned shifts (schedule) — the plan the clock-ins are measured against */}
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
           <div className="p-3.5 border-b border-slate-100 flex items-center justify-between">
-            <div><span className="text-xs font-bold text-ink-primary uppercase tracking-wider">Planned shifts</span><span className="text-[11px] text-ink-tertiary ml-2">what actual hours are measured against</span></div>
+            <div><span className="text-xs font-bold text-ink-primary ">Planned shifts</span><span className="text-[11px] text-ink-tertiary ml-2">what actual hours are measured against</span></div>
             <button onClick={() => setAddSched(true)} className="text-xs font-semibold text-primary flex items-center gap-1"><M n="add" c="text-sm" />Add shift / absence</button>
           </div>
           {cmp && (
             <div className="grid grid-cols-3 divide-x divide-slate-100 border-b border-slate-100 text-center">
-              <div className="py-3"><div className="text-[10px] font-bold uppercase text-ink-tertiary">Planned</div><div className="text-base font-black text-ink-primary tabular-nums">{cmp.planned_hours}h</div></div>
-              <div className="py-3"><div className="text-[10px] font-bold uppercase text-ink-tertiary">Actual</div><div className="text-base font-black text-ink-primary tabular-nums">{cmp.actual_hours}h</div></div>
-              <div className="py-3"><div className="text-[10px] font-bold uppercase text-ink-tertiary">Variance</div><div className={`text-base font-black tabular-nums ${cmp.variance_hours < 0 ? "text-rose-600" : cmp.variance_hours > 0 ? "text-amber-600" : "text-emerald-600"}`}>{cmp.variance_hours > 0 ? "+" : ""}{cmp.variance_hours}h</div></div>
+              <div className="py-3"><div className="text-[11px] font-bold text-ink-tertiary">Planned</div><div className="text-base font-bold text-ink-primary tabular-nums">{cmp.planned_hours}h</div></div>
+              <div className="py-3"><div className="text-[11px] font-bold text-ink-tertiary">Actual</div><div className="text-base font-bold text-ink-primary tabular-nums">{cmp.actual_hours}h</div></div>
+              <div className="py-3"><div className="text-[11px] font-bold text-ink-tertiary">Variance</div><div className={`text-base font-bold tabular-nums ${cmp.variance_hours < 0 ? "text-rose-600" : cmp.variance_hours > 0 ? "text-amber-600" : "text-emerald-600"}`}>{cmp.variance_hours > 0 ? "+" : ""}{cmp.variance_hours}h</div></div>
             </div>
           )}
           <div className="divide-y divide-slate-100 text-xs">
@@ -138,7 +142,7 @@ export default function TimesheetsHub() {
             {sched?.map((w) => (
               <div key={w.id} className="px-4 py-2.5 flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <span className="font-mono text-ink-secondary w-28">{new Date(w.day).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}</span>
+                  <span className="tabular-nums text-ink-secondary w-28">{new Date(w.day).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}</span>
                   {w.kind === "shift"
                     ? <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-blue-50 text-primary border border-blue-200/60 tabular-nums">{w.start}–{w.end} · {w.planned_hours}h</span>
                     : <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200/60 capitalize">{w.kind.replace(/_/g, " ")}</span>}
@@ -169,10 +173,10 @@ function ManualEntryDrawer({ employees, defaultEmp, onClose, onDone }: { employe
     catch (e: any) { setErr(e.message || "Could not add"); setBusy(false); }
   }
   const fld = "glass-input rounded-lg px-3 py-2 text-sm w-full";
-  const lbl = "block text-[11px] font-bold text-ink-tertiary uppercase mb-1";
+  const lbl = "block text-[11px] font-bold text-ink-tertiary  mb-1";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[460px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200"><h2 className="font-bold text-ink-primary">Add time entry</h2><button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
@@ -208,10 +212,10 @@ function ScheduleDrawer({ employees, defaultEmp, onClose, onDone }: { employees:
     } catch (e: any) { setErr(e.message || "Could not save (managers only)"); setBusy(false); }
   }
   const fld = "glass-input rounded-lg px-3 py-2 text-sm w-full";
-  const lbl = "block text-[11px] font-bold text-ink-tertiary uppercase mb-1";
+  const lbl = "block text-[11px] font-bold text-ink-tertiary  mb-1";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[460px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200"><h2 className="font-bold text-ink-primary">Add planned shift</h2><button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
@@ -223,8 +227,8 @@ function ScheduleDrawer({ employees, defaultEmp, onClose, onDone }: { employees:
           </div>
           {isShift && (
             <div className="grid grid-cols-2 gap-3">
-              <div><label className={lbl}>Start</label><input type="time" value={f.start} onChange={(e) => set("start", e.target.value)} className={fld} /></div>
-              <div><label className={lbl}>End</label><input type="time" value={f.end} onChange={(e) => set("end", e.target.value)} className={fld} /></div>
+              <div><label className={lbl}>Start</label><DateField mode="time" value={f.start} onChange={(v) => set("start", v)} label="Start" /></div>
+              <div><label className={lbl}>End</label><DateField mode="time" value={f.end} onChange={(v) => set("end", v)} label="End" /></div>
             </div>
           )}
           <div><label className={lbl}>Note</label><input value={f.note} onChange={(e) => set("note", e.target.value)} placeholder="Optional" className={fld} /></div>

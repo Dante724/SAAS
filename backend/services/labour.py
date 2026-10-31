@@ -4,18 +4,18 @@ One definition of "actual clocked time" so the inline WO booked-vs-actual widget
 Labour-efficiency report can never drift apart. Actual = JOB time entries (not break/admin),
 live-aware for a still-running timer, excluding voided entries.
 """
-from datetime import datetime
 
 from sqlalchemy import select
 
 from backend.models import TimeEntry
+from backend.services.dates import now_utc
 
 
 def entry_seconds(e) -> int:
     """Clocked seconds for one entry; counts a still-running timer up to now."""
     if e.ended_at:
         return int(e.duration_sec or 0)
-    return max(0, int((datetime.utcnow() - e.started_at).total_seconds())) if e.started_at else 0
+    return max(0, int((now_utc() - e.started_at).total_seconds())) if e.started_at else 0
 
 
 def is_job_actual(e) -> bool:

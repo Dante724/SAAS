@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 import backend.core.scheduled  # noqa: F401 — registers periodic jobs
@@ -21,13 +21,17 @@ from backend.routers import (
     appointments,
     assets,
     auth,
+    auto_print,
     automations,
+    billing,
     bins,
     bundles,
     cash,
     catalog,
     catalog_products,
     chats,
+    checkin_public,
+    checkins,
     checklists,
     clients,
     comms,
@@ -43,6 +47,7 @@ from backend.routers import (
     feedback,
     finance,
     forms,
+    imports,
     inbox,
     industry,
     insights,
@@ -54,11 +59,15 @@ from backend.routers import (
     leads,
     lookups,
     media,
+    memberships,
     mfa,
+    mobile_messages,
     notifications,
+    order_items,
     orders,
     payments,
     payroll,
+    pilot,
     platform,
     prefs,
     pricing,
@@ -74,6 +83,8 @@ from backend.routers import (
     sales,
     scan,
     schedules,
+    sense,
+    serials,
     settings_finance,
     sso,
     staff,
@@ -84,39 +95,51 @@ from backend.routers import (
     tasks,
     tech,
     telephony,
+    terminals,
     timeclock,
     transfers,
     v1,
+    v2,
     warehouses,
     webhooks,
 )
 
 setup_logging()
-log = logging.getLogger("repairos")
+from backend.core.error_tracking import init_error_tracking  # noqa: E402
+
+init_error_tracking()
+log = logging.getLogger("tekly")
 
 ROUTERS = [
-    auth, orders, clients, inventory, finance, staff, reports, feed, forms,
+    auth, billing, orders, clients, inventory, finance, staff, reports, feed, forms,
     notifications, public, catalog, assets, cash, statuses, feedback, documents,
-    bins, payroll, leads, pricing, sales, returns, transfers, bundles, appointments,
+    bins, payroll, leads, pricing, sales, sense, returns, transfers, bundles, appointments,
     chats, resources, timeclock, webhooks, payments, apikeys, v1,
-    integrations_qbo, ai, catalog_products, tech, push, checklists, lookups, engage, settings_finance, rbac, directories, analytics, media, compliance, platform, mfa, sso, comms, integrations_xero, integrations_email, integrations_credentials, industry, schedules, conversions, warehouses, tasks, stock_docs, suppliers, printing, inbox, comms_ai, automations, insights, recommendations, prefs, admin, currencies, tags, telephony, custom_reports, regions, scan,
+    integrations_qbo, ai, catalog_products, tech, push, checklists, lookups, engage, settings_finance, rbac, directories, analytics, media, compliance, platform, mfa, sso, comms, integrations_xero, integrations_email, integrations_credentials, industry, schedules, conversions, warehouses, tasks, stock_docs, suppliers, printing, inbox, comms_ai, automations, insights, recommendations, order_items, prefs, admin, currencies, tags, telephony, custom_reports, regions, scan, serials,
+    terminals, auto_print, v2, imports, mobile_messages, pilot, memberships, checkin_public, checkins,
 ]
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log.info("starting RepairOS (env=%s)", settings.ENVIRONMENT)
+    log.info("starting Tekly (env=%s)", settings.ENVIRONMENT)
+    if settings.is_deployed and not _have_react:
+        raise RuntimeError(f"React build missing ({_react_index}). Build frontend-react before starting "
+                           "in production/staging (the Dockerfile does this).")
     await init_db()
     # Build 144ce: ensure a bootstrap platform admin exists for the /admin portal.
     try:
         from backend.db.database import AsyncSessionLocal
+        from backend.services.admin_access import ensure_builtin_roles
         from backend.services.platform_auth import ensure_seed_admin
         async with AsyncSessionLocal() as _s:
             await ensure_seed_admin(_s)
+            await ensure_builtin_roles(_s)   # Owner, Sales and account management, Sales, ...
+            await _s.commit()
     except Exception:  # noqa: BLE001 — never block startup on this
         log.exception("platform admin seed skipped")
     if settings.SEED_DEMO:
-        if settings.is_production:
+        if settings.is_deployed:
             log.warning("SEED_DEMO is enabled in production — refusing to seed demo data.")
         else:
             from scripts.seed import seed_demo_data
@@ -126,29 +149,74 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await job_runner.stop()
-        log.info("RepairOS shut down cleanly")
+        log.info("Tekly shut down cleanly")
 
 
 # Build 144cq: hide the interactive API docs / schema in production.
-_docs_kwargs = {} if not settings.is_production else {
+_docs_kwargs = {} if not settings.is_deployed else {
     "docs_url": None, "redoc_url": None, "openapi_url": None,
 }
 app = FastAPI(
-    title="RepairOS API",
+    title="Tekly API",
     description="Orderry-style repair shop management",
     version="0.1.0",
     lifespan=lifespan,
     **_docs_kwargs,
 )
 
+# Innermost: cost/margin fields leave the server only for roles allowed to see them.
+from backend.core.cost_redaction import CostRedactionMiddleware  # noqa: E402
+from backend.services.org_creds import CredentialsUnreadable  # noqa: E402
+
+
+@app.exception_handler(CredentialsUnreadable)
+async def _unreadable_creds(_request, exc: CredentialsUnreadable):
+    # Audit M10: a shop's saved keys that can't be decrypted are refused everywhere (never swapped
+    # for the operator's); paths that don't handle it say what to do instead of a 500.
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+app.add_middleware(CostRedactionMiddleware)
+# Which app (Tekly Go or the web) made the request; write sites read it via column defaults.
+from backend.core.client_source import ClientSourceMiddleware  # noqa: E402
+
+app.add_middleware(ClientSourceMiddleware)
 app.add_middleware(RequestContextMiddleware)
-from backend.core.observability import MetricsMiddleware, RateLimitMiddleware, SecurityHeadersMiddleware
+from backend.core.observability import (  # noqa: E402
+    MetricsMiddleware,
+    RateLimitMiddleware,
+    SecurityHeadersMiddleware,
+    is_public_api_path,
+)
 
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(MetricsMiddleware)
-app.add_middleware(RateLimitMiddleware, limit=600, window_s=60)
+app.add_middleware(RateLimitMiddleware, window_s=60)  # limits: settings.RATE_LIMIT_*_PER_MIN
+from backend.core.finite_numbers import NonFiniteJsonMiddleware  # noqa: E402
+
+# Inside the size cap: a JSON body with a bare NaN / Infinity token is refused (B9).
+app.add_middleware(NonFiniteJsonMiddleware)
+from backend.core.body_limit import BodySizeLimitMiddleware
+
+# Inside CORS so a 413 still carries CORS headers and the browser can show the message.
+app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.MAX_REQUEST_BYTES)
+class _CorsExceptPublicApi(CORSMiddleware):
+    """CORS for the app's own browser screens only. /api/v1 is called server to server with a
+    secret key, so browsers on other sites get no CORS grant for it (A11): a key pasted into a
+    web page can't be used from there, and preflights get no allow headers."""
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            if is_public_api_path(scope.get("path", "")):
+                return await self.app(scope, receive, send)
+        return await super().__call__(scope, receive, send)
+
+
+from backend.core.observability import PublicApiTransportMiddleware  # noqa: E402
+
+# Deployed: /api/v1 and /api/v2 over plain HTTP are refused with 403 (A11).
+app.add_middleware(PublicApiTransportMiddleware)
 app.add_middleware(
-    CORSMiddleware,
+    _CorsExceptPublicApi,
     allow_origins=settings.cors_origin_list,
     # Credentials cannot be combined with a wildcard origin (CORS spec); only
     # enable them for an explicit allowlist.
@@ -157,10 +225,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from sqlalchemy.exc import IntegrityError  # noqa: E402
+
+from backend.core.db_errors import integrity_error_handler  # noqa: E402
+
+app.add_exception_handler(IntegrityError, integrity_error_handler)   # ii144a: unique clash → plain 409
+
 for r in ROUTERS:
     app.include_router(r.router)
 app.include_router(sales.st_router)
 app.include_router(industry.scan_router)
+from backend.routers import credit_notes  # noqa: E402 — opb: credit notes
+
+app.include_router(credit_notes.router)
+from backend.routers import devices  # noqa: E402 — signed-in devices and the per-login device limit
+
+app.include_router(devices.router)
 
 
 @app.get("/health", include_in_schema=False)
@@ -179,7 +259,7 @@ async def health():
         log.exception("health check: database unreachable")
     status = "ok" if db_ok else "degraded"
     return JSONResponse(
-        {"status": status, "environment": settings.ENVIRONMENT, "database": "up" if db_ok else "down"},
+        {"status": status, "database": "up" if db_ok else "down"},   # no environment name: it helps an attacker
         status_code=200 if db_ok else 503,
     )
 
@@ -189,30 +269,43 @@ frontend_dir = os.path.join(os.path.dirname(__file__), "frontend")
 app.mount("/static", StaticFiles(directory=os.path.join(frontend_dir, "static")), name="static")
 
 # ── React redesign (guarded root cutover) ──
-# The Liquid Clay redesign IS the app now and is served at "/". It has no login
-# screen of its own, so the (unchanged) legacy login lives at "/login" and the
-# other auth deep-links (reset / verify / invite). The React bundle shares this
-# origin and reuses the existing bearer session — same data, same endpoints, same
-# flow, new UI. Assets are served from the built dist folder at /assets/*.
+# The React app is served at "/" and at every page route below, sign-in included
+# (/login, /signup, /reset-password, /verify-email, /accept-invite). Assets are served
+# from the built dist folder at /assets/*. What still comes from the vanilla-JS
+# frontend/ folder: the technician phone app (/tech, sw.js, offline.html), the platform
+# operator console (/admin), the customer portal (/portal/<token>) and the test
+# payment page (/pay/<id>).
 react_dir = os.path.join(os.path.dirname(__file__), "frontend-react", "dist")
 _react_index = os.path.join(react_dir, "index.html")
 _have_react = os.path.isfile(_react_index)
+class _HashedAssets(StaticFiles):
+    """Vite file names carry a content hash, so they can be cached for a year without ever going
+    stale; a new build references new names."""
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        if resp.status_code in (200, 304):
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return resp
+
+
 if os.path.isdir(os.path.join(react_dir, "assets")):
-    app.mount("/assets", StaticFiles(directory=os.path.join(react_dir, "assets")), name="react-assets")
+    app.mount("/assets", _HashedAssets(directory=os.path.join(react_dir, "assets")), name="react-assets")
+
+
+_NOT_BUILT = ("<!doctype html><meta charset=utf-8><title>Tekly</title>"
+              "<body style='font-family:system-ui;padding:40px'><h2>The web app isn't built</h2>"
+              "<p>Run <code>cd frontend-react &amp;&amp; npm ci &amp;&amp; npm run build</code>, then restart. "
+              "Sign-in is still available at <a href='/login'>/login</a>.</p></body>")
 
 
 def _serve_react():
-    # If the redesign hasn't been built yet, fall back to the legacy shell so the
-    # app is never left unreachable.
+    # The old fallback served the legacy shell, whose hashed bundle no longer exists — a blank
+    # page. Say what's wrong instead (deployed environments refuse to boot without the build).
     if _have_react:
-        return FileResponse(_react_index)
-    return FileResponse(os.path.join(frontend_dir, "index.html"))
-
-
-def _serve_legacy():
-    # The legacy SPA shell — carries the login / signup / reset / verify / invite
-    # screens. Its own JS hands off to "/" (React) once a session exists.
-    return FileResponse(os.path.join(frontend_dir, "index.html"))
+        # The shell names the current hashed bundles. Without a cache policy browsers reused a
+        # stale copy heuristically, so after a deploy people kept running the previous release.
+        return FileResponse(_react_index, headers={"Cache-Control": "no-cache"})
+    return HTMLResponse(_NOT_BUILT, status_code=503)
 
 
 @app.get("/", include_in_schema=False)
@@ -254,8 +347,19 @@ async def serve_track(token: str):
 
 @app.get("/admin", include_in_schema=False)
 async def serve_admin():
-    # Build 144cf: the separate platform-operator portal (own login, outside any tenant).
-    return FileResponse(os.path.join(frontend_dir, "admin.html"))
+    # Tekly's own back office (separate login, outside any shop): a React page built from
+    # frontend-react/admin.html. It has no inline script, so it gets the app's strict CSP.
+    page = os.path.join(react_dir, "admin.html")
+    if os.path.isfile(page):
+        return FileResponse(page, headers={"Cache-Control": "no-cache"})
+    return HTMLResponse(_NOT_BUILT, status_code=503)
+
+
+@app.get("/c/{token}", include_in_schema=False)
+@app.get("/c/s/{token}", include_in_schema=False)
+async def serve_checkin(token: str):
+    # Self check-in page and the customer's status page (main.tsx detects "/c/").
+    return _serve_react()
 
 
 @app.get("/book/{slug}", include_in_schema=False)
@@ -264,10 +368,54 @@ async def serve_book(slug: str):
     return _serve_react()
 
 
+# ── Tekly Go (phone app, a second page of the React build) ──
+# Served at /go/. Its service worker lives at /go/sw.js and controls only /go/, so it never
+# touches the web app or the /tech worker's root scope.
+_go_dir = os.path.join(react_dir, "go")
+_go_index = os.path.join(_go_dir, "index.html")
+
+
+@app.get("/go", include_in_schema=False)
+async def serve_go_root():
+    return RedirectResponse("/go/", status_code=307)
+
+
+@app.get("/go/sw.js", include_in_schema=False)
+async def serve_go_sw():
+    if not os.path.isfile(os.path.join(_go_dir, "sw.js")):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    return FileResponse(os.path.join(_go_dir, "sw.js"), media_type="text/javascript",
+                        headers={"Service-Worker-Allowed": "/go/", "Cache-Control": "no-cache"})
+
+
+@app.get("/go/manifest.webmanifest", include_in_schema=False)
+async def serve_go_manifest():
+    if not os.path.isfile(os.path.join(_go_dir, "manifest.webmanifest")):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    return FileResponse(os.path.join(_go_dir, "manifest.webmanifest"), media_type="application/manifest+json",
+                        headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/go/{path:path}", include_in_schema=False)
+async def serve_go(path: str = ""):
+    # Every Go route (/go/today, /go/job/<id>, /go/scan …) is the same shell; the router picks the screen.
+    if os.path.isfile(_go_index):
+        return FileResponse(_go_index, headers={"Cache-Control": "no-cache"})
+    return HTMLResponse(_NOT_BUILT, status_code=503)
+
+
 # ── Technician PWA ──
 @app.get("/tech", include_in_schema=False)
 async def serve_tech():
     return FileResponse(os.path.join(frontend_dir, "tech.html"))
+
+
+@app.get("/robots.txt", include_in_schema=False)
+async def robots_txt():
+    # The app domain is private (staff screens, tokenised customer links); the marketing site has
+    # its own robots.txt and sitemap.
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse("User-agent: *\nDisallow: /\n")
 
 
 @app.get("/sw.js", include_in_schema=False)
@@ -300,7 +448,26 @@ async def serve_offline():
 
 @app.get("/portal/{token}", include_in_schema=False)
 async def serve_portal(token: str):
-    return FileResponse(os.path.join(frontend_dir, "portal.html"))
+    # Customer portal (all of a customer's jobs) — React page (main.tsx detects "/portal/"
+    # and renders <PublicPortal/>).
+    return _serve_react()
+
+
+def _contained_file(base_dir: str, rel: str):
+    """Return the real path of `rel` under `base_dir` if it is an existing file *inside*
+    base_dir, else None. Guards the SPA fallback against path traversal: `..` segments,
+    percent-encoded slashes (decoded by the server before routing), absolute paths (which
+    os.path.join would otherwise let replace the base) and symlinks pointing outside."""
+    if not rel or "\x00" in rel or "\\" in rel:
+        return None
+    try:
+        base = os.path.realpath(base_dir)
+        cand = os.path.realpath(os.path.join(base, rel))
+        if os.path.commonpath([base, cand]) != base or not os.path.isfile(cand):
+            return None
+    except (ValueError, OSError):
+        return None
+    return cand
 
 
 @app.get("/{path:path}", include_in_schema=False)
@@ -310,12 +477,13 @@ async def serve_spa(path: str):
         return JSONResponse({"detail": "Not Found"}, status_code=404)
     # Serve a real built React file (favicon, vite.svg, etc.) if present.
     if path and _have_react:
-        rcand = os.path.join(react_dir, path)
-        if os.path.isfile(rcand):
+        rcand = _contained_file(react_dir, path)
+        if rcand:
             return FileResponse(rcand)
     # Then any real legacy file (public assets), else the React SPA shell so
-    # client-side routes resolve on hard refresh.
-    candidate = os.path.join(frontend_dir, path)
-    if path and os.path.isfile(candidate):
+    # client-side routes resolve on hard refresh. Traversal attempts fall through to
+    # the shell, exactly like any other unknown path.
+    candidate = _contained_file(frontend_dir, path)
+    if candidate:
         return FileResponse(candidate)
     return _serve_react()

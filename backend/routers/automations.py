@@ -5,7 +5,6 @@ that a scheduled task can hit, and a dry-run tester so users can see which
 orders a rule would fire on before enabling it.
 """
 import json
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,8 +15,9 @@ from sqlalchemy.orm import selectinload
 
 from backend.db.database import get_db
 from backend.models import AutomationRule, Employee, Order, Part, StockLevel
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, require_perm
 from backend.services import automation as auto
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/automations", tags=["automations"])
 
@@ -66,11 +66,36 @@ class RuleIn(BaseModel):
     sort_order: int = 0
 
 
-def _validate(data: RuleIn):
+async def _validate(data: RuleIn):
     if data.event not in auto.VALID_EVENTS:
         raise HTTPException(422, f"event must be one of {sorted(auto.VALID_EVENTS)}")
     if data.action_type not in auto.VALID_ACTIONS:
         raise HTTPException(422, f"action_type must be one of {sorted(auto.VALID_ACTIONS)}")
+    if data.action_type == "webhook":
+        # B2: the same public-URL rule as webhook endpoints, checked when the rule is saved and
+        # again (pinned to the checked IP) on every delivery.
+        url = data.action_config.get("url") if isinstance(data.action_config, dict) else None
+        if not isinstance(url, str) or not url.strip() or len(url) > 500:
+            raise HTTPException(422, "Add the webhook URL")
+        from backend.routers.webhooks import require_webhook_url
+        data.action_config = {**data.action_config, "url": await require_webhook_url(url)}
+
+
+async def _sync_webhook_target(db, org_id, r: AutomationRule):
+    """Keep the rule's hidden signed endpoint in step with its action. Returns the signing
+    secret when one was just created (shown once), else None."""
+    from backend.models import WebhookEndpoint
+    from backend.services import webhooks as wh
+    cfg = json.loads(r.action_config) if r.action_config else {}
+    if r.action_type == "webhook" and cfg.get("url"):
+        _, fresh = await wh.automation_endpoint(db, org_id, r.id, cfg["url"])
+        return fresh
+    ep = (await db.execute(select(WebhookEndpoint).where(
+        WebhookEndpoint.org_id == org_id, WebhookEndpoint.kind == "automation",
+        WebhookEndpoint.source_id == r.id, WebhookEndpoint.deleted_at.is_(None)))).scalars().first()
+    if ep:
+        ep.active, ep.deleted_at = False, now_utc()
+    return None
 
 
 @router.get("/meta")
@@ -91,8 +116,8 @@ async def list_rules(db: AsyncSession = Depends(get_db),
 
 @router.post("", status_code=201)
 async def create_rule(data: RuleIn, db: AsyncSession = Depends(get_db),
-                      current: Employee = Depends(get_current_employee)):
-    _validate(data)
+                      current: Employee = Depends(require_perm("can_manage_settings"))):
+    await _validate(data)
     r = AutomationRule(
         org_id=current.org_id, name=data.name, event=data.event,
         trigger_status=data.trigger_status,
@@ -101,15 +126,17 @@ async def create_rule(data: RuleIn, db: AsyncSession = Depends(get_db),
         action_config=json.dumps(data.action_config) if data.action_config else None,
         active=data.active, sort_order=data.sort_order)
     db.add(r)
+    await db.flush()
+    secret = await _sync_webhook_target(db, current.org_id, r)
     await db.commit()
     await db.refresh(r)
-    return {"id": r.id}
+    return {"id": r.id, **({"signing_secret": secret} if secret else {})}
 
 
 @router.put("/{rule_id}")
 async def update_rule(rule_id: str, data: RuleIn, db: AsyncSession = Depends(get_db),
-                      current: Employee = Depends(get_current_employee)):
-    _validate(data)
+                      current: Employee = Depends(require_perm("can_manage_settings"))):
+    await _validate(data)
     r = (await db.execute(select(AutomationRule).where(
         AutomationRule.id == rule_id, AutomationRule.org_id == current.org_id))).scalar_one_or_none()
     if not r:
@@ -122,16 +149,19 @@ async def update_rule(rule_id: str, data: RuleIn, db: AsyncSession = Depends(get
     r.action_config = json.dumps(data.action_config) if data.action_config else None
     r.active = data.active
     r.sort_order = data.sort_order
+    secret = await _sync_webhook_target(db, current.org_id, r)
     await db.commit()
-    return {"ok": True}
+    return {"ok": True, **({"signing_secret": secret} if secret else {})}
 
 
 @router.delete("/{rule_id}")
 async def delete_rule(rule_id: str, db: AsyncSession = Depends(get_db),
-                      current: Employee = Depends(get_current_employee)):
+                      current: Employee = Depends(require_perm("can_manage_settings"))):
     r = (await db.execute(select(AutomationRule).where(
         AutomationRule.id == rule_id, AutomationRule.org_id == current.org_id))).scalar_one_or_none()
     if r:
+        r.action_type = "deleted"
+        await _sync_webhook_target(db, current.org_id, r)   # retire its webhook target (B14)
         await db.delete(r)
         await db.commit()
     return {"ok": True}
@@ -158,10 +188,10 @@ async def test_rule(rule_id: str, db: AsyncSession = Depends(get_db),
 
 @router.post("/sweep")
 async def sweep(db: AsyncSession = Depends(get_db),
-                current: Employee = Depends(get_current_employee)):
+                current: Employee = Depends(require_perm("can_manage_settings"))):
     """Fire time-based automations: overdue work orders and low-stock products.
     Intended to be called on a schedule (e.g. hourly)."""
-    now = datetime.utcnow()
+    now = now_utc()
     fired = 0
 
     # overdue orders: past their promised time (due_at or scheduled_to) and still open

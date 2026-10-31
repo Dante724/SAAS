@@ -1,3 +1,4 @@
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends
@@ -7,15 +8,46 @@ from sqlalchemy.orm import selectinload
 from backend.db.database import get_db
 from backend.models import Order, Client, Invoice, Part, StockLevel, Task, Employee
 from backend.services.auth import get_current_employee, require_perm
+from backend.services.dates import day_start_utc, now_utc, shop_today, shop_tzname, today_in
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
+
+# Short per-org cache for the dashboard tiles: every reports visit (and every tab) used to
+# re-run all of these aggregates. Shop-wide numbers, the same for everyone allowed to see
+# them, so a few seconds of staleness is harmless. In-process; bounded.
+_DASH_TTL_S = 30
+_dash_cache: dict = {}   # org_id -> (expires_at, payload)
+
+
+def low_stock_count_query(org_id: str):
+    """Parts at or under their minimum, counted in the database: one aggregate instead of
+    loading every part and every stock row into Python."""
+    on_hand = (select(StockLevel.part_id, func.sum(StockLevel.qty_available).label("qty"))
+               .join(Part, Part.id == StockLevel.part_id).where(Part.org_id == org_id)
+               .group_by(StockLevel.part_id).subquery())
+    return (select(func.count()).select_from(Part)
+            .outerjoin(on_hand, on_hand.c.part_id == Part.id)
+            .where(Part.org_id == org_id, func.coalesce(on_hand.c.qty, 0) <= func.coalesce(Part.min_stock, 0)))
+
 
 @router.get("/dashboard")
 async def dashboard(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_reports")),
 ):
-    oid = current.org_id
+    import time
+    now = time.monotonic()
+    hit = _dash_cache.get(current.org_id)
+    if hit and hit[0] > now:
+        return hit[1]
+    out = await _dashboard(db, current.org_id)
+    if len(_dash_cache) > 5000:
+        _dash_cache.clear()
+    _dash_cache[current.org_id] = (now + _DASH_TTL_S, out)
+    return out
+
+
+async def _dashboard(db, oid: str) -> dict:
 
     total_orders = (await db.execute(
         select(func.count()).select_from(Order).where(Order.org_id == oid)
@@ -36,7 +68,7 @@ async def dashboard(
     )).scalar() or 0
 
     outstanding = (await db.execute(
-        select(func.sum(Invoice.total - Invoice.amount_paid))
+        select(func.sum(Invoice.total - Invoice.amount_paid - Invoice.credited))
         .where(Invoice.org_id == oid, Invoice.status.in_(["draft", "partial"]))
     )).scalar() or 0
 
@@ -60,16 +92,7 @@ async def dashboard(
     )
     by_status = {row[0]: row[1] for row in status_result.all()}
 
-    # Low stock count
-    all_parts = (await db.execute(select(Part).where(Part.org_id == oid))).scalars().all()
-    all_stock = (await db.execute(
-        select(StockLevel).where(StockLevel.part_id.in_([p.id for p in all_parts]))
-    )).scalars().all()
-    stock_by_part = {}
-    for s in all_stock:
-        stock_by_part.setdefault(s.part_id, 0)
-        stock_by_part[s.part_id] += s.qty_available
-    low_stock_count = sum(1 for p in all_parts if stock_by_part.get(p.id, 0) <= p.min_stock)
+    low_stock_count = (await db.execute(low_stock_count_query(oid))).scalar() or 0
 
     return {
         "stats": {
@@ -112,18 +135,17 @@ async def low_stock_report(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
-    parts = (await db.execute(select(Part).where(Part.org_id == current.org_id))).scalars().all()
-    stocks = (await db.execute(
-        select(StockLevel).where(StockLevel.part_id.in_([p.id for p in parts]))
-    )).scalars().all()
-    stock_map = {}
-    for s in stocks:
-        stock_map.setdefault(s.part_id, 0)
-        stock_map[s.part_id] += s.qty_available
-    low = [
-        {"id": p.id, "name": p.name, "qty": stock_map.get(p.id, 0), "min_stock": p.min_stock}
-        for p in parts if stock_map.get(p.id, 0) <= p.min_stock
-    ]
+    # One aggregate query: on-hand per part summed in SQL, only the four columns the report shows
+    # (was: every Part row loaded, then every StockLevel row for them).
+    on_hand = func.coalesce(func.sum(StockLevel.qty_available), 0)
+    rows = (await db.execute(
+        select(Part.id, Part.name, Part.min_stock, on_hand)
+        .outerjoin(StockLevel, StockLevel.part_id == Part.id)
+        .where(Part.org_id == current.org_id)
+        .group_by(Part.id, Part.name, Part.min_stock)
+        .having(on_hand <= func.coalesce(Part.min_stock, 0)))).all()
+    low = [{"id": pid, "name": name, "qty": qty, "min_stock": min_stock}
+           for pid, name, min_stock, qty in rows]
     return {"count": len(low), "items": low}
 
 
@@ -138,16 +160,16 @@ from datetime import datetime, timedelta
 from fastapi import Query
 from fastapi.responses import StreamingResponse
 import io
-from sqlalchemy import and_, or_, desc
 from backend.models import (
     OrderLine, OrderStatus, Transaction, Account, CashFlowItem,
-    StockMovement, Supplier, Payment, Device, EventFeedItem, WorkOrderType,
+    StockMovement, Supplier, Payment, EventFeedItem,
 )
-from backend.services.money import q2, q4
+from backend.services.money import q2
+from backend.core.spreadsheet import safe_row
 
 
 def _parse_range(date_from, date_to):
-    df = datetime.fromisoformat(date_from) if date_from else datetime.utcnow() - timedelta(days=30)
+    df = datetime.fromisoformat(date_from) if date_from else now_utc() - timedelta(days=30)
     if date_to:
         dt = datetime.fromisoformat(date_to)
         # A date-only "To" (YYYY-MM-DD) parses to 00:00:00 — that would silently drop
@@ -156,7 +178,7 @@ def _parse_range(date_from, date_to):
         if dt.time() == datetime.min.time():
             dt = dt + timedelta(days=1) - timedelta(seconds=1)
     else:
-        dt = datetime.utcnow() + timedelta(days=1)
+        dt = now_utc() + timedelta(days=1)
     return df, dt
 
 
@@ -166,6 +188,13 @@ async def _closed_ready_keys(db, org_id):
     rows = (await db.execute(select(OrderStatus).where(
         OrderStatus.org_id == org_id, OrderStatus.status_group.in_(["ready", "closed"])))).scalars().all()
     return {s.key for s in rows}
+
+
+async def _dropped_keys(db, org_id) -> list:
+    """Status keys in the Dropped group. A dropped job earned nothing (its unpaid balance is
+    written off), so profit reports leave it out instead of counting its lines as revenue."""
+    return [k for (k,) in (await db.execute(select(OrderStatus.key).where(
+        OrderStatus.org_id == org_id, OrderStatus.status_group == "dropped"))).all()]
 
 
 # ── The report builders. Each returns (columns, rows). ──
@@ -192,6 +221,8 @@ async def _rep_work_orders_created(db, org, df, dt, **kw):
 async def _rep_work_orders_closed(db, org, df, dt, **kw):
     _q = _loc_filter(select(Order).where(
         Order.org_id == org, Order.closed_at != None, Order.closed_at >= df, Order.closed_at <= dt), kw)  # noqa: E711
+    if kw.get("hide_zero"):
+        _q = _q.where(func.coalesce(Order.total, 0) != 0)
     rows = (await db.execute(_q
         .options(selectinload(Order.client), selectinload(Order.assigned_to))
         .order_by(Order.closed_at.desc()))).scalars().all()
@@ -202,19 +233,107 @@ async def _rep_work_orders_closed(db, org, df, dt, **kw):
     return cols, data
 
 
+async def _rep_lead_source_revenue(db, org, df, dt, **kw):
+    """Which lead sources bring paying customers: new clients, orders and money received in the
+    period, grouped by the client's lead source (Settings → Directories → Lead sources)."""
+    src = func.coalesce(func.nullif(Client.source, ""), "Not recorded")
+    new_clients = dict((await db.execute(select(src, func.count()).where(
+        Client.org_id == org, Client.created_at >= df, Client.created_at <= dt).group_by(src))).all())
+    oq = _loc_filter(select(src, func.count(Order.id), func.coalesce(func.sum(Order.total), 0))
+        .join(Client, Client.id == Order.client_id).where(
+        Order.org_id == org, Order.is_estimate == False,  # noqa: E712
+        Order.created_at >= df, Order.created_at <= dt), kw).group_by(src)
+    orders = {k: (n, t) for k, n, t in (await db.execute(oq)).all()}
+    # A payment names its client directly or only through its order — attribute either way.
+    pq = (select(src, func.coalesce(func.sum(Payment.amount), 0))
+          .select_from(Payment).outerjoin(Order, Order.id == Payment.order_id)
+          .join(Client, Client.id == func.coalesce(Payment.client_id, Order.client_id))
+          .where(Client.org_id == org, func.coalesce(Payment.kind, "payment") != "refund",
+                 Payment.paid_at >= df, Payment.paid_at <= dt).group_by(src))
+    paid = dict((await db.execute(pq)).all())
+    keys = sorted(set(new_clients) | set(orders) | set(paid), key=lambda k: -float(paid.get(k, 0) or 0))
+    cols = ["Lead source", "New clients", "Work orders", "Order value", "Paid", "Avg paid / new client"]
+    data = []
+    for k in keys:
+        n_new = new_clients.get(k, 0)
+        n_ord, val = orders.get(k, (0, 0))
+        p = float(paid.get(k, 0) or 0)
+        data.append([k, n_new, n_ord, q2(val), q2(p), q2(p / n_new) if n_new else "—"])
+    return cols, data
+
+
+async def _rep_cancellations(db, org, df, dt, **kw):
+    """Why jobs get cancelled: work orders that entered a dropped status in the period, by the
+    reason captured at cancellation (Settings → Directories → Cancellation reasons)."""
+    from backend.models import OrderStatus
+    dropped = [k for (k,) in (await db.execute(select(OrderStatus.key).where(
+        OrderStatus.org_id == org, OrderStatus.status_group == "dropped"))).all()]
+    cols = ["Reason", "Work orders", "Share", "Lost value", "Written off"]
+    if not dropped:
+        return cols, []
+    reason = func.coalesce(func.nullif(Order.cancel_reason, ""), "No reason given")
+    q = _loc_filter(select(reason, func.count(), func.coalesce(func.sum(Order.total), 0),
+                           func.coalesce(func.sum(Order.written_off), 0)).where(
+        Order.org_id == org, Order.status.in_(dropped), Order.is_estimate == False,  # noqa: E712
+        func.coalesce(Order.closed_at, Order.created_at) >= df,
+        func.coalesce(Order.closed_at, Order.created_at) <= dt), kw).group_by(reason)
+    rows = sorted((await db.execute(q)).all(), key=lambda r: -r[1])
+    total = sum(r[1] for r in rows) or 1
+    return cols, [[r, n, f"{round(n * 100 / total)}%", q2(v), q2(w)] for r, n, v, w in rows]
+
+
+async def _rep_dropped_jobs(db, org, df, dt, **kw):
+    """Unsuccessful jobs profit: one row per job dropped in the period — what was paid, what was
+    written off, and the profit after costs, tax and commission (services/profit)."""
+    from backend.services.profit import closed_jobs_query, dropped_keys, job_figures
+    cols = ["Job #", "Dropped", "Client", "Technician", "Type", "Status", "Reason", "Job total",
+            "Money kept", "Written off", "Tax", "Parts cost", "Labour cost", "Commission", "Profit"]
+    dropped = await dropped_keys(db, org)
+    if kw.get("status"):
+        dropped &= {kw["status"]}
+    if not dropped:
+        return cols, []
+    q = closed_jobs_query(org, df, dt, location_id=kw.get("location_id")).where(Order.status.in_(dropped))
+    if kw.get("type_id"):
+        q = q.where(Order.type_id == kw["type_id"])
+    orders = (await db.execute(q.options(selectinload(Order.client), selectinload(Order.assigned_to))
+                               .order_by(Order.closed_at.desc()))).scalars().all()
+    figs = await job_figures(db, org, list(orders), dropped)
+    from backend.models import WorkOrderType
+    tids = {o.type_id for o in orders if o.type_id}
+    tname = dict((await db.execute(select(WorkOrderType.id, WorkOrderType.name).where(
+        WorkOrderType.id.in_(tids), WorkOrderType.org_id == org))).all()) if tids else {}
+    sname = dict((await db.execute(select(OrderStatus.key, OrderStatus.name).where(
+        OrderStatus.org_id == org, OrderStatus.key.in_(dropped)))).all())
+    data = []
+    for o in orders:
+        f = figs[o.id]
+        data.append([o.order_number, o.closed_at.strftime("%Y-%m-%d"), o.client.name if o.client else "—",
+                     o.assigned_to.name if o.assigned_to else "—", tname.get(o.type_id, "—"),
+                     sname.get(o.status, o.status), o.cancel_reason or "No reason given", f["total"],
+                     f["charged"], f["written_off"], f["tax"], f["cogs"], f["labour_cost"],
+                     f["commission"], f["profit"]])
+    return cols, data
+
+
 async def _rep_wo_profit(db, org, df, dt, **kw):
-    """Per-order: revenue, cost, gross profit, markup %."""
+    """Per work order created in the period (open ones are estimated): revenue after tax, cost
+    (parts + labour + commission), profit, markup %. Same maths as every profit screen
+    (services/profit.job_figures)."""
+    from backend.services.profit import job_figures
     _q = _loc_filter(select(Order).where(
-        Order.org_id == org, Order.created_at >= df, Order.created_at <= dt), kw)
-    orders = (await db.execute(_q.options(selectinload(Order.lines)))).scalars().all()
+        Order.org_id == org, Order.is_estimate == False, Order.archived == False,  # noqa: E712
+        Order.created_at >= df, Order.created_at <= dt,
+        Order.status.notin_(await _dropped_keys(db, org))), kw)          # dropped jobs earned nothing
+    orders = (await db.execute(_q.order_by(Order.created_at.desc()))).scalars().all()
+    figs = await job_figures(db, org, list(orders))
     cols = ["Order #", "Revenue", "Cost", "Gross profit", "Markup %"]
     data = []
     for o in orders:
-        rev = sum(l.total for l in o.lines)
-        cost = sum((l.cost_price or 0) * l.qty for l in o.lines)
-        gp = rev - cost
-        markup = round(gp / cost * 100, 1) if cost else 0
-        data.append([o.order_number, q2(rev), q2(cost), q2(gp), markup])
+        f = figs[o.id]
+        cost = q2(f["cogs"] + f["labour_cost"] + f["commission"])
+        markup = round(f["profit"] / cost * 100, 1) if cost else 0
+        data.append([o.order_number, f["revenue"], cost, f["profit"], markup])
     return cols, data
 
 
@@ -222,7 +341,9 @@ async def _rep_technicians(db, org, df, dt, **kw):
     """Per-technician: orders closed, revenue, line-level profit."""
     lines = (await db.execute(
         select(OrderLine, Order).join(Order, OrderLine.order_id == Order.id)
-        .where(Order.org_id == org, Order.created_at >= df, Order.created_at <= dt))).all()
+        .where(Order.org_id == org, Order.created_at >= df, Order.created_at <= dt,
+               Order.is_estimate == False,                              # noqa: E712
+               Order.status.notin_(await _dropped_keys(db, org))))).all()
     emp = {e.id: e.name for e in (await db.execute(select(Employee).where(Employee.org_id == org))).scalars().all()}
     # 144aw — attribute revenue/cost by the SAME split rule payroll uses (co_technicians →
     # single tech → order assignee), so this report reconciles with the commission ledger.
@@ -310,16 +431,24 @@ async def _rep_total_money(db, org, df, dt, **kw):
 
 
 async def _rep_product_turnover(db, org, df, dt, **kw):
-    """Goods written off to orders/sales (movement_type=use)."""
+    """Goods written off to orders/sales (movement_type=use). `movement`: "with" (default) lists
+    products used in the period; "without" lists active products with no use in it; "all" both."""
+    movement = kw.get("movement") or "with"
     rows = (await db.execute(
         select(StockMovement, Part).join(Part, StockMovement.part_id == Part.id)
         .where(Part.org_id == org, StockMovement.movement_type == "use",
                StockMovement.created_at >= df, StockMovement.created_at <= dt))).all()
-    agg = {}
+    agg: dict = {}
     for mv, part in rows:
-        agg[part.name] = agg.get(part.name, 0) + abs(mv.qty)
-    cols = ["Product", "Qty used (orders/sales)"]
-    data = [[k, q2(v)] for k, v in agg.items()]
+        a = agg.setdefault(part.id, [part.name, part.sku or "—", 0.0])
+        a[2] += abs(mv.qty or 0)
+    cols = ["Product", "SKU", "Qty used (orders/sales)"]
+    data = [[n, sku, q2(v)] for n, sku, v in agg.values()] if movement in ("with", "all") else []
+    if movement in ("without", "all"):
+        idle = (await db.execute(select(Part.name, Part.sku).where(
+            Part.org_id == org, Part.active == True,  # noqa: E712
+            Part.id.notin_(list(agg) or [""])).order_by(Part.name))).all()
+        data += [[n, sku or "—", 0] for n, sku in idle]
     return cols, data
 
 
@@ -362,6 +491,9 @@ async def _rep_labor_utilization(db, org, df, dt, **kw):
     rows = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == org, TimeEntry.state != "void",
         TimeEntry.started_at >= df, TimeEntry.started_at < dt))).scalars().all()
+    scope = kw.get("payroll_ids")          # E3: labour cost reveals pay rates
+    if scope is not None:
+        rows = [e for e in rows if e.employee_id in scope]
     emps = {e.id: e.name for e in (await db.execute(
         select(Employee).where(Employee.org_id == org))).scalars().all()}
     agg = {}
@@ -389,6 +521,9 @@ async def _rep_labor_by_job(db, org, df, dt, **kw):
     rows = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == org, TimeEntry.state != "void", TimeEntry.order_id.is_not(None),
         TimeEntry.started_at >= df, TimeEntry.started_at < dt))).scalars().all()
+    scope = kw.get("payroll_ids")          # E3: labour cost reveals pay rates
+    if scope is not None:
+        rows = [e for e in rows if e.employee_id in scope]
     by_order = {}
     for e in rows:
         a = by_order.setdefault(e.order_id, {"sec": 0, "cost": 0.0, "bill": 0.0})
@@ -453,6 +588,9 @@ async def _rep_labor_cost(db, org, df, dt, **kw):
     rows = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == org, TimeEntry.state != "void",
         TimeEntry.started_at >= df, TimeEntry.started_at < dt))).scalars().all()
+    scope = kw.get("payroll_ids")          # E3: only the people the caller's payroll scope covers
+    if scope is not None:
+        rows = [e for e in rows if e.employee_id in scope]
     total = sum(e.duration_sec for e in rows)
     billable = sum(e.duration_sec for e in rows if e.billable)
     cost = sum(e.duration_sec / 3600 * (e.cost_rate or 0) for e in rows)
@@ -506,7 +644,7 @@ async def _rep_purchase_list(db, org, df, dt, **kw):
     promised to a customer, falls below its minimum — reserved stock isn't really yours
     to sell. Anything already on order is netted off, so the same part isn't ordered
     twice while the first delivery is still in transit."""
-    from backend.models import POLine, PurchaseOrder, Supplier
+    from backend.models import POLine, PurchaseOrder
 
     parts = (await db.execute(select(Part).where(
         Part.org_id == org, Part.active == True)  # noqa: E712
@@ -548,7 +686,6 @@ async def _rep_expiration(db, org, df, dt, **kw):
     """Batches by how close they are to expiring. Anything already past its date is
     reported as a negative day count rather than hidden — expired stock sitting on a
     shelf is exactly the thing this report exists to surface."""
-    from datetime import date as _date
 
     from backend.models import StockItemBatch, Warehouse
     whs = {w.id: w.name for w in (await db.execute(select(Warehouse).where(
@@ -559,7 +696,7 @@ async def _rep_expiration(db, org, df, dt, **kw):
                StockItemBatch.expiry_date.isnot(None),
                StockItemBatch.qty_remaining > 0))).all()
 
-    today = _date.today()
+    today = await shop_today(db, org)
     cols = ["Product", "SKU", "Warehouse", "Qty left", "Expires", "Days left", "Status",
             "Value at risk"]
     data = []
@@ -578,10 +715,20 @@ async def _rep_expiration(db, org, df, dt, **kw):
 async def _rep_payroll(db, org, df, dt, **kw):
     """Per-employee compensation accrued in the window, straight from the payroll
     ledger: commissions, hourly wages (both the labour-hours and shop-attendance
-    clocks post here), manual bonuses/penalties, and accrued base salary."""
+    clocks post here), manual bonuses/penalties, and accrued base salary.
+    E2: narrowed by location, role (position) and employee; `payroll_ids` is the caller's
+    payroll scope (None = everyone)."""
     from backend.models import EmployeeBalanceLedger, Role
-    emps = (await db.execute(select(Employee).where(
-        Employee.org_id == org, Employee.active == True))).scalars().all()  # noqa: E712
+    q = select(Employee).where(Employee.org_id == org, Employee.active == True)  # noqa: E712
+    if kw.get("location_id"):
+        # no home location = not tied to a branch, so they count in every branch's report
+        q = q.where((Employee.location_id == kw["location_id"]) | Employee.location_id.is_(None))
+    if kw.get("role_id"):
+        q = q.where(Employee.role_id == kw["role_id"])
+    if kw.get("employee_id"):
+        q = q.where(Employee.id == kw["employee_id"])
+    scope = kw.get("payroll_ids")
+    emps = [e for e in (await db.execute(q)).scalars().all() if scope is None or e.id in scope]
     roles = {r.id: r.name for r in (await db.execute(
         select(Role).where(Role.org_id == org))).scalars().all()}
     led = (await db.execute(select(EmployeeBalanceLedger).where(
@@ -659,7 +806,7 @@ async def _rep_dead_stock(db, org, df, dt, **kw):
         .group_by(StockMovement.part_id))).all()
     for pid, ts in mv_rows:
         last[pid] = ts
-    now = datetime.utcnow()
+    now = now_utc()
     cols = ["Product", "SKU", "On hand", "Unit cost", "Tied-up cash", "Last sold", "Days idle"]
     data = []
     for p in parts:
@@ -682,9 +829,9 @@ async def _rep_reorder_forecast(db, org, df, dt, **kw):
     days-of-cover and stockout date, then suggests an order quantity that covers the
     supplier's lead time plus a 14-day buffer — netting off what's already on order.
     Unlike the min-stock purchase list, this reacts to how fast things actually move."""
-    from backend.models import POLine, PurchaseOrder, Supplier
+    from backend.models import POLine, PurchaseOrder
     WINDOW, COVER = 28, 14
-    since = datetime.utcnow() - timedelta(days=WINDOW)
+    since = now_utc() - timedelta(days=WINDOW)
     vel = {pid: float(q or 0) for pid, q in (await db.execute(
         select(StockMovement.part_id, func.sum(func.abs(StockMovement.qty)))
         .join(Part, StockMovement.part_id == Part.id)
@@ -722,11 +869,80 @@ async def _rep_reorder_forecast(db, org, df, dt, **kw):
         if suggest <= 0:
             continue
         cost = p.avg_cost or p.cost_price or 0
-        stockout = (datetime.utcnow() + timedelta(days=days_left)).strftime("%Y-%m-%d")
+        stockout = (now_utc() + timedelta(days=days_left)).strftime("%Y-%m-%d")
         data.append([p.name, p.sku or "—", q2(free), q2(daily), round(days_left, 1), stockout, ld, q2(incoming.get(p.id, 0)),
                      round(suggest, 1), q2(suggest * cost)])
     data.sort(key=lambda r: r[4])
     return cols, data
+
+
+# Reports exposing sensitive figures need the matching permission on top of can_view_reports.
+REPORT_PERMS = {
+    "payroll": "can_view_payroll", "labor_cost": "can_view_payroll",
+    "labor_utilization": "can_view_payroll", "labor_by_job": "can_view_payroll",   # labour cost = pay rates
+    "wo_profit": ("can_see_profit", "can_view_purchase_price"),   # plain table: its cost column can't be hidden
+    # A plain table can't have its cost columns removed per viewer, so it needs both rights.
+    "dropped_jobs": ("can_see_profit", "can_view_purchase_price"),
+    "cash_flow": "can_view_cashflow", "total_money": "can_view_balance",
+    "stock_valuation": "can_view_purchase_price",
+}
+
+
+# Downloading these as a file needs its own right on top of seeing them.
+EXPORT_PERMS = {
+    "sold_products": "can_export_sales", "provided_services": "can_export_sales",
+    "payroll": "can_export_payroll", "labor_cost": "can_export_payroll",
+    "labor_utilization": "can_export_payroll", "labor_by_job": "can_export_payroll",
+}
+
+
+async def _assert_report_access(db, current, report_key: str, export: bool = False) -> None:
+    from backend.services.auth import assert_perm
+    await assert_perm(db, current, "can_view_reports")
+    need = REPORT_PERMS.get(report_key) or ()
+    for perm in ((need,) if isinstance(need, str) else need):
+        await assert_perm(db, current, perm)
+    if export and report_key in EXPORT_PERMS:
+        await assert_perm(db, current, EXPORT_PERMS[report_key])
+
+
+PAYROLL_REPORTS = {"payroll", "labor_cost", "labor_utilization", "labor_by_job"}
+
+
+class ReportFilters:
+    """Optional report filters; each builder reads only the ones it understands, unknown values
+    are dropped. movement: product turnover (with | without | all); hide_zero: closed jobs;
+    type_id / status: unsuccessful jobs."""
+    def __init__(self, movement: Optional[str] = Query(None), hide_zero: Optional[str] = Query(None, max_length=10),
+                 type_id: Optional[str] = Query(None, max_length=64),
+                 status: Optional[str] = Query(None, max_length=60)):
+        self.kw = {k: v for k, v in {
+            "movement": movement if movement in ("with", "without", "all") else None,
+            "hide_zero": (hide_zero or "").lower() in ("1", "true", "yes", "on"),
+            "type_id": type_id, "status": status}.items() if v}
+
+
+async def _builder_kw(db, current, report_key: str, location_id, role_id, employee_id,
+                      filters: Optional[ReportFilters] = None) -> dict:
+    """Extra builder arguments: the branch, plus (payroll reports) the role/employee filters and
+    the caller's payroll scope, so the screen, the run and every export show the same rows."""
+    kw = {"location_id": location_id, **(filters.kw if filters else {})}
+    if report_key in PAYROLL_REPORTS:
+        from backend.services.payroll_views import assert_payroll_scope, payroll_scope_ids
+        if employee_id:
+            await assert_payroll_scope(db, current, employee_id)
+        kw.update(role_id=role_id, employee_id=employee_id,
+                  payroll_ids=await payroll_scope_ids(db, current))
+    return kw
+
+
+async def _report_from(db, current, report_key: str, df):
+    """The cash flow starts no earlier than today for a role without "any period"."""
+    if report_key != "cash_flow":
+        return df
+    from backend.routers.cash import cash_flow_floor
+    since = await cash_flow_floor(db, current)
+    return max(df, since) if since else df
 
 
 REPORTS = {
@@ -738,6 +954,9 @@ REPORTS = {
     "labor_cost":       ("Labor", "Labor cost summary", _rep_labor_cost),
     "wo_closed":        ("Work Orders", "Work orders closed", _rep_work_orders_closed),
     "wo_profit":        ("Finance", "Work orders profit", _rep_wo_profit),
+    "lead_sources":     ("Customers", "Revenue by lead source", _rep_lead_source_revenue),
+    "cancellations":    ("Work Orders", "Cancellations by reason", _rep_cancellations),
+    "dropped_jobs":     ("Finance", "Unsuccessful jobs profit", _rep_dropped_jobs),
     "technicians":      ("Work Orders", "Technicians performance", _rep_technicians),
     "provided_services":("Assortment", "Provided services (Ready+Closed)", _rep_provided_services),
     "sold_products":    ("Assortment", "Sold products (Ready+Closed)", _rep_sold_products),
@@ -771,15 +990,22 @@ async def run_report(
     date_from: str = Query(None),
     date_to: str = Query(None),
     location_id: str = Query(None),           # build 141: scope order-based reports to a branch
+    role_id: str = Query(None),               # E2: payroll reports — one role (position)
+    employee_id: str = Query(None),           # E2: payroll reports — one employee
+    filters: ReportFilters = Depends(),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    await _assert_report_access(db, current, report_key)
     if report_key not in REPORTS:
         from fastapi import HTTPException
         raise HTTPException(404, "Unknown report")
     tab, title, builder = REPORTS[report_key]
     df, dt = _parse_range(date_from, date_to)
-    cols, rows = await builder(db, current.org_id, df, dt, location_id=location_id)
+    df = await _report_from(db, current, report_key, df)
+    location_id = await _scoped_location(db, current, location_id)
+    cols, rows = await builder(db, current.org_id, df, dt,
+                               **await _builder_kw(db, current, report_key, location_id, role_id, employee_id, filters))
     # totals row for numeric columns
     return {"key": report_key, "title": title, "tab": tab,
             "columns": cols, "rows": rows, "row_count": len(rows)}
@@ -791,10 +1017,14 @@ async def export_report(
     date_from: str = Query(None),
     date_to: str = Query(None),
     location_id: str = Query(None),
+    role_id: str = Query(None),
+    employee_id: str = Query(None),
+    filters: ReportFilters = Depends(),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
     """Stream the report as a styled .xlsx (Orderry: export carries the full data)."""
+    await _assert_report_access(db, current, report_key, export=True)
     if report_key not in REPORTS:
         from fastapi import HTTPException
         raise HTTPException(404, "Unknown report")
@@ -802,7 +1032,10 @@ async def export_report(
     from openpyxl.styles import Font, PatternFill, Alignment
     tab, title, builder = REPORTS[report_key]
     df, dt = _parse_range(date_from, date_to)
-    cols, rows = await builder(db, current.org_id, df, dt, location_id=location_id)
+    df = await _report_from(db, current, report_key, df)
+    location_id = await _scoped_location(db, current, location_id)
+    cols, rows = await builder(db, current.org_id, df, dt,
+                               **await _builder_kw(db, current, report_key, location_id, role_id, employee_id, filters))
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -820,11 +1053,11 @@ async def export_report(
         cell.font = head_font
         cell.alignment = Alignment(horizontal="center")
     for r in rows:
-        ws.append(r)
+        ws.append(safe_row(r))
     for i, col in enumerate(cols, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = max(14, len(str(col)) + 4)
     buf = io.BytesIO()
-    wb.save(buf)
+    await asyncio.to_thread(wb.save, buf)
     buf.seek(0)
     fname = f"{report_key}_{df.strftime('%Y%m%d')}_{dt.strftime('%Y%m%d')}.xlsx"
     return StreamingResponse(
@@ -838,22 +1071,29 @@ async def export_report_csv(
     date_from: str = Query(None),
     date_to: str = Query(None),
     location_id: str = Query(None),
+    role_id: str = Query(None),
+    employee_id: str = Query(None),
+    filters: ReportFilters = Depends(),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
     """Stream any registered report as CSV (BI-friendly, opens anywhere)."""
+    await _assert_report_access(db, current, report_key, export=True)
     if report_key not in REPORTS:
         from fastapi import HTTPException
         raise HTTPException(404, "Unknown report")
     import csv
     _tab, _title, builder = REPORTS[report_key]
     df, dt = _parse_range(date_from, date_to)
-    cols, rows = await builder(db, current.org_id, df, dt, location_id=location_id)
+    df = await _report_from(db, current, report_key, df)
+    location_id = await _scoped_location(db, current, location_id)
+    cols, rows = await builder(db, current.org_id, df, dt,
+                               **await _builder_kw(db, current, report_key, location_id, role_id, employee_id, filters))
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(cols)
     for r in rows:
-        w.writerow(r)
+        w.writerow(safe_row(r))
     buf.seek(0)
     fname = f"{report_key}_{df.strftime('%Y%m%d')}_{dt.strftime('%Y%m%d')}.csv"
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
@@ -869,33 +1109,72 @@ async def company_dashboard(
     """Rich 'My company' dashboard matching Orderry: today metrics, status mix,
     orders-by-assignee, account balances, and monthly KPIs. Optionally scoped to a
     single location via ?location_id=."""
-    from datetime import datetime, timedelta
-    from backend.models import Account, Payment, OrderStatus
+    from backend.models import Account, OrderStatus
     oid = current.org_id
-    now = datetime.utcnow()
-    today0 = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    month0 = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    location_id = await _scoped_location(db, current, location_id)
+    now = now_utc()
+    tz = await shop_tzname(db, oid)   # today/this month start on the shop's clock, not UTC's
+    today = today_in(tz)
+    today0 = day_start_utc(today, tz)
+    month0 = day_start_utc(today.replace(day=1), tz)
 
-    _oq = select(Order).where(Order.org_id == oid, Order.is_estimate == False)  # noqa: E712
+    # Everything below is aggregated in the database, per status (a shop has a handful): Home
+    # used to load every work order the shop ever had, and ten opens on a 30k-order shop took
+    # both workers to 4.8 GB. The status groups are applied to those few rows in Python.
+    from sqlalchemy import case, or_
+    scope = [Order.org_id == oid, Order.is_estimate == False]  # noqa: E712
     if location_id:
-        _oq = _oq.where(Order.location_id == location_id)
-    orders = (await db.execute(_oq.options(selectinload(Order.assigned_to)))).scalars().all()
+        scope.append(Order.location_id == location_id)
     statuses = (await db.execute(select(OrderStatus).where(OrderStatus.org_id == oid, OrderStatus.record_type == "work_order"))).scalars().all()
     grp = {s.key: s.status_group for s in statuses}
     closed_groups = {"closed", "dropped"}
 
-    def is_open(o): return grp.get(o.status) not in closed_groups
+    def is_open(status): return grp.get(status) not in closed_groups
 
-    wo_today = sum(1 for o in orders if o.created_at >= today0)
+    def n_if(cond): return func.coalesce(func.sum(case((cond, 1), else_=0)), 0)
+
+    per_status = (await db.execute(select(
+        Order.status, func.count(),
+        n_if(Order.created_at >= today0),
+        n_if(Order.priority >= 1),
+        n_if(Order.due_at < now),
+        func.coalesce(func.sum(Order.total), 0),
+        n_if(Order.created_at >= month0),
+    ).where(*scope).group_by(Order.status))).all()
+
+    wo_today = sum(r[2] for r in per_status)
+    # Payments carry no org_id: they belong to this shop through their job, invoice or account
+    # (one branch: through that branch's jobs). Every money total below uses the same scope.
+    if location_id:
+        mine = Payment.order_id.in_(select(Order.id).where(*scope))
+    else:
+        mine = or_(Payment.order_id.in_(select(Order.id).where(Order.org_id == oid)),
+                   Payment.invoice_id.in_(select(Invoice.id).where(Invoice.org_id == oid)),
+                   Payment.account_id.in_(select(Account.id).where(Account.org_id == oid)))
     revenue_today = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0))
-        .where(Payment.order_id.in_([o.id for o in orders] or ['_']), Payment.kind != "refund", Payment.paid_at >= today0))).scalar() or 0
+        .where(mine, Payment.kind != "refund", Payment.paid_at >= today0))).scalar() or 0
     refunds_today = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0))
-        .where(Payment.kind == "refund", Payment.paid_at >= today0))).scalar() or 0
+        .where(mine, Payment.kind == "refund", Payment.paid_at >= today0))).scalar() or 0
 
-    new_count = sum(1 for o in orders if grp.get(o.status) == "new")
-    urgent = sum(1 for o in orders if o.priority >= 1 and is_open(o))
-    overdue = sum(1 for o in orders if o.due_at and o.due_at < now and is_open(o))
-    receivables = sum((o.total or 0) for o in orders if is_open(o))
+    open_rows = [r for r in per_status if is_open(r[0])]
+    closed_rows = [r for r in per_status if grp.get(r[0]) in closed_groups]
+    new_count = sum(r[1] for r in per_status if grp.get(r[0]) == "new")
+    urgent = sum(r[3] for r in open_rows)
+    overdue = sum(r[4] for r in open_rows)
+    # "To collect" is what open jobs still owe, not their totals: money already taken counts (B3).
+    # Same rule as order_money.open_receivables (total − written off − payments net of refunds,
+    # never below zero per job), summed in one query rather than over a list of every open job.
+    closed_keys = [k for k, g in grp.items() if g in closed_groups]
+    paid = (select(Payment.order_id.label("order_id"), func.sum(case(
+        (Payment.kind == "refund", -func.abs(Payment.amount)), else_=Payment.amount)).label("paid"))
+        .where(Payment.order_id.in_(select(Order.id).where(*scope)))
+        .group_by(Payment.order_id).subquery())
+    owed = (func.coalesce(Order.total, 0) - func.coalesce(Order.written_off, 0)
+            - func.coalesce(paid.c.paid, 0))
+    receivables = q2(float((await db.execute(
+        select(func.coalesce(func.sum(case((owed > 0, owed), else_=0)), 0))
+        .select_from(Order).outerjoin(paid, paid.c.order_id == Order.id)
+        .where(*scope, *([Order.status.notin_(closed_keys)] if closed_keys else [])))).scalar() or 0))
 
     # accounts (cash vs cashless)
     accounts = (await db.execute(select(Account).where(Account.org_id == oid, Account.active == True))).scalars().all()  # noqa: E712
@@ -913,55 +1192,60 @@ async def company_dashboard(
 
     # status mix (open orders only, by group)
     mix = {}
-    for o in orders:
-        if is_open(o):
-            g = grp.get(o.status, "new")
-            mix[g] = mix.get(g, 0) + 1
+    for r in open_rows:
+        g = grp.get(r[0], "new")
+        mix[g] = mix.get(g, 0) + r[1]
 
     # orders by assignee (open)
     by_assignee = {}
-    for o in orders:
-        if is_open(o):
-            who = o.assigned_to.name if o.assigned_to else "Unassigned"
-            b = by_assignee.setdefault(who, {"new": 0, "in_progress": 0})
-            g = grp.get(o.status)
-            if g == "new": b["new"] += 1
-            else: b["in_progress"] += 1
+    for name, status, n in (await db.execute(
+            select(Employee.name, Order.status, func.count())
+            .select_from(Order).outerjoin(Employee, Employee.id == Order.assigned_to_id)
+            .where(*scope).group_by(Employee.name, Order.status))).all():
+        if not is_open(status):
+            continue
+        b = by_assignee.setdefault(name or "Unassigned", {"new": 0, "in_progress": 0})
+        b["new" if grp.get(status) == "new" else "in_progress"] += n
     assignee_rows = sorted(
         [{"name": k, "new": v["new"], "in_progress": v["in_progress"], "total": v["new"] + v["in_progress"]}
          for k, v in by_assignee.items()], key=lambda r: -r["total"])[:8]
 
     # monthly KPIs
-    wo_month = [o for o in orders if o.created_at >= month0]
-    won_month = [o for o in wo_month if grp.get(o.status) in closed_groups]
+    wo_month = sum(r[6] for r in per_status)
+    won_month = sum(r[6] for r in closed_rows)
     revenue_month = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0))
-        .where(Payment.kind != "refund", Payment.paid_at >= month0))).scalar() or 0
-    closed_total = sum((o.total or 0) for o in orders if grp.get(o.status) in closed_groups)
-    closed_n = sum(1 for o in orders if grp.get(o.status) in closed_groups)
+        .where(mine, Payment.kind != "refund", Payment.paid_at >= month0))).scalar() or 0
+    closed_total = sum(float(r[5] or 0) for r in closed_rows)
+    closed_n = sum(r[1] for r in closed_rows)
     avg_wo = q2(closed_total / closed_n) if closed_n else 0
-    conversion = round(len(won_month) / len(wo_month) * 100, 0) if wo_month else 0
+    conversion = round(won_month / wo_month * 100, 0) if wo_month else 0
 
+    # Money on Home follows the role: balances need "see balance", takings and amounts owed
+    # need finance access. Counts stay visible to everyone.
+    from backend.services.auth import has_perm
+    see_bal = await has_perm(db, current, "can_view_balance")
+    see_fin = await has_perm(db, current, "can_view_finance")
     return {
         "today": {
             "work_orders": wo_today,
-            "revenue": q2(revenue_today),
-            "refunds": q2(refunds_today),
+            "revenue": q2(revenue_today) if see_fin else None,
+            "refunds": q2(refunds_today) if see_fin else None,
         },
         "kpis": {
             "new": new_count, "urgent": urgent, "overdue": overdue,
-            "receivables": q2(receivables),
-            "ar": q2(float(ar)), "ap": q2(float(ap)),
-            "total_money": q2(cash_bal + cashless_bal),
-            "cash": q2(cash_bal), "cashless": q2(cashless_bal),
+            "receivables": q2(receivables) if see_fin else None,
+            "ar": q2(float(ar)) if see_fin else None, "ap": q2(float(ap)) if see_fin else None,
+            "total_money": q2(cash_bal + cashless_bal) if see_bal else None,
+            "cash": q2(cash_bal) if see_bal else None, "cashless": q2(cashless_bal) if see_bal else None,
         },
         "status_mix": [{"group": g, "count": c} for g, c in mix.items()],
         "by_assignee": assignee_rows,
         "monthly": {
-            "work_orders_created": len(wo_month),
-            "work_orders_won": len(won_month),
-            "revenue": q2(revenue_month),
+            "work_orders_created": wo_month,
+            "work_orders_won": won_month,
+            "revenue": q2(revenue_month) if see_fin else None,
             "conversion": conversion,
-            "avg_work_order": avg_wo,
+            "avg_work_order": avg_wo if see_fin else None,
         },
     }
 
@@ -972,7 +1256,28 @@ async def company_dashboard(
 #  stamped on the line) − labour cost (Σ TimeEntry duration × snapshot rate,
 #  timer AND manual). Rolled up per location. No schema, no WO-page changes.
 # ══════════════════════════════════════════════════════════════════════════
-from datetime import datetime, timedelta
+
+
+async def _scoped_location(db, current, location_id):
+    """The branch a report or dashboard may cover for this caller. A role limited to some
+    locations can only ask for one of them, and with no choice gets its only branch (or is
+    told to pick one) instead of the whole shop's figures."""
+    from fastapi import HTTPException
+
+    from backend.models import Role
+    from backend.services.auth import check_location_access, is_shop_owner
+    if not current.role_id or await is_shop_owner(db, current):
+        return location_id
+    if location_id:
+        await check_location_access(db, current, location_id)
+        return location_id
+    role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
+    allow = _allowed_location_ids(role)
+    if allow is None:
+        return None
+    if len(allow) == 1:
+        return next(iter(allow))
+    raise HTTPException(403, "Choose one of your locations to see this report")
 
 
 def _allowed_location_ids(role):
@@ -994,11 +1299,15 @@ async def job_profitability(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_cashflow")),
 ):
-    from backend.models import Location, OrderLine, Role, TimeEntry
+    """Profit per successful job closed in the period (dropped jobs are left out — see Total
+    profit). The figures come from services/profit.job_figures, the same as every profit screen."""
+    from backend.models import Location, Role
+    from backend.services.profit import closed_jobs_query, dropped_keys, job_figures
     oid = current.org_id
 
     # date window (default: trailing 30 days), on closed_at
-    end = datetime.fromisoformat(to) if to else datetime.utcnow()
+    # Same window rules as every report: a date-only "to" covers that whole day.
+    end = _parse_range(None, to)[1] if to else now_utc()
     start = datetime.fromisoformat(from_) if from_ else (end - timedelta(days=30))
 
     # honour a location-scoped role
@@ -1007,97 +1316,121 @@ async def job_profitability(
         role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
     allow = _allowed_location_ids(role)
 
-    q = select(Order).where(
-        Order.org_id == oid, Order.closed_at.isnot(None),
-        Order.closed_at >= start, Order.closed_at <= end)
-    if location_id:
-        q = q.where(Order.location_id == location_id)
+    dropped = await dropped_keys(db, oid)
+    q = closed_jobs_query(oid, start, end, location_id=location_id, allowed_locations=allow)
+    if dropped:
+        q = q.where(Order.status.notin_(dropped))
     orders = (await db.execute(q)).scalars().all()
-    orders = [o for o in orders if allow is None or o.location_id in allow]
     if not orders:
         return {"rows": [], "by_location": [], "totals": {
-            "revenue": 0, "parts_cost": 0, "labour_cost": 0, "margin": 0,
-            "margin_pct": 0, "jobs": 0}}
-
-    order_ids = [o.id for o in orders]
-
-    # parts cost per order (product/part lines carry FIFO/avg cost_price)
-    lines = (await db.execute(select(OrderLine).where(OrderLine.order_id.in_(order_ids)))).scalars().all()
-    parts_by_order: dict = {}
-    for ln in lines:
-        if ln.line_type == "part" or ln.kind == "product":
-            parts_by_order[ln.order_id] = parts_by_order.get(ln.order_id, 0.0) + (ln.cost_price or 0) * (ln.qty or 0)
-
-    # labour cost + clocked minutes per order (timer AND manual, only real spans)
-    entries = (await db.execute(select(TimeEntry).where(
-        TimeEntry.order_id.in_(order_ids),
-        TimeEntry.ended_at.isnot(None),
-        TimeEntry.state.in_(("stopped", "approved"))))).scalars().all()
-    labour_by_order: dict = {}
-    minutes_by_order: dict = {}
-    for e in entries:
-        hrs = (e.duration_sec or 0) / 3600.0
-        labour_by_order[e.order_id] = labour_by_order.get(e.order_id, 0.0) + hrs * (e.cost_rate or 0)
-        minutes_by_order[e.order_id] = minutes_by_order.get(e.order_id, 0.0) + (e.duration_sec or 0) / 60.0
+            "revenue": 0, "tax": 0, "parts_cost": 0, "labour_cost": 0, "commission": 0, "margin": 0,
+            "margin_pct": 0, "jobs": 0}, "range": {"from": start.isoformat(), "to": end.isoformat()}}
+    figs = await job_figures(db, oid, list(orders), dropped)
 
     # client + location names
     cids = {o.client_id for o in orders if o.client_id}
     lids = {o.location_id for o in orders if o.location_id}
     cname = {c.id: c.name for c in (await db.execute(
-        select(Client).where(Client.id.in_(cids)))).scalars().all()} if cids else {}
+        select(Client).where(Client.id.in_(cids), Client.org_id == oid))).scalars().all()} if cids else {}
     lname = {loc.id: loc.name for loc in (await db.execute(
-        select(Location).where(Location.id.in_(lids)))).scalars().all()} if lids else {}
+        select(Location).where(Location.id.in_(lids), Location.org_id == oid))).scalars().all()} if lids else {}
 
+    keys = ("revenue", "tax", "parts_cost", "labour_cost", "commission", "margin")
     rows = []
     loc_agg: dict = {}
-    tot_rev = tot_parts = tot_labour = 0.0
+    tot = {k: 0.0 for k in keys}
     for o in orders:
-        rev = float(o.total or 0)
-        parts = q2(parts_by_order.get(o.id, 0.0))
-        labour = q2(labour_by_order.get(o.id, 0.0))
-        mins = round(minutes_by_order.get(o.id, 0.0), 1)
-        margin = q2(rev - parts - labour)
+        f = figs[o.id]
+        vals = {"revenue": f["revenue"], "tax": f["tax"], "parts_cost": f["cogs"], "labour_cost": f["labour_cost"],
+                "commission": f["commission"], "margin": f["profit"]}
         rows.append({
             "order_id": o.id, "order_number": o.order_number,
             "client_name": cname.get(o.client_id), "location_id": o.location_id,
-            "location_name": lname.get(o.location_id),
-            "revenue": q2(rev), "parts_cost": parts, "labour_cost": labour,
-            "margin": margin, "margin_pct": round(margin / rev * 100, 1) if rev else 0.0,
-            "clocked_minutes": mins, "has_labour": mins > 0,
+            "location_name": lname.get(o.location_id), **vals,
+            "margin_pct": round(f["profit"] / f["revenue"] * 100, 1) if f["revenue"] else 0.0,
+            "clocked_minutes": f["clocked_minutes"], "has_labour": f["clocked_minutes"] > 0,
         })
-        tot_rev += rev
-        tot_parts += parts
-        tot_labour += labour
         la = loc_agg.setdefault(o.location_id, {
-            "location_id": o.location_id, "name": lname.get(o.location_id) or "—",
-            "revenue": 0.0, "parts_cost": 0.0, "labour_cost": 0.0, "jobs": 0})
-        la["revenue"] += rev
-        la["parts_cost"] += parts
-        la["labour_cost"] += labour
+            "location_id": o.location_id, "name": lname.get(o.location_id) or "—", "jobs": 0,
+            **{k: 0.0 for k in keys}})
         la["jobs"] += 1
+        for k in keys:
+            tot[k] = q2(tot[k] + vals[k])
+            la[k] = q2(la[k] + vals[k])
 
     rows.sort(key=lambda r: r["margin"], reverse=True)
-    by_location = []
-    for la in loc_agg.values():
-        m = la["revenue"] - la["parts_cost"] - la["labour_cost"]
-        by_location.append({
-            "location_id": la["location_id"], "name": la["name"], "jobs": la["jobs"],
-            "revenue": q2(la["revenue"]), "parts_cost": q2(la["parts_cost"]),
-            "labour_cost": q2(la["labour_cost"]), "margin": q2(m),
-            "margin_pct": round(m / la["revenue"] * 100, 1) if la["revenue"] else 0.0})
+    by_location = [{**la, "margin_pct": round(la["margin"] / la["revenue"] * 100, 1) if la["revenue"] else 0.0}
+                   for la in loc_agg.values()]
     by_location.sort(key=lambda r: r["margin"], reverse=True)
-
-    tot_margin = tot_rev - tot_parts - tot_labour
+    from backend.services.redact import can_see_costs
+    if not await can_see_costs(db, current):
+        rows.sort(key=lambda r: r["revenue"], reverse=True)
+        return _hide_profit_figures({"rows": rows, "by_location": by_location, "totals": {**tot, "jobs": len(rows)},
+                                     "range": {"from": start.isoformat(), "to": end.isoformat()}})
     return {
         "rows": rows,
         "by_location": by_location,
-        "totals": {
-            "revenue": q2(tot_rev), "parts_cost": q2(tot_parts),
-            "labour_cost": q2(tot_labour), "margin": q2(tot_margin),
-            "margin_pct": round(tot_margin / tot_rev * 100, 1) if tot_rev else 0.0,
-            "jobs": len(rows)},
+        "totals": {**tot, "margin_pct": round(tot["margin"] / tot["revenue"] * 100, 1) if tot["revenue"] else 0.0,
+                   "jobs": len(rows)},
         "range": {"from": start.isoformat(), "to": end.isoformat()},
     }
+
+
+@router.get("/total-profit")
+async def total_profit_report(
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    location_id: Optional[str] = Query(None),
+    technician_id: Optional[str] = Query(None, max_length=64),
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_see_profit")),
+):
+    """Total profit: successful jobs + dropped jobs + counter sales for the period, after tax and
+    commissions, with the previous period of the same length, by location and technician, and
+    the rows behind every number. Cost and profit fields are removed for roles that can't see
+    purchase prices (core/cost_redaction)."""
+    from backend.models import Role
+    from backend.services.auth import assert_perm
+    from backend.services.profit import total_profit
+    await assert_perm(db, current, "can_view_reports")
+    from fastapi import HTTPException
+
+    from backend.services.redact import can_see_costs
+    try:
+        df, dt = _parse_range(date_from, date_to)
+    except ValueError:
+        raise HTTPException(422, "Use dates like 2026-10-24")
+    if dt - df > timedelta(days=731):
+        raise HTTPException(422, "Pick a period of two years or less")
+    location_id = await _scoped_location(db, current, location_id)
+    role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none() \
+        if current.role_id else None
+    out = await total_profit(db, current.org_id, df, dt, location_id=location_id,
+                             technician_id=technician_id, allowed_locations=_allowed_location_ids(role))
+    if not await can_see_costs(db, current):
+        _hide_profit_figures(out)
+    return out
+
+
+# Cost-like figures the shared redaction list doesn't name (they're fine elsewhere, e.g. payroll).
+_PROFIT_ONLY_KEYS = ("labour_cost", "commission", "parts_cost", "profit_pct", "margin")
+
+
+def _hide_profit_figures(obj):
+    """For a viewer who can't see purchase prices: drop every cost/profit figure from a profit
+    report (the middleware drops cogs/profit/margin_pct) and stop sorting by profit, since the
+    order alone would give the ranking away."""
+    if isinstance(obj, dict):
+        for k in _PROFIT_ONLY_KEYS:
+            obj.pop(k, None)
+        for k, v in obj.items():
+            if isinstance(v, list) and v and isinstance(v[0], dict) and "revenue" in v[0] and k != "rows":
+                v.sort(key=lambda r: r.get("revenue") or 0, reverse=True)
+            _hide_profit_figures(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            _hide_profit_figures(v)
+    return obj
 
 
 @router.get("/home-feed")
@@ -1109,10 +1442,9 @@ async def home_feed(
     Each item is a group with a count and a deep link to the filtered list behind it.
     Deterministic (no AI); the order is roughly by urgency. Returns ok=True when the
     shop is all caught up."""
-    from datetime import datetime
     from backend.models import Lead, Role
     oid = current.org_id
-    now = datetime.utcnow()
+    now = now_utc()
 
     # Role shapes the feed: order_scope="own" limits order/task signals to what's
     # assigned to this person; home_feed_sources (owner-set, in the roles section)
@@ -1142,16 +1474,10 @@ async def home_feed(
 
     unpaid_n = (await db.execute(select(func.count()).select_from(Invoice).where(
         Invoice.org_id == oid, Invoice.status.in_(["draft", "partial", "issued"]),
-        (Invoice.total - Invoice.amount_paid) > 0))).scalar() or 0
+        (Invoice.total - Invoice.amount_paid - Invoice.credited) > 0))).scalar() or 0
 
-    parts = (await db.execute(select(Part).where(Part.org_id == oid, Part.active == True))).scalars().all()  # noqa: E712
-    low = 0
-    if parts:
-        rows = (await db.execute(select(StockLevel.part_id, func.sum(StockLevel.qty_available))
-                                 .where(StockLevel.part_id.in_([p.id for p in parts]))
-                                 .group_by(StockLevel.part_id))).all()
-        onhand = {pid: (q or 0) for pid, q in rows}
-        low = sum(1 for p in parts if onhand.get(p.id, 0) <= (p.min_stock or 0))
+    # Counted in the database: this used to load every part and bind each id into an IN list.
+    low = (await db.execute(low_stock_count_query(oid).where(Part.active == True))).scalar() or 0  # noqa: E712
 
     task_conds = [Task.org_id == oid, Task.status != "done"]
     if own:
@@ -1171,7 +1497,7 @@ async def home_feed(
     add("overdue", "danger", "warning", overdue, f"{overdue} work order{'s' if overdue != 1 else ''} overdue", "/orders")
     add("messages", "danger", "chat", unread, f"{unread} customer message{'s' if unread != 1 else ''} waiting", "/orders")
     add("ready", "success", "local_shipping", ready, f"{ready} order{'s' if ready != 1 else ''} ready for pickup", "/orders")
-    add("urgent", "warning", "priority_high", urgent, f"{urgent} urgent order{'s' if urgent != 1 else ''} open", "/orders?priority=2")
+    add("urgent", "warning", "priority_high", urgent, f"{urgent} urgent order{'s' if urgent != 1 else ''} open", "/orders?priority=urgent")
     add("unpaid", "info", "request_quote", unpaid_n, f"{unpaid_n} unpaid invoice{'s' if unpaid_n != 1 else ''}", "/invoices")
     add("lowstock", "warning", "inventory_2", low, f"{low} item{'s' if low != 1 else ''} low or out of stock", "/inventory")
     add("tasks", "info", "task_alt", open_tasks, f"{open_tasks} open task{'s' if open_tasks != 1 else ''}", "/tasks")

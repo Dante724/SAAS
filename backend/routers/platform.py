@@ -1,21 +1,35 @@
 """B4 metrics/readiness · B5 white-label branding · B6 SIEM export + bulk API."""
+import hmac
 import json
+import logging
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import settings
 from backend.core.observability import render_metrics
 from backend.db.database import get_db
 from backend.models import AuditLog, Client, Employee, Organisation
 from backend.services.auth import get_current_employee, require_perm
 
 router = APIRouter(tags=["platform"])
+log = logging.getLogger("tekly.platform")
 
 
 # ── B4: metrics + readiness ──────────────────────────────────────────────────
 @router.get("/metrics", include_in_schema=False)
-async def metrics():
+async def metrics(authorization: str | None = Header(None)):
+    """Prometheus scrape. Request counts and latency per route reveal traffic and endpoints,
+    so a deployed instance serves them only to a scraper holding METRICS_TOKEN (and hides
+    the endpoint entirely when none is configured)."""
+    want = settings.METRICS_TOKEN
+    if want:
+        got = (authorization or "").removeprefix("Bearer ").strip()
+        if not hmac.compare_digest(got, want):
+            raise HTTPException(401, "Metrics token required", headers={"WWW-Authenticate": "Bearer"})
+    elif settings.is_deployed:
+        raise HTTPException(404)
     return Response(content=render_metrics(), media_type="text/plain; version=0.0.4")
 
 
@@ -25,8 +39,10 @@ async def readyz(db: AsyncSession = Depends(get_db)):
     try:
         await db.execute(text("SELECT 1"))
         return {"status": "ready", "db": "ok"}
-    except Exception as e:  # pragma: no cover
-        return Response(status_code=503, content=json.dumps({"status": "unready", "db": str(e)}),
+    except Exception:  # pragma: no cover
+        # The driver error names hosts, users and database names — log it, don't publish it.
+        log.exception("readiness check: database unreachable")
+        return Response(status_code=503, content=json.dumps({"status": "unready", "db": "unreachable"}),
                         media_type="application/json")
 
 

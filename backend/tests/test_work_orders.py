@@ -6,6 +6,8 @@ attachments, activity timeline, warranty, and the customer portal.
 """
 import pytest
 
+from backend.services.dates import now_utc
+
 
 # ── helpers ────────────────────────────────────────────────
 async def _loc(client, h):
@@ -227,7 +229,7 @@ async def test_sla_breach_detection_and_sweep(client, tenant, db):
     assert await find_breaches(db, org_id) == []
 
     # 31 minutes later -> breach surfaces with the right arithmetic.
-    future = datetime.utcnow() + timedelta(minutes=31)
+    future = now_utc() + timedelta(minutes=31)
     breaches = await find_breaches(db, org_id, now=future)
     mine = [b for b in breaches if b["order_id"] == o["id"]]
     assert mine and mine[0]["limit_min"] == 30 and mine[0]["over_by_min"] >= 1

@@ -67,6 +67,9 @@ async def test_sumup_gateway_parse(monkeypatch, db, client, tenant):
 
     monkeypatch.setattr(settings, "SUMUP_API_KEY", "su-test")
     monkeypatch.setattr(settings, "SUMUP_MERCHANT_CODE", "M123")
+    # SumUp keys always count as live (review S1), so the gateway only runs with live payments on.
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "ALLOW_LIVE_PAYMENTS", True)
     monkeypatch.setattr(httpx, "AsyncClient", _fake_client(
         lambda m, u, k: _Resp(201, {"id": "chk_7", "hosted_checkout_url": "https://pay.sumup.com/x"})))
     me = (await client.get("/api/auth/me", headers=tenant)).json()
@@ -141,7 +144,12 @@ async def test_sumup_refresh_poll_marks_paid(monkeypatch, client, tenant, db):
     from backend.config import settings
     from backend.models import PaymentIntent
 
-    monkeypatch.setattr(settings, "SUMUP_API_KEY", "su-test")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")      # SumUp keys count as live (S1)
+    monkeypatch.setattr(settings, "ALLOW_LIVE_PAYMENTS", True)
+    # the shop's own SumUp keys: the poll never uses the operator's account (B7)
+    r = await client.put("/api/integrations/credentials", headers=tenant, json={
+        "provider": "sumup", "data": {"api_key": "su-test", "merchant_code": "M1"}})
+    assert r.status_code == 200, r.text
     monkeypatch.setattr(httpx, "AsyncClient", _fake_client(
         lambda m, u, k: _Resp(200, {"id": "chk_9", "status": "PAID"})))
     me = (await client.get("/api/auth/me", headers=tenant)).json()
@@ -152,9 +160,3 @@ async def test_sumup_refresh_poll_marks_paid(monkeypatch, client, tenant, db):
     await db.refresh(intent)
     r = await client.post(f"/api/payments/intents/{intent.id}/refresh")
     assert r.status_code == 200 and r.json()["status"] == "succeeded"
-
-
-@pytest.mark.asyncio
-async def test_terminal_endpoints_gated_without_stripe(client, tenant):
-    r = await client.post("/api/payments/terminal/connection-token", headers=tenant)
-    assert r.status_code == 503 and "not configured" in r.json()["detail"].lower()

@@ -1,0 +1,72 @@
+name: Docker image
+# Builds the production image and boots it the way DEPLOY.md describes: real Postgres,
+# migrations first, ENVIRONMENT=production (so every fail-closed config check runs), then the
+# health check and the React shell must answer.
+on:
+  push:
+    branches: [ main, master, 'release/**' ]
+  # CI minutes cost money on a private repo, so pull requests are checked only when they are
+  # ready: draft PRs skip every job; marking a PR "Ready for review" runs it once, and each
+  # later push cancels the run it replaces. "Run workflow" on the Actions tab starts one by hand.
+  pull_request:
+    types: [ opened, reopened, synchronize, ready_for_review ]
+  workflow_dispatch:
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# Least privilege: the token can read the repo and nothing else.
+permissions:
+  contents: read
+
+jobs:
+  build-and-boot:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: repairos
+          POSTGRES_PASSWORD: repairos
+          POSTGRES_DB: repairos
+        ports: [ "5432:5432" ]
+        options: >-
+          --health-cmd "pg_isready -U repairos" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build image
+        run: docker build -t repairos:ci .
+      - name: Production-like env
+        run: |
+          {
+            echo "ENVIRONMENT=production"
+            echo "DATABASE_URL=postgresql+asyncpg://repairos:repairos@127.0.0.1:5432/repairos"
+            echo "SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
+            echo "TOKEN_ENCRYPTION_KEY=$(python3 -c 'import base64,os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
+            echo "CORS_ORIGINS=http://localhost:8000"
+            echo "PUBLIC_BASE_URL=http://localhost:8000"
+            echo "SMTP_HOST=smtp.invalid"
+            echo "SMTP_FROM=ci@tekly.invalid"
+            # Subscription billing is required in production; placeholder test-mode values (never called in CI).
+            echo "STRIPE_BILLING_SECRET_KEY=sk_test_ci_placeholder"
+            echo "STRIPE_BILLING_WEBHOOK_SECRET=whsec_ci_placeholder"
+            for p in SOLO SHOP PRO SHOP_SEAT; do for t in MONTH YEAR; do
+              echo "STRIPE_BILLING_PRICE_${p}_${t}=price_ci_${p}_${t}"
+            done; done
+          } > ci.env
+      - name: Migrate
+        run: docker run --rm --network host --env-file ci.env repairos:ci alembic -c backend/alembic.ini upgrade head
+      - name: Boot and health-check
+        run: |
+          docker run -d --name app --network host --env-file ci.env repairos:ci
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8000/api/health; then break; fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8000/api/health
+          curl -sf http://127.0.0.1:8000/ | grep -qi '<div id="root"' || (echo "React shell not served"; exit 1)
+      - name: Container logs
+        if: always()
+        run: docker logs app || true
