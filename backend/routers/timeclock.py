@@ -827,19 +827,24 @@ async def my_work(
             today_s += s
     active = await _running_for(db, current.org_id, current.id)
 
-    # open service/labour lines assigned to me, with booked + measured actual
+    # open service/labour lines assigned to me, with booked + measured actual. Only the tech's
+    # own lines on open jobs are read, and the follow-up queries join on that set instead of
+    # binding an id per order: this used to put every open order in the shop into one IN list,
+    # which failed with "too many SQL variables" at 33,208 orders.
+    my_line_q = (select(OrderLine).join(Order, Order.id == OrderLine.order_id).where(
+        OrderLine.technician_id == current.id, Order.org_id == current.org_id,
+        Order.is_estimate == False, Order.archived == False,   # noqa: E712
+        Order.closed_at.is_(None)))
+    lines = (await db.execute(my_line_q)).scalars().all()
+    my_line_ids = select(my_line_q.subquery().c.id)
     open_orders = (await db.execute(select(Order).where(
-        Order.org_id == current.org_id, Order.is_estimate == False,   # noqa: E712
-        Order.archived == False))).scalars().all()   # noqa: E712
+        Order.id.in_(select(my_line_q.subquery().c.order_id))))).scalars().all()
     open_ids = {o.id: o.order_number for o in open_orders}
-    lines = (await db.execute(select(OrderLine).where(
-        OrderLine.technician_id == current.id,
-        OrderLine.order_id.in_(list(open_ids.keys()) or ["__none__"])))).scalars().all()
     # measured actual seconds per line (job time, any tech) via shared helper source
     line_secs: dict = {}
     for e in (await db.execute(select(TimeEntry).where(
             TimeEntry.org_id == current.org_id,
-            TimeEntry.order_line_id.in_([l.id for l in lines] or ["__none__"])))).scalars().all():
+            TimeEntry.order_line_id.in_(my_line_ids)))).scalars().all():
         if is_job_actual(e):
             line_secs[e.order_line_id] = line_secs.get(e.order_line_id, 0) + entry_seconds(e)
     my_lines = [{
@@ -857,6 +862,7 @@ async def my_work(
     orders = []
     my_order_ids = list(dict.fromkeys(l["order_id"] for l in my_lines))
     if my_order_ids:
+        from sqlalchemy import case
         from backend.models import OrderChecklistItem, OrderStatus, Client, Device
         from backend.routers.statuses import ensure_seeded, is_transition_allowed
         await ensure_seeded(db, current.org_id)
@@ -865,16 +871,19 @@ async def my_work(
             OrderStatus.active == True).order_by(OrderStatus.sort_order))).scalars().all()  # noqa: E712
         by_key = {s.key: s for s in wf}
         order_by_id = {o.id: o for o in open_orders}
+        mine_orders = select(my_line_q.subquery().c.order_id)
         # checklist progress per order (done/total)
-        prog: dict = {}
-        for it in (await db.execute(select(OrderChecklistItem).where(
-                OrderChecklistItem.order_id.in_(my_order_ids)))).scalars().all():
-            d, t = prog.get(it.order_id, (0, 0))
-            prog[it.order_id] = (d + (1 if it.done else 0), t + 1)
+        prog = {oid: (int(d or 0), int(t)) for oid, d, t in (await db.execute(
+            select(OrderChecklistItem.order_id,
+                   func.sum(case((OrderChecklistItem.done == True, 1), else_=0)), func.count())  # noqa: E712
+            .where(OrderChecklistItem.order_id.in_(mine_orders))
+            .group_by(OrderChecklistItem.order_id))).all()}
         clients = {c.id: c.name for c in (await db.execute(select(Client).where(
-            Client.org_id == current.org_id))).scalars().all()}
+            Client.org_id == current.org_id,
+            Client.id.in_(select(Order.client_id).where(Order.id.in_(mine_orders)))))).scalars().all()}
         devices = {d.id: d for d in (await db.execute(select(Device).where(
-            Device.org_id == current.org_id))).scalars().all()}
+            Device.org_id == current.org_id,
+            Device.id.in_(select(Order.device_id).where(Order.id.in_(mine_orders)))))).scalars().all()}
         for oid in my_order_ids:
             o = order_by_id.get(oid)
             if not o:

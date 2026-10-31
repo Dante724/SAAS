@@ -3695,7 +3695,11 @@ def _all_codes():
 async def _order_perms(db, current):
     """The role's effective permissions ({code: bool} for every catalogue code); {} = owner."""
     perms = {}
-    if current.role_id:
+    if not current.role_id:
+        from backend.services.auth import is_shop_owner
+        if not await is_shop_owner(db, current):
+            return {c: False for c in _all_codes()}   # roleless, not the owner: nothing
+    else:
         from backend.models import Role
         from backend.services.permissions import effective_permissions
         role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
@@ -3750,7 +3754,9 @@ async def _assert_listed(db, org_id, employee_id, code, list_name) -> None:
         return
     emp = (await db.execute(select(Employee).where(
         Employee.id == employee_id, Employee.org_id == org_id))).scalar_one_or_none()
-    if emp and not await has_perm(db, emp, code):
+    # Being listed is a display setting, not access: someone with no role is listed, as in the
+    # Team screen's pickers (staff._picker_lists), even though they have no permissions.
+    if emp and emp.role_id and not await has_perm(db, emp, code):
         raise HTTPException(422, f"{emp.name} isn't in the {list_name} list.")
 
 
@@ -4484,6 +4490,11 @@ async def delete_line(
     line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id))).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
+    # Removing a line takes the same right as adding one (this had no check at all).
+    perms = await _order_perms(db, current)
+    need = "can_add_products" if line.kind == "product" else "can_add_services"
+    if perms.get(need) is False:
+        raise HTTPException(403, "You don't have permission to remove lines from this job")
     if line.kind == "membership":
         # The plan's own price: removing it would make the plan free. Cancel the membership instead.
         raise HTTPException(409, "This is a membership plan. Cancel it from the customer's membership instead.")
