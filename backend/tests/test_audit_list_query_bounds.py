@@ -255,7 +255,9 @@ async def test_order_purchase_orders_panel_is_flat(client, tenant, db):
 @pytest.mark.asyncio
 async def test_payroll_calculation_sums_every_employee_in_one_query(client, tenant, db):
     org, _, _ = await _ctx(client, tenant)
-    month = datetime.utcnow().strftime("%Y-%m")
+    from backend.models import Organisation
+    from backend.services.dates import today_in
+    month = today_in(Organisation.__table__.c.timezone.default.arg).strftime("%Y-%m")   # the shop's month
 
     async def seed(n):
         for _ in range(n):

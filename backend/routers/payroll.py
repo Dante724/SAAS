@@ -59,6 +59,15 @@ def _ser_rule(r: CommissionRule) -> dict:
     }
 
 
+
+async def _shop_days(db, org_id: str, ps, pe) -> tuple:
+    """Ledger entries made on the shop's days ps..pe (created_at is naive UTC, periods are shop days)."""
+    from backend.services.dates import day_end_utc, day_start_utc, shop_tzname
+    tz = await shop_tzname(db, org_id)
+    return (EmployeeBalanceLedger.created_at >= day_start_utc(ps, tz),
+            EmployeeBalanceLedger.created_at < day_end_utc(pe, tz))
+
+
 @router.get("/rules")
 async def list_rules(
     db: AsyncSession = Depends(get_db),
@@ -324,8 +333,7 @@ async def create_payroll_run(
         EmployeeBalanceLedger.org_id == current.org_id,
         EmployeeBalanceLedger.employee_id == data.employee_id,
         EmployeeBalanceLedger.entry_type.in_(["commission", "clawback"]),
-        func.date(EmployeeBalanceLedger.created_at) >= ps,
-        func.date(EmployeeBalanceLedger.created_at) <= pe))).scalar() or 0
+        *await _shop_days(db, current.org_id, ps, pe)))).scalar() or 0
     # sum hourly wages whose approved timesheet period overlaps this run's window.
     # The timesheet approval posts a ledger row with ref_type='timesheet' and
     # ref_id='{employee}:{from}:{to}', so wages are attributed to the period worked
@@ -479,8 +487,7 @@ async def _accrue_one(db: AsyncSession, org_id: str, employee_id: str, ps, pe,
         EmployeeBalanceLedger.org_id == org_id,
         EmployeeBalanceLedger.employee_id == employee_id,
         EmployeeBalanceLedger.entry_type.in_(["commission", "clawback"]),
-        func.date(EmployeeBalanceLedger.created_at) >= ps,
-        func.date(EmployeeBalanceLedger.created_at) <= pe))).scalar() or 0
+        *await _shop_days(db, org_id, ps, pe)))).scalar() or 0
 
     hourly_rows = (await db.execute(select(EmployeeBalanceLedger).where(
         EmployeeBalanceLedger.org_id == org_id,
@@ -547,13 +554,11 @@ async def _manual_adjust_totals(db, org_id, employee_id, ps, pe):
     bonus = (await db.execute(select(func.coalesce(func.sum(EmployeeBalanceLedger.amount), 0)).where(
         EmployeeBalanceLedger.org_id == org_id, EmployeeBalanceLedger.employee_id == employee_id,
         EmployeeBalanceLedger.entry_type == "bonus", EmployeeBalanceLedger.ref_type == "manual",
-        func.date(EmployeeBalanceLedger.created_at) >= ps,
-        func.date(EmployeeBalanceLedger.created_at) <= pe))).scalar() or 0
+        *await _shop_days(db, org_id, ps, pe)))).scalar() or 0
     penalty = (await db.execute(select(func.coalesce(func.sum(EmployeeBalanceLedger.amount), 0)).where(
         EmployeeBalanceLedger.org_id == org_id, EmployeeBalanceLedger.employee_id == employee_id,
         EmployeeBalanceLedger.entry_type == "penalty", EmployeeBalanceLedger.ref_type == "manual",
-        func.date(EmployeeBalanceLedger.created_at) >= ps,
-        func.date(EmployeeBalanceLedger.created_at) <= pe))).scalar() or 0
+        *await _shop_days(db, org_id, ps, pe)))).scalar() or 0
     return _money(bonus), _money(abs(penalty))
 
 
@@ -632,8 +637,7 @@ async def payroll_calculation(
                        EmployeeBalanceLedger.employee_id.in_([e.id for e in emps]),
                        EmployeeBalanceLedger.entry_type.in_(
                            ["commission", "clawback", "hourly_wage", "bonus", "penalty"]),
-                       func.date(EmployeeBalanceLedger.created_at) >= ps,
-                       func.date(EmployeeBalanceLedger.created_at) <= pe)
+                       *await _shop_days(db, current.org_id, ps, pe))
                 .group_by(EmployeeBalanceLedger.employee_id, EmployeeBalanceLedger.entry_type,
                           EmployeeBalanceLedger.ref_type))).all():
             if kind in ("bonus", "penalty") and ref_type != "manual":
@@ -799,8 +803,7 @@ async def calculation_detail(
     rows = (await db.execute(select(EmployeeBalanceLedger).where(
         EmployeeBalanceLedger.org_id == current.org_id,
         EmployeeBalanceLedger.employee_id == employee_id,
-        func.date(EmployeeBalanceLedger.created_at) >= ps,
-        func.date(EmployeeBalanceLedger.created_at) <= pe)
+        *await _shop_days(db, current.org_id, ps, pe))
         .order_by(EmployeeBalanceLedger.created_at))).scalars().all()
 
     def _row(e):
@@ -865,8 +868,7 @@ async def accrue_calculation(
     commissions = (await db.execute(select(func.coalesce(func.sum(EmployeeBalanceLedger.amount), 0)).where(
         EmployeeBalanceLedger.org_id == current.org_id, EmployeeBalanceLedger.employee_id == data.employee_id,
         EmployeeBalanceLedger.entry_type.in_(["commission", "clawback"]),
-        func.date(EmployeeBalanceLedger.created_at) >= ps,
-        func.date(EmployeeBalanceLedger.created_at) <= pe))).scalar() or 0
+        *await _shop_days(db, current.org_id, ps, pe)))).scalar() or 0
     hourly = await _hourly_for_period(db, current.org_id, data.employee_id, ps, pe)
     bonuses, penalties = await _manual_adjust_totals(db, current.org_id, data.employee_id, ps, pe)
     base = _money(emp.wage_value) if emp.wage_type == "fixed" else _money(0)

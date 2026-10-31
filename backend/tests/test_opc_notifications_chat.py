@@ -170,7 +170,8 @@ async def test_missing_client_fields_leave_no_gaps_in_a_real_send(client, tenant
 async def test_birthday_greeting_renders_short_client_variables(client, tenant, db):
     me = await _me(client, tenant)
     org_id = me["org_id"]
-    today = now_utc()
+    from backend.services.dates import shop_today
+    today = await shop_today(db, org_id)   # birthdays follow the shop's calendar
     cid = (await client.post("/api/clients", json={
         "name": "Ana Lopez", "phone": "+1777", "birthday": f"1990-{today.month:02d}-{today.day:02d}"},
         headers=tenant)).json()["id"]
