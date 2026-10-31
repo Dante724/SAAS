@@ -363,7 +363,7 @@ export function TrackView({ d, updatedAt, api, extrasApi, reload, onResponded, t
                   : [d.valid_until ? `Valid until ${fmtDay(d.valid_until)}` : null, (d.revision || 1) > 1 ? `Revised (version ${d.revision})` : null].filter(Boolean).join(" · ")}
               </p>
             )}
-            {dep && dep.due > 0 && (isEst || dep.can_pay) && (
+            {dep && dep.due > 0 && (dep.can_pay || (isEst && d.awaiting_approval)) && (
               <p className="mt-1 text-[14px] text-ink-secondary">{dep.can_pay ? `Deposit to pay now: ${money(dep.due, sym)}` : `A deposit of ${money(dep.amount, sym)} is due when you approve.`}</p>
             )}
             {/* phones have no side card; with no line list the paid note sits here */}

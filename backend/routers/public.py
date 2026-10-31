@@ -551,8 +551,7 @@ async def _skip_lines(db: AsyncSession, order: "Order", skip_ids: list[str], who
     if all(m.id in drop for r in rows for m in _row_members(r)):
         raise HTTPException(400, "Keep at least one line, or decline the estimate instead.")
     skipped = [r.description for r in rows if any(m.id in drop for m in _row_members(r))]
-    await snapshot_revision(db, order, decision="approved", skipped=skipped,
-                            note=f"As offered. {who or 'The customer'} left out {len(skipped)} line(s).")
+    await snapshot_revision(db, order, decision="approved", skipped=skipped)   # what was offered
     from backend.services.invoice_money import release_line
     for lid in drop:
         await release_line(db, lid)

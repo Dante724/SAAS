@@ -29,7 +29,7 @@ export function useRevisions(orderId: string, rev?: number) {
 }
 
 export async function startRevision(orderId: string): Promise<number | null> {
-  const note = await promptDialog("What changed in this version? (optional)", { title: "New revision", confirmLabel: "Start revision" });
+  const note = await promptDialog("Why are you revising it? (optional)", { title: "New revision", confirmLabel: "Start revision" });
   if (note === null) return null;
   const r = await api.post<{ revision: number }>(`/orders/${orderId}/estimate/revisions`, { note: note || undefined });
   return r.revision;
@@ -93,7 +93,7 @@ export default function EstimateTerms({ orderId, d, onChanged, onFlash }: {
                 {r.decision && <span className={`text-[11px] font-semibold ${r.decision === "approved" ? "text-emerald-700" : "text-rose-600"}`}>{DECISION[r.decision] || r.decision}</span>}
                 <span className="text-ink-tertiary">{fmtDay(r.created_at)}{r.created_by_name ? ` · ${r.created_by_name}` : ""}</span>
               </div>
-              {r.note && <div className="mt-0.5 text-ink-secondary">{r.note}</div>}
+              {r.note && <div className="mt-0.5 text-ink-secondary">Why it was revised: {r.note}</div>}
               {r.decline_reason && <div className="mt-0.5 text-rose-700">“{r.decline_reason}”</div>}
               {(r.skipped || []).length > 0 && <div className="mt-0.5 text-ink-secondary">Left out: {(r.skipped || []).join(", ")}</div>}
               <ul className="mt-1 text-ink-tertiary">
