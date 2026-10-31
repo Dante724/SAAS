@@ -12,7 +12,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Annotated, Optional
 from datetime import date as _date
 from datetime import datetime as _dt
 from backend.db.database import get_db
@@ -42,7 +42,7 @@ class AcceptIn(BaseModel):
     signature: Optional[str] = None   # data URL
     name: Optional[str] = None
     reason: Optional[str] = Field(default=None, max_length=1000)   # E5: why they declined
-    skip_line_ids: list[str] = Field(default_factory=list, max_length=200)   # E5: lines left out on accept
+    skip_line_ids: list[Annotated[str, Field(max_length=64)]] = Field(default_factory=list, max_length=200)   # E5: lines left out on accept
 
 
 async def _load(db: AsyncSession, token: str) -> Order:
@@ -191,7 +191,8 @@ async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
         db, order, kind="estimate.approved" if approved else "estimate.declined",
         title=f"{doc.capitalize()} {'approved' if approved else 'declined'} · {order.order_number}",
         body=f"{who or 'The customer'} {'approved' if approved else 'declined'} the {doc} online."
-             + (f" Reason: {reason}" if reason else ""))
+             + (f" Reason: {reason}" if reason else "")
+             + (f" Left out: {', '.join(order._skipped_lines)}." if getattr(order, "_skipped_lines", None) else ""))
 
     if approved and order.is_estimate:
         try:   # Build 144w: workflow automations for estimate_approved (best-effort).
@@ -215,6 +216,7 @@ async def _decision_target(db: AsyncSession, order: "Order", decision: str):
     if cfg_key:
         return (await db.execute(select(OrderStatus).where(
             OrderStatus.org_id == order.org_id, OrderStatus.key == cfg_key,
+            OrderStatus.record_type == ("estimate" if order.is_estimate else "work_order"),
             OrderStatus.active == True))).scalars().first()  # noqa: E712
     if not order.is_estimate:
         return None
@@ -417,8 +419,9 @@ async def _track_payload(db: AsyncSession, order: "Order") -> dict:
         "valid_until": order.estimate_valid_until.isoformat() if (order.is_estimate and order.estimate_valid_until) else None,
         "expired": _expired(order),
         "revision": _revision(order) if order.is_estimate else None,
-        "can_choose_lines": bool(awaiting and order.is_estimate and len(lines_pub) > 1),
-        "deposit": await _deposit_block(db, order, _fx, stopped),
+        "can_choose_lines": bool(awaiting and order.is_estimate and len(lines_pub) > 1
+                                 and getattr(org, "oe_estimate_line_choice", True)),
+        "deposit": await _deposit_block(db, order, _fx),
         # Per-status messaging rule (services/messaging_rule): box hidden client-side, enforced
         # server-side. When it's closed for this order, the page offers "Start a new request".
         **(await _message_fields(db, order, org)),
@@ -480,8 +483,16 @@ async def _respond(db: AsyncSession, order: "Order", data: AcceptIn, who: str, r
     if data.decision == "accept" and not data.signature and await _signature_required(db, order):
         raise HTTPException(422, "A signature is required to accept this document")
     if data.decision == "accept" and data.skip_line_ids:
+        if not await _line_choice(db, order):
+            raise HTTPException(403, "This shop asks you to approve the whole estimate. Contact them to change it.")
         await _skip_lines(db, order, data.skip_line_ids, who)
     return await _decide_estimate(db, order, data.decision, data.signature, who, request, reason=data.reason)
+
+
+async def _line_choice(db: AsyncSession, order: "Order") -> bool:
+    """E5 — the shop lets customers untick estimate lines (Settings → Customer pages)."""
+    org = (await db.execute(select(Organisation).where(Organisation.id == order.org_id))).scalar_one_or_none()
+    return bool(org and getattr(org, "oe_estimate_line_choice", True))
 
 
 async def _public_rows(db: AsyncSession, order: "Order") -> list:
@@ -540,6 +551,7 @@ async def _skip_lines(db: AsyncSession, order: "Order", skip_ids: list[str], who
         order.deposit_amount = q2(float(order.total or 0))   # a deposit never asks for more than the job
     db.add(EventFeedItem(org_id=order.org_id, entity_type="order", entity_id=order.id, item_type="status",
                          visibility="internal", body=f"{who or 'The customer'} left out: {', '.join(skipped)}"))
+    order._skipped_lines = skipped     # read by the staff alert in _decide_estimate
 
 
 async def snapshot_revision(db: AsyncSession, order: "Order", *, decision: Optional[str] = None,
@@ -568,12 +580,21 @@ async def snapshot_revision(db: AsyncSession, order: "Order", *, decision: Optio
     return rev
 
 
-async def _deposit_block(db: AsyncSession, order: "Order", fx, stopped: bool) -> Optional[dict]:
+async def _deposit_block(db: AsyncSession, order: "Order", fx) -> Optional[dict]:
     """E5 — the deposit the shop asks for at approval: how much, what's paid, and whether the
-    customer can pay it online now (once they've approved, while the job is open)."""
+    customer can pay it online now (once they've approved, while the job is open and before it's
+    invoiced; after that the invoice is what they pay)."""
     amount = q2(float(order.deposit_amount or 0))
     if amount <= 0:
         return None
+    from backend.models import OrderStatus as _OS
+    st = (await db.execute(select(_OS).where(
+        _OS.org_id == order.org_id, _OS.key == order.status,
+        _OS.record_type == ("estimate" if order.is_estimate else "work_order")))).scalars().first()
+    stopped = bool(order.closed_at or (st and (st.is_terminal or st.status_group in ("closed", "dropped"))))
+    if not stopped:
+        from backend.services.invoice_money import invoices_for_order
+        stopped = bool(await invoices_for_order(db, order.id))
     from backend.services.order_money import net_paid
     paid = q2(min(max(0.0, await net_paid(db, order.id)), amount))
     due = q2(amount - paid)
@@ -591,11 +612,7 @@ async def track_deposit_link(token: str, request: Request, db: AsyncSession = De
     await _rate("track_deposit", f"{_ip(request)}:{token}", limit=10, window_sec=600)
     order = await _load(db, token)
     order = (await db.execute(select(Order).where(Order.id == order.id).with_for_update())).scalar_one()
-    from backend.models import OrderStatus as _OS
-    st = (await db.execute(select(_OS).where(
-        _OS.org_id == order.org_id, _OS.key == order.status,
-        _OS.record_type == ("estimate" if order.is_estimate else "work_order")))).scalars().first()
-    block = await _deposit_block(db, order, 1, bool(st and st.status_group == "dropped"))
+    block = await _deposit_block(db, order, 1)
     if not block or not block["can_pay"]:
         raise HTTPException(409, "There's no deposit to pay on this right now.")
     from backend.config import settings
@@ -608,6 +625,9 @@ async def track_deposit_link(token: str, request: Request, db: AsyncSession = De
     if existing and abs(float(existing.amount or 0) - block["due"]) < 0.005:
         intent = existing
     else:
+        if existing:      # one live link per job: a stale one is closed at the provider first
+            from backend.services.order_money import revoke_pay_link
+            await revoke_pay_link(db, existing)
         try:
             intent = await pay.create_intent(db, org_id=order.org_id, order_id=order.id,
                                              amount=block["due"], account_id=None)
@@ -979,6 +999,8 @@ async def customer_approved_work(db: AsyncSession, order: "Order", who: str) -> 
     if cur and (cur.is_terminal or cur.status_group in ("closed", "dropped")):
         return      # a finished job stays where it is
     target = await _decision_target(db, order, "accept")
+    if cur and target and (target.sort_order or 0) < (cur.sort_order or 0):
+        return      # never backwards: a job already past that status stays where it is
     if target and target.key != order.status:
         await _move_for_customer(db, order, target, "Approved by customer", who)
 
@@ -1137,6 +1159,8 @@ async def portal_message(token: str, order_id: str, data: MessageIn, request: Re
 @router.post("/track/{token}/recommendations/decide")
 async def track_decide_recs(token: str, data: RecDecideIn, request: Request, db: AsyncSession = Depends(get_db)):
     order = await _load(db, token)
+    # lock the job: the decision may move its status, which must not race a second tap
+    order = (await db.execute(select(Order).where(Order.id == order.id).with_for_update())).scalar_one()
     result = await _decide_recommendations(db, order, data, request)
     await db.commit()
     return {"ok": True, **result}
@@ -1147,7 +1171,7 @@ async def portal_decide_recs(token: str, order_id: str, data: RecDecideIn, reque
                              db: AsyncSession = Depends(get_db)):
     client = await _client_by_portal(db, token)
     order = (await db.execute(select(Order).where(
-        Order.id == order_id, Order.client_id == client.id))).scalar_one_or_none()
+        Order.id == order_id, Order.client_id == client.id).with_for_update())).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
     result = await _decide_recommendations(db, order, data, request)

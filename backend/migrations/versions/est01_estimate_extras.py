@@ -5,6 +5,7 @@
 - orders.estimate_decline_reason: what the customer wrote when declining.
 - document_signatures.revision: which version a decision was for, so a new version can be decided.
 - estimate_revisions: snapshots of earlier versions (lines, total, decision).
+- organisations.oe_estimate_line_choice: the customer may untick estimate lines (on by default).
 
 Revision ID: est01
 Revises: im01
@@ -30,6 +31,9 @@ def upgrade() -> None:
         op.add_column("orders", sa.Column("estimate_revision", sa.Integer(), nullable=False, server_default="1"))
     if "estimate_decline_reason" not in have:
         op.add_column("orders", sa.Column("estimate_decline_reason", sa.Text(), nullable=True))
+    if "oe_estimate_line_choice" not in _cols("organisations"):
+        op.add_column("organisations", sa.Column("oe_estimate_line_choice", sa.Boolean(), nullable=False,
+                                                 server_default=sa.true()))
     if "revision" not in _cols("document_signatures"):
         op.add_column("document_signatures", sa.Column("revision", sa.Integer(), nullable=False, server_default="1"))
     if "estimate_revisions" not in sa.inspect(op.get_bind()).get_table_names():
@@ -60,6 +64,7 @@ def downgrade() -> None:
     op.drop_index("ix_estimate_revisions_org_id", table_name="estimate_revisions")
     op.drop_table("estimate_revisions")
     op.drop_column("document_signatures", "revision")
+    op.drop_column("organisations", "oe_estimate_line_choice")
     op.drop_column("orders", "estimate_decline_reason")
     op.drop_column("orders", "estimate_revision")
     op.drop_column("orders", "estimate_valid_until")

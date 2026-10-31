@@ -159,6 +159,7 @@ class Organisation(Base):
     oe_show_zero_price_services: Mapped[bool] = mapped_column(Boolean, default=True)
     # 144bb — public-page feature switches (estimate approval, customer messaging)
     oe_allow_approval: Mapped[bool] = mapped_column(Boolean, default=True)
+    oe_estimate_line_choice: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))  # E5: customer may untick estimate lines
     oe_allow_messages: Mapped[bool] = mapped_column(Boolean, default=True)
     oe_msg_days_after_close: Mapped[int] = mapped_column(Integer, default=14)  # customer messages stay open N days after closing
     oe_allow_recommend: Mapped[bool] = mapped_column(Boolean, default=True)  # 144bd: customer approves recommended services

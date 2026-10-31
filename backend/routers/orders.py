@@ -2003,7 +2003,7 @@ async def set_estimate_terms(
     order_id: str,
     data: EstimateTermsIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_tickets")),
 ):
     """E5 — an estimate's "valid until" date. After it the customer can't approve online; send a new
     revision (or move the date) to let them. Empty clears it."""
@@ -2046,6 +2046,13 @@ async def new_estimate_revision(
     order.estimate_revision = (order.estimate_revision or 1) + 1
     order.estimate_decline_reason = None
     order.estimate_approved_at = None
+    # pay links made for the old version (e.g. its deposit) stop working
+    from backend.models import PaymentIntent
+    from backend.services.order_money import revoke_pay_link
+    for _pi in (await db.execute(select(PaymentIntent).where(
+            PaymentIntent.org_id == current.org_id, PaymentIntent.order_id == order.id,
+            PaymentIntent.status.in_(("created", "viewed", "pending"))))).scalars().all():
+        await revoke_pay_link(db, _pi)
     cur = (await db.execute(select(OrderStatus).where(
         OrderStatus.org_id == current.org_id, OrderStatus.key == order.status,
         OrderStatus.record_type == "estimate"))).scalars().first()
