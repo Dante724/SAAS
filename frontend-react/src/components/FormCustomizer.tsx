@@ -269,10 +269,13 @@ function FieldPanel({ it, dirs, form, onLabel, onField, onRequired, onHide, onDe
                 className={`${chip(f.show_on_job_card !== false || it.require === "close")} disabled:opacity-60`}>Job card</button>}
               <button onClick={() => onField({ show_on_print: !f.show_on_print })} className={chip(!!f.show_on_print)}>Printed receipt</button>
               <button onClick={() => onField({ show_in_portal: !f.show_in_portal })} className={chip(!!f.show_in_portal)}>Customer portal</button>
+              {(form === "order" || form === "device") && f.field_type !== "header" && (
+                <button onClick={() => onField({ ask_at_checkin: !f.ask_at_checkin })} className={chip(!!f.ask_at_checkin)}>Self check-in</button>)}
             </div>
             <p className="text-[11px] text-ink-tertiary mt-1.5">
               {form === "order" && it.require === "close" ? "Needed before closing, so it always shows on the job card. " : ""}
-              Receipts list it wherever a template has the “Form details” block; the portal shows it on the customer's tracking page.</p></div>
+              Receipts list it wherever a template has the “Form details” block; the portal shows it on the customer's tracking page.
+              {(form === "order" || form === "device") && " Self check-in asks the customer this on the check-in page, so only tick fields a customer should see."}</p></div>
         )}
         {f.field_type !== "bool" && (
           <div><label className={lbl}>Hint inside the box</label>

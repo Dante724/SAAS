@@ -37,6 +37,9 @@ POST /api/feedback/public/{token} [public]
 POST /api/payments/intents/{intent_id}/refresh [public]
 POST /api/payments/intents/{intent_id}/simulate-pay [public]
 POST /api/payments/intents/{intent_id}/view [public]
+POST /api/public/checkin/{token} [public]                 # self check-in: token = one check-in point; rate-limited
+POST /api/public/checkin/{token}/identify [public]        # decodes a VIN/HIN/IMEI only, never says if the shop knows it
+POST /api/public/checkin/s/{status_token}/cancel [public] # the customer leaving their own place in the queue
 POST /api/public/appointment/{slug} [public]
 POST /api/public/appointment/{slug}/hello [public]
 POST /api/public/appointment/{slug}/request [public]
@@ -157,6 +160,9 @@ POST /api/inventory/reorder-digest [staff]
 POST /api/leads [staff]
 PATCH /api/leads/{lead_id} [staff]
 POST /api/leads/{lead_id}/convert [staff]
+# self check-in queue: calling someone to the counter is front-desk work, like answering an inquiry
+POST /api/checkins/{cid}/call [staff]
+POST /api/checkins/{cid}/no-show [staff]
 # media
 POST /api/media [staff]
 # mfa
