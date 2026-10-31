@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.models import Tax, TaxException, TaxRule
 from backend.services.money import q2
 
+JOB_FAMILY = "tickets_sales"
+
 
 def _in_scope(tax: Tax, location_id: str | None) -> bool:
     if tax.location_scope != "selected":
@@ -76,3 +78,40 @@ async def resolve_taxes(db: AsyncSession, org_id: str, *, doc_family: str,
                         "rate": tax.rate, "mode": tax.mode, "amount": amount})
         total += amount
     return {"taxes": applied, "tax_total": q2(total), "exempt": False}
+
+
+async def set_default_tax(db: AsyncSession, org_id: str, tax: Tax, is_default: bool) -> None:
+    """Keep the default flag and the job tax stack (tickets_sales) together (QA 2026-10-31 B).
+
+    Making a tax the default puts it in the stack where the old default was (or first, if
+    the old default wasn't there), so jobs charge it; other stacked taxes stay. Clearing the
+    flag takes it out of the stack. Caller commits."""
+    olds = (await db.execute(select(Tax).where(
+        Tax.org_id == org_id, Tax.is_default == True, Tax.id != tax.id))).scalars().all()  # noqa: E712
+    rules = (await db.execute(select(TaxRule).where(
+        TaxRule.org_id == org_id, TaxRule.doc_family == JOB_FAMILY)
+        .order_by(TaxRule.priority.asc()))).scalars().all()
+    stack = [r.tax_id for r in rules]
+    if is_default:
+        for o in olds:
+            o.is_default = False
+        old_ids = {o.id for o in olds}
+        new, placed = [], False
+        for tid in stack:
+            if tid in old_ids or tid == tax.id:
+                if not placed:
+                    new.append(tax.id)
+                    placed = True
+            else:
+                new.append(tid)
+        if not placed:
+            new.insert(0, tax.id)
+    else:
+        new = [tid for tid in stack if tid != tax.id] if tax.is_default else stack
+    tax.is_default = is_default
+    if new != stack:
+        for r in rules:
+            await db.delete(r)
+        await db.flush()
+        for i, tid in enumerate(new):
+            db.add(TaxRule(org_id=org_id, doc_family=JOB_FAMILY, tax_id=tid, priority=i))

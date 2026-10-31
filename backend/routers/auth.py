@@ -265,8 +265,13 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
     _tax = _default_tax_for(data.region, data.country)
     if _tax is not None:
         from backend.models import Tax
-        db.add(Tax(org_id=org.id, name=_tax["name"], rate=_tax["rate"], mode=_tax["mode"],
-                   is_default=True, active=True))
+        from backend.models import TaxRule
+        _seeded = Tax(org_id=org.id, name=_tax["name"], rate=_tax["rate"], mode=_tax["mode"],
+                      is_default=True, active=True)
+        db.add(_seeded)
+        await db.flush()
+        # QA 2026-10-31 B: the default tax is what jobs charge, so it starts the job tax stack.
+        db.add(TaxRule(org_id=org.id, doc_family="tickets_sales", tax_id=_seeded.id, priority=0))
         await db.flush()
 
     employee = Employee(

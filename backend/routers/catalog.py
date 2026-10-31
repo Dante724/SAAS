@@ -391,6 +391,7 @@ async def catalog_search(
 # ── Taxes (named, reusable rates) ────────────────────
 from backend.models import Tax
 from backend.services.money import q2
+from backend.services.tax import set_default_tax
 
 
 class TaxIn(BaseModel):
@@ -430,18 +431,16 @@ async def create_tax(
 ):
     if not data.name.strip():
         raise HTTPException(400, "Name is required")
-    if data.is_default:
-        # clear other defaults
-        existing = (await db.execute(select(Tax).where(Tax.org_id == current.org_id, Tax.is_default == True))).scalars().all()  # noqa: E712
-        for e in existing:
-            e.is_default = False
     import json as _j2
     t = Tax(org_id=current.org_id, name=data.name, rate=data.rate, mode=data.mode,
             code=data.code, name_for_document=data.name_for_document,
             location_scope=data.location_scope,
             location_ids=_j2.dumps(data.location_ids) if data.location_ids else None,
-            is_default=data.is_default)
+            is_default=False)
     db.add(t)
+    await db.flush()
+    if data.is_default:      # the default is what jobs charge: the job tax stack moves with it
+        await set_default_tax(db, current.org_id, t, True)
     await db.commit()
     await db.refresh(t)
     return _ser_tax(t)
@@ -457,13 +456,11 @@ async def update_tax(
         raise HTTPException(404, "Tax not found")
     # A1: write only what was sent, so a partial body can't reset the rate, code or locations.
     sent = data.model_fields_set
-    if "is_default" in sent and data.is_default and not t.is_default:
-        existing = (await db.execute(select(Tax).where(Tax.org_id == current.org_id, Tax.is_default == True))).scalars().all()  # noqa: E712
-        for e in existing:
-            e.is_default = False
+    if "is_default" in sent and data.is_default != bool(t.is_default):
+        await set_default_tax(db, current.org_id, t, data.is_default)
     import json as _j3
     t.name = data.name
-    for k in ("rate", "mode", "is_default", "code", "name_for_document", "location_scope"):
+    for k in ("rate", "mode", "code", "name_for_document", "location_scope"):
         if k in sent:
             setattr(t, k, getattr(data, k))
     if "location_ids" in sent:
