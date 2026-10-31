@@ -431,7 +431,7 @@ async def test_cancelled_invoice_does_not_block_a_new_one(client, tenant, db):
 async def test_ensure_seeded_does_not_write_on_a_seeded_shop(client, tenant, db):
     from sqlalchemy import event
 
-    from backend.models import Organisation, OrderStatus
+    from backend.models import OrderStatus, Organisation
     from backend.routers.statuses import ensure_seeded
     await client.get("/api/statuses", headers=tenant)                     # seeds
     org_id = (await db.execute(select(Organisation.id))).scalars().first()

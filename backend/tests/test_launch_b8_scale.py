@@ -137,7 +137,7 @@ async def test_my_work_is_scoped_to_the_techs_own_jobs(client, tenant, db):
     assert s["max_params"] <= MAX_PARAMS, f"My Work bound {s['max_params']} parameters"
     assert s["loaded"] <= 1, f"My Work loaded {s['loaded']} work orders; only the tech's own is needed"
     body = r.json()
-    assert [l["description"] for l in body["lines"]] == ["Swap screen"]
+    assert [ln["description"] for ln in body["lines"]] == ["Swap screen"]
     assert [o["order_id"] for o in body["orders"]] == [mine]
 
 
@@ -183,10 +183,11 @@ async def _org_with_due_message(client, db, email):
 async def test_one_shops_db_error_does_not_stall_the_sweep(client, db, monkeypatch):
     """512 orgs, a DB error in one, 510 failed: the error left the shared session needing a
     rollback, so every org after it failed too. Each org now gets its own session."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
     from backend.core import scheduled
     from backend.models import NotificationLog
     from backend.services import notification_rules as nr
-    from sqlalchemy.ext.asyncio import async_sessionmaker
 
     orgs = [await _org_with_due_message(client, db, f"shop{i}@b8.dev") for i in range(4)]
     seen = []
