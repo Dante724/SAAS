@@ -33,7 +33,7 @@ async def apply_receipt_line(
     - ii144c: no bin given → the location warehouse's default bin, when one is set. Each unit records
       its supplier and supplier-warranty end date (the product's supplier warranty from today).
     - `movement_type` names the audit row (a manual count-in is an `adjust`, not a `receive`);
-      `warehouse_id` tags the movement and the cost layer.
+      `warehouse_id` tags the movement and the cost layer (default: the stock row's warehouse).
     """
     from backend.services import stock_rows
     if bin_id:
@@ -55,7 +55,10 @@ async def apply_receipt_line(
 
     # ii144a: the exact (product, location, bin) row — the old code reused the location's single row
     # and only tagged it with the first bin, so a later bin transfer made a second row and crashed here.
-    await stock_rows.add(db, part.id, location_id, qty, bin_id=bin_id)
+    row = await stock_rows.add(db, part.id, location_id, qty, bin_id=bin_id)
+    # QA fix D: the movement and the cost layer say which warehouse the stock went into (they were
+    # NULL for postings and PO receipts, so valuation showed a separate "—" warehouse).
+    warehouse_id = warehouse_id or row.warehouse_id or await stock_rows.warehouse_for(db, location_id, bin_id)
 
     db.add(StockMovement(part_id=part.id, location_id=location_id, bin_id=bin_id,
                          movement_type=movement_type, qty=qty, unit_cost=unit_cost or None,

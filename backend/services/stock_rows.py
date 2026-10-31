@@ -73,11 +73,30 @@ async def row_for(db, part_id: str, location_id: str, bin_id: Optional[str] = No
     if row is None and create:
         from backend.db.database import insert_ignore
         from backend.models import _uuid
+        # QA fix D: a new row always says which warehouse it is in — the bin's, else the location's
+        # default product warehouse. Untagged rows showed as a separate "—" warehouse in valuation.
+        tag = warehouse_id or await warehouse_for(db, location_id, bin_id)
         # Insert-or-ignore: two requests receiving the first unit at once must both land on one row.
         await insert_ignore(db, StockLevel, id=_uuid(), part_id=part_id, location_id=location_id,
-                            bin_id=bin_id, warehouse_id=warehouse_id, qty_available=0.0, qty_reserved=0.0)
+                            bin_id=bin_id, warehouse_id=tag, qty_available=0.0, qty_reserved=0.0)
         return await row_for(db, part_id, location_id, bin_id, warehouse_id=warehouse_id)
     return row
+
+
+async def warehouse_for(db, location_id: str, bin_id: Optional[str] = None) -> Optional[str]:
+    """The warehouse stock at this place belongs to: the bin's own warehouse, else the location's
+    default product warehouse (provisioned when the location has none yet)."""
+    from backend.models import Location, StorageBin
+    from backend.services import warehouses as _wh
+    if bin_id:
+        wid = (await db.execute(select(StorageBin.warehouse_id).where(StorageBin.id == bin_id))).scalar_one_or_none()
+        if wid:
+            return wid
+    org_id = (await db.execute(select(Location.org_id).where(Location.id == location_id))).scalar_one_or_none()
+    if not org_id:
+        return None
+    w = await _wh.default_for_location(db, org_id, location_id)
+    return w.id if w else None
 
 
 async def add(db, part_id: str, location_id: str, qty: float, *, bin_id: Optional[str] = None,

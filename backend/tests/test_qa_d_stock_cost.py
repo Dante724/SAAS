@@ -3,6 +3,8 @@
 Every test ends on the same two books checks: stock movements add up to what is on hand, and the
 FIFO cost layers hold exactly the on-hand units (so COGS and valuation are drawn from real costs).
 """
+from pathlib import Path
+
 import pytest
 from sqlalchemy import func, select
 
@@ -150,3 +152,96 @@ async def test_catalog_bulk_delete_refuses_stocked_product(client, tenant, db):
                           json={"ids": [stocked], "action": "delete"})
     assert r.status_code == 200, r.text
     assert r.json()["count"] == 0 and r.json()["blocked"] == ["Part QD-2E"]
+
+
+# ── 5. stock written by postings and PO receipts names its warehouse ────────
+async def _po(client, h, pid, qty, cost):
+    sid = (await client.post("/api/suppliers", json={"name": f"Sup {pid[:6]}"}, headers=h)).json()["id"]
+    loc = await _loc(client, h)
+    po_id = (await client.post("/api/inventory/po", headers=h, json={
+        "supplier_id": sid, "location_id": loc,
+        "lines": [{"part_id": pid, "qty_ordered": qty, "unit_cost": cost}]})).json()["po_id"]
+    line = (await client.get(f"/api/inventory/po/{po_id}", headers=h)).json()["lines"][0]["id"]
+    return po_id, line
+
+
+@pytest.mark.asyncio
+async def test_posting_and_po_receipt_tag_the_default_warehouse(client, tenant, db):
+    from backend.models import Warehouse
+    loc = await _loc(client, tenant)
+    pid = await _part(client, tenant, "QD-5A")
+    r = await client.post("/api/inventory/postings", headers=tenant, json={
+        "location_id": loc, "lines": [{"part_id": pid, "qty": 4, "purchase_price": 3}]})
+    assert r.status_code == 201, r.text
+    po_id, line = await _po(client, tenant, pid, 6, 3)
+    r = await client.post(f"/api/inventory/po/{po_id}/receive", headers=tenant,
+                          json={"lines": [{"po_line_id": line, "qty": 6}]})
+    assert r.status_code == 200, r.text
+    # a stock document on the same warehouse must not open a second, separately-valued row
+    r = await client.post("/api/stock-docs/write-offs", headers=tenant, json={
+        "location_id": loc, "reason": "damaged", "lines": [{"part_id": pid, "qty": 1}]})
+    assert r.status_code == 201, r.text
+
+    await db.commit()
+    wid = (await db.execute(select(Warehouse.id).where(
+        Warehouse.location_id == loc, Warehouse.kind == "product", Warehouse.is_default == True))).scalar_one()  # noqa: E712
+    for model in (StockLevel, StockMovement, StockItemBatch):
+        tags = set((await db.execute(select(model.warehouse_id).where(model.part_id == pid))).scalars())
+        assert tags == {wid}, f"{model.__tablename__}: {tags}"
+    assert len((await db.execute(select(StockLevel).where(StockLevel.part_id == pid))).scalars().all()) == 1
+    on_hand, value = await _assert_books(db, pid)
+    assert on_hand == 9 and value == pytest.approx(27.0)
+
+    rep = (await client.get("/api/reports/run/stock_valuation", headers=tenant)).json()
+    names = [row[0] for row in rep.get("rows", rep.get("data", []))]
+    assert "—" not in names, names
+
+
+def test_backfill_tags_and_merges_untagged_stock(tmp_path):
+    """qad01: untagged rows join their location's default warehouse (merged into its own row when
+    it has one), a bare location gets a warehouse, and a second run changes nothing."""
+    import importlib.util
+
+    import sqlalchemy as sa
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    spec = importlib.util.spec_from_file_location(
+        "qad01", Path(__file__).parents[1] / "migrations/versions/qad01_stock_warehouse_backfill.py")
+    mig = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mig)
+    eng = sa.create_engine(f"sqlite:///{tmp_path}/b.db")
+    with eng.begin() as conn:
+        x = lambda q: conn.execute(sa.text(q))  # noqa: E731
+        x("CREATE TABLE locations (id TEXT PRIMARY KEY, org_id TEXT, name TEXT)")
+        x("CREATE TABLE warehouses (id TEXT PRIMARY KEY, org_id TEXT, name TEXT, kind TEXT, scope TEXT, "
+          "location_id TEXT, is_default BOOLEAN, allowed_actions JSON, active BOOLEAN, created_at TIMESTAMP, "
+          "deleted_at TIMESTAMP)")
+        x("CREATE TABLE storage_bins (id TEXT PRIMARY KEY, warehouse_id TEXT)")
+        x("CREATE TABLE stock_levels (id TEXT PRIMARY KEY, part_id TEXT, location_id TEXT, warehouse_id TEXT, "
+          "bin_id TEXT, qty_available FLOAT, qty_reserved FLOAT)")
+        x("CREATE UNIQUE INDEX uq_unbinned ON stock_levels (part_id, location_id, coalesce(warehouse_id, '')) "
+          "WHERE bin_id IS NULL")
+        x("CREATE TABLE stock_item_batches (id TEXT PRIMARY KEY, org_id TEXT, part_id TEXT, location_id TEXT, "
+          "warehouse_id TEXT, bin_id TEXT, unit_cost NUMERIC, qty_received NUMERIC, qty_remaining NUMERIC)")
+        x("CREATE TABLE stock_movements (id TEXT PRIMARY KEY, part_id TEXT, location_id TEXT, warehouse_id TEXT, "
+          "movement_type TEXT, qty FLOAT)")
+        x("INSERT INTO locations (id, org_id, name) VALUES ('L1', 'o1', 'Main'), ('L2', 'o1', 'Annex')")
+        x("INSERT INTO warehouses (id, org_id, name, kind, scope, location_id, is_default, active) "
+          "VALUES ('W1', 'o1', 'Main warehouse', 'product', 'location', 'L1', 1, 1)")
+        x("INSERT INTO stock_levels (id, part_id, location_id, warehouse_id, bin_id, qty_available, qty_reserved) "
+          "VALUES ('s-null', 'P1', 'L1', NULL, NULL, 4, 1), ('s-own', 'P1', 'L1', 'W1', NULL, 2, 0), "
+          "('s-p2', 'P2', 'L1', NULL, NULL, 5, 0), ('s-l2', 'P2', 'L2', NULL, NULL, 3, 0)")
+        x("INSERT INTO stock_item_batches (id, org_id, part_id, location_id, unit_cost, qty_received, qty_remaining) "
+          "VALUES ('b1', 'o1', 'P1', 'L1', 2, 4, 4)")
+        x("INSERT INTO stock_movements (id, part_id, location_id, movement_type, qty) "
+          "VALUES ('m1', 'P1', 'L1', 'receive', 4), ('m2', 'P2', 'L2', 'receive', 3)")
+        for _ in range(2):        # idempotent
+            with Operations.context(MigrationContext.configure(conn)):
+                mig.upgrade()
+        rows = {r[0]: r[1:] for r in x("SELECT id, warehouse_id, qty_available, qty_reserved FROM stock_levels")}
+        w2 = x("SELECT id FROM warehouses WHERE location_id = 'L2'").scalars().all()
+        assert len(w2) == 1
+        assert rows == {"s-own": ("W1", 6, 1), "s-p2": ("W1", 5, 0), "s-l2": (w2[0], 3, 0)}
+        assert x("SELECT warehouse_id FROM stock_item_batches").scalar() == "W1"
+        assert dict(x("SELECT id, warehouse_id FROM stock_movements").all()) == {"m1": "W1", "m2": w2[0]}
