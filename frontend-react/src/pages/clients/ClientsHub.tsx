@@ -17,7 +17,7 @@ import { confirmDialog } from "../../lib/dialog";
 import TagFilterChip from "./TagFilterChip";
 import { useMe } from "../../context/Me";
 import { Avatar } from "../orders/look";
-import { MoreMenu, btnGhost, btnPrimary } from "../invoices/billing";
+import { MoreMenu, btnDanger, btnGhost, btnPrimary } from "../invoices/billing";
 import { hueText, tint } from "../../lib/tint";
 import ImportDrawer from "../../components/ImportDrawer";
 
@@ -153,7 +153,7 @@ export default function ClientsHub() {
                 </div>}
             <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
               {tab === "clients" && <TagFilterChip value={tagId} onChange={(id) => { setTagId(id); clearSel(); }} />}
-              <div className="relative w-full sm:w-72"><M n="search" c="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" /><input value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search contacts" className="w-full h-9 bg-white border border-slate-200 rounded-lg pl-8 pr-3 text-xs text-ink-primary placeholder:text-ink-placeholder outline-none focus:border-primary focus:ring-2 focus:ring-primary/10" placeholder="Search name, phone or email…" /></div>
+              <div className="relative w-full sm:w-72"><M n="search" c="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" /><input value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search contacts" className="glass-input w-full h-9 rounded-xl pl-8 pr-3 py-2 text-sm text-ink-primary" placeholder="Search name, phone or email…" /></div>
             </div>
           </div>
 
@@ -169,13 +169,12 @@ export default function ClientsHub() {
 
           {tab === "clients" && sel.size > 0 && (
             <div className="bg-primary/5 rounded-2xl border border-primary/30 shadow-clay-sm px-4 py-2.5 flex flex-wrap items-center gap-2 text-xs font-semibold">
-              <span className="text-primary">{sel.size} selected</span>
-              <div className="flex-1" />
-              <button onClick={() => { setPrintIds(null); setPrintDlg(true); }} disabled={bulkBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="print" c="text-sm" />Print</button>
-              <button onClick={bulkExport} disabled={bulkBusy} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="download" c="text-sm" />Export CSV</button>
-              <button onClick={bulkMerge} disabled={bulkBusy || sel.size < 2} className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 disabled:opacity-40 flex items-center gap-1"><M n="merge" c="text-sm" />Merge</button>
-              <button onClick={bulkDelete} disabled={bulkBusy} className="px-3 py-1.5 rounded-lg bg-rose-600 text-white hover:bg-rose-700 flex items-center gap-1"><M n="delete" c="text-sm" />Delete</button>
-              <button aria-label="Close" onClick={clearSel} className="px-2 py-1.5 rounded-lg hover:bg-slate-200/60 text-ink-tertiary"><M n="close" c="text-sm" /></button>
+              <span className="text-primary mr-1">{sel.size} selected</span>
+              <button onClick={() => { setPrintIds(null); setPrintDlg(true); }} disabled={bulkBusy} className={btnGhost}><M n="print" c="text-sm" />Print</button>
+              <button onClick={bulkExport} disabled={bulkBusy} className={btnGhost}><M n="download" c="text-sm" />Export CSV</button>
+              <button onClick={bulkMerge} disabled={bulkBusy || sel.size < 2} className={btnGhost}><M n="merge" c="text-sm" />Merge</button>
+              <button onClick={bulkDelete} disabled={bulkBusy} className={btnDanger}><M n="delete" c="text-sm" />Delete</button>
+              <button aria-label="Close" onClick={clearSel} className="ml-auto h-9 w-9 grid place-items-center rounded-xl hover:bg-slate-200/60 text-ink-tertiary"><M n="close" c="text-sm" /></button>
             </div>
           )}
 
@@ -237,7 +236,14 @@ export default function ClientsHub() {
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
                   {!suppliers && <SkeletonRows cols={6} />}
-                  {suppliers && sRows.length === 0 && <tr><td colSpan={6} className="py-6 px-4 text-ink-tertiary">No suppliers yet.</td></tr>}
+                  {suppliers && sRows.length === 0 && <tr><td colSpan={6} className="py-10 px-4 text-center">
+                    {q ? <p className="text-ink-tertiary">No suppliers found.</p> : (
+                      <div className="space-y-3">
+                        <p className="text-ink-secondary">No suppliers yet.</p>
+                        <button onClick={() => setNewSupplier(true)} className={btnPrimary}><M n="add" c="text-sm" />New supplier</button>
+                      </div>
+                    )}
+                  </td></tr>}
                   {pageS.map((s) => (
                     <tr key={s.id} onClick={() => s.client_id ? setOpenClient(s.client_id) : setOpenSupplier(s)} className="hover:bg-slate-50 cursor-pointer">
                       <td className="py-3 px-4 font-semibold text-ink-primary">{s.name || "—"}</td>

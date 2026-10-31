@@ -30,7 +30,7 @@ export function describeScopes(raw?: string | null): string {
 }
 
 const lbl = "block text-[11px] font-semibold text-ink-tertiary mb-1";
-const field = "glass-input w-full px-3 py-2 rounded-lg text-xs";
+const field = "glass-input w-full rounded-xl px-3 py-2 text-sm";
 
 export default function ApiKeysCard({ Card }: { Card: (p: { title: string; count?: number; children: any }) => any }) {
   const [keys, setKeys] = useState<any[] | null>(null);
@@ -72,16 +72,16 @@ export default function ApiKeysCard({ Card }: { Card: (p: { title: string; count
             {RESOURCES.map(([k, name]) => (
               <div key={k} className="flex items-center justify-between gap-2">
                 <label htmlFor={`scope-${k}`} className="text-ink-secondary font-semibold">{name}</label>
-                <select id={`scope-${k}`} value={pick[k] || ""} onChange={(e) => setPick({ ...pick, [k]: e.target.value as any })} className="glass-input px-2 py-1 rounded-md text-xs">
+                <select id={`scope-${k}`} value={pick[k] || ""} onChange={(e) => setPick({ ...pick, [k]: e.target.value as any })} className="glass-input rounded-xl px-3 py-2 text-sm">
                   <option value="">No access</option><option value="read">Read</option><option value="write">Read and change</option>
                 </select>
               </div>
             ))}
           </div>
         )}
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-3">
+          <button onClick={create} disabled={busy || !label.trim() || !scopes} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold disabled:opacity-60">Create key</button>
           <p className="text-[11px] text-ink-tertiary">{access === "some" && !scopes ? "Pick at least one thing this key can use." : "Keys limited to some things work with API version 2."}</p>
-          <button onClick={create} disabled={busy || !label.trim() || !scopes} className="px-3 py-2 rounded-lg bg-primary text-white font-semibold disabled:opacity-60">Create key</button>
         </div>
       </div>
       <table className="w-full text-left text-xs border-t border-slate-100">

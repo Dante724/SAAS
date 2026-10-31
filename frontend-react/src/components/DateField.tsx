@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { M } from "./Shell";
+import { fmtDay } from "../lib/serverTime";
 
 /**
  * Date / time / datetime field. Drop-in replacement for the native
@@ -42,9 +43,7 @@ function ymd(d: Date) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pa
 
 // The app's date format ("Oct 29, 2026"). A bare date is read as local midnight, not UTC.
 function fmtDate(iso: string): string {
-  if (!iso) return "";
-  const d = new Date(iso.length <= 10 ? iso + "T00:00" : iso);
-  return isNaN(d.getTime()) ? "" : d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+  return fmtDay(iso);   // the app's one date format ("Oct 29, 2026")
 }
 function fmtTime(hm: string): string {
   if (!hm) return "";

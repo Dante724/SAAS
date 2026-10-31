@@ -7,12 +7,14 @@ import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
-import { btnGhost, btnPrimary, inputCls, labelCls } from "../invoices/billing";
+import { btnGhost, btnPrimary, labelCls } from "../invoices/billing";
+import Switch from "../../components/Switch";
+import SaveFooter from "../../components/SaveFooter";
 import ModePill from "./ModePill";
 import MissedCallSettings from "./MissedCallSettings";
 
 const lbl = labelCls;
-const field = `${inputCls} text-ink-primary disabled:opacity-60`;
+const field = "glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary disabled:opacity-60";
 const primary = btnPrimary;
 const ghost = `${btnGhost} bg-white`;
 const hint = "text-xs text-ink-tertiary leading-relaxed";
@@ -59,10 +61,13 @@ function CopyRow({ label, value }: { label: string; value: string }) {
 export default function TelephonySettings() {
   const [cfg, setCfg] = useState<TelConfig | null>(null);
   const [auto, setAuto] = useState<ContactAuto | null>(null);
+  const [autoSaved, setAutoSaved] = useState<ContactAuto | null>(null);
   const [tags, setTags] = useState<Tag[]>([]);
   const [loadErr, setLoadErr] = useState<string | null>(null);
 
-  const [form, setForm] = useState({ provider: "simulated", enabled: false, caller_id_number: "", forward_to: "", allowed: "" });
+  const blank = { provider: "simulated", enabled: false, caller_id_number: "", forward_to: "", allowed: "" };
+  const [form, setForm] = useState(blank);
+  const [formSaved, setFormSaved] = useState(blank);
   const [creds, setCreds] = useState({ account_sid: "", auth_token: "" });
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string; where: string } | null>(null);
@@ -71,12 +76,13 @@ export default function TelephonySettings() {
 
   function apply(c: TelConfig) {
     setCfg(c);
-    setForm({ provider: c.provider, enabled: c.enabled, caller_id_number: c.caller_id_number || "", forward_to: c.forward_to || "", allowed: codes(c.destinations?.override) });
+    const f = { provider: c.provider, enabled: c.enabled, caller_id_number: c.caller_id_number || "", forward_to: c.forward_to || "", allowed: codes(c.destinations?.override) };
+    setForm(f); setFormSaved(f);
   }
   function load() {
     setLoadErr(null);
     Promise.all([api.get<TelConfig>("/telephony/config"), api.get<ContactAuto>("/telephony/automation/contacts"), api.get<{ items: Tag[] }>("/tags")])
-      .then(([c, a, t]) => { apply(c); setAuto(a); setTags(t.items || []); })
+      .then(([c, a, t]) => { apply(c); setAuto(a); setAutoSaved(a); setTags(t.items || []); })
       .catch((e) => setLoadErr(e?.message || "Couldn't load telephony settings"));
   }
   useEffect(load, []);
@@ -107,7 +113,8 @@ export default function TelephonySettings() {
     run("twilio", async () => { apply(await api.del<TelConfig>("/telephony/twilio")); return "Disconnected."; });
   };
   const saveAuto = (next: ContactAuto) => run("auto", async () => {
-    setAuto(await api.put<ContactAuto>("/telephony/automation/contacts", { enabled: next.enabled, ...next.config }));
+    const r = await api.put<ContactAuto>("/telephony/automation/contacts", { enabled: next.enabled, ...next.config });
+    setAuto(r); setAutoSaved(r);
     return "Saved.";
   });
   const saveAircall = () => run("aircall", async () => {
@@ -130,10 +137,12 @@ export default function TelephonySettings() {
   const badge = statusBadge(cfg);
   const tw = cfg?.twilio;
   const savedProvider = cfg?.enabled ? cfg.provider : null;
+  const formDirty = JSON.stringify(form) !== JSON.stringify(formSaved);
+  const autoDirty = JSON.stringify(auto) !== JSON.stringify(autoSaved);
 
   return (
     <section aria-labelledby="tel-title" className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-      <div className="p-3.5 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
+      <div className="p-3.5 border-b border-slate-100 flex flex-wrap items-center gap-2">
         <h3 id="tel-title" className={`${heading} flex items-center gap-1.5`}><M n="call" c="text-sm text-ink-tertiary" />Calls & telephony</h3>
         {cfg && <ModePill testId="tel-badge" mode={MODE[badge.tone]}>{badge.text}</ModePill>}
       </div>
@@ -155,9 +164,9 @@ export default function TelephonySettings() {
                   {!["simulated", "twilio", "aircall"].includes(form.provider) && <option value={form.provider}>{form.provider[0].toUpperCase() + form.provider.slice(1)} (events through the call webhook)</option>}
                 </select>
               </div>
-              <label className="flex items-center gap-2 text-xs font-semibold text-ink-primary sm:pt-5">
-                <input type="checkbox" className="accent-primary" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />Calling is on
-              </label>
+              <div className="flex items-center gap-2.5 text-sm font-medium text-ink-primary sm:pt-6">
+                <Switch label="Calling is on" on={form.enabled} onChange={(v) => setForm({ ...form, enabled: v })} />Calling is on
+              </div>
               <div>
                 <label htmlFor="tel-number" className={lbl}>{form.provider === "twilio" ? "Your Twilio phone number" : "Caller ID number"}</label>
                 <input id="tel-number" className={field} inputMode="tel" value={form.caller_id_number} onChange={(e) => setForm({ ...form, caller_id_number: e.target.value })} placeholder={form.provider === "twilio" && tw?.test_mode ? tw.test_number : "+1 555 010 0100"} />
@@ -176,8 +185,9 @@ export default function TelephonySettings() {
               </div>
             </div>
             {form.provider === "twilio" && <p className={hint}>Click-to-call rings the phone number on your own profile first, then connects the customer. With no number to ring, callers hear that you'll call them back.</p>}
-            {note("config")}
-            <div><button className={primary} disabled={busy === "config"} onClick={saveConfig}>Save</button></div>
+            {msg?.where === "config" && msg.kind === "err" && note("config")}
+            <SaveFooter className="!px-0 !pb-0 !pt-1" dirty={formDirty} busy={busy === "config"} onSave={saveConfig}
+              onDiscard={() => { setForm(formSaved); setMsg(null); }} msg={msg?.where === "config" && msg.kind === "ok" ? { ok: true, text: msg.text } : null} />
           </div>
 
           {/* Twilio account */}
@@ -239,9 +249,9 @@ export default function TelephonySettings() {
 
           {/* D2: contacts from calls */}
           <div className="p-4 space-y-3">
-            <label className={`flex items-center gap-2 ${heading}`}>
-              <input type="checkbox" className="accent-primary" checked={auto.enabled} onChange={(e) => setAuto({ ...auto, enabled: e.target.checked })} />Create contacts from calls
-            </label>
+            <div className={`flex items-center gap-3 ${heading}`}>
+              <Switch label="Create contacts from calls" on={auto.enabled} onChange={(v) => setAuto({ ...auto, enabled: v })} />Create contacts from calls
+            </div>
             <p className={hint}>When an unknown number calls, Tekly adds a contact named after the number and marks it "Created from call". Known numbers are matched, never duplicated.</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
@@ -251,9 +261,9 @@ export default function TelephonySettings() {
                   <option value="all">Incoming and outgoing calls</option>
                 </select>
               </div>
-              <label className="flex items-center gap-2 text-xs font-semibold text-ink-primary sm:pt-5">
-                <input type="checkbox" className="accent-primary" disabled={!auto.enabled} checked={auto.config.assign_manager} onChange={(e) => setAuto({ ...auto, config: { ...auto.config, assign_manager: e.target.checked } })} />Assign a manager
-              </label>
+              <div className="flex items-center gap-2.5 text-sm font-medium text-ink-primary sm:pt-6">
+                <Switch label="Assign a manager" disabled={!auto.enabled} on={auto.config.assign_manager} onChange={(v) => setAuto({ ...auto, config: { ...auto.config, assign_manager: v } })} />Assign a manager
+              </div>
             </div>
             {auto.config.assign_manager && auto.enabled && <p className={hint}>The manager is the person who placed the call, or else whoever owns the extension that was dialled.</p>}
             <div>
@@ -273,8 +283,9 @@ export default function TelephonySettings() {
                     })}
                   </div>}
             </div>
-            {note("auto")}
-            <div><button className={primary} disabled={busy === "auto"} onClick={() => saveAuto(auto)}>Save automation</button></div>
+            {msg?.where === "auto" && msg.kind === "err" && note("auto")}
+            <SaveFooter className="!px-0 !pb-0 !pt-1" dirty={autoDirty} busy={busy === "auto"} onSave={() => saveAuto(auto)} saveLabel="Save automation"
+              onDiscard={() => { setAuto(autoSaved); setMsg(null); }} msg={msg?.where === "auto" && msg.kind === "ok" ? { ok: true, text: msg.text } : null} />
           </div>
 
           {/* Try it: simulated inbound call */}
@@ -282,9 +293,9 @@ export default function TelephonySettings() {
             <div className="p-4 space-y-3">
               <div className={heading}>Try it</div>
               <p className={hint}>Simulate an incoming call. Nothing is dialled; the call shows up in the call log (Marketing → Call log).</p>
-              <label className="flex items-center gap-2 text-xs font-semibold text-ink-primary">
-                <input type="checkbox" className="accent-primary" checked={sim.missed} onChange={(e) => setSim({ ...sim, missed: e.target.checked })} />Nobody answers (a missed call)
-              </label>
+              <div className="flex items-center gap-2.5 text-sm font-medium text-ink-primary">
+                <Switch size="sm" label="Nobody answers (a missed call)" on={sim.missed} onChange={(v) => setSim({ ...sim, missed: v })} />Nobody answers (a missed call)
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-[1fr_8rem_auto] gap-2 items-end">
                 <div><label htmlFor="sim-from" className={lbl}>Caller's number</label><input id="sim-from" className={field} inputMode="tel" value={sim.from_number} onChange={(e) => setSim({ ...sim, from_number: e.target.value })} placeholder="+1 415 555 0100" /></div>
                 <div><label htmlFor="sim-ext" className={lbl}>Extension</label><input id="sim-ext" className={field} value={sim.extension} onChange={(e) => setSim({ ...sim, extension: e.target.value })} placeholder="Optional" /></div>

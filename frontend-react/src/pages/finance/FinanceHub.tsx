@@ -6,7 +6,9 @@ import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import { api, openAuthedDoc } from "../../api/client";
 import Pager from "../../components/Pager";
-import { currencySymbol, money } from "../orders/types";
+import { money } from "../orders/types";
+import { btnGhost, btnPrimary } from "../invoices/billing";
+import { fmtDay, fmtServerTime } from "../../lib/serverTime";
 import { alertDialog, confirmDialog, promptDialog, selectDialog } from "../../lib/dialog";
 import { isoMonth } from "../../lib/localDate";
 import { useMe } from "../../context/Me";
@@ -17,6 +19,15 @@ import PayrollCalcPanel from "./PayrollCalcPanel";
 type Tab = "cashboxes" | "overview" | "pnl" | "reconcile" | "balances" | "refunds" | "payroll";
 type Account = { id: string; name?: string; balance?: number; payment_option?: string; is_virtual?: boolean };
 type Balance = { id: string; name?: string; phone?: string; balance?: number };
+
+// A raw API value ("high", "draft") as a sentence-case label ("High", "Draft").
+const sentence = (s?: string | null) => { const t = String(s || "").replace(/[_-]+/g, " ").trim().toLowerCase(); return t ? t[0].toUpperCase() + t.slice(1) : ""; };
+// "Oct 1 – Oct 31, 2026": a date range in the app's one date format, the year said once when shared.
+export function dayRange(from?: string | null, to?: string | null): string {
+  const a = fmtDay(from), b = fmtDay(to);
+  if (!a || !b) return a || b || "—";
+  return `${from?.slice(0, 4) === to?.slice(0, 4) ? a.replace(/,? \d{4}$/, "") : a} – ${b}`;
+}
 
 export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
   const { can } = useMe();
@@ -55,7 +66,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
   const isoLocal = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const [pFrom, setPFrom] = useState(() => isoLocal(new Date(new Date().getFullYear(), new Date().getMonth(), 1)));
   const [pTo, setPTo] = useState(() => isoLocal(new Date()));
-  const cur = (n?: number) => `${pack?.currency_symbol || currencySymbol()}${(n ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  const cur = (n?: number) => money(n, pack?.currency_symbol, true);   // same formatter as Overview
   async function loadPnl() {
     setPnlBusy(true);
     try { setPnl(await api.get<any>(`/finance/pnl?date_from=${pFrom}&date_to=${pTo}`)); }
@@ -134,7 +145,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
     <Shell title="Finance">
       <div className="px-6 pt-3 border-b border-slate-200/60 bg-white/40 flex-shrink-0">
         <nav className="flex space-x-6 -mb-px text-xs font-semibold overflow-x-auto whitespace-nowrap">
-          {([...(can("can_view_cashbox") ? [["cashboxes", "Cashboxes"]] as [Tab, string][] : []), ["overview", "Overview"], ["pnl", "P&L"], ["reconcile", "Reconcile"], ["balances", "Client balances"], ["refunds", "Refunds"], ["payroll", "Payroll"]] as [Tab, string][]).map(([id, label]) => (
+          {([...(can("can_view_cashbox") ? [["cashboxes", "Cashboxes"]] as [Tab, string][] : []), ["overview", "Overview"], ["pnl", "Profit & loss"], ["reconcile", "Reconcile"], ["balances", "Client balances"], ["refunds", "Refunds"], ["payroll", "Payroll"]] as [Tab, string][]).map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)} className={`pb-3 min-w-[24px] border-b-2 transition-colors ${tab === id ? "text-primary font-bold border-primary" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>{label}</button>
           ))}
         </nav>
@@ -144,13 +155,13 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
       <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
         {tab === "overview" && (<>
           {can("can_export_accountant") && (
-            <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="space-y-2.5">
               <div><h3 className="text-sm font-bold text-ink-primary">Since you started</h3><p className="text-xs text-ink-tertiary">Paid invoices, money still owed and expenses, all time. Pick dates to export a period for your accountant.</p></div>
               <div className="flex items-center gap-1.5 flex-wrap">
+                <button onClick={() => { const qs = [exFrom && `date_from=${exFrom}`, exTo && `date_to=${exTo}`].filter(Boolean).join("&"); openAuthedDoc(`/finance/export/accountant.csv${qs ? `?${qs}` : ""}`).catch(() => alertDialog("Could not export.")); }} className={btnGhost}><M n="download" c="text-sm" />Export for accountant</button>
                 <DateField mode="date" value={exFrom} onChange={setExFrom} placeholder="From" className="w-36" />
                 <span className="text-ink-tertiary text-xs">→</span>
                 <DateField mode="date" value={exTo} onChange={setExTo} placeholder="To" className="w-36" />
-                <button onClick={() => { const qs = [exFrom && `date_from=${exFrom}`, exTo && `date_to=${exTo}`].filter(Boolean).join("&"); openAuthedDoc(`/finance/export/accountant.csv${qs ? `?${qs}` : ""}`).catch(() => alertDialog("Could not export.")); }} className="px-3.5 py-2 rounded-lg bg-white border border-slate-200 text-ink-secondary hover:bg-slate-50 text-xs font-bold flex items-center gap-1.5 shadow-clay-sm"><M n="download" c="text-sm" />Export for accountant</button>
               </div>
             </div>
           )}
@@ -158,7 +169,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
             <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary ">Cash accounts</div>
             <div className="divide-y divide-slate-100">
-              {accounts.length === 0 && <div className="p-6 text-xs text-ink-tertiary">No accounts.</div>}
+              {accounts.length === 0 && <div className="p-6 text-xs text-ink-tertiary flex flex-col items-start gap-3"><span>No cash accounts yet. Add your till or bank account to see what's in it.</span>{can("can_view_cashbox") && <button onClick={() => setTab("cashboxes")} className={btnPrimary}><M n="add" c="text-sm" />Add a cashbox</button>}</div>}
               {accounts.map((a) => (
                 <div key={a.id} className="px-5 py-3 flex items-center justify-between text-xs">
                   <div className="flex items-center gap-2.5"><div className="w-8 h-8 rounded-lg bg-blue-50 text-primary flex items-center justify-center"><M n={a.payment_option === "cash" ? "payments" : a.payment_option === "card" ? "credit_card" : "account_balance"} c="text-sm" /></div><span className="font-bold text-ink-primary">{a.name}</span>{a.is_virtual && <span className="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 text-ink-tertiary font-bold ">Virtual</span>}</div>
@@ -171,14 +182,16 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
 
         {tab === "pnl" && (
           <>
-            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 flex items-center gap-3 flex-wrap">
-              <h3 className="text-sm font-bold text-ink-primary">Profit &amp; Loss</h3>
-              <span className="text-[11px] text-ink-tertiary">Did the shop make money?</span>
-              <div className="ml-auto flex items-center gap-2 text-xs">
+            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 space-y-2.5">
+              <div className="flex items-baseline gap-3 flex-wrap">
+                <h3 className="text-sm font-bold text-ink-primary">Profit &amp; loss</h3>
+                <span className="text-[11px] text-ink-tertiary">Did the shop make money?</span>
+              </div>
+              <div className="flex items-center gap-2 text-xs flex-wrap">
                 <DateField mode="date" value={pFrom} onChange={setPFrom} className="w-36" />
                 <span className="text-ink-tertiary">→</span>
                 <DateField mode="date" value={pTo} onChange={setPTo} className="w-36" />
-                <button onClick={loadPnl} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110">Run</button>
+                <button onClick={loadPnl} className={btnPrimary}>Update</button>
               </div>
             </div>
             {pnlBusy && <div className="p-8 text-xs text-ink-tertiary text-center">Calculating…</div>}
@@ -187,22 +200,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
                 <div className={`rounded-2xl border shadow-clay-card p-5 ${pnl.net_profit >= 0 ? "bg-emerald-50/60 border-emerald-200" : "bg-rose-50/60 border-rose-200"}`}>
                   <p className="text-[11px] font-bold text-ink-tertiary">Net profit {pnl.net_profit >= 0 ? "(you made money)" : "(you're in the red)"}</p>
                   <p className={`text-3xl font-bold tabular-nums ${pnl.net_profit >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{cur(pnl.net_profit)}</p>
-                  <p className="text-[11px] text-ink-tertiary mt-1">Net margin {pnl.net_margin_pct}% · {pnl.invoice_count} invoices · {pnl.date_from} → {pnl.date_to}</p>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                  {[
-                    { l: "Net revenue (ex-tax)", v: cur(pnl.revenue), icon: "trending_up", tint: "bg-blue-50 text-primary" },
-                    { l: "Cost of parts", v: cur(pnl.cogs), icon: "inventory_2", tint: "bg-amber-50 text-amber-600" },
-                    { l: "Gross profit", v: cur(pnl.gross_profit), sub: `${pnl.gross_margin_pct}% margin`, icon: "savings", tint: "bg-indigo-50 text-indigo-600" },
-                    { l: "Operating expenses", v: cur(pnl.opex), icon: "trending_down", tint: "bg-rose-50 text-rose-600" },
-                    { l: "Processing fees", v: cur(pnl.fees), icon: "credit_card", tint: "bg-rose-50 text-rose-600" },
-                    { l: "Tax collected", v: cur(pnl.tax_collected), icon: "receipt_long", tint: "bg-slate-100 text-ink-secondary" },
-                  ].map((k: any) => (
-                    <div key={k.l} className="bg-white rounded-xl p-3 border border-slate-200/80 shadow-clay-sm flex items-center justify-between">
-                      <div><span className="text-[11px] font-bold text-ink-tertiary">{k.l}</span><p className="text-lg font-bold tabular-nums text-ink-primary">{k.v}</p>{k.sub && <p className="text-[11px] text-ink-tertiary">{k.sub}</p>}</div>
-                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${k.tint}`}><M n={k.icon} c="text-base" /></div>
-                    </div>
-                  ))}
+                  <p className="text-[11px] text-ink-tertiary mt-1">Net margin {pnl.net_margin_pct}% · {pnl.invoice_count} invoices · {dayRange(pnl.date_from, pnl.date_to)}</p>
                 </div>
                 <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 text-xs text-ink-secondary max-w-2xl">
                   <div className="flex justify-between py-1.5 border-b border-slate-100"><span>Net revenue (ex-tax)</span><span className="tabular-nums font-semibold text-ink-primary">{cur(pnl.revenue)}</span></div>
@@ -211,6 +209,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
                   <div className="flex justify-between py-1.5 border-b border-slate-100"><span>− Operating expenses</span><span className="tabular-nums text-rose-600">−{cur(pnl.opex)}</span></div>
                   <div className="flex justify-between py-1.5 border-b border-slate-100"><span>− Processing fees (card/online)</span><span className="tabular-nums text-rose-600">−{cur(pnl.fees)}</span></div>
                   <div className="flex justify-between py-2 font-bold text-sm text-ink-primary"><span>= Net profit</span><span className={`tabular-nums ${pnl.net_profit >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{cur(pnl.net_profit)}</span></div>
+                  <div className="flex justify-between pt-2 mt-1 border-t border-slate-100 text-ink-tertiary"><span>Tax collected (not counted as revenue)</span><span className="tabular-nums">{cur(pnl.tax_collected)}</span></div>
                   <p className="mt-2 text-[11px] text-ink-tertiary">Revenue is accrual (issued invoices, ex-tax); expenses are cash-basis for the period.{pack?.region ? ` Region: ${String(pack.region).toUpperCase()} · ${pack.currency_code}` : ""}</p>
                 </div>
               </>
@@ -224,8 +223,8 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
             <div className="flex items-center gap-2">
               <h3 className="text-base font-bold text-ink-primary">Needs your eyes</h3>
               {recon && <span className={`text-[11px] px-2 py-0.5 rounded-full font-bold ${recon.count ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700"}`}>{recon.count} {recon.count === 1 ? "issue" : "issues"}</span>}
-              <button onClick={recordPayout} className="ml-auto text-xs font-bold px-3 py-1.5 rounded-lg bg-slate-100 text-ink-secondary hover:bg-slate-200 flex items-center gap-1"><M n="account_balance" c="text-sm" />Record payout</button>
             </div>
+            <button onClick={recordPayout} className={btnGhost}><M n="account_balance" c="text-sm" />Record payout</button>
             <p className="text-xs text-ink-tertiary max-w-2xl">We scan your books for money problems you'd otherwise miss — overpaid invoices, drawers that didn't balance, supplier balances that drifted from their ledger, and card deposits that don't match what your processor paid out. Review each one instead of reconciling by hand.</p>
             {!recon && <div className="p-8 text-xs text-ink-tertiary text-center">Scanning…</div>}
             {recon && !recon.count && (
@@ -242,7 +241,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2"><h4 className="text-sm font-bold text-ink-primary">{it.title}</h4>
-                    <span className={`text-[11px] px-1.5 py-0.5 rounded font-bold  ${it.severity === "high" ? "bg-rose-100 text-rose-700" : "bg-amber-100 text-amber-700"}`}>{it.severity}</span></div>
+                    <span className={`text-[11px] px-1.5 py-0.5 rounded font-bold  ${it.severity === "high" ? "bg-rose-100 text-rose-700" : "bg-amber-100 text-amber-700"}`}>{sentence(it.severity)}</span></div>
                   <p className="text-xs text-ink-secondary mt-0.5">{it.detail}</p>
                 </div>
               </div>
@@ -254,7 +253,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
         {tab === "payroll" && (
           <div className="space-y-3">
             <PayrollCalcPanel month={month} onMonth={setMonth}
-              headerAction={can("can_accrue_payroll") && <button onClick={runPayroll} disabled={runBusy} className="h-9 px-3 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-60 flex items-center gap-1.5"><M n="save" c="text-sm" />{runBusy ? "Running…" : "Run payroll (draft)"}</button>} />
+              headerAction={can("can_accrue_payroll") && <button onClick={runPayroll} disabled={runBusy} className={btnPrimary}><M n="save" c="text-sm" />{runBusy ? "Running…" : "Run payroll (draft)"}</button>} />
 
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
               <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary ">Payroll runs</div>
@@ -270,10 +269,10 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
                     const voided = r.status === "void";
                     return (
                       <tr key={r.id} className="hover:bg-blue-50/30">
-                        <td className="py-2.5 px-4 font-semibold text-ink-primary">{r.period_start} → {r.period_end}</td>
-                        <td className="py-2.5 px-4"><span className={`px-2 py-0.5 rounded-full text-[11px] font-bold capitalize ${paid ? "bg-emerald-100 text-emerald-800" : voided ? "bg-slate-100 text-ink-tertiary" : "bg-amber-100 text-amber-800"}`} title={voided ? r.void_reason || undefined : undefined}>{voided ? "voided" : r.status || "draft"}</span></td>
+                        <td className="py-2.5 px-4 font-semibold text-ink-primary">{dayRange(r.period_start, r.period_end)}</td>
+                        <td className="py-2.5 px-4"><span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${paid ? "bg-emerald-100 text-emerald-800" : voided ? "bg-slate-100 text-ink-tertiary" : "bg-amber-100 text-amber-800"}`} title={voided ? r.void_reason || undefined : undefined}>{voided ? "Voided" : sentence(r.status || "draft")}</span></td>
                         <td className="py-2.5 px-4 text-right tabular-nums font-bold text-ink-primary">{money(r.totals?.gross_total ?? r.gross_total)}</td>
-                        <td className="py-2.5 px-4 text-ink-tertiary">{r.accrued_at ? new Date(r.accrued_at).toLocaleDateString() : "—"}</td>
+                        <td className="py-2.5 px-4 text-ink-tertiary">{r.accrued_at ? fmtServerTime(r.accrued_at, { month: "short", day: "numeric", year: "numeric" }) : "—"}</td>
                         <td className="py-2.5 px-4 text-right space-x-3">
                           {!paid && !voided && <button onClick={() => markPaid(r.id)} disabled={!!payingId} className="text-primary font-semibold hover:underline disabled:opacity-50 disabled:no-underline">{payingId === r.id ? "Marking…" : "Mark paid"}</button>}
                           {!voided && r.status !== "draft" && <button onClick={() => voidRun(r.id)} disabled={!!payingId} className="text-rose-600 font-semibold hover:underline disabled:opacity-50 disabled:no-underline">Void</button>}
