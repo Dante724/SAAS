@@ -1335,7 +1335,8 @@ async def preview_template(
             body = await _expand_components(db, current.org_id, data.body_html)
             tpl = _types.SimpleNamespace(barcode_field=data.barcode_field, barcode_types=data.barcode_types)
             try:
-                varmap = await _resolve_part(org, part, part.sell_price, tpl)
+                varmap = await _resolve_part(org, part, part.sell_price, tpl, net_price=await _net_of_included_tax(
+                    db, current.org_id, part, part.sell_price))
             except ValueError as e:
                 return {"html": f"<p style='color:#b91c1c'>{_esc(unprintable_message([f'{part.name} ({e})']))}</p>",
                         "sample": part.name}
@@ -1623,17 +1624,35 @@ async def render_invoice_document(
     return {"html": html, "name": tpl.name}
 
 
-async def _resolve_part(org, part: Part, price, tpl=None) -> dict:
+async def _net_of_included_tax(db, org_id: str, part: Part, price) -> float:
+    """The shelf price without the taxes it already contains (the counter-sale tax stack, with
+    the product's / category's exceptions). An added-on-top tax leaves the price as it is."""
+    from backend.services.tax import resolve_taxes
+    price = float(price or 0)
+    res = await resolve_taxes(db, org_id, doc_family="tickets_sales", net_amount=price, item_type="product",
+                              item_id=part.id, category_id=part.category_id)
+    inside = sum(t["amount"] for t in res.get("taxes", []) if t.get("mode") == "included")
+    return round(price - inside, 2)
+
+
+async def _resolve_part(org, part: Part, price, tpl=None, net_price=None) -> dict:
     """Variable map for a label/price-tag rendered against a single product. A template with a
     barcode_field (opa) encodes that field with its chosen symbology in {Barcode}; EAN-13/UPC-A
-    raise ValueError for a value that isn't a valid code."""
-    code_val = (part.barcode or part.sku or part.code or part.name or "0")
+    raise ValueError for a value that isn't a valid code. Without one, {Barcode} prints the
+    product's barcode in its own symbology (an EAN-13 as EAN-13), else its SKU / code as Code 128.
+    {QR Code} encodes the same scannable code — never the product name, which no scan finds."""
+    scan_val = (part.barcode or "").strip() or (part.sku or "").strip() or (part.code or "").strip()
     bc_field = getattr(tpl, "barcode_field", None)
     if bc_field:
         bc_val, bc_kind = label_barcode(part, bc_field, getattr(tpl, "barcode_types", None))
         bc_html = barcode_svg(bc_val, bc_kind) if bc_val else ""
+    elif (part.barcode or "").strip():
+        try:
+            bc_html = barcode_svg(part.barcode.strip(), part.barcode_type or "code128")
+        except ValueError:          # an older code its type can't hold: still print it, as Code 128
+            bc_html = code128_svg(part.barcode.strip())
     else:
-        bc_html = code128_svg(code_val)
+        bc_html = code128_svg(scan_val) if scan_val else ""
     cur = (org.currency if org else "") or ""
     return {
         "{Product Title}": part.name or "—",
@@ -1642,18 +1661,18 @@ async def _resolve_part(org, part: Part, price, tpl=None) -> dict:
         "{Product SKU}": part.sku or "",
         "{Product MPN}": part.mpn or "",
         "{Product Article}": part.sku or part.code or "",
-        "{Product Description}": part.category or "",
+        "{Product Description}": part.description or "",
         "{Product UoM}": part.uom or "",
         "{Product Brand}": getattr(part, "brand", "") or "",
         "{Price}": _money(price),
         "{Product Price}": _money(price),
-        "{Product Price Without Taxes}": _money(price),
+        "{Product Price Without Taxes}": _money(price if net_price is None else net_price),
         "{Currency}": cur,
         "{Company Name}": org.name if org else "Tekly",
         "{Today Date}": _fmt_date(datetime.utcnow()),
         "{Current Date}": _fmt_date(datetime.utcnow()),
         "{Barcode}": _Html(bc_html),
-        "{QR Code}": _Html(qr_svg(code_val)),
+        "{QR Code}": _Html(qr_svg(scan_val) if scan_val else ""),
     }
 
 
@@ -1688,7 +1707,8 @@ async def render_labels(
     tiles, bad = [], []
     for p in parts:
         try:
-            varmap = await _resolve_part(org, p, p.sell_price, tpl)
+            varmap = await _resolve_part(org, p, p.sell_price, tpl,
+                                         net_price=await _net_of_included_tax(db, current.org_id, p, p.sell_price))
         except ValueError as e:              # opa: EAN-13/UPC-A value that isn't a valid code
             bad.append(f"{p.name} ({e})")
             continue

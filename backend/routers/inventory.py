@@ -36,10 +36,13 @@ class PartIn(BaseModel):
     weight: Optional[float] = None       # kg — used for weight-basis freight allocation (144ar)
     dimensions: Optional[str] = None     # "LxWxH" cm
 
+_ADJUST_TYPES = {"receive", "adjust", "writeoff"}
+
+
 class StockAdjust(BaseModel):
     location_id: str
     qty: float
-    movement_type: str = "receive"  # receive|writeoff|transfer|adjust
+    movement_type: str = "receive"  # receive|writeoff|adjust (transfers go through /transfers)
     note: Optional[str] = None
 
 
@@ -177,7 +180,9 @@ async def create_part(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_products")),
 ):
-    payload = data.model_dump()
+    payload = product_codes.clean_codes(data.model_dump())   # " abc-1 " and "abc-1" are one SKU
+    if not payload.get("name"):
+        raise HTTPException(422, "Name is required")
     if not await can_see_costs(db, current):
         drop_cost_fields(payload)
     part = Part(org_id=current.org_id, **payload)
@@ -215,7 +220,9 @@ async def update_part(
         raise HTTPException(404, "Part not found")
     # exclude_unset so a client that omits a field (e.g. an older bundle without weight)
     # leaves it untouched instead of nulling it.
-    payload = data.model_dump(exclude_unset=True)
+    payload = product_codes.clean_codes(data.model_dump(exclude_unset=True))
+    if "name" in payload and not payload["name"]:
+        raise HTTPException(422, "Name is required")
     if not await can_see_costs(db, current):
         drop_cost_fields(payload)
     await product_codes.ensure_identity_free(
@@ -233,6 +240,12 @@ async def adjust_stock(
     current: Employee = Depends(require_perm("can_manage_inventory")),
 ):
     _guard_qty(data.qty)
+    # A manual adjustment is always a positive count of units moving in the named direction: a
+    # negative "receive" used to take stock out (and a negative write-off put it back in).
+    if not data.qty or data.qty <= 0:
+        raise HTTPException(422, "Quantity must be greater than zero")
+    if data.movement_type not in _ADJUST_TYPES:
+        raise HTTPException(422, "movement_type must be one of: " + ", ".join(sorted(_ADJUST_TYPES)))
     result = await db.execute(select(Part).where(Part.id == part_id, Part.org_id == current.org_id))
     if not result.scalar_one_or_none():
         raise HTTPException(404, "Part not found")
@@ -248,14 +261,22 @@ async def adjust_stock(
         has_main = any(r.bin_id is None for r in await stock_rows.rows(db, part_id, data.location_id))
         await stock_rows.add(db, part_id, data.location_id, data.qty,
                              warehouse_id=None if has_main or not _w else _w.id)
-    elif data.movement_type == "writeoff":
-        # Never below zero (the old clamp): take what is there, across bins.
+    moved = data.qty
+    if data.movement_type == "writeoff":
+        # Never below zero (the old clamp): take what is there, across bins — and log exactly that,
+        # as a negative movement, so the movement history adds up to on-hand.
+        await stock_rows.rows(db, part_id, data.location_id, lock=True)
         have, _res = await stock_rows.totals(db, part_id, data.location_id)
-        await stock_rows.draw(db, part_id, data.location_id, min(data.qty, max(have, 0)))
+        drawn = min(data.qty, max(have, 0))
+        try:
+            await stock_rows.draw(db, part_id, data.location_id, drawn)
+        except stock_rows.NotEnoughStock:
+            raise HTTPException(409, "Stock changed while writing off — retry")
+        moved = -drawn
 
     movement = StockMovement(
         part_id=part_id, location_id=data.location_id,
-        movement_type=data.movement_type, qty=data.qty,
+        movement_type=data.movement_type, qty=moved,
         created_by_id=current.id,
         warehouse_id=_w.id if _w else None,
     )
@@ -719,8 +740,11 @@ async def bulk_adjust(
             delta = float(r.set_qty) - float(cur)
         if delta == 0:
             continue
+        # A count down is a write-off of the difference (never below zero, logged negative); a
+        # count up is an adjustment in. The single adjust endpoint only takes positive quantities.
         await adjust_stock(r.part_id, StockAdjust(
-            location_id=data.location_id, qty=delta, movement_type="adjust",
+            location_id=data.location_id, qty=abs(delta),
+            movement_type="adjust" if delta > 0 else "writeoff",
             note=r.note or "Bulk adjust"), db, current)
         adjusted += 1
     await db.commit()

@@ -7,13 +7,17 @@ tracking is on), barcode generation, and Excel import/export. Stock *balances*
 and movements continue to live under /api/inventory.
 """
 import asyncio
+import base64
+import binascii
 import io
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, func
+from sqlalchemy.orm import defer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -205,14 +209,22 @@ async def _resolve_category_path(db, org_id, path: str) -> Optional[str]:
 
 
 # ── Product master ───────────────────────────────────────────────────────────
-def _ser_product(p: Part, qty=0.0, reserved=0.0, variant_count=0) -> dict:
+_FULL = object()
+
+
+def _ser_product(p: Part, qty=0.0, reserved=0.0, variant_count=0, image=_FULL, has_image=None) -> dict:
+    """`image`: what goes in image_data — the full photo by default; lists pass a small thumbnail
+    (and `has_image`) so a catalogue of photos isn't sent whole on every list."""
+    img = p.image_data if image is _FULL else image
     margin = round((p.sell_price - p.avg_cost) / p.avg_cost * 100, 1) if p.avg_cost else None
     return {"id": p.id, "name": p.name, "code": p.code, "sku": p.sku, "mpn": p.mpn, "barcode": p.barcode,
             "barcode_type": p.barcode_type, "brand": p.brand, "category_id": p.category_id,
             "description": p.description, "default_supplier_id": p.default_supplier_id,
             "uom": p.uom, "cost_price": p.cost_price, "avg_cost": p.avg_cost, "sell_price": p.sell_price,
             "min_stock": p.min_stock, "serialized": p.serialized, "expiry_tracking": p.expiry_tracking,
-            "weight": p.weight, "dimensions": p.dimensions, "image_data": p.image_data, "warranty_days": p.warranty_days,
+            "weight": p.weight, "dimensions": p.dimensions, "image_data": img,
+            "has_image": bool(img) if has_image is None else has_image,
+            "warranty_days": p.warranty_days, "repair_price": p.repair_price or 0,
             "supplier_warranty_days": p.supplier_warranty_days, "parent_id": p.parent_id,
             "variant_attrs": p.variant_attrs, "variant_count": variant_count,
             "custom_data": p.custom_data or {},
@@ -254,7 +266,7 @@ async def list_products(search: Optional[str] = None, category_id: Optional[str]
         from backend.models import Warehouse
         wh_location_id = (await db.execute(select(Warehouse.location_id).where(
             Warehouse.id == warehouse_id, Warehouse.org_id == current.org_id))).scalar_one_or_none()
-    rows = (await db.execute(q.order_by(Part.name))).scalars().all()
+    rows = (await db.execute(q.options(defer(Part.image_data)).order_by(Part.name))).scalars().all()
     # Stock and variant counts for the whole page in two grouped queries (this used to be two
     # queries per product — ~2,000 round trips for a 1,000-item catalogue).
     ids = [p.id for p in rows]
@@ -277,13 +289,15 @@ async def list_products(search: Optional[str] = None, category_id: Optional[str]
                 ProductBarcode.org_id == current.org_id, ProductBarcode.part_id.in_(ids),
                 ProductBarcode.is_main == False))).all():  # noqa: E712
             extras.setdefault(pid, []).append(code)
+    thumbs = await _thumbnails(db, ids)
     out = []
     for p in rows:
         # warehouse_id scopes the stock figure to one warehouse; parts with no stock there drop out.
         qty, res = stock.get(p.id, (0, 0))
         if warehouse_id and qty == 0 and res == 0:
             continue
-        out.append({**_ser_product(p, qty, res, variants.get(p.id, 0)),
+        out.append({**_ser_product(p, qty, res, variants.get(p.id, 0), image=thumbs.get(p.id),
+                                   has_image=p.id in thumbs),
                     "extra_barcodes": extras.get(p.id, [])})   # ii144a: the list's search finds them
     return {"items": out}
 
@@ -320,29 +334,108 @@ async def commit_mpn_safe(db) -> None:
 
 
 class ProductIn(BaseModel):
-    name: str
-    code: Optional[str] = None
-    sku: Optional[str] = None
+    name: str = Field(min_length=1, max_length=300)
+    code: Optional[str] = Field(None, max_length=100)
+    sku: Optional[str] = Field(None, max_length=100)
     mpn: Optional[str] = Field(None, max_length=64)   # opa: manufacturer part number
-    barcode: Optional[str] = None
+    barcode: Optional[str] = Field(None, max_length=100)
     barcode_type: str = "code128"
     brand: Optional[str] = None
     description: Optional[str] = None
     default_supplier_id: Optional[str] = None
     category_id: Optional[str] = None
     uom: str = "pcs"
-    cost_price: float = 0.0
-    sell_price: float = 0.0
-    min_stock: int = 0
+    cost_price: float = Field(0.0, ge=0)
+    sell_price: float = Field(0.0, ge=0)
+    repair_price: Optional[float] = Field(None, ge=0)   # price on a work order; blank/0 = store price
+    min_stock: int = Field(0, ge=0)
     serialized: bool = False
     expiry_tracking: bool = False
-    weight: Optional[float] = None
+    weight: Optional[float] = Field(None, ge=0)
     dimensions: Optional[str] = None
     image_data: Optional[str] = None
-    warranty_days: int = 0
-    supplier_warranty_days: int = 0
+    warranty_days: int = Field(0, ge=0)
+    supplier_warranty_days: int = Field(0, ge=0)
     custom_data: Optional[dict] = None
     compatibility_json: Optional[dict] = None   # 144jt: {"fits": [{brand, model?}]}
+
+    # Identity fields are trimmed before they're checked or saved: " abc-1 " and "abc-1" are one
+    # SKU, and a name of spaces is no name (min_length then refuses it).
+    @field_validator("name", "code", "sku", "mpn", "barcode", "brand", mode="before")
+    @classmethod
+    def _trim(cls, v):
+        if isinstance(v, str):
+            v = v.strip()
+        return v
+
+    @field_validator("code", "sku", "mpn", "barcode", "brand")
+    @classmethod
+    def _blank_is_none(cls, v):
+        return v or None
+
+
+# ── Product photo (data URL) ─────────────────────────────────────────────────
+# The drawer shrinks a photo to ~800px JPEG before upload, so a real one is well under this.
+MAX_IMAGE_BYTES = 400 * 1024
+_IMAGE_HEAD = re.compile(r"^data:image/(jpeg|jpg|png|webp);base64,", re.I)
+
+
+def _checked_image(value: Optional[str]) -> Optional[str]:
+    """A product photo as stored: a JPEG / PNG / WebP data URL of at most MAX_IMAGE_BYTES.
+    Blank clears it. 422 for another type, 413 for a bigger one."""
+    if value is None or not str(value).strip():
+        return None
+    v = str(value).strip()
+    if not _IMAGE_HEAD.match(v):
+        raise HTTPException(422, "The photo must be a JPEG, PNG or WebP image")
+    b64 = v.split(",", 1)[1]
+    if len(b64) * 3 // 4 > MAX_IMAGE_BYTES:
+        raise HTTPException(413, f"The photo is too large — up to {MAX_IMAGE_BYTES // 1024} KB "
+                                 "(the product drawer shrinks photos for you)")
+    try:
+        base64.b64decode(b64, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(422, "The photo couldn't be read")
+    return v
+
+
+_THUMBS: dict = {}          # part id -> ((length, sample), thumbnail data URL | None)
+THUMB_EDGE = 96
+
+
+def _make_thumb(data_url: str) -> Optional[str]:
+    """A small JPEG for list rows and the POS grid (a few KB instead of the full photo)."""
+    try:
+        from PIL import Image
+        raw = base64.b64decode(data_url.split(",", 1)[1], validate=False)
+        img = Image.open(io.BytesIO(raw))
+        img.thumbnail((THUMB_EDGE, THUMB_EDGE))
+        if img.mode not in ("RGB", "L"):
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            bg.paste(img.convert("RGBA"), mask=img.convert("RGBA").split()[-1])
+            img = bg
+        out = io.BytesIO()
+        img.convert("RGB").save(out, "JPEG", quality=70)
+        return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode()
+    except Exception:  # noqa: BLE001 — an unreadable photo just shows no thumbnail
+        return None
+
+
+async def _thumbnails(db, ids: list) -> dict:
+    """{part id: thumbnail} for the products that have a photo. The full photos are read only for
+    rows whose photo changed since the last list (keyed by length + a sample of the data)."""
+    if not ids:
+        return {}
+    sig = {pid: (n, sample) for pid, n, sample in (await db.execute(select(
+        Part.id, func.length(Part.image_data), func.substr(Part.image_data, 200, 48)).where(
+        Part.id.in_(ids), Part.image_data.is_not(None), Part.image_data != ""))).all()}
+    stale = [pid for pid, k in sig.items() if _THUMBS.get(pid, (None,))[0] != k]
+    if stale:
+        if len(_THUMBS) > 20_000:
+            _THUMBS.clear()
+        for pid, data in (await db.execute(select(Part.id, Part.image_data).where(Part.id.in_(stale)))).all():
+            _THUMBS[pid] = (sig[pid], _make_thumb(data or ""))
+    return {pid: _THUMBS[pid][1] for pid in sig}
 
 
 @router.post("/products", status_code=201)
@@ -357,6 +450,8 @@ async def create_product(data: ProductIn, db: AsyncSession = Depends(get_db),
     await check_entity_required(db, current.org_id, "product", data)   # built-ins the product form requires
     payload = data.model_dump()
     payload["mpn"] = await _checked_mpn(db, current.org_id, data.mpn)
+    payload["image_data"] = _checked_image(data.image_data)
+    payload["repair_price"] = q2(data.repair_price or 0)
     if not await can_see_costs(db, current):
         drop_cost_fields(payload)          # can't see costs, can't set them
     # enforce required custom fields (Settings → Forms → Products) on create
@@ -390,6 +485,7 @@ async def bulk_products(data: BulkProductsIn, db: AsyncSession = Depends(get_db)
         Part.id.in_(data.ids), Part.org_id == current.org_id))).scalars().all()
     n = 0
     blocked: list[str] = []
+    blocked_items: list[dict] = []
     for p in parts:
         if data.action == "category":
             p.category_id = data.category_id or None
@@ -402,15 +498,21 @@ async def bulk_products(data: BulkProductsIn, db: AsyncSession = Depends(get_db)
         elif data.action == "delete":
             # 144co: never silently orphan a job kit — skip parts still in use, report them.
             from backend.services.catalog_links import catalog_usage
+            reason = None
             if await catalog_usage(db, current.org_id, "product", p.id):
-                blocked.append(p.name)
+                reason = "used in a job kit — remove it there first"
+            else:   # in stock, or on an open job / estimate / PO: it would vanish from those
+                reason = await product_codes.archive_blocker(db, current.org_id, p)
+            if reason:
+                blocked.append(f"{p.name} ({reason})")
+                blocked_items.append({"id": p.id, "name": p.name, "reason": reason})
                 continue
             p.active = False
         else:
             raise HTTPException(400, "Unknown action")
         n += 1
     await db.commit()
-    return {"ok": True, "count": n, "blocked": blocked}
+    return {"ok": True, "count": n, "blocked": blocked, "blocked_items": blocked_items}
 
 
 # ── Excel export / import ────────────────────────────────────────────────────
@@ -446,9 +548,41 @@ async def export_products(db: AsyncSession = Depends(get_db), current: Employee 
                              headers={"Content-Disposition": 'attachment; filename="products.xlsx"'})
 
 
+class _RowError(Exception):
+    pass
+
+
+def _num(v, label: str, *, integer: bool = False):
+    """A sheet cell as a number ≥ 0 (blank = 0) — _RowError with the column name otherwise."""
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return 0
+    try:
+        n = float(str(v).strip().replace(",", ".")) if isinstance(v, str) else float(v)
+    except (TypeError, ValueError):
+        raise _RowError(f"{label} “{v}” isn't a number")
+    if n != n or n in (float("inf"), float("-inf")):
+        raise _RowError(f"{label} “{v}” isn't a number")
+    if n < 0:
+        raise _RowError(f"{label} can't be negative")
+    if integer:
+        if n != int(n):
+            raise _RowError(f"{label} must be a whole number")
+        return int(n)
+    return q2(n)
+
+
+def _text(v) -> Optional[str]:
+    """A code cell as text: a whole-number cell without its “.0”, trimmed, blank = None."""
+    if isinstance(v, float) and v == int(v):
+        v = int(v)
+    return product_codes.clean(v)
+
+
 @router.post("/products/import")
 async def import_products(file: UploadFile = File(...), db: AsyncSession = Depends(get_db),
                           current: Employee = Depends(require_perm("can_manage_inventory"))):
+    """Create / update products from an Excel sheet. Each row is checked on its own: good rows are
+    imported, bad ones come back as {row, message} (sheet row numbers). Nothing imports → 409."""
     wb = open_xlsx(await file.read(MAX_XLSX_BYTES + 1))
     ws = wb.active
     if (ws.max_row or 0) - 1 > MAX_IMPORT_ROWS:
@@ -458,32 +592,112 @@ async def import_products(file: UploadFile = File(...), db: AsyncSession = Depen
     if "Name" not in idx:
         raise HTTPException(400, "Import file must have a 'Name' column")
     created = updated = 0
-    mpn_rows = []                       # (part, mpn, sheet row) — applied after every row is read
+    errors: list[dict] = []
+    # Pass 1 — read + check every row on its own (no writes yet).
+    rows: list[dict] = []
     for rownum, row in enumerate(ws.iter_rows(min_row=2), start=2):
         cells = [unguard_cell(c.value) for c in row]
+
         def g(col, cells=cells):
             i = idx.get(col)
             return cells[i] if i is not None and i < len(cells) else None
-        name = g("Name")
+        name = _text(g("Name"))
         if not name:
+            if any(c not in (None, "") for c in cells):
+                errors.append({"row": rownum, "message": "Name is empty"})
             continue
-        name = str(name).strip()
-        cat_id = await _resolve_category_path(db, current.org_id, str(g("Category") or "").strip())
+        try:
+            if len(name) > 300:
+                raise _RowError("Name is longer than 300 characters")
+            sku, code = _text(g("SKU")), _text(g("Code"))
+            for label, v in (("SKU", sku), ("Code", code)):
+                if v and len(v) > 100:
+                    raise _RowError(f"{label} is longer than 100 characters")
+            try:
+                barcode, bc_type = product_codes.sheet_barcode(g("Barcode"))
+            except ValueError as e:
+                raise _RowError(str(e)[:1].upper() + str(e)[1:])
+            fields = dict(code=code, sku=sku, barcode=barcode,
+                          uom=str(g("UoM") or "pcs").strip()[:10] or "pcs",
+                          cost_price=_num(g("Cost price"), "Cost price"),
+                          sell_price=_num(g("Sell price"), "Sell price"),
+                          min_stock=_num(g("Min stock"), "Min stock", integer=True),
+                          warranty_days=_num(g("Client warranty (days)"), "Client warranty", integer=True),
+                          serialized=str(g("Serialized") or "no").strip().lower() in ("yes", "true", "1"))
+            mpn = None
+            if "MPN" in idx:          # an older sheet without the column leaves MPNs alone
+                raw = g("MPN")
+                mpn = _text(raw) or ""
+                if len(mpn) > 64:     # same limit as the drawer / API (422 there)
+                    raise _RowError("MPN is longer than 64 characters")
+        except _RowError as e:
+            errors.append({"row": rownum, "message": str(e)})
+            continue
+        rows.append({"row": rownum, "name": name, "fields": fields, "bc_type": bc_type, "mpn": mpn,
+                     "category": str(g("Category") or "").strip()})
+
+    # Codes repeated inside the sheet: neither row can be right, so both are reported.
+    def _dupes(key):
+        seen: dict = {}
+        for r in rows:
+            v = key(r)
+            if v:
+                seen.setdefault(v, []).append(r["row"])
+        return {n: [m for m in ns if m != n] for ns in seen.values() if len(ns) > 1 for n in ns}
+    from backend.services import scan_codes
+    sheet_dupes = [
+        ("SKU", _dupes(lambda r: (r["fields"]["sku"] or "").lower())),
+        ("barcode", _dupes(lambda r: r["fields"]["barcode"] and scan_codes.match_key(r["fields"]["barcode"], r["bc_type"]))),
+        ("MPN", _dupes(lambda r: (r["mpn"] or "").lower())),
+    ]
+
+    # Pass 2 — match each row and check it against the catalogue.
+    ok_rows = []
+    for r in rows:
+        rownum, name, fields = r["row"], r["name"], r["fields"]
+        clash = next((f"{label} is also on row {', '.join(map(str, d[rownum]))}"
+                      for label, d in sheet_dupes if rownum in d), None)
+        if clash:
+            errors.append({"row": rownum, "message": clash})
+            continue
         # ii144a: match on the shop's chosen identifier (Settings › Inventory), by name when the row leaves it empty
         existing = await product_codes.match_for_import(
-            db, current.org_id, name=name, sku=g("SKU"), barcode=g("Barcode"), code=g("Code"))
-        fields = dict(code=str(g("Code")) if g("Code") else None, sku=str(g("SKU")) if g("SKU") else None,
-                      barcode=str(g("Barcode")) if g("Barcode") else None, category_id=cat_id,
-                      uom=str(g("UoM") or "pcs"), cost_price=float(g("Cost price") or 0),
-                      sell_price=float(g("Sell price") or 0), min_stock=int(g("Min stock") or 0),
-                      warranty_days=int(g("Client warranty (days)") or 0),
-                      serialized=str(g("Serialized") or "no").strip().lower() in ("yes", "true", "1"))
-        mpn = None
-        if "MPN" in idx:          # an older sheet without the column leaves MPNs alone
-            raw = g("MPN")
-            mpn = str(raw).strip() if raw is not None else ""
-            if len(mpn) > 64:     # same limit as the drawer / API (422 there)
-                raise HTTPException(409, f"Row {rownum}: MPN is longer than 64 characters")
+            db, current.org_id, name=name, sku=fields["sku"], barcode=fields["barcode"], code=fields["code"])
+        want = {k for k in ("sku", "barcode") if _FIELD_COL[k] in idx and fields[k]}
+        try:
+            await product_codes.ensure_identity_free(
+                db, current.org_id, sku=fields["sku"], barcode=fields["barcode"], barcode_type=r["bc_type"],
+                exclude_part_id=existing.id if existing else None, fields=want)
+        except HTTPException as e:
+            errors.append({"row": rownum, "message": str(e.detail)})
+            continue
+        r["existing"] = existing
+        ok_rows.append(r)
+
+    # MPNs are checked against the sheet's end state, so swapping two products' MPNs in one import
+    # works: a product that holds the MPN today is fine when this same sheet gives it another one.
+    if "MPN" in idx:
+        moving = {r["existing"].id: (r["mpn"] or "").lower() for r in ok_rows if r["existing"] is not None}
+        keep = []
+        for r in ok_rows:
+            v = r["mpn"]
+            if v:
+                q = select(Part).where(Part.org_id == current.org_id, Part.active == True,  # noqa: E712
+                                       func.lower(Part.mpn) == v.lower())
+                if r["existing"] is not None:
+                    q = q.where(Part.id != r["existing"].id)
+                holder = (await db.execute(q)).scalars().first()
+                if holder is not None and moving.get(holder.id, v.lower()) == v.lower():
+                    errors.append({"row": r["row"], "message": f"MPN {v} is already used by {holder.name}"})
+                    continue
+            keep.append(r)
+        ok_rows = keep
+
+    # Pass 3 — apply.
+    mpn_rows = []
+    for r in ok_rows:
+        name, fields, existing = r["name"], r["fields"], r["existing"]
+        fields["category_id"] = await _resolve_category_path(db, current.org_id, r["category"])
         if existing:
             target = existing
             existing.name = name          # matched by SKU / barcode / code: the sheet's name wins
@@ -493,31 +707,28 @@ async def import_products(file: UploadFile = File(...), db: AsyncSession = Depen
                 if _FIELD_COL.get(k) not in idx:
                     continue  # ii144a: a column the sheet doesn't have leaves the field alone
                 setattr(existing, k, v)
+                if k == "barcode" and r["bc_type"]:
+                    existing.barcode_type = r["bc_type"]
             updated += 1
         else:
-            target = Part(org_id=current.org_id, name=name, **fields)
+            target = Part(org_id=current.org_id, name=name, barcode_type=r["bc_type"] or "code128", **fields)
+            await product_codes.fill_new_product(db, target)
             db.add(target); created += 1
-        if mpn is not None:
-            mpn_rows.append((target, mpn or None, rownum))
+        if r["mpn"] is not None:
+            mpn_rows.append((target, r["mpn"] or None))
     if mpn_rows:
-        # Checked against the sheet's end state, so swapping two products' MPNs in one import
-        # works: clear the touched MPNs first, then assign + check each (one active product per MPN).
-        for part, _v, _n in mpn_rows:
+        for part, _v in mpn_rows:      # clear first, so a swap never collides mid-way
             part.mpn = None
         await db.flush()
-        seen: dict = {}
-        for part, v, n in mpn_rows:
-            if v:
-                if v.lower() in seen:
-                    raise HTTPException(409, f"Row {n}: MPN {v} is also on row {seen[v.lower()]}")
-                seen[v.lower()] = n
-                try:
-                    await _checked_mpn(db, current.org_id, v, exclude_id=part.id)
-                except HTTPException as e:
-                    raise HTTPException(409, f"Row {n}: {e.detail}")
+        for part, v in mpn_rows:
             part.mpn = v
+    errors.sort(key=lambda e: e["row"])
+    if errors and not (created or updated):
+        await db.rollback()
+        raise HTTPException(409, "Nothing was imported. " + "; ".join(
+            f"Row {e['row']}: {e['message']}" for e in errors[:20]))
     await commit_mpn_safe(db)
-    return {"ok": True, "created": created, "updated": updated}
+    return {"ok": True, "created": created, "updated": updated, "errors": errors}
 
 
 @router.get("/products/{pid}")
@@ -551,6 +762,10 @@ async def update_product(pid: str, data: ProductIn, db: AsyncSession = Depends(g
     # a product photo vanishing). The same goes for cost when it isn't sent.
     payload = data.model_dump(exclude_unset=True)
     payload["name"] = data.name
+    if "image_data" in payload:
+        payload["image_data"] = _checked_image(payload["image_data"])
+    if "repair_price" in payload:
+        payload["repair_price"] = q2(payload["repair_price"] or 0)
     if "mpn" in payload:
         payload["mpn"] = await _checked_mpn(db, current.org_id, data.mpn, exclude_id=p.id)
     if ("barcode" in payload or "barcode_type" in payload) and (
@@ -667,9 +882,20 @@ async def generate_barcode(pid: str, type: str = Query("code128"),
     if not p:
         raise HTTPException(404, "Product not found")
     code = (await product_codes.next_barcodes(db, current.org_id, 1, type))[0]
+    if product_codes.clean(p.barcode):
+        # The product already has a barcode (often the manufacturer's, printed on the box): keep it
+        # as the main one so it still scans, and add the generated code as an extra barcode.
+        from backend.models import ProductBarcode
+        from backend.services import scan_codes
+        db.add(ProductBarcode(org_id=current.org_id, part_id=p.id, barcode=code, barcode_type=type,
+                              match_key=scan_codes.match_key(code, type), is_main=False,
+                              active=p.active is not False))
+        await commit_mpn_safe(db)
+        return {"ok": True, "barcode": code, "barcode_type": type, "is_main": False,
+                "main_barcode": p.barcode}
     p.barcode = code; p.barcode_type = type
     await commit_mpn_safe(db)
-    return {"ok": True, "barcode": code, "barcode_type": type}
+    return {"ok": True, "barcode": code, "barcode_type": type, "is_main": True, "main_barcode": code}
 
 
 class GenerateMissingIn(BaseModel):

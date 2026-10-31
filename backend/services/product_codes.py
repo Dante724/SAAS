@@ -203,7 +203,7 @@ async def next_barcodes(db, org_id: str, n: int, kind: str = "ean13") -> list[st
     including on an archived product, so a code printed on an old label never points somewhere new."""
     from backend.services import barcode_types, numbering
     if kind == "upce":
-        raise HTTPException(409, "UPC-E codes come from the manufacturer — scan or type the one on the box, "
+        raise HTTPException(409, "UPC-E codes come from the manufacturer. Scan or type the one on the box, "
                                  "or generate an EAN-13 instead.")
     gtin = kind if kind in ("ean13", "upca", "ean8") else "ean13"
     prefix = (await db.execute(select(Organisation.inv_barcode_prefix).where(
@@ -217,7 +217,7 @@ async def next_barcodes(db, org_id: str, n: int, kind: str = "ean13") -> list[st
         # ITF-14 / GS1-128 / 2D / Code 39 / Code 128 carry the in-store EAN-13 (same GTIN, same match key)
         return codes if gtin == kind else [barcode_types.generated_value(kind, c) for c in codes]
     except ValueError:      # the counter ran past what the format can hold (EAN-8: a million codes)
-        raise HTTPException(409, "No more barcodes of this kind are free — generate EAN-13 barcodes instead")
+        raise HTTPException(409, "No more barcodes of this kind are free. Generate EAN-13 barcodes instead")
 
 
 async def next_sku(db, org_id: str, template: str, category_name: Optional[str]) -> str:
@@ -265,3 +265,85 @@ async def next_serials(db, org_id: str, n: int) -> list[str]:
         return {canon[r] for r in rows if r in canon}
     return await numbering.next_codes(db, org_id, "product_serial", n,
                                       render_fn=lambda c: normalize(numbering.render(tpl, c))[0], taken=taken)
+
+
+# ── shared product-data rules (create / update / import / any other save path) ──────────────────
+def clean_codes(obj: dict, keys=("name", "sku", "code", "barcode", "mpn")) -> dict:
+    """Trim the identity fields of a payload in place (blank → None), so " abc-1 " and "abc-1"
+    are one SKU. Name stays a string (blank → "") — the caller refuses an empty one."""
+    for k in keys:
+        if k in obj:
+            v = clean(obj[k])
+            obj[k] = (v or "") if k == "name" else v
+    return obj
+
+
+_GTIN_KIND = {8: "ean8", 12: "upca", 13: "ean13", 14: "itf14"}
+
+
+def sheet_barcode(raw, kind: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
+    """A barcode cell from a spreadsheet → (barcode, barcode_type). Raises ValueError with the reason.
+
+    Excel stores 012345678905 as the number 12345678905, so a numeric cell (or an all-digit text
+    that isn't a valid GTIN as typed) is zero-padded to the first GTIN length whose check digit
+    validates. An all-digit value of a GTIN length must carry a valid check digit. Anything else
+    is a Code 128 code (or the given `kind`, checked by its own rules)."""
+    from backend.services import barcode_types
+    if raw is None:
+        return None, None
+    numeric = isinstance(raw, (int, float)) and not isinstance(raw, bool)
+    if isinstance(raw, float):
+        if raw != int(raw):
+            raise ValueError(f"the barcode {raw} isn't a whole number")
+        raw = int(raw)
+    text = clean(raw)
+    if not text:
+        return None, None
+    if kind and kind in barcode_types.TYPES:
+        return barcode_types.normalize(kind, text), kind
+    if text.isdigit() and len(text) <= 14:
+        from backend.services.codes import gtin_check_digit
+        if len(text) in _GTIN_KIND and gtin_check_digit(text[:-1]) == text[-1]:
+            return text, _GTIN_KIND[len(text)]
+        if numeric and len(text) not in _GTIN_KIND:   # a number cell lost its leading zeros (≤ 3)
+            for n in (8, 12, 13, 14):
+                if 0 < n - len(text) <= 3:
+                    padded = text.zfill(n)
+                    if gtin_check_digit(padded[:-1]) == padded[-1]:
+                        return padded, _GTIN_KIND[n]
+        if len(text) in (12, 13, 14):
+            raise ValueError(f"the barcode {text} has a wrong check digit")
+    return text, "code128"
+
+
+OPEN_PO_STATUSES = ("draft", "ordered", "partial")
+
+
+async def archive_blocker(db, org_id: str, part: Part) -> Optional[str]:
+    """Why this product can't be archived yet, or None. A product still in stock, on an open
+    work order / estimate, or on an open purchase order would vanish from those screens
+    (and its stock from the books) — sell, write off or remove it there first.
+    inventory.py / sales.py archive paths should call this too."""
+    from backend.models import Order, OrderLine, POLine, PurchaseOrder, StockLevel
+    from backend.services.po_links import _closed_keys
+    on_hand = (await db.execute(select(func.coalesce(func.sum(StockLevel.qty_available), 0)).where(
+        StockLevel.part_id == part.id))).scalar() or 0
+    if on_hand > 0:
+        return f"{on_hand:g} still in stock. Sell or write them off first"
+    closed = await _closed_keys(db, org_id)
+    jobs = (await db.execute(select(Order.order_number, Order.is_estimate).join(
+        OrderLine, OrderLine.order_id == Order.id).where(
+        Order.org_id == org_id, OrderLine.ref_id == part.id,
+        or_(OrderLine.kind == "product", OrderLine.line_type == "part"),
+        Order.archived == False, Order.status.not_in(closed))  # noqa: E712
+        .distinct().limit(3))).all()
+    if jobs:
+        nums = ", ".join(n for n, _e in jobs)
+        what = "an open estimate" if all(e for _n, e in jobs) else "an open work order"
+        return f"on {what} ({nums})"
+    pos = (await db.execute(select(PurchaseOrder.po_number).join(POLine, POLine.po_id == PurchaseOrder.id).where(
+        PurchaseOrder.org_id == org_id, POLine.part_id == part.id,
+        PurchaseOrder.status.in_(OPEN_PO_STATUSES)).distinct().limit(3))).scalars().all()
+    if pos:
+        return f"on an open purchase order ({', '.join(pos)})"
+    return None

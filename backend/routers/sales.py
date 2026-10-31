@@ -334,10 +334,13 @@ async def lookup_code(
         if loc_id:
             q = q.where(StockLevel.location_id == loc_id)
         stock = {pid: float(qty or 0) for pid, qty in (await db.execute(q.group_by(StockLevel.part_id))).all()}
+    from backend.routers.catalog_products import _thumbnails
+    thumbs = await _thumbnails(db, [p.id for p in parts]) if parts else {}
     return {"code": code, "items": [{
         "id": p.id, "name": p.name, "sku": p.sku, "barcode": p.barcode, "code": p.code,
         "mpn": getattr(p, "mpn", None), "sell_price": p.sell_price or 0,
-        "qty_available": stock.get(p.id, 0.0), "image_data": p.image_data, "matched_on": matched.get(p.id),
+        # the small list thumbnail, not the full photo: a till lookup stays light
+        "image_data": thumbs.get(p.id), "has_image": p.id in thumbs, "matched_on": matched.get(p.id),
     } for p in parts]}
 
 
@@ -404,6 +407,7 @@ async def delete_sale(
                              qty=ln.qty, unit_cost=ln.cost_price or 0, ref_type="sale_void", ref_id=sale.id,
                              created_by_id=current.id))
         draws = ln.stock_draws or {}
+        await _unsell_serials(db, current.org_id, draws.get("serials") or [])
         for d in draws.get("layers") or []:
             batch = (await db.execute(select(StockItemBatch).where(
                 StockItemBatch.id == d["batch_id"], StockItemBatch.org_id == current.org_id))).scalar_one_or_none()
@@ -532,6 +536,8 @@ async def create_sale(
                 except HTTPException:
                     pass
             cost = q4(unit_cost * li.qty)
+            # serialized units leave as sold (recorded on the line so a void / return puts them back)
+            draws["serials"] = await _sell_serials(db, current.org_id, li.ref_id, loc_id, int(li.qty))
             db.add(StockMovement(part_id=li.ref_id, location_id=loc_id,
                                  movement_type="use", qty=-li.qty, unit_cost=unit_cost,
                                  ref_type="sale", ref_id=sale.id))
@@ -608,6 +614,36 @@ async def _load_sale(db, current, sale_id, lock=False) -> Sale:
     if not sale:
         raise HTTPException(404, "Sale not found")
     return sale
+
+
+async def _sell_serials(db, org_id: str, part_id: str, location_id: str, n: int) -> list[str]:
+    """Mark up to `n` in-stock serialized units of the product (at this location, or unplaced) as
+    sold. Locked so two tills can't sell the same unit. Returns their ids."""
+    if n <= 0:
+        return []
+    from sqlalchemy import or_
+
+    from backend.models import SerializedItem
+    items = (await db.execute(select(SerializedItem).where(
+        SerializedItem.org_id == org_id, SerializedItem.part_id == part_id,
+        SerializedItem.status == "in_stock",
+        or_(SerializedItem.location_id == location_id, SerializedItem.location_id.is_(None)))
+        .order_by(SerializedItem.created_at.asc()).limit(n).with_for_update(skip_locked=True))).scalars().all()
+    for it in items:
+        it.status = "sold"
+    return [it.id for it in items]
+
+
+async def _unsell_serials(db, org_id: str, ids: list) -> None:
+    """Put sold serialized units back in stock (sale voided / items returned)."""
+    if not ids:
+        return
+    from backend.models import SerializedItem
+    items = (await db.execute(select(SerializedItem).where(
+        SerializedItem.org_id == org_id, SerializedItem.id.in_(list(ids)),
+        SerializedItem.status == "sold"))).scalars().all()
+    for it in items:
+        it.status = "in_stock"
 
 
 def _returned(ln: SaleLine) -> float:
@@ -717,7 +753,11 @@ async def return_sale_items(
     await db.flush()
     for r in data.lines:
         ln = lines[r.line_id]
-        ln.stock_draws = {**(ln.stock_draws or {}), "returned": q4(_returned(ln) + r.qty)}
+        _sold = list((ln.stock_draws or {}).get("serials") or [])
+        _back = _sold[:int(r.qty)] if ln.kind == "product" else []
+        ln.stock_draws = {**(ln.stock_draws or {}), "returned": q4(_returned(ln) + r.qty),
+                          "serials": _sold[len(_back):]}
+        await _unsell_serials(db, current.org_id, _back)
         if ln.kind == "product" and ln.ref_id:
             db.add(ClientReturnLine(return_id=ret.id, part_id=ln.ref_id, qty=r.qty, restock=True))
             await stock_rows.add(db, ln.ref_id, sale.location_id, r.qty)

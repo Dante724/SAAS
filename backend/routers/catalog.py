@@ -19,6 +19,9 @@ from backend.services.redact import can_see_costs
 router = APIRouter(prefix="/api/catalog", tags=["catalog"])
 
 
+MAX_CODE_DATA = 512
+
+
 @router.get("/code.svg")
 async def render_code_svg(
     data: str, type: str = "code128", height: int = 48,
@@ -31,6 +34,8 @@ async def render_code_svg(
     data = (data or "").strip()
     if not data:
         raise HTTPException(400, "data is required")
+    if len(data) > MAX_CODE_DATA:      # a QR holds ~2.9 KB at best; refuse before the encoder churns
+        raise HTTPException(422, f"Codes hold at most {MAX_CODE_DATA} characters")
     if type not in BARCODE_TYPES:
         raise HTTPException(400, f"type must be one of {'|'.join(BARCODE_TYPES)}")
     try:                     # opa: EAN-13 / UPC-A are validated (check digit, length)
@@ -38,7 +43,7 @@ async def render_code_svg(
     except ValueError as e:
         raise HTTPException(400, str(e))
     return Response(content=svg, media_type="image/svg+xml",
-                    headers={"Cache-Control": "public, max-age=86400"})
+                    headers={"Cache-Control": "private, max-age=86400"})   # signed-in only: no shared caches
 
 
 class ServiceIn(BaseModel):

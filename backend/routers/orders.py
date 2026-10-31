@@ -1012,41 +1012,14 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
         role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
         from backend.services.permissions import effective_permissions as _eff
         perms = _eff(role) if role else {c: False for c in _all_codes()}
-    can_add_without_stock = bool(perms.get("can_add_without_stock", True))  # default allow unless explicitly false
-
     # write off products from stock at order creation; if not enough on hand
-    # and record the shortfall as pending_stock (Orderry's "add without deduction")
-    from backend.services import reservations as _rsv
-    _allow_override = _can_override_reservation(perms, current)
-    from backend.services import stock_rows
+    # record the shortfall as pending_stock (Orderry's "add without deduction"). Same deduction as
+    # adding a line later: reservation-aware, row-locked, cost layers + serials drawn.
     for part_id, qty, line_obj in stock_writeoffs:
-        sl = await stock_rows.rows(db, part_id, data.location_id, lock=True)
-        # 144at — reservation-aware: a new WO can take only FREE stock (+ override for others' holds).
-        g = await _rsv.guard_and_draw(
-            db, org_id=current.org_id, part_id=part_id, location_id=data.location_id,
-            order_id=order.id, qty=qty, actor_id=current.id, allow_override=_allow_override,
-            taken_label=order.order_number)
-        if g["blocked"] > 0:
-            raise HTTPException(409, f"{g['blocked']:g} unit(s) of a part are reserved for another job. "
-                                     f"A manager with override permission must approve using them.")
-        deducted = g["take"]
-        shortfall = g["pending"]
-        if shortfall > 0 and not can_add_without_stock:
-            raise HTTPException(
-                403,
-                "Not enough free stock and you don't have permission to add products "
-                "without deduction. Reduce the quantity or receive more stock."
-            )
-        if sl and deducted > 0:     # ii144a: drawn across the location's bins
-            await stock_rows.draw(db, part_id, data.location_id, deducted, allow_short=True)
-        line_obj.pending_stock = shortfall
+        before = line_obj.pending_stock or 0
+        deducted = await _maybe_deduct(db, order, line_obj, qty, perms, current)
+        shortfall = (line_obj.pending_stock or 0) - before
         if deducted > 0:
-            db.add(StockMovement(
-                part_id=part_id, location_id=data.location_id,
-                movement_type="use", qty=-deducted, ref_type="order", ref_id=order.id,
-            ))
-            from backend.services import inventory_alerts as _alerts  # 144bo: low-stock alert
-            await _alerts.maybe_low_stock_by_id(db, current.org_id, part_id)
             await log_system_event(db, current.org_id, "order", order.id,
                                    f"Stock written off: {deducted:g} unit(s)")
         if shortfall > 0:
@@ -1790,7 +1763,7 @@ async def _convert_estimate(db, current, estimate):
     """Convert an estimate into a work order IN PLACE (Build 144di, Orderry-style):
     the same record flips ``is_estimate`` off, gets a fresh WO number, keeps its
     lines and history, and now deducts stock. Irreversible. Returns the id."""
-    from backend.models import OrderLine, OrderStatus, StockMovement
+    from backend.models import OrderLine, OrderStatus
     old_number = estimate.order_number
     # initial work-order status (org default or "new")
     init = "new"
@@ -1803,21 +1776,14 @@ async def _convert_estimate(db, current, estimate):
     estimate.order_number = await next_number(db, current.org_id, "order")
     estimate.is_estimate = False
     estimate.status = init
-    # deduct stock now (the estimate never did)
+    # deduct stock now (the estimate never did) — the same deduction as adding a line: only free
+    # stock (+ this job's own holds), cost layers and serials drawn, every shortfall booked as
+    # pending (a line with no stock row too, so removing it later can't conjure stock).
     src_lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == estimate.id))).scalars().all()
     for l in src_lines:
         if l.kind == "product" and l.ref_id:
-            from backend.services import stock_rows
-            sl = await stock_rows.rows(db, l.ref_id, estimate.location_id, lock=True)
-            if sl:
-                have = sum(r.qty_available or 0 for r in sl)
-                deduct = min(l.qty, max(have, 0))
-                await stock_rows.draw(db, l.ref_id, estimate.location_id, deduct)
-                l.pending_stock = l.qty - deduct
-                # log the ACTUAL deducted quantity, negative — matches every other
-                # consumption movement; was qty=+l.qty which corrupted movement-sum reports.
-                db.add(StockMovement(part_id=l.ref_id, location_id=estimate.location_id,
-                                     movement_type="use", qty=-deduct, ref_type="order", ref_id=estimate.id))
+            l.pending_stock = 0
+            await _maybe_deduct(db, estimate, l, l.qty or 0, {}, current, lenient=True)
     db.add(OrderStatusLog(order_id=estimate.id, from_status=None, to_status=init,
                           changed_by_id=current.id, note=f"Converted from estimate {old_number}"))
     from backend.routers.feed import log_system_event
@@ -2527,7 +2493,10 @@ async def duplicate_order(
             technician_id=l.technician_id, work_share=l.work_share,
             warranty_days=l.warranty_days, discount=l.discount, discount_type=l.discount_type,
             discount_paid_by=l.discount_paid_by, tax_id=l.tax_id, tax_rate=l.tax_rate,
-            tax_mode=l.tax_mode, total=l.total, pending_stock=0.0,
+            tax_mode=l.tax_mode, total=l.total,
+            # The copy takes no stock: its products are owed (pending) until written off, so
+            # removing one later can't "return" units it never held.
+            pending_stock=float(l.qty or 0) if (l.kind == "product" and l.ref_id and not src.is_estimate) else 0.0,
             discount_by_id=l.discount_by_id)   # a copied discount stays with whoever gave it
         new_lines.append(nl)
         if l.line_type == "labour":
@@ -3481,23 +3450,24 @@ async def receive_pending_stock(
     )).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
+    if order.archived:
+        raise HTTPException(409, "This job is archived. Restore it before writing off stock.")
+    await _guard_order_access(db, current, order)
+    await _guard_editable(db, order, current)
+    if (await _order_perms(db, current)).get("can_add_products") is False:
+        raise HTTPException(403, "You don't have permission to add products")
+    if order.is_estimate or line.kind != "product" or not line.ref_id:
+        raise HTTPException(400, "Only a product line on a work order holds stock")
     if (line.pending_stock or 0) <= 0:
         return {"ok": True, "pending": 0}
 
-    from backend.services import stock_rows
-    available = sum(r.qty_available or 0 for r in await stock_rows.rows(
-        db, line.ref_id, order.location_id, lock=True))
-    deduct = min(line.pending_stock, max(available, 0))
+    # Same deduction as adding the line: free stock (+ this job's holds) only, row-locked, cost
+    # layers and serials drawn. What still can't be taken stays pending.
+    pend = line.pending_stock or 0
+    line.pending_stock = 0
+    deduct = await _maybe_deduct(db, order, line, pend, {}, current, lenient=True)
     if deduct <= 0:
         raise HTTPException(409, "No stock available to write off yet")
-    await stock_rows.draw(db, line.ref_id, order.location_id, deduct, allow_short=True)
-    line.pending_stock -= deduct
-    db.add(StockMovement(
-        part_id=line.ref_id, location_id=order.location_id,
-        movement_type="use", qty=-deduct, ref_type="order", ref_id=order.id,
-    ))
-    from backend.services import inventory_alerts as _alerts  # 144bo: low-stock alert
-    await _alerts.maybe_low_stock_by_id(db, current.org_id, line.ref_id)
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order.id,
                            f"Pending stock written off: {deduct:g} unit(s)")
@@ -3840,7 +3810,8 @@ async def add_line(
                          discount=existing.discount or 0, discount_type=existing.discount_type or "pct",
                          tax_rate=existing.tax_rate or 0, tax_mode=existing.tax_mode or "imposed")
             existing.total = _calc_line(tmp)
-            await _maybe_deduct(db, order, existing, data.qty, perms, current)
+            if not order.is_estimate:      # estimates never deduct
+                await _maybe_deduct(db, order, existing, data.qty, perms, current)
             await _recalc_order(db, order)
             await db.commit()
             return {"ok": True, "line_id": existing.id, "merged": True}
@@ -3978,62 +3949,47 @@ async def _resolve_variant_part(db, org_id, configured, device):
     return (with_stock or fits)[0]
 
 
-async def _maybe_deduct(db, order, line, qty, perms, current):
-    """Deduct qty of a product line from stock; mark true shortfall as pending.
+async def _maybe_deduct(db, order, line, qty, perms, current, *, lenient: bool = False):
+    """Deduct qty of a product line from stock; mark true shortfall as pending. Returns the units
+    actually drawn. The one way a job takes stock (create, add, merge, qty up, convert, receive
+    pending): estimates never move stock.
     144at — reservation-aware: a job may take only FREE stock + its own reservation. Units
     reserved for a *different* job are blocked (409) unless the actor can override, in which case
-    they're drawn from those holds FIFO and audited."""
+    they're drawn from those holds FIFO and audited.
+    `lenient` (convert, receive pending — nobody picked these units by hand): never override another
+    job's hold and never refuse; whatever can't be taken freely stays pending."""
+    if order.is_estimate or not line.ref_id or qty <= 0:
+        return 0.0
     from backend.services import reservations as _rsv
-    allow_override = _can_override_reservation(perms, current)
-    g = await _rsv.guard_and_draw(
-        db, org_id=order.org_id, part_id=line.ref_id, location_id=order.location_id,
-        order_id=order.id, qty=qty, actor_id=current.id, allow_override=allow_override,
-        taken_label=order.order_number)
+    from backend.services import stock_consume
+    # Lock the stock rows first so the availability we plan on is the availability we draw from.
+    await stock_consume.lock_rows(db, line.ref_id, order.location_id)
+    want = qty
+    if lenient:
+        allow_override = False
+        p = await _rsv.plan_consumption(db, part_id=line.ref_id, location_id=order.location_id,
+                                        order_id=order.id, qty=qty)
+        want = max(min(qty, max(p["free"], 0) + p["own"]), 0)
+    else:
+        allow_override = _can_override_reservation(perms, current)
+    g = {"take": 0, "pending": 0, "blocked": 0}
+    if want > 0:
+        g = await _rsv.guard_and_draw(
+            db, org_id=order.org_id, part_id=line.ref_id, location_id=order.location_id,
+            order_id=order.id, qty=want, actor_id=current.id, allow_override=allow_override,
+            taken_label=order.order_number)
     if g["blocked"] > 0:
         raise HTTPException(409, f"{g['blocked']:g} unit(s) of this part are reserved for another job. "
                                  f"A manager with override permission must approve using them.")
-    deducted = g["take"]
-    shortfall = g["pending"]
-    from backend.services import stock_rows
-    sl = await stock_rows.rows(db, line.ref_id, order.location_id)
-    if shortfall > 0 and perms.get("can_add_without_stock") is False:
+    shortfall = g["pending"] + (qty - want)
+    if shortfall > 0 and not lenient and perms.get("can_add_without_stock") is False:
         raise HTTPException(403, "Not enough free stock and you can't add without deduction.")
-    if sl and deducted > 0:
-        await stock_rows.draw(db, line.ref_id, order.location_id, deducted, allow_short=True)
-        if True:
-            db.add(StockMovement(part_id=line.ref_id, location_id=order.location_id,
-                                 movement_type="use", qty=-deducted, ref_type="order", ref_id=order.id))
-            from backend.services import inventory_alerts as _alerts  # 144bo: low-stock alert
-            await _alerts.maybe_low_stock_by_id(db, order.org_id, line.ref_id)
-            # ── FIFO cost layers: if this part has batches, consume them oldest-first
-            #    and stamp the exact weighted COGS onto the line. ──
-            from backend.models import StockItemBatch
-            has_batches = (await db.execute(select(StockItemBatch.id).where(
-                StockItemBatch.org_id == order.org_id, StockItemBatch.part_id == line.ref_id,
-                StockItemBatch.qty_remaining > 0).limit(1))).scalar_one_or_none()
-            if has_batches:
-                from decimal import Decimal as _D
-
-                from backend.services.serialized import consume_fifo_lifo
-                try:
-                    res_cost = await consume_fifo_lifo(
-                        db, org_id=order.org_id, part_id=line.ref_id,
-                        qty=_D(str(deducted)), method="fifo")
-                    # exact unit COGS for the consumed units
-                    line.cost_price = res_cost["avg_unit_cost"]
-                except HTTPException:
-                    pass  # batches short — warehouse qty already handled the deduction
-            # ── Serialized units: allocate in-stock serials onto this order. ──
-            n_serial = int(deducted)
-            if n_serial > 0:
-                from backend.services.serialized import allocate_serialized_item
-                for _ in range(n_serial):
-                    try:
-                        await allocate_serialized_item(
-                            db, org_id=order.org_id, part_id=line.ref_id, order_id=order.id)
-                    except HTTPException:
-                        break  # not a serialized part (or none left) — fine
+    taken = await stock_consume.consume_for_line(
+        db, org_id=order.org_id, order_id=order.id, line=line, location_id=order.location_id,
+        qty=g["take"])
+    shortfall += g["take"] - taken          # lost the last unit to a concurrent job → pending
     line.pending_stock = (line.pending_stock or 0) + shortfall
+    return taken
 
 
 def _line_as_in(line) -> "LineIn":
