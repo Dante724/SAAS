@@ -121,6 +121,30 @@ async def _signature_required(db: AsyncSession, order: "Order") -> bool:
     return bool(getattr(org, "oe_estimate_require_signature" if order.is_estimate else "oe_wo_require_signature", False))
 
 
+async def _claim_estimate_decision(db: AsyncSession, order: "Order", decision: str) -> None:
+    """One answer per estimate state. A double tap on Accept, or Accept while staff press
+    Convert, must not convert twice: claim the row with a conditional UPDATE on the status this
+    request read (row lock on Postgres, write lock on SQLite). If someone else moved or converted
+    it in the meantime, nothing matches and this answer is refused. A declined estimate can't be
+    accepted later unless staff have moved it on since (e.g. revised and re-sent it)."""
+    from sqlalchemy import update as _update
+    if decision == "accept":
+        last = (await db.execute(select(DocumentSignature).where(
+            DocumentSignature.order_id == order.id, DocumentSignature.doc_type == "estimate")
+            .order_by(desc(DocumentSignature.signed_at)).limit(1))).scalars().first()
+        if last and last.decision == "decline":
+            reopened = (await db.execute(select(OrderStatusLog.id).where(
+                OrderStatusLog.order_id == order.id, OrderStatusLog.changed_by_id.is_not(None),
+                OrderStatusLog.changed_at > last.signed_at).limit(1))).first()
+            if not reopened:
+                raise HTTPException(409, "This estimate was declined. Ask the shop to send it again.")
+    won = await db.execute(_update(Order).where(
+        Order.id == order.id, Order.is_estimate == True, Order.status == order.status)  # noqa: E712
+        .values(status=order.status).execution_options(synchronize_session=False))
+    if won.rowcount != 1:
+        raise HTTPException(409, "This estimate has already been answered")
+
+
 async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
                            signature: Optional[str], who: str,
                            request: Optional[Request] = None) -> Optional[str]:
@@ -130,6 +154,8 @@ async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
     estimate to the appropriate status, auto-converting on accept when configured.
     """
     verb = "accepted" if decision == "accept" else "declined"
+    if order.is_estimate:
+        await _claim_estimate_decision(db, order, decision)
     if decision == "accept" and order.is_estimate:
         try:
             from backend.services.webhooks import emit_event

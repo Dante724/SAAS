@@ -1879,8 +1879,18 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
 async def _convert_estimate(db, current, estimate):
     """Convert an estimate into a work order IN PLACE (Build 144di, Orderry-style):
     the same record flips ``is_estimate`` off, gets a fresh WO number, keeps its
-    lines and history, and now deducts stock. Irreversible. Returns the id."""
+    lines and history, and now deducts stock. Irreversible. Returns the id, or None when another
+    request converted it first (double tap, accept + staff convert): the flip below is a
+    conditional UPDATE, so only one caller wins and stock / the WO number move once."""
+    from sqlalchemy import update as _update
+
     from backend.models import OrderLine, OrderStatus, StockMovement
+    won = await db.execute(_update(Order).where(
+        Order.id == estimate.id, Order.is_estimate == True)  # noqa: E712
+        .values(is_estimate=False).execution_options(synchronize_session=False))
+    if won.rowcount != 1:
+        await db.refresh(estimate)
+        return None
     old_number = estimate.order_number
     # initial work-order status (org default or "new")
     init = "new"
@@ -1933,6 +1943,8 @@ async def convert_estimate_endpoint(
     if est.converted_order_id:
         raise HTTPException(400, "Already converted")
     new_id = await _convert_estimate(db, current, est)
+    if new_id is None:
+        raise HTTPException(409, "This estimate was already converted to a work order")
     return {"ok": True, "order_id": new_id}
 
 
