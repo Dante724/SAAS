@@ -1,6 +1,6 @@
 import logging
 import secrets
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -316,6 +316,10 @@ def _serialize_order_scalars(o: Order) -> dict:
         "status_entered_at": o.status_entered_at.isoformat() if o.status_entered_at else None,
         "is_estimate": o.is_estimate,
         "estimate_approved_at": o.estimate_approved_at.isoformat() if o.estimate_approved_at else None,
+        # E5 — estimate terms and the customer's answer
+        "estimate_valid_until": o.estimate_valid_until.isoformat() if getattr(o, "estimate_valid_until", None) else None,
+        "estimate_revision": getattr(o, "estimate_revision", None) or 1,
+        "estimate_decline_reason": getattr(o, "estimate_decline_reason", None),
         "converted_order_id": o.converted_order_id,
         "converted_from_id": o.converted_from_id,
         "duration_min": o.duration_min,
@@ -1294,6 +1298,10 @@ async def get_order(
     if not await scoping.can_view_order(db, current, order):
         raise HTTPException(403, "You can only open work orders assigned to you")
     data = _serialize_order(order)
+    if order.type_id:      # J6: the job type's name for the "Job type" picker
+        from backend.models import WorkOrderType as _WOT
+        data["type_name"] = (await db.execute(select(_WOT.name).where(
+            _WOT.id == order.type_id, _WOT.org_id == current.org_id))).scalar_one_or_none()
     if not await has_perm(db, current, "can_view_item_prices"):
         for ln in data["lines"]:
             for k in LINE_PRICE_KEYS:
@@ -1456,6 +1464,12 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         _block = await status_gate_block(db, current.org_id, order, data.status)
         if _block:
             raise HTTPException(409, _block)
+
+    # J6 — nobody keeps clocking time on a finished job. Before the gates, so time billed as labour
+    # is in the total the "fully paid" check sees (and on the auto-drafted invoice). A cancelled
+    # job's time is stopped but not billed. A refused change rolls back with the request.
+    if is_closing and order.status != data.status:
+        await _stop_job_timers(db, order, bill=not (target and (target.status_group or "") == "dropped"))
 
     # 144gj — Orderry requirement gates on ENTERING the target status.
     if target and order.status != data.status:
@@ -1967,7 +1981,8 @@ async def switch_type(
     order.type_id = data.type_id
     remapped = None
     # if the type defines an initial status and the order is still in a 'new' group, align it
-    if wot.initial_status:
+    # (not on an estimate: its starting status applies when it becomes a work order)
+    if wot.initial_status and not order.is_estimate:
         cur = (await db.execute(select(OrderStatus).where(OrderStatus.org_id == current.org_id, OrderStatus.key == order.status))).scalars().first()
         if cur and cur.status_group == "new" and order.status != wot.initial_status:
             order.status = wot.initial_status
@@ -1979,6 +1994,154 @@ async def switch_type(
     await log_system_event(db, current.org_id, "order", order.id, f"Type switched to {wot.name}")
     await db.commit()
     return {"ok": True, "type_id": data.type_id, "status": order.status, "remapped_to": remapped}
+
+
+class PriorityIn(BaseModel):
+    priority: int = Field(ge=0, le=2)    # 0 normal · 1 high · 2 urgent, same day
+
+
+@router.patch("/{order_id}/priority")
+async def set_priority(
+    order_id: str,
+    data: PriorityIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """J6 — change a job's priority from the job itself (Normal / High / Urgent, same day)."""
+    order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
+    await _guard_editable(db, order, current)       # a closed job keeps its priority
+    if order.priority != data.priority:
+        prev = order.priority
+        order.priority = data.priority
+        from backend.routers.feed import log_system_event
+        names = {0: "Normal", 1: "High", 2: "Urgent, same day"}
+        await log_system_event(db, current.org_id, "order", order.id,
+                               f"Priority changed: {names.get(prev, prev)} \u2192 {names[data.priority]}")
+        await db.commit()
+    return {"ok": True, "priority": order.priority}
+
+
+class EstimateTermsIn(BaseModel):
+    valid_until: Optional[date] = None
+
+
+async def _open_estimate(db, current, order_id: str) -> Order:
+    order = (await db.execute(select(Order).where(
+        Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
+    if not order.is_estimate or order.converted_order_id:
+        raise HTTPException(409, "This is a work order now, not an estimate.")
+    return order
+
+
+@router.patch("/{order_id}/estimate")
+async def set_estimate_terms(
+    order_id: str,
+    data: EstimateTermsIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_create_tickets")),
+):
+    """E5 — an estimate's "valid until" date. After it the customer can't approve online; send a new
+    revision (or move the date) to let them. Empty clears it."""
+    order = await _open_estimate(db, current, order_id)
+    if "valid_until" in data.model_fields_set:
+        order.estimate_valid_until = data.valid_until
+        from backend.routers.feed import log_system_event
+        await log_system_event(db, current.org_id, "order", order.id,
+                               f"Valid until {data.valid_until:%d %b %Y}" if data.valid_until else "Valid-until date cleared")
+    await db.commit()
+    return {"ok": True, "estimate_valid_until": order.estimate_valid_until.isoformat() if order.estimate_valid_until else None}
+
+
+class RevisionIn(BaseModel):
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+def _ser_revision(r) -> dict:
+    return {"id": r.id, "revision": r.revision, "lines": r.lines or [], "total": float(r.total or 0),
+            "valid_until": r.valid_until.isoformat() if r.valid_until else None,
+            "deposit_amount": float(r.deposit_amount or 0), "decision": r.decision,
+            "decline_reason": r.decline_reason, "skipped": r.skipped or [], "note": r.note,
+            "created_by_name": r.created_by_name,
+            "created_at": r.created_at.isoformat() if r.created_at else None}
+
+
+@router.post("/{order_id}/estimate/revisions", status_code=201)
+async def new_estimate_revision(
+    order_id: str,
+    data: RevisionIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_create_tickets")),
+):
+    """E5 — start a new version of the estimate. The version the customer saw (and their answer) is
+    kept in the history; the estimate becomes version N+1, which the customer can approve or decline
+    again. A declined estimate re-opens at the first estimate status."""
+    from backend.routers.public import snapshot_revision
+    order = await _open_estimate(db, current, order_id)
+    await snapshot_revision(db, order, note=data.note, actor=current)
+    order.estimate_revision = (order.estimate_revision or 1) + 1
+    order.estimate_decline_reason = None
+    order.estimate_approved_at = None
+    # pay links made for the old version (e.g. its deposit) stop working
+    from backend.models import PaymentIntent
+    from backend.services.order_money import revoke_pay_link
+    for _pi in (await db.execute(select(PaymentIntent).where(
+            PaymentIntent.org_id == current.org_id, PaymentIntent.order_id == order.id,
+            PaymentIntent.status.in_(("created", "viewed", "pending"))))).scalars().all():
+        await revoke_pay_link(db, _pi)
+    cur = (await db.execute(select(OrderStatus).where(
+        OrderStatus.org_id == current.org_id, OrderStatus.key == order.status,
+        OrderStatus.record_type == "estimate"))).scalars().first()
+    if cur and (cur.is_terminal or cur.status_group in ("closed", "dropped")):
+        first = (await db.execute(select(OrderStatus).where(
+            OrderStatus.org_id == current.org_id, OrderStatus.record_type == "estimate",
+            OrderStatus.active == True, OrderStatus.is_terminal == False,  # noqa: E712
+            OrderStatus.status_group.notin_(("closed", "dropped")))
+            .order_by(OrderStatus.sort_order))).scalars().first()
+        if first:
+            db.add(OrderStatusLog(order_id=order.id, from_status=order.status, to_status=first.key,
+                                  changed_by_id=current.id, note=f"Revision {order.estimate_revision}"))
+            order.status = first.key
+            order.status_entered_at = datetime.utcnow()
+            order.closed_at = None
+    from backend.routers.feed import log_system_event
+    await log_system_event(db, current.org_id, "order", order.id,
+                           f"Revision {order.estimate_revision} started" + (f": {data.note}" if data.note else ""))
+    await db.commit()
+    return {"ok": True, "revision": order.estimate_revision, "status": order.status}
+
+
+@router.get("/{order_id}/estimate/revisions")
+async def list_estimate_revisions(
+    order_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """E5 — earlier versions of an estimate, oldest first."""
+    from backend.models import EstimateRevision
+    order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    from backend.services import scoping
+    if not await scoping.can_view_order(db, current, order):
+        raise HTTPException(403, "You can only open work orders assigned to you")
+    rows = (await db.execute(select(EstimateRevision).where(
+        EstimateRevision.order_id == order.id, EstimateRevision.org_id == current.org_id)
+        .order_by(EstimateRevision.created_at, EstimateRevision.revision))).scalars().all()
+    items = [_ser_revision(r) for r in rows]
+    if not await has_perm(db, current, "can_view_item_prices"):
+        for it in items:
+            it.pop("total", None)
+            it.pop("deposit_amount", None)
+            for ln in it["lines"]:
+                ln.pop("unit_price", None)
+                ln.pop("total", None)
+    return {"items": items, "current": order.estimate_revision or 1}
 
 @router.post("/{order_id}/comments", status_code=201)
 async def add_comment(
@@ -3494,6 +3657,25 @@ async def _log_amount_change(db, org_id, order, prev_total):
     from backend.routers.feed import log_system_event
     await log_system_event(db, org_id, "order", order.id,
                            f"Amount changed: {prev_total:.2f} → {new_total:.2f}")
+
+
+async def _stop_job_timers(db, order, bill: bool = True) -> None:
+    from backend.models import TimeEntry
+    from backend.routers.timeclock import _apply_labour_billing, _maybe_emit_stop, _stop
+    running = (await db.execute(select(TimeEntry).where(
+        TimeEntry.org_id == order.org_id, TimeEntry.order_id == order.id,
+        TimeEntry.state == "running", TimeEntry.ended_at.is_(None)))).scalars().all()
+    for e in running:
+        _stop(e)
+        e.note = ((e.note + " · ") if e.note else "") + "Stopped when the job closed"
+        await _maybe_emit_stop(db, e)
+        if bill:
+            await _apply_labour_billing(db, e)
+    if running:
+        await db.refresh(order, ["lines"])      # billed time may have added a labour line
+        from backend.routers.feed import log_system_event
+        await log_system_event(db, order.org_id, "order", order.id,
+                               f"{len(running)} running timer{'s' if len(running) != 1 else ''} stopped (job closed)")
 
 
 async def _recalc_order(db, order):

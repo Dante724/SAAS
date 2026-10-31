@@ -107,6 +107,7 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
         {cfg[on] && (
           <div className="space-y-4">
             {sw(sig, "Ask for a signature", "They sign with a finger or mouse before approving.", "estimate")}
+            {prefix === "oe" && sw("oe_estimate_line_choice", "Let them leave lines out", "They can untick lines they don't want before approving. You see what they left out on the job.", "estimate")}
             <div>
               <span className="block text-sm font-medium text-ink-primary mb-1.5">Only while the {noun} is in</span>
               {StatusPicker({ value: cfg[sts] || "", list, onChange: (v) => save({ [sts]: v }) })}

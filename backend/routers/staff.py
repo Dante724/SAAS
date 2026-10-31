@@ -1014,6 +1014,7 @@ async def get_public_pages(
         "oe_show_zero_price_products": org.oe_show_zero_price_products,
         "oe_show_zero_price_services": org.oe_show_zero_price_services,
         "oe_allow_approval": getattr(org, "oe_allow_approval", True),
+        "oe_estimate_line_choice": getattr(org, "oe_estimate_line_choice", True),
         "oe_allow_messages": getattr(org, "oe_allow_messages", True),
         "oe_msg_days_after_close": getattr(org, "oe_msg_days_after_close", None) if getattr(org, "oe_msg_days_after_close", None) is not None else 14,
         "oe_allow_recommend": getattr(org, "oe_allow_recommend", True),
@@ -1051,6 +1052,7 @@ class PublicPagesIn(BaseModel):
     oe_show_zero_price_products: Optional[bool] = None
     oe_show_zero_price_services: Optional[bool] = None
     oe_allow_approval: Optional[bool] = None
+    oe_estimate_line_choice: Optional[bool] = None      # E5: customers may untick estimate lines
     oe_allow_messages: Optional[bool] = None
     oe_msg_days_after_close: Optional[int] = Field(default=None, ge=0, le=365)
     oe_allow_recommend: Optional[bool] = None

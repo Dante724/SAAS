@@ -30,6 +30,8 @@ import JobCardFields from "../../components/JobCardFields";
 import ReaderCharge from "../../components/ReaderCharge";
 import CardPaymentsList from "../../components/CardPaymentsList";
 import KitGroupHeader from "./KitGroupHeader";
+import EstimateTerms, { startRevision } from "./EstimateTerms";
+import JobTasks from "./JobTasks";
 import { sendInvoice } from "../invoices/billing";
 import { groupKitLines } from "../../lib/kitGroups";
 
@@ -140,7 +142,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   }
   // I6 — send the estimate (tracking link, plus the PDF by email). The server says whether it
   // really went out; we show that sentence, never a blanket "sent".
-  const [estBusy, setEstBusy] = useState<"" | "send" | "convert">("");
+  const [estBusy, setEstBusy] = useState<"" | "send" | "convert" | "revise">("");
   async function sendEstimate(way?: SendWay) {
     setEstBusy("send");
     try {
@@ -162,6 +164,32 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
       else await reload();
     } catch (e: any) { flash(e.message || "Couldn't convert the estimate", "warn"); }
     finally { setEstBusy(""); }
+  }
+  // E5 — a new version of the estimate: the old one goes to the history, the customer can answer again.
+  async function newRevision() {
+    setEstBusy("revise");
+    try {
+      const n = await startRevision(order.id);
+      if (n != null) { flash(`Revision ${n} started. Change the estimate, then send it.`); await reload(); onChanged?.(); }
+    } catch (e: any) { flash(e.message || "Couldn't start a new revision", "warn"); }
+    finally { setEstBusy(""); }
+  }
+  // J6 — the job's type and priority are real pickers now.
+  const [types, setTypes] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => { api.get<any>("/forms/types").then((r) => setTypes(r.items || [])).catch(() => {}); }, []);
+  async function changeType(typeId: string) {
+    if (!typeId || typeId === (d as any).type_id) return;
+    try {
+      const r = await api.patch<{ status: string; remapped_to?: string | null }>(`/orders/${order.id}/type`, { type_id: typeId });
+      flash(r.remapped_to ? "Job type changed, and the status moved to its starting status" : "Job type changed");
+      await reload(); onChanged?.();
+    } catch (e: any) { flash(e.message || "Couldn't change the job type", "warn"); }
+  }
+  async function changePriority(p: number) {
+    const prev = d.priority;
+    setD({ ...d, priority: p });
+    try { await api.patch(`/orders/${order.id}/priority`, { priority: p }); flash("Priority updated"); onChanged?.(); }
+    catch (e: any) { setD((x) => ({ ...x, priority: prev })); flash(e.message || "Couldn't change the priority", "warn"); }
   }
   // J1 — customer signs on the shop's screen (e.g. at pick-up).
   const [sigOpen, setSigOpen] = useState(false);
@@ -393,9 +421,16 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 flex items-center gap-1.5 disabled:opacity-60">
               <M n="build" c="text-xs" />{estBusy === "convert" ? "Converting…" : "Convert to work order"}
             </button>
-            <span className="ml-auto text-[11px] text-ink-tertiary">{(d as any).estimate_approved_at ? "The customer approved this estimate." : "The customer can approve it from their tracking link."}</span>
+            <button type="button" onClick={newRevision} disabled={!!estBusy}
+              className="px-3.5 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 flex items-center gap-1.5 disabled:opacity-60">
+              <M n="edit_note" c="text-xs" />{estBusy === "revise" ? "Starting…" : "New revision"}
+            </button>
+            <span className="ml-auto text-[11px] text-ink-tertiary">{(d as any).estimate_approved_at ? "The customer approved this estimate."
+              : (d as any).estimate_decline_reason ? "The customer declined this estimate."
+              : "The customer can approve it from their tracking link."}</span>
           </div>
         )}
+        {isEst && <EstimateTerms orderId={order.id} d={d as any} onChanged={() => { reload(); onChanged?.(); }} onFlash={flash} />}
 
         {/* Tabs */}
         <nav className="px-4 sm:px-6 border-b border-slate-200/80 flex space-x-6 text-xs font-medium bg-white flex-shrink-0 overflow-x-auto whitespace-nowrap">
@@ -492,8 +527,16 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-clay-sm space-y-4">
                 <h4 className="text-sm font-semibold text-ink-primary">Job details</h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <Ro label="Job type"><Sel value={d.is_estimate ? "Estimate" : "Hardware Repair"} opts={["Hardware Repair", "Diagnostics", "Warranty", "Maintenance", "Estimate"]} /></Ro>
-                  <Ro label="Priority"><Sel value={(d.priority ?? 0) >= 2 ? "Urgent, same day" : urgent ? "High" : "Normal"} opts={["Normal", "High", "Urgent, same day"]} red={urgent} /></Ro>
+                  <Ro label="Job type">
+                    {types.length ? (
+                      <Pick label="Job type" value={(d as any).type_id || ""} onChange={changeType}
+                        opts={[...((d as any).type_id ? [] : [{ value: "", label: "No job type" }]), ...types.map((t) => ({ value: t.id, label: t.name }))]} />
+                    ) : <Sel value={(d as any).type_name || (d.is_estimate ? "Estimate" : "No job types set up")} />}
+                  </Ro>
+                  <Ro label="Priority">
+                    <Pick label="Priority" value={String(Math.min(d.priority ?? 0, 2))} onChange={(v) => changePriority(Number(v))} red={urgent}
+                      opts={[{ value: "0", label: "Normal" }, { value: "1", label: "High" }, { value: "2", label: "Urgent, same day" }]} />
+                  </Ro>
                   <Ro label="Manager"><SelEmp label="Manager" value={d.manager?.id || ""} emps={emps.filter((e) => e.in_managers !== false || e.id === d.manager?.id)} onChange={(id) => reassign("manager_id", id)} /></Ro>
                   <Ro label="Technician"><SelEmp label="Technician" value={d.assigned_to?.id || ""} emps={emps.filter((e) => e.in_assignees !== false || e.id === d.assigned_to?.id)} onChange={(id) => reassign("assigned_to_id", id)} /></Ro>
                   <Ro label="Time on this job">
@@ -544,6 +587,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               )}
               <LinkedJobs orderId={order.id} />
               <JobItems orderId={order.id} onFlash={flash} onChanged={reload} />
+
+              <JobTasks orderId={order.id} emps={emps} onFlash={flash} />
 
               <IntakePhotos orderId={order.id} photos={d.intake_photos} onChanged={reload} onFlash={flash} />
 
@@ -868,8 +913,19 @@ function ItemComplaint({ value, readOnly, onSave }: { value: string; readOnly: b
 function Ro({ label, children }: { label: string; children: React.ReactNode }) {
   return <div><label className="block text-xs font-medium text-ink-secondary mb-1.5">{label}</label>{children}</div>;
 }
-// Read-only display of a work-order attribute. (These were <select>s with no onChange — they
-// never persisted — so they're rendered as static fields to avoid implying they're editable.)
+// J6 — a work-order attribute picker that saves on change.
+function Pick({ value, opts, onChange, label, red }: { value: string; opts: { value: string; label: string }[]; onChange: (v: string) => void; label: string; red?: boolean }) {
+  return (
+    <div className="relative">
+      <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={label}
+        className={`glass-input w-full py-2 px-3 pr-8 text-xs rounded-xl appearance-none ${red ? "font-semibold text-rose-700" : "font-medium text-ink-primary"}`}>
+        {opts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+      <M n="expand_more" c="absolute right-2.5 top-2.5 text-ink-tertiary pointer-events-none text-sm" />
+    </div>
+  );
+}
+// Read-only display of a work-order attribute.
 function Sel({ value, red }: { value: string; opts?: string[]; red?: boolean }) {
   return (
     <div className={`w-full py-2 px-3 text-xs rounded-xl border flex items-center gap-2 ${red ? "font-semibold text-rose-700 bg-rose-50/60 border-rose-200" : "font-medium text-ink-primary bg-slate-50 border-slate-200"}`}>{red && <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />}{value}</div>
