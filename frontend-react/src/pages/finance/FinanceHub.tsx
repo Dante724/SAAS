@@ -13,6 +13,7 @@ import { useMe } from "../../context/Me";
 import CashPanel from "../cash/CashPanel";
 import VoidableList from "../../components/VoidableList";
 import PayrollCalcPanel from "./PayrollCalcPanel";
+import { loadFailed } from "../../lib/notice";
 
 type Tab = "cashboxes" | "overview" | "pnl" | "reconcile" | "balances" | "refunds" | "payroll";
 type Account = { id: string; name?: string; balance?: number; payment_option?: string; is_virtual?: boolean };
@@ -91,7 +92,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
       setPayingId(id);
       await api.post(`/payroll/runs/${id}/pay`, { account_id: acct.id });
       loadRuns();
-      api.get<any>("/cash/summary").then(setCash).catch(() => {});
+      api.get<any>("/cash/summary").then(setCash).catch(loadFailed("the cash summary"));
     } catch (e: any) { await alertDialog(`Could not mark paid: ${e.message}`); } finally { payingRef.current = false; setPayingId(null); }
   }
   async function voidRun(id: string) {
@@ -103,7 +104,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
       setPayingId(id);
       await api.post(`/payroll/runs/${id}/void`, { reason: reason.trim() });
       loadRuns();
-      api.get<any>("/cash/summary").then(setCash).catch(() => {});
+      api.get<any>("/cash/summary").then(setCash).catch(loadFailed("the cash summary"));
     } catch (e: any) { await alertDialog(`Could not void the run: ${e.message}`); } finally { payingRef.current = false; setPayingId(null); }
   }
 

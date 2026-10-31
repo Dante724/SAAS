@@ -32,7 +32,8 @@ async def names_by_id(db, id_col, name_col, ids: Iterable, *, org_col=None, org_
 
 async def rows_by(db, model, fk_col, ids: Iterable, *order_by) -> dict:
     """{parent_id: [child rows]} for every parent in `ids`, in one query per chunk.
-    Parents with no children are simply missing — use `.get(pid, [])`."""
+    Parents with no children are simply missing — use `.get(pid, [])`. There is no shop filter
+    here: `ids` must come from parent rows the caller already scoped to the shop."""
     want = _ids(ids)
     out: dict = defaultdict(list)
     for i in range(0, len(want), _CHUNK):

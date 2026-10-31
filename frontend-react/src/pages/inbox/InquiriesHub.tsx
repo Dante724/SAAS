@@ -6,6 +6,7 @@ import Pager from "../../components/Pager";
 import InquiryDrawer from "./InquiryDrawer";
 import InquiryFields from "./InquiryFields";
 import { callsLabel, channelLabel, deviceLine, fmt, newIdempotencyKey, sla, SRC_ICON, type Column, type Lead, type LeadType } from "./inquiries";
+import { clickableRow } from "../../lib/clickable";
 
 const COL_ACCENT: Record<string, string> = { new: "bg-blue-500", in_progress: "bg-amber-500", won: "bg-emerald-500", lost: "bg-slate-400" };
 const STATUS_LABEL: Record<string, string> = { new: "New", in_progress: "In progress", won: "Won", lost: "Lost" };
@@ -18,7 +19,7 @@ export function TypesManager({ types, onClose, onChanged }: { types: LeadType[];
   const act = async (fn: () => Promise<any>) => { try { setErr(null); await fn(); onChanged(); } catch (e: any) { setErr(e.message); } };
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div role="dialog" aria-label="Inquiry types" className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-md p-5 space-y-4 text-xs">
         <div className="flex items-center justify-between"><h3 className="text-sm font-bold text-ink-primary">Inquiry types</h3>
           <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
@@ -122,7 +123,7 @@ export default function InquiriesHub() {
                 <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
                   {allLeads.length === 0 && <tr><td colSpan={7} className="py-8 px-4 text-ink-tertiary text-center">No inquiries.</td></tr>}
                   {pageLeads.map((l) => (
-                    <tr key={l.id} onClick={() => setSel(l)} className="hover:bg-blue-50/30 cursor-pointer">
+                    <tr key={l.id} {...clickableRow(() => setSel(l))} className="hover:bg-blue-50/30 cursor-pointer">
                       <td className="py-3 px-4 font-bold text-ink-primary">{l.name || "Inquiry"}{l.lead_type && <span className="block text-[11px] font-semibold text-ink-tertiary">{l.lead_type}</span>}</td>
                       <td className="py-3 px-4"><span className="inline-flex items-center gap-1.5"><M n={SRC_ICON[l.source || "other"] || "help"} c="text-xs text-primary" />{channelLabel(l.source)}</span></td>
                       <td className="py-3 px-4">{deviceLine(l) || "—"}</td>
@@ -178,7 +179,7 @@ export default function InquiriesHub() {
 
       {create && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 55 }}>
-          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={() => setCreate(false)} />
+          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setCreate(false)} />
           <div role="dialog" aria-label="New inquiry" className="relative h-full w-full max-w-[460px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90">
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70"><h3 className="text-base font-bold text-ink-primary">New inquiry</h3><button aria-label="Close" onClick={() => setCreate(false)} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
             <div className="flex-1 overflow-y-auto p-6"><InquiryFields value={cf} onChange={setCf} types={types} creating showSla /></div>

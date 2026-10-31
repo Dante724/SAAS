@@ -1060,7 +1060,8 @@ async def client_communication(
             InboxMessage.thread_id.in_(list(tmap.keys())))
             .order_by(InboxMessage.created_at.desc()).limit(200))).scalars().all()
     from backend.services.batching import names_by_id
-    names = await names_by_id(db, Emp.id, Emp.name, [m.author_id for m in msgs])
+    names = await names_by_id(db, Emp.id, Emp.name, [m.author_id for m in msgs],
+                              org_col=Emp.org_id, org_id=current.org_id)
     items = [{
         "id": m.id, "channel": tmap[m.thread_id].channel if m.thread_id in tmap else None,
         "direction": m.direction, "body": m.body,
@@ -1076,7 +1077,8 @@ async def client_communication(
             ChatMessage.thread_id.in_(list(chats)), ChatMessage.status != "system")
             .order_by(ChatMessage.created_at.desc()).limit(200))).scalars().all()
         names.update(await names_by_id(db, Emp.id, Emp.name,
-                                       {m.author_id for m in cmsgs if m.author_id} - set(names)))
+                                       {m.author_id for m in cmsgs if m.author_id} - set(names),
+                                       org_col=Emp.org_id, org_id=current.org_id))
         items += [{"id": m.id, "channel": chats.get(m.thread_id),
                    "direction": "inbound" if m.direction == "in" else "outbound", "body": m.body,
                    "author": names.get(m.author_id), "delivered": m.status != "failed",

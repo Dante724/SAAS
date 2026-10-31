@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Calendar, ChevronLeft, ChevronRight, Clock } from "lucide-react";
 
 /**
  * Glass-clay date / time / datetime field. Drop-in replacement for the native
@@ -118,7 +119,7 @@ export default function DateField({
         className={`glass-input rounded-lg px-3 py-2 text-sm w-full flex items-center justify-between gap-2 text-left disabled:opacity-50 disabled:cursor-not-allowed ${empty ? "text-ink-tertiary" : "text-ink-primary font-semibold"}`}
       >
         <span className="truncate">{label}</span>
-        <span className="material-symbols-outlined text-base text-primary shrink-0">{mode === "time" ? "schedule" : "calendar_month"}</span>
+        {mode === "time" ? <Clock size={16} className="text-primary shrink-0" aria-hidden /> : <Calendar size={16} className="text-primary shrink-0" aria-hidden />}
       </button>
 
       {open && (
@@ -126,12 +127,12 @@ export default function DateField({
           {showCal && (
             <>
               <div className="flex items-center justify-between mb-1">
-                <button type="button" onClick={() => setView((v) => { const m = v.m - 1; return m < 0 ? { y: v.y - 1, m: 11 } : { y: v.y, m }; })} className="w-6 h-6 grid place-items-center rounded-md hover:bg-slate-100 text-ink-secondary">
-                  <span className="material-symbols-outlined text-sm">chevron_left</span>
+                <button type="button" onClick={() => setView((v) => { const m = v.m - 1; return m < 0 ? { y: v.y - 1, m: 11 } : { y: v.y, m }; })} aria-label="Previous month" className="w-6 h-6 grid place-items-center rounded-md hover:bg-slate-100 text-ink-secondary">
+                  <ChevronLeft size={14} aria-hidden />
                 </button>
                 <span className="text-xs font-bold text-ink-primary">{MONTHS[view.m]} {view.y}</span>
-                <button type="button" onClick={() => setView((v) => { const m = v.m + 1; return m > 11 ? { y: v.y + 1, m: 0 } : { y: v.y, m }; })} className="w-6 h-6 grid place-items-center rounded-md hover:bg-slate-100 text-ink-secondary">
-                  <span className="material-symbols-outlined text-sm">chevron_right</span>
+                <button type="button" onClick={() => setView((v) => { const m = v.m + 1; return m > 11 ? { y: v.y + 1, m: 0 } : { y: v.y, m }; })} aria-label="Next month" className="w-6 h-6 grid place-items-center rounded-md hover:bg-slate-100 text-ink-secondary">
+                  <ChevronRight size={14} aria-hidden />
                 </button>
               </div>
               <div className="grid grid-cols-7 gap-px mb-0.5">
@@ -162,7 +163,7 @@ export default function DateField({
 
           {showTime && (
             <div className={`flex items-center gap-1.5 ${showCal ? "mt-2 pt-2 border-t border-slate-100" : ""}`}>
-              <span className="material-symbols-outlined text-sm text-ink-tertiary">schedule</span>
+              <Clock size={14} className="text-ink-tertiary shrink-0" aria-hidden />
               <select value={th ?? "09"} onChange={(e) => pickTime(`${e.target.value}:${tm ?? "00"}`)} className="glass-input rounded-md px-1.5 py-1 text-xs font-semibold text-ink-primary">
                 {Array.from({ length: 24 }, (_, h) => <option key={h} value={pad(h)}>{pad(h)}</option>)}
               </select>

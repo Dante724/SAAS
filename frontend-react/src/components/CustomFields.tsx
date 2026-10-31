@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { promptDialog } from "../lib/dialog";
+import { loadFailed } from "../lib/notice";
 
 // Renders org-configured custom fields (Settings → Forms) into any form, reading/
 // writing the record's custom_data. Backend resolve_custom_data enforces required +
@@ -46,7 +47,7 @@ export default function CustomFields({ entity, typeId, value, onChange, creating
     api.get<{ items: Field[] }>(url).then((r) => setFields(r.items || [])).catch(() => setFields([]));
   }, [entity, typeId]);
   const fetchDir = (k: string) => api.get<{ items: DItem[] }>(`/directories/by-key/${k}/items`)
-    .then((r) => setDirItems((s) => ({ ...s, [k]: r.items || [] }))).catch(() => {});
+    .then((r) => setDirItems((s) => ({ ...s, [k]: r.items || [] }))).catch(loadFailed("lists"));
   // 144hi — pull items for any directory-bound select/multiselect
   useEffect(() => {
     Array.from(new Set(fields.map((f) => f.directory_key).filter(Boolean) as string[]))
@@ -88,7 +89,7 @@ export default function CustomFields({ entity, typeId, value, onChange, creating
       let changed = false;
       for (const k of Object.keys(vals)) { if (cur[k] === undefined || cur[k] === "" || cur[k] === null) { merged[k] = vals[k]; changed = true; } }
       if (changed) onChange(merged);
-    }).catch(() => {});
+    }).catch(() => { /* silent: autofill is only a suggestion */ });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entity, typeId, creating, autofillCtx?.device_id, autofillCtx?.client_id]);
   const shown = only ? fields.filter((f) => only.includes(f.id)) : fields;

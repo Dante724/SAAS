@@ -10,6 +10,7 @@ import { confirmDialog } from "../../lib/dialog";
 import { btnGhost, btnPrimary, inputCls, labelCls } from "../invoices/billing";
 import ModePill from "./ModePill";
 import MissedCallSettings from "./MissedCallSettings";
+import { saveFailed } from "../../lib/notice";
 
 const lbl = labelCls;
 const field = `${inputCls} text-ink-primary disabled:opacity-60`;
@@ -48,7 +49,7 @@ function CopyRow({ label, value }: { label: string; value: string }) {
       <div className={lbl}>{label}</div>
       <div className="flex items-center gap-2 min-w-0">
         <code className="flex-1 min-w-0 truncate rounded-lg bg-slate-50 border border-slate-200 px-2.5 py-2 text-xs text-ink-secondary">{value}</code>
-        <button type="button" aria-label={`Copy ${label}`} className="w-9 h-9 flex-shrink-0 rounded-lg border border-slate-200 bg-white grid place-items-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-50" onClick={() => { navigator.clipboard?.writeText(value).then(() => { setDone(true); setTimeout(() => setDone(false), 1500); }).catch(() => {}); }}>
+        <button type="button" aria-label={`Copy ${label}`} className="w-9 h-9 flex-shrink-0 rounded-lg border border-slate-200 bg-white grid place-items-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-50" onClick={() => { navigator.clipboard?.writeText(value).then(() => { setDone(true); setTimeout(() => setDone(false), 1500); }).catch(saveFailed("copy it")); }}>
           <M n={done ? "check" : "content_copy"} c="text-sm" />
         </button>
       </div>

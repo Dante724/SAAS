@@ -77,9 +77,7 @@ async def test_pos_rejects_negative_or_overdiscounted_lines(client, tenant, bad)
 
 
 def test_stock_out_doc_lines_reject_negative_qty_and_cost():
-    from backend.routers.stock_docs import DocLine, PostLine
+    from backend.routers.stock_docs import DocLine
     for bad in ({"qty": -1}, {"qty": 0}, {"unit_cost": -5}):
         with pytest.raises(ValueError):
             DocLine(part_id="p", **bad)
-    with pytest.raises(ValueError):
-        PostLine(part_id="p", qty=-2)

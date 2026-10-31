@@ -183,7 +183,6 @@ PUT /api/prefs/{pref_key} [staff]
 # pricing
 POST /api/pricing/margin-check [staff]
 # print
-POST /api/print/labels [staff]
 # push
 POST /api/push/subscribe [staff]
 POST /api/push/unsubscribe [staff]

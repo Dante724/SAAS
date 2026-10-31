@@ -6,6 +6,7 @@ import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import { Avatar } from "../orders/look";
 import { hueText, tint } from "../../lib/tint";
+import { clickableRow } from "../../lib/clickable";
 
 export type ChatStatus = "new" | "reply_needed" | "replied" | "completed";
 type Thread = { id: string; channel?: string; contact_phone?: string; contact_name?: string; client_name?: string; last_body?: string; last_message_at?: string; order_id?: string | null; status?: ChatStatus; is_spam?: boolean };
@@ -164,7 +165,7 @@ export default function ChatsHub() {
                 {shown.map((t) => {
                   const waiting = !t.is_spam && t.status === "reply_needed";
                   return (
-                    <tr key={t.id} onClick={() => { setLayout("split"); open(t); }} className="hover:bg-slate-50 cursor-pointer">
+                    <tr key={t.id} {...clickableRow(() => { setLayout("split"); open(t); })} className="hover:bg-slate-50 cursor-pointer">
                       <td className="py-2.5 px-4 relative">
                         {waiting && <span aria-hidden className="absolute left-0 top-2 bottom-2 w-0.5 rounded-full" style={{ background: STATUS.reply_needed.hue }} />}
                         <span className="flex items-center gap-2.5"><Avatar name={nameOf(t)} size={26} /><span className={`text-ink-primary ${waiting ? "font-semibold" : "font-medium"}`}>{nameOf(t)}</span></span>
@@ -249,7 +250,7 @@ export default function ChatsHub() {
                       <>
                         <button onClick={() => { setConvMenu((v) => !v); setMore(false); }} aria-expanded={convMenu} className="h-9 px-3.5 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container flex items-center gap-1.5"><M n="add" c="text-sm" />Create<M n="expand_more" c="text-sm" /></button>
                         {convMenu && (<>
-                          <div className="fixed inset-0 z-10" onClick={() => setConvMenu(false)} />
+                          <div className="fixed inset-0 z-10" aria-hidden="true" onClick={() => setConvMenu(false)} />
                           <div className="absolute top-full right-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-menu p-1 w-48 z-20">
                             <button onClick={() => convert("order")} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-50 text-xs font-medium text-ink-primary"><M n="handyman" c="text-sm text-ink-tertiary" />Work order</button>
                             <button onClick={() => convert("estimate")} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-50 text-xs font-medium text-ink-primary"><M n="request_quote" c="text-sm text-ink-tertiary" />Estimate</button>
@@ -263,7 +264,7 @@ export default function ChatsHub() {
                     <div className="relative">
                       <button onClick={() => { setMore((v) => !v); setConvMenu(false); }} aria-label="More actions" aria-expanded={more} className="w-9 h-9 rounded-lg grid place-items-center text-ink-secondary border border-slate-200 bg-white hover:bg-slate-50 hover:text-ink-primary"><M n="more_vert" c="text-base" /></button>
                       {more && (<>
-                        <div className="fixed inset-0 z-10" onClick={() => setMore(false)} />
+                        <div className="fixed inset-0 z-10" aria-hidden="true" onClick={() => setMore(false)} />
                         <div className="absolute top-full right-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-menu p-1 w-56 z-20">
                           <label className="block px-2.5 pt-2 pb-1 text-xs font-medium text-ink-tertiary" htmlFor="chat-status">Status</label>
                           <div className="px-2.5 pb-2">

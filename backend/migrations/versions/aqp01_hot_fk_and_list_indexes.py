@@ -6,6 +6,7 @@
 - (org_id, created_at) on postings, write_offs, client_returns and refunds: their lists read
   "this shop, newest first, limit 200".
 
+On Postgres they are built CONCURRENTLY so writes aren't blocked during the deploy.
 Index names follow the metadata naming convention (ix_<table>_<column>), matching what the
 models declare, so the model<->migration drift gate stays clean.
 
@@ -33,15 +34,30 @@ INDEXES = [
 COMPOSITES = ["postings", "write_offs", "client_returns", "refunds"]
 
 
-def upgrade() -> None:
+def _all():
     for table, col in INDEXES:
-        op.create_index(f"ix_{table}_{col}", table, [col])
+        yield f"ix_{table}_{col}", table, f"({col})"
     for table in COMPOSITES:
-        op.create_index(f"ix_{table}_org_id_created_at", table, ["org_id", "created_at"])
+        yield f"ix_{table}_org_id_created_at", table, "(org_id, created_at)"
+
+
+def upgrade() -> None:
+    if op.get_bind().dialect.name == "postgresql":
+        # CONCURRENTLY: busy tables keep taking writes while the index builds (as ix144dh01).
+        # IF NOT EXISTS makes a half-finished run safe to retry.
+        with op.get_context().autocommit_block():
+            for name, table, cols in _all():
+                op.execute(f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON {table} {cols}")
+    else:
+        for name, table, cols in _all():
+            op.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {table} {cols}")
 
 
 def downgrade() -> None:
-    for table in reversed(COMPOSITES):
-        op.drop_index(f"ix_{table}_org_id_created_at", table_name=table)
-    for table, col in reversed(INDEXES):
-        op.drop_index(f"ix_{table}_{col}", table_name=table)
+    if op.get_bind().dialect.name == "postgresql":
+        with op.get_context().autocommit_block():
+            for name, _table, _cols in reversed(list(_all())):
+                op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
+    else:
+        for name, _table, _cols in reversed(list(_all())):
+            op.execute(f"DROP INDEX IF EXISTS {name}")

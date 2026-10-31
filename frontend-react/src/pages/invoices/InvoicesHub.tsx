@@ -15,6 +15,8 @@ import InvoiceDrawer from "./InvoiceDrawer";
 import CreditNotesList from "./CreditNotesList";
 import { Avatar } from "../orders/look";
 import { DISPLAY_MODES, Drawer, ErrorNote, MoreMenu, StatusPill, btnGhost, btnPrimary, daysLate, fmtDate, inputCls, labelCls, lateText, type MenuItem } from "./billing";
+import { loadFailed } from "../../lib/notice";
+import { clickableRow } from "../../lib/clickable";
 
 // Invoices are day-to-day front-desk work (issue, take payment, resend), so they get their own
 // page next to Sales instead of a tab inside Finance — which also kept staff who only need
@@ -142,7 +144,7 @@ export default function InvoicesHub() {
                   const late = daysLate(i);
                   const owed = (i.balance_due || 0) > 0;
                   return (
-                    <tr key={i.id} onClick={() => setOpenInv(i.id)} className={`hover:bg-slate-50/80 cursor-pointer ${invSel.has(i.id) ? "bg-primary/5" : ""}`}>
+                    <tr key={i.id} {...clickableRow(() => setOpenInv(i.id))} className={`hover:bg-slate-50/80 cursor-pointer ${invSel.has(i.id) ? "bg-primary/5" : ""}`}>
                       <td className="py-2.5 pl-4 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label="Select row" checked={invSel.has(i.id)} onChange={() => setInvSel((s) => { const n = new Set(s); n.has(i.id) ? n.delete(i.id) : n.add(i.id); return n; })} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
                       <td className="py-2.5 px-4 font-mono font-semibold text-primary whitespace-nowrap"><button onClick={(e) => { e.stopPropagation(); setOpenInv(i.id); }} className="hover:underline">{i.invoice_number}</button></td>
                       <td className="py-2.5 px-4">{i.client_name
@@ -199,8 +201,8 @@ function NewInvoiceDrawer({ onClose, onCreated }: { onClose: () => void; onCreat
   const [discount, setDiscount] = useState(0); const [tax, setTax] = useState(0); // percentages, per backend InvoiceIn
   const [mode, setMode] = useState("detailed");   // starts at the shop's default (Settings › Finance)
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { api.get<{ items: any[] }>("/clients?limit=200").then((r) => setClients(r.items || [])).catch(() => {}); }, []);
-  useEffect(() => { api.get<any>("/staff/company").then((c) => { if (c?.default_invoice_display) setMode(c.default_invoice_display); }).catch(() => {}); }, []);
+  useEffect(() => { api.get<{ items: any[] }>("/clients?limit=200").then((r) => setClients(r.items || [])).catch(loadFailed("clients")); }, []);
+  useEffect(() => { api.get<any>("/staff/company").then((c) => { if (c?.default_invoice_display) setMode(c.default_invoice_display); }).catch(() => { /* silent: defaults to the standard layout */ }); }, []);
   const setLine = (i: number, k: string, v: any) => setLines(lines.map((l, j) => j === i ? { ...l, [k]: v } : l));
   const subtotal = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unit_price) || 0), 0);
   const discountAmt = +(subtotal * (Number(discount) || 0) / 100).toFixed(2);

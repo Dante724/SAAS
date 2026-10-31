@@ -57,7 +57,7 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
 
   const load = () => api.get<any>(`/orders/${orderId}/recommendations`).then((r) => setRecs(r.items || [])).catch(() => setRecs([]));
   useEffect(() => { load(); }, [orderId]);  // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { api.get<any>("/staff/public-pages").then((c) => setEnabled(c?.oe_allow_recommend !== false)).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/staff/public-pages").then((c) => setEnabled(c?.oe_allow_recommend !== false)).catch(() => { /* silent: defaults to enabled */ }); }, []);
 
   async function call(fn: () => Promise<unknown>, ok?: string) {
     setBusy(true);

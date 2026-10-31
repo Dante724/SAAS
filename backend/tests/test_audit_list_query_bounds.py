@@ -81,6 +81,7 @@ async def _assert_flat(client, db, h, url, seed, *, few=2, more=6, rows=None):
     await seed(few)
     await client.get(url, headers=h)            # warm up one-off lazy seeding (statuses, numbering)
     n_few, body_few = await _queries(client, db, url, h)
+    assert n_few > 0, "the counter isn't attached to the engine the app uses"
     await seed(more)
     n_many, body_many = await _queries(client, db, url, h)
     if rows:
@@ -262,9 +263,12 @@ async def test_payroll_calculation_sums_every_employee_in_one_query(client, tena
                          wage_type="fixed", wage_value=100)
             db.add(e)
             await db.flush()
-            for kind, amount in (("commission", 10), ("hourly_wage", 5), ("bonus", 3), ("penalty", -2)):
+            for kind, amount, ref in (("commission", 12, "order"), ("clawback", -2, "refund"),
+                                      ("hourly_wage", 5, "timesheet"), ("bonus", 3, "manual"),
+                                      ("penalty", -2, "manual"),
+                                      ("bonus", 50, "rule")):      # not manual: not on this page
                 db.add(EmployeeBalanceLedger(org_id=org, employee_id=e.id, entry_type=kind,
-                                             amount=amount, ref_type="manual"))
+                                             amount=amount, ref_type=ref))
         await db.commit()
 
     url = f"/api/payroll/calculation?month={month}"
@@ -346,7 +350,7 @@ async def test_reservations_feedback_calls_types_and_duplicates_are_flat(client,
 
 @pytest.mark.asyncio
 async def test_order_checklists_list_is_flat(client, tenant, db):
-    org, loc, emp = await _ctx(client, tenant)
+    org, loc, _ = await _ctx(client, tenant)
     o = _order(org, loc)
     db.add(o)
     await db.flush()
@@ -355,7 +359,10 @@ async def test_order_checklists_list_is_flat(client, tenant, db):
 
     async def seed(n):
         for _ in range(n):
-            cl = OrderChecklist(org_id=org, order_id=oid, title=f"CL {_u()}", author_id=emp)
+            author = Employee(org_id=org, name=f"A {_u()}", email=f"{_u()}@t.dev", password_hash="x")
+            db.add(author)
+            await db.flush()
+            cl = OrderChecklist(org_id=org, order_id=oid, title=f"CL {_u()}", author_id=author.id)
             db.add(cl)
             await db.flush()
             db.add_all([OrderChecklistItem(org_id=org, order_id=oid, checklist_id=cl.id, label=f"i{k}")
@@ -363,3 +370,22 @@ async def test_order_checklists_list_is_flat(client, tenant, db):
         await db.commit()
 
     await _assert_flat(client, db, tenant, f"/api/orders/{oid}/checklists", seed, rows=_items)
+    items = (await client.get(f"/api/orders/{oid}/checklists", headers=tenant)).json()["items"]
+    assert all(i["author"].startswith("A ") for i in items)
+
+
+@pytest.mark.asyncio
+async def test_low_stock_report_sums_stock_in_sql(client, tenant, db):
+    org, loc, _ = await _ctx(client, tenant)
+    low = Part(org_id=org, name="Low", min_stock=3)
+    ok = Part(org_id=org, name="Ok", min_stock=2)
+    empty = Part(org_id=org, name="Empty", min_stock=1)
+    db.add_all([low, ok, empty])
+    await db.flush()
+    db.add_all([StockLevel(part_id=low.id, location_id=loc, qty_available=1),
+                StockLevel(part_id=ok.id, location_id=loc, qty_available=5)])
+    await db.commit()
+    body = (await client.get("/api/reports/inventory/low-stock", headers=tenant)).json()
+    got = {i["name"]: (i["qty"], i["min_stock"]) for i in body["items"]}
+    assert got["Low"] == (1, 3) and got["Empty"] == (0, 1) and "Ok" not in got
+    assert body["count"] == len(body["items"])

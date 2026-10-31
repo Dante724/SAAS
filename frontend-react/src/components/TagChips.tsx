@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
+import { loadFailed } from "../lib/notice";
 
 export type Tag = { id: string; name: string; color: string };
 
@@ -18,7 +19,7 @@ export default function TagChips({ entityType, entityId, className = "" }:
       .then((r) => setMine(r.items || [])).catch(() => setMine([]));
   };
   useEffect(load, [entityType, entityId]);
-  useEffect(() => { api.get<{ items: Tag[] }>("/tags").then((r) => setAll(r.items || [])).catch(() => {}); }, []);
+  useEffect(() => { api.get<{ items: Tag[] }>("/tags").then((r) => setAll(r.items || [])).catch(loadFailed("tags")); }, []);
   useEffect(() => {
     const h = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
     document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h);

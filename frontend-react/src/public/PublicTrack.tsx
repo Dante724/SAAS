@@ -713,7 +713,7 @@ function ReviewSheet({ items, sym, total, accent, onAccent, defaultName, onClose
   const [busy, setBusy] = useState(false);
   const sum = items.reduce((a, x) => a + x.line_total, 0);
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 sm:p-4" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 sm:p-4" role="presentation" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div role="dialog" aria-label="Confirm your choices" className="w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl bg-white p-6" style={{ paddingBottom: "max(24px, env(safe-area-inset-bottom))" }}>
         <div className="flex items-center justify-between">
           <h2 className="text-[17px] font-semibold text-ink-primary">Add to your repair</h2>
@@ -767,7 +767,7 @@ function SignModal({ accent, onAccent, onClose, onDone }: { accent: string; onAc
   }
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" role="presentation" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5">
         <div className="mb-3 flex items-center justify-between">
           <span className="text-[17px] font-semibold text-ink-primary">Approve and sign</span>
