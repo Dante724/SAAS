@@ -2,6 +2,7 @@
 Event feed — polymorphic timeline for work orders and client profiles.
 Handles comments, photos, signatures, file attachments, and system events.
 """
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,6 +22,17 @@ VALID_ENTITIES = {"order", "client", "lead"}
 VALID_ITEMS = {"comment", "photo", "signature", "file"}
 PROTECTED_ITEMS = {"system", "status", "signature", "client_message"}
 MAX_MEDIA_CHARS = 8_000_000  # ~6 MB base64 ceiling for the demo
+
+
+_MEDIA_RE = re.compile(r"^data:([a-z0-9.+-]+/[a-z0-9.+-]+)(;[a-z0-9=._-]+)*;base64,", re.I)
+_MEDIA_BLOCKED = {"text/html", "application/xhtml+xml", "image/svg+xml", "text/xml", "application/xml",
+                  "text/javascript", "application/javascript", "application/ecmascript", "text/ecmascript"}
+
+
+def _safe_media(value: str) -> bool:
+    """An inline file: a base64 data: URL of a type that can't run script when opened."""
+    m = _MEDIA_RE.match(value.strip())
+    return bool(m) and m.group(1).lower() not in _MEDIA_BLOCKED
 
 
 class FeedItemIn(BaseModel):
@@ -139,6 +151,10 @@ async def create_feed_item(
         raise HTTPException(400, "Media payload is required")
     if data.media_data and len(data.media_data) > MAX_MEDIA_CHARS:
         raise HTTPException(413, "Attachment too large (max ~6 MB)")
+    if data.media_data and not _safe_media(data.media_data):
+        # Shown as a download link on the public tracking page: a javascript: or HTML/SVG value
+        # would run in the app's origin when clicked (audit 2026-10-29, M1).
+        raise HTTPException(422, "Attach a file (photo, PDF or document), not a link.")
 
     await _verify_entity(db, current.org_id, entity_type, entity_id, current)
 

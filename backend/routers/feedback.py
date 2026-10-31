@@ -68,7 +68,11 @@ async def save_settings(
     s.clarify_question = data.clarify_question
     s.bands = data.bands
     s.active = data.active
-    s.google_review_url = (data.google_review_url or "").strip() or None
+    url = (data.google_review_url or "").strip() or None
+    if url and not url.lower().startswith(("https://", "http://")):
+        # shown as a button on the customer's public page: never a javascript: link
+        raise HTTPException(422, "Enter a web address starting with https://")
+    s.google_review_url = url
     await db.commit()
     return {"ok": True}
 

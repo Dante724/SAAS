@@ -125,6 +125,8 @@ async def get_current_employee(
     employee, role = (row[0], row[1]) if row else (None, None)
     if employee is None or not employee.active:
         raise credentials_exception
+    # The flush-time tenant guard (db/tenancy.py) refuses writes to another shop's rows.
+    db.sync_session.info["tenant_org"] = employee.org_id
     # Remembered for response-level rules (cost redaction in main.py) without re-reading the token.
     request.state.employee_id = employee.id
     request.state.employee_role_id = employee.role_id

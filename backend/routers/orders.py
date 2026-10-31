@@ -3316,11 +3316,18 @@ async def _recalc_order(db, order):
     order.labour_total = labour + fees
     order.parts_total = parts
     total = labour + parts + fees
+    if total < 0:
+        # Discounts left behind after the work they paid for was removed: the job is worth 0, and
+        # labour + parts still add up to it (discount lines sit in labour_total).
+        order.labour_total = labour + fees - total
     # Item 3: optional whole-document rounding (nearest 0.05). Off by default.
     _org = (await db.execute(select(Organisation).where(Organisation.id == order.org_id))).scalar_one_or_none()
     if _org and getattr(_org, "rounding_enabled", False):
         total = q2(round(total / 0.05) * 0.05)
-    order.total = total
+    # Never below zero: discount lines (gift card, coupon, loyalty) left behind after the lines
+    # they paid for were removed made the total negative, which then read as an "overpayment" and
+    # could be refunded in cash (audit 2026-10-29, H5).
+    order.total = max(total, 0)   # (rounding can't push a 0 below zero; kept for clarity)
 
 
 def _all_codes():

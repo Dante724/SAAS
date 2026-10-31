@@ -108,6 +108,9 @@ async def get_api_principal(
     row.last_used_at = datetime.utcnow()
     await db.commit()
     scopes = {s.strip() for s in (row.scopes or "").split(",") if s.strip()}
+    # Same flush-time shop guard as signed-in staff (db/tenancy.py): an API write can't touch
+    # or point at another shop's rows.
+    db.sync_session.info["tenant_org"] = row.org_id
     return ApiPrincipal(org_id=row.org_id, key_id=row.id, scopes=scopes)
 
 
