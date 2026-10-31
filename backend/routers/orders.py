@@ -27,6 +27,7 @@ from backend.models import (
 from backend.services import industry as _ind
 from backend.services.auth import assert_perm, get_current_employee, has_perm, require_perm, record_scope
 from backend.services.numbering import next_number
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/orders", tags=["orders"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -308,7 +309,7 @@ def _serialize_order_scalars(o: Order) -> dict:
         "resource_id": o.resource_id,
         "barcode": o.barcode,
         "due_at": o.due_at.isoformat() if o.due_at else None,
-        "overdue_by_date": bool(o.due_at and not o.closed_at and o.due_at < datetime.utcnow()),
+        "overdue_by_date": bool(o.due_at and not o.closed_at and o.due_at < now_utc()),
         "status_entered_at": o.status_entered_at.isoformat() if o.status_entered_at else None,
         "is_estimate": o.is_estimate,
         "estimate_approved_at": o.estimate_approved_at.isoformat() if o.estimate_approved_at else None,
@@ -694,7 +695,7 @@ async def bulk_action(
                 invoice_number=await next_number(db, current.org_id, "invoice"),
                 org_id=current.org_id, order_id=o.id, client_id=o.client_id,
                 status="draft", subtotal=o.total or 0, total=o.total or 0,
-                issued_at=datetime.utcnow(),
+                issued_at=now_utc(),
             )
             db.add(inv)
             await log_system_event(db, current.org_id, "order", o.id,
@@ -719,7 +720,7 @@ async def bulk_action(
             inv = Invoice(
                 invoice_number=await next_number(db, current.org_id, "invoice"),
                 org_id=current.org_id, order_id=grp[0].id, client_id=client_id,
-                status="draft", subtotal=total, total=total, issued_at=datetime.utcnow())
+                status="draft", subtotal=total, total=total, issued_at=now_utc())
             db.add(inv)
             for o in grp:
                 await log_system_event(db, current.org_id, "order", o.id,
@@ -1134,7 +1135,7 @@ async def board(
         g = grp_of.get(st, "new")
         group_counts[g] = group_counts.get(g, 0) + n
 
-    now = datetime.utcnow()
+    now = now_utc()
     known = list(grp_of)
     cards_by_group = {g: [] for g in group_order}
     for g in group_order:
@@ -1275,7 +1276,7 @@ async def get_order(
         st = (await db.execute(select(OrderStatus).where(
             OrderStatus.org_id == current.org_id, OrderStatus.key == order.status,
             OrderStatus.is_estimate == bool(order.is_estimate)))).scalars().first()
-        mins = int((datetime.utcnow() - order.status_entered_at).total_seconds() // 60)
+        mins = int((now_utc() - order.status_entered_at).total_seconds() // 60)
         data["minutes_in_status"] = mins
         data["status_time_limit_min"] = st.time_limit_min if st else None
         data["status_sla_overdue"] = bool(st and st.time_limit_min and mins > st.time_limit_min)
@@ -1454,12 +1455,12 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     order.status = data.status
     if target and (target.status_group or "") == "dropped" and (data.reason or "").strip():
         order.cancel_reason = data.reason.strip()[:120]
-    order.status_entered_at = datetime.utcnow()
+    order.status_entered_at = now_utc()
     from backend.services.audit import record as _audit_sc
     await _audit_sc(db, org_id=current.org_id, actor_id=current.id, action="order.status_change",
                     entity_type="order", entity_id=order.id, diff={"status": [_prev_status, data.status]})   # for status time-limit tracking
     if is_closing:
-        order.closed_at = datetime.utcnow()
+        order.closed_at = now_utc()
         # Build 144dr — auto-draft an invoice on close (org opt-in). Never blocks
         # the status change if it fails.
         if not order.is_estimate:
@@ -1512,7 +1513,7 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         if not existing_inv:
             _inv = Invoice(invoice_number=await next_number(db, current.org_id, "invoice"), org_id=current.org_id,
                            order_id=order.id, client_id=order.client_id, status="draft",
-                           subtotal=order.total or 0, total=order.total or 0, issued_at=datetime.utcnow())
+                           subtotal=order.total or 0, total=order.total or 0, issued_at=now_utc())
             db.add(_inv)
             await log_system_event(db, current.org_id, "order", order.id, "Invoice auto-created on status change")
             # Build 144z: mirror the new invoice (and its customer) to QuickBooks if connected.
@@ -1871,7 +1872,7 @@ async def switch_type(
         cur = (await db.execute(select(OrderStatus).where(OrderStatus.org_id == current.org_id, OrderStatus.key == order.status))).scalars().first()
         if cur and cur.status_group == "new" and order.status != wot.initial_status:
             order.status = wot.initial_status
-            order.status_entered_at = datetime.utcnow()
+            order.status_entered_at = now_utc()
             remapped = wot.initial_status
             db.add(OrderStatusLog(order_id=order.id, from_status=cur.key, to_status=wot.initial_status,
                                   changed_by_id=current.id, note="Type switched"))
@@ -2043,7 +2044,6 @@ async def order_labor(
         raise HTTPException(404, "Order not found")
     entries = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == current.org_id, TimeEntry.order_id == order_id))).scalars().all()
-    from datetime import datetime as _dt
     # 144v: enrich with employee names + line label so the WO "Time & people" panel
     # can show who's on the job, on which line, and running vs total per person.
     emp_names = {e.id: e.name for e in (await db.execute(select(Employee).where(
@@ -2054,7 +2054,7 @@ async def order_labor(
     def _sec(e):  # live seconds for a still-running entry
         if e.ended_at:
             return int(e.duration_sec or 0)
-        return max(0, int((_dt.utcnow() - e.started_at).total_seconds())) if e.started_at else 0
+        return max(0, int((now_utc() - e.started_at).total_seconds())) if e.started_at else 0
 
     total = sum(_sec(e) for e in entries)
     running = any(e.ended_at is None for e in entries)
@@ -2477,7 +2477,7 @@ async def create_po_from_order(
         org_id=current.org_id, po_number=await next_number(db, current.org_id, "po"),
         source_order_id=order.id,
         status="ordered" if data.auto_send else "draft",
-        total=total, ordered_at=datetime.utcnow() if data.auto_send else None)
+        total=total, ordered_at=now_utc() if data.auto_send else None)
     db.add(po)
     await db.flush()
     for part_id, qty, cost, _desc in needed:
@@ -2536,7 +2536,7 @@ async def reserve_stock_for_order(
     existing = (await db.execute(select(StockReservation).where(
         StockReservation.org_id == current.org_id, StockReservation.order_id == order_id,
         StockReservation.released == False))).scalars().all()  # noqa: E712
-    now = datetime.utcnow()
+    now = now_utc()
     for r in existing:
         if r.expires_at and r.expires_at < now:
             continue
@@ -2592,7 +2592,7 @@ async def order_reservations(
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
-    now = datetime.utcnow()
+    now = now_utc()
     rows = (await db.execute(select(StockReservation).where(
         StockReservation.org_id == current.org_id, StockReservation.order_id == order_id,
         StockReservation.released == False))).scalars().all()  # noqa: E712
@@ -2700,7 +2700,7 @@ async def _archive_order(db, current, order_id, reason, do_refund):
 
     order.archived = True
     order.archive_reason = reason
-    order.archived_at = datetime.utcnow()
+    order.archived_at = now_utc()
     order.archived_by_id = current.id
     # Zero out any outstanding charge this order posted to the client ledger — an archived order
     # must not leave a phantom receivable (mirrors the reopen path: target charge = 0).
@@ -4252,7 +4252,7 @@ async def comeback_check(
         raise HTTPException(404, "Order not found")
     if not order.device_id:
         return {"is_comeback": False, "count": 0}
-    ref = order.created_at or datetime.utcnow()
+    ref = order.created_at or now_utc()
     window_start = ref - timedelta(days=45)
     priors = (await db.execute(
         select(Order).where(

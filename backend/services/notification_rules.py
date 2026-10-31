@@ -13,7 +13,7 @@ Delayed/reminder sends are written to NotificationLog with status='scheduled' an
 `send_at`. A worker tick (`run_due`) flushes the ones that have come due, so nothing
 depends on a long-lived in-process timer.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import func, select
@@ -28,6 +28,7 @@ from backend.models import (
     Order,
 )
 from backend.services.notifications import _adapter_for, channel_consented, notif_creds
+from backend.services.dates import now_utc
 
 
 async def _send(db, org_id, channel, *, recipient, subject, body):
@@ -175,7 +176,7 @@ async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
                    status_key: Optional[str] = None, now: Optional[datetime] = None) -> dict:
     """Run every matching rule for an order event. Immediate sends go out now;
     delayed / out-of-hours sends are queued with a due time."""
-    now = now or datetime.utcnow()
+    now = now or now_utc()
     rules = (await db.execute(select(NotificationRule).where(
         NotificationRule.org_id == org_id,
         NotificationRule.active == True))).scalars().all()  # noqa: E712
@@ -235,7 +236,7 @@ async def queue_reminders(db: AsyncSession, *, org_id: str,
     """For every `reminder` rule, queue a send for each order whose scheduled_for
     falls within the rule's lead time. Idempotent: an order already holding a
     scheduled/sent reminder for that rule is skipped."""
-    now = now or datetime.utcnow()
+    now = now or now_utc()
     rules = (await db.execute(select(NotificationRule).where(
         NotificationRule.org_id == org_id, NotificationRule.event == "reminder",
         NotificationRule.active == True))).scalars().all()  # noqa: E712
@@ -280,7 +281,7 @@ async def queue_reminders(db: AsyncSession, *, org_id: str,
 
 async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = None) -> dict:
     """Worker tick: dispatch every scheduled notification whose send_at has passed."""
-    now = now or datetime.utcnow()
+    now = now or now_utc()
     due = (await db.execute(select(NotificationLog).where(
         NotificationLog.org_id == org_id, NotificationLog.status == "scheduled",
         NotificationLog.send_at.isnot(None), NotificationLog.send_at <= now))).scalars().all()
@@ -318,7 +319,7 @@ async def evaluate_appointment(db: AsyncSession, *, org_id: str, appointment_id:
                            now: Optional[datetime] = None) -> dict:
     """Fire `module="appointment"` rules on create / status change. The appointment module
     was declared back in build 80 but nothing evaluated it — this closes that loop."""
-    now = now or datetime.utcnow()
+    now = now or now_utc()
     rules = (await db.execute(select(NotificationRule).where(
         NotificationRule.org_id == org_id, NotificationRule.module == "appointment",
         NotificationRule.event == event,
@@ -386,7 +387,7 @@ async def queue_appointment_reminders(db: AsyncSession, *, org_id: str,
                                   now: Optional[datetime] = None) -> int:
     """Appointment reminders: for each `reminder` appointment rule, queue a send for every
     appointment whose start is now inside the rule's lead time. Idempotent per rule+appointment."""
-    now = now or datetime.utcnow()
+    now = now or now_utc()
     rules = (await db.execute(select(NotificationRule).where(
         NotificationRule.org_id == org_id, NotificationRule.module == "appointment",
         NotificationRule.event == "reminder",
@@ -437,7 +438,7 @@ async def notify_staff_order(db: AsyncSession, *, org_id: str, order_id: str, ev
     """
     from backend.models import Employee as _Emp
     from backend.services import push as _push
-    now = now or datetime.utcnow()
+    now = now or now_utc()
     rules = (await db.execute(select(NotificationRule).where(
         NotificationRule.org_id == org_id, NotificationRule.module == "order",
         NotificationRule.scope == "staff", NotificationRule.event == event,
@@ -505,7 +506,7 @@ async def notify_contact_birthdays(db: AsyncSession, *, org_id: str,
     calendar year is skipped, so the daily sweep never double-greets.
     """
     from backend.models import Client, NotificationTemplate
-    now = now or datetime.utcnow()
+    now = now or now_utc()
     rules = (await db.execute(select(NotificationRule).where(
         NotificationRule.org_id == org_id, NotificationRule.module == "contact",
         NotificationRule.event == "birthday",
@@ -513,7 +514,9 @@ async def notify_contact_birthdays(db: AsyncSession, *, org_id: str,
     if not rules:
         return 0
 
-    today = f"{now.month:02d}-{now.day:02d}"
+    from backend.services.dates import shop_tzname, zone
+    local = now.replace(tzinfo=timezone.utc).astimezone(zone(await shop_tzname(db, org_id)))
+    today = f"{local.month:02d}-{local.day:02d}"   # the shop's calendar day, not UTC's
     clients = (await db.execute(select(Client).where(
         Client.org_id == org_id, Client.birthday.isnot(None),
         Client.blacklisted == False))).scalars().all()  # noqa: E712
@@ -601,7 +604,7 @@ async def notify_task(db: AsyncSession, *, org_id: str, task, event: str,
         return 0
 
     sent = 0
-    now = datetime.utcnow()
+    now = now_utc()
     for rule in rules:
         for emp_id in targets:
             emp = (await db.execute(select(_Emp).where(_Emp.id == emp_id))).scalar_one_or_none()

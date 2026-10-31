@@ -13,7 +13,7 @@ Missed calls (automation key ``lead_on_missed_call``, on unless a shop turns it 
 Push/log titles stay generic: names and numbers only go in the stored notification body.
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import HTTPException
@@ -35,6 +35,7 @@ from backend.models import (
     Shift,
     Task,
 )
+from backend.services.dates import now_utc
 
 log = logging.getLogger("tekly.leads")
 
@@ -61,7 +62,7 @@ async def own(db: AsyncSession, model, obj_id: Optional[str], org_id: str, what:
 
 
 def ser(l: Lead, *, order_number: Optional[str] = None, type_name: Optional[str] = None) -> dict:
-    overdue = bool(l.sla_due_at and l.status in OPEN and l.sla_due_at < datetime.utcnow())
+    overdue = bool(l.sla_due_at and l.status in OPEN and l.sla_due_at < now_utc())
     return {
         "id": l.id, "name": l.name, "phone": l.phone, "email": l.email, "source": l.source,
         "inquiry": l.inquiry, "status": l.status, "client_id": l.client_id,
@@ -149,7 +150,7 @@ async def create_lead(db: AsyncSession, org_id: str, data: dict, *, actor: Optio
                 lead_type_id=ltype.id if ltype else None,
                 device_brand=_clean(data.get("device_brand"), 100), device_model=_clean(data.get("device_model"), 100),
                 serial=_clean(data.get("serial"), 100), custom_data=custom,
-                idempotency_key=key, sla_due_at=datetime.utcnow() + timedelta(minutes=max(sla, 1)))
+                idempotency_key=key, sla_due_at=now_utc() + timedelta(minutes=max(sla, 1)))
     db.add(lead)
     try:
         await db.flush()
@@ -201,7 +202,7 @@ async def update_lead(db: AsyncSession, org_id: str, lead: Lead, payload: dict,
     if lead.status != before:
         who = actor.name if actor else "the API"
         await _feed(db, org_id, lead.id, f"Moved from {LABELS.get(before, before)} to {LABELS[lead.status]} by {who}")
-    lead.updated_at = datetime.utcnow()
+    lead.updated_at = now_utc()
     await _emit(db, org_id, "inquiry.updated", lead)
     await db.commit()
     await db.refresh(lead)
@@ -269,7 +270,7 @@ async def convert_lead(db: AsyncSession, org_id: str, lead: Lead, *, actor: Opti
                           note=f"Created from inquiry ({lead.source})"))
     lead.status = "won"
     lead.converted_order_id = order.id
-    lead.updated_at = datetime.utcnow()
+    lead.updated_at = now_utc()
     from backend.routers.feed import log_system_event
     await log_system_event(db, org_id, "order", order.id, f"Created from inquiry: {lead.name} ({lead.source})")
     await _feed(db, org_id, lead.id, f"Converted to {'estimate' if is_estimate else 'job'} {order.order_number}")
@@ -277,7 +278,7 @@ async def convert_lead(db: AsyncSession, org_id: str, lead: Lead, *, actor: Opti
     for t in (await db.execute(select(Task).where(Task.org_id == org_id, Task.lead_id == lead.id,
                                                   Task.status != "done"))).scalars().all():
         t.order_id = t.order_id or order.id
-        t.status, t.completed_at = "done", datetime.utcnow()
+        t.status, t.completed_at = "done", now_utc()
     await _emit(db, org_id, "inquiry.converted", lead)
     if not is_estimate:   # same as a job made on the work-order screen (estimates don't emit it)
         from backend.services.webhooks import emit_event
@@ -343,7 +344,7 @@ async def on_missed_call(db: AsyncSession, org_id: str, call) -> Optional[dict]:
     if not st["enabled"] or len(cc.digits(number)) < 4:
         return None
     cfg = st["config"]
-    now = datetime.utcnow()
+    now = now_utc()
     try:
         raw = cfg.get("merge_hours")
         merge_hours = max(0, min(int(MISSED_DEFAULTS["merge_hours"] if raw is None else raw), 24 * 14))

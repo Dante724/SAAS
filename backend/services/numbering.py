@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import NumberSequence
+from backend.services.dates import now_utc
 
 # Built-in defaults mirror the pre-Phase-1 hardcoded formats exactly.
 DEFAULT_TEMPLATES = {
@@ -32,7 +33,7 @@ _TOKEN = re.compile(r"\{(D|M|Y|C(?::(\d+))?)\}")
 
 
 def render(template: str, counter: int, *, now: datetime | None = None) -> str:
-    now = now or datetime.utcnow()
+    now = now or now_utc()
 
     def sub(m: re.Match) -> str:
         tok = m.group(1)
@@ -124,7 +125,7 @@ async def next_number(
     from sqlalchemy import update
     for _ in range(100):
         await db.execute(update(NumberSequence).where(NumberSequence.id == seq.id)
-                         .values(next_value=NumberSequence.next_value + 1, updated_at=datetime.utcnow())
+                         .values(next_value=NumberSequence.next_value + 1, updated_at=now_utc())
                          .execution_options(synchronize_session=False))
         await db.refresh(seq, attribute_names=["next_value"])
         number = render(seq.template, seq.next_value - 1)

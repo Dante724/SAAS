@@ -12,7 +12,6 @@ POST   /api/orders/{id}/items/{item_id}/split   move the item + its lines to a n
 Every query matches org_id AND order_id. Writes need the shop setting on (services/multi_asset)
 and the "Create tickets" role permission.
 """
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -24,6 +23,7 @@ from backend.db.database import get_db
 from backend.models import Device, Employee, Order, OrderItem, OrderLine, OrderStatusLog, Recommendation, TimeEntry
 from backend.services import multi_asset as ma
 from backend.services.auth import get_current_employee, require_perm
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/orders", tags=["order-items"])
 
@@ -190,7 +190,7 @@ async def update_item(order_id: str, item_id: str, data: ItemUpdate, db: AsyncSe
     if "complaint" in p:
         it.complaint = (p["complaint"] or "").strip() or None
     if "collected" in p:
-        it.collected_at = datetime.utcnow() if p["collected"] else None
+        it.collected_at = now_utc() if p["collected"] else None
     if "sort_order" in p:
         it.sort_order = p["sort_order"]
     await db.commit()
@@ -240,7 +240,7 @@ async def collect_items(order_id: str, data: CollectIn, db: AsyncSession = Depen
     to_bill = [l for l in lines if l.id not in billed and
                ((l.order_item_id in ids) or (with_job and not l.order_item_id))]
     inv = await ma.bill_lines(db, order, to_bill) if to_bill else None
-    now = datetime.utcnow()
+    now = now_utc()
     for it in chosen:
         it.collected_at = it.collected_at or now
     names = await ma.item_names(db, current.org_id, ids)

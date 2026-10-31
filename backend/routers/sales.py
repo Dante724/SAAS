@@ -1,5 +1,4 @@
 """Sales (over-the-counter POS) + Stocktake (count → variance → adjust)."""
-from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -25,6 +24,7 @@ from backend.services.auth import assert_perm, get_current_employee, require_per
 from backend.services.numbering import next_number
 from backend.services.money import add_to_column, q2, q4
 from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/sales", tags=["sales"])
 st_router = APIRouter(prefix="/api/stocktake", tags=["stocktake"])
@@ -97,7 +97,7 @@ async def _pos_redemptions(db, org_id, sale, client_id, gross, data):
     if data.coupon_code:
         c = (await db.execute(select(Coupon).where(
             Coupon.org_id == org_id, Coupon.code == data.coupon_code.strip().upper()))).scalar_one_or_none()
-        now = datetime.utcnow()
+        now = now_utc()
         if not c or not c.active:
             raise HTTPException(404, "Coupon not found or inactive")
         if c.client_id and c.client_id != client_id:
@@ -125,7 +125,7 @@ async def _pos_redemptions(db, org_id, sale, client_id, gross, data):
             GiftCard.org_id == org_id, GiftCard.code == data.gift_card_code.strip().upper()))).scalar_one_or_none()
         if not g or not g.active:
             raise HTTPException(404, "Gift card not found or inactive")
-        if g.expires_at and g.expires_at < datetime.utcnow():
+        if g.expires_at and g.expires_at < now_utc():
             raise HTTPException(400, "Gift card has expired")
         amt = q2(min(g.balance, max(remaining, 0)))
         if amt > 0:
@@ -306,7 +306,7 @@ async def delete_sale(
 
     from backend.routers.cash import void_document_legs
     await void_document_legs(db, current.org_id, "sale", sale.id, reason, current.id)
-    sale.voided_at = datetime.utcnow()
+    sale.voided_at = now_utc()
     sale.voided_by_id = current.id
     sale.void_reason = reason
     from backend.services import audit
@@ -665,7 +665,7 @@ async def post_stocktake(
                              ref_type="stocktake", ref_id=st.id))
         adjusted += 1
     st.status = "posted"
-    st.posted_at = datetime.utcnow()
+    st.posted_at = now_utc()
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "stocktake", st.id,
                            f"Stocktake posted: {adjusted} adjustment(s)")

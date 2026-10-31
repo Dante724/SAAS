@@ -29,6 +29,7 @@ from backend.models import (
 )
 from backend.services.auth import get_current_employee, require_perm, record_scope
 from backend.services.money import q2
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api", tags=["engage"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -149,7 +150,7 @@ async def redeem_giftcard(
         GiftCard.org_id == current.org_id, GiftCard.code == data.code.strip().upper()))).scalar_one_or_none()
     if not g or not g.active:
         raise HTTPException(404, "Gift card not found or inactive")
-    if g.expires_at and g.expires_at < datetime.utcnow():
+    if g.expires_at and g.expires_at < now_utc():
         raise HTTPException(400, "Gift card has expired")
     from backend.services.order_money import balance_due
     order_balance = await balance_due(db, order)
@@ -299,7 +300,7 @@ async def apply_coupon(
     order = await _order_or_404(db, current.org_id, order_id)
     c = (await db.execute(select(Coupon).where(
         Coupon.org_id == current.org_id, Coupon.code == data.code.strip().upper()))).scalar_one_or_none()
-    now = datetime.utcnow()
+    now = now_utc()
     if not c or not c.active:
         raise HTTPException(404, "Coupon not found or inactive")
     # 144bi: a client-issued coupon can only be redeemed on that client's order.

@@ -5,6 +5,8 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy import select
 
+from backend.services.dates import now_utc
+
 
 async def _loc(client, h):
     return (await client.get("/api/staff/locations", headers=h)).json()["items"][0]["id"]
@@ -34,7 +36,7 @@ async def test_overdue_order_surfaces(client, tenant, db):
     o = (await client.post("/api/orders", json={"client_id": cid, "location_id": loc, "complaint": "x"}, headers=tenant)).json()
     # make it overdue
     row = (await db.execute(select(Order).where(Order.id == o["id"]))).scalar_one()
-    row.due_at = datetime.utcnow() - timedelta(days=2)
+    row.due_at = now_utc() - timedelta(days=2)
     await db.commit()
 
     r = await client.get("/api/reports/home-feed", headers=tenant)
@@ -55,7 +57,7 @@ async def test_overdue_count_is_accurate(client, tenant, db):
     loc = await _loc(client, tenant)
     cid = (await client.post("/api/clients", json={"name": "C"}, headers=tenant)).json()["id"]
     ids = [(await client.post("/api/orders", json={"client_id": cid, "location_id": loc, "complaint": f"x{i}"}, headers=tenant)).json()["id"] for i in range(3)]
-    now = datetime.utcnow()
+    now = now_utc()
     rows = {r.id: r for r in (await db.execute(select(Order).where(Order.id.in_(ids)))).scalars().all()}
     rows[ids[0]].due_at = now - timedelta(days=1)   # overdue
     rows[ids[1]].due_at = now + timedelta(days=3)   # future — not overdue

@@ -12,6 +12,7 @@ from backend.models import (
     StockItemBatch,
     Task,
 )
+from backend.services.dates import now_utc
 
 
 async def _wh_tok(client, H):
@@ -120,13 +121,13 @@ async def test_expiration_report_flags_expired_and_soon(client, tenant, db):
     db.add_all([
         StockItemBatch(org_id=me["org_id"], part_id=p["id"], warehouse_id=w["id"],
                        location_id=loc, unit_cost=2, qty_received=10, qty_remaining=10,
-                       expiry_date=datetime.utcnow() - timedelta(days=3)),   # expired
+                       expiry_date=now_utc() - timedelta(days=3)),   # expired
         StockItemBatch(org_id=me["org_id"], part_id=p["id"], warehouse_id=w["id"],
                        location_id=loc, unit_cost=2, qty_received=5, qty_remaining=5,
-                       expiry_date=datetime.utcnow() + timedelta(days=10)),  # soon
+                       expiry_date=now_utc() + timedelta(days=10)),  # soon
         StockItemBatch(org_id=me["org_id"], part_id=p["id"], warehouse_id=w["id"],
                        location_id=loc, unit_cost=2, qty_received=5, qty_remaining=5,
-                       expiry_date=datetime.utcnow() + timedelta(days=200)), # ok
+                       expiry_date=now_utc() + timedelta(days=200)), # ok
     ])
     await db.commit()
 

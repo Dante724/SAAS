@@ -16,6 +16,7 @@ from backend.models import (
     StockTransferLine,
     Supplier,
 )
+from backend.services.dates import now_utc
 
 
 async def _me(client, H):
@@ -395,7 +396,7 @@ async def test_po_reservation_survives_into_stock(client, tenant, db):
     db.add(sup)
     await db.flush()
     po = PurchaseOrder(supplier_id=sup.id, location_id=loc, po_number="PO-1",
-                       status="ordered", expected_at=datetime.utcnow() + timedelta(days=3))
+                       status="ordered", expected_at=now_utc() + timedelta(days=3))
     db.add(po)
     await db.flush()
     ln = POLine(po_id=po.id, part_id=p["id"], qty_ordered=2)
@@ -437,7 +438,7 @@ async def test_overdue_po_is_reported_as_delayed(client, tenant, db):
     db.add(sup)
     await db.flush()
     po = PurchaseOrder(supplier_id=sup.id, location_id=loc, po_number="PO-2",
-                       status="ordered", expected_at=datetime.utcnow() - timedelta(days=2))
+                       status="ordered", expected_at=now_utc() - timedelta(days=2))
     db.add(po)
     await db.flush()
     db.add(POLine(po_id=po.id, part_id=p["id"], qty_ordered=1))

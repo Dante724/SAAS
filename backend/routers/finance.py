@@ -12,6 +12,7 @@ from backend.core import paging as _paging
 from backend.services.money import q2, q4, msum  # noqa: F401 — money quantizers used module-wide
 from backend.core.spreadsheet import safe_row
 from backend.services.invoicing import DISPLAY_MODES, balance_due as _balance_due, settle_status
+from backend.services.dates import now_utc, shop_today
 
 router = APIRouter(prefix="/api/finance", tags=["finance"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -239,7 +240,7 @@ async def issue_einvoice(
     inv = await _load_invoice(db, invoice_id, current.org_id)
     if not inv.einvoice_number:
         inv.einvoice_number = await _next_einvoice_number(db, current.org_id)
-    inv.einvoice_issued_at = datetime.utcnow()
+    inv.einvoice_issued_at = now_utc()
     inv.einvoice_format = "ubl2.1"
     inv.einvoice_xml = await build_ubl(db, current.org_id, inv)
     inv.einvoice_status = "issued"
@@ -416,7 +417,7 @@ async def create_invoice(
         tax=data.tax,
         total=total,
         amount_paid=0.0,
-        issued_at=_pdate(data.issued_at) or datetime.utcnow(),
+        issued_at=_pdate(data.issued_at) or now_utc(),
         due_at=_pdate(data.due_at),
     )
     db.add(inv)
@@ -555,13 +556,13 @@ async def send_invoice_email(
         if not thread:
             thread = InboxThread(org_id=current.org_id, channel="email", client_id=client.id,
                                  handle=recipient, status="open", unread=False,
-                                 last_message_at=datetime.utcnow())
+                                 last_message_at=now_utc())
             db.add(thread)
             await db.flush()
         db.add(InboxMessage(org_id=current.org_id, thread_id=thread.id, direction="outbound",
                             body=f"{subject}\n\n{body} (attached {fname})",
                             author_id=current.id, delivered=result["status"] in ("sent", "simulated")))
-        thread.last_message_at = datetime.utcnow()
+        thread.last_message_at = now_utc()
         await db.commit()
 
     return {"ok": result["status"] in ("sent", "simulated"), "status": result["status"],
@@ -618,13 +619,14 @@ async def record_payment(
         if data.overpay == "refund":
             await assert_perm(db, current, "can_create_returns")    # paying money back out
     # When the money came in: today by default; an earlier day is a retroactive cash entry.
-    paid_at, retro = datetime.utcnow(), False
+    paid_at, retro = now_utc(), False
     if data.paid_at:
         from backend.services.dates import parse_dt
         day = parse_dt(data.paid_at, "paid_at")
-        if day.date() > datetime.utcnow().date():
+        today = await shop_today(db, current.org_id)
+        if day.date() > today:
             raise HTTPException(422, "The payment date can't be in the future")
-        if day.date() < datetime.utcnow().date():
+        if day.date() < today:
             await assert_perm(db, current, "can_retroactive_cash")
             paid_at, retro = day, True
     acc = None
@@ -866,7 +868,7 @@ async def record_payout(
     net = data.net_amount if data.net_amount is not None else (data.gross_amount - data.fee_amount)
     p = ProcessorPayout(
         org_id=current.org_id, provider=data.provider or "manual",
-        payout_date=date.fromisoformat(data.payout_date) if data.payout_date else date.today(),
+        payout_date=date.fromisoformat(data.payout_date) if data.payout_date else await shop_today(db, current.org_id),
         gross_amount=q2(data.gross_amount), fee_amount=q2(data.fee_amount), net_amount=q2(net),
         reference=data.reference, note=data.note, created_by_id=current.id)
     db.add(p)
@@ -998,7 +1000,7 @@ async def close_shift(
     shift.expected_cash = parts["expected_cash"]
     shift.closing_float = counted
     shift.close_denoms = denoms
-    shift.closed_at = datetime.utcnow()
+    shift.closed_at = now_utc()
     await db.commit()
 
     discrepancy = q2(counted - shift.expected_cash)
@@ -1044,7 +1046,7 @@ async def add_expense(
         recorded_by_id=current.id,
         description=data.description,
         amount=data.amount,
-        expense_date=date.fromisoformat(data.expense_date) if data.expense_date else date.today(),
+        expense_date=date.fromisoformat(data.expense_date) if data.expense_date else await shop_today(db, current.org_id),
     )
     db.add(expense)
     await db.commit()
@@ -1105,7 +1107,7 @@ async def accountant_export(
     file instead of re-keying into QuickBooks. Default period = current month to today."""
     import csv, io
     from backend.models import Transaction, Account, CashFlowItem
-    today = date.today()
+    today = await shop_today(db, current.org_id)
     df = datetime.fromisoformat(date_from) if date_from else datetime(today.year, today.month, 1)
     if date_to:
         _dt = datetime.fromisoformat(date_to)

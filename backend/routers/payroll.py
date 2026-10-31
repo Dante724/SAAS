@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
-from backend.services.dates import parse_date
+from backend.services.dates import now_utc, parse_date, shop_today
 from backend.models import (
     CommissionRule,
     Employee,
@@ -230,14 +230,14 @@ async def my_earnings(
     from backend.services import scoping
     # Both rights: the older "see your own pay" switch still turns it off for a role.
     await assert_perm(db, current, "can_view_own_compensation")
-    today = date.today()
+    today = await shop_today(db, current.org_id)
     ps = parse_date(date_from, "from") if date_from else today.replace(day=1)
     pe = parse_date(date_to, "to") if date_to else _month_bounds(today.strftime("%Y-%m"))[1]
     if pe < ps:
         raise HTTPException(400, "from must be on or before to")
     if (pe - ps).days > 366:
         raise HTTPException(400, "Pick a period of a year or less")
-    cutoff = scoping.payroll_cutoff(await scoping.role_for(db, current))
+    cutoff = scoping.payroll_cutoff(await scoping.role_for(db, current), today)
     asked_from = ps
     if cutoff and ps < cutoff:
         ps = cutoff
@@ -309,7 +309,7 @@ async def create_payroll_run(
     await assert_not_self(db, current, data.employee_id, "accrue your own pay")
     ps = parse_date(data.period_start, "period_start")
     pe = parse_date(data.period_end, "period_end")
-    today = date.today()
+    today = await shop_today(db, current.org_id)
     if not data.draft and (pe.year, pe.month) >= (today.year, today.month):
         raise HTTPException(400, "Can't accrue payroll for the current or a future month; save as draft instead")
     if not data.draft:
@@ -359,7 +359,7 @@ async def create_payroll_run(
         base_salary=base, commissions_total=_money(commissions), hourly_total=_money(hourly),
         bonuses_total=bonus, penalties_total=penalty, gross_total=gross,
         status="draft" if data.draft else "accrued",
-        accrued_at=None if data.draft else datetime.utcnow())
+        accrued_at=None if data.draft else now_utc())
     db.add(run)
     await db.flush()
     if not data.draft:
@@ -412,7 +412,7 @@ async def create_payroll_runs_bulk(
     await assert_perm(db, current, "can_accrue_payroll")
     ps = parse_date(data.period_start, "period_start")
     pe = parse_date(data.period_end, "period_end")
-    today = date.today()
+    today = await shop_today(db, current.org_id)
     if not data.draft and (pe.year, pe.month) >= (today.year, today.month):
         raise HTTPException(400, "Can't accrue payroll for the current or a future month; save as draft instead")
 
@@ -507,7 +507,7 @@ async def _accrue_one(db: AsyncSession, org_id: str, employee_id: str, ps, pe,
         base_salary=base, commissions_total=_money(commissions), hourly_total=_money(hourly),
         bonuses_total=bon, penalties_total=pen, gross_total=gross,
         status="draft" if draft else "accrued",
-        accrued_at=None if draft else datetime.utcnow())
+        accrued_at=None if draft else now_utc())
     db.add(run)
     await db.flush()
     if not draft:
@@ -723,7 +723,7 @@ async def add_adjustment(
     amt = _money(data.amount)
     signed = amt if data.kind == "bonus" else -amt
     # date the entry inside the chosen month so it lands in that period's calculation
-    when = datetime.utcnow()
+    when = now_utc()
     if data.month:
         try:
             ps, pe = _month_bounds(data.month)
@@ -834,7 +834,7 @@ async def accrue_calculation(
         ps, pe = _month_bounds(data.month)
     except (ValueError, IndexError):
         raise HTTPException(400, "month must be YYYY-MM")
-    today = date.today()
+    today = await shop_today(db, current.org_id)
     if (pe.year, pe.month) >= (today.year, today.month):
         raise HTTPException(400, "Can't accrue payroll for the current or a future month")
     emp = (await db.execute(select(Employee).where(
@@ -864,7 +864,7 @@ async def accrue_calculation(
         org_id=current.org_id, employee_id=data.employee_id, period_start=ps, period_end=pe,
         base_salary=base, commissions_total=_money(commissions), hourly_total=hourly,
         bonuses_total=bonuses, penalties_total=penalties, gross_total=gross,
-        status="accrued", accrued_at=datetime.utcnow())
+        status="accrued", accrued_at=now_utc())
     db.add(run)
     await db.flush()
     if base:
@@ -1046,7 +1046,7 @@ async def mark_run_paid(
         await db.flush()
         txn_id = txn.id
     run.status = "paid"
-    run.paid_at = datetime.utcnow()
+    run.paid_at = now_utc()
     run.account_id = acct.id
     run.cash_txn_id = txn_id
     await _audit(db, current, "payroll.run_pay", "payroll_run", run.id,
@@ -1104,7 +1104,7 @@ async def void_run(
             t.voided_by_id = current.id
     was = run.status
     run.status = "void"
-    run.voided_at = datetime.utcnow()
+    run.voided_at = now_utc()
     run.voided_by_id = current.id
     run.void_reason = reason[:300]
     await _audit(db, current, "payroll.run_void", "payroll_run", run.id,

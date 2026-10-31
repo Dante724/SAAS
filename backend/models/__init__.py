@@ -25,13 +25,14 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from backend.db.database import Base
+from backend.services.dates import now_utc
 
 
 def _uuid() -> str:
     return str(uuid.uuid4())
 
 def _now() -> datetime:
-    return datetime.utcnow()
+    return now_utc()
 
 # ─────────────────────────────────────────────
 # ORGANISATION & LOCATIONS
@@ -649,7 +650,7 @@ class OrderItem(Base):
     outcome: Mapped[str] = mapped_column(String(20), default="open")
     collected_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_utc)
 
 # 144df — the legacy JSON JobKit model was retired; the Bundle engine (relabelled "Job Kit" in the UI)
 # is now the single job-kit concept. Its table is dropped by migration jk144df01.

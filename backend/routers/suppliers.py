@@ -11,7 +11,6 @@ CRUD, plus the two things a shop actually does with a supplier:
     that's waiting on the part, so when the goods land they're already spoken for
     rather than being sold to whoever walks in first.
 """
-from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -31,6 +30,7 @@ from backend.models import (
 )
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.money import q2
+from backend.services.dates import shop_today
 from backend.core.spreadsheet import MAX_IMPORT_ROWS
 
 router = APIRouter(prefix="/api/suppliers", tags=["inventory"])
@@ -455,7 +455,7 @@ async def incoming_stock(
          .where(Supplier.org_id == current.org_id,
                 PurchaseOrder.status.notin_(["received", "canceled", "cancelled"])))
     pos = (await db.execute(q)).scalars().all()
-    today = date.today()
+    today = await shop_today(db, current.org_id)
 
     items = []
     for po in pos:

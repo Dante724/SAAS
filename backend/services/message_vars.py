@@ -99,7 +99,8 @@ def _birthday(raw: str | None, today: date | None = None) -> tuple[str, str]:
     except ValueError:
         year = 0
     if year > 1900:
-        t = today or date.today()
+        from backend.services.dates import today_in
+        t = today or today_in("UTC")
         n = t.year - year - ((t.month, t.day) < (month, day))
         age = str(n) if 0 <= n < 130 else ""
     return label, age
@@ -138,7 +139,9 @@ async def client_values(db: AsyncSession, org_id: str, client, *texts: str | Non
     if not want:
         return {}
     first, last = _first_last(getattr(client, "name", None))
-    bday, age = _birthday(getattr(client, "birthday", None))
+    from backend.services.dates import shop_today
+    today = await shop_today(db, org_id) if "client_age" in want else None
+    bday, age = _birthday(getattr(client, "birthday", None), today)
     vals = {"client_name": getattr(client, "name", None) or "", "client_first_name": first,
             "client_last_name": last, "client_phone": getattr(client, "phone", None) or "",
             "client_birthday": bday, "client_age": age}

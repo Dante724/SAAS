@@ -14,7 +14,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
-from backend.services.dates import parse_dt
+from backend.services.dates import day_start_utc, now_utc, parse_dt, shop_today, shop_tzname, today_in
 from backend.models import (
     Account,
     CashFlowItem,
@@ -42,7 +42,7 @@ async def _check_backdating(db, org_id):
     if org and org.prevent_backdating_invoices:
         last = (await db.execute(select(Invoice).where(Invoice.org_id == org_id)
                 .order_by(Invoice.issued_at.desc()).limit(1))).scalar_one_or_none()
-        if last and last.issued_at and datetime.utcnow() < last.issued_at:
+        if last and last.issued_at and now_utc() < last.issued_at:
             raise HTTPException(422, "Backdating invoices is not allowed")
 
 router = APIRouter(prefix="/api/cash", tags=["cash"],
@@ -69,7 +69,7 @@ async def post_transaction(db, org_id, account_id, txn_type, amount, *,
         cash_flow_item_id=cash_flow_item_id, comment=comment, ref_type=ref_type,
         ref_id=ref_id, employee_id=employee_id, transfer_pair_id=transfer_pair_id,
         fx_rate=fx_rate,
-        is_retroactive=is_retroactive, actual_date=actual_date or datetime.utcnow(),
+        is_retroactive=is_retroactive, actual_date=actual_date or now_utc(),
     )
     db.add(txn)
     # Scope the account to the org so a client-supplied account_id can't corrupt another
@@ -291,7 +291,7 @@ async def create_transaction(
     actual = None
     if data.actual_date:
         actual = parse_dt(data.actual_date, "actual_date")
-        retro = actual.date() < datetime.utcnow().date()
+        retro = actual.date() < await shop_today(db, current.org_id)
         if retro:
             await assert_perm(db, current, "can_retroactive_cash")
     await post_transaction(
@@ -558,7 +558,7 @@ async def _order_invoice(db, org_id, o, *, check_backdating=True):
             await _check_backdating(db, org_id)
         inv = Invoice(invoice_number=await next_number(db, org_id, "invoice"), org_id=org_id,
                       order_id=o.id, client_id=o.client_id, status="draft",
-                      subtotal=o.total or 0, total=o.total or 0, issued_at=datetime.utcnow())
+                      subtotal=o.total or 0, total=o.total or 0, issued_at=now_utc())
         db.add(inv)
         await db.flush()
         db.add(InvoiceOrder(invoice_id=inv.id, order_id=o.id, sort_order=0))   # every billed order is linked
@@ -817,7 +817,7 @@ async def create_sub_invoice(
     subtotal = sum(l.total for l in chosen)
     await _check_backdating(db, current.org_id)
     inv = Invoice(invoice_number=await next_number(db, current.org_id, "invoice"), org_id=current.org_id, order_id=order_id,
-                  client_id=o.client_id, status="draft", subtotal=subtotal, total=subtotal, issued_at=datetime.utcnow())
+                  client_id=o.client_id, status="draft", subtotal=subtotal, total=subtotal, issued_at=now_utc())
     db.add(inv)
     await db.flush()
     for l in chosen:
@@ -866,10 +866,12 @@ async def void_document_legs(db, org_id, ref_type, ref_id, reason, actor_id) -> 
 
 async def cash_flow_floor(db, current) -> Optional[datetime]:
     """Without "View the cash flow for any period" a role sees today's money movements only:
-    the start of today (UTC) to filter from, or None when every period is open to them."""
+    the moment the shop's today began (as naive UTC) to filter from, or None when every period
+    is open to them."""
     if await has_perm(db, current, "can_view_cashflow_any_period"):
         return None
-    return datetime.combine(datetime.utcnow().date(), datetime.min.time())
+    tz = await shop_tzname(db, current.org_id)
+    return day_start_utc(today_in(tz), tz)
 
 
 

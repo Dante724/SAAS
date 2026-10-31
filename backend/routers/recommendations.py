@@ -6,7 +6,6 @@ roles keep working; turn it off to make a role read-only here).
 
 The customer-facing approve/decline endpoints live in ``public.py`` (no auth).
 """
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,6 +17,7 @@ from backend.db.database import get_db
 from backend.models import Employee, EventFeedItem, Order, OrderLine, Organisation, Recommendation
 from backend.services.auth import get_current_employee, require_perm, record_scope
 from backend.services.money import q2
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/orders", tags=["recommendations"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -187,7 +187,7 @@ async def publish_recommendation(
     r = await _rec(db, current.org_id, order_id, rec_id)
     if r.status == "draft":
         r.status = "sent"
-        r.published_at = datetime.utcnow()
+        r.published_at = now_utc()
         await db.commit()
         await db.refresh(r)
     return serialize_rec(r)
@@ -203,7 +203,7 @@ async def publish_all(
     rows = (await db.execute(select(Recommendation).where(
         Recommendation.order_id == order_id, Recommendation.org_id == current.org_id,
         Recommendation.status == "draft"))).scalars().all()
-    now = datetime.utcnow()
+    now = now_utc()
     for r in rows:
         r.status = "sent"
         r.published_at = now
@@ -376,5 +376,5 @@ async def approve_recommendation(db: AsyncSession, rec: Recommendation) -> Order
     await db.flush()
     rec.status = "approved"
     rec.order_line_id = ol.id
-    rec.decided_at = datetime.utcnow()
+    rec.decided_at = now_utc()
     return ol

@@ -4,7 +4,7 @@ Platform admins are operators of the whole SaaS (you), not members of any tenant
 Their tokens carry a distinct ``scope: "platform"`` claim so a tenant token can
 never satisfy a platform endpoint and vice-versa.
 """
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -17,6 +17,7 @@ from backend.config import settings
 from backend.db.database import get_db
 from backend.models import PlatformAdmin
 from backend.services.auth import hash_password
+from backend.services.dates import now_utc
 
 # Separate token URL from the tenant one; scope claim keeps the two worlds apart.
 oauth2_platform = OAuth2PasswordBearer(tokenUrl="/api/admin/login", auto_error=True)
@@ -25,7 +26,7 @@ _SCOPE = "platform"
 
 
 def create_platform_token(admin_id: str) -> str:
-    expire = datetime.utcnow() + timedelta(hours=12)
+    expire = now_utc() + timedelta(hours=12)
     return jwt.encode({"sub": admin_id, "scope": _SCOPE, "exp": expire},
                       settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 

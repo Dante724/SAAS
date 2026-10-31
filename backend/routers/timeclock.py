@@ -18,13 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import Employee, Order, TimeEntry, TimeEntryAudit
-from backend.services.dates import parse_dt
+from backend.services.dates import day_start_utc, parse_dt, shop_tzname, today_in
+from backend.services.dates import now_utc
 
 
 def _udt(value, field: str):
     """Parse a user-supplied ISO datetime (400 on bad input) and normalize any
     timezone-aware value to naive UTC, so comparisons against naive
-    datetime.utcnow()/stored values don't raise TypeError (500)."""
+    now_utc()/stored values don't raise TypeError (500)."""
     dt = parse_dt(value, field)
     if dt.tzinfo is not None:
         dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
@@ -61,7 +62,7 @@ async def _clock_enabled(db: AsyncSession, org_id: str, which: str) -> bool:
 # track daily hours against the employee's expected weekly_hours.
 
 def _shift_elapsed(s) -> int:
-    end = s.ended_at or datetime.utcnow()
+    end = s.ended_at or now_utc()
     return max(int((end - s.started_at).total_seconds()), 0)
 
 
@@ -102,7 +103,7 @@ async def shift_clock_in(db: AsyncSession = Depends(get_db),
             .order_by(Location.id))).scalars().first()
     if not loc_id:
         raise HTTPException(400, "No location available to clock in to")
-    s = Shift(employee_id=current.id, location_id=loc_id, started_at=datetime.utcnow())
+    s = Shift(employee_id=current.id, location_id=loc_id, started_at=now_utc())
     db.add(s)
     await db.commit()
     await db.refresh(s)
@@ -115,7 +116,7 @@ async def shift_clock_out(db: AsyncSession = Depends(get_db),
     s = await _open_shift(db, current.id)
     if not s:
         raise HTTPException(409, "You are not clocked in")
-    s.ended_at = datetime.utcnow()
+    s.ended_at = now_utc()
     s.hours_worked = q2(_shift_elapsed(s) / 3600.0)
     await db.commit()
     await db.refresh(s)
@@ -186,7 +187,7 @@ def _rates(emp: Employee) -> tuple[float, float]:
 def _elapsed_sec(e: TimeEntry, now: Optional[datetime] = None) -> int:
     if e.ended_at:
         return int(e.duration_sec or 0)
-    now = now or datetime.utcnow()
+    now = now or now_utc()
     return max(0, int((now - e.started_at).total_seconds()))
 
 
@@ -238,7 +239,7 @@ async def _running_for(db: AsyncSession, org_id: str, employee_id: str) -> Optio
 
 
 def _stop(e: TimeEntry, when: Optional[datetime] = None, needs_review: bool = False) -> None:
-    when = when or datetime.utcnow()
+    when = when or now_utc()
     # guard against a timer left running for days
     cap = e.started_at + timedelta(hours=AUTO_STOP_HOURS)
     if when > cap:
@@ -325,7 +326,7 @@ async def start_timer(
         task_id=task_id,
         location_id=(order.location_id if order else (task.location_id if task else current.location_id)),
         category=resolved_category,
-        started_at=datetime.utcnow(), billable=is_labour,
+        started_at=now_utc(), billable=is_labour,
         cost_rate=cost, billable_rate=billable, note=data.note, source="timer", state="running",
         gps_lat=getattr(data, "gps_lat", None), gps_lng=getattr(data, "gps_lng", None))
     db.add(e)
@@ -396,7 +397,7 @@ async def switch_timer(
     e = TimeEntry(
         org_id=current.org_id, employee_id=current.id, order_id=data.order_id,
         location_id=(order.location_id if order else current.location_id),
-        category="job", started_at=datetime.utcnow(), billable=True,
+        category="job", started_at=now_utc(), billable=True,
         cost_rate=cost, billable_rate=billable, note=data.note, source="timer", state="running",
         gps_lat=getattr(data, "gps_lat", None), gps_lng=getattr(data, "gps_lng", None))
     db.add(e)
@@ -597,7 +598,7 @@ async def create_manual(
         TimeEntry.org_id == current.org_id, TimeEntry.employee_id == emp_id,
         TimeEntry.state != "void"))).scalars().all()
     for o in others:
-        o_end = o.ended_at or datetime.utcnow()
+        o_end = o.ended_at or now_utc()
         if start < o_end and o.started_at < end:
             raise HTTPException(409, "That overlaps an existing time entry")
     # 144cw — scope to the caller's org: a manager must not log time for a foreign-org
@@ -811,9 +812,10 @@ async def my_work(
     job hours, and the open service lines assigned to them with booked-vs-actual."""
     from backend.models import OrderLine
     from backend.services.labour import entry_seconds, is_job_actual
-    now = datetime.utcnow()
-    week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    tz = await shop_tzname(db, current.org_id)   # "today"/"this week" on the shop's clock
+    today = today_in(tz)
+    week_start = day_start_utc(today - timedelta(days=today.weekday()), tz)
+    day_start = day_start_utc(today, tz)
     mine = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == current.org_id, TimeEntry.employee_id == current.id,
         TimeEntry.started_at >= week_start))).scalars().all()

@@ -5,7 +5,6 @@ In-sandbox this returns honest 'not configured' status and never raises, so the
 UI integrates against a stable contract without live credentials.
 """
 import secrets
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import select
@@ -13,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
 from backend.models import XeroConnection
+from backend.services.dates import now_utc
 
 AUTH_URL = "https://login.xero.com/identity/connect/authorize"
 TOKEN_URL = "https://identity.xero.com/connect/token"
@@ -73,12 +73,12 @@ async def handle_callback(db: AsyncSession, org_id: str, code: str, state: str) 
         conn.connected = True
         conn.tenant_id = "sandbox-tenant"
         conn.access_token = "sandbox"
-        conn.updated_at = datetime.utcnow()
+        conn.updated_at = now_utc()
         await db.commit()
         return {"ok": True, "simulated": True}
     # Live token exchange would happen here (httpx POST to TOKEN_URL).
     conn.connected = True
-    conn.updated_at = datetime.utcnow()
+    conn.updated_at = now_utc()
     await db.commit()
     return {"ok": True, "simulated": False}
 

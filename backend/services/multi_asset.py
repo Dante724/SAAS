@@ -12,7 +12,6 @@ Rules
   * The job's own device (orders.device_id) is item #1, created on demand, so everything that
     knows one item per job keeps working. Item #1 can't be removed.
 """
-from datetime import datetime
 from typing import Optional
 
 from fastapi import HTTPException
@@ -20,6 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.services.industry import normalize_template_key
+from backend.services.dates import now_utc
 
 ELIGIBLE = frozenset({"tools", "small_engine", "mobile_phone", "computer"})
 OUTCOMES = ("open", "fixed", "cant_fix", "declined")
@@ -166,7 +166,7 @@ async def bill_lines(db: AsyncSession, order, lines: list, *, display_mode: str 
     inv = Invoice(invoice_number=await next_number(db, order.org_id, "invoice"), org_id=order.org_id,
                   order_id=order.id, client_id=order.client_id, display_mode=display_mode, status="draft",
                   subtotal=subtotal, discount=0.0, tax=0.0, total=subtotal, amount_paid=0.0,
-                  issued_at=datetime.utcnow())
+                  issued_at=now_utc())
     db.add(inv)
     await db.flush()
     db.add(InvoiceOrder(invoice_id=inv.id, order_id=order.id, sort_order=0))

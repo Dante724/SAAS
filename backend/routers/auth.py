@@ -18,6 +18,7 @@ from backend.services.auth import (create_access_token, get_current_employee, ha
 from backend.services.notifications import send_direct_email
 from backend.services.ratelimit import client_ip as _ip
 from backend.services.ratelimit import aenforce as _rate
+from backend.services.dates import now_utc, org_today
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -187,9 +188,8 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
         raise HTTPException(400, "Email already registered")
 
     import secrets as _sec
-    from datetime import date as _date
     org = Organisation(name=data.org_name, webhook_secret=_sec.token_urlsafe(24),
-                       sub_status="trial", sub_start=_date.today())   # build 144ce
+                       sub_status="trial")   # build 144ce
     # Build 144cg — apply onboarding choices with region-based defaults.
     if data.region:
         org.region = data.region
@@ -219,6 +219,7 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
     if data.industry_template:
         from backend.services import industry as _ind
         org.industry_template = _ind.normalize_template_key(data.industry_template)
+    org.sub_start = org_today(org)   # the trial starts on the shop's own calendar day
     db.add(org)
     await db.flush()
 
@@ -327,16 +328,15 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
 
     # Build 144ce: account-level lifecycle gate. A suspended org or one past its
     # term end date can't sign in — the platform admin controls these dates.
-    from datetime import date as _date
     _org = (await db.execute(select(Organisation).where(
         Organisation.id == employee.org_id))).scalar_one_or_none()
+    _today = org_today(_org)   # dates are the shop's calendar days, not the server's
     if _org:
         if _org.sub_status == "suspended":
             raise HTTPException(status_code=403, detail="This account is suspended. Please contact support.")
-        if _org.sub_end and _org.sub_end < _date.today():
+        if _org.sub_end and _org.sub_end < _today:
             raise HTTPException(status_code=403, detail="Your subscription has ended. Please contact support to renew.")
     # Build 144ce: per-employee access window (set from the /admin portal).
-    _today = _date.today()
     if (employee.access_start and employee.access_start > _today) or \
        (employee.access_end and employee.access_end < _today):
         raise HTTPException(status_code=403, detail="Your access is outside its allowed dates.")
@@ -569,8 +569,7 @@ async def invite_preview(data: InvitePreview, request: Request, db: AsyncSession
     from backend.models import Invite, Organisation
     inv = (await db.execute(select(Invite).where(
         Invite.token_hash == _invite_by_token(data.token)))).scalar_one_or_none()
-    from datetime import datetime as _dt
-    if not inv or inv.accepted_at is not None or inv.expires_at < _dt.utcnow():
+    if not inv or inv.accepted_at is not None or inv.expires_at < now_utc():
         return {"valid": False}
     org = (await db.execute(select(Organisation).where(Organisation.id == inv.org_id))).scalar_one_or_none()
     return {"valid": True, "email": inv.email, "name": inv.name,
@@ -582,7 +581,6 @@ async def invite_accept(data: InviteAccept, request: Request, db: AsyncSession =
     """Redeem an invite: create the Employee with the chosen password and return a
     session token so they land straight in the app (email already proven verified)."""
     await _rate("invite", _ip(request), limit=30, window_sec=900)
-    from datetime import datetime as _dt
 
     from backend.models import Invite
     if is_old_default_password(data.password):
@@ -591,7 +589,7 @@ async def invite_accept(data: InviteAccept, request: Request, db: AsyncSession =
         raise HTTPException(400, "Password must be at least 8 characters")
     inv = (await db.execute(select(Invite).where(
         Invite.token_hash == _invite_by_token(data.token)))).scalar_one_or_none()
-    if not inv or inv.accepted_at is not None or inv.expires_at < _dt.utcnow():
+    if not inv or inv.accepted_at is not None or inv.expires_at < now_utc():
         raise HTTPException(400, "This invitation is invalid or has expired")
     # Guard against a race where the email got an account after the invite was sent. Emails are
     # unique across all shops, so an account anywhere blocks it (this used to 500 on the insert).
@@ -605,7 +603,7 @@ async def invite_accept(data: InviteAccept, request: Request, db: AsyncSession =
         email=norm_email(inv.email), password_hash=await asyncio.to_thread(hash_password, data.password),
         email_verified=True)
     db.add(emp)
-    inv.accepted_at = _dt.utcnow()
+    inv.accepted_at = now_utc()
     await db.commit()
     role = (await db.execute(select(Role).where(Role.id == emp.role_id))).scalar_one_or_none()
     token = create_access_token({"sub": emp.id, "org_id": emp.org_id, "tv": 0})

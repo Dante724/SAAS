@@ -23,6 +23,7 @@ from backend.services.platform_auth import (
 )
 from backend.services.ratelimit import client_ip as _ip
 from backend.services.ratelimit import aenforce as _rate
+from backend.services.dates import org_today
 
 router = APIRouter(prefix="/api/admin", tags=["platform-admin"])
 
@@ -50,7 +51,7 @@ def _segment(org: Organisation) -> str:
     if st == "suspended":
         return "suspended"
     # trial: "new" if it started within the first two weeks
-    if org.sub_start and (date.today() - org.sub_start).days <= NEW_TRIAL_DAYS:
+    if org.sub_start and (org_today(org) - org.sub_start).days <= NEW_TRIAL_DAYS:
         return "new"
     return "trial"
 
@@ -170,7 +171,7 @@ async def patch_tenant(org_id: str, data: TenantPatch, db: AsyncSession = Depend
     # Build 144ch: if this change blocks the account (suspended, or term ended in the
     # past), boot every live session immediately by bumping each employee's token
     # version — get_current_employee rejects tokens carrying a stale version.
-    blocked_now = org.sub_status == "suspended" or (org.sub_end and org.sub_end < date.today())
+    blocked_now = org.sub_status == "suspended" or (org.sub_end and org.sub_end < org_today(org))
     if blocked_now and ("sub_status" in p or "sub_end" in p):
         from sqlalchemy import update as _update
         await db.execute(
@@ -252,7 +253,7 @@ async def apply_coupon(org_id: str, body: dict, db: AsyncSession = Depends(get_d
     c = (await db.execute(select(PlatformCoupon).where(PlatformCoupon.code == code))).scalar_one_or_none()
     if not c or not c.active:
         raise HTTPException(404, "Coupon not found")
-    if c.expires_at and c.expires_at < date.today():
+    if c.expires_at and c.expires_at < org_today(org):
         raise HTTPException(400, "Coupon has expired")
     if c.plan and c.plan != org.plan:
         raise HTTPException(400, f"This coupon only applies to the {c.plan} plan")

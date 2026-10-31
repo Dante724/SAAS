@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from sqlalchemy import select
+from backend.services.dates import now_utc
 
 DEFAULT_DAYS_AFTER_CLOSE = 14
 _FALLBACK_TERMINAL = ("done", "delivered", "dropped", "closed", "canceled")
@@ -46,6 +47,6 @@ async def messaging_state(db, order, org, now: Optional[datetime] = None) -> dic
     closed = order.closed_at or getattr(order, "status_entered_at", None)
     if days and closed:
         until = closed + timedelta(days=days)
-        if (now or datetime.utcnow()) < until:
+        if (now or now_utc()) < until:
             return {"open": True, "until": until.isoformat(), "reason": None}
     return {"open": False, "until": None, "reason": "expired"}

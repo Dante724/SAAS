@@ -15,6 +15,7 @@ from backend.services import stock_posting
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.numbering import next_number
 from backend.services.redact import can_see_costs, drop_cost_fields
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/inventory", tags=["inventory"])
 
@@ -575,7 +576,6 @@ async def parts_to_order(
     against on-hand and already-on-order, grouped by supplier. Read-only — the FE turns a
     supplier group into a PO via the existing /inventory/po endpoint."""
     from collections import defaultdict
-    from datetime import datetime as _dt
     from backend.models import Order, OrderLine, OrderStatus, POLine, Supplier
 
     closed = {"closed", "done", "delivered", "dropped", "cancelled", "completed", "picked_up"}
@@ -623,7 +623,7 @@ async def parts_to_order(
     sup_names = {s.id: s.name for s in (await db.execute(select(Supplier).where(
         Supplier.id.in_(sup_ids)))).scalars().all()} if sup_ids else {}
 
-    now = _dt.utcnow()
+    now = now_utc()
     items = []
     for pid, qty_need in need.items():
         p = parts.get(pid)
@@ -786,7 +786,7 @@ DEFAULT_PO_CHARGE_TYPES = ["Shipping", "In-transit"]
 
 async def _release_expired(db: AsyncSession, org_id: str):
     """Release reservations whose hold period has elapsed (Orderry auto-release)."""
-    now = datetime.utcnow()
+    now = now_utc()
     rows = (await db.execute(
         select(StockReservation).where(
             StockReservation.org_id == org_id,
@@ -830,7 +830,7 @@ async def reserve_stock(
     sl.qty_reserved = (sl.qty_reserved or 0) + data.qty
     r = StockReservation(org_id=current.org_id, part_id=data.part_id, location_id=data.location_id,
                          order_id=data.order_id, qty=data.qty,
-                         expires_at=datetime.utcnow() + timedelta(days=data.hold_days))
+                         expires_at=now_utc() + timedelta(days=data.hold_days))
     db.add(r)
     await db.commit()
     await db.refresh(r)
@@ -1043,7 +1043,7 @@ async def create_po(
                        # 144an — manual workflow stage starts at Draft or Ordered to mirror the receipt state.
                        workflow_status="po_draft" if data.draft else "po_ordered",
                        expected_at=datetime.fromisoformat(data.expected_at) if data.expected_at else None,
-                       ordered_at=None if data.draft else datetime.utcnow())
+                       ordered_at=None if data.draft else now_utc())
     db.add(po)
     await db.flush()
     for l in data.lines:
@@ -1322,7 +1322,7 @@ async def group_pos(
     total = sum(q * c for q, c in merged.values())
     newpo = PurchaseOrder(supplier_id=pos[0].supplier_id, location_id=pos[0].location_id,
                           org_id=current.org_id, po_number=await next_number(db, current.org_id, "po"),
-                          status="ordered", total=total, ordered_at=datetime.utcnow())
+                          status="ordered", total=total, ordered_at=now_utc())
     db.add(newpo)
     await db.flush()
     for pid, (q, c) in merged.items():
@@ -1378,12 +1378,12 @@ async def send_po(
         if not thread:
             thread = InboxThread(org_id=current.org_id, channel=data.channel, client_id=sup.client_id,
                                  handle=(sup.email if data.channel == "email" else sup.phone),
-                                 status="open", unread=False, last_message_at=datetime.utcnow())
+                                 status="open", unread=False, last_message_at=now_utc())
             db.add(thread)
             await db.flush()
         db.add(InboxMessage(org_id=current.org_id, thread_id=thread.id, direction="outbound",
                             body=body, author_id=current.id, delivered=True))
-        thread.last_message_at = datetime.utcnow()
+        thread.last_message_at = now_utc()
         logged = True
     from backend.services.po_links import notify_po_change
     await notify_po_change(db, current.org_id, po, "sent to the supplier", actor_id=current.id)
@@ -1450,7 +1450,7 @@ async def set_po_status(
         if cur != "draft":
             raise HTTPException(409, f"Can't move a {cur} purchase order to ordered")
         po.status = "ordered"
-        po.ordered_at = po.ordered_at or datetime.utcnow()
+        po.ordered_at = po.ordered_at or now_utc()
     from backend.services.po_links import notify_po_change
     await notify_po_change(db, current.org_id, po, "marked ordered" if po.status == "ordered" else f"back to {po.status}",
                            actor_id=current.id)
@@ -1739,7 +1739,7 @@ async def receive_po(
         if not await writes_off_automatically(db, current.org_id):
             arrived += ", ready to write off on the job"
         await notify_po_change(db, current.org_id, po, arrived, actor_id=current.id)
-        po.received_at = datetime.utcnow()
+        po.received_at = now_utc()
         po.received_cost = (po.received_cost or 0) + received_cost_now
         po.freight_capitalised = q2((po.freight_capitalised or 0) + freight_added_now)
         po.shipment_freight = q2((po.shipment_freight or 0) + ship_freight_now)
@@ -1831,7 +1831,7 @@ async def purchasing_cockpit(
     hold, so it's cheap and always truthful. Beats a Kanban (which only shows *where* a PO sits)
     and beats Orderry/ShopMonkey's filterable list by being exception-driven."""
     from datetime import timedelta
-    now = datetime.utcnow()
+    now = now_utc()
     soon = now + timedelta(days=7)
     OPEN = ("ordered", "partial")
 
@@ -1905,7 +1905,7 @@ async def _forecast_suggestions(db, org_id: str):
     """Velocity-based reorder suggestions as structured rows (with ids), so the
     forecast can turn into real POs. Mirrors the reorder_forecast report's math."""
     WINDOW, COVER = 28, 14
-    since = datetime.utcnow() - timedelta(days=WINDOW)
+    since = now_utc() - timedelta(days=WINDOW)
     vel = {pid: float(q or 0) for pid, q in (await db.execute(
         select(StockMovement.part_id, func.sum(func.abs(StockMovement.qty)))
         .join(Part, StockMovement.part_id == Part.id)

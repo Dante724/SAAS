@@ -9,6 +9,7 @@ import logging
 from sqlalchemy import select
 
 from backend.core.jobs import job_runner
+from backend.services.dates import now_utc
 
 log = logging.getLogger("tekly.jobs")
 
@@ -129,7 +130,6 @@ async def retry_failed_webhooks() -> None:
 @job_runner.every(3600, "revoked-session-sweep")
 async def sweep_revoked_sessions() -> None:
     """Drop logout records whose sign-in has expired anyway: those tokens fail on exp alone."""
-    from datetime import datetime
 
     from sqlalchemy import delete
 
@@ -137,7 +137,7 @@ async def sweep_revoked_sessions() -> None:
     from backend.models import RevokedSession
 
     async with AsyncSessionLocal() as db:
-        res = await db.execute(delete(RevokedSession).where(RevokedSession.expires_at < datetime.utcnow()))
+        res = await db.execute(delete(RevokedSession).where(RevokedSession.expires_at < now_utc()))
         await db.commit()
         if res.rowcount:
             log.info("revoked-session-sweep: removed %d expired record(s)", res.rowcount)

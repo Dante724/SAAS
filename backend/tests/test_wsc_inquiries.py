@@ -5,6 +5,7 @@ from sqlalchemy import select
 
 from backend.config import settings
 from backend.models import Call, Client, Device, Employee, EventFeedItem, Lead, Order, Shift, StaffNotification, Task
+from backend.services.dates import now_utc
 from backend.tests.test_opd_telephony import (  # noqa: F401 — fake_twilio is a fixture
     connect,
     fake_twilio,
@@ -74,8 +75,8 @@ async def test_call_after_merge_window_or_closed_inquiry_opens_a_new_one(client,
     org = await org_of(client, tenant)
     await _miss(client, org, "CA" + "1" * 32)
     lead = (await db.execute(select(Lead).where(Lead.org_id == org))).scalar_one()
-    lead.last_call_at = datetime.utcnow() - timedelta(hours=25)
-    lead.created_at = datetime.utcnow() - timedelta(hours=25)
+    lead.last_call_at = now_utc() - timedelta(hours=25)
+    lead.created_at = now_utc() - timedelta(hours=25)
     await db.commit()
     await _miss(client, org, "CA" + "2" * 32)
     assert len((await db.execute(select(Lead).where(Lead.org_id == org))).scalars().all()) == 2
@@ -622,7 +623,7 @@ async def test_alert_again_after_the_quiet_window(client, tenant, fake_twilio, d
     org = await org_of(client, tenant)
     await _miss(client, org, "CA" + "1" * 32)
     lead = (await db.execute(select(Lead).where(Lead.org_id == org))).scalar_one()
-    lead.last_call_at = datetime.utcnow() - timedelta(minutes=10)
+    lead.last_call_at = now_utc() - timedelta(minutes=10)
     await db.commit()
     await _miss(client, org, "CA" + "2" * 32)
     notes = (await db.execute(select(StaffNotification).where(StaffNotification.org_id == org))).scalars().all()

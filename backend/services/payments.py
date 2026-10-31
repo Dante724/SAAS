@@ -11,7 +11,6 @@ otherwise the SimulatedGateway returns a local confirm URL so the whole flow is
 testable end-to-end without keys. Real charges go live the moment the key is set.
 """
 import logging
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import select
@@ -22,6 +21,7 @@ from backend.models import Account, Invoice, Order, Payment, PaymentIntent
 from backend.services.money import minor_units, q2
 from backend.services.numbering import next_number
 from backend.services.payment_guard import LivePaymentsRefused
+from backend.services.dates import now_utc
 
 log = logging.getLogger("tekly.payments")
 
@@ -327,7 +327,7 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
             inv = Invoice(invoice_number=await next_number(db, intent.org_id, "invoice"), org_id=intent.org_id,
                           order_id=intent.order_id, client_id=o.client_id if o else None,
                           status="draft", subtotal=(o.total if o else intent.amount) or 0,
-                          total=(o.total if o else intent.amount) or 0, issued_at=datetime.utcnow())
+                          total=(o.total if o else intent.amount) or 0, issued_at=now_utc())
             db.add(inv)
             await db.flush()
             from backend.models import InvoiceOrder
@@ -364,7 +364,7 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
         settle_status(inv)
     intent.payment_id = pay.id
     intent.status = "succeeded"
-    intent.updated_at = datetime.utcnow()
+    intent.updated_at = now_utc()
     # The client paid online: reflect it on their balance like every in-store payment path does
     # (it was never posted, so the client kept showing the full amount owed).
     _client_id = inv.client_id if inv else None

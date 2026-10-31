@@ -18,6 +18,7 @@ from sqlalchemy import func, select
 from backend.config import settings
 from backend.models import Payment, Sale, TerminalCharge, Transaction
 from backend.services import terminal as svc
+from backend.services.dates import now_utc
 
 SQ_URL = "https://shop.example/api/payments/square/webhook"
 SQ_OK_DEVICE = "9fa747a2-25ff-48ee-b078-04381f7c828f"
@@ -813,7 +814,7 @@ async def test_m6_payment_after_sale_deletion_books_nothing_and_can_be_refunded(
     sid = await _sale(client, tenant)
     ch = (await _charge(client, tenant, t["id"], sale_id=sid)).json()
     sale = (await db.execute(select(Sale).where(Sale.id == sid))).scalar_one()
-    sale.voided_at = _dt.utcnow()            # deleted while the card was on the reader (race)
+    sale.voided_at = now_utc()            # deleted while the card was on the reader (race)
     await db.commit()
     r = await client.post(f"/api/payments/terminal/charges/{ch['id']}/simulate", json={"outcome": "approve"}, headers=tenant)
     assert r.json()["status"] == "succeeded"

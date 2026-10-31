@@ -6,7 +6,6 @@ public token page. Settings define the system + per-band answer messages.
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
@@ -14,6 +13,7 @@ from backend.services.dates import parse_date
 from backend.models import Feedback, FeedbackSettings, Order
 from backend.services.auth import get_current_employee, Employee, require_perm
 from backend.services.money import q2
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
 
@@ -152,7 +152,7 @@ async def submit_feedback(token: str, data: SubmitIn, db: AsyncSession = Depends
         raise HTTPException(409, "Feedback already submitted")
     fb.rating = data.rating
     fb.comment = data.comment
-    fb.submitted_at = datetime.utcnow()
+    fb.submitted_at = now_utc()
     s = (await db.execute(select(FeedbackSettings).where(FeedbackSettings.org_id == fb.org_id))).scalar_one_or_none()
     from backend.routers.feed import log_system_event
     await log_system_event(db, fb.org_id, "order", fb.order_id,

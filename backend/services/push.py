@@ -11,7 +11,6 @@ package installed it sends a real encrypted push.
 """
 import json
 import logging
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import select
@@ -19,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
 from backend.models import PushSubscription, StaffNotification
+from backend.services.dates import now_utc
 
 log = logging.getLogger("tekly.push")
 
@@ -90,7 +90,7 @@ async def _dispatch_push(db: AsyncSession, employee_id: str, payload: dict) -> N
                 vapid_private_key=settings.VAPID_PRIVATE_KEY,
                 vapid_claims=dict(claims),
             )
-            s.last_used_at = datetime.utcnow()
+            s.last_used_at = now_utc()
         except Exception as e:  # pragma: no cover - needs live endpoint
             code = getattr(getattr(e, "response", None), "status_code", None)
             if code in (404, 410):  # gone -> prune dead subscription

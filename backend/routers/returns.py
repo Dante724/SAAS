@@ -1,7 +1,6 @@
 """Client Returns (goods back to stock) and Refunds (money back) — separate
 documents, per Orderry's Feb-2026 split. A refund claws back the refunded share of
 the order's commissions via the payroll engine."""
-from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -14,6 +13,7 @@ from backend.models import (
     Account, Employee, Payment,
 )
 from backend.services.auth import assert_perm, get_current_employee, require_perm
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/returns", tags=["returns"])
 
@@ -208,7 +208,7 @@ async def _refund_payment(db, refund):
         Payment.account_id == refund.account_id))).scalars().all()
     if not cands:
         return None
-    at = refund.created_at or datetime.utcnow()
+    at = refund.created_at or now_utc()
     return min(cands, key=lambda p: abs(((p.paid_at or at) - at).total_seconds()))
 
 
@@ -257,7 +257,7 @@ async def delete_refund(
         await post_contact_ledger(db, current.org_id, e.client_id, "refund_void", -float(e.amount or 0),
                                   note=f"Refund deleted: {reason}", ref_type="refund_void", ref_id=refund.id,
                                   created_by_id=current.id)
-    refund.voided_at = datetime.utcnow()
+    refund.voided_at = now_utc()
     refund.voided_by_id = current.id
     refund.void_reason = reason
     await db.flush()

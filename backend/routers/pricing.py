@@ -15,6 +15,7 @@ from backend.db.database import get_db
 from backend.models import Employee, Location, Organisation, Part, PriceType, PriceTypeItem, Service
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.money import q2
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/pricing", tags=["pricing"])
 
@@ -24,7 +25,7 @@ from datetime import datetime
 
 def _in_window(p: PriceType, now: Optional[datetime] = None) -> bool:
     """True when a price type's promo window is open (null bounds = open-ended)."""
-    now = now or datetime.utcnow()
+    now = now or now_utc()
     if getattr(p, "starts_at", None) and now < p.starts_at:
         return False
     if getattr(p, "ends_at", None) and now > p.ends_at:

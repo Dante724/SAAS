@@ -9,7 +9,7 @@ credentials the connection is unavailable and sync attempts are logged 'skipped'
 import hashlib
 import hmac
 import secrets
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -23,6 +23,7 @@ from backend.models import (
 from backend.services.crypto import decrypt as _dec
 from backend.services.crypto import encrypt as _enc
 from backend.services.money import q2
+from backend.services.dates import now_utc
 
 AUTH_BASE = "https://appcenter.intuit.com/connect/oauth2"
 TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
@@ -91,7 +92,7 @@ async def complete_connect(db: AsyncSession, code: str, realm_id: str, state: st
     conn.realm_id = realm_id
     conn.access_token = _enc(tok.get("access_token"))
     conn.refresh_token = _enc(tok.get("refresh_token"))
-    conn.token_expires_at = datetime.utcnow() + timedelta(seconds=int(tok.get("expires_in", 3600)))
+    conn.token_expires_at = now_utc() + timedelta(seconds=int(tok.get("expires_in", 3600)))
     conn.connected = True
     conn.state_nonce = None
     await db.commit()
@@ -138,13 +139,13 @@ async def _refresh(db: AsyncSession, conn: QboConnection) -> None:
         conn.access_token = _enc(tok["access_token"])
     if tok.get("refresh_token"):
         conn.refresh_token = _enc(tok["refresh_token"])
-    conn.token_expires_at = datetime.utcnow() + timedelta(seconds=int(tok.get("expires_in", 3600)))
+    conn.token_expires_at = now_utc() + timedelta(seconds=int(tok.get("expires_in", 3600)))
     await db.commit()
 
 
 async def _ensure_fresh(db: AsyncSession, conn: QboConnection) -> None:
     """Refresh proactively if the access token is expired/near-expiry (60s skew)."""
-    if conn.token_expires_at and conn.token_expires_at <= datetime.utcnow() + timedelta(seconds=60):
+    if conn.token_expires_at and conn.token_expires_at <= now_utc() + timedelta(seconds=60):
         await _refresh(db, conn)
 
 
