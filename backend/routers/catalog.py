@@ -16,7 +16,7 @@ from backend.services.auth import get_current_employee, has_perm, require_perm
 from backend.core import paging as _paging
 from backend.core.likes import contains as _contains
 from backend.services.redact import can_see_costs
-from backend.services.money import check_money
+from backend.services.money import check_money, org_price_decimals, round_price
 from backend.services.commission_input import (
     check_commission_amount, check_commission_basis, check_commission_calc_type)
 
@@ -165,11 +165,12 @@ async def create_service(
 ):
     if not data.name.strip():
         raise HTTPException(400, "Name is required")
+    dp = await org_price_decimals(db, current.org_id)     # QA 2026-10-31 B: round at write time
     s = Service(
         org_id=current.org_id, name=data.name, description=(data.description or "")[:2000],
         category=data.category, category_id=data.category_id,
         is_labor=data.is_labor, unit=(data.unit or "pc")[:24],
-        price=data.price, cost_price=data.cost_price if await can_see_costs(db, current) else 0,
+        price=round_price(data.price, dp), cost_price=round_price(data.cost_price, dp) if await can_see_costs(db, current) else 0,
         duration_min=max(0, data.duration_min or 0), flat_rate=data.flat_rate,
         warranty_days=max(0, data.warranty_days or 0), barcode=(data.barcode or "").strip() or None,
         bookable=data.bookable,
@@ -207,10 +208,11 @@ async def update_service(
         s.is_labor = data.is_labor
     if "unit" in sent:
         s.unit = (data.unit or "pc")[:24]
+    dp = await org_price_decimals(db, current.org_id)     # QA 2026-10-31 B: round at write time
     if "price" in sent:
-        s.price = data.price
+        s.price = round_price(data.price, dp)
     if "cost_price" in sent and await can_see_costs(db, current):
-        s.cost_price = data.cost_price
+        s.cost_price = round_price(data.cost_price, dp)
     if "duration_min" in sent:
         s.duration_min = max(0, data.duration_min or 0)
     if "flat_rate" in sent:

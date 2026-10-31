@@ -212,7 +212,8 @@ async def create_coupon(
         Coupon.org_id == current.org_id, Coupon.code == code))).scalar_one_or_none()
     if dup:
         raise HTTPException(409, "Coupon code already exists")
-    c = Coupon(org_id=current.org_id, code=code, name=data.name, kind=data.kind, value=data.value,
+    c = Coupon(org_id=current.org_id, code=code, name=data.name, kind=data.kind,
+               value=data.value if data.kind == "pct" else q2(data.value),     # QA 2026-10-31 B
                min_total=data.min_total, starts_at=data.starts_at, ends_at=data.ends_at,
                max_uses=data.max_uses)
     db.add(c)

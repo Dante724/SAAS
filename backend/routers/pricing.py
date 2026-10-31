@@ -311,6 +311,12 @@ class PriceItemIn(BaseModel):
     item_id: str
     price: float
 
+    @field_validator("price")
+    @classmethod
+    def _money(cls, v):
+        from backend.services.money import check_money
+        return check_money(v)
+
 
 @router.get("/types/{type_id}/items")
 async def list_type_items(
@@ -336,11 +342,13 @@ async def set_type_item(
     row = (await db.execute(select(PriceTypeItem).where(
         PriceTypeItem.price_type_id == type_id, PriceTypeItem.item_type == data.item_type,
         PriceTypeItem.item_id == data.item_id, PriceTypeItem.org_id == current.org_id))).scalar_one_or_none()
+    from backend.services.money import org_price_decimals, round_price
+    price = round_price(data.price, await org_price_decimals(db, current.org_id))
     if row:
-        row.price = data.price
+        row.price = price
     else:
         db.add(PriceTypeItem(org_id=current.org_id, price_type_id=type_id,
-                             item_type=data.item_type, item_id=data.item_id, price=data.price))
+                             item_type=data.item_type, item_id=data.item_id, price=price))
     await db.commit()
     return {"ok": True}
 
